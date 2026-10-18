@@ -67,7 +67,7 @@ package final class Chat: Identifiable {
         transcript.provider = provider
     }
 
-    var sessionId: String? { status.sessionId }
+    package var sessionId: String? { status.sessionId }
     var resumed: Bool { status.resumed }
     var hasConversation: Bool { status.hasConversation }
     var title: String { status.title(fallback: provider.name) }

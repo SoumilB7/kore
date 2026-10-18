@@ -33,6 +33,10 @@ extension Chat {
     package var isRunning: Bool { status.isRunning }
     package var pendingApprovals: [Approval] { approvals.pending }
     package var mode: String { controls.mode }
+    package var isCompacting: Bool { context.compacting }
+
+    /// The context wheel's click: compacts, between turns only.
+    package func storyCompact() { compact() }
 
     /// The composer's Send (or a queued send, while a turn runs).
     package func storySend(_ text: String) {

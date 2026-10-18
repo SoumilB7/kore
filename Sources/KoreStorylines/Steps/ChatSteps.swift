@@ -153,3 +153,41 @@ extension Expect {
         Expect(what) { story in check(try story.activeChat().rows) }
     }
 }
+
+/// Picks a mode in the mode menu; waits until the composer shows it.
+package struct SetMode: Step {
+    let id: String
+    package var label: String { "Switch the mode to \(id)" }
+    package init(_ id: String) { self.id = id }
+
+    package func run(_ story: StoryContext) async throws {
+        let chat = try story.activeChat()
+        chat.storySetMode(id)
+        try await story.until("the mode \(id)") { chat.mode == id }
+    }
+}
+
+/// Clicks the context wheel to compact; waits for the compaction to finish.
+package struct Compact: Step {
+    package var label: String { "Compact with the context wheel" }
+    package init() {}
+
+    package func run(_ story: StoryContext) async throws {
+        let chat = try story.activeChat()
+        chat.storyCompact()
+        try await story.until("the compaction to finish") {
+            !chat.isCompacting && story.chatEvents(chat).contains { if case .compacted = $0 { true } else { false } }
+        }
+    }
+}
+
+extension StoryContext {
+    /// The scripted backend of the active chat (`--cli scripted`).
+    package func scriptedBackend() throws -> ScriptedBackend {
+        let chat = try activeChat()
+        guard let backend = ScriptedWorld.shared.backend(session: chat.sessionId) else {
+            throw StoryFailure.modelMissing("a scripted backend for this chat")
+        }
+        return backend
+    }
+}
