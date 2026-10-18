@@ -44,7 +44,10 @@ final class TabSwitching: Storyline {
             SwitchTab(1),
 
             // A fourth chat: chat 3, the longest unseen, is let go, and comes back as it was.
-            StartChat("claude"), WaitForFocus(.id(StoryID.Composer.field)), TypeText("draft four"),
+            StartChat("claude"), WaitForFocus(.id(StoryID.Composer.field)),
+            // The composer keeps its focus through the start: typing waits for it to show the new chat.
+            Expect("the new chat's empty draft in the composer") { story in SwitchTab.composerText(story) == "" },
+            TypeText("draft four"),
             SwitchTab(3), SwitchTab(2), SwitchTab(1), SwitchTab(3), SwitchTab(4), SwitchTab(3),
 
             // A reply streaming into a hidden chat is all there when it shows.

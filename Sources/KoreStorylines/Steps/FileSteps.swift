@@ -20,7 +20,7 @@ package struct WriteFiles: Step {
 }
 
 /// Waits until the element has the window's keyboard focus: the view itself (the editor's
-/// text), or a field editor inside it (a text field being typed in). Typing goes to the focus,
+/// text), or a text view over it (a text field's field editor, the composer's own text). Typing goes to the focus,
 /// so a storyline waits for it before typing into a field that has just appeared.
 package struct WaitForFocus: Step {
     let target: Locator
@@ -34,8 +34,9 @@ package struct WaitForFocus: Step {
                 guard let responder = element.window?.firstResponder as? NSView, responder.window != nil, let frame = element.frame
                 else { return false }
                 if let view = element.registeredView, responder.isDescendant(of: view) { return true }
-                // A text field's typing goes to the window's field editor, placed over the field.
-                guard (responder as? NSTextView)?.isFieldEditor == true else { return false }
+                // A text field's typing goes to the window's field editor, placed over the field; a
+                // SwiftUI element's AppKit text sits beside its registrar, not in it.
+                guard responder is NSTextView else { return false }
                 let inside = responder.convert(responder.visibleRect, to: nil)
                 return frame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: inside.midX, y: inside.midY))
             }

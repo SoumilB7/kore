@@ -266,9 +266,9 @@ final class SlashMenuCaret: ChatStoryline {
             turns: [CLIScript.reply("OK")])
     }
 
-    /// The draft, and where the caret sits in the field (in characters).
+    /// The draft, and where the caret sits in the focused text (in UTF-16 units).
     @MainActor static func caret(_ story: StoryContext) -> (draft: String, at: Int)? {
-        guard let editor = story.window?.firstResponder as? NSTextView, editor.isFieldEditor else { return nil }
+        guard let editor = story.window?.firstResponder as? NSTextView else { return nil }
         return (editor.string, editor.selectedRange().location)
     }
 
@@ -276,7 +276,7 @@ final class SlashMenuCaret: ChatStoryline {
     static func expectComposer(_ what: String, chip: String?, _ draft: String, at: Int? = nil) -> Expect {
         Expect(what, found: { story in
             let chip = story.app.chat?.command.map { "/\($0.name)" } ?? "no chip"
-            return chip + ", " + (caret(story).map { "“\($0.draft)” with the caret at \($0.at)" } ?? "no field editor")
+            return chip + ", " + (caret(story).map { "“\($0.draft)” with the caret at \($0.at)" } ?? "no text in focus")
         }) { story in
             guard let now = caret(story), let chat = story.app.chat else { return false }
             return chat.command?.name == chip && now.draft == draft && chat.draft == draft

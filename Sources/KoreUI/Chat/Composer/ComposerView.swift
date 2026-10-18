@@ -25,31 +25,22 @@ struct ComposerView: View {
     @StateObject private var menuFrame = Held<CGRect?>(nil)
     @StateObject private var boxFrame = Held<CGRect>(.zero)
     @StateObject private var clickMonitor = Held<Any?>(nil)
-    /// Where the caret is, so Shift+Return can put a line break there: in that chat's draft.
-    @StateObject private var caret = Local(Caret(chat: nil, selection: nil, text: nil, placed: false))
+    /// The caret Kore last placed, with the draft it had just set: a range is only good in the
+    /// text it was made for. The text view takes it once it shows that text.
+    @StateObject private var caret = Local<ComposerText.Placed?>(nil)
+    /// The text view and its undo, read outside updates; never shown.
+    @StateObject private var editor = ComposerEditor()
 
-    /// A selection's indices are only good in the text they were made for: `text` is the draft
-    /// when it was set. `placed`: Kore put it there, with the draft it had just set, so it's that
-    /// text's for sure; the field's own can come a keystroke apart from its text.
-    private struct Caret: Equatable {
-        let chat: UUID?
-        var selection: TextSelection?
-        var text: String?
-        var placed: Bool
-    }
-
-    /// The caret in this chat's draft; nil when it was placed in another chat's.
-    private var selection: Binding<TextSelection?> {
-        Binding(
-            get: { caret.value.chat == chat.id ? caret.value.selection : nil },
-            set: { caret.value = Caret(chat: chat.id, selection: $0, text: chat.draft, placed: false) })
-    }
-
-    /// Puts the caret at `offset` characters into the draft just set.
-    private func place(at offset: Int) {
+    /// Puts the caret at `offset` characters into the draft just set; nil, at its end (found
+    /// without counting a long draft's characters, as a tab switch does it).
+    private func place(at offset: Int? = nil) {
         let draft = chat.draft
-        let index = draft.index(draft.startIndex, offsetBy: min(max(offset, 0), draft.count))
-        caret.value = Caret(chat: chat.id, selection: TextSelection(insertionPoint: index), text: draft, placed: true)
+        let location = offset.map { offset in
+            let index = draft.index(draft.startIndex, offsetBy: min(max(offset, 0), draft.count))
+            return NSRange(index..<index, in: draft).location
+        } ?? draft.utf16.count
+        caret.value = ComposerText.Placed(
+            chat: chat.id, range: NSRange(location: location, length: 0), text: draft, serial: (caret.value?.serial ?? 0) + 1)
     }
 
     /// Empty, except while a turn runs (look.md §10): a message sent then waits for it, or joins
@@ -84,7 +75,7 @@ struct ComposerView: View {
         .onAppear {
             pasteChat.value = chat
             pasteMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                removeCommand(event).flatMap(pasteAttachments)
+                pasteAttachments(event)
             }
             clickMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { closeMenu(onClick: $0) }
         }
@@ -93,39 +84,22 @@ struct ComposerView: View {
             pasteMonitor.value = nil
             clickMonitor.value = nil
         }
-        .onReceive(Self.undoChanges) { draftFromUndo($0) }
         .onChange(of: chat.id) {
             pasteChat.value = chat
             // The caret goes to the end of this chat's draft, ready to go on typing.
-            place(at: chat.draft.count)
+            place()
             slashSelection.value = 0
             slashDismissed.value = false
             forgetUndo()
         }
     }
 
-    /// Every undo and redo in the app; `draftFromUndo` keeps the composer's.
-    private static let undoChanges = NotificationCenter.default.publisher(for: .NSUndoManagerDidUndoChange)
-        .merge(with: NotificationCenter.default.publisher(for: .NSUndoManagerDidRedoChange))
-
-    /// Undo and redo change the field's text without the text binding hearing of it, so the
-    /// field and the draft would part: the draft takes the field's text back.
-    private func draftFromUndo(_ note: Notification) {
-        guard focused.wrappedValue, let editor = window.value?.firstResponder as? NSTextView, editor.isFieldEditor,
-            let undo = note.object as? UndoManager, undo === editor.undoManager, editor.string != chat.draft
-        else { return }
-        chat.draft = editor.string
-    }
-
-    /// The field stays focused through a switch, and its undo was the last chat's typing: undone
-    /// here, it would edit this chat's draft. The field editor keeps its own undo manager (not
-    /// the window's, which the explorer's file moves use), so all of it goes.
+    /// The text stays focused through a switch, and its undo was the last chat's typing: undone
+    /// here, it would edit this chat's draft. The text view keeps its own undo manager (not the
+    /// window's, which the explorer's file moves use), so all of it goes.
     private func forgetUndo() {
-        guard let editor = window.value?.firstResponder as? NSTextView, editor.isFieldEditor,
-            let undo = editor.undoManager
-        else { return }
-        if undo === window.value?.undoManager { undo.removeAllActions(withTarget: editor) } else { undo.removeAllActions() }
-        editor.breakUndoCoalescing()
+        editor.undo?.removeAllActions()
+        editor.view?.breakUndoCoalescing()
     }
 
     private var box: some View {
@@ -178,59 +152,71 @@ struct ComposerView: View {
             textField
         }
         .padding(Inset.field)
-        // The field itself is one line tall; a click anywhere in the text area focuses it
-        // at once rather than landing on padding.
+        // A click on the padding around the text focuses it at once rather than landing on
+        // nothing; a click in the text puts the caret there.
         .contentShape(Rectangle())
         .onTapGesture { focused.wrappedValue = true }
     }
 
     private var textField: some View {
-        TextField(placeholder, text: Binding(get: { chat.draft }, set: { chat.draft = $0 }), selection: selection, axis: .vertical)
-            .textFieldStyle(.plain)
-            .font(TextStyle.body)
-            .foregroundStyle(Theme.text)
-            .lineLimit(1...10)
-            .storyID(StoryID.Composer.field)
-            .focused(focused)
-            .onSubmit { chat.send() }
-            .onKeyPress(.upArrow) { moveSlash(-1) }
-            .onKeyPress(.downArrow) { moveSlash(1) }
-            .onKeyPress(.return, phases: .down) { press in
-                // Shift+Return (and Option+Return) start a new line; Return sends.
-                if !press.modifiers.isDisjoint(with: [.shift, .option]) {
-                    insertLineBreak()
-                    return .handled
-                }
-                return acceptSlash()
+        let font = TextStyle.bodyFont
+        let baseline = ComposerText.baseline(font)
+        return ComposerText(
+            chat: chat.id, text: chat.draft, font: font, placed: caret.value, editor: editor,
+            changed: { chat.draft = $0 }, command: perform
+        )
+        .focused(focused)
+        .alignmentGuide(.firstTextBaseline) { _ in baseline }
+        .overlay(alignment: .topLeading) {
+            if chat.draft.isEmpty, !placeholder.isEmpty {
+                Text(placeholder)
+                    .font(TextStyle.body)
+                    .foregroundStyle(Theme.tertiary)
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
             }
-            // Shift+Tab switches mode, as in both CLIs; plain Tab accepts a slash command.
-            .onKeyPress(keys: [.tab, KeyEquivalent("\u{19}")]) { press in
-                if press.key == KeyEquivalent("\u{19}") || press.modifiers.contains(.shift) {
-                    chat.cycleMode()
-                    return .handled
-                }
-                return acceptSlash()
-            }
-            .onKeyPress(.escape) {
-                guard !slashMatches.isEmpty else { return .ignored }
-                slashDismissed.value = true
-                return .handled
-            }
-            .onChange(of: slashToken) { old, new in
-                slashSelection.value = 0
-                // Esc closes the menu for this "/word"; the next one opens it again.
-                if new?.range.lowerBound != old?.range.lowerBound { slashDismissed.value = false }
-            }
+        }
+        .storyID(StoryID.Composer.field)
+        .onChange(of: slashToken) { old, new in
+            slashSelection.value = 0
+            // Esc closes the menu for this "/word"; the next one opens it again.
+            if new?.range.lowerBound != old?.range.lowerBound { slashDismissed.value = false }
+        }
     }
 
-    /// Replaces the selection (or inserts at the caret) with a line break, the caret after it.
-    private func insertLineBreak() {
-        var draft = chat.draft
-        let range = selectedRange ?? draft.endIndex..<draft.endIndex
-        let offset = draft.distance(from: draft.startIndex, to: range.lowerBound)
-        draft.replaceSubrange(range, with: "\n")
-        chat.draft = draft
-        place(at: offset + 1)
+    /// The keys the composer gives a meaning, as the text view's commands: true when taken.
+    private func perform(_ view: ComposerTextView, _ command: Selector) -> Bool {
+        switch command {
+        case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertLineBreak(_:)),
+            #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+            // Shift+Return (and Option+Return) start a new line; Return sends.
+            if let key = view.key, !key.modifierFlags.isDisjoint(with: [.shift, .option]) {
+                view.insertNewlineIgnoringFieldEditor(nil)
+                return true
+            }
+            if acceptSlash() == .ignored { chat.send() }
+            return true
+        // Shift+Tab switches mode, as in both CLIs; plain Tab accepts a slash command, else
+        // moves on as a field's Tab does.
+        case #selector(NSResponder.insertBacktab(_:)):
+            chat.cycleMode()
+            return true
+        case #selector(NSResponder.insertTab(_:)):
+            if acceptSlash() == .ignored { view.window?.selectNextKeyView(nil) }
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            // Taken either way: the text view's own Esc would open a completion list.
+            if !slashMatches.isEmpty { slashDismissed.value = true }
+            return true
+        case #selector(NSResponder.moveUp(_:)):
+            return moveSlash(-1) == .handled
+        case #selector(NSResponder.moveDown(_:)):
+            return moveSlash(1) == .handled
+        case #selector(NSResponder.deleteBackward(_:)):
+            return removeCommand(view)
+        default:
+            return false
+        }
     }
 
     // MARK: Paste and +
@@ -248,20 +234,12 @@ struct ComposerView: View {
     }
 
     /// Backspace with the caret before the first character takes the command chip off; the
-    /// text stays. (The field's own key handling never shows SwiftUI that key.)
-    private func removeCommand(_ event: NSEvent) -> NSEvent? {
-        guard event.keyCode == Self.backspaceKey,
-            event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
-            let window = window.value, event.window === window, focused.wrappedValue,
-            let chat = pasteChat.value, chat.command != nil,
-            let editor = window.firstResponder as? NSTextView, editor.isFieldEditor, !editor.hasMarkedText(),
-            editor.selectedRange() == NSRange(location: 0, length: 0)
-        else { return event }
+    /// text stays.
+    private func removeCommand(_ view: NSTextView) -> Bool {
+        guard chat.command != nil, !view.hasMarkedText(), view.selectedRange() == NSRange(location: 0, length: 0) else { return false }
         chat.command = nil
-        return nil
+        return true
     }
-
-    private static let backspaceKey: UInt16 = 51
 
     private func attach() {
         let panel = NSOpenPanel()
@@ -275,21 +253,15 @@ struct ComposerView: View {
 
     // MARK: Slash commands
 
-    /// What's selected in this chat's draft (empty: the caret), read from the editor while it
-    /// shows this draft (moving the caret alone, by ⌘← or a click, doesn't reach the selection
-    /// binding), else a caret Kore placed in this very text; nil when not known. The field's own
-    /// selection is never carried into the draft: it can belong to the text a keystroke ahead,
-    /// and an index of one string used in another traps.
+    /// What's selected in this chat's draft (empty: the caret), read from the text view while
+    /// it shows this draft, else a caret Kore placed in this very text; nil when not known. The
+    /// view's selection is never carried into another text: it can belong to the text a
+    /// keystroke ahead, and an index of one string used in another traps.
     private var selectedRange: Range<String.Index>? {
         let draft = chat.draft
-        let editor = fieldEditor
-        if let editor, editor.string == draft { return Range(editor.selectedRange(), in: draft) }
-        let kept = caret.value
-        guard kept.chat == chat.id, kept.placed, kept.text == draft,
-            case .selection(let range) = kept.selection?.indices,
-            let lower = String.Index(range.lowerBound, within: draft), let upper = String.Index(range.upperBound, within: draft)
-        else { return nil }
-        return lower..<upper
+        if let view = editor.view, view.shown == draft { return Range(view.selectedRange(), in: draft) }
+        guard let kept = caret.value, kept.chat == chat.id, kept.text == draft else { return nil }
+        return Range(kept.range, in: draft)
     }
 
     /// Where the caret is in this chat's draft: the end when it isn't known, nil with a range
@@ -315,14 +287,8 @@ struct ComposerView: View {
         return hits.filter { $0.name.lowercased().hasPrefix(query) } + hits.filter { !$0.name.lowercased().hasPrefix(query) }
     }
 
-    /// The field's editor while the field has focus.
-    private var fieldEditor: NSTextView? {
-        guard focused.wrappedValue, let editor = window.value?.firstResponder as? NSTextView, editor.isFieldEditor else { return nil }
-        return editor
-    }
-
     /// An input method is composing (marked text): its keys are its own.
-    private var composing: Bool { fieldEditor?.hasMarkedText() ?? false }
+    private var composing: Bool { editor.view?.hasMarkedText() ?? false }
 
     private func moveSlash(_ delta: Int) -> KeyPress.Result {
         let count = slashMatches.count

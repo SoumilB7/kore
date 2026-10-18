@@ -45,6 +45,9 @@ enum Layout {
     /// Transcript vertical padding and the gap between entries.
     static let transcriptPadding: CGFloat = 20
     static let entryGap: CGFloat = 14
+    /// The composer grows with its text to this many lines, then scrolls: as tall as it was as a
+    /// text field, so a long paste leaves the transcript in view at any window size.
+    static let composerLines: CGFloat = 10
 
     enum Welcome {
         static let width: CGFloat = 480

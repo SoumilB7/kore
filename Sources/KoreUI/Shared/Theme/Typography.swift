@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Font roles, not sizes. Two kinds, kept apart so a view can't pick the wrong one:
@@ -6,6 +7,8 @@ import SwiftUI
 @MainActor
 enum TextStyle {
     static var body: Font { .kore(13) }
+    /// `body` for AppKit text (the composer's text view).
+    static var bodyFont: NSFont { .systemFont(ofSize: 13 * Zoom.shared.scale) }
     static var bodyMedium: Font { .kore(13, .medium) }
     static var title: Font { .kore(13, .semibold) }
     static var label: Font { .kore(12) }
