@@ -11,12 +11,13 @@ struct ChatView: View {
     @StateObject private var window = Local<NSWindow?>(nil)
     @StateObject private var pasteMonitor = Local<Any?>(nil)
     @StateObject private var dropTargeted = Local(false)
+    @StateObject private var viewer = Local<ImageEditor?>(nil)
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    ForEach(chat.entries) { EntryView(entry: $0) }
+                    ForEach(chat.entries) { EntryView(entry: $0, openImage: { view($0, pending: false) }) }
                 }
                 .padding(.horizontal, column.padding)
                 .padding(.vertical, 20)
@@ -45,7 +46,16 @@ struct ChatView: View {
             .padding(.bottom, 16)
             .frame(maxWidth: ChatColumn.window.maxWidth)
         }
+        .overlay {
+            if let editor = viewer.value {
+                ImageViewer(
+                    editor: editor, actionTitle: editor.pendingID == nil ? "Add to message" : "Done",
+                    finish: { finishViewing(editor) }, close: closeViewer
+                )
+            }
+        }
         .animation(.easeOut(duration: 0.25), value: chat.activeMode.id)
+        .animation(.easeOut(duration: 0.15), value: viewer.value?.id)
         .background(WindowReader { window.value = $0 })
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted.value) { providers in
             Attachments.load(providers) { chat.attach($0) }
@@ -80,7 +90,9 @@ struct ChatView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(chat.attachments) { attachment in
-                            AttachmentChip(attachment: attachment) { chat.removeAttachment(attachment.id) }
+                            AttachmentChip(attachment: attachment, open: { view(attachment, pending: true) }) {
+                                chat.removeAttachment(attachment.id)
+                            }
                         }
                     }
                     .padding(.horizontal, 12)
@@ -343,6 +355,29 @@ struct ChatView: View {
         level == "xhigh" ? "Extra high" : level.capitalized
     }
 
+    // MARK: Image viewer
+
+    private func view(_ attachment: Attachment, pending: Bool) {
+        viewer.value = ImageEditor(attachment, pending: pending)
+        composerFocused = false
+    }
+
+    /// A composer image takes its markup in place; a sent image (marked up or not) is added to
+    /// the next message.
+    private func finishViewing(_ editor: ImageEditor) {
+        if let id = editor.pendingID {
+            if !editor.strokes.isEmpty, let url = editor.render() { chat.replaceAttachment(id, with: url) }
+        } else if let url = editor.strokes.isEmpty ? (editor.url ?? editor.render()) : editor.render() {
+            chat.attach([url])
+        }
+        closeViewer()
+    }
+
+    private func closeViewer() {
+        viewer.value = nil
+        composerFocused = true
+    }
+
     private func attach() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -358,6 +393,7 @@ struct ChatView: View {
 
 private struct EntryView: View {
     let entry: ChatModel.Entry
+    let openImage: (Attachment) -> Void
 
     var body: some View {
         switch entry.kind {
@@ -365,7 +401,9 @@ private struct EntryView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !entry.attachments.isEmpty {
                     HStack(spacing: 8) {
-                        ForEach(entry.attachments) { AttachmentChip(attachment: $0) }
+                        ForEach(entry.attachments) { attachment in
+                            AttachmentChip(attachment: attachment, open: { openImage(attachment) })
+                        }
                     }
                 }
                 if !entry.text.isEmpty {
@@ -645,21 +683,29 @@ private struct PlanChip: View {
 
 // MARK: - Attachments
 
-/// An attached image (thumbnail) or file (icon + name); removable while still in the composer.
+/// An attached image (thumbnail, click to view) or file (icon + name); removable while still
+/// in the composer.
 private struct AttachmentChip: View {
     let attachment: Attachment
+    var open: (() -> Void)?
     var remove: (() -> Void)?
 
     var body: some View {
         Group {
             if let thumbnail = attachment.thumbnail {
-                Image(nsImage: thumbnail)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.border))
-                    .help(attachment.name)
+                Button {
+                    open?()
+                } label: {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.border))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(attachment.name)
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: icon)

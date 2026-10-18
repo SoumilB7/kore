@@ -211,6 +211,12 @@ final class ChatModel: Identifiable {
         attachments.removeAll { $0.id == id }
     }
 
+    /// Swaps in an edited copy (a marked-up image), keeping its place.
+    func replaceAttachment(_ id: Attachment.ID, with url: URL) {
+        guard let index = attachments.firstIndex(where: { $0.id == id }) else { return }
+        attachments[index] = Attachment(url: url)
+    }
+
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let sent = attachments
