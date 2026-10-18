@@ -131,7 +131,8 @@ final class TranscriptStore {
             case .rule(let t): "rule-\(t)"
             case .outcome(let t, _): "outcome-\(t)"
             case .changes(let t, _, _, _): "changes-\(t)"
-            case .explored(let entries, _): "explored-\(entries.first?.id.uuidString ?? "")"
+            // The first call's: a read-only call that becomes a group keeps its identity.
+            case .explored(let entries, _): entries.first?.id.uuidString ?? "explored"
             case .spinner(let t, _, _): "spinner-\(t)"
             }
         }
@@ -173,11 +174,14 @@ final class TranscriptStore {
         let dot: TimelineDot?
         let above: Bool
         let below: Bool
-        var id: String { row.id }
+        /// The row's id; a call listed under its open "Explored" group (which has the first
+        /// call's id) gets "<id>/call".
+        let id: String
     }
 
     /// One user (or peer) message and what followed it. The header sticks to the top while
-    /// its section scrolls by.
+    /// its section scrolls by. Its id is "s-<message id>" ("start" before the first message),
+    /// distinct from the message row's own.
     struct Section: Identifiable, Equatable {
         let id: String
         let header: Entry?
@@ -186,7 +190,42 @@ final class TranscriptStore {
         let items: [Item]
     }
 
-    private(set) var sections: [Section] = []
+    /// A section as the view sees it: its own observable, so a streamed token re-renders only
+    /// the section it lands in. `sections` itself changes only when sections come or go.
+    @MainActor @Observable
+    final class SectionModel: Identifiable {
+        let id: String
+        private(set) var header: Entry?
+        private(set) var headerOpen: Bool
+        private(set) var items: [Item]
+
+        init(_ section: Section) {
+            id = section.id
+            header = section.header
+            headerOpen = section.headerOpen
+            items = section.items
+        }
+
+        /// Takes a rebuilt section's content, touching only what changed; whether anything did.
+        func update(_ section: Section) -> Bool {
+            var changed = false
+            if header != section.header {
+                header = section.header
+                changed = true
+            }
+            if headerOpen != section.headerOpen {
+                headerOpen = section.headerOpen
+                changed = true
+            }
+            if items != section.items {
+                items = section.items
+                changed = true
+            }
+            return changed
+        }
+    }
+
+    private(set) var sections: [SectionModel] = []
     /// Changes whenever any row does, so the view can follow the end.
     private(set) var tail = 0
     /// Changes whenever any agent's own work or details do (the map and agent tabs follow it;
@@ -240,8 +279,19 @@ final class TranscriptStore {
     /// Where the reader was when the chat's view went away (another tab), to come back to.
     @ObservationIgnored var savedScroll: (offset: CGFloat, atEnd: Bool)?
 
-    /// User turns shown, counted from the end (T3 Code opens a thread on its last 10).
-    @ObservationIgnored private var windowTurns = 10
+    /// The first user message built; nil: from the first entry. A replayed chat opens on its
+    /// last `openTurns` (T3 Code's paging); "Load earlier turns" moves it up. A send never moves
+    /// it, so nothing above the reader goes away.
+    @ObservationIgnored private var windowStart: UUID?
+    @ObservationIgnored private var windowPlaced = false
+    static let openTurns = 10
+    /// The lowest entry index changed since the last rebuild: sections from the one holding it
+    /// are built again, the ones above are kept. nil: nothing changed.
+    @ObservationIgnored private var dirtyFrom: Int?
+    /// Where each of `sections` starts in `entries`.
+    @ObservationIgnored private var sectionStarts: [Int] = []
+    /// The latest turn's tools changed, so `fileTouches` is due again.
+    @ObservationIgnored private var touchesDirty = false
     /// Changes waiting to be drawn: streamed deltas are drawn once per `drawInterval`.
     @ObservationIgnored private var drawScheduled = false
     static let drawInterval: TimeInterval = 1.0 / 30
@@ -293,10 +343,39 @@ final class TranscriptStore {
         for i in entries.indices where entries[i].startedAt == nil && (entries[i].kind == .thinking || entries[i].kind == .answer) {
             entries[i].done = true
         }
+        invalidateAll()
         rebuild()
     }
 
-    /// Twenty more user turns above the window.
+    /// A past session's history, before anything else: it opens on its last `openTurns` turns.
+    func replay(_ events: [ChatEvent]) {
+        batch {
+            events.forEach(apply)
+            placeWindow()
+        }
+    }
+
+    private func placeWindow() {
+        guard !windowPlaced else { return }
+        windowPlaced = true
+        var users = 0
+        for i in entries.indices.reversed() where entries[i].kind == .user {
+            users += 1
+            if users == Self.openTurns {
+                windowStart = entries[i].id
+                break
+            }
+        }
+        countHidden()
+    }
+
+    private var windowStartIndex: Int { windowStart.flatMap { position[$0] } ?? 0 }
+
+    private func countHidden() {
+        let hidden = entries[..<windowStartIndex].count { $0.kind == .user }
+        if hidden != hiddenTurns { hiddenTurns = hidden }
+    }
+
     /// The conversation before a compaction is being read.
     func startLoadingEarlier() {
         loadingEarlier = true
@@ -311,7 +390,6 @@ final class TranscriptStore {
         position = [:]
         batching = true
         events.forEach(apply)
-        let added = entries.count { $0.kind == .user }
         for entry in later {
             position[entry.id] = entries.count
             entries.append(entry)
@@ -321,9 +399,12 @@ final class TranscriptStore {
         for i in entries.indices where entries[i].startedAt == nil && (entries[i].kind == .thinking || entries[i].kind == .answer) {
             entries[i].done = true
         }
-        windowTurns += added
+        // Offered only with every turn shown, so the page shows too.
+        if hiddenTurns == 0 { windowStart = nil }
+        countHidden()
         earlierAvailable = more
         loadingEarlier = false
+        invalidateAll()
         rebuild()
     }
 
@@ -348,8 +429,18 @@ final class TranscriptStore {
         return f
     }()
 
+    /// Twenty more user turns above the window.
     func loadEarlier() {
-        windowTurns += 20
+        var users = 0
+        var start: UUID?
+        for i in entries[..<windowStartIndex].indices.reversed() where entries[i].kind == .user {
+            users += 1
+            start = entries[i].id
+            if users == 20 { break }
+        }
+        windowStart = users == 20 ? start : nil
+        countHidden()
+        invalidateAll()
         rebuild()
     }
 
@@ -359,7 +450,8 @@ final class TranscriptStore {
         turns[id] = Turn(id: id, startedAt: date)
         current = id
         latestTurn = id
-        changed()
+        touchesDirty = true
+        changed(at: entries.count - 1)
     }
 
     /// Codex: the final answer has begun, so the work above it folds now.
@@ -369,7 +461,7 @@ final class TranscriptStore {
         turns[turn]?.answerFrom = entry
         turns[turn]?.workEnded = Date()
         announceFold(turn)
-        changed()
+        changed(at: position[entry])
     }
 
     func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date()) {
@@ -389,13 +481,14 @@ final class TranscriptStore {
         if current == id { current = nil }
         workedBefore += turn.duration ?? 0
         if !hadAnswer { announceFold(id) }
-        changed()
+        changed(turn: id)
     }
 
     /// The files a turn changed (the git snapshot, or what the CLI reported), for its summary.
     func turnChanges(_ id: String, _ changes: [FileChange]) {
         turns[id]?.changes = changes
-        changed()
+        touchesDirty = true
+        changed(turn: id)
     }
 
     func changes(ofTurn id: String) -> [FileChange] { turns[id]?.changes ?? [] }
@@ -430,7 +523,12 @@ final class TranscriptStore {
                 for c in e.changes { touch(c.path, added: c.added, removed: c.removed, writing: !e.done, agent: agent) }
             }
         }
-        for e in entries where e.turn == id {
+        // The turn's entries sit together near the end (a peer's message may lead them).
+        var i = entries.count - 1
+        while i >= 0, entries[i].turn != id { i -= 1 }
+        var first = i
+        while first >= 0, entries[first].turn == id { first -= 1 }
+        for e in entries[(first + 1)..<(i + 1)] where e.turn == id {
             add(e, agent: nil)
             if let info = e.agent { (lanes[info.id] ?? []).forEach { add($0, agent: info) } }
         }
@@ -447,12 +545,22 @@ final class TranscriptStore {
         return touches
     }
 
-    /// Symlinks resolved (/tmp → /private/tmp), as FSEvents reports paths.
+    /// Symlinks resolved (/tmp → /private/tmp), as FSEvents reports paths; each path once.
     private static func resolved(_ path: String) -> String {
-        guard let real = realpath(path, nil) else { return (path as NSString).standardizingPath }
-        defer { free(real) }
-        return String(cString: real)
+        if let known = realPaths[path] { return known }
+        let resolved: String
+        if let real = realpath(path, nil) {
+            resolved = String(cString: real)
+            free(real)
+        } else {
+            // Not there (yet): asked again next time.
+            return (path as NSString).standardizingPath
+        }
+        realPaths[path] = resolved
+        return resolved
     }
+
+    private static var realPaths: [String: String] = [:]
 
     // MARK: The agent map
 
@@ -478,7 +586,7 @@ final class TranscriptStore {
         let rows = (lanes[id] ?? []).map(row)
         let dots = rows.map { Self.dot($0) ?? .plain }
         return rows.indices.map { i in
-            Item(row: rows[i], dot: dots[i], above: i > 0, below: i + 1 < rows.count)
+            Item(row: rows[i], dot: dots[i], above: i > 0, below: i + 1 < rows.count, id: rows[i].id)
         }
     }
 
@@ -508,12 +616,12 @@ final class TranscriptStore {
     /// The CLI waits on the user: the live fold row says so, and the spinner hides.
     func approvalAsked(_ approval: String, question: Bool) {
         pendingApprovals[approval] = question
-        changed()
+        changed(turn: current)
     }
 
     /// The question was answered or withdrawn.
     func approvalSettled(_ approval: String) {
-        if pendingApprovals.removeValue(forKey: approval) != nil { changed() }
+        if pendingApprovals.removeValue(forKey: approval) != nil { changed(turn: current) }
         guard let agent = askedBy.removeValue(forKey: approval) else { return }
         updateAgent(agent) { $0.waiting = max(0, $0.waiting - 1) }
     }
@@ -579,11 +687,7 @@ final class TranscriptStore {
     // MARK: Content
 
     func user(_ text: String, attachments: [Attachment], source: String? = nil) {
-        if !batching {
-            sentAt = Date()
-            // A send never drops a turn from the top: a full window grows by the turn it adds.
-            if entries.lazy.filter({ $0.kind == .user }).count >= windowTurns { windowTurns += 1 }
-        }
+        if !batching { sentAt = Date() }
         var entry = Entry(kind: .user, text: text, attachments: attachments)
         entry.source = source
         append(entry)
@@ -617,6 +721,7 @@ final class TranscriptStore {
         }
         if let id = blocks[block], let i = position[id] {
             entries[i].text += text
+            changed(at: i)
         } else {
             endThinking()
             endAnswer()
@@ -624,9 +729,8 @@ final class TranscriptStore {
             entry.turn = current
             if kind == .thinking { entry.startedAt = Date() }
             blocks[block] = entry.id
-            append(entry, rebuild: false)
+            append(entry)
         }
-        changed()
     }
 
     func toolStarted(
@@ -650,7 +754,8 @@ final class TranscriptStore {
                 entries[i].agent!.tools += 1
                 entries[i].agent!.lastTool = name
             }
-            changed()
+            touchesDirty = true
+            changed(at: cardIndex(agent))
             return
         }
         entry.turn = current
@@ -659,7 +764,7 @@ final class TranscriptStore {
     }
 
     func toolOutput(id: String, _ text: String) {
-        update(tool: id) { $0.result = ($0.result ?? "") + text }
+        update(tool: id, files: false) { $0.result = ($0.result ?? "") + text }
     }
 
     /// `output` nil keeps what streamed. On an agent's spawning call (Claude's foreground Agent
@@ -667,7 +772,7 @@ final class TranscriptStore {
     func toolFinished(id: String, output: String?, isError: Bool) {
         if let card = tools[id], let i = position[card], entries[i].agent != nil {
             if entries[i].agent!.result == nil, let output { entries[i].agent!.result = Self.handBack(output) }
-            changed()
+            changed(at: i)
             return
         }
         update(tool: id) {
@@ -708,7 +813,7 @@ final class TranscriptStore {
                 laneAppend(agent: parent, entry)
             }
             laneAgents[id] = (parent, entry.id)
-            changed()
+            changed(at: cardIndex(parent))
             return
         }
         entry.turn = current
@@ -720,7 +825,8 @@ final class TranscriptStore {
             position[entry.id] = i
             position[existing] = nil
             tools[tool] = entry.id
-            changed()
+            touchesDirty = true
+            changed(at: i)
         } else {
             append(entry)
         }
@@ -752,11 +858,16 @@ final class TranscriptStore {
         turn.open = !Self.isOpen(turn)
         turn.touched = true
         turns[id] = turn
+        mark(turnIndex(id))
         rebuild()
     }
 
+    /// `key` is an entry id, maybe with a prefix or suffix ("explored-<id>", "<id>/all",
+    /// "<id>/<path>").
     func toggle(_ key: String) {
         if openKeys.remove(key) == nil { openKeys.insert(key) }
+        let id = key.hasPrefix("explored-") ? key.dropFirst("explored-".count) : Substring(key)
+        mark(UUID(uuidString: String(id.prefix(36))).flatMap { position[$0] })
         rebuild()
     }
 
@@ -781,21 +892,18 @@ final class TranscriptStore {
             RebuildStats.signposter.endInterval("TranscriptRebuild", signpost)
             RebuildStats.shared.record(Double(DispatchTime.now().uptimeNanoseconds - began) / 1e6)
         }
-        // Only the last `windowTurns` user turns are built (T3 Code's paging): a long chat costs
-        // what its last few turns cost. Everything stays in `entries`.
-        var users = 0
-        var start = 0
-        for i in entries.indices.reversed() where entries[i].kind == .user {
-            users += 1
-            if users == windowTurns { start = i }
-        }
-        let hidden = max(0, users - windowTurns)
-        if hidden == 0 { start = 0 }
-        if hidden != hiddenTurns { hiddenTurns = hidden }
+        // Only the window is built (a long chat costs what its last turns cost), and of it only
+        // the sections from the first change down; the ones above are kept as they are.
+        let start = windowStartIndex
+        let whole = sectionStarts.first != start
+        guard whole || dirtyFrom != nil else { return }
+        let from = whole ? start : max(dirtyFrom ?? entries.count, start)
+        dirtyFrom = nil
+        let kept = whole ? 0 : (sectionStarts.lastIndex { $0 <= from } ?? 0)
+        let begin = whole ? start : sectionStarts[kept]
 
         var rows: [Row] = []
-        rows.reserveCapacity(entries.count - start)
-        var i = start
+        var i = begin
         while i < entries.count {
             guard let turnID = entries[i].turn, let turn = turns[turnID] else {
                 if let row = visibleRow(entries[i]) { rows.append(row) }
@@ -809,13 +917,38 @@ final class TranscriptStore {
         }
         let summary = summarizeAgents()
         if summary != agentSummary { agentSummary = summary }
-        let touches = touchedFiles()
-        if touches != fileTouches { fileTouches = touches }
-        // Sections are the one built form of the transcript; nothing else keeps the rows.
-        let sections = Self.sections(rows, open: openKeys)
-        guard sections != self.sections else { return }
-        self.sections = sections
-        tail &+= 1
+        if touchesDirty {
+            touchesDirty = false
+            let touches = touchedFiles()
+            if touches != fileTouches { fileTouches = touches }
+        }
+        // Sections are the one built form of the transcript; nothing else keeps the rows. A
+        // section that's still there keeps its model, so only its own view hears of a change.
+        let old = Dictionary(sections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var models = Array(sections.prefix(kept))
+        var starts = Array(sectionStarts.prefix(kept))
+        var changed = false
+        for section in Self.sections(rows, open: openKeys) {
+            if let model = old[section.id] {
+                if model.update(section) { changed = true }
+                models.append(model)
+            } else {
+                models.append(SectionModel(section))
+            }
+            starts.append(section.header.flatMap { position[$0.id] } ?? begin)
+        }
+        sectionStarts = starts
+        if models.count != sections.count || zip(models, sections).contains(where: { $0 !== $1 }) {
+            sections = models
+            changed = true
+        }
+        if changed { tail &+= 1 }
+    }
+
+    /// Everything is built again on the next rebuild (the window moved, or entries shifted).
+    private func invalidateAll() {
+        sectionStarts = []
+        touchesDirty = true
     }
 
     /// Splits rows at each user or peer message, and places them on the timeline.
@@ -827,11 +960,14 @@ final class TranscriptStore {
         func flush() {
             guard header != nil || !run.isEmpty else { return }
             let dots = run.map(dot)
+            var ids: Set<String> = []
             let items = run.indices.map { i in
-                Item(
+                let id = run[i].id
+                return Item(
                     row: run[i], dot: dots[i],
                     above: dots[i] != nil && i > 0 && dots[i - 1] != nil,
-                    below: dots[i] != nil && i + 1 < dots.count && dots[i + 1] != nil)
+                    below: dots[i] != nil && i + 1 < dots.count && dots[i + 1] != nil,
+                    id: ids.insert(id).inserted ? id : id + "/call")
             }
             let headerOpen = header.map { $0.kind == .user || open.contains($0.id.uuidString) } ?? false
             sections.append(Section(id: id, header: header, headerOpen: headerOpen, items: items))
@@ -840,7 +976,7 @@ final class TranscriptStore {
             if case .entry(let e) = row, e.kind == .user || e.kind == .peer {
                 flush()
                 header = e
-                id = e.id.uuidString
+                id = "s-" + e.id.uuidString
                 // The message itself is the section's first row; the pinned header is only its
                 // first lines, once it has scrolled past.
                 let opened = e.kind == .user || open.contains(e.id.uuidString)
@@ -889,6 +1025,7 @@ final class TranscriptStore {
     private func endAnswer() {
         guard let last = entries.indices.last, entries[last].kind == .answer, !entries[last].done else { return }
         entries[last].done = true
+        mark(last)
     }
 
     /// The thinking block in progress ends when anything else starts.
@@ -898,6 +1035,7 @@ final class TranscriptStore {
         else { return }
         entries[last].duration = Date().timeIntervalSince(start)
         entries[last].done = true
+        mark(last)
     }
 
     /// A turn. While it works, a live fold row (look.md §12) heads its work, open, saying what's
@@ -1075,7 +1213,10 @@ final class TranscriptStore {
 
     /// Draws the change: at once for a batch's end or a user's action, else at most once per
     /// `drawInterval`, so a fast stream of deltas costs one rebuild per frame, not one per token.
-    private func changed() {
+    /// `index` is the entry that changed; nil when it's not known (everything shown is built
+    /// again).
+    private func changed(at index: Int? = nil) {
+        mark(index)
         guard !batching, !drawScheduled else { return }
         drawScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.drawInterval) { [weak self] in
@@ -1085,34 +1226,70 @@ final class TranscriptStore {
         }
     }
 
-    private func append(_ entry: Entry, rebuild: Bool = true) {
+    private func mark(_ index: Int?) {
+        let i = max(index ?? 0, 0)
+        dirtyFrom = min(dirtyFrom ?? i, i)
+    }
+
+    /// A change to a turn: its rows are laid out together.
+    private func changed(turn id: String?) {
+        changed(at: turnIndex(id))
+    }
+
+    /// One of the turn's entries (all of them sit in one section), or the last entry for a turn
+    /// with none yet; nil for no turn.
+    private func turnIndex(_ id: String?) -> Int? {
+        guard let id else { return entries.count - 1 }
+        return entries.lastIndex { $0.turn == id } ?? (current == id ? entries.count - 1 : nil)
+    }
+
+    /// The chat's own card an agent's work shows in: its card, or its parent's, up to the one
+    /// on the transcript.
+    private func cardIndex(_ agent: String) -> Int? {
+        var id = agent
+        while true {
+            if let card = agentCards[id], let i = position[card] { return i }
+            guard let parent = laneAgents[id]?.parent else { return nil }
+            id = parent
+        }
+    }
+
+    private func append(_ entry: Entry) {
         position[entry.id] = entries.count
         entries.append(entry)
-        if rebuild { changed() }
+        changed(at: entries.count - 1)
     }
 
     private func insert(_ entry: Entry, at index: Int) {
         entries.insert(entry, at: index)
         for i in index..<entries.count { position[entries[i].id] = i }
+        invalidateAll()
+        countHidden()
         changed()
     }
 
-    private func update(tool id: String, _ change: (inout Entry) -> Void) {
+    private func update(tool id: String, files: Bool = true, _ change: (inout Entry) -> Void) {
+        let at: Int?
         if let (agent, index) = laneTools[id] {
             if lanes[agent]?.indices.contains(index) == true { change(&lanes[agent]![index]) }
             agentsVersion &+= 1
+            at = cardIndex(agent)
         } else if let entry = tools[id], let i = position[entry] {
             change(&entries[i])
+            at = i
         } else {
             return
         }
-        changed()
+        if files { touchesDirty = true }
+        changed(at: at)
     }
 
     private func updateAgent(_ id: String, _ change: (inout AgentInfo) -> Void) {
         agentsVersion &+= 1
         if let card = agentCards[id], let i = position[card], entries[i].agent != nil {
             change(&entries[i].agent!)
+            changed(at: i)
+            return
         } else if let (parent, card) = laneAgents[id], let i = lanes[parent]?.firstIndex(where: { $0.id == card }),
             lanes[parent]![i].agent != nil
         {
@@ -1120,12 +1297,13 @@ final class TranscriptStore {
         } else {
             return
         }
-        changed()
+        changed(at: cardIndex(id))
     }
 
     private func laneAppend(agent: String, _ entry: Entry) {
         lanes[agent, default: []].append(entry)
         agentsVersion &+= 1
+        touchesDirty = true
     }
 
     private func laneText(agent: String, block: String, kind: Entry.Kind, text: String) {
@@ -1140,7 +1318,7 @@ final class TranscriptStore {
             blocks[key] = entry.id
             laneAppend(agent: agent, entry)
         }
-        changed()
+        changed(at: cardIndex(agent))
     }
 
     private func announceFold(_ turn: String) {

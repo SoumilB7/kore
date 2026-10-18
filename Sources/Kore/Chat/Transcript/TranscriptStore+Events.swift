@@ -7,7 +7,7 @@ extension TranscriptStore {
     func apply(_ event: ChatEvent) {
         switch event {
         case .replayed(let events):
-            batch { events.forEach(apply) }
+            replay(events)
 
         case .turnStarted(let id, _, let at):
             turnStarted(id, at: at)

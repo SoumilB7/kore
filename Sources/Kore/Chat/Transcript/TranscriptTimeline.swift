@@ -44,6 +44,8 @@ struct TranscriptTimeline: View {
 
     var body: some View {
         ScrollViewReader { proxy in
+            let rowActions = rowActions(proxy)
+            let reveal = reveal(proxy)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     // One row at the top, never two: earlier turns of this history first, then the
@@ -60,17 +62,8 @@ struct TranscriptTimeline: View {
                             .id(Self.loadRow)
                     }
                     ForEach(store.sections) { section in
-                        Section {
-                            ForEach(section.items) { item in
-                                TimelineRow(item: item, actions: rowActions(proxy)).equatable()
-                            }
-                        } header: {
-                            if let header = section.header {
-                                StickyMessage(
-                                    entry: header, open: section.headerOpen, actions: reveal(proxy), tracker: sticky)
-                            }
-                        }
-                        .id(section.id)
+                        TimelineSection(section: section, actions: rowActions, reveal: reveal, sticky: sticky)
+                            .id(section.id)
                     }
                     Color.clear.frame(height: Stroke.hairline).id(Self.end)
                 }
@@ -261,5 +254,26 @@ struct TranscriptTimeline: View {
             withAnimation(Motion.fade) { proxy.scrollTo(id, anchor: .top) }
         }
         return actions
+    }
+}
+
+/// One section, reading only its own model: a streamed token re-renders the section it lands
+/// in, not the transcript.
+private struct TimelineSection: View {
+    let section: TranscriptStore.SectionModel
+    let actions: TranscriptActions
+    let reveal: TranscriptActions
+    let sticky: StickyTracker
+
+    var body: some View {
+        Section {
+            ForEach(section.items) { item in
+                TimelineRow(item: item, actions: actions).equatable()
+            }
+        } header: {
+            if let header = section.header {
+                StickyMessage(entry: header, open: section.headerOpen, actions: reveal, tracker: sticky)
+            }
+        }
     }
 }
