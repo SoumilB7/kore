@@ -53,6 +53,7 @@ struct StoryRegistryTests {
         let old = StoryRegistry.register("t.agents", in: stale)
         closed.close()
         #expect(StoryRegistry.entry("t.agents") == nil)
+        #expect(!StoryRegistry.ids.contains("t.agents"))
         let live = StoryRegistry.register("t.agents", in: view(CGRect(x: 0, y: 0, width: 10, height: 10)))
         #expect(StoryRegistry.entry("t.agents")?.token == live)
         StoryRegistry.unregister(old)

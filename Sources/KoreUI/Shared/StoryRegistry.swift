@@ -60,9 +60,10 @@ package enum StoryRegistry {
         entries[id]?.last { $0.window?.isVisible == true }
     }
 
-    /// Every id with an entry in a window, sorted.
+    /// Every id with an entry in a shown window, sorted: the ids `entry(_:)` answers for, so a
+    /// not-found report never names one that only a closed window still holds.
     package static var ids: [String] {
-        entries.compactMap { id, list in list.contains { $0.window != nil } ? id : nil }.sorted()
+        entries.compactMap { id, list in list.contains { $0.window?.isVisible == true } ? id : nil }.sorted()
     }
 
     /// The registered ids that share the most leading segments with `id` (its parent and
