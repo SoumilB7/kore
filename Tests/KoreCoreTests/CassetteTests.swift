@@ -18,7 +18,15 @@ struct CassetteTests {
 
     @Test func prefersTheWorkFolderOverHomeForAFolderUnderHome() {
         let paths = CassettePaths(work: URL(fileURLWithPath: "/Users/someone/code/app"), home: home)
-        #expect(paths.scrub("/Users/someone/code/app/x and /Users/someone/.codex") == "/WORK/x and /HOME/.codex")
+        #expect(paths.scrub("/Users/someone/code/app/x and /Users/someone/.codex") == "/WORK/x and /CODEX_HOME")
+    }
+
+    @Test func scrubsAndRestoresCodexsHome() {
+        let paths = CassettePaths(work: URL(fileURLWithPath: "/w"), codexHome: URL(fileURLWithPath: "/private/tmp/run/codex-home"), home: home)
+        #expect(paths.scrub(#"{"codexHome":"/tmp/run/codex-home","path":"/private/tmp/run/codex-home/sessions/r.jsonl"}"#)
+            == #"{"codexHome":"/CODEX_HOME","path":"/CODEX_HOME/sessions/r.jsonl"}"#)
+        let real = CassettePaths(work: URL(fileURLWithPath: "/w"), home: home)
+        #expect(real.restore("/CODEX_HOME/sessions") == "/Users/someone/.codex/sessions")
     }
 
     @Test func restoresThisRunsPaths() {

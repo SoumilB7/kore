@@ -56,26 +56,34 @@ package struct Cassette: Sendable {
 }
 
 /// The paths a cassette doesn't keep: the session's working folder (in every form a CLI prints
-/// it) becomes "/WORK", Claude's project-dir name for it "-WORK", and the home folder "/HOME".
-/// `restore` puts this run's paths back.
+/// it) becomes "/WORK", Claude's project-dir name for it "-WORK", Codex's home "/CODEX_HOME" and
+/// the home folder "/HOME". `restore` puts this run's paths back.
 package struct CassettePaths: Sendable {
     private let pairs: [(real: String, placeholder: String)]
 
-    package init(work: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) {
-        var variants: Set<String> = [work.path]
-        if let real = realpath(work.path, nil) {
+    /// `codexHome`: the `CODEX_HOME` the CLI ran with (`~/.codex` when it had none).
+    package init(work: URL, codexHome: URL? = nil, home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        let codex = codexHome ?? home.appendingPathComponent(".codex")
+        var pairs = Self.variants(work.path).map { ($0, "/WORK") } + Self.variants(work.path).map { (Self.encoded($0), "-WORK") }
+        pairs += Self.variants(codex.path).map { ($0, "/CODEX_HOME") }
+        pairs.append((home.path, "/HOME"))
+        // Longest first, so a folder under home is "/WORK", not "/HOME/…".
+        self.pairs = pairs.sorted { $0.0.count > $1.0.count }
+    }
+
+    /// The path as given, its real path, and both with and without /private: /tmp and /var are
+    /// /private/tmp and /private/var, and a CLI may print either.
+    private static func variants(_ path: String) -> Set<String> {
+        var variants: Set<String> = [path]
+        if let real = realpath(path, nil) {
             variants.insert(String(cString: real))
             free(real)
         }
-        // /tmp and /var are /private/tmp and /private/var: a CLI may print either.
         for path in variants {
             if path.hasPrefix("/private/") { variants.insert(String(path.dropFirst("/private".count))) }
             else if path.hasPrefix("/tmp/") || path.hasPrefix("/var/") { variants.insert("/private" + path) }
         }
-        var pairs = variants.map { ($0, "/WORK") } + variants.map { (Self.encoded($0), "-WORK") }
-        pairs.append((home.path, "/HOME"))
-        // Longest first, so a folder under home is "/WORK", not "/HOME/…".
-        self.pairs = pairs.sorted { $0.0.count > $1.0.count }
+        return variants
     }
 
     package func scrub(_ text: String) -> String {
@@ -88,13 +96,18 @@ package struct CassettePaths: Sendable {
 
     /// The placeholders as this run's paths (the folder's real path, as the CLIs print it).
     package func restore(_ text: String) -> String {
-        guard text.contains("/WORK") || text.contains("-WORK") || text.contains("/HOME") else { return text }
-        let work = pairs.first { $0.placeholder == "/WORK" && $0.real.hasPrefix("/private/") }?.real
-            ?? pairs.first { $0.placeholder == "/WORK" }?.real ?? "/WORK"
-        let home = pairs.first { $0.placeholder == "/HOME" }?.real ?? "/HOME"
+        guard text.contains("WORK") || text.contains("/HOME") || text.contains("/CODEX_HOME") else { return text }
+        let work = real("/WORK")
         return text.replacingOccurrences(of: "-WORK", with: Self.encoded(work))
+            .replacingOccurrences(of: "/CODEX_HOME", with: real("/CODEX_HOME"))
             .replacingOccurrences(of: "/WORK", with: work)
-            .replacingOccurrences(of: "/HOME", with: home)
+            .replacingOccurrences(of: "/HOME", with: real("/HOME"))
+    }
+
+    /// The placeholder's path in its real form (the CLIs print real paths).
+    private func real(_ placeholder: String) -> String {
+        pairs.first { $0.placeholder == placeholder && $0.real.hasPrefix("/private/") }?.real
+            ?? pairs.first { $0.placeholder == placeholder }?.real ?? placeholder
     }
 
     /// Claude's project-dir name for a folder: every character but ASCII letters and digits as "-".
@@ -124,11 +137,11 @@ package final class CassetteRecorder: @unchecked Sendable {
     private let model: String?
     private var next = 0
 
-    package init(url: URL, work: URL, model: String? = nil) throws {
+    package init(url: URL, work: URL, codexHome: URL? = nil, model: String? = nil) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: url.path, contents: nil)
         handle = try FileHandle(forWritingTo: url)
-        paths = CassettePaths(work: work)
+        paths = CassettePaths(work: work, codexHome: codexHome)
         self.model = model
     }
 

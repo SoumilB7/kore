@@ -28,7 +28,7 @@ let package = Package(
         // Plays recorded CLI sessions as `claude` / `codex` for storylines.
         .executableTarget(name: "kore-fake-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
-        .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore"]),
+        .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "KoreCore"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines"]),
     ]
