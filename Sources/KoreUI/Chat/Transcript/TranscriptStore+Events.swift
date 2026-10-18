@@ -65,6 +65,7 @@ extension TranscriptStore {
             agentFinished(id: id, status: status, result: result)
 
         case .exited(let status):
+            compacting(false)
             if turnIsOpen { turnFinished(nil, .interrupted) }
             if status != 0 && status != 15 { notice("\(providerName) exited (\(status))", isError: true) }
 
@@ -77,10 +78,8 @@ extension TranscriptStore {
         case .compactionStarted:
             compacting(true)
         case .compactionFailed(let reason):
-            compacting(false)
-            notice("Couldn't compact: " + reason, isError: true)
+            compactionFailed(reason)
         case .compacted(let at, _, let auto):
-            compacting(false)
             compacted(at: at, auto: auto)
         case .compactionSummary(let text):
             compactionSummary(text)

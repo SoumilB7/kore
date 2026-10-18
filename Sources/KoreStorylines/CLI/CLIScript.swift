@@ -100,6 +100,8 @@ package enum Call: Sendable, Equatable {
     case stopAgent(String)
     case compact
     case fork(message: String?)
+    /// Not Kore's: a test's go-ahead (`ScriptedBackend.release()`), to hold a script mid-way.
+    case release
 
     /// Whether a call matches what a `.wait` names: the same kind, and for sends and agents the
     /// same text or id when the wait names one (an empty text matches any).

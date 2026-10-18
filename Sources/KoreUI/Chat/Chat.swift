@@ -205,11 +205,14 @@ package final class Chat: Identifiable {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let sent = attachments
         guard !text.isEmpty || !sent.isEmpty, !context.compacting else { return }
-        // A typed /compact compacts as the context wheel does, not as a message. It waits in
-        // the composer while it can't (a turn running, no session yet).
+        // A typed /compact compacts as the context wheel does, shown as the user's message (the
+        // CLI isn't sent it as one). It waits in the composer while it can't (a turn running, no
+        // session yet).
         if sent.isEmpty, let instructions = Self.compactCommand(text) {
             guard canCompact else { return }
             draft = ""
+            let message = ChatEvent.userMessage(text: text, attachments: [])
+            if awaitingHistory { held.append(message) } else { dispatch(message) }
             compact(instructions: instructions)
             return
         }
@@ -257,9 +260,11 @@ package final class Chat: Identifiable {
     var canCompact: Bool { status.sessionId != nil && !status.isRunning && !context.compacting }
 
     /// `instructions`: what the summary should keep (`/compact <instructions>`); empty for none.
+    /// The transcript's live row shows from here, before the CLI says it started.
     func compact(instructions: String = "") {
         guard canCompact else { return }
         context.begin()
+        transcript.compacting(true)
         let backend = connect()
         Task {
             do {

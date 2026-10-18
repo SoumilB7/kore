@@ -363,8 +363,8 @@ final class TranscriptStore {
     static let drawInterval: TimeInterval = 1.0 / 30
     /// Pending approvals of this chat: id → it's a question (AskUserQuestion, Codex user input).
     @ObservationIgnored private var pendingApprovals: [String: Bool] = [:]
-    /// A compaction is running (the live row says "Compacting…").
-    @ObservationIgnored private var compactingNow = false
+    /// A compaction is running, since when (the live row says "Compacting…").
+    @ObservationIgnored private var compactingSince: Date?
     /// The most recently started turn, for `turnChanges()`.
     @ObservationIgnored private var latestTurn: String?
 
@@ -426,6 +426,8 @@ final class TranscriptStore {
     func replay(_ events: [ChatEvent]) {
         batch {
             events.forEach(apply)
+            // A past compaction that never finished isn't still running.
+            compactingSince = nil
             endUnfinishedAgents()
             placeWindow()
         }
@@ -498,19 +500,30 @@ final class TranscriptStore {
         earlierAvailable = available
     }
 
-    /// A compaction is running: the live row says "Compacting…" (look §9).
+    /// A compaction is running: the live row says "Compacting…" (look §9), the running turn's
+    /// or, when no turn shows one, a row of its own at the end, where its divider lands.
     func compacting(_ on: Bool) {
-        guard compactingNow != on else { return }
-        compactingNow = on
-        rebuild()
+        guard (compactingSince != nil) != on else { return }
+        compactingSince = on ? Date() : nil
+        changed(turn: turnShowsSpinner ? current : nil)
     }
 
-    /// "Conversation compacted · 14:32" above the summary that follows.
+    /// The running turn draws its spinner: it has rows (a compaction's own turn has none).
+    private var turnShowsSpinner: Bool { turnIsOpen && current.flatMap { turnFirst[$0] } != nil }
+
+    /// "Conversation compacted · 14:32" above the summary that follows, in place of the live row.
     /// The divider names who started it: "Conversation compacted · 14:32" (the user, or not
     /// known), "Compacted automatically · 14:32" (the CLI).
     func compacted(at date: Date, auto: Bool? = nil) {
         let cause = auto == true ? "Compacted automatically" : "Conversation compacted"
+        compacting(false)
         append(Entry(kind: .divider, text: cause + " · " + Self.time.string(from: date)))
+    }
+
+    /// "Couldn't compact: …", one line, in place of the live row.
+    func compactionFailed(_ reason: String) {
+        compacting(false)
+        notice("Couldn't compact: " + (reason.split(whereSeparator: \.isNewline).first.map(String.init) ?? reason), isError: true)
     }
 
     /// What the compaction kept (Claude's summary), under its divider.
@@ -524,6 +537,8 @@ final class TranscriptStore {
     }
 
     static let forkSource = "fork"
+    /// The turn id of a compaction's own live row.
+    static let compactionRow = "compaction"
 
     private static let time: DateFormatter = {
         let f = DateFormatter()
@@ -1261,6 +1276,10 @@ final class TranscriptStore {
             layout(turn, entries[i..<end], into: &rows)
             i = end
         }
+        // A compaction no turn shows has its own live row.
+        if let since = compactingSince, !turnShowsSpinner {
+            rows.append(.spinner(turn: Self.compactionRow, since: since, claude: providerName == "Claude", word: "Compacting"))
+        }
         // Messages waiting for the running turn come last, after its spinner.
         rows.append(contentsOf: queued.map { .queued($0.entry) })
         return rows
@@ -1468,7 +1487,7 @@ final class TranscriptStore {
             rows.append(
                 .spinner(
                     turn: turn.id, since: turn.startedAt, claude: providerName == "Claude",
-                    word: compactingNow ? "Compacting" : nil))
+                    word: compactingSince != nil ? "Compacting" : nil))
         }
     }
 

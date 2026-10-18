@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// The row under the text field: + · / · context wheel · model … mode · send. In a narrow tile
-/// it steps down ("Compacting…", then effort, then labels, then the model pill go) instead of
-/// clipping.
+/// it steps down (effort, then labels, then the model pill go) instead of clipping.
 struct ComposerBar: View {
     let chat: Chat
     let attach: () -> Void
@@ -50,7 +49,6 @@ struct ComposerBar: View {
             }
 
             ViewThatFits(in: .horizontal) {
-                if chat.context.compacting { controls(.full, compacting: true) }
                 controls(.full)
                 controls(.noEffort)
                 controls(.iconsOnly)
@@ -64,12 +62,8 @@ struct ComposerBar: View {
 
     private enum Density { case full, noEffort, iconsOnly, minimal }
 
-    private func controls(_ density: Density, compacting: Bool = false) -> some View {
+    private func controls(_ density: Density) -> some View {
         HStack(spacing: Space.xxl) {
-            if compacting {
-                Text("Compacting…").font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(1).fixedSize()
-                    .padding(.horizontal, -Space.sm)
-            }
             if !chat.controls.models.isEmpty && density != .minimal {
                 ModelMenu(chat: chat, showEffort: density == .full).storyID(StoryID.Composer.model)
             }

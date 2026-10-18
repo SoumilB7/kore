@@ -167,6 +167,12 @@ package final class ScriptedBackend: ChatBackend {
         enqueue { await $0.play(beats) }
     }
 
+    /// Lets a script held at `.wait(.release)` go on.
+    package func release() {
+        log.append(.release)
+        offer(.release)
+    }
+
     package func close() async {
         closed = true
         playing?.cancel()
