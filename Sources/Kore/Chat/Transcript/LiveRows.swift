@@ -8,6 +8,8 @@ struct SpinnerRow: View {
     let since: Date
     /// Claude's list includes "Clauding"; a Codex chat leaves it out.
     let claude: Bool
+    /// Said instead of a random verb ("Compacting").
+    var word: String? = nil
     @Environment(\.spinnerTint) private var tint
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var shown = Local(false)
@@ -20,7 +22,7 @@ struct SpinnerRow: View {
                     .font(TextStyle.spinnerGlyph)
                     .foregroundStyle(Theme.spinnerGlyph(tint))
                     .frame(width: Size.spinnerGlyphBox)
-                Text(Self.word(t, verbs: verbs, seed: seed, decode: !reduceMotion) + "...")
+                Text((word ?? Self.word(t, verbs: verbs, seed: seed, decode: !reduceMotion)) + "...")
                     .font(TextStyle.spinnerVerb)
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)

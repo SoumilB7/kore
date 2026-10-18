@@ -119,8 +119,9 @@ final class TranscriptStore {
         case explored([Entry], open: Bool)
         /// A user or peer message, first in its section; `expanded` shows a long one whole.
         case message(Entry, open: Bool, expanded: Bool)
-        /// The running turn's last row: glyph and verb (look.md §12).
-        case spinner(turn: String, since: Date, claude: Bool)
+        /// The running turn's last row: glyph and verb (look.md §12); `word` in place of the
+        /// random verb ("Compacting").
+        case spinner(turn: String, since: Date, claude: Bool, word: String?)
 
         var id: String {
             switch self {
@@ -133,7 +134,7 @@ final class TranscriptStore {
             case .changes(let t, _, _, _): "changes-\(t)"
             // The first call's: a read-only call that becomes a group keeps its identity.
             case .explored(let entries, _): entries.first?.id.uuidString ?? "explored"
-            case .spinner(let t, _, _): "spinner-\(t)"
+            case .spinner(let t, _, _, _): "spinner-\(t)"
             }
         }
     }
@@ -386,6 +387,7 @@ final class TranscriptStore {
         if hidden != hiddenTurns { hiddenTurns = hidden }
     }
 
+    @ObservationIgnored private var compactingNow = false
     /// The conversation before a compaction is being read.
     func startLoadingEarlier() {
         loadingEarlier = true
@@ -423,6 +425,13 @@ final class TranscriptStore {
     }
 
     /// "Conversation compacted · 14:32" above the summary that follows.
+    /// A compaction is running: the live row says "Compacting…" (look §9).
+    func compacting(_ on: Bool) {
+        guard compactingNow != on else { return }
+        compactingNow = on
+        rebuild()
+    }
+
     func compacted(at date: Date) {
         append(Entry(kind: .divider, text: "Conversation compacted · " + Self.time.string(from: date)))
     }
@@ -1115,7 +1124,10 @@ final class TranscriptStore {
         if turn.finished {
             trailer(turn, folded: folded, into: &rows)
         } else if pendingApprovals.isEmpty {
-            rows.append(.spinner(turn: turn.id, since: turn.startedAt, claude: providerName == "Claude"))
+            rows.append(
+                .spinner(
+                    turn: turn.id, since: turn.startedAt, claude: providerName == "Claude",
+                    word: compactingNow ? "Compacting" : nil))
         }
     }
 

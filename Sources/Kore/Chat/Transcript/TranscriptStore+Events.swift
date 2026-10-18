@@ -72,13 +72,19 @@ extension TranscriptStore {
         case .approvalWithdrawn(let id):
             approvalSettled(id)
 
+        case .compactionStarted:
+            compacting(true)
+        case .compactionFailed(let reason):
+            compacting(false)
+            notice("Couldn't compact: " + reason, isError: true)
         case .compacted(let at, _):
+            compacting(false)
             compacted(at: at)
         case .earlierHistory(let available):
             earlierHistory(available)
 
         case .sessionIdentified, .titleChanged, .controlsLoaded, .modeChanged, .planModeChanged, .turnOrigin,
-            .planReady, .contextUsage, .compactionStarted, .compactionFailed:
+            .planReady, .contextUsage:
             break
         }
     }

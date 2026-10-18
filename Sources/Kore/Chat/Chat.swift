@@ -4,7 +4,8 @@ import KoreCore
 import Observation
 
 /// One conversation with a CLI. It owns the backend and hands each `ChatEvent` to the stores,
-/// one per feature: the transcript, approvals, controls (mode, model, commands) and status. Views
+/// one per feature: the transcript, approvals, controls (mode, model, commands), status and
+/// context (how full it is, compacting). Views
 /// read the store they show, so a streamed token re-renders the transcript alone and typing
 /// re-renders the composer alone. The composer's draft and attachments live here, sent and
 /// cleared by `send()`.
@@ -17,6 +18,7 @@ final class Chat: Identifiable {
     let approvals = ApprovalsStore()
     let controls: ControlsStore
     let status: ChatStatus
+    let context = ContextStore()
     /// The agent map's own UI state (open, selection); not fed by events.
     let agentMap = AgentMapState()
 
@@ -95,6 +97,7 @@ final class Chat: Identifiable {
         approvals.apply(event)
         controls.apply(event)
         status.apply(event)
+        context.apply(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
     }
@@ -152,7 +155,10 @@ final class Chat: Identifiable {
 
     // MARK: Composer
 
-    var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty }
+    /// Something to send, and no compaction under way (sending waits until it's done).
+    var canSend: Bool {
+        !context.compacting && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+    }
 
     func attach(_ urls: [URL]) {
         attachments += urls.map(Attachment.init(url:))
@@ -171,7 +177,7 @@ final class Chat: Identifiable {
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let sent = attachments
-        guard !text.isEmpty || !sent.isEmpty else { return }
+        guard !text.isEmpty || !sent.isEmpty, !context.compacting else { return }
         draft = ""
         attachments = []
         // The Codex extension's /plan flips the plan toggle; it isn't a message.
@@ -200,6 +206,28 @@ final class Chat: Identifiable {
     func stop() {
         let backend = backend
         Task { await backend?.interrupt() }
+    }
+
+    /// The context wheel's click (look §9): compacts at once, between turns only.
+    var canCompact: Bool { status.sessionId != nil && !status.isRunning && !context.compacting }
+
+    func compact() {
+        guard canCompact else { return }
+        context.begin()
+        let backend = connect()
+        Task {
+            do {
+                try await backend.start()
+                try await backend.compact()
+            } catch {
+                dispatch(.compactionFailed(Self.reason(error)))
+            }
+        }
+    }
+
+    /// An error as a short line for "Couldn't compact: …".
+    private static func reason(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     /// Loads a sub-agent's own transcript the first time it's opened, when the chat doesn't have

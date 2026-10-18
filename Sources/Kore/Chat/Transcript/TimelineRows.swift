@@ -38,9 +38,9 @@ struct TimelineRow: View, Equatable {
             DividerRow(text: entry.text, open: entry.source == TranscriptStore.forkSource ? actions.openOriginal : nil)
         } else if case .message(let entry, let open, let expanded) = item.row {
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
-        } else if case .spinner(_, let since, let claude) = item.row {
+        } else if case .spinner(_, let since, let claude, let word) = item.row {
             // Not a timeline item: no dot, and the line doesn't run into it.
-            SpinnerRow(since: since, claude: claude)
+            SpinnerRow(since: since, claude: claude, word: word)
         } else if let dot = item.dot {
             let rule = if case .rule = item.row { true } else { false }
             TimelineItem(
@@ -82,8 +82,8 @@ struct RowContent: View {
             }
         case .explored(let calls, let open):
             ExploredItem(calls: calls.count, open: open) { actions.toggle("explored-\(calls[0].id.uuidString)") }
-        case .spinner(_, let since, let claude):
-            SpinnerRow(since: since, claude: claude)
+        case .spinner(_, let since, let claude, let word):
+            SpinnerRow(since: since, claude: claude, word: word)
         case .message(let entry, let open, let expanded):
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         case .rule:
