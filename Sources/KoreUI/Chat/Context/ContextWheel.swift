@@ -4,8 +4,9 @@ import SwiftUI
 /// The composer's context wheel (phase-10 look §9): a ring filling as the context does, a card
 /// on hover with the tokens and the auto-compact point, and a click to compact. Under the
 /// pointer the ring takes the button hover fill and a compress glyph, so the click explains
-/// itself. While compacting it turns. The slot is kept once the chat has a session, so the bar
-/// never shifts; the ring and card show from the first usage report.
+/// itself. While compacting it turns. The wheel shows once the chat has a session, so the bar
+/// never shifts: an empty ring until the first usage report (a thread resumed with none, or one
+/// whose turns all failed), the card from that report on.
 struct ContextWheel: View {
     let chat: Chat
     @StateObject private var hovered = Local(false)
@@ -20,7 +21,7 @@ struct ContextWheel: View {
             ZStack {
                 if context.compacting {
                     SpinningArc(lineWidth: Size.contextRingStroke)
-                } else if context.usage != nil {
+                } else {
                     ContextRing(fraction: context.fraction ?? 0, threshold: context.threshold)
                         .overlay {
                             Image(systemName: "arrow.down.right.and.arrow.up.left")
