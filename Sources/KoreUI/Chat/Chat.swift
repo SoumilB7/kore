@@ -78,12 +78,11 @@ package final class Chat: Identifiable {
         controls = ControlsStore(provider: provider, memory: modeMemory)
         self.compactMemory = compactMemory
         // A reopened chat (a restored tab, or from history) has its own point back; a fork's
-        // session is its original's until its own comes (`inheritAutoCompact`).
+        // session is its original's until its own comes (`inheritAutoCompact`). Any other starts
+        // Off: a point is one chat's, not every chat's.
         if fork == nil, let id = session?.id, let own = compactMemory.point(chat: id) {
             context.autoCompactAt = own
             ownAutoCompact = true
-        } else {
-            context.autoCompactAt = compactMemory.point(for: provider)
         }
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
@@ -335,7 +334,6 @@ package final class Chat: Identifiable {
         guard context.autoCompactAt != point || !ownAutoCompact else { return }
         context.autoCompactAt = point
         ownAutoCompact = true
-        compactMemory.remember(point, for: provider)
         if let id = sessionId { compactMemory.remember(point, chat: id) }
     }
 

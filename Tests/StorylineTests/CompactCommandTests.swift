@@ -138,22 +138,18 @@ final class CompactCommandTests {
         #expect(!chat.context.compacting)
     }
 
-    @Test func thePointIsKeptForNewChats() {
+    /// A point is the chat's own: setting it leaves other chats, open or new, as they were.
+    @Test func thePointIsOnlyThatChats() {
         let memory = AutoCompactMemory(defaults: ScratchDefaults())
         let folder = URL(fileURLWithPath: "/tmp")
-        // A fresh install starts Off.
         let first = Chat(provider: .claude, folder: folder, compactMemory: memory)
+        let other = Chat(provider: .claude, folder: folder, compactMemory: memory)
         #expect(first.context.autoCompactAt == nil)
         first.setAutoCompact(80)
-        #expect(memory.point(for: .claude) == 80)
-        let second = Chat(provider: .claude, folder: folder, compactMemory: memory)
-        #expect(second.context.autoCompactAt == 80)
-        // Each provider keeps its own.
-        #expect(Chat(provider: .codex, folder: folder, compactMemory: memory).context.autoCompactAt == nil)
-        // Off is kept too; a chat already open keeps its point.
-        first.setAutoCompact(nil)
+        #expect(first.context.autoCompactAt == 80)
+        #expect(other.context.autoCompactAt == nil)
         #expect(Chat(provider: .claude, folder: folder, compactMemory: memory).context.autoCompactAt == nil)
-        #expect(second.context.autoCompactAt == 80)
+        #expect(Chat(provider: .codex, folder: folder, compactMemory: memory).context.autoCompactAt == nil)
     }
 
     private func reopened(_ id: String, _ memory: AutoCompactMemory, _ provider: ProviderDescriptor = .claude) -> Chat {
@@ -161,20 +157,18 @@ final class CompactCommandTests {
         return Chat(provider: provider, folder: URL(fileURLWithPath: "/tmp"), resume: session, compactMemory: memory)
     }
 
-    /// Each chat keeps its own point, Off included, by its session id; one with none takes the
-    /// provider's. A new chat's id comes with its first turn, and its point is kept then.
+    /// Each chat keeps its own point, Off included, by its session id; one with none starts Off.
+    /// A new chat's id comes with its first turn, and its point is kept then.
     @Test func eachChatKeepsItsPoint() async throws {
         let memory = AutoCompactMemory(defaults: ScratchDefaults())
-        memory.remember(70, for: .codex)
         let codex = reopened("thread-1", memory, .codex)
-        #expect(codex.context.autoCompactAt == 70)
+        #expect(codex.context.autoCompactAt == nil)
         codex.setAutoCompact(nil)
         #expect(reopened("thread-1", memory, .codex).context.autoCompactAt == nil)
         codex.setAutoCompact(90)
         #expect(reopened("thread-1", memory, .codex).context.autoCompactAt == 90)
-        // Never set in a chat: the provider's, whatever it is now.
-        memory.remember(60, for: .codex)
-        #expect(reopened("thread-2", memory, .codex).context.autoCompactAt == 60)
+        // Never set in a chat: Off, whatever another chat has.
+        #expect(reopened("thread-2", memory, .codex).context.autoCompactAt == nil)
         #expect(memory.point(chat: "thread-2") == nil)
 
         // Set before the CLI has said the session's id.
@@ -184,7 +178,6 @@ final class CompactCommandTests {
         try await turn(chat, "Hi")
         let id = try #require(chat.sessionId)
         #expect(memory.point(chat: id) == .some(90))
-        memory.remember(50, for: .claude)
         #expect(reopened(id, memory).context.autoCompactAt == 90)
 
         // A fork starts at its original's point, and keeps it under its own id.
@@ -192,7 +185,7 @@ final class CompactCommandTests {
             provider: .claude, folder: URL(fileURLWithPath: "/tmp"),
             resume: SessionSummary(id: id, agent: .claude, title: "Fork", updated: .now),
             fork: ForkPoint(from: id, at: "m1"), compactMemory: memory)
-        #expect(fork.context.autoCompactAt == 50)
+        #expect(fork.context.autoCompactAt == nil)
         fork.inheritAutoCompact(from: chat)
         #expect(fork.context.autoCompactAt == 90)
         try await turn(fork, "Hi again")

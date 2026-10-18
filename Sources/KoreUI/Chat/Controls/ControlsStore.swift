@@ -98,26 +98,15 @@ struct ModeMemory {
     func remember(_ id: String, for provider: ProviderDescriptor) { defaults?.set(id, forKey: Self.key + provider.id) }
 }
 
-/// The auto-compact point last picked for each provider, which new chats start at: a percent,
-/// 0 for off (a fresh install). And each chat's own, by its session id ("autoCompact.chat.<id>",
-/// one small entry each), which it opens at again. Kept and read under the same rule as the mode.
+/// Each chat's auto-compact point, by its session id ("autoCompact.chat.<id>", one small entry
+/// each): a percent, 0 for off. The chat opens at it again; other chats aren't touched. Kept and
+/// read under the same rule as the mode.
 struct AutoCompactMemory {
-    private static let key = "autoCompact."
     private static let chatKey = "autoCompact.chat."
     /// Nil keeps and reads nothing.
     let defaults: UserDefaults?
 
     @MainActor static var shared: AutoCompactMemory { AutoCompactMemory(defaults: ModeMemory.shared.defaults) }
-
-    func point(for provider: ProviderDescriptor) -> Int? {
-        let value = defaults?.object(forKey: Self.key + provider.id) as? Int
-        return value.flatMap { ContextStore.snapPoints.contains($0) ? $0 : nil }
-    }
-
-    func remember(_ point: Int?, for provider: ProviderDescriptor) {
-        let value: Any = point ?? 0
-        defaults?.set(value, forKey: Self.key + provider.id)
-    }
 
     /// The session's own point: nil when it has none, `.some(nil)` when it's Off.
     func point(chat session: String) -> Int?? {
