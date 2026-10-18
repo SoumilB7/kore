@@ -134,7 +134,7 @@ struct FolderWindow: View {
                 workspace.value.searchStore().text = query
             }
             if let mode = DevSnapshot.quickOpen { workspace.value.quickOpen = mode == "line" ? .line : .files }
-            if let session = DevSnapshot.resume {
+            for session in DevSnapshot.resumes {
                 workspace.value.open(session)
                 workspace.value.activeTab.chat?.launchModel = DevSnapshot.model
                 if let text = DevSnapshot.send, let chat = workspace.value.activeTab.chat {
@@ -145,6 +145,10 @@ struct FolderWindow: View {
                     }
                 }
             }
+            if let first = DevSnapshot.resumes.first.flatMap({ session in workspace.value.tabs.first { $0.chat?.sessionId == session.id } }) {
+                workspace.value.select(first)
+            }
+            DevBench.startIfRequested(workspace.value)
             DevSnapshot.captureIfRequested()
             DevSnapshot.dumpIfRequested { workspace.value.activeTab.chat }
             if let chat = workspace.value.activeTab.chat { DevSnapshot.drive(chat) }

@@ -1,0 +1,45 @@
+# The navigation budgets (z-docs/phases/phase-11-navigation-p0/research-harness.md §4 and addendum).
+# fixture	steps	metric	across-runs	limit	note
+# fixture and steps are fnmatch globs; steps may list alternatives with "|", and a leading "!"
+# means every step but those. across-runs is how the runs' values combine: median or max.
+# Derived metrics: missed_per_10kpx, cpu_s_per_10kpx, peak_over_settled_mb, mem_delta_mb
+# (settled − start), cpu_s_per_action, over_ready_mb (settled − ready's settled).
+*	switch:*	tab_switch_ms_p95	median	50	3 frames
+*	switch:*	tab_switch_ms_max	max	100
+*	switch:*	late_jumps	max	0
+*	switch:*	peak_over_settled_mb	max	8
+*	switch:*	cpu_s_per_action	median	0.05
+*	scroll:*,warm	missed	max	0	warm scroll
+*	scroll:*,warm	cpu_s_per_10kpx	median	0.4
+*	scroll:*@2000|fling*	missed_per_10kpx	max	2	cold scroll or fling
+*	scroll:*@2000|fling*	hitch_ms_per_s	median	2
+*	scroll:*|fling*	cpu_s_per_10kpx	median	0.8
+*	scroll:*|fling*	peak_over_settled_mb	max	15
+claude-61mb	ready	open_kore_ms	median	150
+claude-61mb	ready	stalls	max	1
+claude-61mb	ready	worst_ms	max	100
+claude-61mb	ready	mem_peak_mb	max	90
+claude-61mb	ready	mem_settled_mb	median	60
+*	earlier[*]*	earlier_ms_max	median	100
+*	earlier[*]*	earlier_drift_pt	max	2
+*	earlier[*]*	mem_delta_mb	median	4	3 loads
+*	earlierconv	earlier_conv_ms	median	250
+*	earlierconv	worst_ms	max	33
+*	earlierconv	peak_over_settled_mb	max	20
+*	fold*	fold_ms_p95	median	33
+*	fold*	fold_drift_pt	max	1
+*	fold*|send:*	peak_over_settled_mb	max	2
+*	fold*|send:*	cpu_s_per_action	median	0.03
+*	send:*	send_row_ms_p95	median	33
+*	resize:*	hitch_ms_per_s	median	5
+*	resize:*	worst_ms	max	50
+*	resize:*	cpu_peak_pct	max	120
+*	!ready|env	over33	max	0	no stall after ready
+*	!ready|env|idle:*|mem	cpu_peak_pct	max	150	navigation steps
+*	!ready|env|earlier*	mem_delta_mb	median	3	per step
+*	mem	over_ready_mb	median	5	end − ready
+*	idle:*	cpu_s	max	0.02
+*	idle:*	cpu_peak_pct	max	2
+*	idle:*	mem_delta_mb	max	1	no growth
+tabs3	*	mem_peak_mb	max	140
+!tabs3	*	mem_peak_mb	max	150

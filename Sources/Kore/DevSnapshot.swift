@@ -4,7 +4,7 @@ import KoreCore
 /// Debug hook for checking the UI without clicking through it:
 ///   KORE_OPEN=<folder>       open that folder's window at launch
 ///   KORE_START=claude|codex  start a chat of that provider in its first tab
-///   KORE_RESUME=<agent>:<id> open that past session instead
+///   KORE_RESUME=<agent>:<id>[,<agent>:<id>...] open those past sessions instead, one tab each
 ///   KORE_SEND=<text>         send that message in the started or resumed chat (KORE_SEND_AFTER=<s>, resumed only)
 ///   KORE_MODE=<mode id>      switch the started chat to that mode
 ///   KORE_MODEL=<model>       launch the started or resumed chat on that model (haiku / gpt-6-luna keep tests cheap)
@@ -23,7 +23,9 @@ import KoreCore
 ///   KORE_HISTORY=1           open the history panel at launch
 ///   KORE_VIEW_IMAGE=1        open the first composer attachment in the image viewer
 ///   KORE_SIZE=<w>,<h>        resize the folder window's content first (tile-size checks)
-///   KORE_HANGS=1             log main-thread stalls over 60ms and each click/key, with times, to stderr
+///   KORE_HANGS=1|<ms>        log main-thread stalls over 50ms (or <ms>) and each click/key, with times, to
+///                            stderr; a stall past 250ms also prints STALL-START <pid> once, so a script can
+///                            `sample` it. Watched in the common run-loop modes (through tracking and resize)
 ///   KORE_SNAPSHOT=<png path> once a folder window is up, save an image of it and quit
 ///   KORE_DUMP=<path>         write the chat's transcript entries as text and quit (KORE_DUMP_AFTER=<s>, default 6)
 ///   KORE_EVENT_LOG=<path>    append every ChatEvent the backend emits, one per line
@@ -48,11 +50,14 @@ import KoreCore
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
     static let startProvider = ProcessInfo.processInfo.environment["KORE_START"].flatMap(Provider.init(rawValue:))
-    static let resume: SessionSummary? = ProcessInfo.processInfo.environment["KORE_RESUME"].flatMap { value in
-        let parts = value.split(separator: ":", maxSplits: 1).map(String.init)
-        guard parts.count == 2, let agent = SessionSummary.Agent(rawValue: parts[0]) else { return nil }
-        return SessionSummary(id: parts[1], agent: agent, title: "Resumed", updated: .now)
-    }
+    /// KORE_RESUME, one session per comma.
+    static let resumes: [SessionSummary] = (ProcessInfo.processInfo.environment["KORE_RESUME"] ?? "")
+        .split(separator: ",").compactMap { value in
+            let parts = value.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let agent = SessionSummary.Agent(rawValue: parts[0]) else { return nil }
+            return SessionSummary(id: parts[1], agent: agent, title: "Resumed", updated: .now)
+        }
+    static var resume: SessionSummary? { resumes.first }
     static let send = ProcessInfo.processInfo.environment["KORE_SEND"]
     static let mode = ProcessInfo.processInfo.environment["KORE_MODE"]
     static let thenSend = ProcessInfo.processInfo.environment["KORE_THEN_SEND"]
@@ -104,20 +109,27 @@ enum DevSnapshot {
         }
     private static var clicks: [NSPoint] { clickList.map(\.0) }
 
-    /// KORE_HANGS=1: logs every main-thread stall over 50ms (with what was happening) to stderr.
+    /// KORE_HANGS: logs every main-thread stall over the threshold (with what was happening).
     @MainActor static func watchHangs() {
-        guard ProcessInfo.processInfo.environment["KORE_HANGS"] == "1" else { return }
+        guard let value = ProcessInfo.processInfo.environment["KORE_HANGS"] else { return }
+        let threshold = (value == "1" ? 50 : Double(value) ?? 50) / 1000
         let start = Date()
-        final class Tick: @unchecked Sendable { var last = Date() }
-        let tick = Tick()
-        Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { _ in
+        let tick = HangTick()
+        // In the common modes, so it fires during tracking and live resize instead of reporting
+        // those as stalls.
+        let timer = Timer(timeInterval: 0.01, repeats: true) { _ in
             let now = Date()
+            tick.lock.lock()
             let gap = now.timeIntervalSince(tick.last)
-            if gap > 0.06 {
+            tick.last = now
+            tick.stalledReported = false
+            tick.lock.unlock()
+            if gap > threshold {
                 FileHandle.standardError.write(Data(String(format: "HANG %.0fms at %.2fs\n", gap * 1000, now.timeIntervalSince(start)).utf8))
             }
-            tick.last = now
         }
+        RunLoop.main.add(timer, forMode: .common)
+        hangWatchdog = watchStalls(tick)
         NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .keyDown]) { event in
             var focus = event.window?.firstResponder.map { String(describing: type(of: $0)) } ?? "none"
             if let editor = event.window?.firstResponder as? NSTextView, let field = editor.delegate as? NSTextField {
@@ -152,11 +164,39 @@ enum DevSnapshot {
         }
     }
 
-    static let timeReplay = ProcessInfo.processInfo.environment["KORE_TIME_REPLAY"] == "1"
+    static let timeReplay = ProcessInfo.processInfo.environment["KORE_TIME_REPLAY"] == "1" || DevBench.plan != nil
 
-    static func logReplay(_ elapsed: Duration) {
+    nonisolated(unsafe) private static var hangWatchdog: DispatchSourceTimer?
+
+    /// The main thread's last tick, shared with the watchdog off it.
+    private final class HangTick: @unchecked Sendable {
+        var last = Date()
+        var stalledReported = false
+        let lock = NSLock()
+    }
+
+    /// Off the main thread: a stall past 250ms says so while it's happening. Nonisolated, so its
+    /// handler doesn't inherit the main actor and trap when it runs on the watchdog's queue.
+    nonisolated private static func watchStalls(_ tick: HangTick) -> DispatchSourceTimer {
+        let watchdog = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.kore.hangs", qos: .utility))
+        watchdog.schedule(deadline: .now(), repeating: 0.01)
+        watchdog.setEventHandler {
+            tick.lock.lock()
+            let stalled = Date().timeIntervalSince(tick.last) > 0.25 && !tick.stalledReported
+            if stalled { tick.stalledReported = true }
+            tick.lock.unlock()
+            if stalled { FileHandle.standardError.write(Data("STALL-START \(getpid())\n".utf8)) }
+        }
+        watchdog.resume()
+        return watchdog
+    }
+
+    @MainActor static func logReplay(_ elapsed: Duration) {
         let ms = Double(elapsed.components.attoseconds) / 1e15 + Double(elapsed.components.seconds) * 1000
-        FileHandle.standardError.write("REPLAY \(String(format: "%.1f", ms)) ms\n".data(using: .utf8)!)
+        if DevBench.isOn { DevBench.replayApplied(ms) }
+        if ProcessInfo.processInfo.environment["KORE_TIME_REPLAY"] == "1" {
+            FileHandle.standardError.write("REPLAY \(String(format: "%.1f", ms)) ms\n".data(using: .utf8)!)
+        }
     }
 
     /// KORE_STOP_AFTER / KORE_ANSWER: drive a started chat without clicking.
