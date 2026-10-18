@@ -72,6 +72,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         app.openFromOutside(urls)
     }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Once the windows have their autosave names.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Self.pruneStaleWindowFrames() }
+    }
+
+    /// SwiftUI saves each window's frame under a key naming the window's whole view type,
+    /// including a code address that changes with every build, so the keys pile up (850 after
+    /// a day of builds) and saving the frame, which it does on every step of a resize, slows
+    /// to ~85 ms. Keys of build-specific names that no open window uses are dropped.
+    static func pruneStaleWindowFrames() {
+        let live = Set(NSApp.windows.map { "NSWindow Frame " + $0.frameAutosaveName })
+        // One write for all of them, off the main thread: a key at a time rewrites the whole
+        // preferences file each time (seconds for hundreds of keys).
+        Task.detached(priority: .utility) {
+            let app = kCFPreferencesCurrentApplication
+            guard let keys = CFPreferencesCopyKeyList(app, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String] else { return }
+            let stale = keys.filter { $0.hasPrefix("NSWindow Frame ") && $0.contains("(unknown context at $") && !live.contains($0) }
+            guard !stale.isEmpty else { return }
+            CFPreferencesSetMultiple(nil, stale as CFArray, app, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+            CFPreferencesAppSynchronize(app)
+        }
+    }
 }
 
 /// Hands the app model SwiftUI's window actions, which only views can read, so folders
