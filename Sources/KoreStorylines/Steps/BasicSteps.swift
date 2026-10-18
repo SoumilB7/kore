@@ -17,7 +17,8 @@ package struct OpenFolder: Step {
         model.openFolder(story.folder)
         let window = try await story.wait("the folder's window") { story.window }
         window.setContentSize(story.windowSize)
-        if let screen = window.screen ?? NSScreen.main {
+        // Placed on screen only for real input; otherwise the host keeps it off screen.
+        if story.flags.realInput, let screen = window.screen ?? NSScreen.main {
             let visible = screen.visibleFrame
             window.setFrameTopLeftPoint(NSPoint(x: visible.minX + 40, y: visible.maxY - 40))
         }
