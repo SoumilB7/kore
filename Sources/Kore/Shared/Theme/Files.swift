@@ -165,6 +165,13 @@ extension Size {
         static let deletionMark: CGFloat = 4
         /// The change peek's distance from the editor's sides.
         static let peekInset: CGFloat = 12
+        /// Fold chevrons in the gutter's trailing space (look §5).
+        static let foldChevron: CGFloat = 9
+        /// The " ⋯ " chip after a folded line.
+        static let foldChip = CGSize(width: 22, height: 14)
+        static let foldChipGap: CGFloat = 4
+        /// How long after the last edit fold regions are worked out again.
+        static let foldIdle: Duration = .milliseconds(300)
         static let textInsetTop: CGFloat = 6
         static let textInsetLeading: CGFloat = 4
         static let caret: CGFloat = 2

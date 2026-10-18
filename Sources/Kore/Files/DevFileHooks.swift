@@ -4,6 +4,7 @@ import Foundation
 /// don't get to the editor in a snapshot run):
 ///   KORE_FIND=<query>         open find with that query in the first file tab that shows its text
 ///   KORE_CONVERT=tabs|spaces  convert that tab's indentation first
+///   KORE_FOLD=<line>[,<line>...]  fold the regions starting on those lines (1-based)
 ///   KORE_TREE_MOVE=<path>|<folder>[|copy]  drop that item on that folder in the explorer, 2s in
 ///   KORE_TREE_COLLISION=replace|keep|cancel  the answer when its name is taken (no alert)
 ///   KORE_TREE_UNDO=1          undo it 2s later, through the window's undo manager
@@ -14,10 +15,13 @@ enum DevFileHooks {
     static func editorShown(_ document: FileDocument) {
         guard !done else { return }
         let env = ProcessInfo.processInfo.environment
-        guard env["KORE_FIND"] != nil || env["KORE_CONVERT"] != nil else { return }
+        guard env["KORE_FIND"] != nil || env["KORE_CONVERT"] != nil || env["KORE_FOLD"] != nil else { return }
         done = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             if let mode = env["KORE_CONVERT"] { document.convertIndentation(toTabs: mode == "tabs") }
+            for line in (env["KORE_FOLD"] ?? "").split(separator: ",").compactMap({ Int($0) }) {
+                document.editor.fold(line: line - 1)
+            }
             if let query = env["KORE_FIND"] {
                 document.editor.find.isOpen = true
                 document.editor.find.query = query

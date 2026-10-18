@@ -31,6 +31,12 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     private var editCount = 0
     /// The peek of one change's old text, under its line.
     private var peek: (line: Int, view: NSView)?
+    /// Folded text, sorted: each from the end of a fold's first line to the end of its last
+    /// (that line's break stays, so the next line starts below). The text itself is untouched.
+    var folds: [NSRange] = []
+    /// Where code can fold, worked out at idle.
+    var regions = FoldRegions()
+    var regionsPending: Task<Void, Never>?
 
     init(document: FileDocument) {
         self.document = document
@@ -49,6 +55,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         configure()
         document.storage.delegate = self
         lines.rebuild(document.storage.string as NSString)
+        computeRegions()
     }
 
     private func configure() {
@@ -76,7 +83,8 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         text.autoresizingMask = [.width]
         text.textContainerInset = NSSize(width: Size.Editor.textInsetLeading, height: Size.Editor.textInsetTop)
         text.delegate = self
-        text.layoutManager?.delegate = nil
+        // Folded text: no glyphs, and its line breaks don't break lines.
+        text.layoutManager?.delegate = self
 
         // Unclipped views get an overdraw layer the size of the scroll area (macOS 14+).
         scrollView.clipsToBounds = true
@@ -169,6 +177,8 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         closePeek()
         refreshChanges()
         lines.rebuild(document.storage.string as NSString)
+        folds = []
+        scheduleRegions()
         undo.removeAllActions()
         colorer.invalidate(from: 0)
         if zoom != 0 { applyStyle() }
@@ -194,6 +204,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         flashLines(NSRange(location: range.location, length: (text as NSString).length))
         recolor(force: true)
         refreshChanges()
+        scheduleRegions()
     }
 
     private func flashLines(_ range: NSRange) {
@@ -235,6 +246,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         }
         colorer.invalidate(from: lines.line(at: editedRange.location))
         colored = nil
+        foldsEdited(editedRange, delta: delta)
     }
 
     func textDidChange(_ notification: Notification) {
@@ -242,6 +254,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         refreshChanges(after: .seconds(1))
         document.edited()
         find.textChanged()
+        scheduleRegions()
         recolor()
         textView.updateDecorations()
         gutter.updateThickness()
@@ -255,6 +268,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
+        revealSelection()
         let selection = textView.selectedRange()
         let line = lines.line(at: selection.location)
         let column = selection.location - lines.start(of: line) + 1
@@ -331,6 +345,8 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     }
 
     func focus() { textView.window?.makeFirstResponder(textView) }
+
+    func gutterNeedsDisplay() { gutter.needsDisplay = true }
 
     // MARK: - Changes against git HEAD
 
@@ -700,6 +716,11 @@ final class GutterView: NSRulerView {
         var line = lines.line(at: chars.location)
         let last = lines.line(at: NSMaxRange(chars))
         while line <= last {
+            // Lines under a fold have no row of their own.
+            if let fold = controller.hiddenFold(line: line) {
+                line = lines.line(at: NSMaxRange(fold)) + 1
+                continue
+            }
             let start = lines.start(of: line)
             var fragment: NSRect
             if start >= string.length, string.length > 0 || line > 0 {
@@ -828,10 +849,13 @@ final class EditorTextView: NSTextView {
     private let guideLayer = CAShapeLayer()
     private let occurrenceLayer = CAShapeLayer()
     private let bracketLayer = CAShapeLayer()
+    /// The " ⋯ " chips after folded lines, and where they are (a click opens the fold).
+    private let foldLayer = CALayer()
+    private var foldChips: [(rect: NSRect, fold: NSRange)] = []
 
     private func installDecorations(in host: CALayer) {
         guard lineLayer.superlayer !== host else { return }
-        for (index, layer) in [lineLayer, guideLayer, occurrenceLayer, bracketLayer].enumerated() {
+        for (index, layer) in [lineLayer, guideLayer, occurrenceLayer, bracketLayer, foldLayer].enumerated() {
             layer.actions = ["position": NSNull(), "bounds": NSNull(), "path": NSNull(), "hidden": NSNull(), "frame": NSNull()]
             host.insertSublayer(layer, at: UInt32(index))
         }
@@ -863,6 +887,45 @@ final class EditorTextView: NSTextView {
         guideLayer.path = guidePath(visible, layout: layout)
         occurrenceLayer.path = occurrencePath(visible, layout: layout)
         bracketLayer.path = bracketPath(layout)
+        placeFoldChips(visible, layout: layout)
+    }
+
+    private func placeFoldChips(_ visible: NSRange, layout: NSLayoutManager) {
+        let (folds, height) = MainActor.assumeIsolated { (controller?.folds ?? [], controller?.lineHeight ?? Size.Editor.line) }
+        foldChips = []
+        foldLayer.sublayers = nil
+        let size = Size.Editor.foldChip
+        for fold in folds where fold.location >= visible.location && fold.location <= NSMaxRange(visible) {
+            let glyph = layout.glyphIndexForCharacter(at: fold.location)
+            let used = layout.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+            let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+            let frame = NSRect(
+                x: textContainerOrigin.x + used.maxX + Size.Editor.foldChipGap,
+                y: textContainerOrigin.y + line.minY + (max(line.height, height) - size.height) / 2,
+                width: size.width, height: size.height)
+            let chip = CATextLayer()
+            chip.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull()]
+            chip.frame = frame
+            chip.backgroundColor = NSColor(Theme.surface).cgColor
+            chip.cornerRadius = Radius.chip
+            chip.string = "⋯"
+            chip.font = NSFont.systemFont(ofSize: 0)
+            chip.fontSize = Size.Editor.foldChip.height - Size.Editor.foldChipGap
+            chip.foregroundColor = NSColor(Theme.secondary).cgColor
+            chip.alignmentMode = .center
+            chip.contentsScale = window?.backingScaleFactor ?? 2
+            foldLayer.addSublayer(chip)
+            foldChips.append((frame, fold))
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let chip = foldChips.first(where: { $0.rect.contains(point) }) {
+            MainActor.assumeIsolated { controller?.unfold(chip.fold) }
+            return
+        }
+        super.mouseDown(with: event)
     }
 
     private func rect(for range: NSRange, layout: NSLayoutManager) -> NSRect {
@@ -897,6 +960,10 @@ final class EditorTextView: NSTextView {
         let last = lines.line(at: NSMaxRange(visible))
         var carried = 0
         while line <= last {
+            if let fold = MainActor.assumeIsolated({ controller.hiddenFold(line: line) }) {
+                line = lines.line(at: NSMaxRange(fold)) + 1
+                continue
+            }
             let range = lines.range(of: line, in: string)
             var columns = 0
             var blank = true
@@ -1295,6 +1362,8 @@ final class EditorTextView: NSTextView {
         case (.command, "z", _): undoManager?.undo()
         case ([.command, .shift], "z", _): undoManager?.redo()
         case (.command, "/", _): toggleComment()
+        case ([.command, .option], _, 33): MainActor.assumeIsolated { controller?.foldAtCaret() }
+        case ([.command, .option], _, 30): MainActor.assumeIsolated { controller?.unfoldAtCaret() }
         case (.command, "]", _): shiftLines(right: true)
         case (.command, "[", _): shiftLines(right: false)
         case (.command, "l", _): selectLine()
