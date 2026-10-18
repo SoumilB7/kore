@@ -393,10 +393,8 @@ final class SlashChipLive: Storyline {
             WriteFiles([(".claude/commands/ping.md", "---\ndescription: Probe ping\n---\nReply with the single word PING-$ARGUMENTS.\n")]),
             OpenFolder(),
             StartChat(),
-            Expect("the run's model set, and /\(command) offered", timeout: .seconds(60)) { story in
-                guard case .live(let model) = story.flags.cli, let chat = story.app.chat, chat.storyCommands.contains(command)
-                else { return false }
-                return chat.storySetModel(model)
+            Expect("/\(command) offered", timeout: .seconds(60)) { story in
+                story.app.chat?.storyCommands.contains(command) == true
             },
             WaitForFocus(.id(StoryID.Composer.field)),
             Press(.id(StoryID.Composer.slash)),
@@ -410,7 +408,7 @@ final class SlashChipLive: Storyline {
             ]
         }
         return steps + [
-            TurnFinished(1),
+            WaitForEvent("the turn to end", timeout: .seconds(90)) { if case .turnFinished = $0 { true } else { false } },
             Expect.rows("/ping's answer") { $0.contains { $0.kind == "assistant" && $0.text.contains("PING-chip") } },
         ]
     }

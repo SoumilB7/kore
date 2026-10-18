@@ -103,10 +103,12 @@ package final class Workspace {
 
     /// Starts a chat of the provider with that id ("claude", "codex") in the active tab, or a new
     /// tab when the active one has a chat. False for an unknown id.
-    package func start(provider id: String) -> Bool {
+    package func start(provider id: String, model: String? = nil) -> Bool {
         guard let provider = Registry.provider(id) else { return false }
         if !activeTab.isEmpty { newTab() }
         start(provider, in: activeTab)
+        // Before its view appears and starts the CLI: it launches with this model.
+        if let model { activeTab.chat?.launchModel = model }
         return true
     }
 

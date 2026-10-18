@@ -35,7 +35,10 @@ package struct StartChat: Step {
     package func run(_ story: StoryContext) async throws {
         guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the folder's workspace") }
         let id = provider ?? story.variant?.provider ?? "claude"
-        guard workspace.start(provider: id) else { throw StoryFailure.modelMissing("a provider named \(id)") }
+        // A live run's chats talk to its model (`--live haiku`), never the CLI's default.
+        var model: String?
+        if case .live(let live) = story.flags.cli { model = live }
+        guard workspace.start(provider: id, model: model) else { throw StoryFailure.modelMissing("a provider named \(id)") }
         _ = try await story.wait("the chat") { story.app.chat }
     }
 }
