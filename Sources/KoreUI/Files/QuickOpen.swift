@@ -48,6 +48,7 @@ struct QuickOpenView: View {
         let list = lineMode ? [] : matches
         VStack(spacing: 0) {
             TextField("", text: $query.value, prompt: Text(placeholder).foregroundStyle(Theme.tertiary))
+                .storyID(StoryID.QuickOpen.field)
                 .textFieldStyle(.plain)
                 .font(Chrome.body)
                 .foregroundStyle(Theme.text)
@@ -115,6 +116,7 @@ struct QuickOpenView: View {
                                 QuickOpenRow(path: match.path, positions: match.positions, isSelected: offset == selected.value)
                                     .id(offset)
                                     .onTapGesture { open(match) }
+                                    .storyID(StoryID.QuickOpen.row(match.path), press: { open(match) })
                             }
                         }
                         .padding(Space.xs)

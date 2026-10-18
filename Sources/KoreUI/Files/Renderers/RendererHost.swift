@@ -73,6 +73,7 @@ struct RendererToggle: View {
     var body: some View {
         if document.rendering.hasToggle {
             PreviewSourceSwitch(rendering: document.rendering)
+                .storyID(StoryID.Editor.rendererToggle, press: { document.rendering.showsRaw.toggle() })
         }
     }
 }

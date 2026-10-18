@@ -34,6 +34,7 @@ struct SearchView: View {
                 HStack(spacing: Space.xxs) {
                     TextField("Search", text: $store.text)
                         .textFieldStyle(.plain)
+                        .storyID(StoryID.Search.field)
                         .font(Chrome.body)
                         .foregroundStyle(Theme.text)
                         .focused($field, equals: .query)
@@ -63,7 +64,9 @@ struct SearchView: View {
             if store.showsDetails {
                 VStack(alignment: .leading, spacing: Space.xs) {
                     DetailField(title: "files to include", text: $store.include, focused: $field, which: .include)
+                        .storyID(StoryID.Search.include)
                     DetailField(title: "files to exclude", text: $store.exclude, focused: $field, which: .exclude)
+                        .storyID(StoryID.Search.exclude)
                 }
             }
         }
@@ -280,6 +283,8 @@ private struct SearchHitRow: View {
         .onHover { hovered.value = $0 }
         .onTapGesture { action(NSApp.mouseClickCount >= 2) }
         .help("Line \(hit.line)")
+        // Keyed by the 0-based line, like every storyline line.
+        .storyID(StoryID.Search.result(store.relative(hit.path), line: hit.line - 1), press: { action(false) })
     }
 
     /// The line from just before its first match, the matches on the find fill.

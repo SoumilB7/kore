@@ -141,7 +141,7 @@ struct ImageViewer: View {
             VStack {
                 HStack {
                     Spacer()
-                    toolButton("xmark", help: "Close (Esc)", action: close)
+                    toolButton("xmark", help: "Close (Esc)", action: close).storyID(StoryID.Viewer.close)
                 }
                 .padding(Layout.Viewer.closeInset)
                 Spacer()
@@ -278,7 +278,7 @@ struct ImageToolbar: View {
                     .help(secondary.help)
                     .padding(.leading, Space.xs)
             }
-            Button(actionTitle, action: finish)
+            Button(actionTitle, action: finish).storyID(StoryID.Viewer.add)
                 .buttonStyle(SubtleButtonStyle(prominent: true))
                 .lineLimit(1)
                 .fixedSize()

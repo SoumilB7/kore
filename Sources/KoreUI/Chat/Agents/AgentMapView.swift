@@ -35,7 +35,7 @@ struct AgentMapView: View {
                         }
                     }
                 }
-                IconButton(symbol: "xmark", help: "Close (Esc)") { map.close() }
+                IconButton(symbol: "xmark", help: "Close (Esc)") { map.close() }.storyID(StoryID.AgentMap.close)
                     .padding(Layout.Viewer.closeInset)
             }
         }
@@ -242,6 +242,7 @@ private struct AgentGraphRow: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .help(info.name)
+        .storyID(StoryID.AgentMap.row(info.id))
     }
 
     private var elbowColour: Color {
@@ -429,6 +430,7 @@ struct AgentDetail: View {
                 .buttonStyle(SubtleButtonStyle())
                 .fixedSize()
                 .help("Stop agent")
+                .storyID(StoryID.AgentMap.stop)
             }
             Button {
                 openAgent(info.id)
@@ -439,6 +441,7 @@ struct AgentDetail: View {
             .buttonStyle(SubtleButtonStyle())
             .fixedSize()
             .help("Open in tab (Return)")
+            .storyID(StoryID.AgentMap.open)
         }
     }
 }

@@ -61,6 +61,7 @@ struct ChangesView: View {
                     FileListRow(change: change, folder: folder, selected: index == selected.value) {
                         selected.value = index
                     }
+                    .storyID(StoryID.Changes.file(Self.relative(change.path, folder)))
                 }
             }
             .padding(Space.sm)
@@ -149,7 +150,7 @@ struct ChangesView: View {
             IconButton(symbol: "chevron.down", help: "Next file (↓)", action: next)
                 .disabled(selected.value >= changes.count - 1)
             BarDivider()
-            Button("Done", action: close)
+            Button("Done", action: close).storyID(StoryID.Changes.done)
                 .buttonStyle(SubtleButtonStyle(prominent: true))
         }
     }

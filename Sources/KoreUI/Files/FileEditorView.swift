@@ -70,7 +70,10 @@ struct FileEditorView: View {
                 .overlay(alignment: .trailing) {
                     if document.editor.find.isOpen { FindTicks(find: document.editor.find, lines: document.editor.lines) }
                 }
-                .onAppear { DevFileHooks.editorShown(document) }
+                .onAppear {
+                    document.editor.textView.setStoryID(StoryID.Editor.text(workspace.relativePath(document.path)))
+                    DevFileHooks.editorShown(document)
+                }
                 .overlay(alignment: .topTrailing) {
                     if document.editor.find.isOpen {
                         FindBar(find: document.editor.find)
@@ -238,9 +241,9 @@ private struct NoticeBar: View {
                 Button("Save") { document.save() }.buttonStyle(SubtleButtonStyle())
                 Button("Close", action: close).buttonStyle(SubtleButtonStyle())
             case .changed:
-                Button("Compare", action: compare).buttonStyle(SubtleButtonStyle())
-                Button("Reload") { document.reloadInPlace() }.buttonStyle(SubtleButtonStyle())
-                Button("Keep Mine") { document.keepMine() }.buttonStyle(SubtleButtonStyle())
+                Button("Compare", action: compare).buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.Notice.compare)
+                Button("Reload") { document.reloadInPlace() }.buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.Notice.reload)
+                Button("Keep Mine") { document.keepMine() }.buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.Notice.keep)
             }
         }
         .padding(.horizontal, Size.Editor.pathInset)
@@ -322,11 +325,13 @@ private struct StatusRow: View {
                 Button("Convert Indentation to Tabs") { document.convertIndentation(toTabs: true) }
                     .disabled(document.readOnly)
             }
+            .storyID(StoryID.Editor.Status.indent)
             StatusText(document.encodingName)
             StatusItem(title: document.lineEnding.rawValue, help: "Line endings") {
                 Button("LF") { document.setLineEnding(.lf) }
                 Button("CRLF") { document.setLineEnding(.crlf) }
             }
+            .storyID(StoryID.Editor.Status.lineEndings)
             StatusItem(title: document.language.name, help: "Language") {
                 ForEach(Language.all, id: \.id) { language in
                     Button(language.name) {
@@ -335,6 +340,7 @@ private struct StatusRow: View {
                     }
                 }
             }
+            .storyID(StoryID.Editor.Status.language)
         }
         .padding(.horizontal, Size.Editor.statusInset)
         .frame(height: Size.Editor.statusRow)

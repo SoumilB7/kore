@@ -88,10 +88,15 @@ struct ExplorerSidebar: View {
                 .opacity(hovered.value ? 1 : 0)
             } else {
                 Group {
+                    // Shown only while the pointer is over the explorer: pressed through their actions.
                     HeaderButton(symbol: "doc.badge.plus", help: "New File") { store.startNew(folder: false) }
+                        .storyID(StoryID.Explorer.newfile, press: { store.startNew(folder: false) })
                     HeaderButton(symbol: "folder.badge.plus", help: "New Folder") { store.startNew(folder: true) }
+                        .storyID(StoryID.Explorer.newfolder, press: { store.startNew(folder: true) })
                     HeaderButton(symbol: "arrow.clockwise", help: "Refresh") { store.refresh() }
+                        .storyID(StoryID.Explorer.refresh, press: { store.refresh() })
                     HeaderButton(symbol: "rectangle.compress.vertical", help: "Collapse all") { store.collapseAll() }
+                        .storyID(StoryID.Explorer.collapse, press: { store.collapseAll() })
                 }
                 .opacity(hovered.value || focused ? 1 : 0)
             }
@@ -99,6 +104,8 @@ struct ExplorerSidebar: View {
             HeaderButton(symbol: "magnifyingglass", isOn: searching, help: searching ? "Explorer (⇧⌘E)" : "Search (⇧⌘F)") {
                 if searching { workspace.sidebar = .explorer } else { workspace.showSearch() }
             }
+            // One toggle: back to the files while searching, else to Search.
+            .storyID(searching ? StoryID.Explorer.filesTab : StoryID.Explorer.searchTab)
         }
         .padding(.horizontal, Layout.Explorer.headerInset)
         .frame(height: Layout.Explorer.header)
@@ -363,6 +370,8 @@ private struct TreeRow: View {
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .onTapGesture { click() }
+        // A tap gesture, not a button: pressed through its action.
+        .storyID(StoryID.Explorer.row(store.relative(row.id)), press: click)
         // As a file URL: it drops into another folder here, or into Finder.
         .onDrag {
             NSItemProvider(object: URL(fileURLWithPath: row.id) as NSURL)
@@ -507,6 +516,7 @@ private struct InlineNameField: View {
     var body: some View {
         TextField("", text: $name.value)
             .textFieldStyle(.plain)
+            .storyID(StoryID.Explorer.namefield)
             .font(Chrome.body)
             .foregroundStyle(Theme.text)
             .focused($focused)

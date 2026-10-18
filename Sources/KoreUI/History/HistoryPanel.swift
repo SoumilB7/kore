@@ -117,6 +117,7 @@ struct HistoryPanel: View {
                 .foregroundStyle(Theme.tertiary)
             TextField(showArchived.value ? "Search archived…" : "Search chats…", text: $query.value)
                 .textFieldStyle(.plain)
+                .storyID(StoryID.History.search)
                 .font(Chrome.body)
                 .focused($searchFocused)
                 // Hidden, it takes no keys (and focus is left alone: clearing it resets the window's).
@@ -190,13 +191,16 @@ private struct HistoryRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if isRenaming { renameField } else { title }
+            if isRenaming { renameField } else { title.storyID(StoryID.History.row(session.id)) }
             if hovered.value && !isRenaming {
                 iconButton("pencil", help: "Rename", action: startRename)
                 iconButton(session.archived ? "tray.and.arrow.up" : "archivebox", help: session.archived ? "Unarchive" : "Archive", action: toggleArchive)
+                    .storyID(StoryID.History.row(session.id).part(.archive))
                     .padding(.trailing, Space.xs)
             }
         }
+        // Archive is built only on hover: pressed through its action meanwhile.
+        .storyAction(StoryID.History.row(session.id).part(.archive)) { toggleArchive() }
         .hoverFill(hovered.value || isRenaming)
         .onHover { hovered.value = $0 }
         .contextMenu {

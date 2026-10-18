@@ -215,6 +215,7 @@ struct FindBar: View {
                     HStack(spacing: Space.xxs) {
                         TextField("Find", text: $find.query)
                             .textFieldStyle(.plain)
+                            .storyID(StoryID.Editor.Find.field)
                             .font(Chrome.body)
                             .foregroundStyle(Theme.text)
                             .focused($field, equals: .query)
@@ -235,15 +236,19 @@ struct FindBar: View {
                         .lineLimit(1)
                         .fixedSize()
                     IconButton(symbol: "arrow.up", kind: .small, font: Chrome.label, help: "Previous Match (⇧⌘G)") { find.previous() }
+                        .storyID(StoryID.Editor.Find.previous)
                         .disabled(find.matches.isEmpty)
                     IconButton(symbol: "arrow.down", kind: .small, font: Chrome.label, help: "Next Match (⌘G)") { find.next() }
+                        .storyID(StoryID.Editor.Find.next)
                         .disabled(find.matches.isEmpty)
                     IconButton(symbol: "xmark", kind: .small, font: Chrome.label, help: "Close (Esc)") { find.close() }
+                        .storyID(StoryID.Editor.Find.close)
                 }
                 if find.showReplace {
                     HStack(spacing: Space.xs) {
                         TextField("Replace", text: $find.replacement)
                             .textFieldStyle(.plain)
+                            .storyID(StoryID.Editor.Find.replaceField)
                             .font(Chrome.body)
                             .foregroundStyle(Theme.text)
                             .focused($field, equals: .replacement)
