@@ -27,13 +27,19 @@ private struct MarkdownBlocks: View {
     let listDepth: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
-                MarkdownBlockView(block: block, listDepth: listDepth)
-                    .padding(.top, index == 0 ? 0 : gap(blocks[index - 1], block))
+        // One block (most list items) needs no stack around it.
+        if blocks.count == 1 {
+            MarkdownBlockView(block: blocks[0], listDepth: listDepth)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
+                    MarkdownBlockView(block: block, listDepth: listDepth)
+                        .padding(.top, index == 0 ? 0 : gap(blocks[index - 1], block))
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func gap(_ above: MarkdownBlock, _ below: MarkdownBlock) -> CGFloat {
