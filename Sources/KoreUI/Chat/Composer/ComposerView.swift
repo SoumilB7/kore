@@ -99,6 +99,11 @@ struct ComposerView: View {
             chat.usage.close()
             chat.account.close()
         }
+        // A field or form in the Account popup had the keys: when it goes, the composer has them
+        // again, as it has throughout everything else in the popup.
+        .onChange(of: chat.account.isEditing) { _, editing in
+            if !editing { focused.wrappedValue = true }
+        }
         .onChange(of: chat.id) {
             // The popups are the chat the box showed; they close with the switch.
             pasteChat.value?.usage.close()

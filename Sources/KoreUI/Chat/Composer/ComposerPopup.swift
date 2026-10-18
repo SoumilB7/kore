@@ -10,13 +10,16 @@ import SwiftUI
 /// to the field; a click outside it closes it and goes on. So the composer keeps focus
 /// throughout (the context card's monitor pattern). What reaches the draft without a key here
 /// (a paste the composer takes first, a menu's Paste, dictation) closes it too, as the draft
-/// changes; it shows only once open, so the change that opened it never counts.
+/// changes; it shows only once open, so the change that opened it never counts. While a field
+/// or form in it is open (`editing`), every key is the field's and never closes it, Return
+/// included; Esc still steps back, and a click outside still closes it.
 struct ComposerPopup<Content: View>: View {
     let chat: Chat
     let id: StoryID
     var room: CGFloat?
     let stepBack: @MainActor () -> Bool
     let close: @MainActor () -> Void
+    var editing: @MainActor () -> Bool = { false }
     @ViewBuilder let content: () -> Content
     @StateObject private var frame = Held(CGRect.zero)
     @StateObject private var window = Held<NSWindow?>(nil)
@@ -64,6 +67,8 @@ struct ComposerPopup<Content: View>: View {
         guard let window = window.value, event.window === window else { return event }
         // Esc steps back one at a time, then closes.
         if event.type == .keyDown, event.keyCode == 53, stepBack() { return nil }
+        // A field has the keys: Tab, Return and the rest are its own.
+        if event.type == .keyDown, event.keyCode != 53, editing() { return event }
         if event.type == .keyDown {
             close()
             // Esc, Return, keypad Enter.

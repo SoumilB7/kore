@@ -293,9 +293,11 @@ struct AccountPopup: View {
         // Under a storyline host, the ⌄ menu's items drawn over the card, so a snapshot has them.
         .overlay(alignment: .topLeading) {
             if StoryHost.installed, let items = state.hostMenu {
+                // Its bottom a gap above the card's top, its height its own.
                 HostMenu(items: items)
                     .fixedSize()
-                    .alignmentGuide(.top) { $0[.bottom] + Space.xs }
+                    .padding(.bottom, Space.xs)
+                    .frame(height: 0, alignment: .bottomLeading)  // lint:allow a zero-height anchor, not a size
             }
         }
     }

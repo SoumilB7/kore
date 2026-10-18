@@ -226,7 +226,7 @@ package final class Chat: Identifiable {
     /// Opens the Account popup for this chat's CLI.
     func openAccount() {
         usage.close()
-        account.open(provider: provider.id)
+        account.open(provider: provider.id, folder: folder)
     }
 
     /// The auth-failure notice's Sign in: Account opens, and the sign-in starts with the last
