@@ -317,11 +317,15 @@ private struct StickyBackground: ViewModifier {
 /// The section's pinned header: no height of its own, so its message row scrolls normally; once
 /// that row has gone fully above the top (its bottom too), the message's first three lines hang
 /// from here. While any of the row shows, the row itself names the turn (look.md §15).
-struct StickyMessage: View {
+struct StickyMessage: View, Equatable {
     let entry: TranscriptStore.Entry
     var open: Bool
     let actions: TranscriptActions
     @ObservedObject var tracker: StickyTracker
+
+    /// By content, like the rows: the actions are one shared value, and the tracker redraws it
+    /// when a message crosses.
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.entry == b.entry && a.open == b.open }
 
     var body: some View {
         Color.clear
