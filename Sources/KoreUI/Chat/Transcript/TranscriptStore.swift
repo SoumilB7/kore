@@ -267,7 +267,21 @@ final class TranscriptStore {
     /// a closed card's lane isn't in `sections`).
     private(set) var agentsVersion = 0
     /// What the Agents button shows; changes only when an agent comes or goes or changes state.
-    private(set) var agentSummary = AgentSummary()
+    var agentSummary: AgentSummary {
+        access(keyPath: \.agentSummary)
+        return storedSummary
+    }
+    @ObservationIgnored private var storedSummary = AgentSummary()
+
+    /// Stored first, then announced. Observers hear of a change before it's made, and SwiftUI
+    /// can draw right then (an observer's change ends its update group, which carries out a
+    /// scroll view's pending commit at once): the Agents button read the old summary, nothing
+    /// came after, and it stayed hidden with agents in the chat.
+    private func publish(_ summary: AgentSummary) {
+        guard summary != storedSummary else { return }
+        storedSummary = summary
+        withMutation(keyPath: \.agentSummary) {}
+    }
 
     struct AgentSummary: Equatable {
         var count = 0
@@ -1188,8 +1202,7 @@ final class TranscriptStore {
         let begin = whole ? start : sectionStarts[kept]
 
         let rows = rows(from: begin)
-        let summary = summarizeAgents()
-        if summary != agentSummary { agentSummary = summary }
+        publish(summarizeAgents())
         if touchesDirty {
             touchesDirty = false
             let touches = touchedFiles()
