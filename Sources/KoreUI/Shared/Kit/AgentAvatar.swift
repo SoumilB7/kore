@@ -40,6 +40,8 @@ struct AgentAvatar: View {
     let name: String
     var status = Status.finished
     var waiting = false
+    /// Run in the background: its ring is dashed.
+    var background = false
     var place = Place.timeline
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -55,7 +57,11 @@ struct AgentAvatar: View {
                 .frame(width: place.shape, height: place.shape)
                 .foregroundStyle(Theme.agentMark)
                 .opacity(status == .stopped ? 0.35 : 1)
-            if status == .running { arc }
+            if status == .running {
+                arc
+            } else if background {
+                track.frame(width: ringSize, height: ringSize)
+            }
         }
         .frame(width: place.box, height: place.box)
         .overlay(alignment: .topTrailing) { if waiting { point(Theme.warning) } }
@@ -66,21 +72,31 @@ struct AgentAvatar: View {
                 Text("\(round + 1)").font(TextStyle.caption).foregroundStyle(Theme.agentMark)
             }
         }
-        .help(name)
-        .accessibilityLabel(name)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+
+    private var label: String { background ? "\(name) · Background" : name }
+
+    private var ringSize: CGFloat {
+        place.halo > 0 ? place.halo - Stroke.emphasis : place.shape + 2 * (Stroke.emphasis + 1)
+    }
+
+    /// The ring the running arc turns on.
+    private var track: some View {
+        Circle().stroke(Theme.border, style: StrokeStyle(lineWidth: Stroke.emphasis, dash: background ? Stroke.backgroundDash : []))
     }
 
     @ViewBuilder private var arc: some View {
-        let size = place.halo > 0 ? place.halo - Stroke.emphasis : place.shape + 2 * (Stroke.emphasis + 1)
         ZStack {
-            Circle().stroke(Theme.border, lineWidth: Stroke.emphasis)
+            track
             if reduceMotion {
                 Circle().stroke(Theme.agentArc, lineWidth: Stroke.emphasis)
             } else {
                 SpinningArc()
             }
         }
-        .frame(width: size, height: size)
+        .frame(width: ringSize, height: ringSize)
     }
 
     private func point(_ color: Color) -> some View {

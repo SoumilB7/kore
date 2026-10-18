@@ -9,6 +9,8 @@ import SwiftUI
 struct RunningTrack: View {
     /// The running agents' spawn orders, at most three.
     let indexes: [Int]
+    /// They all run in the background: the track is dashed.
+    var background = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hiddenTab) private var hidden
     @StateObject private var visible = Local(true)
@@ -20,7 +22,7 @@ struct RunningTrack: View {
         if trail.value.now != indexes { trail.value = (trail.value.now, indexes) }
         return Track(
             width: Self.width(indexes.count), indexes: indexes, leaving: trail.value.was,
-            still: reduceMotion || hidden || !visible.value, dash: dash
+            still: reduceMotion || hidden || !visible.value, dash: dash, background: background
         )
         .animation(Motion.fade, value: indexes.count)
         .background(Occlusion { visible.value = $0 })
@@ -58,6 +60,7 @@ struct RunningTrack: View {
         let leaving: [Int]
         let still: Bool
         let dash: Held<Dash>
+        let background: Bool
 
         nonisolated var animatableData: CGFloat {
             get { width }
@@ -96,7 +99,9 @@ struct RunningTrack: View {
         private func draw(_ graphics: inout GraphicsContext, _ size: CGSize, at: Double) {
             let path = Self.path(size)
             let perimeter = Self.perimeter(size)
-            graphics.stroke(path, with: .color(Theme.border), lineWidth: Stroke.emphasis)
+            graphics.stroke(
+                path, with: .color(Theme.border),
+                style: StrokeStyle(lineWidth: Stroke.emphasis, dash: background ? Stroke.backgroundDash : []))
             // A running avatar's arc: 0.28 of a lone ring, the same length on any track.
             let length = 0.28 * .pi * Size.agentTrack
             let start = CGFloat(at) * perimeter

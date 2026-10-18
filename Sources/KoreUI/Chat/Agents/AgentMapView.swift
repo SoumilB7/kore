@@ -136,7 +136,7 @@ struct AgentMapView: View {
             if let selected {
                 HStack(spacing: Space.sm) {
                     AgentAvatar(index: selected.info.index, name: selected.info.name, status: selected.info.status,
-                                place: .crumb)
+                                background: selected.info.background, place: .crumb)
                     Text(selected.info.name).font(TextStyle.labelMedium).foregroundStyle(Theme.text).lineLimit(1)
                 }
             }
@@ -283,13 +283,13 @@ private struct AgentGraphRow: View {
         let wires = GraphWires(depth: node.depth, rails: node.rails, isLast: node.isLast, hasChildren: hasChildren)
         Button(action: select) {
             HStack(spacing: m.labelGap) {
-                AgentNodeMark(kind: .agent(index: info.index, status: info.status, waiting: waiting))
+                AgentNodeMark(kind: .agent(index: info.index, status: info.status, waiting: waiting), background: info.background)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(info.name)
                         .font(TextStyle.labelMedium)
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
-                    AgentNodeMeter(info: info, waiting: waiting, hidden: hidden)
+                    AgentNodeMeter(info: info, waiting: waiting, hidden: hidden, background: info.background)
                 }
                 Spacer(minLength: 0)
             }
@@ -302,7 +302,7 @@ private struct AgentGraphRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(info.name)
+        .help(info.background ? "\(info.name) · Background" : info.name)
         .storyID(StoryID.AgentMap.row(info.id))
     }
 
@@ -315,11 +315,13 @@ private struct AgentGraphRow: View {
     }
 }
 
-/// "0:41 · 12.8k", ticking while the agent runs; "failed · 0:27"; "waiting · 0:31".
+/// "0:41 · 12.8k", ticking while the agent runs; "failed · 0:27"; "waiting · 0:31";
+/// "background · 12:04 · 295k".
 private struct AgentNodeMeter: View {
     let info: TranscriptStore.AgentInfo
     let waiting: Bool
     let hidden: Int
+    let background: Bool
 
     var body: some View {
         Group {
@@ -336,7 +338,7 @@ private struct AgentNodeMeter: View {
     }
 
     private func line(_ duration: TimeInterval?) -> some View {
-        var parts: [String] = []
+        var parts: [String] = background ? ["background"] : []
         if info.status == .failed { parts.append("failed") } else if info.status == .stopped { parts.append("stopped") }
         if waiting { parts.append("waiting") }
         if let duration { parts.append(AgentMeter.clock(duration)) }
@@ -488,7 +490,7 @@ struct AgentDetail: View {
     private func headerRow(labelled: Bool) -> some View {
         HStack(alignment: .center, spacing: Space.md) {
             AgentNodeMark(kind: .agent(index: info.index, status: info.status, waiting: info.waiting > 0),
-                          radius: Layout.AgentMap.detailRadius)
+                          radius: Layout.AgentMap.detailRadius, background: info.background)
             VStack(alignment: .leading, spacing: Space.xxs) {
                 Text(info.name)
                     .font(TextStyle.title)

@@ -19,12 +19,13 @@ struct AgentsButton: View {
             } label: {
                 HStack(spacing: Space.sm) {
                     if running {
-                        RunningTrack(indexes: stack.map(\.index))
+                        RunningTrack(indexes: stack.map(\.index), background: stack.allSatisfy(\.background))
                     } else {
                         HStack(spacing: -Size.avatarOverlap) {
                             ForEach(stack) { agent in
                                 AgentAvatar(
-                                    index: agent.index, name: agent.name, status: agent.status, place: .stack)
+                                    index: agent.index, name: agent.name, status: agent.status,
+                                    background: agent.background, place: .stack)
                                     .opacity(Theme.dimmed)
                             }
                         }

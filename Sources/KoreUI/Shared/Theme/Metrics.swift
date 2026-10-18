@@ -121,6 +121,8 @@ enum Stroke {
     static let emphasis: CGFloat = 1.5
     /// The rule at a quote's left (a compaction's summary).
     static let quote: CGFloat = 2
+    /// A background agent's ring: dashes (on, off) where another agent's is solid.
+    static let backgroundDash: [CGFloat] = [2.5, 2]
 }
 
 /// The one shadow: the history panel floating over content (owner kept it, 2026-10-20).

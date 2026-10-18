@@ -301,6 +301,7 @@ final class TranscriptStore {
         let index: Int
         let name: String
         let status: AgentInfo.Status
+        var background = false
     }
 
     /// One row of the agent map's tree.
@@ -775,7 +776,9 @@ final class TranscriptStore {
     private func summarizeAgents() -> AgentSummary {
         guard !agentOrder.isEmpty else { return AgentSummary() }
         let infos = agentOrder.compactMap(agent)
-        let refs = infos.map { AgentRef(id: $0.id, index: $0.index, name: $0.name, status: $0.status) }
+        let refs = infos.map {
+            AgentRef(id: $0.id, index: $0.index, name: $0.name, status: $0.status, background: $0.background)
+        }
         let working = refs.filter { $0.status != .stopped }
         return AgentSummary(
             count: working.count, stopped: refs.count - working.count, running: refs.filter { $0.status == .running },
@@ -1431,7 +1434,9 @@ final class TranscriptStore {
         case .tool(let e, _): return state(e)
         case .file(let e, _, _): return state(e)
         case .agent(let e, _, _):
-            return e.agent.map { .agent(index: $0.index, name: $0.name, status: $0.status, waiting: $0.waiting > 0) }
+            return e.agent.map {
+                .agent(index: $0.index, name: $0.name, status: $0.status, waiting: $0.waiting > 0, background: $0.background)
+            }
         }
     }
 

@@ -2,7 +2,8 @@ import SwiftUI
 
 /// An agent as a node in the agent map: an O with the agent's shape inside (phase 10 §6).
 /// Running turns a ring around it, finished fills it, failed turns it red, stopped fades it,
-/// and a waiting agent gets the amber point. The chat itself is the root: a grey O with a dot.
+/// and a waiting agent gets the amber point; a background agent's O is dashed. The chat itself
+/// is the root: a grey O with a dot.
 struct AgentNodeMark: View {
     enum Kind: Equatable {
         case root
@@ -11,6 +12,7 @@ struct AgentNodeMark: View {
 
     let kind: Kind
     var radius = Layout.AgentMap.nodeRadius
+    var background = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -26,9 +28,11 @@ struct AgentNodeMark: View {
     /// A filled O with its border inside it, and the agent's shape (the root's dot) in the middle.
     private func draw(in context: inout GraphicsContext, _ box: CGRect) {
         let border = Stroke.emphasis
-        context.fill(Circle().path(in: box), with: .color(fill))
+        // Dashed, the fill stays inside the border so the gaps show.
+        context.fill(Circle().path(in: background ? box.insetBy(dx: border, dy: border) : box), with: .color(fill))
         context.stroke(
-            Circle().path(in: box.insetBy(dx: border / 2, dy: border / 2)), with: .color(stroke), lineWidth: border)
+            Circle().path(in: box.insetBy(dx: border / 2, dy: border / 2)), with: .color(stroke),
+            style: StrokeStyle(lineWidth: border, dash: background ? Stroke.backgroundDash : []))
         switch kind {
         case .root:
             let dot = radius * 0.64

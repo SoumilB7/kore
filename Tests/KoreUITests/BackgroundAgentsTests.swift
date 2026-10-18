@@ -92,6 +92,19 @@ struct BackgroundAgentsTests {
         #expect(ends == ["toolu_bgB completed -", "toolu_bgB failed The publish step timed out."])
     }
 
+    /// Its card's avatar, the Agents button's stack and the map's row all know it runs in the
+    /// background (their rings are dashed).
+    @Test func aBackgroundAgentCarriesTheCue() {
+        let script = Script()
+        script.on(.replayed(translator().replay(lines)))
+        for item in script.items { if case .fold(let fold) = item.row, !fold.open { script.store.toggle(turn: fold.turn) } }
+        let cards = script.items.compactMap { item -> Bool? in
+            if case .agent(_, _, _, _, let background)? = item.dot { background } else { nil }
+        }
+        #expect(cards == [true, true])
+        #expect(script.store.agentSummary.first.allSatisfy { $0.background })
+    }
+
     // MARK: Codex
 
     /// A child thread another client runs outlives its parent's turn: its rollout says it still

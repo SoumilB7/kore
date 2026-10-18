@@ -43,14 +43,16 @@ struct AgentTabView: View {
                         workspace.openAgent(parent.id, of: chat)
                     } label: {
                         HStack(spacing: Space.xs) {
-                            AgentAvatar(index: parent.index, name: parent.name, status: parent.status, place: .crumb)
+                            AgentAvatar(
+                                index: parent.index, name: parent.name, status: parent.status, background: parent.background,
+                                place: .crumb)
                             Text(parent.name).font(TextStyle.label).foregroundStyle(Theme.secondary).lineLimit(1)
                         }
                     }
                     .buttonStyle(.plain)
                 }
                 chevron
-                AgentAvatar(index: info.index, name: info.name, status: info.status, place: .crumb)
+                AgentAvatar(index: info.index, name: info.name, status: info.status, background: info.background, place: .crumb)
                 Text(info.name)
                     .font(TextStyle.labelMedium)
                     .foregroundStyle(AgentAvatar.hue(info.index))
@@ -84,7 +86,7 @@ struct AgentTabView: View {
 
     private func footer(_ info: TranscriptStore.AgentInfo) -> some View {
         HStack(spacing: Space.md) {
-            AgentAvatar(index: info.index, name: info.name, status: info.status, place: .approval)
+            AgentAvatar(index: info.index, name: info.name, status: info.status, background: info.background, place: .approval)
             Group {
                 switch info.status {
                 case .running, .stopped:

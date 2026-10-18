@@ -4,7 +4,7 @@ import SwiftUI
 /// no dot (the WorkedFor rule), so the line runs through it.
 enum TimelineDot: Equatable {
     case plain, success, failure, warning, running
-    case agent(index: Int, name: String, status: AgentAvatar.Status, waiting: Bool)
+    case agent(index: Int, name: String, status: AgentAvatar.Status, waiting: Bool, background: Bool)
     /// A mode's icon in place of the dot (an agent's mode change, look.md §8).
     case mode(ModeMark)
     case none
@@ -75,8 +75,8 @@ struct TimelineDotView: View {
 
     var body: some View {
         switch dot {
-        case .agent(let index, let name, let status, let waiting):
-            AgentAvatar(index: index, name: name, status: status, waiting: waiting, place: .timeline)
+        case .agent(let index, let name, let status, let waiting, let background):
+            AgentAvatar(index: index, name: name, status: status, waiting: waiting, background: background, place: .timeline)
         case .running:
             BlinkingDot()
         case .mode(let mark):

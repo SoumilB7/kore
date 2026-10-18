@@ -242,7 +242,8 @@ private struct TabItem: View {
                     if let file = tab.file {
                         FileIconView(name: file.name, color: isActive ? Theme.text : Theme.secondary)
                     } else if let chat = tab.chat, let agent = tab.agent, let info = chat.transcript.agent(agent) {
-                        AgentAvatar(index: info.index, name: info.name, status: info.status, place: .tab)
+                        AgentAvatar(
+                            index: info.index, name: info.name, status: info.status, background: info.background, place: .tab)
                     } else if let chat = tab.chat {
                         if chat.status.isRunning {
                             ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
