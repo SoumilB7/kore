@@ -39,6 +39,9 @@ protocol ChatBackend: AnyObject {
     /// The page of conversation before what's shown (before a compaction), oldest first, and
     /// whether more comes before it; nil when there's none.
     func earlier() async -> (events: [ChatEvent], more: Bool)?
+    /// Summarizes the conversation to free context (Claude `/compact`, Codex
+    /// `thread/compact/start`): `.compactionStarted`, then `.compacted` or `.compactionFailed`.
+    func compact() async throws
     func close() async
 }
 
@@ -87,6 +90,15 @@ enum ForkError: LocalizedError {
 /// the CLI reported: its own turn diff when it has one (Codex), else the turn's tool edits
 /// merged per file. Two chats running in one folder at once see each other's edits in their
 /// git diffs.
+extension ChatBackend {
+    /// For a backend that can't compact.
+    func compact() async throws { throw CompactUnavailable() }
+}
+
+struct CompactUnavailable: Error, CustomStringConvertible {
+    var description: String { "This chat can't be compacted" }
+}
+
 /// Not tied to an actor, so a translator can replay history off the main thread; the lock
 /// covers the backend and the translator touching it from different threads.
 final class TurnFiles: @unchecked Sendable {

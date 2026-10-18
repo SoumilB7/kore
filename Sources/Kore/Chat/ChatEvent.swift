@@ -67,8 +67,16 @@ enum ChatEvent: Sendable {
     /// The CLI process ended. The next send relaunches it and resumes the session.
     case exited(status: Int32)
 
-    /// The conversation was compacted here: a divider over its summary.
-    case compacted(at: Date)
+    /// The conversation was compacted here: a divider over its summary. `from`: the tokens in
+    /// context before (Claude's `pre_tokens`). Also ends `compactionStarted`.
+    case compacted(at: Date, from: Int? = nil)
+    /// The CLI started compacting: on `ChatBackend.compact()` (`auto` false), or by itself when
+    /// the context ran full (`auto` true). `compacted` or `compactionFailed` follows.
+    case compactionStarted(auto: Bool)
+    case compactionFailed(String)
+    /// How full the context is: when the CLI comes up, after the main agent's model calls and after
+    /// a compaction, and once in a replay (the last known value). Sent only when it changes.
+    case contextUsage(ContextUsage)
     /// Older conversation exists before the history shown (before a compaction):
     /// `ChatBackend.earlier()` loads it.
     case earlierHistory(Bool)
@@ -111,6 +119,18 @@ struct ModeChange: Sendable, Equatable {
 struct PlanModeChange: Sendable, Equatable {
     let on: Bool
     let source: ModeSource
+    let at: Date
+}
+
+struct ContextUsage: Sendable, Equatable {
+    /// Tokens in context now.
+    let used: Int
+    /// What the fill is measured against, as each CLI's own extension does: Claude's effective
+    /// window (contextWindow − min(maxOutputTokens, 20k) − 13k, where it auto-compacts), Codex's
+    /// model context window. nil until the CLI says.
+    let window: Int?
+    /// The CLI compacts by itself when `used` reaches `window`; nil when it doesn't say.
+    let autoCompacts: Bool?
     let at: Date
 }
 
