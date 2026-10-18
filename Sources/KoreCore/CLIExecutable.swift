@@ -82,11 +82,13 @@ public enum CLIExecutable {
     }
 
     /// Variables that would make a CLI authenticate some other way than its own login
-    /// (`claude auth login` / `codex login`). Stripped so we always use that login.
+    /// (`claude auth login` / `codex login`). Stripped so we always use that login. The ones
+    /// that only move the stores (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) hold no secret and stay.
     static let foreignAuthVariables = [
         "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
         "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
-        "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY",
+        "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
     ]
 
     /// Set when Kore itself is launched from inside Claude Code (e.g. its VS Code extension);

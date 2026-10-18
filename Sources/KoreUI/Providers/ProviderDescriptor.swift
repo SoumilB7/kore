@@ -26,6 +26,8 @@ struct ProviderDescriptor: Identifiable, Sendable {
     let setArchived: @Sendable (_ id: String, _ archived: Bool, _ folder: URL) async -> Void
     /// What the usage popup says of this CLI without a reading.
     let usage: UsageWording
+    /// Its login: the sign-in methods, the status, the file it's kept in.
+    let account: AccountOps
 }
 
 /// The usage popup's words for one CLI.

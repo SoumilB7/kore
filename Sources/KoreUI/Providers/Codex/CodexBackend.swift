@@ -452,6 +452,16 @@ final class CodexBackend: ChatBackend {
         return (replayed.events, older.earlier != nil)
     }
 
+    func relaunch() async {
+        guard let session else { return }
+        // Its exit isn't the chat's news: the pump goes first.
+        pump?.cancel()
+        pump = nil
+        resumeId = sessionId
+        self.session = nil
+        await session.close()
+    }
+
     func close() async {
         for follow in follows.values { follow.cancel() }
         follows = [:]

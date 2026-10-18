@@ -15,6 +15,8 @@ package final class AppModel {
     private(set) var recents: [URL] = []
     /// Set when `claude` is missing or logged out; nil when all is well.
     private(set) var cliProblem: String?
+    /// Each CLI's login, app-wide.
+    var accounts: AccountStore { .shared }
 
     /// SwiftUI's window actions, from the first window that appeared. Folders opened from
     /// outside before then wait in `pendingFolders`.
@@ -25,6 +27,7 @@ package final class AppModel {
         let paths = UserDefaults.standard.stringArray(forKey: Self.recentsKey) ?? []
         recents = paths.map { URL(fileURLWithPath: $0) }.filter(Self.isDirectory)
         Self.shared = self
+        accounts.watch()
     }
 
     /// Opens (or focuses) a folder's window, the way a folder from outside the app is.

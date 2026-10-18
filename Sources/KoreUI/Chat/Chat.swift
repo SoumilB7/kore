@@ -64,6 +64,9 @@ package final class Chat: Identifiable {
     let contextCard = ContextCardPresence()
     /// The usage popup over the composer (the / menu's Usage).
     let usage = UsageState()
+    /// The CLI's account changed since its CLI started: it starts again (with resume) at the
+    /// next turn boundary, so it runs as the new account.
+    @ObservationIgnored private var relaunchDue = false
 
     /// `fork` makes this chat a fork of `session` that its CLI creates; it has no session of its
     /// own until then. `forkedFrom` names the original chat.
@@ -90,6 +93,7 @@ package final class Chat: Identifiable {
         if fork != nil { status.name = session?.title }
         transcript.providerName = provider.name
         transcript.provider = provider
+        AccountStore.shared.register(self)
     }
 
     package var sessionId: String? { status.sessionId }
@@ -137,6 +141,7 @@ package final class Chat: Identifiable {
         status.apply(event)
         context.apply(event)
         autoCompactIfDue(event)
+        afterAccountEvent(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
         StorylineSeams.events?(self, event)
@@ -215,6 +220,43 @@ package final class Chat: Identifiable {
             })
     }
 
+    // MARK: Account
+
+    /// A turn or a background agent is running.
+    var isWorking: Bool { status.isRunning || !transcript.agentSummary.running.isEmpty }
+
+    /// The account changed (a sign-in, a sign-out, a change outside Kore): the CLI starts again
+    /// at the next turn boundary, at once when nothing runs.
+    func accountChanged() {
+        guard backend != nil else { return }
+        relaunchDue = true
+        relaunchIfDue()
+    }
+
+    /// Ends the CLI's process between turns, so the next send starts it again as the new
+    /// account. It waits behind any send under way, and the next send waits for it.
+    private func relaunchIfDue() {
+        guard relaunchDue, !isWorking, let backend else { return }
+        relaunchDue = false
+        let previous = sending
+        sending = Task {
+            await previous?.value
+            await backend.relaunch()
+        }
+    }
+
+    private func afterAccountEvent(_ event: ChatEvent) {
+        switch event {
+        case .turnFinished, .agentFinished:
+            relaunchIfDue()
+        case .exited:
+            // Its process is gone: the next send starts a new one anyway.
+            relaunchDue = false
+        default:
+            break
+        }
+    }
+
     func close() {
         pump?.cancel()
         let backend = backend
@@ -284,6 +326,7 @@ package final class Chat: Identifiable {
         draft = ""
         command = nil
         attachments = []
+        relaunchIfDue()
         // The Codex extension's /plan flips the plan toggle; it isn't a message.
         if text == "/plan" && sent.isEmpty && provider.planToggle != nil {
             setPlanMode(!controls.planMode)

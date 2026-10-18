@@ -54,6 +54,9 @@ package protocol ChatBackend: AnyObject {
     /// Uses one of the account's full resets of its limits (`credit`, or the CLI's pick), as
     /// the attempt `attempt`: irreversible, so only on the user's confirmed ask.
     func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome
+    /// Ends the CLI's process between turns, quietly, so the next `start()` launches it again
+    /// and resumes the same session: after the account changed, it runs as the new one.
+    func relaunch() async
     func close() async
 }
 
@@ -132,6 +135,9 @@ extension ChatBackend {
 
     /// For a backend with no account to read.
     package func usage() async throws -> PlanReading { throw UsageUnavailable() }
+
+    /// For a backend with no process of its own.
+    package func relaunch() async {}
 
     /// For a backend whose CLI has no full resets.
     package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome { throw UsageUnavailable() }

@@ -197,6 +197,17 @@ public actor ClaudeSession {
         try await control("get_usage", ["skip_behaviors": true])
     }
 
+    /// Starts a sign-in (`claude_authenticate`): `loginWithClaudeAi` and any other field the
+    /// method sends. Answers `{manualUrl, automaticUrl}`; the CLI opens no browser.
+    public func authenticate(_ fields: [String: JSONValue]) async throws -> JSONValue {
+        try await control("claude_authenticate", fields)
+    }
+
+    /// Waits for the sign-in started above to finish in the browser; answers `{account}`.
+    public func waitForSignIn() async throws -> JSONValue {
+        try await control("claude_oauth_wait_for_completion")
+    }
+
     /// Ends the process.
     public func close() {
         guard running else { return }

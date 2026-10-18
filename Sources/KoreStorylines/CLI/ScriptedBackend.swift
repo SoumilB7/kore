@@ -188,6 +188,9 @@ package final class ScriptedBackend: ChatBackend {
         enqueue { await $0.play(beats) }
     }
 
+    /// The account changed: the process would end here and start again at the next send.
+    package func relaunch() async { log.append(.relaunch) }
+
     /// Lets a script held at `.wait(.release)` go on.
     package func release() {
         log.append(.release)

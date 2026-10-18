@@ -20,7 +20,8 @@ extension ProviderDescriptor {
             }
         },
         usage: UsageWording(
-            product: "Codex", login: "codex login", rows: ["5h limit", "Weekly limit"], resetsCaption: "Reset your current usage limits"))
+            product: "Codex", login: "codex login", rows: ["5h limit", "Weekly limit"], resetsCaption: "Reset your current usage limits"),
+        account: .codex)
 }
 
 /// Codex's permission presets as its VS Code extension shows them, and its separate Plan toggle.

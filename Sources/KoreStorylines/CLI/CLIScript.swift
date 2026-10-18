@@ -118,6 +118,8 @@ package enum Call: Sendable, Equatable {
     /// The usage popup used a full reset: the credit it named.
     case useReset(credit: String?)
     case fork(message: String?)
+    /// The CLI started again after the account changed.
+    case relaunch
     /// Not Kore's: a test's go-ahead (`ScriptedBackend.release()`), to hold a script mid-way.
     case release
 

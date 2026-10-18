@@ -556,6 +556,15 @@ final class ClaudeBackend: ChatBackend {
         try? await session?.stopTask(task)
     }
 
+    func relaunch() async {
+        guard let session else { return }
+        // Its exit isn't the chat's news: the pump goes first.
+        pump?.cancel()
+        pump = nil
+        self.session = nil
+        await session.close()
+    }
+
     func close() async {
         for tail in tails.values { tail.cancel() }
         tails = [:]

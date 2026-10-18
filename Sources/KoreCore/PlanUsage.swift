@@ -212,7 +212,7 @@ extension PlanReading {
     }
 
     /// "Claude Max" as the CLI names it; a bare "max" becomes that too.
-    static func claudePlan(_ raw: String?) -> String? {
+    public static func claudePlan(_ raw: String?) -> String? {
         guard let raw = nonEmpty(raw) else { return nil }
         let words = raw.split(whereSeparator: { $0 == " " || $0 == "_" }).map { $0.prefix(1).uppercased() + $0.dropFirst() }
         let name = words.joined(separator: " ")
@@ -361,7 +361,7 @@ extension PlanReading {
     }
 
     /// "ChatGPT Pro Lite" from `prolite`; "ChatGPT" when the plan isn't known.
-    static func codexPlan(_ raw: String?) -> String {
+    public static func codexPlan(_ raw: String?) -> String {
         let named: [String: String] = [
             "prolite": "Pro Lite", "promax": "Pro Max", "ent26": "Enterprise", "enterprise_cbp_automation": "Enterprise",
             "enterprise_cbp_usage_based": "Enterprise", "self_serve_business_prolite": "Business",
