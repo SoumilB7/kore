@@ -71,3 +71,69 @@ package struct StoryTranscript {
 extension Chat {
     package var storyTranscript: StoryTranscript { StoryTranscript(store: transcript) }
 }
+
+// The transcript's selection as a storyline aims at it and reads it.
+extension StoryTranscript {
+    /// Where the glyph at `offset` of an entry's text starts, a point in and halfway down its
+    /// line, in its window's base coordinates; nil until the text's row is built.
+    package func textPoint(_ entry: UUID, _ path: [Int], offset: Int) -> CGPoint? {
+        let selection = store.selection
+        guard let slot = selection.slots[entry]?[path], let layout = selection.layout(entry, path), let p = layout.point(at: offset),
+            let view = selection.responder
+        else { return nil }
+        return view.convert(CGPoint(x: slot.frame.minX + p.x + 1, y: slot.frame.minY + p.y), to: nil)
+    }
+
+    /// The paths of an entry's texts its built row reports.
+    package func selectableTexts(_ entry: UUID) -> [[Int]] {
+        (store.selection.slots[entry] ?? [:]).keys.sorted { $0.lexicographicallyPrecedes($1) }
+    }
+
+    /// The selection's ends, as "entry[path]@offset – …", or "none".
+    package var selectionDescription: String {
+        guard let (a, b) = store.selection.range else { return "none" }
+        return "\(a) – \(b)"
+    }
+
+    package var hasSelection: Bool { store.selection.hasSelection }
+    /// Everything the timeline shows selected, as ⌘A does.
+    package func selectAll() { store.selection.selectAll() }
+    /// Moves the transcript by `dy` points (positive: towards its end), as a scroll would.
+    package func scrollContent(by dy: CGFloat) {
+        guard let scroll = store.selection.responder?.enclosingScrollView, let document = scroll.documentView else { return }
+        let clip = scroll.contentView
+        let flipped = document.isFlipped
+        let maxY = max(0, document.bounds.height - clip.bounds.height)
+        let y = min(max(clip.bounds.origin.y + (flipped ? dy : -dy), 0), maxY)
+        clip.scroll(to: CGPoint(x: clip.bounds.origin.x, y: y))
+        scroll.reflectScrolledClipView(clip)
+    }
+
+    /// Loads past turns as a resumed session's history (it opens on its last turns, the earlier
+    /// ones behind "Load earlier turns"): each a message and its answer.
+    package func replay(_ turns: [(message: String, answer: String)]) {
+        var events: [ChatEvent] = []
+        for (i, turn) in turns.enumerated() {
+            events.append(.userMessage(text: turn.message, attachments: [], id: "story-message-\(i)"))
+            events.append(.turnStarted("story-turn-\(i)", origin: .user, at: Date()))
+            events.append(.text("story-block-\(i)", .answer, turn.answer))
+            events.append(.turnFinished("story-turn-\(i)", .completed, duration: nil))
+        }
+        store.replay(events)
+    }
+    /// Where the rows' content sits in the window (it moves as the transcript scrolls).
+    package var selectionAnchorY: CGFloat? { store.selection.responder.map { $0.convert(CGPoint.zero, to: nil).y } }
+    package var selectionMarkdown: String { store.selection.markdown() }
+    /// The rects a built row draws for the selection now.
+    package func highlightRects(_ entry: UUID) -> Int { store.selection.rects(entry).count }
+    /// Hit-tests made and texts laid out again, so far.
+    package var selectionWork: (hitTests: Int, laidOut: Int) { (store.selection.hitTests, store.selection.laidOut) }
+    package var selectionActive: Bool { store.selection.active }
+    /// The transcript's responder holds focus.
+    package var selectionFocused: Bool { store.selection.responder.map { $0.window?.firstResponder === $0 } ?? false }
+
+    /// What the selection's copies left on the storylines' pasteboard.
+    package static var copied: String? { TranscriptSelection.pasteboard.string(forType: .string) }
+    package static func clearCopied() { TranscriptSelection.pasteboard.clearContents() }
+    package static var openedLinks: [URL] { TranscriptSelection.opened }
+}

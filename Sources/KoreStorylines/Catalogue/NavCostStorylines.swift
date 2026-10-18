@@ -24,7 +24,7 @@ final class NavCost: Storyline {
     }
 
     override func steps() -> [any Step] {
-        [OpenFolder()] + Self.chat(1) + Self.chat(2) + Self.chat(3) + [WaitIdle(), MeasureNav()]
+        [OpenFolder()] + Self.chat(1) + Self.chat(2) + Self.chat(3) + [WaitIdle(), MeasureNav(), MeasureSelectedScroll()]
     }
 }
 

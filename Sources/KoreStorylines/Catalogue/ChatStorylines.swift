@@ -183,7 +183,8 @@ final class AnswerRowsWithoutSelection: ChatStoryline {
     }
 }
 
-/// With the real pointer: the answer's text becomes selectable when the pointer is over it.
+/// With the real pointer: an answer's text under the pointer still builds no selection view of
+/// its own (the transcript's one selection lays a text out only when a press reaches it).
 final class SelectableOnHover: ChatStoryline {
     static let reply = """
         A paragraph long enough to fill several lines of the answer, so the middle of its row is \
@@ -200,7 +201,7 @@ final class SelectableOnHover: ChatStoryline {
             WaitIdle(),
             Expect("no text selection views yet") { selectionViews(in: $0.window) == 0 },
             Hover(.answer(turn: 1)),
-            Expect("the answer's text selectable under the pointer") { selectionViews(in: $0.window) > 0 },
+            Expect("no text selection views under the pointer either") { selectionViews(in: $0.window) == 0 },
         ]
     }
 }
