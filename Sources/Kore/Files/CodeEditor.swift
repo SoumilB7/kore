@@ -363,7 +363,9 @@ struct CodeEditorView: NSViewRepresentable {
 
 // MARK: - Lines
 
-/// Where each line starts (UTF-16 offsets), kept up to date edit by edit.
+/// Where each line starts (UTF-16 offsets), kept up to date edit by edit. A line ends where
+/// NSString's `getLineStart` ends one: at `\n`, `\r\n` (one break), a lone `\r`, or U+2028 /
+/// U+2029, so the gutter, go-to-line, find ticks and the caret's line agree with AppKit's.
 final class LineIndex: @unchecked Sendable {
     private(set) var starts: [Int] = [0]
 
@@ -382,10 +384,14 @@ final class LineIndex: @unchecked Sendable {
         return low
     }
 
-    /// The line's range without its newline.
+    /// The line's range without its line break (two characters for `\r\n`).
     func range(of line: Int, in string: NSString) -> NSRange {
         let start = self.start(of: line)
-        let end = line + 1 < starts.count ? starts[line + 1] - 1 : string.length
+        var end = string.length
+        if line + 1 < starts.count {
+            end = starts[line + 1] - 1
+            if end > start, string.character(at: end) == Self.lf, string.character(at: end - 1) == Self.cr { end -= 1 }
+        }
         return NSRange(location: start, length: max(0, end - start))
     }
 
@@ -394,12 +400,17 @@ final class LineIndex: @unchecked Sendable {
         starts.append(contentsOf: Self.newlines(in: string, range: NSRange(location: 0, length: string.length)))
     }
 
-    /// After `edited` (in the new text) replaced `edited.length - delta` characters.
+    /// After `edited` (in the new text) replaced `edited.length - delta` characters. Only the
+    /// edit is scanned, with one character either side: a `\r\n` pair can be joined or split
+    /// at its edges.
     func update(_ string: NSString, edited: NSRange, delta: Int) {
-        let oldEnd = edited.location + edited.length - delta
-        let low = firstIndex(after: edited.location)
-        let high = firstIndex(after: oldEnd)
-        let added = Self.newlines(in: string, range: edited)
+        let from = max(0, edited.location - 1)
+        let to = min(string.length, NSMaxRange(edited) + 1)
+        // The same span before the edit: its line starts are the ones replaced.
+        let oldTo = min(string.length - delta, NSMaxRange(edited) - delta + 1)
+        let low = firstIndex(after: from)
+        let high = firstIndex(after: oldTo)
+        let added = Self.newlines(in: string, range: NSRange(location: from, length: to - from))
         starts.replaceSubrange(low..<high, with: added)
         if delta != 0 {
             for i in (low + added.count)..<starts.count { starts[i] += delta }
@@ -416,7 +427,8 @@ final class LineIndex: @unchecked Sendable {
         return low
     }
 
-    /// The offsets after each newline in `range`.
+    /// The offsets after each line break that ends in `range`. A `\r` is a break of its own
+    /// unless a `\n` follows it (looked up past the range when it's the last character).
     static func newlines(in string: NSString, range: NSRange) -> [Int] {
         var result: [Int] = []
         let chunk = 1 << 16
@@ -426,11 +438,35 @@ final class LineIndex: @unchecked Sendable {
         while location < end {
             let length = min(chunk, end - location)
             string.getCharacters(&buffer, range: NSRange(location: location, length: length))
-            for i in 0..<length where buffer[i] == 0x0A { result.append(location + i + 1) }
+            for i in 0..<length {
+                switch buffer[i] {
+                case lf, ls, ps:
+                    result.append(location + i + 1)
+                case cr:
+                    let next = location + i + 1
+                    let followed = i + 1 < length ? buffer[i + 1] == lf : next < string.length && string.character(at: next) == lf
+                    if !followed { result.append(next) }
+                default:
+                    break
+                }
+            }
             location += length
         }
         return result
     }
+
+    /// The text ends in a line break, so the caret after it sits on a line of its own.
+    static func endsWithBreak(_ string: NSString) -> Bool {
+        guard string.length > 0 else { return false }
+        let last = string.character(at: string.length - 1)
+        return last == lf || last == cr || last == ls || last == ps
+    }
+
+    static let lf: unichar = 0x0A
+    static let cr: unichar = 0x0D
+    /// U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR.
+    static let ls: unichar = 0x2028
+    static let ps: unichar = 0x2029
 }
 
 // MARK: - Syntax colour
@@ -646,7 +682,7 @@ final class EditorTextView: NSTextView {
         let string = nsString
         let caret = selectedRange().location
         var box: NSRect
-        if caret >= string.length, string.length == 0 || string.hasSuffix("\n") {
+        if caret >= string.length, string.length == 0 || LineIndex.endsWithBreak(string) {
             box = layout.extraLineFragmentRect.offsetBy(dx: 0, dy: textContainerOrigin.y)
         } else {
             box = rect(for: string.lineRange(for: NSRange(location: caret, length: 0)), layout: layout)
