@@ -296,6 +296,12 @@ final class CodexTranslator {
             let command = Self.command(item.raw) ?? item.command ?? ""
             // Codex parses each command: reads, searches and listings only count as exploring.
             let actions = item.raw["commandActions"]?.array ?? []
+            if let read = Self.fileRead(command, actions: actions, cwd: item.raw["cwd"]?.string ?? folder.path) {
+                // A plain read of one file shows as Claude's Read does: the path, no output box.
+                return ToolCall(
+                    id: item.id, name: "Read", detail: ToolText.relative(read.path, in: folder),
+                    input: read.range.map { "\(read.path):\($0)" } ?? read.path, path: read.path, readOnly: true)
+            }
             let readOnly = !actions.isEmpty && actions.allSatisfy { ["read", "search", "listFiles"].contains($0["type"]?.string ?? "") }
             return ToolCall(id: item.id, name: "Run", detail: command, input: command, readOnly: readOnly)
         case "fileChange":
@@ -610,6 +616,42 @@ final class CodexTranslator {
             return c
         }
         return json["command"]?.string
+    }
+
+    /// Programs whose plain use on one file only shows it.
+    private static let readers: Set<String> = ["cat", "sed", "head", "tail", "nl"]
+
+    /// The file (absolute) and line range a command only reads, when Codex parsed it as one
+    /// read and the command is one reader on one file: no pipe, redirect or second command.
+    static func fileRead(_ command: String, actions: [JSONValue], cwd: String) -> (path: String, range: String?)? {
+        guard actions.count == 1, actions[0]["type"]?.string == "read", let path = actions[0]["path"]?.string,
+            !path.isEmpty, command.rangeOfCharacter(from: CharacterSet(charactersIn: "|;&<>`$")) == nil
+        else { return nil }
+        let words = command.split(separator: " ").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'\"")) }
+        guard let program = words.first, readers.contains(program) else { return nil }
+        // `sed` reads only with -n and a print range; anything else (-i, s///) changes or filters.
+        if program == "sed", !(words.contains("-n") && words.contains { $0.hasSuffix("p") && $0.first?.isNumber == true }) {
+            return nil
+        }
+        let absolute = path.hasPrefix("/") ? path : (cwd as NSString).appendingPathComponent(path)
+        // Codex reports `/tmp/…` where the folder is `/private/tmp/…`: resolve both the same way.
+        return (realPath(absolute), lineRange(program, words))
+    }
+
+    /// "40–90" for `sed -n '40,90p'`, "1–20" for `head -n 20` / `head -20`.
+    private static func lineRange(_ program: String, _ words: [String]) -> String? {
+        switch program {
+        case "sed":
+            guard let spec = words.first(where: { $0.hasSuffix("p") && $0.first?.isNumber == true }) else { return nil }
+            let bounds = spec.dropLast().split(separator: ",").compactMap { Int($0) }
+            return bounds.count == 2 ? "\(bounds[0])–\(bounds[1])" : bounds.first.map(String.init)
+        case "head":
+            if let i = words.firstIndex(of: "-n"), i + 1 < words.count, let n = Int(words[i + 1]) { return "1–\(n)" }
+            if let flag = words.first(where: { $0.hasPrefix("-") }), let n = Int(flag.dropFirst()) { return "1–\(n)" }
+            return nil
+        default:
+            return nil
+        }
     }
 
     /// A thread's name, when it has a usable one.
