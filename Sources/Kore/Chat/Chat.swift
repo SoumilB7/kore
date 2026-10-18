@@ -128,7 +128,8 @@ final class Chat: Identifiable {
     /// The backend, made on first use with the chat's current settings.
     private func connect() -> any ChatBackend {
         if let backend { return backend }
-        let backend = provider.makeBackend(
+        let make: (BackendOptions) -> any ChatBackend = FeedBackend.enabled ? FeedBackend.init : provider.makeBackend
+        let backend = make(
             BackendOptions(
                 folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode, model: launchModel,
                 fork: fork, forkTitle: fork == nil ? nil : status.name))

@@ -775,6 +775,12 @@ final class TranscriptStore {
     // MARK: Building rows
 
     private func rebuild() {
+        let signpost = RebuildStats.signposter.beginInterval("TranscriptRebuild")
+        let began = DispatchTime.now().uptimeNanoseconds
+        defer {
+            RebuildStats.signposter.endInterval("TranscriptRebuild", signpost)
+            RebuildStats.shared.record(Double(DispatchTime.now().uptimeNanoseconds - began) / 1e6)
+        }
         // Only the last `windowTurns` user turns are built (T3 Code's paging): a long chat costs
         // what its last few turns cost. Everything stays in `entries`.
         var users = 0
