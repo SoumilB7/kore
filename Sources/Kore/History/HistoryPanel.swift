@@ -17,11 +17,11 @@ struct HistoryButton: View {
             isOpen.toggle()
         } label: {
             Image(systemName: "clock")
-                .font(.system(size: 13, weight: .medium))
+                .font(Chrome.bodyMedium)
                 .foregroundStyle(hovered.value || isOpen ? Theme.text : Theme.secondary)
                 .frame(width: size, height: size)
-                .background(hovered.value || isOpen ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: 8))
-                .contentShape(RoundedRectangle(cornerRadius: 8))
+                .background(hovered.value || isOpen ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
+                .contentShape(RoundedRectangle(cornerRadius: Radius.control))
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
@@ -56,10 +56,10 @@ struct HistoryPanel: View {
     private var archivedCount: Int { workspace.chats.count { $0.archived } }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Space.md) {
             searchBar
             ScrollView {
-                LazyVStack(spacing: 2) {
+                LazyVStack(spacing: Space.xxs) {
                     ForEach(matches) { chat in
                         HistoryRow(
                             session: chat,
@@ -80,15 +80,14 @@ struct HistoryPanel: View {
 
             if matches.isEmpty {
                 Text(!workspace.loaded ? "Loading…" : showArchived.value ? "No archived chats" : "No chats yet")
-                    .font(.system(size: 12))
+                    .font(Chrome.label)
                     .foregroundStyle(Theme.tertiary)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, Space.xl)
             }
         }
-        .padding(10)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
-        .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+        .padding(Space.lg)
+        .panel(.panel)
+        .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
         .opacity(isOpen ? 1 : 0)
         .allowsHitTesting(isOpen)
@@ -112,13 +111,13 @@ struct HistoryPanel: View {
     }
 
     private var searchBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Space.md) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12))
+                .font(Chrome.label)
                 .foregroundStyle(Theme.tertiary)
             TextField(showArchived.value ? "Search archived…" : "Search chats…", text: $query.value)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(Chrome.body)
                 .focused($searchFocused)
                 // Hidden, it takes no keys (and focus is left alone: clearing it resets the window's).
                 .disabled(!isOpen)
@@ -126,23 +125,22 @@ struct HistoryPanel: View {
             Button {
                 showArchived.value.toggle()
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: Space.xs) {
                     Image(systemName: "archivebox")
                     if archivedCount > 0 { Text("\(archivedCount)") }
                 }
-                .font(.system(size: 12))
+                .font(Chrome.label)
                 .foregroundStyle(showArchived.value ? Theme.text : Theme.tertiary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(showArchived.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, Space.sm)
+                .padding(.vertical, Space.xs)
+                .hoverFill(showArchived.value)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(showArchived.value ? "Show chats" : "Show archived chats")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Theme.background, in: RoundedRectangle(cornerRadius: 8))
+        .padding(Inset.search)
+        .panel(.well)
     }
 
     private func open(_ chat: SessionSummary) {
@@ -196,10 +194,10 @@ private struct HistoryRow: View {
             if hovered.value && !isRenaming {
                 iconButton("pencil", help: "Rename", action: startRename)
                 iconButton(session.archived ? "tray.and.arrow.up" : "archivebox", help: session.archived ? "Unarchive" : "Archive", action: toggleArchive)
-                    .padding(.trailing, 4)
+                    .padding(.trailing, Space.xs)
             }
         }
-        .background(hovered.value || isRenaming ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: 7))
+        .hoverFill(hovered.value || isRenaming)
         .onHover { hovered.value = $0 }
         .contextMenu {
             Button("Open", action: open)
@@ -210,24 +208,24 @@ private struct HistoryRow: View {
 
     private var title: some View {
         Button(action: open) {
-            HStack(spacing: 8) {
-                ProviderLogo(provider: session.agent == .claude ? .claude : .codex, size: 13)
+            HStack(spacing: Space.md) {
+                ProviderLogo(provider: session.agent == .claude ? .claude : .codex, size: Size.logoRow)
                 Text(session.title)
-                    .font(.system(size: 13))
+                    .font(Chrome.body)
                     .foregroundStyle(session.archived ? Theme.secondary : Theme.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Spacer(minLength: 8)
+                Spacer(minLength: Space.md)
                 if !hovered.value {
                     Text(Self.age(of: session.updated))
-                        .font(.system(size: 12))
+                        .font(Chrome.label)
                         .foregroundStyle(Theme.tertiary)
                         .fixedSize()
                 }
             }
-            .padding(.leading, 10)
+            .padding(.leading, Space.lg)
             .padding(.trailing, hovered.value ? 4 : 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, Space.md)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -235,11 +233,11 @@ private struct HistoryRow: View {
     }
 
     private var renameField: some View {
-        HStack(spacing: 8) {
-            ProviderLogo(provider: session.agent == .claude ? .claude : .codex, size: 13)
+        HStack(spacing: Space.md) {
+            ProviderLogo(provider: session.agent == .claude ? .claude : .codex, size: Size.logoRow)
             TextField("Name", text: $draft.value)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(Chrome.body)
                 .focused($fieldFocused)
                 .onSubmit { finish(draft.value) }
                 .onKeyPress(.escape) {
@@ -248,9 +246,9 @@ private struct HistoryRow: View {
                 }
                 .onChange(of: fieldFocused) { _, focused in if !focused { finish(draft.value) } }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.accent.opacity(0.6)))
+        .padding(Inset.row)
+
+        .overlay(RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.accentLine))
         .onAppear {
             draft.value = session.title
             finished.value = false
@@ -267,9 +265,9 @@ private struct HistoryRow: View {
     private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 12))
+                .font(Chrome.label)
                 .foregroundStyle(Theme.secondary)
-                .frame(width: 26, height: 26)
+                .frame(width: Size.iconButtonSmall, height: Size.iconButtonSmall)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

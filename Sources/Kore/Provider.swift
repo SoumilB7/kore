@@ -101,21 +101,6 @@ struct ModeOption: Identifiable {
     /// A step on the mode ladder, all in the theme's one hue: the outline gets brighter, more
     /// saturated, then thicker the less the agent asks before acting. Only the last step leaves
     /// the hue, for danger. The labels and icons still come from the VS Code extensions.
-    struct Rung {
-        let color: Color
-        /// Outline opacity while the composer is focused (lower when not).
-        let opacity: Double
-        let width: CGFloat
-
-        /// Plans and reads only: pale and calm.
-        static let plan = Rung(color: Theme.Blue.b200, opacity: 0.55, width: 1)
-        /// Edits files without asking.
-        static let edits = Rung(color: Theme.Blue.b400, opacity: 0.85, width: 1)
-        /// Runs commands without asking.
-        static let auto = Rung(color: Theme.Blue.b300, opacity: 1, width: 1.5)
-        /// Skips every check.
-        static let danger = Rung(color: Theme.danger, opacity: 0.9, width: 1.5)
-    }
 }
 
 struct ModeIcon: View {

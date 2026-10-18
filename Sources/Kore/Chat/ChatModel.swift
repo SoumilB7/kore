@@ -39,6 +39,8 @@ final class ChatModel: Identifiable {
         enum Source {
             case claude(PermissionRequest)
             case codex(CodexApproval)
+            /// Not from a CLI: the test gallery's samples. Answering does nothing.
+            case sample
         }
 
         let id: String
@@ -405,6 +407,8 @@ final class ChatModel: Identifiable {
                     case .keepPlanning: .deny(message: "The user wants to keep planning. Ask what to change.")
                     }
                 try? await session.respond(to: request, mapped)
+            case .sample:
+                return
             case .codex(let request):
                 guard case .codex(let session) = backend else { return }
                 let mapped: CodexDecision =

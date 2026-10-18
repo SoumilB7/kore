@@ -38,17 +38,17 @@ struct FolderWindow: View {
                             historyOpen.value = false
                         }
                         .frame(width: min(380, max(geometry.size.width - 16, 200)))
-                        .padding(.top, 6)
-                        .padding(.trailing, 8)
-                        .padding(.bottom, 12)
+                        .padding(.top, Space.sm)
+                        .padding(.trailing, Space.md)
+                        .padding(.bottom, Space.xl)
                     }
             }
             .ignoresSafeArea(.container, edges: .top)
-            .animation(.easeOut(duration: 0.12), value: historyOpen.value)
+            .animation(Motion.fade, value: historyOpen.value)
         }
         .background(TitleBar { fullScreen.value = $0 })
         // Small minimum: every part has to work as a tile, not just as a full window.
-        .frame(minWidth: 360, minHeight: 300)
+        .frame(minWidth: Layout.Window.minWidth, minHeight: Layout.Window.minHeight)
         .navigationTitle(folder.lastPathComponent)
         .focusedSceneValue(\.workspace, workspace.value)
         .onAppear {

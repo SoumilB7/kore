@@ -28,10 +28,10 @@ final class ImageEditor: Identifiable {
 
         var nsColor: NSColor {
             switch self {
-            case .red: NSColor(red: 1, green: 0.27, blue: 0.23, alpha: 1)
-            case .yellow: NSColor(red: 1, green: 0.84, blue: 0.04, alpha: 1)
-            case .green: NSColor(red: 0.2, green: 0.84, blue: 0.29, alpha: 1)
-            case .blue: NSColor(red: 0.04, green: 0.52, blue: 1, alpha: 1)
+            case .red: NSColor(red: 1, green: 0.27, blue: 0.23, alpha: 1)  // lint:allow pen colours are user content
+            case .yellow: NSColor(red: 1, green: 0.84, blue: 0.04, alpha: 1)  // lint:allow
+            case .green: NSColor(red: 0.2, green: 0.84, blue: 0.29, alpha: 1)  // lint:allow
+            case .blue: NSColor(red: 0.04, green: 0.52, blue: 1, alpha: 1)  // lint:allow
             case .white: .white
             }
         }
@@ -114,17 +114,17 @@ struct ImageViewer: View {
         ZStack {
             Theme.background
             ImageCanvas(editor: editor)
-                .padding(.top, 44)
-                .padding(.bottom, 68)
-                .padding(.horizontal, 24)
+                .padding(.top, Layout.Viewer.canvasTop)
+                .padding(.bottom, Layout.Viewer.canvasBottom)
+                .padding(.horizontal, Layout.Viewer.canvasSide)
             VStack {
                 HStack {
                     Spacer()
                     toolButton("xmark", help: "Close (Esc)", action: close)
                 }
-                .padding(10)
+                .padding(Layout.Viewer.closeInset)
                 Spacer()
-                toolbar.padding(.bottom, 16)
+                toolbar.padding(.bottom, Layout.Viewer.toolbarBottom)
             }
         }
         .transition(.opacity)
@@ -171,22 +171,22 @@ struct ImageViewer: View {
             toolbarRow(.compact)
             toolbarRow(.minimal)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Space.xl)
     }
 
     private enum Density { case full, compact, minimal }
 
     private func toolbarRow(_ density: Density) -> some View {
-        HStack(spacing: 2) {
+        FloatingBar {
             if density != .minimal {
                 toolButton("minus.magnifyingglass", help: "Zoom out (⌘-)", action: editor.zoomOut)
             }
             if density == .full {
                 Button(action: editor.actualSize) {
                     Text("\(Int((editor.zoom * 100).rounded()))%")
-                        .font(.system(size: 12).monospacedDigit())
+                        .font(Chrome.labelDigits)
                         .foregroundStyle(Theme.secondary)
-                        .frame(width: 44, height: 28)
+                        .frame(width: Size.zoomLabel.width, height: Size.zoomLabel.height)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -235,52 +235,23 @@ struct ImageViewer: View {
                 .lineLimit(1)
                 .fixedSize()
                 .help("\(actionTitle) (Return)")
-                .padding(.leading, 4)
+                .padding(.leading, Space.xs)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
     }
 
     private func swatch(_ color: ImageEditor.PenColor, selected: Bool) -> some View {
         Circle()
             .fill(Color(nsColor: color.nsColor))
-            .frame(width: 12, height: 12)
-            .overlay(Circle().strokeBorder(Theme.text, lineWidth: selected ? 1.5 : 0).padding(-3))
-            .frame(width: 24, height: 28)
+            .frame(width: Size.swatch, height: Size.swatch)
+            .overlay(Circle().strokeBorder(Theme.text, lineWidth: selected ? Size.swatchRing : 0).padding(-Size.swatchRingInset))
+            .frame(width: Size.swatchButton.width, height: Size.swatchButton.height)
             .contentShape(Rectangle())
     }
 
-    private var divider: some View {
-        Rectangle().fill(Theme.border).frame(width: 1, height: 18).padding(.horizontal, 6)
-    }
+    private var divider: some View { BarDivider() }
 
     private func toolButton(_ symbol: String, help: String, isOn: Bool = false, action: @escaping () -> Void) -> some View {
-        ToolButton(symbol: symbol, isOn: isOn, action: action).help(help)
-    }
-}
-
-private struct ToolButton: View {
-    let symbol: String
-    let isOn: Bool
-    let action: () -> Void
-    @Environment(\.isEnabled) private var isEnabled
-    @StateObject private var hovered = Local(false)
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13))
-                .foregroundStyle(isOn ? Theme.text : (isEnabled ? Theme.secondary : Theme.tertiary))
-                .frame(width: 28, height: 28)
-                .background(
-                    isOn ? Theme.surfaceHover : (hovered.value && isEnabled ? Theme.surfaceHover.opacity(0.6) : .clear),
-                    in: RoundedRectangle(cornerRadius: 7))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered.value = $0 }
+        IconButton(symbol: symbol, isOn: isOn, help: help, action: action)
     }
 }
 

@@ -7,9 +7,9 @@ struct EntryView: View {
     var body: some View {
         switch entry.kind {
         case .user:
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Space.md) {
                 if !entry.attachments.isEmpty {
-                    HStack(spacing: 8) {
+                    HStack(spacing: Space.md) {
                         ForEach(entry.attachments) { attachment in
                             AttachmentChip(attachment: attachment, open: { openImage(attachment) })
                         }
@@ -17,27 +17,26 @@ struct EntryView: View {
                 }
                 if !entry.text.isEmpty {
                     Text(entry.text)
-                        .font(Theme.body)
+                        .font(TextStyle.body)
                         .foregroundStyle(Theme.text)
                         .textSelection(.enabled)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(Inset.bubble)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+            .panel(.bubble)
         case .assistant:
             Text(markdown(entry.text))
-                .font(Theme.body)
+                .font(TextStyle.body)
                 .foregroundStyle(Theme.text)
-                .lineSpacing(3)
+                .lineSpacing(TextStyle.leading)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .plan:
             PlanText(text: entry.text)
         case .thinking:
             Text(entry.text)
-                .font(Theme.body)
+                .font(TextStyle.body)
                 .italic()
                 .foregroundStyle(Theme.tertiary)
                 .textSelection(.enabled)
@@ -48,7 +47,7 @@ struct EntryView: View {
             PeerMessageView(entry: entry)
         case .notice:
             Text(entry.text)
-                .font(.kore(12))
+                .font(TextStyle.label)
                 .foregroundStyle(entry.isError ? Theme.danger : Theme.tertiary)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: entry.isError ? .leading : .center)
@@ -67,19 +66,18 @@ struct PeerMessageView: View {
     let entry: ChatModel.Entry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Space.sm) {
             Label("From \(entry.from ?? "another session")", systemImage: "bubble.left")
-                .font(.kore(12, .medium))
+                .font(TextStyle.labelMedium)
                 .foregroundStyle(Theme.secondary)
             Text(entry.text)
-                .font(Theme.body)
+                .font(TextStyle.body)
                 .foregroundStyle(Theme.text)
                 .textSelection(.enabled)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(Inset.bubble)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
+        .panel(.outline)
         .help("A message from another Claude session")
     }
 }
@@ -88,17 +86,17 @@ struct ToolRow: View {
     let entry: ChatModel.Entry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.md) {
                 Circle()
-                    .fill(entry.done ? Theme.text.opacity(0.7) : Theme.secondary)
-                    .frame(width: 6, height: 6)
+                    .fill(entry.done ? Theme.toolDone : Theme.secondary)
+                    .frame(width: Size.dot, height: Size.dot)
                     .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
                 Text(entry.toolName ?? "Tool")
-                    .font(.kore(12, .semibold))
+                    .font(TextStyle.labelStrong)
                     .foregroundStyle(Theme.text)
                 Text(entry.text)
-                    .font(Theme.mono)
+                    .font(TextStyle.code)
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(2)
                     .truncationMode(.middle)
@@ -106,10 +104,10 @@ struct ToolRow: View {
             if entry.done, let result = entry.result {
                 let firstLine = result.split(separator: "\n").first.map(String.init) ?? "(no output)"
                 Text(firstLine)
-                    .font(Theme.mono)
+                    .font(TextStyle.code)
                     .foregroundStyle(entry.isError ? Theme.danger : Theme.tertiary)
                     .lineLimit(1)
-                    .padding(.leading, 14)
+                    .padding(.leading, Space.xxl)
             }
         }
         .textSelection(.enabled)
@@ -124,20 +122,19 @@ struct PlanText: View {
     let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Space.sm) {
             Text("Plan")
-                .font(.kore(11, .semibold))
-                .foregroundStyle(ModeOption.Rung.plan.color)
+                .font(TextStyle.eyebrow)
+                .foregroundStyle(Rung.plan.color)
             Text(planMarkdown(text))
-                .font(Theme.body)
+                .font(TextStyle.body)
                 .foregroundStyle(Theme.text)
-                .lineSpacing(3)
+                .lineSpacing(TextStyle.leading)
                 .textSelection(.enabled)
         }
-        .padding(12)
+        .padding(Inset.block)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ModeOption.Rung.plan.color.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ModeOption.Rung.plan.color.opacity(0.3)))
+        .panel(.plan)
     }
 }
 

@@ -9,10 +9,10 @@ struct ComposerBar: View {
     @StateObject private var plusHovered = Local(false)
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: Space.xxl) {
             Button(action: attach) {
                 Image(systemName: "plus")
-                    .font(.kore(14))
+                    .font(Glyph.attach)
                     .foregroundStyle(plusHovered.value ? Theme.text : Theme.secondary)
             }
             .buttonStyle(.plain)
@@ -21,10 +21,10 @@ struct ComposerBar: View {
 
             Button(action: slash) {
                 Text("/")
-                    .font(.kore(11, .semibold))
+                    .font(Glyph.slash)
                     .foregroundStyle(Theme.secondary)
-                    .frame(width: 16, height: 16)
-                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Theme.secondary, lineWidth: 1.2))
+                    .frame(width: Size.slashGlyph, height: Size.slashGlyph)
+                    .overlay(RoundedRectangle(cornerRadius: Radius.glyph).stroke(Theme.secondary, lineWidth: Size.slashStroke))
             }
             .buttonStyle(.plain)
             .help("Slash commands")
@@ -38,14 +38,13 @@ struct ComposerBar: View {
 
             sendButton
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(Inset.composerBar)
     }
 
     private enum Density { case full, noEffort, iconsOnly, minimal }
 
     private func controls(_ density: Density) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: Space.xxl) {
             if !chat.models.isEmpty && density != .minimal {
                 ModelMenu(chat: chat, showEffort: density == .full)
             }
@@ -62,10 +61,10 @@ struct ComposerBar: View {
             chat.isRunning ? chat.stop() : chat.send()
         } label: {
             Image(systemName: chat.isRunning ? "stop.fill" : "arrow.up")
-                .font(.kore(12, .bold))
+                .font(Glyph.send)
                 .foregroundStyle(Theme.background)
-                .frame(width: 28, height: 28)
-                .background(Theme.text, in: RoundedRectangle(cornerRadius: 7))
+                .frame(width: Size.iconButton, height: Size.iconButton)
+                .background(Theme.text, in: RoundedRectangle(cornerRadius: Radius.chip))
         }
         .buttonStyle(.plain)
         .disabled(!chat.isRunning && !chat.canSend)
@@ -109,20 +108,20 @@ struct ModelMenu: View {
                 }
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: Space.sm) {
                 Text(chat.modelLabel)
-                    .font(.kore(12, .medium))
+                    .font(TextStyle.labelMedium)
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
                 if showEffort, let effort = chat.effortLabel {
                     Text(effort)
-                        .font(.kore(12))
+                        .font(TextStyle.label)
                         .foregroundStyle(Theme.secondary)
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.xs)
             .background(Theme.surfaceHover, in: Capsule())
         }
         .menuStyle(.button)
@@ -153,10 +152,10 @@ struct ModeMenu: View {
             }
         } label: {
             let mode = chat.provider == .codex ? chat.permissionsMode : chat.activeMode
-            HStack(spacing: 3) {
+            HStack(spacing: Space.xs) {
                 ModeIcon(mode: mode)
                 if showLabel {
-                    Text(mode.label).font(.kore(12, mode.tint == nil ? .regular : .medium)).lineLimit(1)
+                    Text(mode.label).font(mode.tint == nil ? TextStyle.label : TextStyle.labelMedium).lineLimit(1)
                 }
             }
             .foregroundStyle(mode.tint ?? Theme.secondary)

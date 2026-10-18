@@ -22,14 +22,14 @@ struct TranscriptView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: Layout.entryGap) {
                     ForEach(chat.entries) { entry in
                         EntryView(entry: entry, openImage: openImage).equatable()
                     }
-                    Color.clear.frame(height: 1).id(Self.end)
+                    Color.clear.frame(height: Stroke.hairline).id(Self.end)
                 }
                 .padding(.horizontal, column.padding)
-                .padding(.vertical, 20)
+                .padding(.vertical, Layout.transcriptPadding)
                 .frame(maxWidth: column.maxWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }

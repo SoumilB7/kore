@@ -7,24 +7,24 @@ struct PermissionCard: View {
     let decide: (ChatModel.Decision) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Space.lg) {
             Text(approval.title)
-                .font(.kore(13, .semibold))
+                .font(TextStyle.title)
                 .foregroundStyle(Theme.text)
             if let detail = approval.detail {
                 Text(detail)
-                    .font(.kore(12))
+                    .font(TextStyle.label)
                     .foregroundStyle(Theme.secondary)
             }
             if let body = approval.body {
                 Text(body)
-                    .font(Theme.mono)
+                    .font(TextStyle.code)
                     .foregroundStyle(Theme.text)
                     .textSelection(.enabled)
                     .lineLimit(6)
-                    .padding(8)
+                    .padding(Inset.well)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
+                    .panel(.well)
             }
             AdaptiveButtons {
                 Button("Deny") { decide(.deny) }
@@ -37,9 +37,8 @@ struct PermissionCard: View {
                     .buttonStyle(SubtleButtonStyle(prominent: true))
             }
         }
-        .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
+        .padding(Inset.card)
+        .panel(.card)
     }
 }
 
@@ -50,13 +49,13 @@ struct QuestionCard: View {
     @StateObject private var picked = Local([String: String]())
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Space.xxl) {
             ForEach(approval.questions, id: \.id) { question in
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: Space.md) {
                     Text(question.text)
-                        .font(.kore(13, .semibold))
+                        .font(TextStyle.title)
                         .foregroundStyle(Theme.text)
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: Space.sm) {
                         ForEach(Array(question.options.enumerated()), id: \.offset) { _, option in
                             Button {
                                 picked.value[question.id] = option.label
@@ -64,10 +63,10 @@ struct QuestionCard: View {
                                     submit(picked.value)
                                 }
                             } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(option.label).font(.kore(13, .medium))
+                                VStack(alignment: .leading, spacing: Space.xxs) {
+                                    Text(option.label).font(TextStyle.bodyMedium)
                                     if !option.description.isEmpty {
-                                        Text(option.description).font(.kore(11)).opacity(0.7)
+                                        Text(option.description).font(TextStyle.caption).opacity(Theme.dimmed)
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -78,10 +77,9 @@ struct QuestionCard: View {
                 }
             }
         }
-        .padding(14)
+        .padding(Inset.card)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
+        .panel(.card)
     }
 }
 
@@ -92,22 +90,22 @@ struct PlanApprovalCard: View {
     let decide: (ChatModel.Decision) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Space.lg) {
             Text("Ready to code?")
-                .font(.kore(13, .semibold))
+                .font(TextStyle.title)
                 .foregroundStyle(Theme.text)
             ScrollView {
                 Text(planMarkdown(plan))
-                    .font(Theme.body)
+                    .font(TextStyle.body)
                     .foregroundStyle(Theme.text)
-                    .lineSpacing(3)
+                    .lineSpacing(TextStyle.leading)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
+                    .padding(Inset.well)
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: Size.planScrollMax)
             .fixedSize(horizontal: false, vertical: true)
-            .background(Theme.background, in: RoundedRectangle(cornerRadius: 8))
+            .panel(.well)
             AdaptiveButtons {
                 Button("No, keep planning") { decide(.keepPlanning) }
                     .buttonStyle(SubtleButtonStyle())
@@ -117,9 +115,8 @@ struct PlanApprovalCard: View {
                     .buttonStyle(SubtleButtonStyle(prominent: true))
             }
         }
-        .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ModeOption.Rung.plan.color.opacity(0.45)))
+        .padding(Inset.card)
+        .panel(.planCard)
     }
 }
 
@@ -130,7 +127,7 @@ struct ImplementPlanCard: View {
 
     private var title: some View {
         Text("Implement this plan?")
-            .font(.kore(13, .semibold))
+            .font(TextStyle.title)
             .foregroundStyle(Theme.text)
     }
 
@@ -143,19 +140,18 @@ struct ImplementPlanCard: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
+            HStack(spacing: Space.md) {
                 title
-                Spacer(minLength: 8)
+                Spacer(minLength: Space.md)
                 buttons
             }
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: Space.lg) {
                 title
                 AdaptiveButtons { buttons }
             }
         }
-        .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ModeOption.Rung.plan.color.opacity(0.45)))
+        .padding(Inset.card)
+        .panel(.planCard)
     }
 }
 

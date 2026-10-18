@@ -6,15 +6,15 @@ struct WelcomeView: View {
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
-        VStack(spacing: 28) {
-            VStack(spacing: 6) {
-                BrandMark(height: 56)
-                    .padding(.bottom, 10)
+        VStack(spacing: Layout.Welcome.sectionGap) {
+            VStack(spacing: Space.sm) {
+                BrandMark(height: Layout.Welcome.markHeight)
+                    .padding(.bottom, Space.lg)
                 Text("Kore")
-                    .font(.system(size: 30, weight: .semibold))
+                    .font(Chrome.display)
                     .foregroundStyle(Theme.text)
                 Text("Open a folder to start")
-                    .font(.system(size: 13))
+                    .font(Chrome.body)
                     .foregroundStyle(Theme.secondary)
             }
 
@@ -26,32 +26,32 @@ struct WelcomeView: View {
             .buttonStyle(SubtleButtonStyle(prominent: true))
 
             if !app.recents.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Space.xs) {
                     Text("Recent")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(Chrome.captionMedium)
                         .foregroundStyle(Theme.tertiary)
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 2)
+                        .padding(.horizontal, Space.lg)
+                        .padding(.bottom, Space.xxs)
                     ForEach(app.recents, id: \.self) { folder in
                         RecentRow(folder: folder) { open(folder) }
                     }
                 }
-                .frame(width: 380)
+                .frame(width: Layout.Welcome.contentWidth)
             }
 
             if let problem = app.cliProblem {
                 Text(problem)
-                    .font(.system(size: 12))
+                    .font(Chrome.label)
                     .foregroundStyle(Theme.danger)
                     .multilineTextAlignment(.center)
                     .textSelection(.enabled)
-                    .frame(width: 380)
+                    .frame(width: Layout.Welcome.contentWidth)
             }
         }
-        .padding(.vertical, 48)
-        .padding(.horizontal, 40)
-        .frame(width: 480)
-        .frame(minHeight: 360)
+        .padding(.vertical, Layout.Welcome.paddingV)
+        .padding(.horizontal, Layout.Welcome.paddingH)
+        .frame(width: Layout.Welcome.width)
+        .frame(minHeight: Layout.Welcome.minHeight)
         // The window takes the content's full height (with .contentSize), so nothing is cut off.
         .fixedSize(horizontal: false, vertical: true)
         .task {
@@ -73,23 +73,22 @@ private struct RecentRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: Space.lg) {
                 Image(systemName: "folder")
-                    .font(.system(size: 12))
+                    .font(Chrome.label)
                     .foregroundStyle(Theme.secondary)
                 Text(folder.lastPathComponent)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(Chrome.bodyMedium)
                     .foregroundStyle(Theme.text)
-                Spacer(minLength: 12)
+                Spacer(minLength: Space.xl)
                 Text(folder.deletingLastPathComponent().abbreviatedPath)
-                    .font(.system(size: 11))
+                    .font(Chrome.caption)
                     .foregroundStyle(Theme.tertiary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(hovering.value ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: 7))
+            .padding(Inset.row)
+            .hoverFill(hovering.value, Theme.surface)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

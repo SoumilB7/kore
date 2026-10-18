@@ -15,14 +15,14 @@ struct ComposerView: View {
     @StateObject private var dropTargeted = Local(false)
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Space.lg) {
             if !slashMatches.isEmpty {
                 SlashMenu(matches: slashMatches, selected: min(slashSelection.value, slashMatches.count - 1), accept: accept)
             }
             box
         }
         .background(WindowReader { window.value = $0 })
-        .animation(.easeOut(duration: 0.25), value: chat.activeMode.id)
+        .animation(Motion.fadeSlow, value: chat.activeMode.id)
         .onAppear {
             pasteMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { pasteAttachments($0) }
         }
@@ -36,39 +36,38 @@ struct ComposerView: View {
         VStack(spacing: 0) {
             if dropTargeted.value {
                 Text("Drop to attach")
-                    .font(.kore(12.5, .medium))
+                    .font(TextStyle.labelMedium)
                     .foregroundStyle(Theme.accent)
-                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .frame(maxWidth: .infinity, minHeight: Size.dropZone)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 9)
-                            .strokeBorder(Theme.accent.opacity(0.55), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
+                        RoundedRectangle(cornerRadius: Radius.control)
+                            .strokeBorder(
+                                Theme.accentLine,
+                                style: StrokeStyle(lineWidth: Stroke.hairline, dash: Size.dropDash)))
+                    .padding(.horizontal, Space.xl)
+                    .padding(.top, Space.lg)
             }
             if !chat.attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: Space.md) {
                         ForEach(chat.attachments) { attachment in
                             AttachmentChip(attachment: attachment, open: { openImage(attachment) }) {
                                 chat.removeAttachment(attachment.id)
                             }
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
+                    .padding(.horizontal, Space.xl)
+                    .padding(.top, Space.lg)
                 }
             }
             field
-            Rectangle().fill(Theme.border).frame(height: 1)
+            Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
             ComposerBar(chat: chat, attach: attach) {
                 if chat.draft.isEmpty { chat.draft = "/" }
                 focused.wrappedValue = true
             }
         }
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(border, lineWidth: dropTargeted.value ? 1.5 : chat.activeMode.rung?.width ?? 1))
+        .modeOutline(chat.activeMode.rung, focused: focused.wrappedValue, highlighted: dropTargeted.value)
         // Only the box takes drops; the rest of the chat ignores them.
         .onDrop(of: [.fileURL, .image], isTargeted: Binding(get: { dropTargeted.value }, set: { dropTargeted.value = $0 })) { providers in
             Attachments.load(providers) { chat.attach($0) }
@@ -80,7 +79,7 @@ struct ComposerView: View {
     private var field: some View {
         TextField("", text: Binding(get: { chat.draft }, set: { chat.draft = $0 }), axis: .vertical)
             .textFieldStyle(.plain)
-            .font(Theme.body)
+            .font(TextStyle.body)
             .foregroundStyle(Theme.text)
             .lineLimit(1...10)
             .focused(focused)
@@ -105,19 +104,11 @@ struct ComposerView: View {
                 if !chat.draft.hasPrefix("/") { slashDismissed.value = false }
             }
             .onChange(of: slashQuery) { slashSelection.value = 0 }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 10)
+            .padding(Inset.field)
             // The field itself is one line tall; a click anywhere in the text area focuses it
             // at once rather than landing on padding.
             .contentShape(Rectangle())
             .onTapGesture { focused.wrappedValue = true }
-    }
-
-    private var border: Color {
-        if dropTargeted.value { return Theme.accent }
-        if let rung = chat.activeMode.rung { return rung.color.opacity(rung.opacity * (focused.wrappedValue ? 1 : 0.65)) }
-        return focused.wrappedValue ? Theme.text.opacity(0.22) : Theme.border
     }
 
     // MARK: Paste and +

@@ -7,15 +7,15 @@ struct PlanChip: View {
 
     var body: some View {
         Button(action: turnOff) {
-            HStack(spacing: 5) {
+            HStack(spacing: Space.sm) {
                 if hovered.value {
-                    Image(systemName: "xmark.circle.fill").font(.kore(12))
+                    Image(systemName: "xmark.circle.fill").font(TextStyle.label)
                 } else {
                     ModeIcon(mode: Provider.codexPlan)
                 }
-                Text("Plan").font(.kore(12, .medium))
+                Text("Plan").font(TextStyle.labelMedium)
             }
-            .foregroundStyle(ModeOption.Rung.plan.color)
+            .foregroundStyle(Rung.plan.color)
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
@@ -41,28 +41,28 @@ struct AttachmentChip: View {
                     Image(nsImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
-                        .frame(width: 44, height: 44)
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
-                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.border))
+                        .frame(width: Size.thumb, height: Size.thumb)
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.chip))
+                        .overlay(RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.border))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help(attachment.name)
             } else {
-                HStack(spacing: 6) {
+                HStack(spacing: Space.sm) {
                     Image(systemName: icon)
-                        .font(.kore(12))
+                        .font(TextStyle.label)
                         .foregroundStyle(Theme.secondary)
                     Text(attachment.name)
-                        .font(.kore(12))
+                        .font(TextStyle.label)
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .frame(maxWidth: 180, alignment: .leading)
+                        .frame(maxWidth: Size.chipNameMax, alignment: .leading)
                 }
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(Theme.surfaceHover, in: RoundedRectangle(cornerRadius: 7))
+                .padding(.horizontal, Space.lg)
+                .frame(height: Size.chip)
+                .background(Theme.surfaceHover, in: RoundedRectangle(cornerRadius: Radius.chip))
                 .help(attachment.url?.path ?? attachment.name)
             }
         }
@@ -70,11 +70,11 @@ struct AttachmentChip: View {
             if let remove {
                 Button(action: remove) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 13))
+                        .font(Glyph.remove)
                         .foregroundStyle(Theme.text, Theme.surfaceHover)
                 }
                 .buttonStyle(.plain)
-                .offset(x: 5, y: -5)
+                .offset(x: Size.chipBadge.width, y: Size.chipBadge.height)
                 .help("Remove")
             }
         }

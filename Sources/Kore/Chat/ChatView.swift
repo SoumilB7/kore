@@ -11,12 +11,12 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             TranscriptView(chat: chat) { view($0, pending: false) }
-            VStack(spacing: 10) {
+            VStack(spacing: Space.lg) {
                 ApprovalsView(chat: chat)
                 ComposerView(chat: chat, focused: $composerFocused) { view($0, pending: true) }
             }
             .padding(.horizontal, ChatColumn.window.padding)
-            .padding(.bottom, 16)
+            .padding(.bottom, Space.xxxl)
             .frame(maxWidth: ChatColumn.window.maxWidth)
         }
         .overlay {
@@ -27,7 +27,7 @@ struct ChatView: View {
                 )
             }
         }
-        .animation(.easeOut(duration: 0.15), value: viewer.value?.id)
+        .animation(Motion.fade, value: viewer.value?.id)
         .onAppear {
             composerFocused = true
             if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, pending: true) }

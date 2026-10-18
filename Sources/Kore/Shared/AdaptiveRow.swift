@@ -7,11 +7,11 @@ struct AdaptiveButtons<Content: View>: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
+            HStack(spacing: Space.md) {
                 Spacer(minLength: 0)
                 content
             }
-            VStack(alignment: .trailing, spacing: 6) {
+            VStack(alignment: .trailing, spacing: Space.sm) {
                 content
             }
             .frame(maxWidth: .infinity, alignment: .trailing)

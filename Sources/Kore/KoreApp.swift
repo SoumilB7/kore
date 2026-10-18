@@ -10,7 +10,10 @@ struct KoreApp: App {
     init() {
         // Needed when launched as a bare binary (`swift run Kore`); a no-op inside Kore.app.
         NSApplication.shared.setActivationPolicy(.regular)
-        DispatchQueue.main.async { DevSnapshot.watchHangs() }
+        DispatchQueue.main.async {
+            DevSnapshot.watchHangs()
+            DevGallery.showIfRequested()
+        }
     }
 
     var body: some Scene {
@@ -43,7 +46,7 @@ struct KoreApp: App {
             }
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 880, height: 760)
+        .defaultSize(width: Layout.Window.defaultWidth, height: Layout.Window.defaultHeight)
     }
 }
 

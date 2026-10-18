@@ -37,10 +37,10 @@ struct TabBar: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Size.tabGap) {
             ScrollViewReader { scroller in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: Size.tabGap) {
                         ForEach(workspace.tabs) { tab in
                             TabItem(tab: tab, workspace: workspace, height: tabHeight).frame(width: tabWidth)
                         }
@@ -51,13 +51,13 @@ struct TabBar: View {
                 .frame(maxWidth: CGFloat(workspace.tabs.count) * 184)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stripWidth.value = $0 }
                 .onChange(of: workspace.activeID) { _, id in
-                    withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
+                    withAnimation(Motion.fade) { scroller.scrollTo(id) }
                 }
             }
             NewTabButton(size: tabHeight) { workspace.newTab() }
-            Spacer(minLength: 12)
+            Spacer(minLength: Space.xl)
             Text(workspace.folder.lastPathComponent)
-                .font(.system(size: 12))
+                .font(Chrome.label)
                 .foregroundStyle(Theme.tertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -66,7 +66,7 @@ struct TabBar: View {
             HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight)
         }
         .padding(.leading, leadingInset)
-        .padding(.trailing, 8)
+        .padding(.trailing, Space.md)
         .frame(height: height)
         // Empty space drags the window (tabs and buttons take their own clicks).
         .background {
@@ -94,21 +94,21 @@ private struct TabItem: View {
             Button {
                 workspace.select(tab)
             } label: {
-                HStack(spacing: 7) {
+                HStack(spacing: Space.md) {
                     if let chat = tab.chat {
                         if chat.isRunning {
-                            ProgressView().controlSize(.small).frame(width: 14, height: 14)
+                            ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
                         } else {
-                            ProviderLogo(provider: chat.provider, size: 14)
+                            ProviderLogo(provider: chat.provider, size: Size.logoTab)
                         }
                     }
                     Text(tab.title)
-                        .font(.system(size: 13))
+                        .font(Chrome.body)
                         .foregroundStyle(isActive ? Theme.text : Theme.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                .padding(.leading, 12)
+                .padding(.leading, Space.xl)
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
@@ -117,21 +117,21 @@ private struct TabItem: View {
                 workspace.close(tab)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(Chrome.glyphClose)
                     .foregroundStyle(Theme.secondary)
-                    .frame(width: 18, height: 18)
+                    .frame(width: Size.closeGlyph, height: Size.closeGlyph)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .opacity(hovered.value || isActive ? 1 : 0)
             .help("Close tab")
-            .padding(.trailing, 6)
+            .padding(.trailing, Space.sm)
         }
         // Width set by the tab bar (180 down to 90, like browser tabs); titles truncate.
         .frame(height: height)
         .background(
-            isActive ? Theme.surface : (hovered.value ? Theme.surface.opacity(0.5) : .clear),
-            in: RoundedRectangle(cornerRadius: 8)
+            isActive ? Theme.surface : (hovered.value ? Theme.tabHover : .clear),
+            in: RoundedRectangle(cornerRadius: Radius.control)
         )
         .onHover { hovered.value = $0 }
         .help(tab.title)
@@ -161,11 +161,11 @@ private struct NewTabButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "plus")
-                .font(.system(size: 13, weight: .medium))
+                .font(Chrome.bodyMedium)
                 .foregroundStyle(hovered.value ? Theme.text : Theme.secondary)
                 .frame(width: size, height: size)
-                .background(hovered.value ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: 8))
-                .contentShape(RoundedRectangle(cornerRadius: 8))
+                .background(hovered.value ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
+                .contentShape(RoundedRectangle(cornerRadius: Radius.control))
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
@@ -185,17 +185,16 @@ private struct EmptyTab: View {
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
-            HStack(spacing: 8) {
+            HStack(spacing: Space.md) {
                 ForEach(Provider.allCases) { provider in
                     ProviderButton(provider: provider) { workspace.start(provider, in: tab) }
                 }
             }
-            .padding(8)
+            .padding(Space.md)
             .frame(maxWidth: .infinity)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border, lineWidth: 1))
+            .panel(.panel)
             .padding(.horizontal, ChatColumn.window.padding)
-            .padding(.bottom, 16)
+            .padding(.bottom, Space.xxxl)
             .frame(maxWidth: ChatColumn.window.maxWidth)
         }
         .frame(maxWidth: .infinity)
@@ -209,16 +208,16 @@ private struct ProviderButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                ProviderLogo(provider: provider, size: 16 * Zoom.shared.scale)
+            HStack(spacing: Space.md) {
+                ProviderLogo(provider: provider, size: Size.logoPicker * Zoom.shared.scale)
                 Text(provider.name)
-                    .font(Theme.body)
+                    .font(TextStyle.body)
                     .foregroundStyle(Theme.text)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(hovered.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, Space.xxl)
+            .padding(.vertical, Space.md)
+            .background(hovered.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
+            .contentShape(RoundedRectangle(cornerRadius: Radius.control))
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
