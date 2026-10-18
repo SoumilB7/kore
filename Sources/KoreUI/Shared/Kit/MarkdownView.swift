@@ -95,7 +95,7 @@ private struct MarkdownCodeBlock: View {
     @StateObject private var hovered = Local(false)
 
     var body: some View {
-        ScrollView(.horizontal) {
+        SidewaysWhenWide {
             Text(text)
                 .font(TextStyle.code)
                 .foregroundStyle(Theme.text)
@@ -103,7 +103,6 @@ private struct MarkdownCodeBlock: View {
                 .fixedSize()
                 .padding(Inset.codeBlock)
         }
-        .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.codeBlock, in: RoundedRectangle(cornerRadius: Radius.chip))
         .overlay(alignment: .topTrailing) {
@@ -116,6 +115,21 @@ private struct MarkdownCodeBlock: View {
             }
         }
         .onHover { hovered.value = $0 }
+    }
+}
+
+/// Content at its own width, in a sideways scroll view only when it's wider than the column. A
+/// scroll view is most of what a short code block or a small table costs to build, and one that
+/// fits looks and scrolls the same as no scroll view.
+private struct SidewaysWhenWide<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            content.fixedSize(horizontal: true, vertical: false)
+            ScrollView(.horizontal) { content }
+                .scrollBounceBehavior(.basedOnSize)
+        }
     }
 }
 
@@ -173,7 +187,7 @@ private struct MarkdownTableView: View {
     private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0) }
 
     var body: some View {
-        ScrollView(.horizontal) {
+        SidewaysWhenWide {
             Grid(horizontalSpacing: Stroke.hairline, verticalSpacing: Stroke.hairline) {
                 GridRow {
                     ForEach(0..<columns, id: \.self) { column in
@@ -192,7 +206,6 @@ private struct MarkdownTableView: View {
             .padding(Stroke.hairline)
             .background(Theme.tableRule)
         }
-        .scrollBounceBehavior(.basedOnSize)
         // Rows as tall as their text: cells fill their row, not the height on offer.
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
