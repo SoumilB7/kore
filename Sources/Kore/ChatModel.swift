@@ -7,7 +7,7 @@ import SwiftUI
 @MainActor @Observable
 final class ChatModel: Identifiable {
     struct Entry: Identifiable {
-        enum Kind { case user, assistant, thinking, plan, tool, notice }
+        enum Kind { case user, assistant, thinking, plan, tool, notice, peer }
 
         let id = UUID()
         var kind: Kind
@@ -20,6 +20,8 @@ final class ChatModel: Identifiable {
         var isError = false
         /// Files and images sent with a user message.
         var attachments: [Attachment] = []
+        /// Who sent a `.peer` message (another Claude session's name).
+        var from: String?
     }
 
     struct Approval: Identifiable {
@@ -115,6 +117,8 @@ final class ChatModel: Identifiable {
     private var pump: Task<Void, Never>?
     /// Kept across process restarts so an exited CLI resumes the same conversation.
     private var resumeId: String?
+    /// Launch with this model instead of the CLI's default (set by the dev hook).
+    var launchModel: String?
     /// Claude: entry receiving streamed text; reset at each new content block.
     private var streamingIndex: Int?
     /// Codex: item id → entry index.
@@ -435,7 +439,8 @@ final class ChatModel: Identifiable {
     private func launchClaude() async throws {
         let session = try await ClaudeSession.start(
             .init(
-                cwd: folder, permissionMode: ClaudeSession.PermissionMode(rawValue: mode) ?? .default,
+                cwd: folder, model: launchModel,
+                permissionMode: ClaudeSession.PermissionMode(rawValue: mode) ?? .default,
                 resume: resumeId))
         if resuming != nil {
             let folder = folder, id = resumeId ?? ""
@@ -476,7 +481,8 @@ final class ChatModel: Identifiable {
     private func launchCodex() async throws {
         let session = try await CodexSession.start(
             .init(
-                cwd: folder, permissions: CodexSession.Permissions(rawValue: mode) ?? .askForApproval,
+                cwd: folder, model: launchModel,
+                permissions: CodexSession.Permissions(rawValue: mode) ?? .askForApproval,
                 plan: planMode, resume: resumeId))
         if resuming != nil {
             replayCodex(await session.history)
@@ -535,8 +541,36 @@ final class ChatModel: Identifiable {
 
     /// Claude transcript entries go through the live event handling; only user prompts
     /// need adding here (live, the composer adds them).
+    /// Stdout doesn't carry a peer's message, so it's read from the transcript (written as the
+    /// turn starts, so retried briefly) and placed where its turn began.
+    private func showPeerMessage(_ id: String, at index: Int) {
+        guard let sessionId = resumeId else { return }
+        let folder = folder
+        Task {
+            for _ in 0..<15 {
+                let entry = await Task.detached { ClaudeHistory.entry(uuid: id, sessionId: sessionId, in: folder) }.value
+                if let entry {
+                    guard let peer = PeerMessage(entry: entry) else { return }  // e.g. a queued prompt of ours
+                    var message = Entry(kind: .peer, text: peer.text)
+                    message.from = peer.from
+                    let index = min(index, entries.count)
+                    entries.insert(message, at: index)
+                    if let i = streamingIndex, i >= index { streamingIndex = i + 1 }
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+    }
+
     private func replayClaude(_ messages: [JSONValue]) {
         for message in messages {
+            if let peer = PeerMessage(entry: message) {
+                var entry = Entry(kind: .peer, text: peer.text)
+                entry.from = peer.from
+                entries.append(entry)
+                continue
+            }
             if message["type"]?.string == "user", let content = message["message"]?["content"] {
                 let prompt = Self.promptText(content)
                 let chips = Attachments.chips(fromClaude: content)
@@ -614,6 +648,11 @@ final class ChatModel: Identifiable {
             approvals.append(claudeApproval(r))
         case .permissionCancelled(let id):
             approvals.removeAll { $0.id == id }
+        case .commandStarted(let id):
+            // A turn the CLI started itself (e.g. a peer's message): running like any other.
+            isRunning = true
+            streamingIndex = nil
+            showPeerMessage(id, at: entries.count)
         case .turnCompleted(let r):
             isRunning = false
             streamingIndex = nil

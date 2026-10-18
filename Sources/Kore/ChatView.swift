@@ -435,6 +435,8 @@ private struct EntryView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .tool:
             ToolRow(entry: entry)
+        case .peer:
+            PeerMessageView(entry: entry)
         case .notice:
             Text(entry.text)
                 .font(.kore(12))
@@ -447,6 +449,29 @@ private struct EntryView: View {
     private func markdown(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+}
+
+/// A message another Claude session sent this chat: outlined rather than filled, so it reads
+/// apart from the user's own messages.
+private struct PeerMessageView: View {
+    let entry: ChatModel.Entry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("From \(entry.from ?? "another session")", systemImage: "bubble.left")
+                .font(.kore(12, .medium))
+                .foregroundStyle(Theme.secondary)
+            Text(entry.text)
+                .font(Theme.body)
+                .foregroundStyle(Theme.text)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
+        .help("A message from another Claude session")
     }
 }
 
