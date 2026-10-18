@@ -105,9 +105,9 @@ struct BackgroundAgentsTests {
         #expect(script.store.agentSummary.first.allSatisfy { $0.background })
     }
 
-    /// The map lists the chat's background agents apart, below the tree: the running ones
-    /// first, each with its own agents; one of them stopped goes with the stopped, and one
-    /// another agent runs in the background stays under it.
+    /// The map lists the chat's background agents still running apart, below the tree, each
+    /// with its own agents; a finished one is back in the tree, a stopped one with the stopped,
+    /// and one another agent runs in the background stays under it.
     @Test func theMapListsBackgroundAgentsApart() {
         func spawn(_ id: String, under parent: AgentID = .main, background: Bool = false) -> ChatEvent {
             .agentSpawned(AgentInfo(
@@ -123,8 +123,8 @@ struct BackgroundAgentsTests {
         _ = script.sections
         let map = script.store.agentTree()
         let names = { (nodes: [TranscriptStore.AgentNode]) in nodes.map { String(repeating: ".", count: $0.depth) + $0.id } }
-        #expect(names(map.tree) == ["writer", ".helper"])
-        #expect(names(map.background) == ["scout", ".reader", "done"])
+        #expect(names(map.tree) == ["done", "writer", ".helper"])
+        #expect(names(map.background) == ["scout", ".reader"])
         #expect(names(map.stopped) == ["gone"])
     }
 

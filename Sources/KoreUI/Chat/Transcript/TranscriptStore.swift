@@ -726,7 +726,8 @@ final class TranscriptStore {
     // MARK: The agent map
 
     /// The agent map's three trees, parents before children, in spawn order: the agents, the
-    /// chat's own background agents (running first) with theirs, and the stopped ones apart. A
+    /// chat's own background agents still running with theirs (one that finishes goes back to the
+    /// tree, so the section is what's still going on), and the stopped ones apart. A
     /// stopped agent takes its own agents with it, except those running: they stay in the tree,
     /// where it was. One that runs again goes back to its place.
     func agentTree() -> (tree: [AgentNode], background: [AgentNode], stopped: [AgentNode]) {
@@ -743,17 +744,12 @@ final class TranscriptStore {
             treeParent[info.id] = parent.map { grouped.contains($0) ? treeParent[$0] ?? "" : $0 } ?? ""
             if info.status == .stopped || (info.status != .running && parent.map(grouped.contains) == true) {
                 grouped.insert(info.id)
-            } else if let up = treeParent[info.id], up.isEmpty ? info.background : behind.contains(up) {
+            } else if let up = treeParent[info.id], up.isEmpty ? info.background && info.status == .running : behind.contains(up) {
                 behind.insert(info.id)
             }
         }
         let tree = Self.walk(infos.filter { !grouped.contains($0.id) && !behind.contains($0.id) }) { treeParent[$0.id] ?? "" }
-        // The running ones first, each in spawn order.
-        let lead = infos.filter { behind.contains($0.id) }
-        let first = Set(lead.filter { treeParent[$0.id] == "" && $0.status == .running }.map(\.id))
-        let background = Self.walk(lead.filter { first.contains($0.id) } + lead.filter { !first.contains($0.id) }) {
-            treeParent[$0.id] ?? ""
-        }
+        let background = Self.walk(infos.filter { behind.contains($0.id) }) { treeParent[$0.id] ?? "" }
         let stopped = Self.walk(infos.filter { grouped.contains($0.id) }) { info in
             info.parent.flatMap { grouped.contains($0) ? $0 : nil } ?? ""
         }
