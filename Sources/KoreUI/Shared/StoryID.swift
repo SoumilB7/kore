@@ -67,6 +67,8 @@ extension StoryID {
         package static let model = StoryID(.composer, "model")
         package static let effort = StoryID(.composer, "effort")
         package static let context = StoryID(.composer, "context")
+        /// The command chip before the text.
+        package static let chip = StoryID(.composer, "chip")
         /// A row of the slash menu, by the command's name.
         package static func command(_ name: String) -> StoryID { StoryID(.composer, "command", key: name) }
         /// A message waiting for the turn to end; `.part(.cancel)` takes it back.
@@ -188,7 +190,7 @@ extension StoryID {
         let fixed: [StoryID] = [
             Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
-            Composer.model, Composer.effort, Composer.context, Transcript.earlier,
+            Composer.model, Composer.effort, Composer.context, Composer.chip, Transcript.earlier,
             AgentMap.open, AgentMap.stop, AgentMap.close, History.search,
             Explorer.newfile, Explorer.newfolder, Explorer.refresh, Explorer.collapse, Explorer.namefield,
             Explorer.filesTab, Explorer.searchTab,
@@ -202,6 +204,7 @@ extension StoryID {
             StoryID(.tabs, "tab", key: k), StoryID(.tabs, "tab", key: k).part(.close), StoryID(.tabs, "file", key: k),
             StoryID(.newtab, "provider", key: k), StoryID(.composer, "queued", key: k),
             StoryID(.composer, "queued", key: k).part(.cancel),
+            StoryID(.composer, "command", key: k),
             StoryID(.transcript, "user", key: k), StoryID(.transcript, "user", key: k).part(.copy),
             StoryID(.transcript, "user", key: k).part(.fork), StoryID(.transcript, "answer", key: k),
             StoryID(.transcript, "answer", key: k).part(.copy), StoryID(.transcript, "answer", key: k).part(.fork),

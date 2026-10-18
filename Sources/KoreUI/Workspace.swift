@@ -156,7 +156,7 @@ package final class Workspace {
         fork.launchEffort = chat.controls.effort
         fork.inheritAutoCompact(from: chat)
         fork.original = chat
-        fork.draft = text
+        fork.restoreDraft(text, commands: chat.controls.commands)
         if let probe = DevSnapshot.forkSend {
             // Test hook: send a probe in the fork, once its CLI is up.
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) {

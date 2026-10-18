@@ -25,6 +25,9 @@ package final class Chat: Identifiable {
     /// Waiting in the composer, sent with the next message.
     private(set) var attachments: [Attachment] = []
     package var draft = ""
+    /// The `/` command this message starts with, shown as a chip before the draft: one per
+    /// message, as both CLIs run one.
+    package var command: SlashCommand?
     /// Launch with this model and effort instead of the CLI's defaults (a fork, the dev hook).
     @ObservationIgnored var launchModel: String?
     @ObservationIgnored var launchEffort: String?
@@ -208,7 +211,8 @@ package final class Chat: Identifiable {
 
     /// Something to send, and no compaction under way (sending waits until it's done).
     var canSend: Bool {
-        !context.compacting && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+        !context.compacting
+            && (command != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
 
     func attach(_ urls: [URL]) {
@@ -225,8 +229,29 @@ package final class Chat: Identifiable {
         attachments[index] = Attachment(url: url)
     }
 
-    func send() {
+    /// What goes to the CLI: the command first, then the draft.
+    nonisolated static func message(command: SlashCommand?, draft: String) -> String {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let command else { return text }
+        return text.isEmpty ? "/\(command.name)" : "/\(command.name) \(text)"
+    }
+
+    /// A sent message as the composer holds it: a leading command among `commands` goes back to
+    /// the chip, the rest to the draft.
+    nonisolated static func split(_ text: String, commands: [SlashCommand]) -> (command: SlashCommand?, draft: String) {
+        guard text.hasPrefix("/") else { return (nil, text) }
+        let name = text.dropFirst().prefix { !$0.isWhitespace }
+        guard let command = commands.first(where: { $0.kind == .command && $0.name == name }) else { return (nil, text) }
+        return (command, String(text.dropFirst(1 + name.count).drop(while: \.isWhitespace)))
+    }
+
+    /// Puts a message back in the composer (a fork's), its command in the chip.
+    func restoreDraft(_ text: String, commands: [SlashCommand]) {
+        (command, draft) = Self.split(text, commands: commands)
+    }
+
+    func send() {
+        let text = Self.message(command: command, draft: draft)
         let sent = attachments
         guard !text.isEmpty || !sent.isEmpty, !context.compacting else { return }
         // A typed /compact compacts as the context wheel does, shown as the user's message (the
@@ -235,12 +260,14 @@ package final class Chat: Identifiable {
         if sent.isEmpty, let instructions = Self.compactCommand(text) {
             guard canCompact else { return }
             draft = ""
+            command = nil
             let message = ChatEvent.userMessage(text: text, attachments: [])
             if awaitingHistory { held.append(message) } else { dispatch(message) }
             compact(instructions: instructions)
             return
         }
         draft = ""
+        command = nil
         attachments = []
         // The Codex extension's /plan flips the plan toggle; it isn't a message.
         if text == "/plan" && sent.isEmpty && provider.planToggle != nil {
@@ -414,7 +441,11 @@ package final class Chat: Identifiable {
     private func restoreQueued(_ event: ChatEvent) {
         guard case .queuedMessage(let id, let delivery) = event, let message = waiting.removeValue(forKey: id) else { return }
         guard delivery == .dropped else { return }
-        draft = draft.isEmpty ? message.text : message.text + "\n" + draft
+        if command == nil, draft.isEmpty {
+            restoreDraft(message.text, commands: controls.commands)
+        } else {
+            draft = draft.isEmpty ? message.text : message.text + "\n" + draft
+        }
         attachments = message.files + attachments
     }
 

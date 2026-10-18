@@ -43,6 +43,8 @@ struct ComposerView: View {
     /// Empty, except while a turn runs (look.md §10): a message sent then waits for it, or joins
     /// it where the CLI can steer (Codex).
     private var placeholder: String {
+        // With a command and nothing typed: what the command takes ("objective").
+        if let hint = chat.command?.hint, !hint.isEmpty, chat.draft.isEmpty { return hint }
         guard chat.status.isRunning else { return "" }
         return chat.provider == .codex ? "Add to this turn…" : "Queue another message…"
     }
@@ -55,7 +57,9 @@ struct ComposerView: View {
             .overlay(alignment: .top) {
                 let matches = slashMatches
                 if !matches.isEmpty {
-                    SlashMenu(matches: matches, selected: min(slashSelection.value, matches.count - 1), accept: accept)
+                    SlashMenu(
+                        matches: matches, selected: min(slashSelection.value, matches.count - 1), current: chat.command?.name,
+                        accept: accept)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuFrame.value = $0 }
                         .onDisappear { menuFrame.value = nil }
                         // Its bottom a gap above the box's top, its height its own.
@@ -67,7 +71,9 @@ struct ComposerView: View {
         .animation(Motion.fadeSlow, value: chat.controls.activeMode.id)
         .onAppear {
             pasteChat.value = chat
-            pasteMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { pasteAttachments($0) }
+            pasteMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                removeCommand(event).flatMap(pasteAttachments)
+            }
             clickMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { closeMenu(onClick: $0) }
         }
         .onDisappear {
@@ -151,7 +157,22 @@ struct ComposerView: View {
         }
     }
 
+    /// The command chip, then the text: one row, so the command reads as the message's start.
     private var field: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+            if let command = chat.command {
+                CommandChip(command: command, open: openSlash)
+            }
+            textField
+        }
+        .padding(Inset.field)
+        // The field itself is one line tall; a click anywhere in the text area focuses it
+        // at once rather than landing on padding.
+        .contentShape(Rectangle())
+        .onTapGesture { focused.wrappedValue = true }
+    }
+
+    private var textField: some View {
         TextField(placeholder, text: Binding(get: { chat.draft }, set: { chat.draft = $0 }), selection: selection, axis: .vertical)
             .textFieldStyle(.plain)
             .font(TextStyle.body)
@@ -183,15 +204,11 @@ struct ComposerView: View {
                 slashDismissed.value = true
                 return .handled
             }
-            .onChange(of: chat.draft) {
-                if !chat.draft.hasPrefix("/") { slashDismissed.value = false }
+            .onChange(of: slashToken) { old, new in
+                slashSelection.value = 0
+                // Esc closes the menu for this "/word"; the next one opens it again.
+                if new?.range.lowerBound != old?.range.lowerBound { slashDismissed.value = false }
             }
-            .onChange(of: slashQuery) { slashSelection.value = 0 }
-            .padding(Inset.field)
-            // The field itself is one line tall; a click anywhere in the text area focuses it
-            // at once rather than landing on padding.
-            .contentShape(Rectangle())
-            .onTapGesture { focused.wrappedValue = true }
     }
 
     /// Replaces the selection (or inserts at the caret) with a line break, the caret after it.
@@ -223,6 +240,22 @@ struct ComposerView: View {
         return nil
     }
 
+    /// Backspace with the caret before the first character takes the command chip off; the
+    /// text stays. (The field's own key handling never shows SwiftUI that key.)
+    private func removeCommand(_ event: NSEvent) -> NSEvent? {
+        guard event.keyCode == Self.backspaceKey,
+            event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+            let window = window.value, event.window === window, focused.wrappedValue,
+            let chat = pasteChat.value, chat.command != nil,
+            let editor = window.firstResponder as? NSTextView, editor.isFieldEditor, !editor.hasMarkedText(),
+            editor.selectedRange() == NSRange(location: 0, length: 0)
+        else { return event }
+        chat.command = nil
+        return nil
+    }
+
+    private static let backspaceKey: UInt16 = 51
+
     private func attach() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -235,50 +268,92 @@ struct ComposerView: View {
 
     // MARK: Slash commands
 
-    /// The text after a leading "/" while the draft is still a single word.
-    private var slashQuery: String? {
+    /// What's selected in this chat's draft (empty: the caret), read from the editor while it
+    /// shows this draft (moving the caret alone, by ⌘← or a click, doesn't reach the selection
+    /// binding), else from the binding; nil when not known.
+    private var selectedRange: Range<String.Index>? {
         let draft = chat.draft
-        guard draft.hasPrefix("/"), !draft.contains(where: \.isWhitespace) else { return nil }
-        return String(draft.dropFirst()).lowercased()
+        if let editor = fieldEditor, editor.string == draft { return Range(editor.selectedRange(), in: draft) }
+        guard case .selection(let range) = selection.wrappedValue?.indices,
+            let lower = String.Index(range.lowerBound, within: draft), let upper = String.Index(range.upperBound, within: draft)
+        else { return nil }
+        return lower..<upper
+    }
+
+    /// Where the caret is in this chat's draft: the end when it isn't known, nil with a range
+    /// selected.
+    private var caretIndex: String.Index? {
+        guard let range = selectedRange else { return chat.draft.endIndex }
+        return range.isEmpty ? range.lowerBound : nil
+    }
+
+    /// The "/word" at the caret (or Codex's "$word"), anywhere in the draft.
+    private var slashToken: SlashToken? {
+        guard let caret = caretIndex else { return nil }
+        return SlashToken(in: chat.draft, caret: caret, skills: chat.provider == .codex)
     }
 
     private var slashMatches: [SlashCommand] {
-        guard !slashDismissed.value, let query = slashQuery else { return [] }
+        guard !slashDismissed.value, let token = slashToken else { return [] }
+        let commands = token.sigil == "$" ? chat.controls.commands.filter { $0.kind == .skill } : chat.controls.commands
+        let query = token.query
         // Foundation's `contains("")` is false, so a bare "/" must list everything explicitly.
-        if query.isEmpty { return chat.controls.commands }
-        let hits = chat.controls.commands.filter { $0.name.lowercased().contains(query) }
+        if query.isEmpty { return commands }
+        let hits = commands.filter { $0.name.lowercased().contains(query) }
         return hits.filter { $0.name.lowercased().hasPrefix(query) } + hits.filter { !$0.name.lowercased().hasPrefix(query) }
     }
 
+    /// The field's editor while the field has focus.
+    private var fieldEditor: NSTextView? {
+        guard focused.wrappedValue, let editor = window.value?.firstResponder as? NSTextView, editor.isFieldEditor else { return nil }
+        return editor
+    }
+
+    /// An input method is composing (marked text): its keys are its own.
+    private var composing: Bool { fieldEditor?.hasMarkedText() ?? false }
+
     private func moveSlash(_ delta: Int) -> KeyPress.Result {
         let count = slashMatches.count
-        guard count > 0 else { return .ignored }
+        guard count > 0, !composing else { return .ignored }
         slashSelection.value = min(max(slashSelection.value + delta, 0), count - 1)
         return .handled
     }
 
     private func acceptSlash() -> KeyPress.Result {
         let matches = slashMatches
-        guard !matches.isEmpty else { return .ignored }
+        guard !matches.isEmpty, !composing else { return .ignored }
         accept(matches[min(slashSelection.value, matches.count - 1)])
         return .handled
     }
 
-    /// The `/` key: an empty draft becomes "/", the caret after it, and the menu opens.
+    /// The `/` key (and the chip): a "/" at the caret, as if typed, so the menu opens there.
+    /// A space goes before it when the caret ends a word; in a "/word" already, the menu opens
+    /// again for it.
     private func openSlash() {
-        if chat.draft.isEmpty {
-            chat.draft = "/"
-            selection.wrappedValue = TextSelection(insertionPoint: chat.draft.endIndex)
-        }
         slashDismissed.value = false
         focused.wrappedValue = true
+        if slashToken != nil { return }
+        var draft = chat.draft
+        let range = selectedRange ?? draft.endIndex..<draft.endIndex
+        let spaced = range.lowerBound > draft.startIndex && !draft[draft.index(before: range.lowerBound)].isWhitespace
+        let offset = draft.distance(from: draft.startIndex, to: range.lowerBound) + (spaced ? 2 : 1)
+        draft.replaceSubrange(range, with: spaced ? " /" : "/")
+        chat.draft = draft
+        selection.wrappedValue = TextSelection(insertionPoint: draft.index(draft.startIndex, offsetBy: offset))
     }
 
-    /// The command takes the draft, the caret after it and its space, ready for arguments.
+    /// A pick replaces the "/word" it was filtered by: a command goes to the chip (one per
+    /// message, so it replaces any there), a Codex skill in the text as "$name ". The caret
+    /// stays where the word was, and the field's undo starts over, as its text was set.
     private func accept(_ command: SlashCommand) {
-        chat.draft = command.insertion
-        selection.wrappedValue = TextSelection(insertionPoint: chat.draft.endIndex)
+        let insertion = command.kind == .skill ? command.insertion : ""
+        let (draft, caret) = slashToken.map { $0.replacing(in: chat.draft, with: insertion) } ?? (chat.draft, chat.draft.count)
+        if command.kind != .skill { chat.command = command }
+        chat.draft = draft
+        selection.wrappedValue = TextSelection(insertionPoint: draft.index(draft.startIndex, offsetBy: caret))
+        slashDismissed.value = false
         focused.wrappedValue = true
+        forgetUndo()
     }
 
     /// A click outside the menu and the box closes the menu; the click goes on as it was.
