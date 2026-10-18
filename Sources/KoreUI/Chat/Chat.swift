@@ -204,6 +204,14 @@ package final class Chat: Identifiable {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let sent = attachments
         guard !text.isEmpty || !sent.isEmpty, !context.compacting else { return }
+        // A typed /compact compacts as the context wheel does, not as a message. It waits in
+        // the composer while it can't (a turn running, no session yet).
+        if sent.isEmpty, let instructions = Self.compactCommand(text) {
+            guard canCompact else { return }
+            draft = ""
+            compact(instructions: instructions)
+            return
+        }
         draft = ""
         attachments = []
         // The Codex extension's /plan flips the plan toggle; it isn't a message.
@@ -247,18 +255,26 @@ package final class Chat: Identifiable {
     /// The context wheel's click (look §9): compacts at once, between turns only.
     var canCompact: Bool { status.sessionId != nil && !status.isRunning && !context.compacting }
 
-    func compact() {
+    /// `instructions`: what the summary should keep (`/compact <instructions>`); empty for none.
+    func compact(instructions: String = "") {
         guard canCompact else { return }
         context.begin()
         let backend = connect()
         Task {
             do {
                 try await backend.start()
-                try await backend.compact()
+                try await backend.compact(instructions: instructions)
             } catch {
                 dispatch(.compactionFailed(Self.reason(error)))
             }
         }
+    }
+
+    /// The instructions of a typed `/compact` (empty when it has none); nil for anything else.
+    static func compactCommand(_ text: String) -> String? {
+        let command = "/compact"
+        guard text.hasPrefix(command), text.dropFirst(command.count).first.map(\.isWhitespace) ?? true else { return nil }
+        return text.dropFirst(command.count).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// An error as a short line for "Couldn't compact: …".

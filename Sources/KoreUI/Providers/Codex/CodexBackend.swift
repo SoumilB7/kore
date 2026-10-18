@@ -249,7 +249,8 @@ final class CodexBackend: ChatBackend {
     }
 
     /// `thread/compact/start`: Codex runs it as a turn of its own (a `contextCompaction` item).
-    func compact() async throws {
+    /// It takes no instructions.
+    func compact(instructions: String) async throws {
         try await start()
         guard let session else { return }
         translator.compactRequested = true

@@ -161,7 +161,7 @@ package final class ScriptedBackend: ChatBackend {
 
     package func earlier() async -> (events: [ChatEvent], more: Bool)? { nil }
 
-    package func compact() async throws {
+    package func compact(instructions: String) async throws {
         log.append(.compact)
         let beats = script.compact
         enqueue { await $0.play(beats) }

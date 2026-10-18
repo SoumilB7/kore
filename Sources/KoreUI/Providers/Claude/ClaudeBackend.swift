@@ -311,11 +311,11 @@ final class ClaudeBackend: ChatBackend {
 
     /// `/compact` as the CLI's own command (as Claude's VS Code extension sends it): no user
     /// message in the transcript; "compacting", then the boundary, come from the CLI.
-    func compact() async throws {
+    func compact(instructions: String) async throws {
         try await start()
         guard let session else { return }
         translator.compactRequested = true
-        try await session.send("/compact")
+        try await session.send(instructions.isEmpty ? "/compact" : "/compact \(instructions)")
     }
 
     // MARK: - Actions

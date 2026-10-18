@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import Testing
 
 @testable import KoreUI
@@ -50,6 +51,26 @@ struct ClaudeTranslatorTests {
         #expect(auto == false)
         let summary = events.lazy.compactMap { if case .compactionSummary(let text) = $0 { text } else { nil } }.first
         #expect(summary?.isEmpty == false)
+    }
+
+    /// A /compact typed in the terminal, read back: the divider and the summary, and none of the
+    /// command's caveat, name or output as a message.
+    @Test func aTypedCompactReadBack() throws {
+        let lines = [
+            #"{"type":"user","uuid":"u1","timestamp":"2026-10-21T10:00:00Z","message":{"role":"user","content":"Reply with just OK."}}"#,
+            #"{"type":"assistant","uuid":"a1","timestamp":"2026-10-21T10:00:01Z","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"OK"}]}}"#,
+            #"{"type":"system","subtype":"compact_boundary","uuid":"b1","timestamp":"2026-10-21T10:01:00Z","content":"Conversation compacted","compactMetadata":{"trigger":"manual","preTokens":35104}}"#,
+            #"{"type":"user","uuid":"s1","timestamp":"2026-10-21T10:01:00Z","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"Summary: the user asked for OK."}}"#,
+            #"{"type":"user","uuid":"c1","timestamp":"2026-10-21T10:01:00Z","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: run locally.</local-command-caveat>"}}"#,
+            #"{"type":"user","uuid":"c2","timestamp":"2026-10-21T10:01:00Z","message":{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}"#,
+            #"{"type":"user","uuid":"c3","timestamp":"2026-10-21T10:01:00Z","message":{"role":"user","content":"<local-command-stdout>Compacted </local-command-stdout>"}}"#,
+        ]
+        let messages = try lines.map { try JSONValue.parse(Data($0.utf8)) }
+        let events = ClaudeTranslator(folder: URL(fileURLWithPath: "/tmp"), sessionId: "s").replay(messages)
+        let users = events.compactMap { if case .userMessage(let text, _, _) = $0 { text } else { nil } }
+        #expect(users == ["Reply with just OK."])
+        let tail = Array(shape(events).drop { $0 != "compacted" })
+        #expect(tail == ["compacted", "summary"])
     }
 
     /// A message sent mid-turn is taken at the next tool boundary: after the Bash call.

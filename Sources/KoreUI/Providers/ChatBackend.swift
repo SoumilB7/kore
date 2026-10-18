@@ -46,7 +46,8 @@ package protocol ChatBackend: AnyObject {
     func earlier() async -> (events: [ChatEvent], more: Bool)?
     /// Summarizes the conversation to free context (Claude `/compact`, Codex
     /// `thread/compact/start`): `.compactionStarted`, then `.compacted` or `.compactionFailed`.
-    func compact() async throws
+    /// `instructions` say what the summary should keep, where the CLI takes them (Claude).
+    func compact(instructions: String) async throws
     func close() async
 }
 
@@ -121,7 +122,7 @@ extension ChatBackend {
     }
 
     /// For a backend that can't compact.
-    package func compact() async throws { throw CompactUnavailable() }
+    package func compact(instructions: String) async throws { throw CompactUnavailable() }
 }
 
 struct CompactUnavailable: Error, CustomStringConvertible {
