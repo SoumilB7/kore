@@ -8,7 +8,10 @@ import OSLog
 ///   KORE_BENCH=<plan>          steps separated by ";":
 ///     ready                     the open chats replayed and settled (open_kore_ms)
 ///     switch:all*<n>            cycle through every tab n times (tab_switch_ms, late_jumps)
-///     scroll:top@<px/s> | scroll:bottom@<px/s> [,event]   hitches while scrolling
+///     scroll:top@<px/s>[/<px>] | scroll:bottom@<px/s>[/<px>] [,clip]   hitches while scrolling
+///                               up to <px> (default 10000: a long chat's whole height is minutes),
+///                               as trackpad events (in-process); clip sets the offset directly,
+///                               which the transcript's pinning to the bottom undoes
 ///     fling*<n>:<px>            n momentum flings of about px, alternating up and down
 ///     earlier*<n>               "Load earlier turns" n times (earlier_ms, earlier_drift_pt)
 ///     earlierconv               "Load earlier conversation" once (earlier_conv_ms)
@@ -256,13 +259,15 @@ enum DevBench {
         }
 
         private func scroll(_ step: String, _ record: inout [String: Any]) async -> CFTimeInterval? {
-            // "scroll:top@2000" or "scroll:bottom@2000,event"
+            // "scroll:top@2000", "scroll:top@2000/20000" or "scroll:bottom@2000,clip"
             let spec = step.dropFirst("scroll:".count)
             let parts = spec.split(separator: ",")
             let target = parts.first ?? "top"
             let toTop = target.hasPrefix("top")
-            let speed = Double(target.split(separator: "@").last ?? "2000") ?? 2000
-            let mode = parts.contains("event") ? DevScroller.Mode.event : .clip
+            let rate = (target.split(separator: "@").last ?? "2000").split(separator: "/")
+            let speed = rate.first.flatMap { Double($0) } ?? 2000
+            let limit = rate.count > 1 ? Double(rate[1]) ?? 10_000 : 10_000
+            let mode = parts.contains("clip") ? DevScroller.Mode.clip : .event
             guard let scroll = scrollView else {
                 record["valid"] = false
                 record["reason"] = "no transcript"
@@ -270,7 +275,7 @@ enum DevBench {
             }
             let id = signposter.makeSignpostID()
             let interval = signposter.beginInterval("ScrollRun", id: id)
-            let result = await DevScroller.run(scroll, toTop: toTop, speed: speed, mode: mode)
+            let result = await DevScroller.run(scroll, toTop: toTop, speed: speed, mode: mode, limit: limit)
             signposter.endInterval("ScrollRun", interval)
             record["px"] = round1(result.movedPX)
             if !result.valid {

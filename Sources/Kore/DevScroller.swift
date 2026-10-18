@@ -64,16 +64,20 @@ enum DevScroller {
     }
 
     /// Scrolls to the top (`toTop`) or bottom at `speed` px/s. Lazy content growing as it goes
-    /// is followed; it ends at the edge, or after `limit` px.
+    /// is followed; it ends at the edge, after `limit` px, after 30 moves in a row that don't
+    /// move it, or at three times the time the distance should take.
     static func run(_ scroll: NSScrollView, toTop: Bool, speed: Double, mode: Mode, limit: Double = .infinity) async -> Result {
         var result = Result()
         let start = offset(scroll)
         var last = CACurrentMediaTime()
         var travelled = 0.0
         var stuckFrames = 0
+        var stillMoves = 0
+        let deadline = last + (limit.isFinite ? 3 * limit / speed + 2 : 120)
         while travelled < limit {
             try? await Task.sleep(for: .milliseconds(8))
             let now = CACurrentMediaTime()
+            if now > deadline || stillMoves > 30 { break }
             let step = min(speed * (now - last), limit - travelled)
             last = now
             let before = offset(scroll)
@@ -92,7 +96,9 @@ enum DevScroller {
             case .event:
                 send(scroll, deltaY: -delta, phase: travelled == 0 ? .began : .changed)
             }
-            travelled += abs(offset(scroll) - before)
+            let moved = abs(offset(scroll) - before)
+            stillMoves = moved > 0 ? 0 : stillMoves + 1
+            travelled += moved
             result.requestedPX += step
         }
         if mode == .event { send(scroll, deltaY: 0, phase: .ended) }

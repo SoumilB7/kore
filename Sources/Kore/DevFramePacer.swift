@@ -99,6 +99,13 @@ final class DevFramePacer: NSObject {
         last = nil
         stableFrames = 0
         stableSince = nil
+        // The deadline holds without frames too: a covered window or another Space gets none.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(timeout))
+            guard let self, let pending = waiter, pending.since == now else { return }
+            waiter = nil
+            pending.continuation.resume(returning: nil)
+        }
         return await withCheckedContinuation { continuation in
             waiter = (now, continuation, now + timeout)
         }
