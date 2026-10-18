@@ -21,7 +21,7 @@ struct PlanText: View {
     }
 }
 
-func planMarkdown(_ text: String) -> AttributedString {
-    let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-    return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+/// Parsed once per text (`MarkdownCache`), not on every body.
+@MainActor func planMarkdown(_ text: String) -> AttributedString {
+    MarkdownCache.shared.inlineText(text)
 }

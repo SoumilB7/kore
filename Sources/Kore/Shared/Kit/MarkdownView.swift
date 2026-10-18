@@ -8,10 +8,11 @@ import SwiftUI
 struct MarkdownView: View {
     let text: String
     var streaming = false
-    @StateObject private var document = Held(MarkdownDocument())
+    /// What the parse is kept under (a reply's entry id); nil keys it by the text itself.
+    var key: String?
 
     var body: some View {
-        let document = document.value
+        let document = MarkdownCache.shared.document(key ?? "text:" + text)
         document.update(streaming ? MarkdownParser.settled(text) : text[...])
         var blocks = document.blocks
         if streaming, blocks.last?.isOpen == true { blocks.removeLast() }

@@ -482,3 +482,52 @@ enum MarkdownParser {
         }
     }
 }
+
+/// Parsed markdown kept for the app, not per view: a view rebuilt by a tab switch, a scroll or a
+/// window change finds its blocks parsed. A reply is keyed by its entry, so while it streams
+/// only its last block is parsed again; other text by its content. The least recently used go
+/// past `limit`.
+@MainActor
+final class MarkdownCache {
+    static let shared = MarkdownCache()
+
+    private var documents: [String: MarkdownDocument] = [:]
+    private var inline: [String: AttributedString] = [:]
+    /// Least recently used first.
+    private var order: [String] = []
+    private var inlineOrder: [String] = []
+    private let limit = 400
+
+    func document(_ key: String) -> MarkdownDocument {
+        if let document = documents[key] {
+            touch(key, in: &order)
+            return document
+        }
+        let document = MarkdownDocument()
+        documents[key] = document
+        order.append(key)
+        if order.count > limit { documents[order.removeFirst()] = nil }
+        return document
+    }
+
+    /// A one-paragraph markdown string (a plan, an agent's result), parsed once.
+    func inlineText(_ text: String) -> AttributedString {
+        if let parsed = inline[text] {
+            touch(text, in: &inlineOrder)
+            return parsed
+        }
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        let parsed = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        inline[text] = parsed
+        inlineOrder.append(text)
+        if inlineOrder.count > limit { inline[inlineOrder.removeFirst()] = nil }
+        return parsed
+    }
+
+    /// Moved to the end, for a hit that isn't already near it (the common case costs nothing).
+    private func touch(_ key: String, in order: inout [String]) {
+        guard order.suffix(16).contains(key) == false, let index = order.lastIndex(of: key) else { return }
+        order.remove(at: index)
+        order.append(key)
+    }
+}

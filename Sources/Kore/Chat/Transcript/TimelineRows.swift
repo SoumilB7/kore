@@ -117,7 +117,7 @@ private struct EntryContent: View {
             MessageHeader(entry: entry, open: true, actions: actions)
         default:
             // While it streams, whole blocks only (the row's text already stops at the last one).
-            MarkdownView(text: entry.text, streaming: !entry.done)
+            MarkdownView(text: entry.text, streaming: !entry.done, key: entry.id.uuidString)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -688,9 +688,7 @@ struct AgentItem: View {
     let lane: [TranscriptStore.Row]
     let open: Bool
     let actions: TranscriptActions
-    @StateObject private var hovered = Local(false)
     @StateObject private var showEarlier = Local(false)
-    @StateObject private var showAllResult = Local(false)
 
     /// Items shown before "N earlier".
     private static let recent = 8
@@ -698,7 +696,7 @@ struct AgentItem: View {
     var body: some View {
         if let info = entry.agent {
             VStack(alignment: .leading, spacing: 0) {
-                header(info)
+                AgentHeader(entry: entry, info: info, open: open, actions: actions)
                 if open {
                     nested(info)
                 } else if info.status == .running, let last = lane.last {
@@ -708,7 +706,47 @@ struct AgentItem: View {
         }
     }
 
-    private func header(_ info: TranscriptStore.AgentInfo) -> some View {
+    @ViewBuilder
+    private func nested(_ info: TranscriptStore.AgentInfo) -> some View {
+        let hidden = showEarlier.value ? 0 : max(0, lane.count - Self.recent)
+        VStack(alignment: .leading, spacing: 0) {
+            if hidden > 0 {
+                TextButton("\(hidden) earlier", font: TextStyle.caption, color: Theme.tertiary) {
+                    showEarlier.value = true
+                }
+                .padding(.top, Space.xs)
+            }
+            if lane.isEmpty, info.status == .running {
+                NestedNote(
+                    text: info.background ? "Commands appear when this agent finishes" : "No commands yet")
+            }
+            NestedTimeline(
+                rows: Array(lane.suffix(lane.count - hidden)), actions: actions, result: result(info), rail: rail(info))
+        }
+    }
+
+    private func rail(_ info: TranscriptStore.AgentInfo) -> Color { Theme.agentRail(AgentAvatar.hue(info.index)) }
+
+    private func result(_ info: TranscriptStore.AgentInfo) -> AnyView? {
+        let laneEntries = lane.compactMap { row -> TranscriptStore.Entry? in
+            if case .entry(let e) = row { return e }
+            return nil
+        }
+        guard let result = TranscriptStore.distinctResult(info, lane: laneEntries) else { return nil }
+        return AnyView(AgentResult(text: result, finished: info.status == .finished))
+    }
+}
+
+/// An agent card's top line. Its hover state is its own, so the pointer crossing it redraws
+/// this line, not the card's nested timeline.
+private struct AgentHeader: View {
+    let entry: TranscriptStore.Entry
+    let info: TranscriptStore.AgentInfo
+    let open: Bool
+    let actions: TranscriptActions
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
             Button {
                 if NSEvent.modifierFlags.contains(.command) {
@@ -719,8 +757,8 @@ struct AgentItem: View {
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: Space.md) {
                     ToolHeader(
-                        name: info.name, nameColor: AgentAvatar.hue(info.index), text: subtitle(info),
-                        status: statusSuffix(info))
+                        name: info.name, nameColor: AgentAvatar.hue(info.index), text: subtitle,
+                        status: statusSuffix)
                         .layoutPriority(1)
                     if hovered.value {
                         // Built only on hover: a hidden view wouldn't take the click.
@@ -760,13 +798,13 @@ struct AgentItem: View {
     }
 
     /// "Explore · haiku" while running; then the type, with its status after it.
-    private func subtitle(_ info: TranscriptStore.AgentInfo) -> String {
+    private var subtitle: String {
         let model = info.status == .running && info.waiting == 0 ? info.model : nil
         return [info.type, model].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// "waiting" in secondary, "failed" in red, "finished" / "stopped" in secondary.
-    private func statusSuffix(_ info: TranscriptStore.AgentInfo) -> (text: String, color: Color)? {
+    private var statusSuffix: (text: String, color: Color)? {
         switch info.status {
         case .running: info.waiting > 0 ? ("waiting", Theme.secondary) : nil
         case .finished: ("finished", Theme.secondary)
@@ -774,45 +812,32 @@ struct AgentItem: View {
         case .stopped: ("stopped", Theme.secondary)
         }
     }
+}
 
-    @ViewBuilder
-    private func nested(_ info: TranscriptStore.AgentInfo) -> some View {
-        let hidden = showEarlier.value ? 0 : max(0, lane.count - Self.recent)
-        VStack(alignment: .leading, spacing: 0) {
-            if hidden > 0 {
-                TextButton("\(hidden) earlier", font: TextStyle.caption, color: Theme.tertiary) {
-                    showEarlier.value = true
-                }
-                .padding(.top, Space.xs)
+/// An agent's answer under its work: four lines until "Show all", parsed once.
+private struct AgentResult: View {
+    let text: String
+    let finished: Bool
+    @StateObject private var showAll = Local(false)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(planMarkdown(text))
+                .font(TextStyle.body)
+                .foregroundStyle(finished ? Theme.text : Theme.secondary)
+                .lineSpacing(TextStyle.leading)
+                .lineLimit(showAll.value ? nil : 4)
+                .textSelection(.enabled)
+            if !showAll.value, Self.long(text) {
+                TextButton("Show all") { showAll.value = true }
             }
-            if lane.isEmpty, info.status == .running {
-                NestedNote(
-                    text: info.background ? "Commands appear when this agent finishes" : "No commands yet")
-            }
-            NestedTimeline(
-                rows: Array(lane.suffix(lane.count - hidden)), actions: actions, result: result(info), rail: rail(info))
         }
     }
 
-    private func rail(_ info: TranscriptStore.AgentInfo) -> Color { Theme.agentRail(AgentAvatar.hue(info.index)) }
-
-    private func result(_ info: TranscriptStore.AgentInfo) -> AnyView? {
-        let laneEntries = lane.compactMap { row -> TranscriptStore.Entry? in
-            if case .entry(let e) = row { return e }
-            return nil
-        }
-        guard let result = TranscriptStore.distinctResult(info, lane: laneEntries) else { return nil }
-        return AnyView(VStack(alignment: .leading, spacing: Space.xs) {
-            Text(planMarkdown(result))
-                .font(TextStyle.body)
-                .foregroundStyle(info.status == .finished ? Theme.text : Theme.secondary)
-                .lineSpacing(TextStyle.leading)
-                .lineLimit(showAllResult.value ? nil : 4)
-                .textSelection(.enabled)
-            if !showAllResult.value, result.count > 280 || result.filter({ $0 == "\n" }).count > 3 {
-                TextButton("Show all") { showAllResult.value = true }
-            }
-        })
+    /// Over 280 characters or four lines; read only as far as needed.
+    private static func long(_ text: String) -> Bool {
+        let prefix = TextPrefix.of(text, lines: 5, bytes: 1200)
+        return prefix.lines > 4 || prefix.text.count > 280
     }
 }
 
