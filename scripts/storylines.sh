@@ -53,6 +53,7 @@ defaults delete kore-storylines >/dev/null 2>&1
 # verify-landing takes too). A caller that already holds it says so with KORE_REPLAY_LOCK_HELD.
 lock=/private/tmp/kore-verify-replay.lock
 if (( replay )) && [[ -z ${KORE_REPLAY_LOCK_HELD:-} ]]; then
-  for (( i = 0; i < 60; i++ )); do mkdir $lock 2>/dev/null && { trap "rmdir $lock 2>/dev/null" EXIT; break; }; sleep 2; done
+  until mkdir $lock 2>/dev/null; do sleep 2; done
+  trap "rmdir $lock 2>/dev/null" EXIT
 fi
 "$bins/kore-storylines" "${args[@]}" --cassettes "$PWD/Tests/Fixtures/cassettes" --out "$out" 2>"$out/stderr.log"
