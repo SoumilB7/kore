@@ -48,6 +48,10 @@ final class CodexTranslator {
     private var finished: Set<String> = []
     /// Each child's latest message: its result when it finishes.
     private var lastText: [String: String] = [:]
+    /// Child threads' nicknames, roles and (in a replay) outcomes, which the backend looks up
+    /// before the events that name them; `lookedUp` keeps it to once per thread.
+    var agentThreads: [String: CodexAgentThread] = [:]
+    private var lookedUp: Set<String> = []
 
     init(folder: URL) {
         self.folder = folder
@@ -169,6 +173,12 @@ final class CodexTranslator {
             // reported when made, so this adds only what differs (a relaunch in another preset).
             if method == "thread/settings/updated", agent == .main, let settings = CodexTurnSettings(params["threadSettings"] ?? .null) {
                 apply(settings, .user, at: .now)
+            }
+            // A sub-agent's own count, as its card shows it: everything it has used so far.
+            if method == "thread/tokenUsage/updated", case .sub(let thread) = agent, !replaying,
+                let total = params["tokenUsage"]?["total"]?["totalTokens"]?.int
+            {
+                out.append(.agentProgress(id: thread, AgentProgress(tokens: total)))
             }
             // After each model call, and after a compaction: the context's size and the window.
             if method == "thread/tokenUsage/updated", agent == .main, let used = params["tokenUsage"]?["last"]?["totalTokens"]?.int {
@@ -334,18 +344,52 @@ final class CodexTranslator {
 
     private func spawn(_ thread: String, parent: AgentID, toolId: String?, name: String?, prompt: String?, model: String?) {
         guard spawned.insert(thread).inserted else { return }
-        // An agent path like /root/count_lines names it.
-        let shown = name.map { $0.split(separator: "/").last.map(String.init) ?? $0 } ?? "Agent"
+        // Its nickname ("Hume") or role names it; else its task, from an agent path like
+        // /root/count_lines. Beside the name goes what's left: the role, else the task.
+        let info = agentThreads[thread]
+        let task = name.map { $0.split(separator: "/").last.map(String.init) ?? $0 }
+        let shown = info?.nickname ?? info?.role ?? task ?? "Agent"
+        let beside = info?.nickname != nil ? info?.role ?? task : info?.role != nil ? task : nil
         out.append(
             .agentSpawned(
                 AgentInfo(
-                    id: thread, parent: parent, toolId: toolId, name: shown, type: nil, model: model, prompt: prompt,
+                    id: thread, parent: parent, toolId: toolId, name: shown, type: beside, model: model, prompt: prompt,
                     background: false)))
     }
 
     private func finish(_ thread: String, _ status: AgentStatus) {
         guard finished.insert(thread).inserted else { return }
-        out.append(.agentFinished(id: thread, status, result: lastText[thread]))
+        // A replay carries no child messages: the result, tokens and time its rollout ended with.
+        let info = agentThreads[thread]
+        if info?.tokens != nil || info?.duration != nil {
+            out.append(.agentProgress(id: thread, AgentProgress(tokens: info?.tokens, duration: info?.duration)))
+        }
+        out.append(.agentFinished(id: thread, status, result: lastText[thread] ?? info?.result))
+    }
+
+    /// Child threads this event names that haven't been looked up yet.
+    func unseenAgents(in event: CodexEvent) -> [String] {
+        let ids: [String] =
+            switch event {
+            case .itemStarted(let item), .itemCompleted(let item): Self.agents(in: item)
+            case .subThread(let thread, _, _): [thread]
+            default: []
+            }
+        return ids.filter { !spawned.contains($0) && lookedUp.insert($0).inserted }
+    }
+
+    /// Child threads a resumed thread's turns name.
+    static func agents(in turns: [JSONValue]) -> [String] {
+        turns.flatMap { $0["items"]?.array ?? [] }.flatMap { agents(in: CodexItem($0)) }
+    }
+
+    private static func agents(in item: CodexItem) -> [String] {
+        switch item.type {
+        case "subAgentActivity": item.raw["agentThreadId"]?.string.map { [$0] } ?? []
+        case "collabAgentToolCall" where item.raw["tool"]?.string == "spawnAgent":
+            item.raw["receiverThreadIds"]?.array?.compactMap(\.string) ?? []
+        default: []
+        }
     }
 
     // MARK: - Approvals
@@ -381,8 +425,8 @@ final class CodexTranslator {
 
     // MARK: - A sub-agent's thread
 
-    /// A child thread's turns (`thread/read`) as events of that agent; its user messages are the
-    /// instructions it was given.
+    /// A child thread's turns (`thread/read`) as events of that agent. Its instructions aren't
+    /// among them (multi-agent v2 sends them encrypted); user messages are forked history.
     func agentTurns(_ turns: [JSONValue], agent thread: String) -> [ChatEvent] {
         let pending = out
         out = []
@@ -457,9 +501,12 @@ final class CodexTranslator {
     }
 
     /// Replays `thread/resume` turns on a translator of its own, off the main thread.
-    static func replayed(_ turns: [JSONValue], rollout: CodexRollout, folder: URL) async -> Replayed {
+    static func replayed(
+        _ turns: [JSONValue], rollout: CodexRollout, folder: URL, agents: [String: CodexAgentThread] = [:]
+    ) async -> Replayed {
         await Task.detached(priority: .userInitiated) {
             let translator = CodexTranslator(folder: folder)
+            translator.agentThreads = agents
             let context = rollout.lastTokens.map { (used: $0, window: rollout.contextWindow) }
             let events = translator.replay(turns, settings: rollout.turnSettings, context: context)
             return Replayed(

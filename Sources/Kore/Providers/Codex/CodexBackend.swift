@@ -54,13 +54,21 @@ final class CodexBackend: ChatBackend {
             // Read and parsed into events off the main thread, on a translator of its own.
             let path = await session.rolloutPath
             let rollout = await Task.detached { path.map { CodexHistory.rollout(at: $0) } ?? CodexRollout() }.value
-            let replayed = await CodexTranslator.replayed(await session.history, rollout: rollout, folder: options.folder)
+            let history = await session.history
+            // Its sub-agents' nicknames and outcomes: metadata reads, about a millisecond each.
+            let agents = await session.agentThreads(CodexTranslator.agents(in: history))
+            let replayed = await CodexTranslator.replayed(history, rollout: rollout, folder: options.folder, agents: agents)
             translator.adopt(replayed.carried)
             yield(.replayed(replayed.events))
         }
         self.session = session
         pump = Task {
-            for await event in session.events { self.handle(event) }
+            for await event in session.events {
+                // A new sub-agent's nickname, before the event that makes its card.
+                let unseen = self.translator.unseenAgents(in: event)
+                if !unseen.isEmpty { self.translator.agentThreads.merge(await session.agentThreads(unseen)) { _, new in new } }
+                self.handle(event)
+            }
         }
         yield(.controlsLoaded(await controls(session)))
     }

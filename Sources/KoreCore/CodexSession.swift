@@ -163,6 +163,11 @@ public actor CodexSession {
         return result["thread"]?["turns"]?.array ?? []
     }
 
+    /// A thread's metadata (nickname, role, rollout path…) without its turns.
+    public func threadInfo(_ id: String) async throws -> JSONValue {
+        try await server.request("thread/read", ["threadId": .string(id), "includeTurns": false])["thread"] ?? .null
+    }
+
     /// Stops a sub-agent's running turn (its own thread on this app-server).
     public func interrupt(thread: String, turn: String) async throws {
         _ = try await server.request("turn/interrupt", ["threadId": .string(thread), "turnId": .string(turn)])
