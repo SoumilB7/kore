@@ -36,7 +36,7 @@ import KoreCore
 ///                            top; with load, then press the top row KORE_EARLIER_TIMES times (default 1); then
 ///                            KORE_EARLIER_SHOW=divider|top scrolls to the first divider or the top
 ///   KORE_EXPLORER=1          open the explorer at launch
-///   KORE_FILE=<path>[:...]   open those files in tabs (the last one shown)
+///   KORE_FILE=<path>[:...]   open those files in tabs (the last one shown); KORE_PREVIEW=1 opens them as preview tabs
 ///   KORE_QUICK_OPEN=files|line  open quick open at launch
 ///   KORE_LINE=<n>            put the caret on that line of the shown file
 ///   KORE_SEARCH=<query>      open the sidebar on Search with that query
@@ -70,11 +70,14 @@ enum DevSnapshot {
     /// Runs that start or resume a chat keep one tab instead of loading the folder's chats.
     static var singleTab: Bool { startProvider != nil || resume != nil }
     private static let output = ProcessInfo.processInfo.environment["KORE_SNAPSHOT"]
-    private static let clicks: [NSPoint] = (ProcessInfo.processInfo.environment["KORE_CLICK"] ?? "")
+    /// "x,y" clicks once; "x,y,2" double-clicks (inside Kore, like the single clicks).
+    private static let clickList: [(NSPoint, Int)] = (ProcessInfo.processInfo.environment["KORE_CLICK"] ?? "")
         .split(separator: ";").compactMap { pair in
             let xy = pair.split(separator: ",").compactMap { Double($0) }
-            return xy.count == 2 ? NSPoint(x: xy[0], y: xy[1]) : nil
+            guard xy.count >= 2 else { return nil }
+            return (NSPoint(x: xy[0], y: xy[1]), xy.count > 2 ? Int(xy[2]) : 1)
         }
+    private static var clicks: [NSPoint] { clickList.map(\.0) }
 
     /// KORE_HANGS=1: logs every main-thread stall over 50ms (with what was happening) to stderr.
     @MainActor static func watchHangs() {
@@ -221,7 +224,7 @@ enum DevSnapshot {
         let clickStart = Double(ProcessInfo.processInfo.environment["KORE_CLICK_AFTER"] ?? "") ?? 2.5
         for (index, point) in clicks.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + clickStart + Double(index)) {
-                real ? post(click: point) : send(click: point)
+                real ? post(click: point) : send(click: point, count: clickList[index].1)
             }
         }
         if let after = ProcessInfo.processInfo.environment["KORE_CLOSE_AFTER"].flatMap(Double.init) {
@@ -328,13 +331,13 @@ enum DevSnapshot {
     }
 
     /// A mouse down/up delivered inside Kore (skips the window server).
-    @MainActor private static func send(click point: NSPoint) {
+    @MainActor private static func send(click point: NSPoint, count: Int = 1) {
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }) else { return }
         let location = NSPoint(x: point.x, y: window.frame.height - point.y)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+        for (type, clickCount) in (1...max(count, 1)).flatMap({ n in [(NSEvent.EventType.leftMouseDown, n), (.leftMouseUp, n)] }) {
             if let event = NSEvent.mouseEvent(
                 with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clickCount, pressure: 1)
             {
                 // Through NSApp, so local event monitors (outside-click handling) see it too.
                 NSApp.sendEvent(event)

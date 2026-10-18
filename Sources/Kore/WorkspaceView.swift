@@ -38,6 +38,9 @@ struct TabBar: View {
     private let tabHeight: CGFloat = 30
     /// Width the tab strip got; tabs share it (180 down to 90 each), then the strip scrolls.
     @StateObject private var stripWidth = Local<CGFloat>(0)
+    /// Each tab's frame in the window, for the double-click monitor below.
+    @StateObject private var tabFrames = Held<[UUID: CGRect]>([:])
+    @StateObject private var doubleClicks = Held<Any?>(nil)
 
     private var tabWidth: CGFloat {
         let count = CGFloat(workspace.tabs.count)
@@ -54,7 +57,11 @@ struct TabBar: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Size.tabGap) {
                         ForEach(workspace.tabs) { tab in
-                            TabItem(tab: tab, workspace: workspace, height: tabHeight).frame(width: tabWidth)
+                            TabItem(tab: tab, workspace: workspace, height: tabHeight)
+                                .frame(width: tabWidth)
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                                    tabFrames.value[tab.id] = $0
+                                }
                         }
                     }
                 }
@@ -83,11 +90,38 @@ struct TabBar: View {
         .padding(.leading, leadingInset)
         .padding(.trailing, Space.md)
         .frame(height: height)
+        .background(WindowReader { window in watchDoubleClicks(in: window) })
+        .onDisappear {
+            if let monitor = doubleClicks.value { NSEvent.removeMonitor(monitor) }
+            doubleClicks.value = nil
+        }
         // Empty space drags the window (tabs and buttons take their own clicks).
         .background {
             Theme.background
                 .gesture(WindowDragGesture())
                 .allowsWindowActivationEvents(true)
+        }
+    }
+}
+
+extension TabBar {
+    /// The tabs sit in the title bar, where a double click zooms the window. A double click
+    /// on a tab keeps its preview instead (VS Code), and the window never sees it; empty
+    /// title-row space still zooms and drags as before.
+    fileprivate func watchDoubleClicks(in window: NSWindow?) {
+        guard let window, doubleClicks.value == nil else { return }
+        let frames = tabFrames
+        let workspace = workspace
+        doubleClicks.value = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak window] event in
+            guard let window, event.window === window, event.clickCount == 2, let content = window.contentView else { return event }
+            // Window coordinates (bottom-left) to SwiftUI's global ones (top-left).
+            let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+            guard let id = frames.value.first(where: { $0.value.contains(point) })?.key,
+                let tab = workspace.tabs.first(where: { $0.id == id })
+            else { return event }
+            workspace.select(tab)
+            workspace.keep(tab)
+            return nil
         }
     }
 }

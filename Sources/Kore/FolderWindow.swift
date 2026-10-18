@@ -117,7 +117,9 @@ struct FolderWindow: View {
             }
             if DevSnapshot.openHistory { historyOpen.value = true }
             if DevSnapshot.explorer { workspace.value.explorerOpen = true }
-            for file in DevSnapshot.files { workspace.value.openFile(file) }
+            for file in DevSnapshot.files {
+                workspace.value.openFile(file, preview: ProcessInfo.processInfo.environment["KORE_PREVIEW"] == "1")
+            }
             if let line = DevSnapshot.line, let file = workspace.value.activeFile {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { file.editor.goTo(line: line) }
             }
