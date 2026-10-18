@@ -10,15 +10,27 @@ import AppKit
 /// the machine sees it coming. Posted events go to the frontmost app, so it then brings Kore
 /// forward. When the storyline ends it puts the cursor back and gives the front back to the app
 /// that had it.
+///
+/// A dry run (`--real-input-dry`) does all of that but post: the events it would have posted
+/// are kept in `posted`, and the cursor, which never moved, isn't put back.
 @MainActor
 package final class RealInput {
     package let keys: Bool
+    package let dry: Bool
+    /// Seconds the banner counts down before the first event.
+    private let countdown: Int
     private var started = false
     private var cursor: CGPoint?
     private var previous: NSRunningApplication?
-    private var banner: NSWindow?
+    private(set) var banner: NSWindow?
+    /// A dry run's events, in the order they would have been posted.
+    private(set) var posted: [CGEvent] = []
 
-    package init(keys: Bool) { self.keys = keys }
+    package init(keys: Bool, dry: Bool = false, countdown: Int = 3) {
+        self.keys = keys
+        self.dry = dry
+        self.countdown = countdown
+    }
 
     /// Moves the real pointer onto a point in the window, and leaves it there (a hover lasts
     /// until the next real event or the end of the storyline).
@@ -45,7 +57,7 @@ package final class RealInput {
         for down in [true, false] {
             let event = CGEvent(keyboardEventSource: nil, virtualKey: chord.keyCode, keyDown: down)
             event?.flags = chord.cgFlags
-            event?.post(tap: .cghidEventTap)
+            send(event)
         }
         try await settle()
     }
@@ -55,7 +67,7 @@ package final class RealInput {
     package func finish() {
         guard started else { return }
         started = false
-        if let cursor { CGWarpMouseCursorPosition(cursor) }
+        if let cursor, !dry { CGWarpMouseCursorPosition(cursor) }
         banner?.orderOut(nil)
         banner = nil
         if let previous, previous != NSRunningApplication.current { previous.activate() }
@@ -70,7 +82,7 @@ package final class RealInput {
         previous = NSWorkspace.shared.frontmostApplication
         let banner = Self.banner(over: window)
         self.banner = banner
-        for left in (1...3).reversed() {
+        for left in stride(from: countdown, to: 0, by: -1) {
             Self.say("Real input in \(left)…", on: banner)
             try await Task.sleep(for: .seconds(1))
         }
@@ -126,7 +138,12 @@ package final class RealInput {
     private func post(_ type: CGEventType, at point: CGPoint, clickCount: Int = 1) {
         let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
         event?.setIntegerValueField(.mouseEventClickState, value: Int64(clickCount))
-        event?.post(tap: .cghidEventTap)
+        send(event)
+    }
+
+    private func send(_ event: CGEvent?) {
+        guard let event else { return }
+        if dry { posted.append(event) } else { event.post(tap: .cghidEventTap) }
     }
 
     /// A short wait for the window server to deliver what was posted (a real event arrives

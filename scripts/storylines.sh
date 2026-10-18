@@ -6,7 +6,7 @@
 #   scripts/storylines.sh [--build debug|release] [--tag a,b] [--name A,B] [--provider claude|codex]
 #                         [--cli scripted|process] [--live haiku|gpt-6-luna [--record]]
 #                         [--size WxH] [--replay 'name|folder|agent:id;…'] [--out <dir>] [--list]
-#                         [--real-input [--real-keys]]
+#                         [--real-input | --real-input-dry [--real-keys]]
 #
 # Each run gets a folder of its own ($TMPDIR/kore-storylines/<time>, or --out) for its scratch
 # folders, report.json / report.txt, event logs, dumps and failure snapshots. The app's settings
@@ -17,6 +17,9 @@
 #
 # --real-input sends pointer events through the window server (the real cursor moves), and
 # --real-keys real keystrokes too: only after the owner has OK'd that run in chat.
+# --real-input-dry plays the same storylines with everything real input does around its events
+# (the banner and its countdown, Kore brought forward, the front given back) but posts nothing:
+# the cursor stays put, and a step that needs the real pointer's effect fails.
 set -u
 cd "$(dirname "$0")/.." || exit 2
 build=debug

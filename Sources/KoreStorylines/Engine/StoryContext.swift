@@ -23,6 +23,8 @@ package struct AppProbe {
 package struct RunFlags: Sendable {
     /// `--real-input`: pointer events through the window server (the owner OKs each run in chat).
     package var realInput = false
+    /// `--real-input-dry`: real input's banner, countdown and activation, with nothing posted.
+    package var realInputDry = false
     /// `--real-keys`: posted keystrokes too.
     package var realKeys = false
     /// `--size WxH`: overrides each storyline's window.

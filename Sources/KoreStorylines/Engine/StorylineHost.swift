@@ -8,7 +8,7 @@ import KoreUI
 ///     kore-storylines [--tag a,b] [--name A,B] [--provider claude|codex] [--list]
 ///                     [--out <dir>] [--size WxH] [--replay name|folder|agent:id;…]
 ///                     [--cli scripted|process] [--live <model>] [--record] [--fake-cli <path>]
-///                     [--cassettes <dir>] [--real-input [--real-keys]]
+///                     [--cassettes <dir>] [--real-input | --real-input-dry [--real-keys]]
 @MainActor
 package enum StorylineHost {
     private static var runner: Runner?
@@ -25,6 +25,11 @@ package enum StorylineHost {
             }
             exit(0)
         }
+        // AppKit reads the arguments too, as `-key value` pairs, and takes one left over for a
+        // file to open: a flag without a value (`--real-input --cassettes <dir>`) pairs with
+        // the next flag and leaves that one's value over. Launched to open a file, the app
+        // shows no window, so the welcome window never hands over the means to open a folder's.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": false])
         // The app's own story registry runs only under a host.
         StoryHost.installed = true
         StorylineSeams.events = { chat, event in Runner.current?.record(chat, event) }
@@ -65,6 +70,9 @@ package enum StorylineHost {
                 case "--fake-cli": flags.fakeCLI = args.next().map { URL(fileURLWithPath: $0) }
                 case "--cassettes": flags.cassettes = args.next().map { URL(fileURLWithPath: $0, isDirectory: true) }
                 case "--real-input": flags.realInput = true
+                case "--real-input-dry":
+                    flags.realInput = true
+                    flags.realInputDry = true
                 case "--real-keys": flags.realKeys = true
                 case "--size":
                     let wh = (args.next() ?? "").split(separator: "x").compactMap { Double($0) }

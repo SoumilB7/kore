@@ -415,10 +415,13 @@ package final class InputDriver {
 extension InputDriver: StoryFinishing {}
 
 extension StoryContext {
-    /// This storyline's input driver, made on first use (real input only with `--real-input`).
+    /// This storyline's input driver, made on first use (real input only with `--real-input`,
+    /// or `--real-input-dry`).
     package var input: InputDriver {
         stash(InputDriver.self) {
-            InputDriver(window: { [unowned self] in window }, real: flags.realInput ? RealInput(keys: flags.realKeys) : nil)
+            InputDriver(
+                window: { [unowned self] in window },
+                real: flags.realInput ? RealInput(keys: flags.realKeys, dry: flags.realInputDry) : nil)
         }
     }
 }

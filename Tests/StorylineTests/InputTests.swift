@@ -187,3 +187,57 @@ struct KeyOrderTests {
         #expect(view == 1)
     }
 }
+
+@Suite("real input, dry", .serialized)
+@MainActor
+struct DryRealInputTests {
+    private let window: NSWindow = {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: CGRect(x: -10000, y: -10000, width: 300, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderFront(nil)
+        return window
+    }()
+
+    private func label(_ banner: NSWindow?) -> String? {
+        (banner?.contentView?.subviews.first as? NSTextField)?.stringValue
+    }
+
+    @Test func theBannerCountsDownOverTheWindowAndNothingIsPosted() async throws {
+        let real = RealInput(keys: false, dry: true, countdown: 1)
+        let move = Task { try await real.move(to: CGPoint(x: 150, y: 100), in: window) }
+        // The countdown leaves the main actor free: this runs during it.
+        try await Task.sleep(for: .milliseconds(200))
+        let banner = try #require(real.banner)
+        #expect(label(banner) == "Real input in 1…")
+        #expect(banner.parent === window)
+        #expect(banner.isVisible)
+        #expect(!banner.canBecomeKey)
+        #expect(banner.ignoresMouseEvents)
+        try await move.value
+        #expect(label(banner) == "Real input")
+
+        let screen = window.convertPoint(toScreen: CGPoint(x: 150, y: 100))
+        let primary = NSScreen.screens.first?.frame.height ?? 0
+        #expect(real.posted.map(\.type) == [.mouseMoved])
+        #expect(real.posted.first?.location == CGPoint(x: screen.x, y: primary - screen.y))
+
+        // The countdown is once a storyline.
+        try await real.click(at: CGPoint(x: 10, y: 10), in: window, count: 2)
+        #expect(real.posted.map(\.type) == [.mouseMoved, .mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDown, .leftMouseUp])
+        #expect(real.posted.last?.getIntegerValueField(.mouseEventClickState) == 2)
+        await #expect(throws: StoryFailure.self) { try await real.key(.cmd("k"), in: window) }
+
+        real.finish()
+        #expect(real.banner == nil)
+        #expect(!banner.isVisible)
+        #expect(window.childWindows?.contains(banner) != true)
+    }
+
+    @Test func theRunnerReadsTheDryFlag() {
+        let dry = StorylineHost.Options(["kore-storylines", "--real-input-dry", "--real-keys"]).flags
+        #expect(dry.realInput && dry.realInputDry && dry.realKeys)
+        let real = StorylineHost.Options(["kore-storylines", "--real-input"]).flags
+        #expect(real.realInput && !real.realInputDry)
+    }
+}
