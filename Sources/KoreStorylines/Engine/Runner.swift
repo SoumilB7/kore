@@ -152,9 +152,7 @@ final class Runner {
             window.close()
             // The next storyline may open the same folder: its window has to be gone, or opening
             // the folder would bring this one back.
-            _ = try? await waits.until("the window to close", timeout: .seconds(5)) {
-                !window.isVisible && context.window == nil ? true : nil
-            }
+            _ = try? await waits.until("the window to close", timeout: .seconds(5)) { !window.isVisible ? true : nil }
         }
         if !real {
             result.files += modes.end().map { "removed \($0.path)" }

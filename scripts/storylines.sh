@@ -22,12 +22,14 @@ cd "$(dirname "$0")/.." || exit 2
 build=debug
 out=""
 process=0
+replay=0
 args=()
 while (( $# )); do
   case $1 in
     --build) build=$2; shift ;;
     --out) out=$2; shift ;;
     --cli) [[ $2 == process ]] && process=1; args+=("$1" "$2"); shift ;;
+    --replay) replay=1; args+=("$1" "$2"); shift ;;
     *) args+=("$1") ;;
   esac
   shift
@@ -47,4 +49,10 @@ bins="$(swift build -c $build --show-bin-path)"
 [[ -n $out ]] || out="${TMPDIR:-/tmp}/kore-storylines/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$out"
 defaults delete kore-storylines >/dev/null 2>&1
+# Recorded Codex threads take one writer at a time: replays wait for any other run's (the lock
+# verify-landing takes too). A caller that already holds it says so with KORE_REPLAY_LOCK_HELD.
+lock=/private/tmp/kore-verify-replay.lock
+if (( replay )) && [[ -z ${KORE_REPLAY_LOCK_HELD:-} ]]; then
+  for (( i = 0; i < 60; i++ )); do mkdir $lock 2>/dev/null && { trap "rmdir $lock 2>/dev/null" EXIT; break; }; sleep 2; done
+fi
 "$bins/kore-storylines" "${args[@]}" --cassettes "$PWD/Tests/Fixtures/cassettes" --out "$out" 2>"$out/stderr.log"
