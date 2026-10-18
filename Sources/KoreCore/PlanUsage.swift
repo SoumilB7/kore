@@ -133,11 +133,21 @@ public struct PlanLimit: Sendable, Equatable {
     /// Percent of the limit used, 0–100 (past 100 once over).
     public let used: Double
     public let resetsAt: Date?
+    /// How long its window is: it began at `resetsAt − window`. Nil when the CLI didn't say.
+    public var window: TimeInterval?
+    /// What it's limited to: Claude's model for a model-scoped week ("Fable"), Codex's limit id
+    /// past its own; nil for the plan's plain limit.
+    public var scope: String?
+    /// Claude's week as the plan splits it by surface (`seven_day_breakdown`), in points of it.
+    public var surfaces: [PlanSurface]
 
-    public init(title: String, used: Double, resetsAt: Date?) {
+    public init(title: String, used: Double, resetsAt: Date?, window: TimeInterval? = nil, scope: String? = nil, surfaces: [PlanSurface] = []) {
         self.title = title
         self.used = used
         self.resetsAt = resetsAt
+        self.window = window
+        self.scope = scope
+        self.surfaces = surfaces
     }
 }
 
@@ -175,17 +185,20 @@ extension PlanReading {
         }
         let limits = usage["rate_limits"]
         var bars: [PlanLimit] = []
-        func add(_ title: String, _ window: JSONValue?) {
+        func add(_ title: String, _ window: JSONValue?, hours: Double = 7 * 24, scope: String? = nil, breakdown: JSONValue? = nil) {
             guard let used = window?["utilization"]?.double else { return }
-            bars.append(PlanLimit(title: title, used: used, resetsAt: date(window?["resets_at"])))
+            bars.append(
+                PlanLimit(
+                    title: title, used: used, resetsAt: date(window?["resets_at"]), window: hours * 3600, scope: scope,
+                    surfaces: UsageAttribution.surfaces(breakdown, used: used)))
         }
-        add("Session (5hr)", limits?["five_hour"])
-        add("Weekly (7 day)", limits?["seven_day"])
+        add("Session (5hr)", limits?["five_hour"], hours: 5)
+        add("Weekly (7 day)", limits?["seven_day"], breakdown: limits?["seven_day_breakdown"])
         if subscription == nil || subscription == "max" || subscription == "team" {
-            add("Weekly Sonnet", limits?["seven_day_sonnet"])
+            add("Weekly Sonnet", limits?["seven_day_sonnet"], scope: "Sonnet")
         }
         for scoped in limits?["model_scoped"]?.array ?? [] {
-            if let name = scoped["display_name"]?.string, !name.isEmpty { add("Weekly \(name)", scoped) }
+            if let name = scoped["display_name"]?.string, !name.isEmpty { add("Weekly \(name)", scoped, scope: name) }
         }
         reading.limits = PlanLimits(bars: bars, extras: extraUsage(limits?["extra_usage"], locale: locale).map { [$0] } ?? [])
         return reading
@@ -301,8 +314,12 @@ extension PlanReading {
             let name = id == "codex" ? nil : nonEmpty(snapshot["limitName"]?.string) ?? nonEmpty(snapshot["normalModelSlug"]?.string) ?? id
             for window in [snapshot["primary"], snapshot["secondary"]] {
                 guard let window, let used = window["usedPercent"]?.double else { continue }
-                let title = windowLabel(window["windowDurationMins"]?.int) + (name.map { " · " + $0 } ?? "")
-                bars.append(PlanLimit(title: title, used: used, resetsAt: date(window["resetsAt"])))
+                let minutes = window["windowDurationMins"]?.int
+                let title = windowLabel(minutes) + (name.map { " · " + $0 } ?? "")
+                bars.append(
+                    PlanLimit(
+                        title: title, used: used, resetsAt: date(window["resetsAt"]), window: minutes.map { Double($0) * 60 },
+                        scope: PlanSnapshot.limitKey(id)))
             }
         }
         var extras: [PlanExtra] = []

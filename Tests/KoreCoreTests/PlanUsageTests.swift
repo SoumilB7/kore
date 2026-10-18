@@ -63,7 +63,7 @@ struct PlanUsageTests {
             "seven_day": nil,
             "model_scoped": [["display_name": "Fable", "utilization": nil], ["utilization": 5], ["display_name": "Lark", "utilization": 101.5]],
         ])
-        #expect(reading.limits?.bars == [PlanLimit(title: "Weekly Lark", used: 101.5, resetsAt: nil)])
+        #expect(reading.limits?.bars == [PlanLimit(title: "Weekly Lark", used: 101.5, resetsAt: nil, window: 7 * 86400, scope: "Lark")])
     }
 
     @Test func extraUsageShowsWhileItIsOn() {
@@ -120,7 +120,8 @@ struct PlanUsageTests {
         #expect(reading.account.email == "you@example.com")
         #expect(reading.account.organization == nil)
         #expect(reading.account.manage?.absoluteString == "https://chatgpt.com/codex/settings/usage")
-        #expect(reading.limits?.bars == [PlanLimit(title: "Weekly limit", used: 6, resetsAt: Date(timeIntervalSince1970: 1_793_335_108))])
+        #expect(
+            reading.limits?.bars == [PlanLimit(title: "Weekly limit", used: 6, resetsAt: Date(timeIntervalSince1970: 1_793_335_108), window: 7 * 86400)])
         #expect(reading.limits?.extras == [PlanExtra("Credits", "47,162"), PlanExtra(nil, "2 full resets available", isResets: true)])
         let credit = { (id: String, granted: Double, expires: Double) in
             PlanReset(
