@@ -648,7 +648,8 @@ final class ChatModel: Identifiable {
             approvals.append(claudeApproval(r))
         case .permissionCancelled(let id):
             approvals.removeAll { $0.id == id }
-        case .commandStarted(let id):
+        case .commandStarted(let id, let sessionId):
+            if resumeId == nil { resumeId = sessionId }
             // A turn the CLI started itself (e.g. a peer's message): running like any other.
             isRunning = true
             streamingIndex = nil

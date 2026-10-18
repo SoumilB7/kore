@@ -20,8 +20,9 @@ public enum ClaudeEvent: Sendable {
     case permissionModeChanged(String)
     /// `command_lifecycle`: the CLI runs a queued command on its own, such as a message from
     /// another Claude session (`PeerMessage`). Stdout doesn't carry its text; `id` is the uuid
-    /// of its user entry in the transcript (`ClaudeHistory.entry`).
-    case commandStarted(id: String)
+    /// of its user entry in the transcript (`ClaudeHistory.entry`). `sessionId` comes with it: in a
+    /// chat with nothing sent yet, this arrives before `system/init`.
+    case commandStarted(id: String, sessionId: String?)
     case commandCompleted(id: String)
     /// End of a turn. The process stays alive for the next `send`.
     case turnCompleted(TurnResult)
@@ -202,7 +203,7 @@ extension ClaudeEvent {
         case "command_lifecycle" where json["command_uuid"]?.string != nil:
             let id = json["command_uuid"]?.string ?? ""
             switch json["state"]?.string {
-            case "started": self = .commandStarted(id: id)
+            case "started": self = .commandStarted(id: id, sessionId: json["session_id"]?.string)
             case "completed": self = .commandCompleted(id: id)
             default: self = .raw(json)
             }
