@@ -111,4 +111,86 @@ final class CompactCommandTests {
         #expect(!kinds.contains(.divider) && !kinds.contains(.notice))
         chat.close()
     }
+
+    // MARK: Auto-compact
+
+    /// A Claude chat on a script whose every turn ends at 85% of a 200k window, its compaction
+    /// ending with `end`, its auto-compact point kept in `memory`.
+    private func autoCompactChat(_ memory: AutoCompactMemory, compaction end: [ChatEvent]) -> Chat {
+        world.script = CLIScript(
+            turns: [[.startTurn] + Beat.answer("Done.") + [.context(used: 170_000, window: 200_000), .finishTurn(.completed)]],
+            compact: [.event(.compactionStarted(auto: false))] + end.map(Beat.event))
+        world.install()
+        return Chat(provider: .claude, folder: URL(fileURLWithPath: "/tmp"), compactMemory: memory)
+    }
+
+    private func compactions(_ chat: Chat) -> Int {
+        world.backends.last?.log.count { $0 == .compact } ?? 0
+    }
+
+    /// Sends `text` and waits for its turn, and any compaction after it, to end.
+    private func turn(_ chat: Chat, _ text: String) async throws {
+        chat.draft = text
+        chat.send()
+        try await until("the turn") { chat.status.sessionId != nil && !chat.status.isRunning && !chat.context.compacting }
+        // A few more passes: nothing else follows.
+        for _ in 0..<20 { await Task.yield() }
+        #expect(!chat.context.compacting)
+    }
+
+    @Test func thePointIsKeptForNewChats() {
+        let memory = AutoCompactMemory(defaults: ScratchDefaults())
+        let folder = URL(fileURLWithPath: "/tmp")
+        // A fresh install starts Off.
+        let first = Chat(provider: .claude, folder: folder, compactMemory: memory)
+        #expect(first.context.autoCompactAt == nil)
+        first.setAutoCompact(80)
+        #expect(memory.point(for: .claude) == 80)
+        let second = Chat(provider: .claude, folder: folder, compactMemory: memory)
+        #expect(second.context.autoCompactAt == 80)
+        // Each provider keeps its own.
+        #expect(Chat(provider: .codex, folder: folder, compactMemory: memory).context.autoCompactAt == nil)
+        // Off is kept too; a chat already open keeps its point.
+        first.setAutoCompact(nil)
+        #expect(Chat(provider: .claude, folder: folder, compactMemory: memory).context.autoCompactAt == nil)
+        #expect(second.context.autoCompactAt == 80)
+    }
+
+    @Test func aTurnPastThePointCompactsOnceAfterIt() async throws {
+        let memory = AutoCompactMemory(defaults: ScratchDefaults())
+        // Usage stays past the point after compacting: it isn't tried again until the next turn.
+        let chat = autoCompactChat(
+            memory, compaction: [.compacted(at: Date(), auto: false), .contextUsage(ContextUsage(used: 175_000, window: 200_000, autoCompacts: true, at: Date()))])
+        chat.setAutoCompact(80)
+        try await turn(chat, "First")
+        #expect(compactions(chat) == 1)
+        #expect(chat.transcript.entries.contains { $0.kind == .divider && $0.text.hasPrefix("Compacted at 80% · ") })
+        try await turn(chat, "Second")
+        #expect(compactions(chat) == 2)
+        chat.close()
+    }
+
+    @Test func aFailedCompactionIsntRetried() async throws {
+        let chat = autoCompactChat(AutoCompactMemory(defaults: ScratchDefaults()), compaction: [.compactionFailed("Busy")])
+        chat.setAutoCompact(80)
+        try await turn(chat, "First")
+        #expect(compactions(chat) == 1)
+        #expect(chat.transcript.entries.filter { $0.kind == .notice }.map(\.text) == ["Couldn't compact: Busy"])
+        chat.close()
+    }
+
+    @Test func offDoesNothing() async throws {
+        let chat = autoCompactChat(AutoCompactMemory(defaults: ScratchDefaults()), compaction: [.compacted(at: Date(), auto: false)])
+        try await turn(chat, "First")
+        #expect(compactions(chat) == 0)
+        chat.close()
+    }
+}
+
+/// Defaults kept in memory, so a test never touches the app's.
+private final class ScratchDefaults: UserDefaults, @unchecked Sendable {
+    private var values: [String: Any] = [:]
+
+    override func object(forKey key: String) -> Any? { values[key] }
+    override func set(_ value: Any?, forKey key: String) { values[key] = value }
 }

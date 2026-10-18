@@ -363,8 +363,10 @@ final class TranscriptStore {
     static let drawInterval: TimeInterval = 1.0 / 30
     /// Pending approvals of this chat: id → it's a question (AskUserQuestion, Codex user input).
     @ObservationIgnored private var pendingApprovals: [String: Bool] = [:]
-    /// A compaction is running, since when (the live row says "Compacting…").
+    /// A compaction is running, since when (the live row says "Compacting…"), and the point it
+    /// was started at when Kore started it by itself (auto-compact).
     @ObservationIgnored private var compactingSince: Date?
+    @ObservationIgnored private var compactingAt: Int?
     /// The most recently started turn, for `turnChanges()`.
     @ObservationIgnored private var latestTurn: String?
 
@@ -428,6 +430,7 @@ final class TranscriptStore {
             events.forEach(apply)
             // A past compaction that never finished isn't still running.
             compactingSince = nil
+            compactingAt = nil
             endUnfinishedAgents()
             placeWindow()
         }
@@ -501,10 +504,12 @@ final class TranscriptStore {
     }
 
     /// A compaction is running: the live row says "Compacting…" (look §9), the running turn's
-    /// or, when no turn shows one, a row of its own at the end, where its divider lands.
-    func compacting(_ on: Bool) {
+    /// or, when no turn shows one, a row of its own at the end, where its divider lands. `point`:
+    /// Kore started it at the chat's auto-compact point.
+    func compacting(_ on: Bool, at point: Int? = nil) {
         guard (compactingSince != nil) != on else { return }
         compactingSince = on ? Date() : nil
+        compactingAt = on ? point : nil
         changed(turn: turnShowsSpinner ? current : nil)
     }
 
@@ -513,9 +518,12 @@ final class TranscriptStore {
 
     /// "Conversation compacted · 14:32" above the summary that follows, in place of the live row.
     /// The divider names who started it: "Conversation compacted · 14:32" (the user, or not
-    /// known), "Compacted automatically · 14:32" (the CLI).
+    /// known), "Compacted automatically · 14:32" (the CLI), "Compacted at 80% · 14:32" (Kore, at
+    /// the chat's point).
     func compacted(at date: Date, auto: Bool? = nil) {
-        let cause = auto == true ? "Compacted automatically" : "Conversation compacted"
+        let cause =
+            if let point = compactingAt { "Compacted at \(point)%" }
+            else { auto == true ? "Compacted automatically" : "Conversation compacted" }
         compacting(false)
         append(Entry(kind: .divider, text: cause + " · " + Self.time.string(from: date)))
     }

@@ -8,6 +8,12 @@ import Observation
 final class ContextStore {
     private(set) var usage: ContextUsage?
     private(set) var compacting = false
+    /// Kore compacts by itself when a turn ends at or past this percent of the window (one of
+    /// `snapPoints`); nil: off, and the CLI compacts at its own limit (the ring's end).
+    var autoCompactAt: Int?
+
+    /// Where the auto-compact point can go; past the last is off.
+    nonisolated static let snapPoints = [50, 60, 70, 80, 90]
 
     func apply(_ event: ChatEvent) {
         switch event {
@@ -33,6 +39,15 @@ final class ContextStore {
     var fraction: Double? {
         guard let usage, let window = usage.window, window > 0 else { return nil }
         return min(max(Double(usage.used) / Double(window), 0), 1)
+    }
+
+    /// The point as a fraction of the window, for the ring and the track.
+    var threshold: Double? { autoCompactAt.map { Double($0) / 100 } }
+
+    /// Usage has reached the point: the turn ending now compacts.
+    var pastPoint: Bool {
+        guard let fraction, let threshold else { return false }
+        return fraction >= threshold
     }
 
     /// 1.2k, 18k, 1.1M (T3 Code's format).

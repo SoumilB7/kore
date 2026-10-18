@@ -49,12 +49,19 @@ package final class Chat: Identifiable {
     @ObservationIgnored weak var original: Chat?
     /// The chat has been shown, so its CLI was started once (`startOnce`).
     @ObservationIgnored private var shown = false
+    @ObservationIgnored private let compactMemory: AutoCompactMemory
+    /// The user's turn may end in an auto-compact: set as it starts, cleared once a compaction
+    /// starts or Kore asks for one. So a failed compaction, or one that leaves usage past the
+    /// point, waits for the user's next turn.
+    @ObservationIgnored private var autoCompactDue = false
+    /// The context card's presence: the wheel and the card share it.
+    let contextCard = ContextCardPresence()
 
     /// `fork` makes this chat a fork of `session` that its CLI creates; it has no session of its
     /// own until then. `forkedFrom` names the original chat.
     init(
         provider: ProviderDescriptor, folder: URL, resume session: SessionSummary? = nil, fork: ForkPoint? = nil,
-        forkedFrom: String? = nil, modeMemory: ModeMemory = .shared
+        forkedFrom: String? = nil, modeMemory: ModeMemory = .shared, compactMemory: AutoCompactMemory = .shared
     ) {
         self.provider = provider
         self.folder = folder
@@ -63,6 +70,8 @@ package final class Chat: Identifiable {
         self.forkedFrom = forkedFrom
         awaitingHistory = session != nil
         controls = ControlsStore(provider: provider, memory: modeMemory)
+        self.compactMemory = compactMemory
+        context.autoCompactAt = compactMemory.point(for: provider)
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
         transcript.providerName = provider.name
@@ -109,6 +118,7 @@ package final class Chat: Identifiable {
         restoreQueued(event)
         status.apply(event)
         context.apply(event)
+        autoCompactIfDue(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
         StorylineSeams.events?(self, event)
@@ -260,11 +270,13 @@ package final class Chat: Identifiable {
     var canCompact: Bool { status.sessionId != nil && !status.isRunning && !context.compacting }
 
     /// `instructions`: what the summary should keep (`/compact <instructions>`); empty for none.
-    /// The transcript's live row shows from here, before the CLI says it started.
-    func compact(instructions: String = "") {
+    /// The transcript's live row shows from here, before the CLI says it started. `point`: Kore
+    /// compacts by itself, at the chat's auto-compact point.
+    func compact(instructions: String = "", at point: Int? = nil) {
         guard canCompact else { return }
+        autoCompactDue = false
         context.begin()
-        transcript.compacting(true)
+        transcript.compacting(true, at: point)
         let backend = connect()
         Task {
             do {
@@ -273,6 +285,33 @@ package final class Chat: Identifiable {
             } catch {
                 dispatch(.compactionFailed(Self.reason(error)))
             }
+        }
+    }
+
+    /// The card's auto-compact point: this chat's, and the provider's for chats opened later.
+    func setAutoCompact(_ point: Int?) {
+        guard context.autoCompactAt != point else { return }
+        context.autoCompactAt = point
+        compactMemory.remember(point, for: provider)
+    }
+
+    /// Auto-compact: Kore compacts between turns, when the user's turn ends at or past the
+    /// chat's point, the same for both CLIs (their own auto-compact stays on, for a turn that
+    /// overruns). The turn's last usage report may come just after it ends. A message queued
+    /// meanwhile goes first, and its turn's end looks again.
+    private func autoCompactIfDue(_ event: ChatEvent) {
+        switch event {
+        case .turnStarted(_, let origin, _):
+            // A compaction's own turn (Kore's, as both CLIs run one) isn't the user's.
+            if origin == .user && !context.compacting { autoCompactDue = true }
+        case .compactionStarted, .compacted, .exited:
+            autoCompactDue = false
+        case .turnFinished, .contextUsage:
+            guard autoCompactDue, context.pastPoint, canCompact, waiting.isEmpty, let point = context.autoCompactAt
+            else { return }
+            compact(at: point)
+        default:
+            break
         }
     }
 
