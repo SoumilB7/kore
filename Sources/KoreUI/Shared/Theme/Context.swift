@@ -77,9 +77,9 @@ extension Size {
     static let usageBarMin: CGFloat = 48
     /// The least height the popup keeps however little room the window has above the composer.
     static let usageMinRoom: CGFloat = 72
-    /// A full reset's row, as tall as the ↗.
-    static let usageResetRow: CGFloat = 22
+    /// A full reset's row: its small "Use reset" button and a little room around it.
+    static let usageResetRow: CGFloat = 26
     /// The full resets' list at its tallest before it scrolls: four and a half rows, so the half
     /// row shows there's more.
-    static let usageResetsMax: CGFloat = 99
+    static let usageResetsMax: CGFloat = 117
 }

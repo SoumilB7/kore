@@ -9,7 +9,7 @@ import KoreUI
 /// and the extras line. Esc closes it with the composer still focused; reopened from a typed
 /// "/lim" mid-text, typing closes it and the key lands in the field; a click outside closes it
 /// too, and so does a paste that reaches the draft without a key. With Codex, its count of full
-/// resets unfolds one row each, and a row's "Use" uses that one after asking; Codex's count
+/// resets unfolds one row each, and a row's "Use reset" uses that one after asking; Codex's count
 /// alone is one row where Codex picks, and a long list scrolls.
 final class UsagePopup: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
@@ -186,6 +186,7 @@ final class UsagePopup: ChatStoryline {
             let reset = Locator.id(StoryID.Composer.usage.part(.reset))
             let (soon, late) = (StoryID.Composer.usageReset(Self.soonest), StoryID.Composer.usageReset(Self.later))
             let resets = { (story: StoryContext) in try story.scriptedBackend().log.filter { if case .useReset = $0 { true } else { false } } }
+            let spot = KeptFrame()
             steps += [
                 ExpectElement(reset),
                 ExpectElement(.id(soon), .absent),
@@ -207,7 +208,7 @@ final class UsagePopup: ChatStoryline {
                 Key(.escape),
                 ExpectElement(.id(soon), .absent),
                 ExpectElement(popup),
-                // "Use" on the second row asks in that row; a "Yes" as quick as a double click's
+                // "Use reset" on the second row asks in that row; a "Yes" as quick as a double click's
                 // second half does nothing, and Esc or "No, go back" take the question back.
                 Click(reset),
                 WaitForElement(.id(late.part(.use))),
@@ -223,9 +224,20 @@ final class UsagePopup: ChatStoryline {
                 Key(.escape),
                 WaitForElement(.id(late.part(.use))),
                 ExpectElement(.id(soon)),
-                Click(.id(late.part(.use))),
+                // "Use reset" pressed twice over: the second lands on "No, go back", which sits
+                // where "Use reset" was, "Yes" clear of it; nothing is used.
+                Expect("Use reset's place noted") { _ in
+                    spot.frame = Self.frame(late.part(.use))
+                    return spot.frame != nil
+                },
+                Press(.id(late.part(.use))),
                 WaitForElement(.id(late.part(.cancel))),
-                Click(.id(late.part(.cancel))),
+                Expect("No, go back where Use reset was, Yes clear of it") { _ in
+                    guard let use = spot.frame, let no = Self.frame(late.part(.cancel)), let yes = Self.frame(late.part(.allow))
+                    else { return false }
+                    return no.contains(CGPoint(x: use.midX, y: use.midY)) && yes.maxX <= use.minX
+                },
+                Press(.id(late.part(.cancel))),
                 WaitForElement(.id(late.part(.use))),
                 ExpectElement(.id(late.part(.allow)), .absent),
                 Expect("nothing used yet") { try resets($0).isEmpty },
@@ -386,6 +398,11 @@ final class UsagePopup: ChatStoryline {
             WaitForFocus(.id(StoryID.Composer.field)),
         ]
     }
+}
+
+/// Where an element was, kept from one step for a later one.
+@MainActor private final class KeptFrame {
+    var frame: CGRect?
 }
 
 /// Waits out the popup's fades (`Motion.fade`) and a bar's move, so a snapshot shows where they end.

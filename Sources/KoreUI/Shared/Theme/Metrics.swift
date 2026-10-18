@@ -92,6 +92,8 @@ enum Size {
     static let tabDragStart: CGFloat = 4
     static let iconButton: CGFloat = 28
     static let iconButtonSmall: CGFloat = 26
+    /// `SubtleButtonStyle(small:)`: a capsule button inside a row.
+    static let smallButton: CGFloat = 20
     static let closeGlyph: CGFloat = 18
     static let slashGlyph: CGFloat = 16
     static let slashStroke: CGFloat = 1.2

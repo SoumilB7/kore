@@ -32,8 +32,12 @@ enum Theme {
     static let planCardLine = Rung.plan.color.opacity(0.45)
     /// Rename field, drop-zone dash.
     static let accentLine = accent.opacity(0.6)
-    /// The composer's command chip.
+    /// The composer's command chip; a small accent button at rest.
     static let commandFill = accent.opacity(0.14)
+    /// A small accent button under the pointer.
+    static let accentFillHover = accent.opacity(0.24)
+    /// A small button under the pointer: a step above `surfaceHover`.
+    static let surfaceRaised = Color(hex: 0x263036)
     /// Finished tool dot.
     static let toolDone = text.opacity(0.7)
     /// Opacity for a secondary line under an option.

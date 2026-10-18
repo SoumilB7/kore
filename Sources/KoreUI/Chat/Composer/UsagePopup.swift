@@ -48,7 +48,7 @@ final class UsageState {
     /// only kept for next time.
     @ObservationIgnored private var serial = 0
     /// When a row last asked (system uptime): a "Yes" within a double-click of it is the
-    /// "Use" click's second half, and is ignored.
+    /// "Use reset" click's second half, and is ignored.
     @ObservationIgnored private var askedAt: TimeInterval = 0
     @ObservationIgnored private var patienceTimer: Task<Void, Never>?
     @ObservationIgnored private var provider = ""
@@ -116,7 +116,7 @@ final class UsageState {
         return true
     }
 
-    /// A row's "Use": that row asks first, and any other row's question is dropped.
+    /// A row's "Use reset": that row asks first, and any other row's question is dropped.
     func askReset(_ id: String?) {
         guard !resetsBusy else { return }
         cancelReset()
@@ -131,7 +131,7 @@ final class UsageState {
     /// Whether "Yes" would go: a double-click's time has passed since the row asked.
     var confirmable: Bool { ProcessInfo.processInfo.systemUptime - askedAt >= NSEvent.doubleClickInterval }
 
-    /// A reset is being sent, or the limits read again after one: no other "Use" goes.
+    /// A reset is being sent, or the limits read again after one: no other "Use reset" goes.
     var resetsBusy: Bool { rereading || resetSteps.values.contains(.using) }
 
     /// Confirmed: uses the asking row's reset (Codex picks for a count alone), then reads the
@@ -633,14 +633,12 @@ struct UsagePopup: View {
 }
 
 /// A text button in the caption's line: `tint` at rest, `hover` under the pointer. With
-/// `unfolds`, a ⌄ after it (tertiary at rest) turned over while what it unfolds is open; `tall`,
-/// it takes clicks over its row's height and a little before the word.
+/// `unfolds`, a ⌄ after it (tertiary at rest) turned over while what it unfolds is open.
 private struct CaptionButton: View {
     let title: String
     let tint: Color
     let hover: Color
     var unfolds: Bool?
-    var tall = false
     let action: () -> Void
     @StateObject private var hovered = Local(false)
     @Environment(\.isEnabled) private var isEnabled
@@ -660,8 +658,6 @@ private struct CaptionButton: View {
                 }
             }
             .foregroundStyle(isEnabled ? (lit ? hover : tint) : Theme.tertiary)
-            .padding(.leading, tall ? Space.sm : 0)
-            .frame(maxHeight: tall ? .infinity : nil)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -669,15 +665,16 @@ private struct CaptionButton: View {
     }
 }
 
-/// One full reset: its title, when it expires (the exact time on hover) and a quiet "Use"; "Use"
-/// turns the row into the question, with "Yes" at its leading end so a double click's second
-/// half lands on nothing; then a spinner, then what came of it, in place until the popup closes.
+/// One full reset: its title, when it expires (the exact time on hover) and a small "Use reset"
+/// button; that turns the row into the question, "No, go back" where "Use reset" was and "Yes,
+/// use reset" before it, so a double click's second half goes back; then a spinner, then what
+/// came of it, in place until the popup closes.
 private struct ResetRowView: View {
     let row: ResetRow
     let step: UsageState.ResetStep?
     /// The count, for a row that stands for it.
     let available: Int
-    /// Another reset is being sent or read after: "Use" is off.
+    /// Another reset is being sent or read after: "Use reset" is off.
     let busy: Bool
     let now: Date
     let state: UsageState
@@ -688,12 +685,14 @@ private struct ResetRowView: View {
         HStack(spacing: step == .asking ? Space.md : Space.lg) {
             switch step {
             case .asking:
-                Text("Use this reset?").foregroundStyle(Theme.text).lineLimit(1)
-                CaptionButton(title: "Yes, use reset", tint: Theme.accent, hover: Theme.accent) { state.useReset() }
-                    .storyID(id.part(.allow))
-                CaptionButton(title: "No, go back", tint: Theme.secondary, hover: Theme.text) { state.cancelReset() }
-                    .storyID(id.part(.cancel))
+                Text("Use this reset?").foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
+                Button("Yes, use reset") { state.useReset() }
+                    .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                    .storyID(id.part(.allow))
+                Button("No, go back") { state.cancelReset() }
+                    .buttonStyle(SubtleButtonStyle(small: true))
+                    .storyID(id.part(.cancel))
             case .using:
                 title(Theme.text)
                 sending
@@ -738,7 +737,7 @@ private struct ResetRowView: View {
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .help(step == nil ? row.credit.map { UsageText.expiresAt($0.expiresAt, now: now) } ?? "" : "")
-        // One element to VoiceOver, its "Use" a button on it.
+        // One element to VoiceOver, its "Use reset" a button on it.
         .accessibilityElement(children: .combine)
         .storyID(id)
     }
@@ -766,9 +765,10 @@ private struct ResetRowView: View {
         Text(words).foregroundStyle(color).lineLimit(1).truncationMode(.tail).help(words)
     }
 
-    /// Never truncated; it takes the row's height and a little before the word.
+    /// Never truncated, at the row's trailing edge.
     private func use(_ id: StoryID) -> some View {
-        CaptionButton(title: "Use", tint: Theme.secondary, hover: Theme.accent, tall: true) { state.askReset(row.id) }
+        Button("Use reset") { state.askReset(row.id) }
+            .buttonStyle(SubtleButtonStyle(small: true))
             .disabled(busy)
             .accessibilityLabel("Use \(row.title.lowercased()), \(expiry.prefix(1).lowercased() + expiry.dropFirst())")
             .storyID(id.part(.use))
