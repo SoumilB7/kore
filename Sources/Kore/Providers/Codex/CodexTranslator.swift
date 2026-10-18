@@ -4,7 +4,6 @@ import KoreCore
 /// Turns Codex app-server notifications into `ChatEvent`s. A turn is a list of items, each
 /// started → deltas → completed; sub-agents are child threads on the same connection, mapped
 /// with `agent: .sub(threadId)`. `thread/resume` turns replay through the same item mapping.
-@MainActor
 final class CodexTranslator {
     let files: TurnFiles
     private let folder: URL
@@ -388,6 +387,47 @@ final class CodexTranslator {
         planKnown = true
         planMode = on
         out.append(.planModeChanged(PlanModeChange(on: on, source: first ? .session : source, at: date)))
+    }
+
+    // MARK: - Replay off the main thread
+
+    /// What a replay leaves for the live session: the mode and plan toggle, and its agents.
+    struct Carried: Sendable {
+        var mode: String?
+        var planMode: Bool
+        var planKnown: Bool
+        var spawned: Set<String>
+        var finished: Set<String>
+        var lastText: [String: String]
+    }
+
+    struct Replayed: Sendable {
+        let events: [ChatEvent]
+        let carried: Carried
+    }
+
+    /// Replays `thread/resume` turns on a translator of its own, off the main thread.
+    static func replayed(_ turns: [JSONValue], settings: [String: CodexTurnSettings], folder: URL) async -> Replayed {
+        await Task.detached(priority: .userInitiated) {
+            let translator = CodexTranslator(folder: folder)
+            let events = translator.replay(turns, settings: settings)
+            return Replayed(
+                events: events,
+                carried: Carried(
+                    mode: translator.mode, planMode: translator.planMode, planKnown: translator.planKnown,
+                    spawned: translator.spawned, finished: translator.finished, lastText: translator.lastText))
+        }.value
+    }
+
+    func adopt(_ replayed: Carried) {
+        if replayed.planKnown {
+            planMode = replayed.planMode
+            planKnown = true
+        }
+        mode = replayed.mode ?? mode
+        spawned.formUnion(replayed.spawned)
+        finished.formUnion(replayed.finished)
+        lastText.merge(replayed.lastText) { live, _ in live }
     }
 
     // MARK: - Replay

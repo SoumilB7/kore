@@ -3,7 +3,6 @@ import KoreCore
 
 /// Turns Claude's stream-json into `ChatEvent`s. Transcripts share the shape, so a resumed
 /// session's past goes through the same mapping (`replay`).
-@MainActor
 final class ClaudeTranslator {
     /// Work that needs the disk or time; the backend runs it and reports back.
     enum Followup {
@@ -504,20 +503,71 @@ final class ClaudeTranslator {
         out.append(.modeChanged(ModeChange(mode: new, previous: previous, source: previous == nil ? .session : source, at: date)))
     }
 
+    // MARK: - Replay off the main thread
+
+    /// What a replay leaves for the live session: the mode, and the agents it may still hear
+    /// about (a background agent finishing later) or open (their transcripts).
+    struct Carried: Sendable {
+        var mode: String?
+        var toolAgent: [String: AgentID]
+        var agentInputs: [String: JSONValue]
+        var taskTool: [String: String]
+        var spawned: Set<String>
+        var finished: [String: Bool]
+        var agentFiles: [String: String]
+    }
+
+    struct Replayed: Sendable {
+        let events: [ChatEvent]
+        let carried: Carried
+    }
+
+    /// Replays a transcript on a translator of its own, off the main thread: parsing a long
+    /// history never blocks the UI. The live translator then `adopt`s what it leaves.
+    static func replayed(_ messages: [JSONValue], folder: URL, sessionId: String?) async -> Replayed {
+        await Task.detached(priority: .userInitiated) {
+            let translator = ClaudeTranslator(folder: folder, sessionId: sessionId)
+            let events = translator.replay(messages)
+            return Replayed(events: events, carried: translator.carried)
+        }.value
+    }
+
+    /// A sub-agent's transcript as events, off the main thread.
+    static func agentHistory(_ entries: [JSONValue], agent id: String, folder: URL) async -> [ChatEvent] {
+        await Task.detached(priority: .userInitiated) {
+            ClaudeTranslator(folder: folder, sessionId: nil).agentEntries(entries, agent: id, skippingPrompt: true, live: false)
+        }.value
+    }
+
+    private var carried: Carried {
+        Carried(
+            mode: mode, toolAgent: toolAgent, agentInputs: agentInputs, taskTool: taskTool, spawned: spawned,
+            finished: finished, agentFiles: agentFiles)
+    }
+
+    /// Takes on a replay's state. `history` (an older page, prepended): only where its agents'
+    /// transcripts are; the live mode and agents stay.
+    func adopt(_ replayed: Carried, history: Bool = false) {
+        agentFiles.merge(replayed.agentFiles) { live, _ in live }
+        guard !history else { return }
+        mode = replayed.mode ?? mode
+        toolAgent.merge(replayed.toolAgent) { live, _ in live }
+        agentInputs.merge(replayed.agentInputs) { live, _ in live }
+        taskTool.merge(replayed.taskTool) { live, _ in live }
+        spawned.formUnion(replayed.spawned)
+        finished.merge(replayed.finished) { live, _ in live }
+    }
+
     // MARK: - Replay
 
     /// A transcript (`ClaudeHistory.messages`) as events: turns open at each prompt (or peer
     /// message, cron firing, finished agent) and close before the next one, timed from the
     /// entries' timestamps.
-    /// `earlier`: an older page, prepended. Its modes are history; the chat's current one stays.
-    func replay(_ messages: [JSONValue], earlier: Bool = false) -> [ChatEvent] {
+    func replay(_ messages: [JSONValue]) -> [ChatEvent] {
         replaying = true
-        let current = mode
-        if earlier { mode = nil }
         defer {
             replaying = false
             modeCalls = [:]
-            if earlier { mode = current }
         }
         // Leaving plan mode isn't recorded with its target; the next prompt's mode is it.
         var nextPromptMode = [String?](repeating: nil, count: messages.count)
@@ -612,7 +662,9 @@ final class ClaudeTranslator {
         }
     }
 
-    private static let iso: ISO8601DateFormatter = {
+    /// ISO8601DateFormatter is thread-safe once configured (Apple's docs), so replays off the
+    /// main thread share it.
+    nonisolated(unsafe) private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f

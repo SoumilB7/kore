@@ -22,12 +22,26 @@ final class ClaudeBackend: ChatBackend {
     private var earlierFrom: String?
     /// A fork's new session got its "(fork)" title.
     private var forkNamed = false
+    /// The source session's transcript, indexed once and kept: later pages read only their lines.
+    private var transcript: (id: String, reader: ClaudeTranscript)?
 
     var sessionId: String? { translator.sessionId }
 
     /// The session whose transcript holds the history: a fork reads the one it was made from
     /// until its own exists.
     private var source: String? { sessionId ?? options.fork?.from }
+
+    /// History pages for `id`, read off the main thread.
+    private func page(_ id: String, before: String? = nil, userTurns: Int? = nil) async -> ClaudeHistory.Page {
+        let reader: ClaudeTranscript
+        if let transcript, transcript.id == id {
+            reader = transcript.reader
+        } else {
+            reader = ClaudeTranscript(sessionId: id, in: options.folder)
+            transcript = (id, reader)
+        }
+        return await Task.detached(priority: .userInitiated) { reader.page(before: before, userTurns: userTurns) }.value
+    }
 
     init(_ options: BackendOptions) {
         self.options = options
@@ -54,13 +68,15 @@ final class ClaudeBackend: ChatBackend {
         // A fork not yet made: its history is the original's up to the fork point, and the CLI
         // makes the new session (`--fork-session`) on the first message.
         let fork = sessionId == nil ? options.fork : nil
+        // Only a first launch reads history: a relaunch (the CLI exited, the next send starts it
+        // again) shows what's already there.
         let past: Task<ClaudeHistory.Page, Never>? =
             if !replayPending {
                 nil
             } else if let history = fork?.history {
                 Task { history }
             } else {
-                source.map { id in Task.detached { ClaudeHistory.page(sessionId: id, in: folder, before: fork?.at) } }
+                source.map { id in Task { await page(id, before: fork?.at) } }
             }
         // Only needed once: the transcript holds it from here.
         options.fork?.history = nil
@@ -72,9 +88,12 @@ final class ClaudeBackend: ChatBackend {
         let starting = Task { try await ClaudeSession.start(launch) }
         if let past {
             replayPending = false
-            let page = await past.value
-            earlierFrom = page.earlier
-            yield(.replayed(translator.replay(page.messages)))
+            let first = await past.value
+            earlierFrom = first.earlier
+            // Parsed into events off the main thread, on a translator of its own.
+            let replayed = await ClaudeTranslator.replayed(first.messages, folder: folder, sessionId: translator.sessionId)
+            translator.adopt(replayed.carried)
+            yield(.replayed(replayed.events))
             yield(.earlierHistory(earlierFrom != nil))
         }
         let session = try await starting.value
@@ -198,7 +217,8 @@ final class ClaudeBackend: ChatBackend {
         let entries = await Task.detached {
             ClaudeHistory.subagentFile(toolUseId: id, sessionId: session, in: folder).map { ClaudeHistory.entries(in: $0).entries }
         }.value
-        return entries.map { translator.agentEntries($0, agent: id, skippingPrompt: true, live: false) } ?? []
+        guard let entries else { return [] }
+        return await ClaudeTranslator.agentHistory(entries, agent: id, folder: folder)
     }
 
     /// Reads a running background agent's transcript as it grows, until the agent finishes.
@@ -234,27 +254,28 @@ final class ClaudeBackend: ChatBackend {
     /// (`--fork-session --resume-session-at` the message before it, as the extension does).
     func fork(message id: String?, text: String) async throws -> ForkStart {
         guard let source else { return .fresh }
-        let folder = options.folder
         // A replayed message is found by its id (also in an earlier page); one sent in this run,
         // by its text from the end of the current history.
-        let page = await Task.detached { ClaudeHistory.page(sessionId: source, in: folder, before: id) }.value
-        let messages = page.messages
+        let found = await page(source, before: id)
+        let messages = found.messages
         let target = id.flatMap { id in messages.lastIndex { $0["uuid"]?.string == id } }
             ?? messages.lastIndex { $0["type"]?.string == "user" && ClaudeTranslator.promptText($0["message"]?["content"]) == text }
         guard let target else { throw ForkError.notFound }
         guard let before = messages[..<target].lastIndex(where: { !ClaudeHistory.isBoundary($0) }),
             let at = messages[before]["uuid"]?.string
         else { return .fresh }
-        let history = ClaudeHistory.Page(messages: Array(messages[...before]), earlier: page.earlier)
+        let history = ClaudeHistory.Page(messages: Array(messages[...before]), earlier: found.earlier)
         return .pending(ForkPoint(from: source, at: at, history: history))
     }
 
     func earlier() async -> (events: [ChatEvent], more: Bool)? {
         guard let from = earlierFrom, let source else { return nil }
-        let folder = options.folder
-        let page = await Task.detached { ClaudeHistory.page(sessionId: source, in: folder, before: from, userTurns: 10) }.value
-        earlierFrom = page.earlier
-        return (translator.replay(page.messages, earlier: true), page.earlier != nil)
+        let older = await page(source, before: from, userTurns: 10)
+        earlierFrom = older.earlier
+        // An older page is history only: it starts from no mode and leaves the live one alone.
+        let replayed = await ClaudeTranslator.replayed(older.messages, folder: options.folder, sessionId: source)
+        translator.adopt(replayed.carried, history: true)
+        return (replayed.events, older.earlier != nil)
     }
 
     // MARK: - Actions

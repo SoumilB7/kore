@@ -85,9 +85,11 @@ enum ForkError: LocalizedError {
 /// the CLI reported: its own turn diff when it has one (Codex), else the turn's tool edits
 /// merged per file. Two chats running in one folder at once see each other's edits in their
 /// git diffs.
-@MainActor
-final class TurnFiles {
+/// Not tied to an actor, so a translator can replay history off the main thread; the lock
+/// covers the backend and the translator touching it from different threads.
+final class TurnFiles: @unchecked Sendable {
     private let folder: URL
+    private let lock = NSLock()
     private var snapshot: Task<GitSnapshot?, Never>?
     private var reported: [FileChange] = []
     private var turnDiff: [FileChange]?
@@ -97,30 +99,37 @@ final class TurnFiles {
     /// Starts the turn's snapshot (git runs off the main actor). A turn already begun keeps its
     /// snapshot: Codex's begins at send, before its `turn/started`.
     func begin() {
-        guard snapshot == nil else { return }
-        let folder = folder
-        snapshot = Task.detached { await GitSnapshot.take(folder) }
-        reported = []
-        turnDiff = nil
+        lock.withLock {
+            guard snapshot == nil else { return }
+            let folder = folder
+            snapshot = Task.detached { await GitSnapshot.take(folder) }
+            reported = []
+            turnDiff = nil
+        }
     }
 
     /// Waits for the start snapshot, so the CLI's first edit can't land before it.
-    func ready() async { _ = await snapshot?.value }
+    func ready() async {
+        let snapshot = lock.withLock { self.snapshot }
+        _ = await snapshot?.value
+    }
 
-    func record(_ changes: [FileChange]) { reported += changes }
+    func record(_ changes: [FileChange]) { lock.withLock { reported += changes } }
 
     /// The CLI's diff of the whole turn so far (replaces any earlier one).
-    func setTurnDiff(_ changes: [FileChange]) { turnDiff = changes }
+    func setTurnDiff(_ changes: [FileChange]) { lock.withLock { turnDiff = changes } }
 
     /// Ends the turn. The list is computed after (a git diff takes a moment); the next turn
     /// can begin meanwhile.
     func finish() -> Task<[FileChange], Never> {
         let folder = folder
-        let start = snapshot
-        let reported = turnDiff ?? FileChange.mergedByPath(reported)
-        snapshot = nil
-        self.reported = []
-        turnDiff = nil
+        let (start, reported) = lock.withLock {
+            let taken = (snapshot, turnDiff ?? FileChange.mergedByPath(self.reported))
+            snapshot = nil
+            self.reported = []
+            turnDiff = nil
+            return taken
+        }
         return Task {
             if let begin = await start?.value, let end = await GitSnapshot.take(folder) {
                 return await begin.changes(to: end)

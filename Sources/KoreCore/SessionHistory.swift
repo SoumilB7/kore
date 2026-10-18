@@ -69,36 +69,15 @@ public enum ClaudeHistory {
     /// misses some. Those are added back: entries of the same assistant messages, then the
     /// results of every included tool call, all in file order.
     public static func page(sessionId: String, in folder: URL, before: String? = nil, userTurns: Int? = nil) -> Page {
-        let file = projectDirectory(for: folder).appendingPathComponent("\(sessionId).jsonl")
-        guard let data = try? Data(contentsOf: file, options: .mappedIfSafe) else { return Page(messages: [], earlier: nil) }
-        // Two passes keep a long session cheap: every entry is read for its links only (no text,
-        // no tool output), and only the page's entries are parsed whole. Only entries with a
-        // uuid (user, assistant, attachment, system) can be on the branch; the rest, such as
-        // api-request bodies (a third of a long session's bytes), are skipped unread. Only the
-        // key is matched, so JSON written with spaces after its colons is read too.
-        var byId: [String: Link] = [:]
-        var lines: [String: Data] = [:]
-        var order: [String] = []
-        var leaf: String?
-        let decoder = JSONDecoder()
-        for line in data.jsonLines(containing: "\"uuid\"") {
-            guard let link = try? decoder.decode(Link.self, from: line) else { continue }
-            let uuid = link.uuid
-            // The CLI writes history again (same uuids, other metadata) when a session is resumed
-            // or forked: the first copy keeps its place. A repeat would also abort building
-            // `index` below (`Dictionary(uniqueKeysWithValues:)`).
-            guard byId[uuid] == nil else { continue }
-            byId[uuid] = link
-            lines[uuid] = line
-            if link.isBoundary {
-                order.append(uuid)
-                continue
-            }
-            guard (link.type == "user" || link.type == "assistant") && link.isSidechain != true else { continue }
-            order.append(uuid)
-            leaf = uuid
-        }
-        let index = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        ClaudeTranscript(sessionId: sessionId, in: folder).page(before: before, userTurns: userTurns)
+    }
+
+    /// The page algorithm over an index of links (`ClaudeTranscript`); `load` reads the chosen
+    /// entries' lines.
+    static func page(
+        byId: [String: Link], order: [String], index: [String: Int], leaf: String?, before: String?, userTurns: Int?,
+        load: ([String]) -> [String: Data]
+    ) -> Page {
         /// Where history goes on before a compaction: its logical parent, or, when that entry
         /// isn't in the file (the compaction kept it under a new id), the last message before
         /// the boundary.
@@ -142,7 +121,9 @@ public enum ClaudeHistory {
         for id in window where byId[id]?.type == "user" {
             if byId[id]?.toolResults.contains(where: toolIds.contains) == true { included.insert(id) }
         }
-        let messages = window.filter(included.contains).compactMap { lines[$0].flatMap { try? JSONValue.parse($0) } }.filter { entry in
+        let ids = window.filter(included.contains)
+        let lines = load(ids)
+        let messages = ids.compactMap { lines[$0].flatMap { try? JSONValue.parse($0) } }.filter { entry in
             // Peer messages, cron firings and finished-agent notices are meta entries, but they
             // start turns of the conversation.
             isBoundary(entry) || entry["isMeta"]?.bool != true || PeerMessage(entry: entry) != nil

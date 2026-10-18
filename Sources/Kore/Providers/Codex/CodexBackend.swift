@@ -51,9 +51,12 @@ final class CodexBackend: ChatBackend {
         }
         if replayPending {
             replayPending = false
+            // Read and parsed into events off the main thread, on a translator of its own.
             let rollout = await session.rolloutPath
             let settings = await Task.detached { rollout.map { CodexHistory.turnSettings(rollout: $0) } ?? [:] }.value
-            yield(.replayed(translator.replay(await session.history, settings: settings)))
+            let replayed = await CodexTranslator.replayed(await session.history, settings: settings, folder: options.folder)
+            translator.adopt(replayed.carried)
+            yield(.replayed(replayed.events))
         }
         self.session = session
         pump = Task {
