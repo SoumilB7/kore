@@ -148,6 +148,24 @@ struct BackgroundAgentsTests {
         nodes.map { String(repeating: ".", count: $0.depth) + $0.id }
     }
 
+    /// One its own files say ended, with no notification in the transcript (a fork's copy of
+    /// the call, its notification in the session it came from): it ends with the time its
+    /// transcript spans, not the moment the chat was read back.
+    @Test func oneEndedByItsFilesKeepsItsTime() {
+        let translator = translator()
+        let script = Script()
+        script.on(.replayed(translator.replay(spawned)))
+        translator.agentEnded("toolu_bgA", .completed, duration: .seconds(4175))
+        translator.agentEnded("toolu_bgB", .completed)
+        translator.take().events.forEach(script.store.apply)
+        _ = script.sections
+        #expect(script.store.agent("toolu_bgA")?.duration == 4175)
+        #expect(script.store.agent("toolu_bgA")?.tokens == nil)
+        #expect(names(script.store.agentTree().done) == ["toolu_bgA", "toolu_bgB"])
+    }
+
+    // MARK: Codex
+
     /// Codex marks no child thread as run in the background: one that finished, as its rollout
     /// says, keeps its place in the tree with its totals, and the done group stays empty.
     @Test func aFinishedCodexChildStaysInTheTree() {

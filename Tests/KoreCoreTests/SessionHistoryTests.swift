@@ -133,6 +133,21 @@ struct SessionHistoryTests {
         #expect(interrupted.outcome(quiet: 900) == .stopped)
     }
 
+    /// Its time is from its first line to the last that has one, as its notification's would be.
+    @Test func anAgentsTranscriptSpansItsTime() throws {
+        var first = user("x1", nil, "Find why uploads fail. " + String(repeating: "More. ", count: 20_000))
+        first["timestamp"] = "2026-10-21T12:46:10.460Z"
+        var last = answer("x2", "x1", "Found it.")
+        last["timestamp"] = "2026-10-21T14:53:50.997Z"
+        let untimed: [String: Any] = ["type": "api-request"]
+        let file = folder.appendingPathComponent("agent-span.jsonl")
+        let text = try [first, last, untimed].map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }
+        try (text.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let span = try #require(ClaudeHistory.Subagent.span(file))
+        #expect(abs(span.end.timeIntervalSince(span.start) - 7660.537) < 0.001)
+        #expect(ClaudeHistory.Subagent.span(try agent("u", session: "s5", tool: "t5")) == nil)
+    }
+
     /// The chat's own folder first; a fork's copied calls ran in the session it was made from.
     @Test func agentsAreFoundInTheirSessionOrTheOneAForkCameFrom() throws {
         let own = try agent("own", session: "s6", tool: "t1")

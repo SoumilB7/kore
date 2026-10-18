@@ -114,7 +114,9 @@ final class ClaudeBackend: ChatBackend {
             // Looked up after the page shows, so a chat with such agents opens no later.
             let running = await settleUnfinished()
             translator.take().events.forEach(yield)
-            for id in running {
+            for (id, ran) in running {
+                // Its clock goes on from when it began, not from when the chat opened.
+                if let ran { yield(.agentProgress(id: id, AgentProgress(duration: .seconds(ran)))) }
                 yield(.agentResumed(id: id))
                 alone.insert(id)
                 tail(id)
@@ -339,23 +341,28 @@ final class ClaudeBackend: ChatBackend {
 
     /// After a replay: what became of the agents it never saw end, from their own files (see
     /// `ClaudeHistory.Subagent.outcome`). Those marked ended end (their events wait in the
-    /// translator); the background ones still running are returned, to follow.
-    private func settleUnfinished() async -> [String] {
+    /// translator), with the time their transcripts span; the background ones still running are
+    /// returned, to follow, with how long they've run.
+    private func settleUnfinished() async -> [(id: String, ran: TimeInterval?)] {
         let open = translator.unfinishedAgents()
         guard let session = sessionId, !open.isEmpty else { return [] }
         let ids = Set(open.map(\.id))
         let agentIds = translator.agentFiles
         let folder = options.folder
-        let found = await Task.detached(priority: .userInitiated) {
-            ClaudeHistory.subagents(toolUseIds: ids, agentIds: agentIds, sessionId: session, in: folder)
+        let (found, spans) = await Task.detached(priority: .userInitiated) {
+            let found = ClaudeHistory.subagents(toolUseIds: ids, agentIds: agentIds, sessionId: session, in: folder)
+            let spans = found.filter { $0.value.outcome() != .stopped }
+                .compactMapValues { ClaudeHistory.Subagent.span($0.transcript) }
+            return (found, spans)
         }.value
-        var running: [String] = []
+        var running: [(id: String, ran: TimeInterval?)] = []
         for (id, background) in open {
             guard let agent = found[id] else { continue }
             agentTranscripts[id] = agent.transcript
             switch agent.outcome() {
-            case .finished: translator.agentEnded(id, .completed)
-            case .running where background: running.append(id)
+            case .finished:
+                translator.agentEnded(id, .completed, duration: spans[id].map { .seconds($0.end.timeIntervalSince($0.start)) })
+            case .running where background: running.append((id, spans[id].map { Date.now.timeIntervalSince($0.start) }))
             case .running, .stopped: break  // the replay stops it
             }
         }

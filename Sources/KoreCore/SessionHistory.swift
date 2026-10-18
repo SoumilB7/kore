@@ -308,6 +308,46 @@ public enum ClaudeHistory {
                 modified: modified)
         }
 
+        /// When it began and when it last wrote: its transcript's first and last timestamps. One
+        /// its files say ended had no notification to bring its time; this is the same time (the
+        /// notification's `duration_ms` is the span between them). Reads the first line and the
+        /// file's last 64 KB (1 MB when those hold no time).
+        public static func span(_ transcript: URL) -> (start: Date, end: Date)? {
+            guard let handle = try? FileHandle(forReadingFrom: transcript) else { return nil }
+            defer { try? handle.close() }
+            // The first line holds the prompt, which can run long.
+            var head = Data()
+            while head.firstIndex(of: 0x0A) == nil, head.count < 4 << 20,
+                let more = try? handle.read(upToCount: 64 << 10), !more.isEmpty
+            {
+                head += more
+            }
+            guard let start = timestamp(head.jsonLines().first) else { return nil }
+            let size = (try? handle.seekToEnd()) ?? 0
+            // The last 64 KB nearly always hold a whole line with a time; a long tool result at
+            // the end takes up to 1 MB.
+            for tail: UInt64 in [64 << 10, 1 << 20] {
+                let from = size > tail ? size - tail : 0
+                try? handle.seek(toOffset: from)
+                // The read cuts the first line it gets; the last whole line with a time ends it.
+                let lines = ((try? handle.readToEnd()) ?? Data()).jsonLines().dropFirst(from > 0 ? 1 : 0)
+                if let end = lines.reversed().lazy.compactMap(timestamp).first { return (start, max(start, end)) }
+                if from == 0 { break }
+            }
+            return nil
+        }
+
+        private static func timestamp(_ line: Data?) -> Date? {
+            line.flatMap { try? JSONValue.parse($0) }?["timestamp"]?.string.flatMap { iso.date(from: $0) }
+        }
+
+        /// ISO8601DateFormatter is thread-safe once configured.
+        nonisolated(unsafe) private static let iso: ISO8601DateFormatter = {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return f
+        }()
+
         /// Whether the last whole line is a stop marker: only the file's last 4 KB are read.
         static func endsStopped(_ file: URL) -> Bool {
             guard let handle = try? FileHandle(forReadingFrom: file) else { return false }
