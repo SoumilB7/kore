@@ -22,9 +22,9 @@ final class AccountState {
     private(set) var askingSignOut = false
     /// Copy link (or code) was just pressed: it reads "Copied" for a moment.
     private(set) var copied = false
-    /// The ⌄ menu is open for a storyline host: under a host the native menu never pops up (its
-    /// tracking loop would hold the run), and an item is picked by its path.
-    private(set) var hostMenuOpen = false
+    /// The ⌄'s methods are unfolded in the card, and the groups disclosed in them, by title.
+    private(set) var methodsOpen = false
+    private(set) var disclosed: Set<String> = []
     private(set) var editor: Editor?
     /// The platform forms' values that aren't secret, kept for this run of Kore.
     var form = PlatformForm()
@@ -48,7 +48,7 @@ final class AccountState {
         self.provider = provider
         self.folder = folder
         isOpen = true
-        (askingSignOut, copied, hostMenuOpen, editor, formError, filled) = (false, false, false, nil, nil, [])
+        (askingSignOut, copied, methodsOpen, editor, formError, filled) = (false, false, false, nil, nil, [])
         store.dismissOutcome(provider)
         if store.flow(provider)?.step.live != true { Task { await store.refresh(provider) } }
     }
@@ -58,15 +58,15 @@ final class AccountState {
     func close() {
         guard isOpen else { return }
         isOpen = false
-        (askingSignOut, hostMenuOpen, editor, formError, filled) = (false, false, nil, nil, [])
+        (askingSignOut, methodsOpen, editor, formError, filled) = (false, false, nil, nil, [])
         store.dismissOutcome(provider)
     }
 
-    /// Esc: the menu, then the field or form, then the question go first. False when there's
-    /// nothing to step back from, and the popup closes.
+    /// Esc: the methods fold, then the field or form, then the question go first. False when
+    /// there's nothing to step back from, and the popup closes.
     func stepBack() -> Bool {
-        if hostMenuOpen {
-            hostMenuOpen = false
+        if methodsOpen {
+            methodsOpen = false
             return true
         }
         if editor != nil, !saving {
@@ -117,7 +117,7 @@ final class AccountState {
     /// platform opens its field or form, filled in with what's saved.
     func signIn(_ method: SignInMethod? = nil) {
         askingSignOut = false
-        hostMenuOpen = false
+        methodsOpen = false
         guard let method = method ?? store.currentMethod(provider) else { return }
         if method.opensEditor { return openEditor(method) }
         closeEditor()
@@ -198,26 +198,25 @@ final class AccountState {
         }
     }
 
-    /// The ⌄ menu: the methods the CLI's policy lists, in their submenus, the current one checked.
+    /// The ⌄'s methods: those the CLI's policy lists, in their groups, the current one checked.
     var menuItems: [MethodMenuItem] { store.menu(provider) }
 
     /// More than one method to pick from: the ⌄ shows.
     var hasMenu: Bool { store.methods(provider).count > 1 }
 
-    func showHostMenu() { hostMenuOpen = true }
-
-    /// The menu's items as the host sees them while it's open.
-    var hostMenu: [MethodMenuItem]? { hostMenuOpen ? menuItems : nil }
-
-    /// A host's pick from the menu, as a click on the item does: by its path
-    /// ("3rd-party platform/Amazon Bedrock…"), or its title.
-    func pickHostMenu(_ path: String) {
-        guard let leaves = hostMenu.map(MethodMenuItem.paths),
-            let method = (leaves.first { $0.path == path } ?? leaves.first { $0.item.title == path })?.item.method
-        else { return }
-        hostMenuOpen = false
-        signIn(method)
+    /// The ⌄: the methods unfold above the account, every group closed; again, they fold.
+    func toggleMethods() {
+        askingSignOut = false
+        (methodsOpen, disclosed) = (!methodsOpen, [])
     }
+
+    /// A group's row: its methods show under it, or go.
+    func toggleGroup(_ title: String) {
+        if disclosed.contains(title) { disclosed.remove(title) } else { disclosed.insert(title) }
+    }
+
+    /// The methods while they're unfolded.
+    var methodsShown: [MethodMenuItem]? { methodsOpen ? menuItems : nil }
 
     /// The identity signed in now, when there is one.
     var identity: AccountIdentity? {
@@ -287,17 +286,15 @@ struct AccountPopup: View {
                 PlatformFormView(state: state, platform: platform)
                     .transition(.opacity.animation(Motion.fade))
             } else {
-                content.transition(.opacity.animation(Motion.fade))
-            }
-        }
-        // Under a storyline host, the ⌄ menu's items drawn over the card, so a snapshot has them.
-        .overlay(alignment: .topLeading) {
-            if StoryHost.installed, let items = state.hostMenu {
-                // Its bottom a gap above the card's top, its height its own.
-                HostMenu(items: items)
-                    .fixedSize()
-                    .padding(.bottom, Space.xs)
-                    .frame(height: 0, alignment: .bottomLeading)  // lint:allow a zero-height anchor, not a size
+                VStack(alignment: .leading, spacing: 0) {
+                    // The ⌄'s methods, unfolded above the account (model-picker.html, "Account ⌄").
+                    if let items = state.methodsShown {
+                        MethodList(state: state, items: items)
+                        Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
+                    }
+                    content
+                }
+                .transition(.opacity.animation(Motion.fade))
             }
         }
     }
@@ -478,7 +475,7 @@ private struct AccountRow: View {
                         .smallButton()
                         .storyID(id.part(.switch))
                         .tabStop(id.part(.switch)) { state.signIn() }
-                    if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method), press: { state.showHostMenu() }) }
+                    if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method)) }
                 }
                 Button("Sign out") { state.askSignOut() }
                     .smallButton()
@@ -579,7 +576,7 @@ private struct AccountRow: View {
                 .smallButton(prominent: true)
                 .storyID(id.part(.signIn))
                 .tabStop(id.part(.signIn)) { state.signIn() }
-            if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method), press: { state.showHostMenu() }) }
+            if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method)) }
         }
     }
 }
@@ -626,99 +623,78 @@ private struct KeyField: View {
     }
 }
 
-/// The ⌄: a native menu of the CLI's sign-in methods under it, with the CLI's hints as
-/// subtitles and its groups as submenus. Under a storyline host the items are handed over
-/// instead, and drawn over the card so a snapshot shows them.
+/// The ⌄: unfolds the CLI's sign-in methods in the card, and folds them again.
 private struct MethodMenuButton: View {
     let state: AccountState
-    @StateObject private var frame = Held(CGRect.zero)
-    @StateObject private var window = Held<NSWindow?>(nil)
 
     var body: some View {
-        IconButton(symbol: "chevron.down", kind: .mini, font: Glyph.chevron, help: "Sign-in method") { show() }
-            .tabStop(StoryID.Composer.account.part(.method)) { show() }
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
-            .background(WindowReader { window.value = $0 })
-    }
-
-    private func show() {
-        if StoryHost.installed { return state.showHostMenu() }
-        guard let content = window.value?.contentView else { return }
-        let picker = MethodPicker(state: state)
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        for item in state.menuItems { add(item, to: menu, picker: picker) }
-        let box = frame.value
-        let point = NSPoint(x: box.minX, y: content.isFlipped ? box.maxY + Space.xs : content.bounds.height - box.maxY - Space.xs)
-        // Runs until the menu closes; the picker lives as long.
-        menu.popUp(positioning: nil, at: point, in: content)
-        withExtendedLifetime(picker) {}
-    }
-
-    private func add(_ item: MethodMenuItem, to menu: NSMenu, picker: MethodPicker) {
-        if item.separated { menu.addItem(.separator()) }
-        let entry = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
-        entry.subtitle = item.hint
-        if let method = item.method {
-            entry.action = #selector(MethodPicker.pick(_:))
-            entry.target = picker
-            entry.representedObject = method.id
-            entry.state = item.checked ? .on : .off
-        } else {
-            let submenu = NSMenu(title: item.title)
-            submenu.autoenablesItems = false
-            for child in item.children { add(child, to: submenu, picker: picker) }
-            entry.submenu = submenu
-        }
-        menu.addItem(entry)
+        IconButton(
+            symbol: "chevron.down", kind: .mini, font: Glyph.chevron, isOn: state.methodsOpen, help: "Sign-in method"
+        ) { state.toggleMethods() }
+            .tabStop(StoryID.Composer.account.part(.method)) { state.toggleMethods() }
     }
 }
 
-/// The menu's items as a storyline host is handed them, drawn like the menu: a ✓, the title and
-/// its hint, a ▸ on a submenu, whose items follow it, indented.
-private struct HostMenu: View {
+/// The CLI's sign-in methods, in the card: a 36pt row each with the CLI's hint under its title,
+/// the current one checked; a group discloses its methods under it, indented, never a submenu.
+private struct MethodList: View {
+    let state: AccountState
     let items: [MethodMenuItem]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                entry(item, depth: 0)
-                ForEach(Array(item.children.enumerated()), id: \.offset) { _, child in entry(child, depth: 1) }
+                let open = state.disclosed.contains(item.title)
+                let press: @MainActor @Sendable () -> Void = { if let method = item.method { state.signIn(method) } else { state.toggleGroup(item.title) } }
+                MethodRow(item: item, depth: 0, open: open, action: press)
+                    .storyID(StoryID.Composer.accountMethod(item.title))
+                    .tabStop(StoryID.Composer.accountMethod(item.title), action: press)
+                if item.method == nil, open {
+                    ForEach(Array(item.children.enumerated()), id: \.offset) { _, child in
+                        let path = item.title + "/" + child.title
+                        let press: @MainActor @Sendable () -> Void = { if let method = child.method { state.signIn(method) } }
+                        MethodRow(item: child, depth: 1, open: false, action: press)
+                            .storyID(StoryID.Composer.accountMethod(path))
+                            .tabStop(StoryID.Composer.accountMethod(path), action: press)
+                    }
+                }
             }
         }
-        .padding(.vertical, Space.xs)
-        .panel(.panel)
-    }
-
-    @ViewBuilder private func entry(_ item: MethodMenuItem, depth: Int) -> some View {
-        if item.separated { Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.xs) }
-        HStack(spacing: Space.xs) {
-            Text(item.checked && item.method != nil ? "✓" : " ").frame(width: Space.lg)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(item.title).foregroundStyle(Theme.text)
-                if let hint = item.hint { Text(hint).font(TextStyle.caption).foregroundStyle(Theme.secondary) }
-            }
-            Spacer(minLength: Space.xl)
-            if item.method == nil { Text("▸").foregroundStyle(Theme.secondary) }
-        }
-        .font(TextStyle.label)
-        .padding(.leading, depth == 0 ? Space.sm : Space.xxxl)
-        .padding(.trailing, Space.md)
-        .padding(.vertical, Space.xxs)
     }
 }
 
-/// The menu items' target.
-@MainActor
-private final class MethodPicker: NSObject {
-    let state: AccountState
+/// One method, or a group (⌄ open, › closed); the hover fill under the pointer.
+private struct MethodRow: View {
+    let item: MethodMenuItem
+    let depth: Int
+    let open: Bool
+    let action: () -> Void
+    @StateObject private var hovered = Local(false)
 
-    init(state: AccountState) { self.state = state }
-
-    @objc func pick(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? String,
-            let method = AccountStore.shared.methods(state.provider).first(where: { $0.id == id })
-        else { return }
-        state.signIn(method)
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Space.md) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(item.title).font(TextStyle.body).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
+                    if let hint = item.hint {
+                        Text(hint).font(TextStyle.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.tail)
+                    }
+                }
+                Spacer(minLength: Space.md)
+                if item.method == nil {
+                    Image(systemName: open ? "chevron.down" : "chevron.right").font(Glyph.chevron).foregroundStyle(Theme.secondary)
+                } else if item.checked {
+                    Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
+                }
+            }
+            .padding(.leading, Space.lg + CGFloat(depth) * Size.Picker.indent)
+            .padding(.trailing, Space.lg)
+            .frame(maxWidth: .infinity, minHeight: Size.Picker.method, alignment: .leading)
+            .hoverFill(hovered.value, Theme.Row.hover(.surface))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
+        .accessibilityAddTraits(item.checked && item.method != nil ? .isSelected : [])
     }
 }

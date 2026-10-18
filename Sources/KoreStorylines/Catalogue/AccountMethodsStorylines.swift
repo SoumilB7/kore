@@ -3,9 +3,9 @@ import Foundation
 import KoreCore
 import KoreUI
 
-/// Every sign-in method (account-popup.html §7): the ⌄ menu mirrors the CLI's own login (its
-/// labels, order, hints and submenus), and a policy hides what it refuses, the ⌄ going when one
-/// method is left. A key goes into one masked field in the action row, is sent once and the field
+/// Every sign-in method (account-popup.html §7): the ⌄ unfolds the CLI's own login in the card
+/// (its labels, order and hints, its groups disclosing in place), and a policy hides what it
+/// refuses, the ⌄ going when one method is left; Esc folds them. A key goes into one masked field in the action row, is sent once and the field
 /// is cleared; typing never closes the popup. Claude's platforms get Kore's forms, which write
 /// Claude's settings (the run's own file) and keep everything else in it; signed in through
 /// one, the card names the platform, and Sign out asks with No, go back covering Sign out's spot.
@@ -54,15 +54,16 @@ final class AccountMethods: ChatStoryline {
         Expect(what, found: { $0.app.chat?.storyAccountMenu?.joined(separator: " | ") }) { $0.app.chat?.storyAccountMenu == want }
     }
 
-    private static func pick(_ path: String) -> [any Step] {
-        [
-            Press(part(.method)),
-            Expect("the menu open") { $0.app.chat?.storyAccountMenu != nil },
-            Expect("“\(path)” picked") { story in
-                story.app.chat?.storyPickMethod(path)
-                return true
-            },
-        ]
+    /// Unfolds the methods and presses one by its path.
+    static func pick(_ path: String) -> [any Step] {
+        [Press(part(.method)), Expect("the methods unfolded") { $0.app.chat?.storyAccountMenu != nil }] + press(path)
+    }
+
+    /// Presses an unfolded method by its path: its group's row first, which discloses it.
+    static func press(_ path: String) -> [any Step] {
+        let parts = path.split(separator: "/", maxSplits: 1)
+        let group: [any Step] = parts.count == 2 ? [Press(.id(StoryID.Composer.accountMethod(String(parts[0]))))] : []
+        return group + [Press(.id(StoryID.Composer.accountMethod(path)))]
     }
 
     private static func check(_ what: String, _ test: @escaping @MainActor () -> Bool) -> Expect { Expect(what) { _ in test() } }
@@ -112,10 +113,16 @@ final class AccountMethods: ChatStoryline {
                     "Anthropic Console account ▸ · API usage billing", "3rd-party platform ▸",
                 ]
             },
+            // A group discloses its methods in place.
+            Press(.id(StoryID.Composer.accountMethod("Anthropic Console account"))),
+            WaitForElement(.id(StoryID.Composer.accountMethod("Anthropic Console account/Use an API key…"))),
             FadesEnd(),
             Snapshot("methods-menu"),
             Key(.escape),
-            Expect("Esc: the menu gone, the popup still open") { $0.app.chat?.storyAccountMenu == nil && $0.app.chat?.isAccountOpen == true },
+            Expect("Esc: the methods folded, the popup still open") {
+                $0.app.chat?.storyAccountMenu == nil && $0.app.chat?.isAccountOpen == true
+            },
+            ExpectElement(.id(StoryID.Composer.accountMethod("Claude account with SSO")), .absent),
         ]
         // 2 · Policies hide what they refuse; a submenu left with one item comes up a level; one
         // method left and the ⌄ goes.

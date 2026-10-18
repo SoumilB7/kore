@@ -187,11 +187,7 @@ final class AccountPopup: ChatStoryline {
                 if codex { accounts.start[provider] = .deviceCode("K7QM-4XWD") }
                 return true
             },
-            Expect("the second method picked") { story in
-                story.app.chat?.storyPickMethod(second)
-                return true
-            },
-        ]
+        ] + AccountMethods.press(second)
         if codex {
             steps += [
                 lines("the code to enter", ["Enter K7QM-4XWD"]),

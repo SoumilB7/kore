@@ -179,25 +179,23 @@ extension Chat {
     }
     /// Whether "Yes, sign out" would go yet (a double-click's time after Sign out).
     package var storyAccountConfirmable: Bool { account.confirmable }
-    /// The ⌄ menu as it last opened, leaf by leaf in its order: each by its path
-    /// ("3rd-party platform/Amazon Bedrock…"), "✓ " before the current one, "—" for a separator;
-    /// nil while it isn't open.
+    /// The ⌄'s methods while they're unfolded in the card, leaf by leaf in their order, closed
+    /// groups too: each by its path ("3rd-party platform/Amazon Bedrock…"), "✓ " before the
+    /// current one, "—" for the CLI's separator; nil while they're folded.
     package var storyAccountMenu: [String]? {
-        account.hostMenu.map { items in
+        account.methodsShown.map { items in
             MethodMenuItem.paths(items).flatMap { path, item in
                 (item.separated ? ["—"] : []) + [(item.checked ? "✓ " : "") + path]
             }
         }
     }
-    /// The open menu's top level with its hints: "Claude account with subscription · Pro, Max,
+    /// The unfolded methods' top level with their hints: "Claude account with subscription · Pro, Max,
     /// Team, or Enterprise", "Anthropic Console account ▸ · API usage billing".
     package var storyAccountMenuTop: [String]? {
-        account.hostMenu.map { items in
+        account.methodsShown.map { items in
             items.map { item in [item.title + (item.method == nil ? " ▸" : ""), item.hint].compactMap { $0 }.joined(separator: " · ") }
         }
     }
-    /// Picks an item of the open ⌄ menu by its path (or title), as a click on it does.
-    package func storyPickMethod(_ path: String) { account.pickHostMenu(path) }
     /// Whether the ⌄ shows (more than one method to pick).
     package var storyAccountHasMenu: Bool { account.hasMenu }
     /// A form's picker, as a pick from its menu: "credentials" by the choice's case name
