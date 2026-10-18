@@ -22,9 +22,9 @@ struct FileEditorView: View {
                     }
                 }
             }
-            content
+            RendererHost(document: document, workspace: workspace) { content }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if document.loaded, document.isText || document.file.content == .image {
+            if !document.rendering.showsRenderer, document.loaded, document.isText || document.file.content == .image {
                 Rule()
                 StatusRow(document: document, workspace: workspace)
             }
@@ -36,7 +36,6 @@ struct FileEditorView: View {
             }
         }
         .animation(Motion.fade, value: changes.value == nil)
-        .onAppear { document.loadIfNeeded() }
         // An edit keeps a preview tab.
         .onChange(of: document.isDirty) { _, dirty in if dirty { workspace.keep(tab) } }
     }
@@ -107,6 +106,7 @@ private struct PathRow: View {
                     workspace: workspace)
             }
             Spacer(minLength: Space.md)
+            RendererToggle(document: document)
             if let touch = workspace.turnTouches[document.path] {
                 TurnMark(touch: touch) {
                     if let source = touch.sources.last {

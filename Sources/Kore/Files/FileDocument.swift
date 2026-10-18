@@ -34,8 +34,18 @@ final class FileDocument: Identifiable {
 
     /// Lines the last reload from disk changed (UTF-16 ranges), for the editor's flash.
     @ObservationIgnored var reloadedRanges: [NSRange] = []
-    /// Bumped when the text is replaced from disk, so the editor recolours.
+    /// Bumped when the text is replaced from disk, so the editor recolours, and on any other
+    /// change on disk, so a renderer reloads (its text may never have been loaded).
     private(set) var revision = 0
+    /// The disk's stamp as last seen, to tell a real change from an event that changed nothing.
+    @ObservationIgnored private var diskStamp: TextFile.Stamp?
+    /// The renderer for this file, and the tab's raw ⇄ rendered choice.
+    let rendering = FileRendering()
+    /// The tab shows the editor although a renderer matches (rendered comes first).
+    var showsRaw: Bool {
+        get { rendering.showsRaw }
+        set { rendering.showsRaw = newValue }
+    }
 
     @ObservationIgnored let storage = NSTextStorage()
     @ObservationIgnored private var saved = ""
@@ -51,6 +61,7 @@ final class FileDocument: Identifiable {
         let language = Language.of(url)
         self.language = language
         wrap = Self.wraps(language)
+        diskStamp = TextFile.Stamp.of(url)
     }
 
     private static func wraps(_ language: Language) -> Bool {
@@ -136,8 +147,13 @@ final class FileDocument: Identifiable {
     /// Something under this path changed on disk: reload in place when there are no unsaved
     /// edits, else say so. Our own saves don't count.
     func diskChanged() {
-        guard loaded else { return }
         let stamp = TextFile.Stamp.of(url)
+        if stamp != diskStamp {
+            diskStamp = stamp
+            // Editor text reloading in place bumps it itself.
+            if !loaded || !isText || readOnly { revision += 1 }
+        }
+        guard loaded else { return }
         guard let stamp else {
             if !FileManager.default.fileExists(atPath: path) { notice = .deleted }
             return
