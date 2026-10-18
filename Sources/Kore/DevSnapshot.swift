@@ -35,6 +35,7 @@ import KoreCore
 ///   KORE_SEND_AFTER_STOP=<text> send that 3s after either stop
 ///   KORE_SET_MODE=<id>@<s>[;…] switch the chat's mode that many seconds after launch, as the mode
 ///                            menu does (plan-on / plan-off toggle Codex's Plan)
+///   KORE_UNFOLD=<s>          open every turn's "Worked for" fold that many seconds after launch
 ///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
 ///   KORE_FORK=<n>            fork the opened chat from its nth user message (once its CLI is up); KORE_FORK_SEND=<text>
 ///                            then sends that text in the fork's tab
@@ -205,10 +206,11 @@ enum DevSnapshot {
         }
     }
 
-    /// KORE_STOP_AFTER / KORE_ANSWER: drive a started chat without clicking.
     /// KORE_CONTEXT_CARD=1: the context wheel's card stays open.
     static let contextCard = ProcessInfo.processInfo.environment["KORE_CONTEXT_CARD"] == "1"
 
+    /// Drives a chat without clicking: KORE_CONTEXT, KORE_STOP_AFTER, KORE_UNFOLD, KORE_SET_MODE and
+    /// KORE_ANSWER.
     @MainActor static func drive(_ chat: Chat) {
         let env = ProcessInfo.processInfo.environment
         if let parts = env["KORE_CONTEXT"]?.split(separator: ","), let used = parts.first.flatMap({ Int($0) }) {
@@ -238,6 +240,15 @@ enum DevSnapshot {
             DispatchQueue.main.asyncAfter(deadline: .now() + after) {
                 if let agent = chat.transcript.agentSummary.running.first { chat.stopAgent(agent.id) }
                 sendAfterStop()
+            }
+        }
+        if let after = env["KORE_UNFOLD"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) {
+                let folds = chat.transcript.sections.flatMap(\.items).compactMap { item -> String? in
+                    if case .fold(let fold) = item.row, !fold.open { return fold.turn }
+                    return nil
+                }
+                for turn in folds { chat.transcript.toggle(turn: turn) }
             }
         }
         // As the mode menu does, mid-session: "<id>@<seconds>[;<id>@<seconds>…]".
