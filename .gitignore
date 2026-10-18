@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+.DS_Store
+build/
+.vscode/
+z-docs/
+.agents/

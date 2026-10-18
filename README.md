@@ -1,0 +1,19 @@
+# Kore
+
+A native macOS app for the Claude Code and Codex CLIs.
+
+Kore runs the `claude` and `codex` CLIs you already have installed and logged in, and gives them
+a simple interface: one window per folder, tabs for chats, and history for past sessions.
+
+## Requirements
+
+- macOS 15 or later
+- Swift 6 toolchain (Xcode Command Line Tools)
+- `claude` and/or `codex` installed and logged in
+
+## Build
+
+```sh
+./scripts/build-app.sh            # builds build/Kore.app
+./scripts/build-app.sh --install  # also copies it to /Applications
+```
