@@ -62,6 +62,7 @@ private struct GridRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> CanvasScrollView {
         let grid = GridCanvas()
         let scroll = CanvasScrollView(canvas: grid)
+        grid.installParts(in: scroll)
         update(grid)
         return scroll
     }
@@ -76,8 +77,12 @@ private struct GridRepresentable: NSViewRepresentable {
     }
 }
 
+
 // MARK: - The grid
 
+/// The grid's cells, as the scroll view's document (document coordinates throughout). Row i's
+/// top is `rowHeight * (i + 1)`: the first row's height is under the floating header; the
+/// gutter's width is under the floating row numbers.
 private final class GridCanvas: CanvasView {
     var onFacts: ([String]) -> Void = { _ in }
     private var table: DelimitedTable?
@@ -90,8 +95,8 @@ private final class GridCanvas: CanvasView {
     private var widths: [CGFloat] = []
     /// Each column's left edge from the gutter's right edge; one more for the last right edge.
     private var lefts: [CGFloat] = [0]
-    private var gutter: CGFloat = 0
-    private var rowHeight: CGFloat = 0
+    fileprivate private(set) var gutter: CGFloat = 0
+    fileprivate private(set) var rowHeight: CGFloat = 0
 
     private struct Cell: Equatable {
         var row: Int
@@ -103,10 +108,15 @@ private final class GridCanvas: CanvasView {
     private var hoverRow: Int?
     private var resizing: (column: Int, startX: CGFloat, width: CGFloat)?
 
+    /// The rules between rows and columns, as plain layers over the visible cells: lines drawn
+    /// into the cells would make them keep a full bitmap.
+    private let rules = GridRules()
+    private let header = GridPart(.header)
+    private let rowNumbers = GridPart(.rowNumbers)
+    private let corner = GridPart(.corner)
+
     // Drawing state, made once per zoom.
     private var font = NSFont.systemFont(ofSize: 12)
-    private var digits = NSFont.systemFont(ofSize: 12)
-    private var bold = NSFont.systemFont(ofSize: 12)
     private var textAttributes: [NSAttributedString.Key: Any] = [:]
     private var numberAttributes: [NSAttributedString.Key: Any] = [:]
     private var headerAttributes: [NSAttributedString.Key: Any] = [:]
@@ -117,6 +127,65 @@ private final class GridCanvas: CanvasView {
     private var columns: Int { table?.columns ?? 0 }
     /// The note row under the last row when the file was cut short.
     private var noteRows: Int { table?.capped == true ? 1 : 0 }
+    private var contentWidth: CGFloat { gutter + (lefts.last ?? 0) }
+
+    /// The header, row numbers and corner sit over the scrolled cells, the size of what's
+    /// visible, and redraw as it scrolls: strips that small cost little to keep or redraw.
+    func installParts(in scroll: CanvasScrollView) {
+        scroll.addSubview(rules, positioned: .above, relativeTo: scroll.contentView)
+        for part in [rowNumbers, header, corner] {
+            part.grid = self
+            scroll.addSubview(part, positioned: .above, relativeTo: rules)
+        }
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+    }
+
+    @objc private func scrolled() {
+        guard let origin = scroller?.visible.origin else { return }
+        if origin.x != lastOrigin.x { header.needsDisplay = true }
+        if origin.y != lastOrigin.y { rowNumbers.needsDisplay = true }
+        lastOrigin = origin
+        placeRules()
+    }
+
+    /// One layer a visible rule, placed for the current scroll.
+    private func placeRules() {
+        guard let scroller, rowHeight > 0 else { return }
+        let visible = scroller.visible
+        var lines: [NSRect] = []
+        let bottom = min(rowTop(rows), visible.maxY) - visible.minY
+        if let range = rows(in: visible) {
+            for display in range where display < rows {
+                let y = rowTop(display + 1) - Stroke.hairline - visible.minY
+                lines.append(NSRect(x: gutter, y: y, width: max(0, min(contentWidth, visible.maxX) - visible.minX - gutter), height: Stroke.hairline))
+            }
+        }
+        if let range = columns(in: visible) {
+            for column in range {
+                let (x, width) = columnRect(column)
+                let left = x + width - Stroke.hairline - visible.minX
+                if left >= gutter { lines.append(NSRect(x: left, y: rowHeight, width: Stroke.hairline, height: max(0, bottom - rowHeight))) }
+            }
+        }
+        rules.show(lines)
+    }
+
+    private var lastOrigin = NSPoint.zero
+
+    override func documentResized(_ size: NSSize) { layoutParts() }
+
+    fileprivate func layoutParts() {
+        guard let scroller else { return }
+        let clip = scroller.contentView.frame
+        rules.frame = clip
+        header.frame = NSRect(x: clip.minX, y: clip.minY, width: clip.width, height: rowHeight)
+        rowNumbers.frame = NSRect(x: clip.minX, y: clip.minY, width: gutter, height: clip.height)
+        corner.frame = NSRect(x: clip.minX, y: clip.minY, width: gutter, height: rowHeight)
+        for part in [header, rowNumbers, corner] { part.needsDisplay = true }
+        placeRules()
+    }
 
     func set(table: DelimitedTable, zoom: CGFloat) {
         let tableChanged = table !== self.table
@@ -126,33 +195,29 @@ private final class GridCanvas: CanvasView {
         self.table = table
         self.zoom = zoom
         if zoomChanged { makeStyle() }
-        if tableChanged || zoomChanged {
-            if columnsChanged || zoomChanged || widths.isEmpty { measure() }
-            if let sort, tableChanged {
-                order = nil
-                startSort(sort.column, ascending: sort.ascending)
-            }
-            clampSelection()
+        if columnsChanged || zoomChanged || widths.isEmpty { measure() }
+        if let sort, tableChanged {
+            order = nil
+            startSort(sort.column, ascending: sort.ascending)
         }
+        clampSelection()
         layoutDocument()
-        needsDisplay = true
+        redraw()
         reportFacts()
     }
 
     private func makeStyle() {
         rowHeight = (Size.Grid.row * zoom).rounded()
         font = TextStyle.gridFont
-        digits = TextStyle.gridFontDigits
-        bold = TextStyle.gridHeaderFont
         let left = NSMutableParagraphStyle()
         left.lineBreakMode = .byTruncatingTail
         let right = NSMutableParagraphStyle()
         right.lineBreakMode = .byTruncatingTail
         right.alignment = .right
         textAttributes = [.font: font, .foregroundColor: NSColor(Theme.text), .paragraphStyle: left]
-        numberAttributes = [.font: digits, .foregroundColor: NSColor(Theme.text), .paragraphStyle: right]
-        headerAttributes = [.font: bold, .foregroundColor: NSColor(Theme.text), .paragraphStyle: left]
-        gutterAttributes = [.font: digits, .foregroundColor: NSColor(Theme.Grid.rowNumber), .paragraphStyle: right]
+        numberAttributes = [.font: TextStyle.gridFontDigits, .foregroundColor: NSColor(Theme.text), .paragraphStyle: right]
+        headerAttributes = [.font: TextStyle.gridHeaderFont, .foregroundColor: NSColor(Theme.text), .paragraphStyle: left]
+        gutterAttributes = [.font: TextStyle.gridFontDigits, .foregroundColor: NSColor(Theme.Grid.rowNumber), .paragraphStyle: right]
         noteAttributes = [.font: font, .foregroundColor: NSColor(Theme.tertiary), .paragraphStyle: left]
     }
 
@@ -186,11 +251,17 @@ private final class GridCanvas: CanvasView {
             x += width
             lefts.append(x)
         }
-        scroller?.documentSize = NSSize(
-            width: gutter + x, height: rowHeight * CGFloat(1 + rows + noteRows))
+        scroller?.documentSize = NSSize(width: gutter + x, height: rowHeight * CGFloat(1 + rows + noteRows))
+        layoutParts()
     }
 
-    // MARK: Geometry (document coordinates)
+    private func redraw() {
+        needsDisplay = true
+        for part in [header, rowNumbers, corner] { part.needsDisplay = true }
+        placeRules()
+    }
+
+    // MARK: Geometry
 
     private func tableRow(_ display: Int) -> Int { order.map { Int($0[display]) } ?? display + 1 }
 
@@ -203,7 +274,11 @@ private final class GridCanvas: CanvasView {
         return NSRect(x: column.x, y: rowTop(cell.row), width: column.width, height: rowHeight)
     }
 
-    private func column(atDocumentX x: CGFloat) -> Int? {
+    private func rowRect(_ display: Int) -> NSRect {
+        NSRect(x: gutter, y: rowTop(display), width: frame.width - gutter, height: rowHeight)
+    }
+
+    private func column(atX x: CGFloat) -> Int? {
         let inner = x - gutter
         guard inner >= 0, inner < lefts.last ?? 0 else { return nil }
         var low = 0
@@ -215,119 +290,117 @@ private final class GridCanvas: CanvasView {
         return low
     }
 
+    private func row(atY y: CGFloat) -> Int? {
+        let row = Int((y - rowHeight) / rowHeight)
+        return y >= rowHeight && row < rows ? row : nil
+    }
+
     /// A column's right edge under the pointer, in the header.
-    private func edge(atDocumentX x: CGFloat) -> Int? {
+    fileprivate func edge(atX x: CGFloat) -> Int? {
         let hit = Size.Grid.edgeHit / 2
-        guard let column = column(atDocumentX: x - hit) ?? column(atDocumentX: x + hit) else { return nil }
+        guard let column = column(atX: x - hit) ?? column(atX: x + hit) else { return nil }
         for candidate in [column, column - 1] where candidate >= 0 {
             if abs(gutter + lefts[candidate + 1] - x) <= hit { return candidate }
         }
         return nil
     }
 
-    // MARK: Drawing
+    private func rows(in rect: NSRect) -> ClosedRange<Int>? {
+        let first = max(0, Int(rect.minY / rowHeight) - 1)
+        let last = min(rows + noteRows - 1, Int(rect.maxY / rowHeight))
+        return first <= last ? first...last : nil
+    }
 
-    override func draw(_ dirtyRect: NSRect) {
+    private func columns(in rect: NSRect) -> ClosedRange<Int>? {
+        guard columns > 0 else { return nil }
+        let first = column(atX: max(rect.minX, gutter)) ?? (rect.minX < gutter ? 0 : columns)
+        let last = column(atX: rect.maxX) ?? (columns - 1)
+        return first <= last ? first...last : nil
+    }
+
+    // MARK: Drawing the cells
+
+    override func draw(_ dirty: NSRect) {
         guard let table, rowHeight > 0 else { return }
-        let offset = offset
-        let size = bounds.size
-        NSColor(Theme.background).setFill()
-        bounds.fill()
-
-        let firstRow = max(0, Int((offset.y) / rowHeight) - 1)
-        let lastRow = min(rows + noteRows - 1, Int((offset.y + size.height) / rowHeight))
-        let firstColumn = column(atDocumentX: max(offset.x + gutter, gutter)) ?? 0
-        let lastColumn = column(atDocumentX: offset.x + size.width) ?? (columns - 1)
+        let visibleRows = rows(in: dirty)
+        let visibleColumns = columns(in: dirty)
         let selection = selectedRange
 
-        // Body: hover, cells, selection, rules.
-        NSGraphicsContext.saveGraphicsState()
-        NSRect(x: gutter, y: rowHeight, width: size.width - gutter, height: size.height - rowHeight).clip()
         if let hoverRow, hoverRow < rows {
             NSColor(Theme.Grid.hover).setFill()
-            NSRect(x: gutter, y: rowTop(hoverRow) - offset.y, width: size.width, height: rowHeight).fill()
+            rowRect(hoverRow).intersection(dirty).fill()
         }
         if let selection {
-            let rect = selectionRect(selection).offsetBy(dx: -offset.x, dy: -offset.y)
             NSColor(Theme.Grid.selection).setFill()
-            rect.fill()
+            selectionRect(selection).intersection(dirty).fill()
         }
-        if firstRow <= lastRow {
-            for display in firstRow...lastRow where display < rows {
+        if let visibleRows, let visibleColumns {
+            for display in visibleRows where display < rows {
                 let row = tableRow(display)
-                let y = rowTop(display) - offset.y
-                guard firstColumn <= lastColumn else { continue }
-                for column in firstColumn...lastColumn {
+                let y = rowTop(display)
+                for column in visibleColumns {
                     let text = table.text(row: row, column: column)
                     guard !text.isEmpty else { continue }
                     let (x, width) = columnRect(column)
-                    draw(text, in: NSRect(x: x - offset.x, y: y, width: width, height: rowHeight),
+                    draw(text, in: NSRect(x: x, y: y, width: width, height: rowHeight),
                          attributes: table.numeric[column] ? numberAttributes : textAttributes)
                 }
             }
         }
-        rules(firstRow: firstRow, lastRow: min(lastRow, rows - 1), firstColumn: firstColumn, lastColumn: lastColumn, offset: offset)
         if let selection {
-            let rect = selectionRect(selection).offsetBy(dx: -offset.x, dy: -offset.y)
-            NSColor(Theme.Grid.selectionLine).setStroke()
-            let outline = NSBezierPath(rect: rect.insetBy(dx: Stroke.hairline / 2, dy: Stroke.hairline / 2))
-            outline.lineWidth = Stroke.hairline
-            outline.stroke()
+            let rect = selectionRect(selection)
+            if rect.intersects(dirty) {
+                NSColor(Theme.Grid.selectionLine).setStroke()
+                let outline = NSBezierPath(rect: rect.insetBy(dx: Stroke.hairline / 2, dy: Stroke.hairline / 2))
+                outline.lineWidth = Stroke.hairline
+                outline.stroke()
+            }
         }
         if table.capped {
-            let y = rowTop(rows) - offset.y
+            let visible = self.visible
             draw("Showing the first \(Self.count(Limit.csvRows)) rows",
-                 in: NSRect(x: gutter, y: y, width: size.width - gutter, height: rowHeight), attributes: noteAttributes)
+                 in: NSRect(x: visible.minX + gutter, y: rowTop(rows), width: visible.width - gutter, height: rowHeight),
+                 attributes: noteAttributes)
         }
-        NSGraphicsContext.restoreGraphicsState()
+    }
 
-        // The row-number gutter, sticky at the left.
-        NSGraphicsContext.saveGraphicsState()
-        NSRect(x: 0, y: rowHeight, width: gutter, height: size.height - rowHeight).clip()
+    // MARK: Drawing the floating parts (each in its own coordinates)
+
+    fileprivate func drawHeader(_ dirty: NSRect) {
+        NSColor(Theme.Grid.header).setFill()
+        dirty.fill()
+        if let range = columns(in: dirty) {
+            for column in range {
+                let (x, width) = columnRect(column)
+                header(column, in: NSRect(x: x, y: 0, width: width, height: rowHeight))
+                NSColor(Theme.Grid.rule).setFill()
+                NSRect(x: x + width - Stroke.hairline, y: 0, width: Stroke.hairline, height: rowHeight).fill()
+            }
+        }
+        NSColor(Theme.Grid.headerRule).setFill()
+        NSRect(x: dirty.minX, y: rowHeight - Stroke.hairline, width: dirty.width, height: Stroke.hairline).fill()
+    }
+
+    fileprivate func drawRowNumbers(_ dirty: NSRect) {
         NSColor(Theme.background).setFill()
-        NSRect(x: 0, y: rowHeight, width: gutter, height: size.height).fill()
-        if firstRow <= lastRow {
-            for display in firstRow...lastRow where display < rows {
-                draw(String(tableRow(display)), in: NSRect(x: 0, y: rowTop(display) - offset.y, width: gutter, height: rowHeight),
+        dirty.fill()
+        if let range = rows(in: dirty) {
+            for display in range where display < rows {
+                draw(String(tableRow(display)), in: NSRect(x: 0, y: rowTop(display), width: gutter, height: rowHeight),
                      attributes: gutterAttributes)
             }
         }
-        NSGraphicsContext.restoreGraphicsState()
         NSColor(Theme.Grid.rule).setFill()
-        NSRect(x: gutter - Stroke.hairline, y: rowHeight, width: Stroke.hairline, height: size.height).fill()
-
-        // The header, sticky at the top.
-        NSColor(Theme.Grid.header).setFill()
-        NSRect(x: 0, y: 0, width: size.width, height: rowHeight).fill()
-        NSGraphicsContext.saveGraphicsState()
-        NSRect(x: gutter, y: 0, width: size.width - gutter, height: rowHeight).clip()
-        if firstColumn <= lastColumn {
-            for column in firstColumn...lastColumn {
-                let (x, width) = columnRect(column)
-                header(column, in: NSRect(x: x - offset.x, y: 0, width: width, height: rowHeight))
-                NSColor(Theme.Grid.rule).setFill()
-                NSRect(x: x - offset.x + width - Stroke.hairline, y: 0, width: Stroke.hairline, height: rowHeight).fill()
-            }
-        }
-        NSGraphicsContext.restoreGraphicsState()
-        NSColor(Theme.Grid.headerRule).setFill()
-        NSRect(x: 0, y: rowHeight - Stroke.hairline, width: size.width, height: Stroke.hairline).fill()
+        NSRect(x: gutter - Stroke.hairline, y: dirty.minY, width: Stroke.hairline, height: dirty.height).fill()
     }
 
-    private func rules(firstRow: Int, lastRow: Int, firstColumn: Int, lastColumn: Int, offset: NSPoint) {
-        guard firstRow <= lastRow else { return }
+    fileprivate func drawCorner(_ bounds: NSRect) {
+        NSColor(Theme.Grid.header).setFill()
+        bounds.fill()
         NSColor(Theme.Grid.rule).setFill()
-        let right = min(bounds.width, gutter + (lefts.last ?? 0) - offset.x)
-        for display in firstRow...lastRow {
-            let y = rowTop(display + 1) - offset.y - Stroke.hairline
-            NSRect(x: gutter, y: y, width: right - gutter, height: Stroke.hairline).fill()
-        }
-        let bottom = min(bounds.height, rowTop(rows) - offset.y)
-        guard firstColumn <= lastColumn else { return }
-        for column in firstColumn...lastColumn {
-            let (x, width) = columnRect(column)
-            NSRect(x: x - offset.x + width - Stroke.hairline, y: rowHeight, width: Stroke.hairline, height: bottom - rowHeight).fill()
-        }
+        NSRect(x: bounds.maxX - Stroke.hairline, y: 0, width: Stroke.hairline, height: bounds.height).fill()
+        NSColor(Theme.Grid.headerRule).setFill()
+        NSRect(x: 0, y: bounds.maxY - Stroke.hairline, width: bounds.width, height: Stroke.hairline).fill()
     }
 
     private func header(_ column: Int, in rect: NSRect) {
@@ -339,8 +412,7 @@ private final class GridCanvas: CanvasView {
         draw(name as String, in: NSRect(x: rect.minX, y: rect.minY, width: textWidth + 2 * padding, height: rect.height),
              attributes: headerAttributes)
         guard let sort, sort.column == column else { return }
-        let size = Size.Grid.sortGlyph * zoom
-        let configuration = NSImage.SymbolConfiguration(pointSize: size, weight: .semibold)
+        let configuration = NSImage.SymbolConfiguration(pointSize: Size.Grid.sortGlyph * zoom, weight: .semibold)
             .applying(.init(paletteColors: [NSColor(Theme.Grid.sort)]))
         guard let glyph = NSImage(systemSymbolName: sort.ascending ? "chevron.up" : "chevron.down", accessibilityDescription: nil)?
             .withSymbolConfiguration(configuration)
@@ -357,7 +429,8 @@ private final class GridCanvas: CanvasView {
             x: rect.minX + padding, y: rect.minY + (rect.height - line) / 2,
             width: max(0, rect.width - 2 * padding), height: line)
         // Line breaks inside a quoted cell show as spaces.
-        let flat = text.contains(where: \.isNewline) ? text.replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ") : text
+        let flat = text.contains(where: \.isNewline)
+            ? text.replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ") : text
         (flat as NSString).draw(with: inner, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attributes)
     }
 
@@ -387,10 +460,12 @@ private final class GridCanvas: CanvasView {
     }
 
     private func select(_ cell: Cell, extend: Bool) {
+        let before = selectedRange.map(selectionRect)
         if !extend || anchor == nil { anchor = cell }
         head = cell
+        if let before { setNeedsDisplay(before.insetBy(dx: -Stroke.hairline, dy: -Stroke.hairline)) }
+        if let after = selectedRange.map(selectionRect) { setNeedsDisplay(after.insetBy(dx: -Stroke.hairline, dy: -Stroke.hairline)) }
         scroller?.reveal(cellRect(cell), inset: NSSize(width: gutter, height: rowHeight))
-        needsDisplay = true
         reportFacts()
     }
 
@@ -435,7 +510,7 @@ private final class GridCanvas: CanvasView {
                 self.sort = nil
                 order = nil
                 sorting += 1
-                needsDisplay = true
+                redraw()
             }
         } else {
             startSort(column, ascending: true)
@@ -447,12 +522,12 @@ private final class GridCanvas: CanvasView {
         sort = (column, ascending)
         sorting += 1
         let ticket = sorting
-        needsDisplay = true
+        header.needsDisplay = true
         Task { @MainActor [weak self] in
             let order = await Task.detached(priority: .userInitiated) { table.order(column: column, ascending: ascending) }.value
             guard let self, self.sorting == ticket, self.table === table else { return }
             self.order = order
-            self.needsDisplay = true
+            self.redraw()
             self.reportFacts()
         }
     }
@@ -464,28 +539,25 @@ private final class GridCanvas: CanvasView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
         addTrackingArea(area)
         tracking = area
     }
 
+    private func setHover(_ row: Int?) {
+        guard row != hoverRow else { return }
+        if let hoverRow { setNeedsDisplay(rowRect(hoverRow)) }
+        hoverRow = row
+        if let row { setNeedsDisplay(rowRect(row)) }
+    }
+
     override func mouseMoved(with event: NSEvent) {
         let p = point(event)
-        let doc = NSPoint(x: p.x + offset.x, y: p.y + offset.y)
-        if p.y < rowHeight, p.x >= gutter, edge(atDocumentX: doc.x) != nil {
-            NSCursor.resizeLeftRight.set()
-        } else {
-            NSCursor.arrow.set()
-        }
-        let row = p.y >= rowHeight ? Int((doc.y - rowHeight) / rowHeight) : nil
-        let hovered = row.flatMap { $0 < rows ? $0 : nil }
-        if hovered != hoverRow {
-            hoverRow = hovered
-            needsDisplay = true
-        }
+        let hovered = row(atY: p.y)
+        setHover(hovered)
         // The full text of a cut-off cell.
         var tip: String?
-        if let hovered, p.x >= gutter, let column = column(atDocumentX: doc.x), let table {
+        if let hovered, let column = column(atX: p.x), let table {
             let text = table.text(row: tableRow(hovered), column: column)
             let width = (text as NSString).size(withAttributes: textAttributes).width + 2 * Size.Grid.cellPadding * zoom
             if width > widths[column] { tip = text }
@@ -493,53 +565,45 @@ private final class GridCanvas: CanvasView {
         if toolTip != tip { toolTip = tip }
     }
 
-    override func mouseExited(with event: NSEvent) {
-        if hoverRow != nil {
-            hoverRow = nil
-            needsDisplay = true
-        }
-        NSCursor.arrow.set()
-    }
+    override func mouseExited(with event: NSEvent) { setHover(nil) }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let p = point(event)
-        let doc = NSPoint(x: p.x + offset.x, y: p.y + offset.y)
-        if p.y < rowHeight {
-            guard p.x >= gutter else { return }
-            if let edge = edge(atDocumentX: doc.x) {
-                if event.clickCount == 2 {
-                    fit(edge)
-                } else {
-                    resizing = (edge, doc.x, widths[edge])
-                }
-            } else if let column = column(atDocumentX: doc.x) {
-                cycleSort(column)
-            }
-            return
-        }
-        guard p.x >= gutter, let column = column(atDocumentX: doc.x) else { return }
-        let row = Int((doc.y - rowHeight) / rowHeight)
-        guard row < rows else { return }
+        guard let column = column(atX: p.x), let row = row(atY: p.y) else { return }
         select(Cell(row: row, column: column), extend: event.modifierFlags.contains(.shift))
     }
 
     override func mouseDragged(with event: NSEvent) {
         let p = point(event)
-        let doc = NSPoint(x: p.x + offset.x, y: p.y + offset.y)
-        if let resizing {
-            widths[resizing.column] = max(Size.Grid.minColumn * zoom, resizing.width + doc.x - resizing.startX)
-            layoutDocument()
-            needsDisplay = true
-            return
-        }
         guard anchor != nil, rows > 0 else { return }
-        let column = column(atDocumentX: max(doc.x, gutter)) ?? (columns - 1)
-        let row = min(max(Int((doc.y - rowHeight) / rowHeight), 0), rows - 1)
+        let column = column(atX: max(p.x, gutter)) ?? (columns - 1)
+        let row = min(max(Int((p.y - rowHeight) / rowHeight), 0), rows - 1)
         select(Cell(row: row, column: column), extend: true)
     }
 
-    override func mouseUp(with event: NSEvent) { resizing = nil }
+    /// The header's clicks: sort by a column, or drag (double-click to fit) its edge.
+    fileprivate func headerDown(_ event: NSEvent, x: CGFloat) {
+        window?.makeFirstResponder(self)
+        if let edge = edge(atX: x) {
+            if event.clickCount == 2 {
+                fit(edge)
+            } else {
+                resizing = (edge, x, widths[edge])
+            }
+        } else if let column = column(atX: x) {
+            cycleSort(column)
+        }
+    }
+
+    fileprivate func headerDragged(x: CGFloat) {
+        guard let resizing else { return }
+        widths[resizing.column] = max(Size.Grid.minColumn * zoom, resizing.width + x - resizing.startX)
+        layoutDocument()
+        redraw()
+    }
+
+    fileprivate func headerUp() { resizing = nil }
 
     /// Double-clicking a column's edge fits it to everything in it (up to the max).
     private func fit(_ column: Int) {
@@ -552,13 +616,13 @@ private final class GridCanvas: CanvasView {
         }
         widths[column] = clampWidth(width + 2 * Size.Grid.cellPadding * zoom)
         layoutDocument()
-        needsDisplay = true
+        redraw()
     }
 
     override func keyDown(with event: NSEvent) {
         let extend = event.modifierFlags.contains(.shift)
         let current = head ?? Cell(row: 0, column: 0)
-        let page = max(1, Int(bounds.height / max(rowHeight, 1)) - 2)
+        let page = max(1, Int(visible.height / max(rowHeight, 1)) - 2)
         var next = current
         switch event.keyCode {
         case 126: next.row -= 1
@@ -570,9 +634,9 @@ private final class GridCanvas: CanvasView {
         case 115: next.row = 0
         case 119: next.row = rows - 1
         case 53:
+            if let range = selectedRange { setNeedsDisplay(selectionRect(range).insetBy(dx: -Stroke.hairline, dy: -Stroke.hairline)) }
             anchor = nil
             head = nil
-            needsDisplay = true
             reportFacts()
             return
         default:
@@ -583,5 +647,117 @@ private final class GridCanvas: CanvasView {
         next.row = min(max(next.row, 0), rows - 1)
         next.column = min(max(next.column, 0), columns - 1)
         select(next, extend: extend)
+    }
+}
+
+/// The grid's header, row numbers or corner: drawn and clicked through the grid.
+private final class GridPart: NSView {
+    enum Kind { case header, rowNumbers, corner }
+
+    let kind: Kind
+    weak var grid: GridCanvas?
+
+    init(_ kind: Kind) {
+        self.kind = kind
+        super.init(frame: .zero)
+        clipsToBounds = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Where this part's points sit in the grid's document.
+    private var shift: NSPoint {
+        guard let origin = grid?.visible.origin else { return .zero }
+        switch kind {
+        case .header: return NSPoint(x: origin.x, y: 0)
+        case .rowNumbers: return NSPoint(x: 0, y: origin.y)
+        case .corner: return .zero
+        }
+    }
+
+    override func draw(_ dirty: NSRect) {
+        guard let grid else { return }
+        let shift = shift
+        NSGraphicsContext.saveGraphicsState()
+        let transform = NSAffineTransform()
+        transform.translateX(by: -shift.x, yBy: -shift.y)
+        transform.concat()
+        let rect = dirty.offsetBy(dx: shift.x, dy: shift.y)
+        switch kind {
+        case .header: grid.drawHeader(rect)
+        case .rowNumbers: grid.drawRowNumbers(rect)
+        case .corner: grid.drawCorner(bounds)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private var tracking: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        guard kind == .header else { return }
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    private func x(_ event: NSEvent) -> CGFloat { convert(event.locationInWindow, from: nil).x + shift.x }
+
+    /// Scrolling over a part scrolls the grid.
+    override func scrollWheel(with event: NSEvent) { grid?.scroller?.scrollWheel(with: event) }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard kind == .header, let grid else { return }
+        (grid.edge(atX: x(event)) != nil ? NSCursor.resizeLeftRight : NSCursor.arrow).set()
+    }
+
+    override func mouseDown(with event: NSEvent) { if kind == .header { grid?.headerDown(event, x: x(event)) } }
+    override func mouseDragged(with event: NSEvent) { if kind == .header { grid?.headerDragged(x: x(event)) } }
+    override func mouseUp(with event: NSEvent) { if kind == .header { grid?.headerUp() } }
+}
+
+/// Lines as plain filled layers: no bitmap behind them, however much of the grid they cross.
+private final class GridRules: NSView {
+    private var lines: [CALayer] = []
+    private let color = NSColor(Theme.Grid.rule).cgColor
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        let host = CALayer()
+        // Top-left origin, like the grid.
+        host.isGeometryFlipped = true
+        layer = host
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func show(_ rects: [NSRect]) {
+        guard let layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        while lines.count < rects.count {
+            let line = CALayer()
+            line.backgroundColor = color
+            layer.addSublayer(line)
+            lines.append(line)
+        }
+        for (index, line) in lines.enumerated() {
+            if index < rects.count {
+                line.frame = rects[index]
+                line.isHidden = false
+            } else {
+                line.isHidden = true
+            }
+        }
+        CATransaction.commit()
     }
 }

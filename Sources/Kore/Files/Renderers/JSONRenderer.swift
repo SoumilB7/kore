@@ -269,7 +269,7 @@ private final class TreeCanvas: CanvasView {
             }
         }
         self.rows = rows
-        scroller?.documentSize = NSSize(width: scroller?.contentSize.width ?? 0, height: rowHeight * CGFloat(rows.count))
+        scroller?.documentSize = NSSize(width: 0, height: rowHeight * CGFloat(rows.count))
         needsDisplay = true
         reportFacts()
     }
@@ -282,7 +282,7 @@ private final class TreeCanvas: CanvasView {
     }
 
     private func rowAt(_ point: NSPoint) -> Int? {
-        let row = Int((point.y + offset.y) / rowHeight)
+        let row = Int(point.y / rowHeight)
         return row >= 0 && row < rows.count ? row : nil
     }
 
@@ -293,13 +293,9 @@ private final class TreeCanvas: CanvasView {
     // MARK: Drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let index, rowHeight > 0 else { return }
-        NSColor(Theme.background).setFill()
-        bounds.fill()
-        guard !rows.isEmpty else { return }
-        let offset = offset
-        let first = max(0, Int(offset.y / rowHeight))
-        let last = min(rows.count - 1, Int((offset.y + bounds.height) / rowHeight))
+        guard let index, rowHeight > 0, !rows.isEmpty else { return }
+        let first = max(0, Int(dirtyRect.minY / rowHeight))
+        let last = min(rows.count - 1, Int(dirtyRect.maxY / rowHeight))
         guard first <= last else { return }
         let selected = selectedRow
         let focused = window?.firstResponder === self
@@ -309,7 +305,7 @@ private final class TreeCanvas: CanvasView {
         for row in first...last {
             let item = rows[row]
             let node = index.nodes[Int(item.node)]
-            let y = CGFloat(row) * rowHeight - offset.y
+            let y = CGFloat(row) * rowHeight
             let fill = NSRect(x: gutter + Size.Tree.rowInset, y: y, width: bounds.width - gutter - 2 * Size.Tree.rowInset, height: rowHeight)
             if row == selected {
                 NSColor(focused ? Theme.Tree.selectedFocused : Theme.Tree.selected).setFill()
@@ -512,7 +508,7 @@ private final class TreeCanvas: CanvasView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
         addTrackingArea(area)
         tracking = area
     }
@@ -520,8 +516,9 @@ private final class TreeCanvas: CanvasView {
     override func mouseMoved(with event: NSEvent) {
         let row = rowAt(point(event))
         if row != hoverRow {
+            if let hoverRow { setNeedsDisplay(rowRect(hoverRow)) }
             hoverRow = row
-            needsDisplay = true
+            if let row { setNeedsDisplay(rowRect(row)) }
         }
         // The full value of a cut-off row.
         var tip: String?
@@ -533,11 +530,11 @@ private final class TreeCanvas: CanvasView {
     }
 
     override func mouseExited(with event: NSEvent) {
-        if hoverRow != nil {
-            hoverRow = nil
-            needsDisplay = true
-        }
+        if let hoverRow { setNeedsDisplay(rowRect(hoverRow)) }
+        hoverRow = nil
     }
+
+    private func rowRect(_ row: Int) -> NSRect { NSRect(x: 0, y: CGFloat(row) * rowHeight, width: bounds.width, height: rowHeight) }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
@@ -566,7 +563,7 @@ private final class TreeCanvas: CanvasView {
         }
         guard let index, !rows.isEmpty else { return super.keyDown(with: event) }
         let current = selectedRow ?? -1
-        let page = max(1, Int(bounds.height / max(rowHeight, 1)) - 2)
+        let page = max(1, Int(visible.height / max(rowHeight, 1)) - 2)
         switch event.keyCode {
         case 126: select(max(current - 1, 0))
         case 125: select(min(current + 1, rows.count - 1))

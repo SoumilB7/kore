@@ -1,17 +1,16 @@
 import AppKit
 
-/// A scroll view over an empty document of `documentSize`, with a canvas on top that draws only
-/// what's visible. The canvas is the size of the visible area whatever the document's size, so
-/// a 100,000-row grid costs one screenful of drawing, and sticky parts (a header, a gutter)
-/// are just drawn at the visible edge.
+/// A scroll view whose document is a `CanvasView` the size of the whole content, drawn only
+/// where it's dirty. AppKit tiles a large document view and scrolls it without redrawing, as it
+/// does the editor's text view, so a 100,000-row grid costs no more than a short one.
+/// Sticky parts (a grid's header and row numbers) are the canvas's to place over it.
 final class CanvasScrollView: NSScrollView {
     let canvas: CanvasView
-    private let spacer = FlippedSpacer()
 
     init(canvas: CanvasView) {
         self.canvas = canvas
         super.init(frame: .zero)
-        documentView = spacer
+        documentView = canvas
         hasVerticalScroller = true
         hasHorizontalScroller = true
         autohidesScrollers = true
@@ -22,26 +21,37 @@ final class CanvasScrollView: NSScrollView {
         clipsToBounds = true
         canvas.clipsToBounds = true
         canvas.scroller = self
-        // Above the content, under the scrollers.
-        addSubview(canvas, positioned: .above, relativeTo: contentView)
-        contentView.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: contentView)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    var documentSize: NSSize {
-        get { spacer.frame.size }
-        set { if spacer.frame.size != newValue { spacer.frame.size = newValue } }
+    /// At least the visible size, so the canvas paints the whole ground.
+    var documentSize = NSSize.zero {
+        didSet { fit() }
+    }
+
+    override func tile() {
+        super.tile()
+        fit()
+        canvas.documentResized(canvas.frame.size)
+    }
+
+    private func fit() {
+        let size = NSSize(
+            width: max(documentSize.width, contentView.bounds.width),
+            height: max(documentSize.height, contentView.bounds.height))
+        if canvas.frame.size != size {
+            canvas.frame.size = size
+            canvas.documentResized(size)
+        }
     }
 
     /// The visible part of the document.
     var visible: NSRect { contentView.bounds }
 
     func scroll(to point: NSPoint) {
-        let maxX = max(0, documentSize.width - contentView.bounds.width)
-        let maxY = max(0, documentSize.height - contentView.bounds.height)
+        let maxX = max(0, canvas.frame.width - contentView.bounds.width)
+        let maxY = max(0, canvas.frame.height - contentView.bounds.height)
         contentView.scroll(to: NSPoint(x: min(max(point.x, 0), maxX), y: min(max(point.y, 0), maxY)))
         reflectScrolledClipView(contentView)
     }
@@ -57,17 +67,12 @@ final class CanvasScrollView: NSScrollView {
         if rect.maxY > origin.y + size.height { origin.y = rect.maxY - size.height }
         if origin != visible.origin { scroll(to: origin) }
     }
-
-    override func tile() {
-        super.tile()
-        if canvas.frame != contentView.frame { canvas.frame = contentView.frame }
-    }
-
-    @objc private func scrolled() { canvas.needsDisplay = true }
 }
 
-/// What a `CanvasScrollView` draws. Points in `draw` are view points; add `offset` for the
-/// document point under them.
+/// A `CanvasScrollView`'s document: points are document points. It draws no ground of its own
+/// (the tab's is behind it): a view that fills its whole area keeps a full bitmap of it, while
+/// one that draws only text and lines keeps a fraction (18.7 MB against 2.1 MB for a 1000×700
+/// tab).
 class CanvasView: NSView {
     weak var scroller: CanvasScrollView?
 
@@ -75,14 +80,10 @@ class CanvasView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    var offset: NSPoint { scroller?.visible.origin ?? .zero }
-
-    /// Scrolling goes to the scroll view (the canvas sits outside its clip view).
-    override func scrollWheel(with event: NSEvent) { scroller?.scrollWheel(with: event) }
+    /// The document or the visible area changed size (sticky parts follow).
+    func documentResized(_ size: NSSize) {}
 
     func point(_ event: NSEvent) -> NSPoint { convert(event.locationInWindow, from: nil) }
-}
 
-private final class FlippedSpacer: NSView {
-    override var isFlipped: Bool { true }
+    var visible: NSRect { scroller?.visible ?? visibleRect }
 }
