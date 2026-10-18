@@ -173,6 +173,7 @@ enum DevBench {
             record["missed"] = hitches.missed
             record["over33"] = hitches.over33
             record["worst_ms"] = round1(hitches.worstMS)
+            record["frame_p95_ms"] = round1(hitches.p95MS)
             record["hitch_ms_per_s"] = round1(hitches.hitchMSPerS)
             record["stalls"] = hitches.stalls
             record["mem_start_mb"] = round1(resources.memStartMB)

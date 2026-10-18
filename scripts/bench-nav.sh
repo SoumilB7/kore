@@ -2,6 +2,7 @@
 # The navigation bench (z-docs/phases/phase-11-navigation-p0/research-harness.md).
 #
 #   scripts/bench-nav.sh [--runs 5] [--fixtures a,b,…] [--size 880,760] [--compare <ref>] [--gate] [--smoke]
+#                        [--quick] [--plan <steps>]
 #
 # Builds a release of this checkout (and of <ref>, from `git archive`, never a worktree), restores
 # each fixture before every run, runs the plan for that fixture through KORE_BENCH with a clean
@@ -9,6 +10,11 @@
 # report. --smoke runs through a failed preflight, to check the bench itself; its numbers are not
 # results, and its folder is named smoke-…. --gate exits 1 on any budget FAIL or invalid record. Windows come to the front while it
 # runs; say so to whoever is at the machine first.
+#
+# --quick is the short check for one hypothesis: claude-6mb and claude-61mb, a warm-up and 2
+# runs, the plan "ready;earlier*3;scroll:top@2000;scroll:bottom@2000", and only the summary from
+# scripts/bench/quick.swift (stalls per 10k px, scroll frame p95, peak memory). --plan <steps>
+# runs those steps on every fixture instead of each fixture's own plan.
 #
 # Fixtures live in $KORE_BENCH_HOME (default ~/Library/Application Support/KoreBench), built
 # once by scripts/bench/fixtures.swift; results go under its results/ folder.
@@ -21,8 +27,12 @@ size=880,760
 compare=""
 gate=0
 smoke=0
+quick=0
+plan=""
+named=()  # options given on the command line, which --quick leaves alone
 fixtures=(claude-600k claude-6mb claude-61mb compacted agents tabs3 codex-long)
 while (( $# )); do
+  named+=($1)
   case $1 in
     --runs) runs=$2; shift ;;
     --size) size=$2; shift ;;
@@ -30,6 +40,8 @@ while (( $# )); do
     --gate) gate=1 ;;
     --smoke) smoke=1 ;;
     --fixtures) fixtures=(${(s:,:)2}); shift ;;
+    --quick) quick=1 ;;
+    --plan) plan=$2; shift ;;
     *) print -u2 "unknown option $1"; exit 2 ;;
   esac
   shift
@@ -41,6 +53,13 @@ typeset -A plans=(
   claude-600k "$single" claude-6mb "$single" claude-61mb "$compacted" compacted "$compacted"
   agents "$single" codex-long "$single" tabs3 "ready;switch:all*20;idle:5;mem"
 )
+if (( quick )); then
+  # Unless named on the command line, quick takes its own fixtures, runs and plan.
+  (( ${named[(Ie)--fixtures]} )) || fixtures=(claude-6mb claude-61mb)
+  (( ${named[(Ie)--runs]} )) || runs=2
+  [[ -n $plan ]] || plan="ready;earlier*3;scroll:top@2000;scroll:bottom@2000"
+fi
+if [[ -n $plan ]]; then for f in ${(k)plans}; do plans[$f]=$plan; done; fi
 
 # MARK: Preflight
 pre=()
@@ -165,6 +184,12 @@ for name in $fixtures; do
 done
 
 print "results: $out"
+if (( quick )); then
+  quickargs=("$out")
+  [[ -n $compare ]] && quickargs+=(--base "${builds[2]%%|*}")
+  swift "$repo/scripts/bench/quick.swift" "${quickargs[@]}" | tee "$out/quick.md"
+  exit 0
+fi
 report=("$out" "$repo/scripts/bench/budgets.tsv")
 [[ -n $compare ]] && report+=(--base "${builds[2]%%|*}")
 swift "$repo/scripts/bench/report.swift" "${report[@]}" | tee "$out/report.md"

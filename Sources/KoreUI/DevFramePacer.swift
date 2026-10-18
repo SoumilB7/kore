@@ -19,6 +19,8 @@ final class DevFramePacer: NSObject {
         var missed = 0
         var over33 = 0
         var worstMS = 0.0
+        /// The 95th percentile of frame-to-frame times.
+        var p95MS = 0.0
         var hitchMSPerS = 0.0
         var stalls = 0
         var durationS = 0.0
@@ -76,14 +78,19 @@ final class DevFramePacer: NSObject {
         guard count > 1 else { return result }
         let period = frameDuration
         var hitch = 0.0
+        var deltas: [CFTimeInterval] = []
+        deltas.reserveCapacity(count - 1)
         for i in 1..<count {
             let delta = times[i] - times[i - 1]
+            deltas.append(delta)
             result.missed += max(0, Int((delta / period).rounded()) - 1)
             if delta > 0.0333 { result.over33 += 1 }
             if delta >= 0.033 { result.stalls += 1 }
             result.worstMS = max(result.worstMS, delta * 1000)
             hitch += max(0, delta - period)
         }
+        deltas.sort()
+        result.p95MS = deltas[min(deltas.count - 1, Int(Double(deltas.count) * 0.95))] * 1000
         result.frames = count
         result.durationS = times[count - 1] - times[0]
         result.hitchMSPerS = result.durationS > 0 ? hitch * 1000 / result.durationS : 0
