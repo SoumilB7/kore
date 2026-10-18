@@ -8,26 +8,17 @@ import Observation
 final class ContextStore {
     private(set) var usage: ContextUsage?
     private(set) var compacting = false
-    /// Tokens before the last compaction, until the next message is sent ("Compacted from 152k";
-    /// the new size arrives right after the compaction).
-    private(set) var compactedFrom: Int?
 
     func apply(_ event: ChatEvent) {
         switch event {
         case .contextUsage(let next):
             usage = next
-        case .userMessage:
-            compactedFrom = nil
         case .compactionStarted:
             compacting = true
-        case .compacted(_, let from, _):
-            compacting = false
-            compactedFrom = from
-        case .compactionFailed, .exited:
+        case .compacted, .compactionFailed, .exited:
             compacting = false
         case .replayed(let events):
             events.forEach(apply)
-            compactedFrom = nil
             // A past compaction that never finished isn't still running.
             compacting = false
         default:

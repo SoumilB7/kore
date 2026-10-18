@@ -15,12 +15,15 @@ extension Theme {
 extension Size {
     static let contextRing: CGFloat = 16
     static let contextRingStroke: CGFloat = 2
-    /// The hover card, at most this wide.
-    static let contextCard: CGFloat = 240
     /// The card's left edge, from the wheel's.
     static let contextCardLead: CGFloat = -6
     /// The card's gap above the wheel.
     static let contextCardGap: CGFloat = 8
+}
+
+extension Glyph {
+    /// The compress mark in the ring's centre under the pointer.
+    @MainActor static var contextCompress: Font { .kore(7, .semibold) }
 }
 
 extension Motion {

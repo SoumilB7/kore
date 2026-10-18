@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// The composer's context wheel (phase-10 look §9): a ring filling as the context does, a card
-/// on hover with the numbers, and a click to compact. While compacting it turns. The slot is
-/// kept once the chat has a session, so the bar never shifts; the ring shows from the first
-/// usage report.
+/// The composer's context wheel (phase-10 look §9): a ring filling as the context does, a
+/// one-line card on hover with the tokens, and a click to compact. Under the pointer the ring
+/// takes the button hover fill and a compress glyph, so the click explains itself. While
+/// compacting it turns. The slot is kept once the chat has a session, so the bar never shifts;
+/// the ring and card show from the first usage report.
 struct ContextWheel: View {
     let chat: Chat
     @StateObject private var hovered = Local(false)
@@ -20,6 +21,13 @@ struct ContextWheel: View {
                     SpinningArc(lineWidth: Size.contextRingStroke)
                 } else if context.usage != nil {
                     ContextRing(fraction: context.fraction ?? 0)
+                        .overlay {
+                            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                                .font(Glyph.contextCompress)
+                                .foregroundStyle(Theme.text)
+                                .opacity(hovered.value && chat.canCompact ? 1 : 0)
+                                .animation(Motion.fade, value: hovered.value && chat.canCompact)
+                        }
                 }
             }
             .frame(width: Size.contextRing, height: Size.contextRing)
@@ -31,10 +39,26 @@ struct ContextWheel: View {
         .disabled(!chat.canCompact)
         .onHover(perform: hover)
         // The card is drawn by the chat (`contextCard`), over the composer box, which clips.
-        .anchorPreference(key: ContextCardAnchor.self, value: .bounds) { cardShown.value ? $0 : nil }
-        .accessibilityLabel(Text(ContextCard.summary(context)))
-        .onAppear { if DevSnapshot.contextCard { cardShown.value = true } }
+        .anchorPreference(key: ContextCardAnchor.self, value: .bounds) { cardShown.value && context.usage != nil ? $0 : nil }
+        .accessibilityLabel(Text(Self.accessibility(context)))
+        .onAppear {
+            // The dev hook holds the hover state: card and glyph.
+            if DevSnapshot.contextCard {
+                cardShown.value = true
+                hovered.value = true
+            }
+        }
         .onDisappear { pending.value?.cancel() }
+    }
+
+    /// "Context 62% used, 597k of 967k tokens. Compact."
+    private static func accessibility(_ context: ContextStore) -> String {
+        if context.compacting { return "Compacting context" }
+        guard let usage = context.usage else { return "Context" }
+        guard let window = usage.window, let fraction = context.fraction else {
+            return "Context, \(ContextStore.tokens(usage.used)) tokens. Compact."
+        }
+        return "Context \(ContextStore.percent(fraction)) used, \(ContextStore.tokens(usage.used)) of \(ContextStore.tokens(window)) tokens. Compact."
     }
 
     /// The card after a short rest, gone at once on leaving.
@@ -97,57 +121,24 @@ extension View {
     }
 }
 
-/// "Context window   62% · 124k / 200k", what's left, and what a click does.
+/// "597k / 967k tokens": the card, one line (look §9, revised).
 private struct ContextCard: View {
     let chat: Chat
 
     var body: some View {
-        let context = chat.context
-        VStack(alignment: .leading, spacing: Space.xxs) {
-            HStack(spacing: Space.md) {
-                Text("Context window").font(Chrome.label).foregroundStyle(Theme.secondary)
-                Spacer(minLength: 0)
-                Text(Self.numbers(context)).font(Chrome.labelDigits).foregroundStyle(Theme.text).lineLimit(1)
-            }
-            if let left = Self.left(context) {
-                Text(left).font(Chrome.caption).foregroundStyle(Theme.contextArc(context.fraction ?? 0))
-            }
-            Text(action).font(Chrome.caption).foregroundStyle(Theme.tertiary)
-        }
-        .padding(Inset.row)
-        .frame(width: Size.contextCard, alignment: .leading)
-        .panel(.panel)
-        .fixedSize(horizontal: false, vertical: true)
+        Text(Self.tokens(chat.context))
+            .font(Chrome.labelDigits)
+            .foregroundStyle(Theme.text)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(Inset.row)
+            .panel(.panel)
     }
 
-    private var action: String {
-        if chat.context.compacting { return "Compacting…" }
-        if chat.status.isRunning { return "Compact when this turn ends" }
-        if chat.context.usage == nil { return "Usage appears after the first reply" }
-        return "Click to compact now"
-    }
-
-    /// "62% · 124k / 200k"; "124k tokens" before the window is known; "—" before any report.
-    static func numbers(_ context: ContextStore) -> String {
-        guard let usage = context.usage else { return "—" }
-        guard let window = usage.window, let fraction = context.fraction else {
-            return ContextStore.tokens(usage.used) + " tokens"
-        }
-        return "\(ContextStore.percent(fraction)) · \(ContextStore.tokens(usage.used)) / \(ContextStore.tokens(window))"
-    }
-
-    /// "38% left until auto-compact" (just "left" when the CLI doesn't compact by itself), or
-    /// "Compacted from 152k" right after a compaction.
-    static func left(_ context: ContextStore) -> String? {
-        if let from = context.compactedFrom { return "Compacted from " + ContextStore.tokens(from) }
-        guard let fraction = context.fraction else { return nil }
-        let left = ContextStore.percent(1 - fraction)
-        return context.usage?.autoCompacts == false ? "\(left) left" : "\(left) left until auto-compact"
-    }
-
-    /// For VoiceOver: the card in one line.
-    static func summary(_ context: ContextStore) -> String {
-        if context.compacting { return "Compacting context" }
-        return "Context window " + numbers(context)
+    /// "597k / 967k tokens"; "182k tokens" before the CLI says its window.
+    static func tokens(_ context: ContextStore) -> String {
+        guard let usage = context.usage else { return "" }
+        guard let window = usage.window else { return ContextStore.tokens(usage.used) + " tokens" }
+        return "\(ContextStore.tokens(usage.used)) / \(ContextStore.tokens(window)) tokens"
     }
 }
