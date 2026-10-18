@@ -40,7 +40,7 @@ final class CodexBackend: ChatBackend {
     private func launch() async throws {
         let session = try await CodexSession.start(
             .init(
-                cwd: options.folder, model: options.model,
+                cwd: options.folder, model: options.model, effort: options.effort,
                 permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
                 plan: options.planMode, resume: sessionId, forkAt: forkAt))
         if forkAt != nil {
@@ -100,7 +100,8 @@ final class CodexBackend: ChatBackend {
                     name: name, description: json["shortDescription"]?.string ?? json["description"]?.string ?? "",
                     hint: "", kind: .skill)
             }
-        let effort = current.flatMap { id in list.first { $0["id"]?.string == id } }?["defaultReasoningEffort"]?.string
+        let effort = options.effort
+            ?? current.flatMap { id in list.first { $0["id"]?.string == id } }?["defaultReasoningEffort"]?.string
         return ChatControls(models: models, model: current, effort: effort, commands: commands)
     }
 

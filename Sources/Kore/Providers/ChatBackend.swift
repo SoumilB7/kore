@@ -50,8 +50,10 @@ struct BackendOptions {
     /// The provider's mode id to launch in.
     var mode: String
     var planMode = false
-    /// Launch on this model instead of the CLI's default (the dev hook's cheap test models).
+    /// Launch on this model and effort instead of the CLI's defaults (a fork keeps the
+    /// original's; the dev hook's cheap test models).
     var model: String?
+    var effort: String?
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude), and the
     /// title it gets.
     var fork: ForkPoint?

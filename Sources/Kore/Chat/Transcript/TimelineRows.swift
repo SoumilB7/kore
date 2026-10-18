@@ -17,6 +17,8 @@ struct TranscriptActions {
     var fork: (TranscriptStore.Entry) -> Void = { _ in }
     /// Loads the conversation before a compaction.
     var loadEarlierConversation: () -> Void = {}
+    /// A fork's "Forked from" line: switches to the original chat's tab; nil when there's none.
+    var openOriginal: (() -> Void)?
     /// A user message's action button was pressed: its menu opens under this frame.
     var messageMenu: (TranscriptStore.Entry, CGRect) -> Void = { _, _ in }
     /// A message row's bottom moved (for its pinned copy).
@@ -33,7 +35,7 @@ struct TimelineRow: View, Equatable {
 
     var body: some View {
         if case .entry(let entry) = item.row, entry.kind == .divider {
-            DividerRow(text: entry.text)
+            DividerRow(text: entry.text, open: entry.source == TranscriptStore.forkSource ? actions.openOriginal : nil)
         } else if case .message(let entry, let open, let expanded) = item.row {
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         } else if case .spinner(_, let since, let claude) = item.row {

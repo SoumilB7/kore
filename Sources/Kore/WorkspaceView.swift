@@ -13,9 +13,11 @@ struct WorkspaceView: View {
         } else if let chat = tab.chat, let agent = tab.agent {
             AgentTabView(chat: chat, id: agent, workspace: workspace).id(tab.id)
         } else if let chat = tab.chat {
-            ChatView(chat: chat, openAgent: { workspace.openAgent($0, of: chat) }, openFork: { start, text in
-                workspace.fork(chat, start, text: text)
-            }).id(chat.id)
+            ChatView(
+                chat: chat, openAgent: { workspace.openAgent($0, of: chat) },
+                openFork: { start, text in workspace.fork(chat, start, text: text) },
+                openOriginal: workspace.openOriginal(of: chat)
+            ).id(chat.id)
         } else {
             EmptyTab(tab: tab, workspace: workspace).id(tab.id)
         }

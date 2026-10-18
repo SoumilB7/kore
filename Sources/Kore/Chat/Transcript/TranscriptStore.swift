@@ -40,7 +40,7 @@ final class TranscriptStore {
         /// A tool that only reads, searches or lists (grouped into "Explored N").
         var readOnly = false
         /// A user message's id in its CLI's history (where a fork from it starts); nil for one
-        /// sent in this run.
+        /// sent in this run. `forkSource` on a fork's "Forked from" line.
         var source: String?
 
         static func == (a: Self, b: Self) -> Bool {
@@ -429,8 +429,10 @@ final class TranscriptStore {
 
     /// After a fork's history: "Forked from "Refactor theme tokens"".
     func forkedFrom(_ title: String) {
-        append(Entry(kind: .divider, text: "Forked from \u{201C}\(title)\u{201D}"))
+        append(Entry(kind: .divider, text: "Forked from \u{201C}\(title)\u{201D}", source: Self.forkSource))
     }
+
+    static let forkSource = "fork"
 
     private static let time: DateFormatter = {
         let f = DateFormatter()

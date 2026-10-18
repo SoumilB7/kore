@@ -34,7 +34,7 @@ import KoreCore
 ///   KORE_SET_MODE=<id>@<s>[;…] switch the chat's mode that many seconds after launch, as the mode
 ///                            menu does (plan-on / plan-off toggle Codex's Plan)
 ///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
-///   KORE_FORK=<n>            fork the opened chat from its nth user message (after 6s); KORE_FORK_SEND=<text>
+///   KORE_FORK=<n>            fork the opened chat from its nth user message (once its CLI is up); KORE_FORK_SEND=<text>
 ///                            then sends that text in the fork's tab
 ///   KORE_EARLIER=top|load    after KORE_EARLIER_AFTER seconds (default 4), scroll the transcript to its
 ///                            top; with load, then press the top row KORE_EARLIER_TIMES times (default 1); then

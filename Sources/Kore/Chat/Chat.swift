@@ -23,8 +23,9 @@ final class Chat: Identifiable {
     /// Waiting in the composer, sent with the next message.
     private(set) var attachments: [Attachment] = []
     var draft = ""
-    /// Launch with this model instead of the CLI's default (set by the dev hook).
+    /// Launch with this model and effort instead of the CLI's defaults (a fork, the dev hook).
     @ObservationIgnored var launchModel: String?
+    @ObservationIgnored var launchEffort: String?
 
     @ObservationIgnored private var backend: (any ChatBackend)?
     @ObservationIgnored private var pump: Task<Void, Never>?
@@ -37,6 +38,8 @@ final class Chat: Identifiable {
     /// so they come after it rather than above it.
     @ObservationIgnored private var awaitingHistory: Bool
     @ObservationIgnored private var held: [ChatEvent] = []
+    /// That chat, while it's open (its "Forked from" line switches to it).
+    @ObservationIgnored weak var original: Chat?
 
     /// `fork` makes this chat a fork of `session` that its CLI creates; it has no session of its
     /// own until then. `forkedFrom` names the original chat.
@@ -131,8 +134,8 @@ final class Chat: Identifiable {
         let make: (BackendOptions) -> any ChatBackend = FeedBackend.enabled ? FeedBackend.init : provider.makeBackend
         let backend = make(
             BackendOptions(
-                folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode, model: launchModel,
-                fork: fork, forkTitle: fork == nil ? nil : status.name))
+                folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
+                model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name))
         self.backend = backend
         pump = Task {
             for await event in backend.events { self.dispatch(event) }

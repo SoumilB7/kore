@@ -265,7 +265,7 @@ extension Size {
     /// A user message's action button: 20 round, its glyph inset 3.
     static let messageAction: CGFloat = 20
     static let messageActionInset: CGFloat = 3
-    /// The fork menu: at least 200 wide; a row is about this tall (for flipping it above).
+    /// The fork menu: at least 200 wide; a row is about this tall (its height until measured).
     static let forkMenu: CGFloat = 220
     static let forkMenuRow: CGFloat = 36
 }

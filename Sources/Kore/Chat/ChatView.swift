@@ -10,7 +10,11 @@ struct ChatView: View {
     /// Opens a fork of the chat in a new tab.
     var openFork: (ForkStart, String) -> Void = { _, _ in }
     @Environment(\.chatColumn) private var column
+    /// Switches to the tab of the chat this one was forked from, while it's open.
+    var openOriginal: (() -> Void)?
     @FocusState private var composerFocused: Bool
+    /// KORE_FORK forks once per run (the original's view appears again when switched back to).
+    private static var forkedOnce = false
     @StateObject private var viewer = Local<ImageEditor?>(nil)
     /// The turn whose changes are open in the modal.
     @StateObject private var changesTurn = Local<String?>(nil)
@@ -50,13 +54,15 @@ struct ChatView: View {
         .onAppear {
             composerFocused = true
             if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, pending: true) }
-            if let n = DevSnapshot.forkMessage, !chat.title.hasSuffix(" (fork)") {
-                // Test hook: fork from the nth user message once the history is in.
+            if let n = DevSnapshot.forkMessage, !Self.forkedOnce, !chat.title.hasSuffix(" (fork)") {
+                Self.forkedOnce = true
+                // Test hook: fork from the nth user message once the history and the CLI's
+                // controls are in (the fork takes the model and effort from them).
                 let actions = actions
                 Task { @MainActor in
                     for _ in 0..<40 {
                         let users = chat.transcript.entries.filter { $0.kind == .user }
-                        if users.indices.contains(n - 1) {
+                        if users.indices.contains(n - 1), !chat.controls.models.isEmpty {
                             actions.fork(users[n - 1])
                             return
                         }
@@ -91,6 +97,7 @@ struct ChatView: View {
             }
         }
         actions.loadEarlierConversation = { chat.loadEarlierConversation() }
+        actions.openOriginal = openOriginal
         actions.folder = chat.folder
         return actions
     }

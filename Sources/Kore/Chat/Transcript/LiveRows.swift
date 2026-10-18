@@ -217,22 +217,36 @@ struct LoadEarlierRow: View {
     }
 }
 
-/// A quiet line across the transcript, the load row's geometry but not a button:
-/// "Conversation compacted · 14:32", "Forked from "…"".
+/// A quiet line across the transcript, the load row's geometry: "Conversation compacted ·
+/// 14:32", "Forked from "…"". Not a button, except a fork's line while its original chat is
+/// open: then its label switches to that chat (`secondary`, `text` under the pointer).
 struct DividerRow: View {
     let text: String
+    var open: (() -> Void)?
+    @StateObject private var hovered = Local(false)
 
     var body: some View {
         HStack(spacing: Space.xl) {
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
-            Text(text)
-                .font(TextStyle.label)
-                .foregroundStyle(Theme.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            if let open {
+                Button(action: open) { label(hovered.value ? Theme.text : Theme.secondary) }
+                    .buttonStyle(.plain)
+                    .onHover { hovered.value = $0 }
+                    .help("Show the original chat")
+            } else {
+                label(Theme.tertiary)
+            }
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
         }
         .padding(.vertical, Space.sm)
+    }
+
+    private func label(_ color: Color) -> some View {
+        Text(text)
+            .font(TextStyle.label)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 }
 

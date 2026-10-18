@@ -81,7 +81,7 @@ final class ClaudeBackend: ChatBackend {
         // Only needed once: the transcript holds it from here.
         options.fork?.history = nil
         var launch = ClaudeSession.Options(
-            cwd: options.folder, model: options.model,
+            cwd: options.folder, model: options.model, effort: options.effort,
             permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
             resume: fork?.from ?? sessionId)
         if let fork { launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at] }

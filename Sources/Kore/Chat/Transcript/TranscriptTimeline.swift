@@ -46,6 +46,8 @@ struct TranscriptTimeline: View, Equatable {
     nonisolated static let space = "transcript"
     /// A user message's open action menu, and its button's frame.
     @StateObject private var menu = Local<(entry: TranscriptStore.Entry, frame: CGRect)?>(nil)
+    /// The menu's laid-out height (one row's until it's measured).
+    @StateObject private var menuHeight = Local(Size.forkMenuRow)
     /// "At the bottom" within this, as in the extension.
     private static let atBottom: CGFloat = 50
     /// After a send, new content glides into view for this long.
@@ -232,20 +234,24 @@ struct TranscriptTimeline: View, Equatable {
         anchor.value = (id, y)
     }
 
-    /// A message's action menu, under its button (above it near the bottom), over the rows.
+    /// A message's action menu over the rows: under its button, or above it when it would pass
+    /// the bottom of what's visible and fits above.
     @ViewBuilder private var messageMenu: some View {
         if let open = menu.value {
             ZStack(alignment: .topLeading) {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { menu.value = nil }
+                let height = menuHeight.value
                 let below = open.frame.maxY + Space.menuGap
-                let y = below + Size.forkMenuRow > visibleHeight.value && visibleHeight.value > 0
-                    ? open.frame.minY - Space.menuGap - Size.forkMenuRow : below
+                let above = open.frame.minY - Space.menuGap - height
+                let room = visibleHeight.value
+                let y = room > 0 && below + height > room && above >= 0 ? above : below
                 MessageMenu {
                     menu.value = nil
                     actions.fork(open.entry)
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { menuHeight.value = $0 }
                 .offset(x: max(0, open.frame.maxX - Size.forkMenu), y: y)
                 .transition(.opacity)
             }

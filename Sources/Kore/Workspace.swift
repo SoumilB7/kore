@@ -141,6 +141,9 @@ final class Workspace {
         }
         fork.controls.mode = chat.controls.mode
         fork.controls.planMode = chat.controls.planMode
+        fork.launchModel = chat.controls.modelId ?? chat.launchModel
+        fork.launchEffort = chat.controls.effort
+        fork.original = chat
         fork.draft = text
         if let probe = DevSnapshot.forkSend {
             // Test hook: send a probe in the fork, once its CLI is up.
@@ -154,6 +157,16 @@ final class Workspace {
         let index = tabs.firstIndex { $0.chat === chat && $0.agent == nil } ?? tabs.count - 1
         tabs.insert(tab, at: index + 1)
         activeID = tab.id
+    }
+
+    /// Switches to the tab of the chat `chat` was forked from; nil when that tab is closed.
+    func openOriginal(of chat: Chat) -> (() -> Void)? {
+        guard let original = chat.original, tab(of: original) != nil else { return nil }
+        return { [weak self, weak original] in
+            // Checked again on the click: the tab may have closed since.
+            guard let self, let original, let tab = self.tab(of: original) else { return }
+            self.select(tab)
+        }
     }
 
     /// The tab showing a chat itself (not one of its agents).
