@@ -147,6 +147,7 @@ extension CodeEditorController: @preconcurrency NSLayoutManagerDelegate {
             try? await Task.sleep(for: Size.Editor.foldIdle)
             guard !Task.isCancelled, let self else { return }
             self.computeRegions()
+            self.regionsPending = nil
             self.gutterNeedsDisplay()
         }
     }

@@ -55,7 +55,9 @@ struct QuickOpenView: View {
                 .focused($focused)
                 .padding(.horizontal, Space.xl)
                 .frame(height: Size.QuickOpen.field)
-                .onSubmit { submit(list) }
+                // What the list holds now: a field can keep an older closure than its rows (a file
+                // index that arrives after the last keystroke re-renders the rows only).
+                .onSubmit { submit(lineMode ? [] : matches) }
                 .onExitCommand { close() }
                 .onKeyPress(.downArrow) {
                     selected.value = min(selected.value + 1, max(list.count - 1, 0))
