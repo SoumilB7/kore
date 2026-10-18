@@ -25,6 +25,8 @@ struct TabBar: View {
     let height: CGFloat
     /// Room for the traffic lights; little in full screen, where they're hidden.
     let leadingInset: CGFloat
+    @Binding var historyOpen: Bool
+    @Binding var clockFrame: CGRect
     private let tabHeight: CGFloat = 30
     /// Width the tab strip got; tabs share it (180 down to 90 each), then the strip scrolls.
     @StateObject private var stripWidth = Local<CGFloat>(0)
@@ -58,8 +60,10 @@ struct TabBar: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.tertiary)
                 .lineLimit(1)
+                .truncationMode(.middle)
+                .layoutPriority(-1)
                 .help(workspace.folder.path)
-            HistoryButton(workspace: workspace, size: tabHeight)
+            HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight)
         }
         .padding(.leading, leadingInset)
         .padding(.trailing, 8)
@@ -173,168 +177,6 @@ private struct NewTabButton: View {
 
 /// The clock at the end of the tab bar: every chat the CLIs have for this folder, where chats
 /// are opened, archived and brought back.
-private struct HistoryButton: View {
-    let workspace: Workspace
-    let size: CGFloat
-    @StateObject private var hovered = Local(false)
-    @StateObject private var showing = Local(false)
-
-    var body: some View {
-        Button {
-            showing.value.toggle()
-        } label: {
-            Image(systemName: "clock")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(hovered.value || showing.value ? Theme.text : Theme.secondary)
-                .frame(width: size, height: size)
-                .background(hovered.value || showing.value ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: 8))
-                .contentShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered.value = $0 }
-        .help("Chats in this folder")
-        .popover(isPresented: $showing.value, arrowEdge: .bottom) {
-            HistoryPanel(workspace: workspace) { showing.value = false }
-        }
-    }
-}
-
-private struct HistoryPanel: View {
-    let workspace: Workspace
-    let dismiss: () -> Void
-    @StateObject private var query = Local("")
-    @StateObject private var showArchived = Local(false)
-
-    private var matches: [SessionSummary] {
-        let q = query.value.trimmingCharacters(in: .whitespaces).lowercased()
-        return workspace.chats.filter { chat in
-            chat.archived == showArchived.value && (q.isEmpty || chat.title.lowercased().contains(q))
-        }
-    }
-
-    private var archivedCount: Int { workspace.chats.count { $0.archived } }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.tertiary)
-                TextField(showArchived.value ? "Search archived…" : "Search chats…", text: $query.value)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                Button {
-                    showArchived.value.toggle()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "archivebox")
-                        if archivedCount > 0 { Text("\(archivedCount)") }
-                    }
-                    .font(.system(size: 12))
-                    .foregroundStyle(showArchived.value ? Theme.text : Theme.tertiary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(showArchived.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: 6))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(showArchived.value ? "Show chats" : "Show archived chats")
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(Theme.background, in: RoundedRectangle(cornerRadius: 8))
-
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(matches) { chat in
-                        HistoryRow(session: chat) {
-                            dismiss()
-                            if chat.archived {
-                                Task { await workspace.unarchive(chat) }
-                            } else {
-                                workspace.open(chat)
-                            }
-                        } toggleArchive: {
-                            Task { chat.archived ? await workspace.unarchive(chat) : await workspace.archive(chat) }
-                        }
-                    }
-                }
-            }
-            .frame(maxHeight: 380)
-            .fixedSize(horizontal: false, vertical: true)
-
-            if matches.isEmpty {
-                Text(!workspace.loaded ? "Loading…" : showArchived.value ? "No archived chats" : "No chats yet")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.tertiary)
-                    .padding(.vertical, 12)
-            }
-        }
-        .padding(10)
-        .frame(width: 380)
-        .presentationBackground(Theme.surface)
-        .task { await workspace.refresh() }
-    }
-}
-
-private struct HistoryRow: View {
-    let session: SessionSummary
-    let action: () -> Void
-    let toggleArchive: () -> Void
-    @StateObject private var hovered = Local(false)
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: action) {
-                HStack(spacing: 8) {
-                    ProviderLogo(provider: session.agent == .claude ? .claude : .codex, size: 13)
-                    Text(session.title)
-                        .font(.system(size: 13))
-                        .foregroundStyle(session.archived ? Theme.secondary : Theme.text)
-                        .lineLimit(1)
-                    Spacer(minLength: 12)
-                    if !hovered.value {
-                        Text(Self.age(of: session.updated))
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.tertiary)
-                    }
-                }
-                .padding(.leading, 10)
-                .padding(.trailing, hovered.value ? 4 : 10)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if hovered.value {
-                Button(action: toggleArchive) {
-                    Image(systemName: session.archived ? "tray.and.arrow.up" : "archivebox")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.secondary)
-                        .frame(width: 26, height: 26)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(session.archived ? "Unarchive" : "Archive")
-                .padding(.trailing, 4)
-            }
-        }
-        .background(hovered.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: 7))
-        .onHover { hovered.value = $0 }
-    }
-
-    /// "now", "5m", "3h", "2d", then the date.
-    private static func age(of date: Date) -> String {
-        let seconds = Date().timeIntervalSince(date)
-        switch seconds {
-        case ..<60: return "now"
-        case ..<3600: return "\(Int(seconds / 60))m"
-        case ..<86400: return "\(Int(seconds / 3600))h"
-        case ..<(7 * 86400): return "\(Int(seconds / 86400))d"
-        default: return date.formatted(.dateTime.month(.abbreviated).day())
-        }
-    }
-}
-
 /// Provider picker sitting where the composer will appear.
 private struct EmptyTab: View {
     let tab: ChatTab

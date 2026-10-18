@@ -152,16 +152,19 @@ final class ChatModel: Identifiable {
 
     /// A user rename, saved by the CLI (Claude: custom title, Codex: thread name).
     func rename(_ newName: String) {
+        Task { await applyRename(newName) }
+    }
+
+    /// Renames and waits until the CLI has it (starting the CLI if needed).
+    func applyRename(_ newName: String) async {
         let newName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !newName.isEmpty else { return }
         name = newName
-        Task {
-            await start()
-            switch backend {
-            case .claude(let session): try? await session.rename(newName)
-            case .codex(let session): try? await session.rename(newName)
-            case nil: break
-            }
+        await start()
+        switch backend {
+        case .claude(let session): try? await session.rename(newName)
+        case .codex(let session): try? await session.rename(newName)
+        case nil: break
         }
     }
 

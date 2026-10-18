@@ -163,44 +163,77 @@ struct ImageViewer: View {
         return nil
     }
 
+    /// Full in a roomy window; in a narrow tile it drops the percentage, folds the pen colours
+    /// into one swatch menu, and at the smallest keeps only zoom-to-fit, pen, undo and the action.
     private var toolbar: some View {
+        ViewThatFits(in: .horizontal) {
+            toolbarRow(.full)
+            toolbarRow(.compact)
+            toolbarRow(.minimal)
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private enum Density { case full, compact, minimal }
+
+    private func toolbarRow(_ density: Density) -> some View {
         HStack(spacing: 2) {
-            toolButton("minus.magnifyingglass", help: "Zoom out (⌘-)", action: editor.zoomOut)
-            Button(action: editor.actualSize) {
-                Text("\(Int((editor.zoom * 100).rounded()))%")
-                    .font(.system(size: 12).monospacedDigit())
-                    .foregroundStyle(Theme.secondary)
-                    .frame(width: 44, height: 28)
-                    .contentShape(Rectangle())
+            if density != .minimal {
+                toolButton("minus.magnifyingglass", help: "Zoom out (⌘-)", action: editor.zoomOut)
             }
-            .buttonStyle(.plain)
-            .help("Actual size")
-            toolButton("plus.magnifyingglass", help: "Zoom in (⌘=)", action: editor.zoomIn)
+            if density == .full {
+                Button(action: editor.actualSize) {
+                    Text("\(Int((editor.zoom * 100).rounded()))%")
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(Theme.secondary)
+                        .frame(width: 44, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Actual size")
+            }
+            if density != .minimal {
+                toolButton("plus.magnifyingglass", help: "Zoom in (⌘=)", action: editor.zoomIn)
+            }
             toolButton("arrow.up.left.and.arrow.down.right", help: "Fit (⌘0)", action: editor.zoomToFit)
             divider
             toolButton("pencil", help: "Pen", isOn: editor.penOn) { editor.penOn.toggle() }
             if editor.penOn {
-                ForEach(ImageEditor.PenColor.allCases, id: \.self) { color in
-                    Button {
-                        editor.color = color
-                    } label: {
-                        Circle()
-                            .fill(Color(nsColor: color.nsColor))
-                            .frame(width: 12, height: 12)
-                            .overlay(Circle().strokeBorder(Theme.text, lineWidth: editor.color == color ? 1.5 : 0).padding(-3))
-                            .frame(width: 24, height: 28)
-                            .contentShape(Rectangle())
+                if density == .full {
+                    ForEach(ImageEditor.PenColor.allCases, id: \.self) { color in
+                        Button {
+                            editor.color = color
+                        } label: {
+                            swatch(color, selected: editor.color == color)
+                        }
+                        .buttonStyle(.plain)
                     }
+                } else {
+                    Menu {
+                        ForEach(ImageEditor.PenColor.allCases, id: \.self) { color in
+                            Button(String(describing: color).capitalized) { editor.color = color }
+                        }
+                    } label: {
+                        swatch(editor.color, selected: true)
+                    }
+                    .menuStyle(.button)
                     .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Pen colour")
                 }
             }
             toolButton("arrow.uturn.backward", help: "Undo (⌘Z)", action: editor.undo)
                 .disabled(editor.strokes.isEmpty)
-            toolButton("trash", help: "Clear markup", action: editor.clear)
-                .disabled(editor.strokes.isEmpty)
+            if density != .minimal {
+                toolButton("trash", help: "Clear markup", action: editor.clear)
+                    .disabled(editor.strokes.isEmpty)
+            }
             divider
             Button(actionTitle, action: finish)
                 .buttonStyle(SubtleButtonStyle(prominent: true))
+                .lineLimit(1)
+                .fixedSize()
                 .help("\(actionTitle) (Return)")
                 .padding(.leading, 4)
         }
@@ -208,6 +241,15 @@ struct ImageViewer: View {
         .padding(.vertical, 6)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
+    }
+
+    private func swatch(_ color: ImageEditor.PenColor, selected: Bool) -> some View {
+        Circle()
+            .fill(Color(nsColor: color.nsColor))
+            .frame(width: 12, height: 12)
+            .overlay(Circle().strokeBorder(Theme.text, lineWidth: selected ? 1.5 : 0).padding(-3))
+            .frame(width: 24, height: 28)
+            .contentShape(Rectangle())
     }
 
     private var divider: some View {

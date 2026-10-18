@@ -83,15 +83,18 @@ final class Workspace {
 
     private func load() async {
         let folder = folder
-        let claude = await Task.detached { ClaudeHistory.sessions(in: folder) }.value
-        let codexThreads = try? await CodexHistory.threads(in: folder)
-        let codex = codexThreads ?? []
         let hidden = ClaudeArchive.ids
-        chats = (claude.map { session in
+        let claude = await Task.detached { ClaudeHistory.sessions(in: folder) }.value.map { session in
             var session = session
             session.archived = hidden.contains(session.id)
             return session
-        } + codex).sorted { $0.updated > $1.updated }
+        }
+        // Claude's list is a quick file read; show it before Codex's app-server answers.
+        if !loaded {
+            chats = (claude + chats.filter { $0.agent == .codex }).sorted { $0.updated > $1.updated }
+        }
+        let codexThreads = try? await CodexHistory.threads(in: folder)
+        chats = (claude + (codexThreads ?? [])).sorted { $0.updated > $1.updated }
         if !loaded { reconcileRestored(codexListed: codexThreads != nil) }
         loaded = true
     }
@@ -120,6 +123,24 @@ final class Workspace {
         case .codex: try? await CodexHistory.archive(session.id, in: folder)
         }
         setArchived(session.id, true)
+    }
+
+    /// Renames a chat through its CLI. An open tab's chat does it directly; a chat that isn't
+    /// open is resumed just long enough to rename it.
+    func rename(_ session: SessionSummary, to name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        if let index = chats.firstIndex(where: { $0.id == session.id }) {
+            let old = chats[index]
+            chats[index] = SessionSummary(id: old.id, agent: old.agent, title: name, updated: old.updated, archived: old.archived)
+        }
+        if let chat = tab(for: session.id)?.chat {
+            await chat.applyRename(name)
+        } else {
+            let chat = chat(session)
+            await chat.applyRename(name)
+            chat.close()
+        }
     }
 
     /// Brings an archived chat back and opens it.

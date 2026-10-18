@@ -5,6 +5,8 @@ struct FolderWindow: View {
     let folder: URL
     @StateObject private var workspace: Local<Workspace>
     @StateObject private var fullScreen = Local(false)
+    @StateObject private var historyOpen = Local(false)
+    @StateObject private var clockFrame = Local(CGRect.zero)
 
     init(folder: URL) {
         self.folder = folder
@@ -21,16 +23,32 @@ struct FolderWindow: View {
                     workspace: workspace.value,
                     // Full screen has no title bar inset; keep the same 40pt row.
                     height: fullScreen.value ? 40 : max(geometry.safeAreaInsets.top, 28),
-                    leadingInset: fullScreen.value ? 10 : 82
+                    leadingInset: fullScreen.value ? 10 : 82,
+                    historyOpen: $historyOpen.value,
+                    clockFrame: $clockFrame.value
                 )
                 .zIndex(1)
                 WorkspaceView(workspace: workspace.value)
                     .environment(\.chatColumn, fullScreen.value ? .fullScreen : .window)
+                    // History hangs under the clock, inside the window whatever its size. It
+                    // sits on the content, below the title bar (a text field in an overlay
+                    // reaching into the title bar took no typing).
+                    .overlay(alignment: .topTrailing) {
+                        HistoryPanel(workspace: workspace.value, isOpen: historyOpen.value, anchor: clockFrame.value) {
+                            historyOpen.value = false
+                        }
+                        .frame(width: min(380, max(geometry.size.width - 16, 200)))
+                        .padding(.top, 6)
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 12)
+                    }
             }
             .ignoresSafeArea(.container, edges: .top)
+            .animation(.easeOut(duration: 0.12), value: historyOpen.value)
         }
         .background(TitleBar { fullScreen.value = $0 })
-        .frame(minWidth: 640, minHeight: 420)
+        // Small minimum: every part has to work as a tile, not just as a full window.
+        .frame(minWidth: 360, minHeight: 300)
         .navigationTitle(folder.lastPathComponent)
         .focusedSceneValue(\.workspace, workspace.value)
         .onAppear {
