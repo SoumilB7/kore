@@ -5,7 +5,8 @@ import Foundation
 /// Apps launched from Finder/Dock get a bare PATH (/usr/bin:/bin:...), so we ask the
 /// user's login shell for its PATH once per run. That picks up nvm, Homebrew, ~/.local/bin,
 /// etc. An interactive login shell takes a second or two, so it starts at app launch
-/// (`prepare()`), off the main thread, and only the first CLI start waits for what's left.
+/// (`prepare()`), off the main thread. Until it answers, a CLI starts with the PATH the last
+/// run's shell gave, when the CLI is still found there; otherwise it waits for this run's.
 public enum CLIExecutable {
     public struct Launch: Sendable {
         public let url: URL
@@ -24,20 +25,37 @@ public enum CLIExecutable {
     }
 
     public static func resolve(_ name: String, override: URL? = nil) async throws -> Launch {
+        // Last run's PATH counts only if the CLI is in it, not just in the usual folders below:
+        // a CLI found there with a stale PATH would run its own tools without theirs.
+        if shellResult.value == nil, let cached = cachedEnvironment,
+            let launch = find(name, override, in: cached, usualFolders: false)
+        {
+            return launch
+        }
         let env = await environment()
         if let override { return Launch(url: override, environment: env) }
+        if let launch = find(name, nil, in: env, usualFolders: true) { return launch }
+        throw Failure.notFound(name: name, searched: searchPath(env, usualFolders: true))
+    }
 
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let dirs = (env["PATH"] ?? "").split(separator: ":").map(String.init) + [
-            "\(home)/.claude/local", "\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin",
-        ]
-        for dir in dirs {
+    private static func find(_ name: String, _ override: URL?, in env: [String: String], usualFolders: Bool) -> Launch? {
+        if let override {
+            return FileManager.default.isExecutableFile(atPath: override.path) ? Launch(url: override, environment: env) : nil
+        }
+        for dir in searchPath(env, usualFolders: usualFolders) {
             let path = (dir as NSString).appendingPathComponent(name)
             if FileManager.default.isExecutableFile(atPath: path) {
                 return Launch(url: URL(fileURLWithPath: path), environment: env)
             }
         }
-        throw Failure.notFound(name: name, searched: dirs)
+        return nil
+    }
+
+    private static func searchPath(_ env: [String: String], usualFolders: Bool) -> [String] {
+        let path = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        guard usualFolders else { return path }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return path + ["\(home)/.claude/local", "\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
     }
 
     /// Variables that would make a CLI authenticate some other way than its own login
@@ -60,11 +78,30 @@ public enum CLIExecutable {
     public static func environment() async -> [String: String] { await loading.value }
 
     private static let loading = Task.detached(priority: .userInitiated) { () -> [String: String] in
+        let path = loginShellPATH()
+        let env = cleaned(path: path)
+        shellResult.set(env)
+        if let path { UserDefaults.standard.set(path, forKey: cacheKey) }
+        return env
+    }
+
+    /// The process environment with a CLI-ready PATH and without the variables above.
+    private static func cleaned(path: String?) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
-        if let path = loginShellPATH() { env["PATH"] = path }
+        if let path { env["PATH"] = path }
         for name in foreignAuthVariables + inheritedHostVariables { env[name] = nil }
         return env
     }
+
+    /// This run's shell answer, once it's in: from then on every start uses it.
+    private static let shellResult = Locked<[String: String]?>(nil)
+
+    /// Last run's login-shell PATH. Only PATH is kept: the shell's environment can hold keys
+    /// and tokens, and defaults are a plain plist. Dev builds share the app's defaults domain
+    /// but keep their own key, so a terminal's PATH never becomes the app's.
+    private static let cacheKey = Bundle.main.bundleURL.pathExtension == "app" ? "cliSearchPath" : "cliSearchPath.dev"
+    private static let cachedEnvironment: [String: String]? = UserDefaults.standard.string(forKey: cacheKey)
+        .map { cleaned(path: $0) }
 
     private static func loginShellPATH() -> String? {
         let marker = "__KORE_PATH__"
@@ -91,4 +128,16 @@ public enum CLIExecutable {
         guard parts.count >= 3, !parts[1].isEmpty else { return nil }
         return parts[1]
     }
+}
+
+/// A value read and written from any thread.
+final class Locked<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+
+    init(_ value: Value) { stored = value }
+
+    var value: Value { lock.withLock { stored } }
+
+    func set(_ value: Value) { lock.withLock { stored = value } }
 }
