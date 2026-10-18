@@ -26,6 +26,8 @@ final class AccountState {
     private(set) var methodsOpen = false
     private(set) var disclosed: Set<String> = []
     private(set) var editor: Editor?
+    /// A form's picker unfolded in the card, by name ("credentials", "profile").
+    private(set) var formPicker: String?
     /// The platform forms' values that aren't secret, kept for this run of Kore.
     var form = PlatformForm()
     /// A form's Save under way.
@@ -48,7 +50,7 @@ final class AccountState {
         self.provider = provider
         self.folder = folder
         isOpen = true
-        (askingSignOut, copied, methodsOpen, editor, formError, filled) = (false, false, false, nil, nil, [])
+        (askingSignOut, copied, methodsOpen, editor, formPicker, formError, filled) = (false, false, false, nil, nil, nil, [])
         store.dismissOutcome(provider)
         if store.flow(provider)?.step.live != true { Task { await store.refresh(provider) } }
     }
@@ -58,13 +60,17 @@ final class AccountState {
     func close() {
         guard isOpen else { return }
         isOpen = false
-        (askingSignOut, methodsOpen, editor, formError, filled) = (false, false, nil, nil, [])
+        (askingSignOut, methodsOpen, editor, formPicker, formError, filled) = (false, false, nil, nil, nil, [])
         store.dismissOutcome(provider)
     }
 
-    /// Esc: the methods fold, then the field or form, then the question go first. False when
-    /// there's nothing to step back from, and the popup closes.
+    /// Esc: the methods or a form's choices fold, then the field or form, then the question go
+    /// first. False when there's nothing to step back from, and the popup closes.
     func stepBack() -> Bool {
+        if formPicker != nil {
+            formPicker = nil
+            return true
+        }
         if methodsOpen {
             methodsOpen = false
             return true
@@ -142,7 +148,7 @@ final class AccountState {
     /// Back to what was there: secrets go with the view, a refused key's words with the flow.
     func closeEditor() {
         guard editor != nil else { return }
-        (editor, formError, filled) = (nil, nil, [])
+        (editor, formPicker, formError, filled) = (nil, nil, nil, [])
         if case .keyFailed = store.flow(provider)?.step { store.dismissOutcome(provider) }
     }
 
@@ -164,6 +170,12 @@ final class AccountState {
 
     /// A form's field was edited: an error gives way to the caption.
     func editedForm() { formError = nil }
+
+    /// A form's picker: its choices unfold under it in the card, or fold.
+    func toggleFormPicker(_ name: String) { formPicker = formPicker == name ? nil : name }
+
+    /// A choice picked: the choices fold.
+    func foldFormPicker() { formPicker = nil }
 
     /// What Save would write, or nil while a required field is missing.
     func setup(_ platform: ClaudeSettings.Platform, _ secrets: PlatformForm.Secrets) -> ClaudeSettings.Setup? {

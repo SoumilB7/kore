@@ -75,11 +75,10 @@ final class AccountMethods: ChatStoryline {
         }
     }
 
-    private static func choose(_ picker: String, _ value: String) -> Expect {
-        Expect("\(picker): \(value) picked") { story in
-            story.app.chat?.storyAccountChoose(picker, value)
-            return true
-        }
+    /// A form's picker pressed, its choices unfolded in the card, and one pressed.
+    private static func choose(_ picker: String, _ value: String) -> [any Step] {
+        let id = StoryID.Composer.accountChoice(picker, value)
+        return [Press(picker == "credentials" ? part(.credentials) : field(picker)), WaitForElement(.id(id)), Press(.id(id))]
     }
 
     /// Claude's user settings as the run's file holds them.
@@ -215,11 +214,11 @@ final class AccountMethods: ChatStoryline {
             Self.lines("the Bedrock form, from the AWS config", [
                 "Amazon Bedrock", "Credentials: AWS profile", "Profile: default", "Region: us-east-1", "Saved to Claude's settings.",
             ]),
-            Self.choose("profile", "dev"),
+        ] + Self.choose("profile", "dev") + [
             Self.lines("the region follows the profile", [
                 "Amazon Bedrock", "Credentials: AWS profile", "Profile: dev", "Region: us-west-2", "Saved to Claude's settings.",
             ]),
-            Self.choose("credentials", "apiKey"),
+        ] + Self.choose("credentials", "apiKey") + [
             WaitForFocus(Self.field("apikey")),
             TypeText("bedrock-kore-test"),
             Self.lines("a Bedrock API key, masked, saved in plain text", [
@@ -231,7 +230,15 @@ final class AccountMethods: ChatStoryline {
             WaitForFocus(Self.field("region")),
             FadesEnd(),
             Snapshot("methods-bedrock-form"),
-            Self.choose("credentials", "profile"),
+            // The choices unfold under the picker; Esc folds them, the form staying.
+            Press(Self.part(.credentials)),
+            WaitForElement(.id(StoryID.Composer.accountChoice("credentials", "accessKey"))),
+            FadesEnd(),
+            Snapshot("methods-form-picker"),
+            Key(.escape),
+            ExpectElement(.id(StoryID.Composer.accountChoice("credentials", "accessKey")), .absent),
+            Expect("the form still open") { $0.app.chat?.storyAccount.first == "Amazon Bedrock" },
+        ] + Self.choose("credentials", "profile") + [
             Press(Self.part(.save)),
             Self.lines("saved: the platform, its region and profile", ["Amazon Bedrock", "us-west-2 · profile dev", "Saved."]),
             Self.check("exactly Bedrock's keys, the rest kept") {
@@ -287,7 +294,7 @@ final class AccountMethods: ChatStoryline {
                 return true
             },
         ] + Self.pick("3rd-party platform/Google Vertex AI…") + [
-            Self.choose("credentials", "keyFile"),
+        ] + Self.choose("credentials", "keyFile") + [
             Press(Self.part(.choose)),
             Self.lines("the key file, its project", [
                 "Google Vertex AI", "Credentials: Key file", "Key file: vertex-sa.json", "Project: acme-ml-prod", "Region: us-east5",

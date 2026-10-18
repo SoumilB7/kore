@@ -198,20 +198,6 @@ extension Chat {
     }
     /// Whether the ⌄ shows (more than one method to pick).
     package var storyAccountHasMenu: Bool { account.hasMenu }
-    /// A form's picker, as a pick from its menu: "credentials" by the choice's case name
-    /// ("profile", "apiKey", "accessKey", "environment"; "gcloud", "keyFile"), "profile" by name.
-    package func storyAccountChoose(_ picker: String, _ value: String) {
-        switch (account.editor, picker) {
-        case (.platform(.bedrock), "credentials"):
-            if let choice = ClaudeSettings.BedrockCredentials(rawValue: value) { account.form.bedrock = choice }
-        case (.platform(.vertex), "credentials"):
-            if let choice = ClaudeSettings.VertexCredentials(rawValue: value) { account.form.vertex = choice }
-        case (.platform(.bedrock), "profile"):
-            account.form.pick(profile: value)
-        default: break
-        }
-        account.editedForm()
-    }
     /// Whether a field or form is open in the popup, and has the keys.
     package var storyAccountEditing: Bool { account.isEditing }
     /// The account changed since the chat's CLI started: it hasn't started again yet.

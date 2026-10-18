@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// A cloud platform's form, in the whole Account card (account-popup.html §7.3): the platform's
 /// name, two to five rows (a label column, then a field, picker or file), and a footer saying
-/// where Save puts it, with Save and Cancel. The secrets are this view's alone: cleared as Save
+/// where Save puts it, with Save and Cancel. A picker's choices unfold under it in the card. The secrets are this view's alone: cleared as Save
 /// sends them, and gone when the form closes. Every other value is `AccountState.form`'s.
 struct PlatformFormView: View {
     let state: AccountState
@@ -53,24 +53,21 @@ struct PlatformFormView: View {
     @ViewBuilder private var rows: some View {
         switch platform {
         case .bedrock:
-            row("Credentials") {
-                picker(
-                    "credentials", PlatformForm.short(form.bedrock),
-                    ClaudeSettings.BedrockCredentials.allCases.map { choice in
-                        (PlatformForm.label(choice), choice == form.bedrock, { state.form.bedrock = choice; state.editedForm() })
-                    })
+            let credentials = ClaudeSettings.BedrockCredentials.allCases.map { choice in
+                Choice(choice.rawValue, PlatformForm.label(choice), choice == form.bedrock) { state.form.bedrock = choice }
             }
+            row("Credentials") { picker("credentials", PlatformForm.short(form.bedrock)) }
+            choices("credentials", credentials)
             switch form.bedrock {
             case .profile:
                 row("Profile") {
                     if form.profiles.names.isEmpty {
                         Text("None in ~/.aws/config").font(TextStyle.label).foregroundStyle(Theme.tertiary).fieldWell(focused: false, fills: false)
                     } else {
-                        picker(
-                            "profile", form.profile ?? "",
-                            form.profiles.names.map { name in (name, name == form.profile, { state.form.pick(profile: name); state.editedForm() }) })
+                        picker("profile", form.profile ?? "")
                     }
                 }
+                choices("profile", form.profiles.names.map { name in Choice(name, name, name == form.profile) { state.form.pick(profile: name) } })
             case .apiKey:
                 row("API key") { secret(.apiKey, "apikey", bedrockKey, prompt: "Bedrock API key", saved: .bedrockKey) }
             case .accessKey:
@@ -84,13 +81,11 @@ struct PlatformFormView: View {
                 text(.region, "region", edited(\.region, flag: \.regionEdited), prompt: "us-east-1")
             }
         case .vertex:
-            row("Credentials") {
-                picker(
-                    "credentials", PlatformForm.short(form.vertex),
-                    ClaudeSettings.VertexCredentials.allCases.map { choice in
-                        (PlatformForm.label(choice), choice == form.vertex, { state.form.vertex = choice; state.editedForm() })
-                    })
+            let credentials = ClaudeSettings.VertexCredentials.allCases.map { choice in
+                Choice(choice.rawValue, PlatformForm.label(choice), choice == form.vertex) { state.form.vertex = choice }
             }
+            row("Credentials") { picker("credentials", PlatformForm.short(form.vertex)) }
+            choices("credentials", credentials)
             if form.vertex == .keyFile {
                 row("Key file") { keyFile }
             }
@@ -159,30 +154,43 @@ struct PlatformFormView: View {
             .storyID(StoryID.Composer.accountField(name))
     }
 
-    /// The short choice and a ⌄; its menu holds the CLI's full labels, the choice checked.
-    private func picker(_ name: String, _ choice: String, _ items: [(String, Bool, () -> Void)]) -> some View {
-        Menu {
-            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                Button {
-                    item.2()
-                } label: {
-                    if item.1 { Label(item.0, systemImage: "checkmark") } else { Text(item.0) }
-                }
-            }
+    /// The short choice and a ⌄ (⌃ while its choices show under it).
+    private func picker(_ name: String, _ choice: String) -> some View {
+        let open = state.formPicker == name
+        return Button {
+            state.toggleFormPicker(name)
         } label: {
             HStack(spacing: Space.xs) {
                 Text(choice).foregroundStyle(Theme.text)
-                Image(systemName: "chevron.down").font(Glyph.chevron).foregroundStyle(Theme.secondary)
+                Image(systemName: open ? "chevron.up" : "chevron.down").font(Glyph.chevron).foregroundStyle(Theme.secondary)
             }
-            .fieldWell(focused: false, fills: false)
+            .fieldWell(focused: open, fills: false)
             .contentShape(Rectangle())
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
-        // A host never opens the menu (its tracking loop would hold the run): it picks instead.
-        .storyID(name == "credentials" ? StoryID.Composer.account.part(.credentials) : StoryID.Composer.accountField(name), press: {})
+        .storyID(name == "credentials" ? StoryID.Composer.account.part(.credentials) : StoryID.Composer.accountField(name))
+    }
+
+    /// A picker's choices, unfolded under its row: the CLI's full labels, the current one checked,
+    /// in the methods' rows.
+    @ViewBuilder private func choices(_ name: String, _ choices: [Choice]) -> some View {
+        if state.formPicker == name {
+            GridRow {
+                // The whole card's width, so the CLI's full labels fit.
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(choices, id: \.id) { choice in
+                        ChoiceRow(choice: choice) {
+                            choice.pick()
+                            state.editedForm()
+                            state.foldFormPicker()
+                        }
+                        .storyID(StoryID.Composer.accountChoice(name, choice.id))
+                    }
+                }
+                .gridCellColumns(2)
+            }
+        }
     }
 
     /// The key file's name (its path on hover), or "No file", then Choose….
@@ -276,5 +284,44 @@ struct PlatformFormView: View {
         case .foundry: order = [(.resource, form.resource.isEmpty), (.foundryKey, foundryKey.value.isEmpty)]
         }
         focus = order.first(where: \.1)?.0 ?? order.first?.0
+    }
+}
+
+/// One of a form picker's choices: its id (the case's name, a profile's), its label, whether it's
+/// the current one, and what picking it sets.
+private struct Choice {
+    let id: String
+    let label: String
+    let current: Bool
+    let pick: () -> Void
+
+    init(_ id: String, _ label: String, _ current: Bool, pick: @escaping () -> Void) {
+        (self.id, self.label, self.current, self.pick) = (id, label, current, pick)
+    }
+}
+
+/// A choice's row, as tall as a sign-in method's; the current one checked.
+private struct ChoiceRow: View {
+    let choice: Choice
+    let action: () -> Void
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Space.md) {
+                Text(choice.label).font(TextStyle.body).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: Space.md)
+                if choice.current {
+                    Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
+                }
+            }
+            .padding(.horizontal, Space.lg)
+            .frame(maxWidth: .infinity, minHeight: Size.Picker.method, alignment: .leading)
+            .hoverFill(hovered.value, Theme.Row.hover(.surface))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
+        .accessibilityAddTraits(choice.current ? .isSelected : [])
     }
 }
