@@ -7,7 +7,7 @@ import SwiftUI
 @MainActor
 enum DevGallery {
     static func showIfRequested() {
-        if DevTimelineGallery.showIfRequested() { return }
+        if DevTimelineGallery.showIfRequested() || DevMarkdownGallery.showIfRequested() { return }
         guard ProcessInfo.processInfo.environment["KORE_GALLERY"] == "1" else { return }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 1640), styleMask: [.titled], backing: .buffered, defer: false)
