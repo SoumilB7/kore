@@ -96,6 +96,8 @@ extension StoryID {
         package static func row(_ agent: String) -> StoryID { StoryID(.agentmap, "row", key: agent) }
         /// The wires drawn behind an agent's row: its elbow and the spines passing it.
         package static func wires(_ agent: String) -> StoryID { StoryID(.agentmap, "wires", key: agent) }
+        /// The stopped agents' group: its row opens and closes it.
+        package static let stopped = StoryID(.agentmap, "stopped")
         package static let open = StoryID(.agentmap, "open")
         package static let stop = StoryID(.agentmap, "stop")
         package static let close = StoryID(.agentmap, "close")

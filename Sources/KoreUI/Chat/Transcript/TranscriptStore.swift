@@ -284,12 +284,14 @@ final class TranscriptStore {
     }
 
     struct AgentSummary: Equatable {
+        /// Agents that did or are doing work: the stopped ones are counted apart.
         var count = 0
+        var stopped = 0
         /// Running agents' mark indexes and ids, in spawn order.
         var running: [AgentRef] = []
         /// Some agent is waiting for the user.
         var waiting = false
-        /// The first few agents, for the idle stack.
+        /// The first few agents, for the idle stack; the stopped ones when there are no others.
         var first: [AgentRef] = []
         var failed: [String] = []
     }
@@ -717,10 +719,32 @@ final class TranscriptStore {
 
     // MARK: The agent map
 
-    /// Every agent as a tree, parents before children, in spawn order.
-    func agentTree() -> [AgentNode] {
+    /// The agent map's two trees, parents before children, in spawn order: the agents, and the
+    /// stopped ones apart. A stopped agent takes its own agents with it, except those running:
+    /// they stay in the tree, where it was. One that runs again goes back to its place.
+    func agentTree() -> (tree: [AgentNode], stopped: [AgentNode]) {
         let infos = agentOrder.compactMap(agent)
-        let children = Dictionary(grouping: infos, by: { $0.parent ?? "" })
+        let byId = Dictionary(infos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        // Parents spawn before their children, so each parent is settled before its children.
+        var grouped: Set<String> = []
+        // The nearest ancestor still in the tree ("" for the chat).
+        var treeParent: [String: String] = [:]
+        for info in infos {
+            let parent = info.parent.flatMap { byId[$0] == nil ? nil : $0 }
+            treeParent[info.id] = parent.map { grouped.contains($0) ? treeParent[$0] ?? "" : $0 } ?? ""
+            if info.status == .stopped || (info.status != .running && parent.map(grouped.contains) == true) {
+                grouped.insert(info.id)
+            }
+        }
+        let tree = Self.walk(infos.filter { !grouped.contains($0.id) }) { treeParent[$0.id] ?? "" }
+        let stopped = Self.walk(infos.filter { grouped.contains($0.id) }) { info in
+            info.parent.flatMap { grouped.contains($0) ? $0 : nil } ?? ""
+        }
+        return (tree, stopped)
+    }
+
+    private static func walk(_ infos: [AgentInfo], parent: (AgentInfo) -> String) -> [AgentNode] {
+        let children = Dictionary(grouping: infos, by: parent)
         var nodes: [AgentNode] = []
         func walk(_ parent: String, depth: Int, rails: [Bool]) {
             let kids = children[parent] ?? []
@@ -747,9 +771,11 @@ final class TranscriptStore {
         guard !agentOrder.isEmpty else { return AgentSummary() }
         let infos = agentOrder.compactMap(agent)
         let refs = infos.map { AgentRef(id: $0.id, index: $0.index, name: $0.name, status: $0.status) }
+        let working = refs.filter { $0.status != .stopped }
         return AgentSummary(
-            count: infos.count, running: refs.filter { $0.status == .running }, waiting: infos.contains { $0.waiting > 0 },
-            first: Array(refs.prefix(3)), failed: infos.filter { $0.status == .failed }.map(\.id))
+            count: working.count, stopped: refs.count - working.count, running: refs.filter { $0.status == .running },
+            waiting: infos.contains { $0.waiting > 0 }, first: Array((working.isEmpty ? refs : working).prefix(3)),
+            failed: infos.filter { $0.status == .failed }.map(\.id))
     }
 
     /// Claude frames a sub-agent's report with a first line of its own; the report is the rest.
@@ -1170,6 +1196,17 @@ final class TranscriptStore {
             if let result { $0.result = result }
             // A replayed agent has no timing of its own unless the CLI gave one.
             if $0.duration == nil, !self.batching { $0.duration = date.timeIntervalSince($0.startedAt) }
+        }
+    }
+
+    /// It runs again: its clock carries on from where it ended, and its result stays until the
+    /// next one.
+    func agentResumed(id: String, at date: Date = Date()) {
+        guard let info = agent(id), info.status != .running else { return }
+        updateAgent(id) {
+            $0.status = .running
+            if let duration = $0.duration { $0.startedAt = date.addingTimeInterval(-duration) }
+            $0.duration = nil
         }
     }
 

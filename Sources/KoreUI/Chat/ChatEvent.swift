@@ -62,6 +62,9 @@ package enum ChatEvent: Sendable {
     case agentSpawned(AgentInfo)
     case agentProgress(id: String, AgentProgress)
     case agentFinished(id: String, AgentStatus, result: String?)
+    /// A stopped or finished agent runs again (Claude's SendMessage, a Codex follow-up): the
+    /// same agent, in its place, running.
+    case agentResumed(id: String)
 
     // MARK: Approvals
 

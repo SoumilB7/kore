@@ -10,6 +10,8 @@ final class AgentMapState {
     private(set) var seenFailures: Set<String> = []
     /// Branches folded in the tree.
     var folded: Set<String> = []
+    /// The stopped agents' group is open (it starts closed).
+    var stoppedOpen = false
 
     func open(selecting id: String? = nil) {
         if let id { selected = id }

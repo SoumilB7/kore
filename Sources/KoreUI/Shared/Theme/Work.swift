@@ -261,6 +261,9 @@ extension Layout {
         static let paneMin: CGFloat = 280
         static let paneShare: CGFloat = 0.45
         static let labelRoom: CGFloat = 200
+        /// The stopped agents' group row, below the tree.
+        static let groupRow: CGFloat = 34
+        static let groupTop: CGFloat = 8
     }
 }
 
