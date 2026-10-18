@@ -383,7 +383,7 @@ private struct GraphRootRow: View {
                 Text((["this chat"] + [chat.controls.currentModel?.name ?? chat.controls.modelId].compactMap { $0 }
                     + [AgentMeter.clock(chat.transcript.workedFor)]).joined(separator: " · "))
                     .font(TextStyle.caption.monospacedDigit())
-                    .foregroundStyle(Theme.tertiary)
+                    .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)

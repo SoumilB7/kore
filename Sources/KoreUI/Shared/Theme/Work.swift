@@ -19,8 +19,8 @@ extension Theme {
     static let timelineLine = text.opacity(0.16)
     /// A dot in the default state.
     static let dot = secondary
-    /// IN / OUT labels.
-    static let toolLabel = secondary.opacity(0.5)
+    /// IN / OUT labels: 5.6 : 1 on the tool box's `surface`.
+    static let toolLabel = secondary
     /// A sub-agent's shape, and the faint disc behind it (owner, 2026-10-21: shapes, one hue,
     /// standing out from the line's state dots).
     static let agentMark = accent

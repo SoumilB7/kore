@@ -273,7 +273,7 @@ private struct HistoryRow: View {
                 if !showsActions {
                     Text(session.updated.historyAge)
                         .font(Chrome.label)
-                        .foregroundStyle(Theme.tertiary)
+                        .foregroundStyle(Theme.secondary)
                         .fixedSize()
                 }
             }

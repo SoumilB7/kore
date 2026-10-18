@@ -314,7 +314,7 @@ struct AccountPopup: View {
                 let caption = reach ?? AccountText.caption(identity)
                 Text(caption)
                     .font(TextStyle.caption)
-                    .foregroundStyle(reach == nil ? Theme.secondary : Theme.tertiary)
+                    .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(caption)

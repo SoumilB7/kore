@@ -10,10 +10,11 @@ enum Theme {
     static let surface = Color(hex: 0x171D21)
     static let surfaceHover = Color(hex: 0x1D252A)
     static let border = Color(hex: 0xBED7EB).opacity(0.09)
-    /// 15.7, 6.0 and 3.0 : 1 on the background; tertiary is for hints only.
+    /// 16.2, 6.2 and 4.8 : 1 on the background (tertiary 4.3 on `surface`, 4.0 on `surfaceHover`,
+    /// 3.4 on `surfaceRaised`). Tertiary is for hints only: what a person needs to read is secondary.
     static let text = Color(hex: 0xEAEEF1)
     static let secondary = Color(hex: 0x89959F)
-    static let tertiary = Color(hex: 0x596269)
+    static let tertiary = Color(hex: 0x77828B)
     static let danger = Color(hex: 0xF0736B)
     /// Links, caret, selection, progress.
     static let accent = Blue.b300

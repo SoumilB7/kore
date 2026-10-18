@@ -316,7 +316,7 @@ struct CompactionSummary: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             Text("Summary from Claude")
                 .font(TextStyle.caption)
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.secondary)
             HStack(alignment: .top, spacing: Space.lg) {
                 Rectangle().fill(Theme.timelineLine).frame(width: Stroke.quote)
                 VStack(alignment: .leading, spacing: 0) {
@@ -360,7 +360,7 @@ struct QueuedMessage: View {
             MessageHeader(entry: entry, open: true, actions: actions)
                 .padding(.vertical, -Layout.Timeline.itemPadding)
                 .opacity(Theme.queuedOpacity)
-            Text("Queued").font(TextStyle.caption).foregroundStyle(Theme.tertiary)
+            Text("Queued").font(TextStyle.caption).foregroundStyle(Theme.secondary)
         }
         .padding(.vertical, Space.sm / 2)
         .storyID(StoryID.Composer.queued(entry.id))

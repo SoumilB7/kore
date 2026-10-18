@@ -35,14 +35,14 @@ struct WorkedFor: View {
                     }
                 } else {
                     Text(label)
-                        .foregroundStyle(hovered.value || isOpen ? Theme.secondary : Theme.tertiary)
+                        .foregroundStyle(hovered.value ? Theme.text : Theme.secondary)
                         .lineLimit(1)
                 }
                 Disclosure(isOpen: isOpen)
                     .foregroundStyle(hovered.value || isOpen ? Theme.secondary : Theme.tertiary)
                 if let outcome {
                     Text(outcome == .interrupted ? "· Interrupted" : "· Failed")
-                        .foregroundStyle(outcome == .interrupted ? Theme.tertiary : Theme.danger)
+                        .foregroundStyle(outcome == .interrupted ? Theme.secondary : Theme.danger)
                         .lineLimit(1)
                 }
                 if let now {

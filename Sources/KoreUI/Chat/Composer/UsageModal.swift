@@ -465,7 +465,7 @@ private struct UsageChatRow: View {
                 AgentRings().frame(width: Size.usageAgentsGlyph.width, height: Size.usageAgentsGlyph.height)
                 Text("\(share.agents)").font(TextStyle.caption.monospacedDigit())
             }
-            .foregroundStyle(Theme.tertiary)
+            .foregroundStyle(Theme.secondary)
             .lineLimit(1)
             .help("\(share.agents) \(share.agents == 1 ? "agent" : "agents") · \(UsageText.kore(share.agentPoints))")
         }

@@ -136,7 +136,7 @@ struct TabBar: View {
             Spacer(minLength: Space.xl)
             Text(workspace.folder.lastPathComponent)
                 .font(Chrome.label)
-                .foregroundStyle(Theme.tertiary)
+                .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(-1)
