@@ -17,6 +17,8 @@ extension TranscriptStore {
             case .interrupted: .interrupted
             case .failed(let message): .failed(message)
             case .authFailed(let said): .authFailed(said)
+            case .limited(let message, _): .failed(message)
+            case .slept(let said): .slept(said)
             }
             turnFinished(id, outcome, duration: duration.map(Self.seconds))
         case .turnChanges(let id, let changes):

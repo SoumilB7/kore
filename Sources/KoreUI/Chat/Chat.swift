@@ -70,6 +70,14 @@ package final class Chat: Identifiable {
     /// The CLI's account changed since its CLI started: it starts again (with resume) at the
     /// next turn boundary, so it runs as the new account.
     @ObservationIgnored private var relaunchDue = false
+    /// The turn running now, and when it began: a failure is the sleep's when the Mac slept since.
+    @ObservationIgnored private var turnBegan: (id: TurnID, at: Date)?
+    /// Stay awake's continuation after the plan's limit (`LimitContinuation`).
+    @ObservationIgnored private lazy var continuation = makeContinuation()
+    /// When the chat continues after its plan's limit resets; nil when it won't.
+    private(set) var continuesAt: Date?
+    /// Its tab closed: nothing of it counts as running any more.
+    private var closed = false
 
     /// `fork` makes this chat a fork of `session` that its CLI creates; it has no session of its
     /// own until then. `forkedFrom` names the original chat.
@@ -97,6 +105,7 @@ package final class Chat: Identifiable {
         transcript.providerName = provider.name
         transcript.provider = provider
         AccountStore.shared.register(self)
+        StayAwake.register(self)
     }
 
     package var sessionId: String? { status.sessionId }
@@ -125,6 +134,7 @@ package final class Chat: Identifiable {
 
     /// Every event goes to every store; each takes what it shows.
     private func dispatch(_ event: ChatEvent) {
+        let event = sleptOutcome(event)
         if case .historyReplaced(let events) = event {
             replaceHistory(events)
             StorylineSeams.events?(self, event)
@@ -151,6 +161,7 @@ package final class Chat: Identifiable {
         context.apply(event)
         autoCompactIfDue(event)
         afterAccountEvent(event)
+        continueAfterLimit(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
         StorylineSeams.events?(self, event)
@@ -323,6 +334,8 @@ package final class Chat: Identifiable {
     }
 
     func close() {
+        closed = true
+        cancelContinue()
         pump?.cancel()
         let backend = backend
         self.backend = nil
@@ -391,6 +404,13 @@ package final class Chat: Identifiable {
         draft = ""
         command = nil
         attachments = []
+        // The owner said something: the chat no longer continues by itself.
+        cancelContinue()
+        deliver(text, sent)
+    }
+
+    /// Sends a message the composer has given up (or Kore's own "Continue").
+    private func deliver(_ text: String, _ sent: [Attachment]) {
         relaunchIfDue()
         // The Codex extension's /plan flips the plan toggle; it isn't a message.
         if text == "/plan" && sent.isEmpty && provider.planToggle != nil {
@@ -421,6 +441,69 @@ package final class Chat: Identifiable {
                 fail(Self.reason(error))
             }
         }
+    }
+
+    // MARK: Stay awake
+
+    /// What this chat keeps awake for: its turn, and its running agents and Codex child threads.
+    var awakeWork: Int {
+        guard !closed else { return 0 }
+        return (status.isRunning ? 1 : 0) + transcript.agentSummary.running.count
+    }
+
+    /// Sends "Continue": a slept turn's Continue, and the continuation at a limit's reset.
+    func continueTurn() {
+        cancelContinue()
+        deliver("Continue", [])
+    }
+
+    /// The × after "Continues at …", Stay awake turned off, or the owner sending.
+    func cancelContinue() {
+        guard continuesAt != nil || continuation.pending != nil else { return }
+        continuation.cancel()
+    }
+
+    private func makeContinuation() -> LimitContinuation {
+        let continuation = LimitContinuation(clock: StayAwake.current?.clock ?? SystemClock())
+        continuation.read = { [weak self] in
+            guard let self else { return nil }
+            return try? await self.connect().usage()
+        }
+        continuation.send = { [weak self] in self?.deliver("Continue", []) }
+        continuation.changed = { [weak self] pending in
+            guard let self else { return }
+            continuesAt = pending?.at
+            transcript.continues(turn: pending?.turn, at: pending?.at)
+        }
+        return continuation
+    }
+
+    /// A turn that ended on the plan's limit continues at the reset, while Stay awake is on.
+    private func continueAfterLimit(_ event: ChatEvent) {
+        guard case .turnFinished(let id, .limited(_, let resetsAt), _) = event,
+            StayAwake.current?.isOn == true, let turn = id ?? turnBegan?.id
+        else { return }
+        continuation.schedule(turn: turn, at: resetsAt)
+    }
+
+    /// A turn that failed while the Mac slept (or just after it woke) says so, in place of the
+    /// CLI's line.
+    private func sleptOutcome(_ event: ChatEvent) -> ChatEvent {
+        switch event {
+        case .turnStarted(let id, _, let at):
+            turnBegan = (id, at)
+        case .turnFinished(let id, .failed(let said), let duration):
+            let began = turnBegan
+            turnBegan = nil
+            if let began, id == nil || id == began.id, StayAwake.current?.sleptThrough(since: began.at) == true {
+                return .turnFinished(id, .slept(said), duration: duration)
+            }
+        case .turnFinished, .exited:
+            turnBegan = nil
+        default:
+            break
+        }
+        return event
     }
 
     // MARK: Actions

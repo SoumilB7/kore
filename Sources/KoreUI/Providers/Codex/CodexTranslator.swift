@@ -204,6 +204,9 @@ final class CodexTranslator {
             if case .failed(let message) = outcome, CodexError.isUnauthorized(result.raw["turn"]?["error"]) || authRecovering {
                 outcome = .authFailed(message)
             }
+            if case .failed(let message) = outcome, let hit = PlanLimitHit.codex(result.raw["turn"]?["error"]) {
+                outcome = .limited(message, resetsAt: hit.resetsAt)
+            }
             authRecovering = false
             if compacting {
                 // A compaction runs as a turn of its own: ending without its item completing is a

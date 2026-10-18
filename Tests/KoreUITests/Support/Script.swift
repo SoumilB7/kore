@@ -53,8 +53,9 @@ final class Script {
         case .agent(let e, _, _): "agent \(e.agent?.name ?? "")"
         case .fold(let f): "fold" + (f.live ? " live" : "") + (f.outcome.map { " \($0)" } ?? "") + (f.now.map { " now \($0.label)" } ?? "")
         case .rule: "rule"
-        case .outcome(_, let text): "outcome \(text)"
+        case .outcome(_, let text, _): "outcome \(text)"
         case .signIn(_, let said): "signin \(said)"
+        case .slept(_, let said): "slept \(said)"
         case .changes: "changes"
         case .explored(let entries, _): "explored \(entries.count)"
         case .message(let e, _, _): "message \(e.text)"

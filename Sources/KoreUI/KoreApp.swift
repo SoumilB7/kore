@@ -12,6 +12,7 @@ package struct KoreApp: App {
         NSApplication.shared.setActivationPolicy(.regular)
         // The login shell's PATH takes a second or two; read it while the window opens.
         CLIExecutable.prepare()
+        StayAwake.start()
         // No field here takes a password or a one-time code, yet AppKit's AutoFill heuristics run
         // whenever a text field takes focus (each tab switch focuses its chat's composer): they
         // walk the window's key-view loop, every selectable line of the transcript included, and
@@ -35,6 +36,7 @@ package struct KoreApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         .commands {
+            CommandGroup(after: .appInfo) { StayAwakeCommands() }
             CommandGroup(replacing: .newItem) { FileCommands(app: app) }
             // SwiftUI has no save slot outside document apps.
             CommandGroup(after: .newItem) { SaveCommands() }

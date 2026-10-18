@@ -29,6 +29,8 @@ package final class ClaudeTranslator {
     private var replaying = false
     /// The running turn's login was refused: the CLI's line, for its failed notice.
     private var authRefused: String?
+    /// The reset a `rate_limit_event` gave as it refused this turn's request (the plan's limit).
+    private var limitRejected: Date?
     private var replayChanges: [FileChange] = []
     /// Reading a sub-agent's own transcript: its edits belong to no turn of this chat.
     private var reading = false
@@ -286,6 +288,10 @@ package final class ClaudeTranslator {
                 authRefused = nil
                 outcome = .authFailed(said.isEmpty ? result.result ?? "" : said)
             }
+            if case .failed(let message) = outcome, let hit = PlanLimitHit.claude(message, rejected: limitRejected) {
+                outcome = .limited(message, resetsAt: hit.resetsAt)
+            }
+            limitRejected = nil
             finishTurn(outcome, duration: result.durationMs.map { .milliseconds($0) })
         case .raw(let json):
             raw(json)
@@ -414,6 +420,8 @@ package final class ClaudeTranslator {
 
     private func raw(_ json: JSONValue) {
         switch json["type"]?.string {
+        case "rate_limit_event":
+            if let reset = PlanLimitHit.claudeRejected(json) { limitRejected = reset }
         case "stream_event":
             if json["event"]?["type"]?.string == "content_block_start", json["parent_tool_use_id"]?.string == nil {
                 block = nil

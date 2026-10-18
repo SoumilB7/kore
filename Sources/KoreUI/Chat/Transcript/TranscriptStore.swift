@@ -95,8 +95,9 @@ final class TranscriptStore {
         var result: String?
     }
 
-    /// `authFailed`: the CLI's login was refused, in its own words.
-    enum Outcome: Equatable { case completed, interrupted, failed(String), authFailed(String) }
+    /// `authFailed`: the CLI's login was refused, in its own words. `slept`: it failed while the
+    /// Mac slept, the CLI's line kept for the hover.
+    enum Outcome: Equatable { case completed, interrupted, failed(String), authFailed(String), slept(String) }
 
     struct Turn {
         let id: String
@@ -138,9 +139,12 @@ final class TranscriptStore {
         case agent(Entry, lane: [Row], open: Bool)
         case fold(Fold)
         case rule(turn: String)
-        case outcome(turn: String, text: String)
+        /// `continues`: the turn ended on its plan's limit, and the chat continues at the reset.
+        case outcome(turn: String, text: String, continues: Date? = nil)
         /// A turn the CLI's login refused: Kore's words, the CLI's line, and Sign in.
         case signIn(turn: String, said: String)
+        /// A turn that failed while the Mac slept: Kore's words, the CLI's line, and Continue.
+        case slept(turn: String, said: String)
         case changes(turn: String, files: Int, added: Int, removed: Int)
         /// Two or more consecutive read-only tool calls, as one "Explored N" item.
         case explored([Entry], open: Bool)
@@ -161,7 +165,7 @@ final class TranscriptStore {
                 e.id.uuidString
             case .fold(let f): "fold-\(f.turn)"
             case .rule(let t): "rule-\(t)"
-            case .outcome(let t, _), .signIn(let t, _): "outcome-\(t)"
+            case .outcome(let t, _, _), .signIn(let t, _), .slept(let t, _): "outcome-\(t)"
             case .changes(let t, _, _, _): "changes-\(t)"
             // The first call's: a read-only call that becomes a group keeps its identity.
             case .explored(let entries, _): entries.first?.id.uuidString ?? "explored"
@@ -371,8 +375,8 @@ final class TranscriptStore {
     /// Each turn's first entry. A turn can span sections (a message sent while it ran lands in
     /// the middle of it), so a change to the turn marks from here.
     @ObservationIgnored private var turnFirst: [String: UUID] = [:]
-    /// Turns the CLI's login refused before they wrote anything: their notice shows after the
-    /// entry before them.
+    /// Turns that failed before they wrote anything (a refused login, a plan's limit, a sleep):
+    /// their notice shows after the entry before them.
     @ObservationIgnored private var refusedTurns: [String] = []
     /// Changes waiting to be drawn: streamed deltas are drawn once per `drawInterval`.
     @ObservationIgnored private var drawScheduled = false
@@ -659,11 +663,25 @@ final class TranscriptStore {
         }
         workedBefore += turn.duration ?? 0
         if !hadAnswer { announceFold(id) }
-        if case .authFailed = turn.outcome, turnFirst[id] == nil { refusedTurns.append(id) }
+        switch turn.outcome {
+        case .authFailed, .slept, .failed: if turnFirst[id] == nil { refusedTurns.append(id) }
+        case .completed, .interrupted: break
+        }
         changed(turn: id)
     }
 
     /// The files a turn changed (the git snapshot, or what the CLI reported), for its summary.
+    /// The turn that ended on its plan's limit, and when the chat continues; shown after its
+    /// notice until it continues or is cancelled.
+    private(set) var continuation: (turn: String, at: Date)?
+
+    func continues(turn: String?, at: Date?) {
+        let old = continuation?.turn
+        continuation = turn.flatMap { turn in at.map { (turn, $0) } }
+        if let old { changed(turn: old) }
+        if let turn, turn != old { changed(turn: turn) }
+    }
+
     func turnChanges(_ id: String, _ changes: [FileChange]) {
         turns[id]?.changes = changes
         touchesDirty = true
@@ -1492,8 +1510,8 @@ final class TranscriptStore {
             return calls.contains(where: \.isError) ? .failure : .success
         case .spinner, .message, .summary, .queued: return nil
         case .rule: return TimelineDot.none
-        case .outcome(_, let text): return text == "Interrupted" ? .warning : .failure
-        case .signIn: return .failure
+        case .outcome(_, let text, _): return text == "Interrupted" ? .warning : .failure
+        case .signIn, .slept: return .failure
         case .changes: return .plain
         case .tool(let e, _): return state(e)
         case .file(let e, _, _): return state(e)
@@ -1670,8 +1688,11 @@ final class TranscriptStore {
         switch turn.outcome {
         case .completed: break
         case .interrupted: if !folded { rows.append(.outcome(turn: turn.id, text: "Interrupted")) }
-        case .failed(let message): rows.append(.outcome(turn: turn.id, text: message))
+        case .failed(let message):
+            let continues = continuation.flatMap { $0.turn == turn.id ? $0.at : nil }
+            rows.append(.outcome(turn: turn.id, text: message, continues: continues))
         case .authFailed(let said): rows.append(.signIn(turn: turn.id, said: said))
+        case .slept(let said): rows.append(.slept(turn: turn.id, said: said))
         }
         if !turn.changes.isEmpty {
             rows.append(.changes(
@@ -1684,7 +1705,7 @@ final class TranscriptStore {
         switch turn.outcome {
         case .completed: nil
         case .interrupted: .interrupted
-        case .failed, .authFailed: .failed
+        case .failed, .authFailed, .slept: .failed
         }
     }
 

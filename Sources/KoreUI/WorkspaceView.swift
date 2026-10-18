@@ -144,6 +144,9 @@ struct TabBar: View {
             if let chat = workspace.activeTab.chat {
                 AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents, press: chat.agentMap.toggle)
             }
+            if let awake = StayAwake.current {
+                StayAwakeButton(awake: awake, size: tabHeight).storyID(StoryID.Titlebar.awake)
+            }
             HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight).storyID(StoryID.Titlebar.history)
         }
         .padding(.leading, leadingInset)

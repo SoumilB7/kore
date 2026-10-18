@@ -213,6 +213,10 @@ package enum TurnOutcome: Sendable, Equatable {
     /// The CLI's login was refused (Claude's `authentication_failed`, Codex's 401): the CLI's
     /// own line.
     case authFailed(String)
+    /// The plan's limit was hit: the CLI's line, and when the limit resets when it said.
+    case limited(String, resetsAt: Date?)
+    /// It failed while the Mac slept, or just after it woke (`Chat` decides): the CLI's line.
+    case slept(String)
 }
 
 /// A tool call, already worded for display.

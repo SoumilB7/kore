@@ -23,6 +23,10 @@ struct TranscriptActions {
     var openOriginal: (() -> Void)?
     /// An auth failure's Sign in: Account opens in the chat and the sign-in starts.
     var signIn: () -> Void = {}
+    /// The × after "Continues at …": the chat won't continue at its limit's reset.
+    var cancelContinue: () -> Void = {}
+    /// A slept turn's Continue: sends "Continue".
+    var continueTurn: () -> Void = {}
     /// A message row moved (its frame in the scroll view: the bottom for its pinned copy, the
     /// top for keeping the reader's place), or left the built rows (nil).
     var messageMoved: (String, CGRect?) -> Void = { _, _ in }
@@ -57,6 +61,88 @@ private struct SignInNotice: View {
             Button("Sign in", action: signIn)
                 .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
                 .storyID(StoryID.Transcript.signIn(turn).part(.signIn))
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A failed turn's notice in the CLI's words. When the turn ended on its plan's limit and Stay
+/// awake continues it, one quiet part follows on the same line, or under it when the row is
+/// narrow: "Continues at 3:00 PM" and its ×.
+private struct OutcomeLine: View {
+    let turn: String
+    let text: String
+    let continues: Date?
+    let cancel: () -> Void
+
+    var body: some View {
+        if let continues {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+                    notice.fixedSize()
+                    quiet(continues)
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: Space.xxs) {
+                    notice
+                    quiet(continues)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .storyID(StoryID.Transcript.continues(turn))
+        } else {
+            notice.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var notice: some View {
+        Text(text)
+            .font(TextStyle.body)
+            .foregroundStyle(text == "Interrupted" ? Theme.secondary : Theme.danger)
+            .selectableOnHover()
+    }
+
+    private func quiet(_ at: Date) -> some View {
+        HStack(alignment: .center, spacing: Space.xxs) {
+            Text(ContinueText.line(at, now: Date()))
+                .font(TextStyle.body)
+                .foregroundStyle(Theme.secondary)
+                .lineLimit(1)
+                .help("Sends Continue when the limit resets")
+            IconButton(symbol: "xmark", kind: .mini, font: TextStyle.caption, help: "Don't continue", action: cancel)
+                .storyID(StoryID.Transcript.continues(turn).part(.cancel))
+        }
+        .fixedSize()
+    }
+}
+
+/// The words of a continuation.
+enum ContinueText {
+    /// "Continues at 3:00 PM" today, else "Continues Thu 9:00 AM".
+    static func line(_ at: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        let time = StayAwake.time(at, now: now, calendar: calendar, locale: locale)
+        return calendar.isDate(at, inSameDayAs: now) ? "Continues at \(time)" : "Continues \(time)"
+    }
+}
+
+/// A turn that failed while the Mac slept, in Kore's words with the CLI's own line on hover,
+/// then one Continue: the Sign in notice's pattern.
+private struct SleptNotice: View {
+    let turn: String
+    let said: String
+    let resume: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            Text("Stopped while the Mac slept")
+                .font(TextStyle.body)
+                .foregroundStyle(Theme.danger)
+                .help(said)
+                .selectableOnHover()
+            Button("Continue", action: resume)
+                .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                .storyID(StoryID.Transcript.slept(turn).part(.continue))
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -133,6 +219,8 @@ struct TimelineRow: View, Equatable {
             return calls.first.map { StoryID.Transcript.explored($0.toolId ?? $0.id.uuidString) }
         case .signIn(let turn, _):
             return StoryID.Transcript.signIn(turn)
+        case .slept(let turn, _):
+            return StoryID.Transcript.slept(turn)
         case .thinking, .rule, .outcome, .summary, .queued, .spinner:
             return nil
         }
@@ -214,14 +302,12 @@ struct RowContent: View {
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         case .rule:
             Rule()
-        case .outcome(_, let text):
-            Text(text)
-                .font(TextStyle.body)
-                .foregroundStyle(text == "Interrupted" ? Theme.secondary : Theme.danger)
-                .selectableOnHover()
-                .frame(maxWidth: .infinity, alignment: .leading)
+        case .outcome(let turn, let text, let continues):
+            OutcomeLine(turn: turn, text: text, continues: continues, cancel: actions.cancelContinue)
         case .signIn(let turn, let said):
             SignInNotice(turn: turn, said: said, provider: actions.provider, signIn: actions.signIn)
+        case .slept(let turn, let said):
+            SleptNotice(turn: turn, said: said, resume: actions.continueTurn)
         case .changes(let turn, let files, let added, let removed):
             ChangesLine(files: files, added: added, removed: removed) { actions.viewChanges(turn) }
         }

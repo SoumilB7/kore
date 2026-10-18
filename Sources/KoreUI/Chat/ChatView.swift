@@ -137,6 +137,8 @@ struct ChatView: View {
         actions.folder = chat.folder
         actions.provider = chat.provider
         actions.signIn = { chat.signInAgain() }
+        actions.cancelContinue = { chat.cancelContinue() }
+        actions.continueTurn = { chat.continueTurn() }
         return actions
     }
 

@@ -35,6 +35,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
         case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save
         case signIn = "signin", signOut = "signout"
+        case `continue`
     }
 }
 
@@ -46,6 +47,10 @@ extension StoryID {
         package static let history = StoryID(.titlebar, "history")
         package static let agents = StoryID(.titlebar, "agents")
         package static let newtab = StoryID(.titlebar, "newtab")
+        /// The Stay awake cup; its click turns it on or off.
+        package static let awake = StoryID(.titlebar, "awake")
+        /// A mode in the cup's menu, by `StayAwake.Mode`'s id; "off" is Turn Off.
+        package static func awakeMode(_ id: String) -> StoryID { StoryID(.titlebar, "awake.mode", key: id) }
     }
 
     package enum Tabs {
@@ -105,6 +110,10 @@ extension StoryID {
         package static let earlier = StoryID(.transcript, "earlier")
         /// A refused login's notice, by its turn; `.part(.signIn)` is its Sign in.
         package static func signIn(_ turn: String) -> StoryID { StoryID(.transcript, "signin", key: turn) }
+        /// A limit notice's "Continues at …", by its turn; `.part(.cancel)` is its ×.
+        package static func continues(_ turn: String) -> StoryID { StoryID(.transcript, "continues", key: turn) }
+        /// A turn that failed while the Mac slept, by its turn; `.part(.continue)` is its Continue.
+        package static func slept(_ turn: String) -> StoryID { StoryID(.transcript, "slept", key: turn) }
         package static func compacted(_ entry: UUID) -> StoryID { StoryID(.transcript, "compacted", key: entry.uuidString) }
         package static func peer(_ entry: UUID) -> StoryID { StoryID(.transcript, "peer", key: entry.uuidString) }
     }
@@ -209,7 +218,7 @@ extension StoryID {
     package static let all: [String] = {
         let k = "<key>"
         let fixed: [StoryID] = [
-            Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab,
+            Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab, Titlebar.awake,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
             Composer.model, Composer.effort, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
             Composer.usage.part(.reset), Composer.account, Composer.account.part(.signIn), Composer.account.part(.method),
@@ -242,6 +251,9 @@ extension StoryID {
             StoryID(.transcript, "changes", key: k), StoryID(.transcript, "compacted", key: k),
             StoryID(.transcript, "peer", key: k), StoryID(.transcript, "signin", key: k),
             StoryID(.transcript, "signin", key: k).part(.signIn),
+            StoryID(.titlebar, "awake.mode", key: k), StoryID(.transcript, "continues", key: k),
+            StoryID(.transcript, "continues", key: k).part(.cancel), StoryID(.transcript, "slept", key: k),
+            StoryID(.transcript, "slept", key: k).part(.continue),
             StoryID(.approval, key: k).part(.allow), StoryID(.approval, key: k).part(.always),
             StoryID(.approval, key: k).part(.deny), StoryID(.approval, key: k).part(.approveplan),
             StoryID(.approval, key: k).part(.keepplanning), StoryID(.approval, key: k).part(.autoaccept),
