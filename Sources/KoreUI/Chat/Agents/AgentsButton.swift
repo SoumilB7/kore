@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The title row's Agents button (look.md §10, §11): the chat's agents as a stack of avatars, a
-/// count, and a point when one waits for the user (amber) or has failed unseen (red). Hidden
-/// until the chat has spawned an agent. Opens and closes the agent map (⇧⌘A).
+/// The title row's Agents button (look.md §10, §11): the chat's agents as a stack of avatars, or
+/// one track round the running ones, a count, and a point when one waits for the user (amber) or
+/// has failed unseen (red). Hidden until the chat has spawned an agent. Opens and closes the
+/// agent map (⇧⌘A).
 struct AgentsButton: View {
     let chat: Chat
     let height: CGFloat
@@ -17,11 +18,15 @@ struct AgentsButton: View {
                 chat.agentMap.toggle()
             } label: {
                 HStack(spacing: Space.sm) {
-                    HStack(spacing: -Size.avatarOverlap) {
-                        ForEach(stack) { agent in
-                            AgentAvatar(
-                                index: agent.index, name: agent.name, status: agent.status, place: .stack)
-                                .opacity(running ? 1 : Theme.dimmed)
+                    if running {
+                        RunningTrack(indexes: stack.map(\.index))
+                    } else {
+                        HStack(spacing: -Size.avatarOverlap) {
+                            ForEach(stack) { agent in
+                                AgentAvatar(
+                                    index: agent.index, name: agent.name, status: agent.status, place: .stack)
+                                    .opacity(Theme.dimmed)
+                            }
                         }
                     }
                     Text(running ? "\(summary.running.count) running" : summary.count == 1 ? "1 agent" : "\(summary.count) agents")

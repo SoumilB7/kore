@@ -132,8 +132,9 @@ extension Motion {
     /// An in-progress dot: opacity 1 ↔ 0.35 over 1s.
     static let blink = Animation.linear(duration: 0.5).repeatForever(autoreverses: true)
     static let blinkLow: Double = 0.35
-    /// A running agent's ring.
-    static let ring = Animation.linear(duration: 1.1).repeatForever(autoreverses: false)
+    /// A running agent's ring: once round per lap.
+    static let ringLap: Double = 1.1
+    static let ring = Animation.linear(duration: ringLap).repeatForever(autoreverses: false)
 }
 
 extension PanelStyle {
@@ -152,6 +153,10 @@ enum Mono {
 extension Size {
     /// Avatars in the Agents button overlap by this much.
     static let avatarOverlap: CGFloat = 3
+    /// The Agents button's running track: as tall as a stack avatar's ring, and a shape's step
+    /// along it (a 12 shape and a 2 gap).
+    static let agentTrack: CGFloat = 17
+    static let agentTrackStep: CGFloat = 14
     /// The Agents button's waiting / failed point, and its inset from the corner.
     static let statusPoint: CGFloat = 6
     static let statusPointInset: CGFloat = 3
