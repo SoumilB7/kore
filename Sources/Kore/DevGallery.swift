@@ -38,17 +38,17 @@ private struct Gallery: View {
         ]
     }
 
-    private let permission = ChatModel.Approval(
+    private let permission = Approval(
         id: "p", title: "Allow Bash?", detail: "List the folder", body: "ls -la Sources/Kore", canAlwaysAllow: true,
-        questions: [], source: .sample)
-    private let question = ChatModel.Approval(
+        questions: [])
+    private let question = Approval(
         id: "q", title: "Question", detail: nil, body: nil, canAlwaysAllow: false,
         questions: [
             .init(id: "q1", text: "Which layout should the map use?", options: [
                 .init(label: "Top to bottom", description: "Fits narrow tiles"),
                 .init(label: "Left to right", description: "Like the extension's map"),
             ])
-        ], source: .sample)
+        ])
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -58,7 +58,7 @@ private struct Gallery: View {
             PlanApprovalCard(plan: "Move the views onto tokens, then apply the snaps.") { _ in }
             ImplementPlanCard(implement: {}, stay: {})
             HStack(spacing: 8) {
-                PlanChip {}
+                PlanChip(mode: CodexModes.plan) {}
                 AttachmentChip(attachment: Attachment(name: "notes.md", kind: .text))
             }
         }

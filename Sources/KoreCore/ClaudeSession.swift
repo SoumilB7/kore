@@ -167,6 +167,11 @@ public actor ClaudeSession {
         try await control("rename_session", ["title": .string(title), "source": "host"])
     }
 
+    /// Stops one sub-agent (its `task_started` task id).
+    public func stopTask(_ taskId: String) async throws {
+        try await control("stop_task", ["task_id": .string(taskId)])
+    }
+
     /// Effective settings; `applied.model` and `applied.effort` are what the next turn uses.
     public func settings() async throws -> JSONValue {
         try await control("get_settings")

@@ -1,0 +1,510 @@
+import Foundation
+import KoreCore
+
+/// Turns Claude's stream-json into `ChatEvent`s. Transcripts share the shape, so a resumed
+/// session's past goes through the same mapping (`replay`).
+@MainActor
+final class ClaudeTranslator {
+    /// Work that needs the disk or time; the backend runs it and reports back.
+    enum Followup {
+        /// A turn the CLI started for a queued command: read its transcript entry for a peer's message.
+        case peer(uuid: String, turn: TurnID)
+        /// A turn the CLI started with no command (a cron firing, a finished agent): read its cause.
+        case cliTurn(TurnID, startedAt: Date)
+        /// The turn's changed files, once its end snapshot is diffed.
+        case changes(TurnID, Task<[FileChange], Never>)
+    }
+
+    let files: TurnFiles
+    private let folder: URL
+    private(set) var sessionId: String?
+    /// Permission requests waiting on the user, by request id.
+    private var pending: [String: PermissionRequest] = [:]
+
+    private var out: [ChatEvent] = []
+    private var followups: [Followup] = []
+    /// Replaying a transcript: no snapshots; a turn's files come from its tool edits.
+    private var replaying = false
+    private var replayChanges: [FileChange] = []
+
+    /// The main agent's block receiving deltas; a new one starts at each content block.
+    private var block: (id: BlockID, kind: TextKind)?
+
+    private(set) var turn: TurnID?
+    private var turnStart = Date()
+    /// The main agent's answer blocks and tool calls, in order, to find the final answer.
+    private var turnItems: [TurnItem] = []
+    private enum TurnItem { case answer(BlockID), tool }
+
+    // Sub-agents. `AgentID.sub` carries the Agent tool_use id that spawned it: messages name it
+    // as their `parent_tool_use_id`, so it's known before `task_started` arrives.
+    private var toolAgent: [String: AgentID] = [:]
+    private var agentInputs: [String: JSONValue] = [:]
+    /// task id → Agent tool_use id.
+    private var taskTool: [String: String] = [:]
+    private var spawned: Set<String> = []
+    private var finished: Set<String> = []
+    /// Agent tool_use id → the CLI's agent id (its `subagents/agent-<id>.jsonl`).
+    private(set) var agentFiles: [String: String] = [:]
+
+    static let agentTools: Set<String> = ["Agent", "Task"]
+
+    init(folder: URL, sessionId: String?) {
+        self.folder = folder
+        self.sessionId = sessionId
+        files = TurnFiles(folder: folder)
+    }
+
+    func take() -> (events: [ChatEvent], followups: [Followup]) {
+        defer {
+            out = []
+            followups = []
+        }
+        return (out, followups)
+    }
+
+    func request(_ id: String) -> PermissionRequest? { pending.removeValue(forKey: id) }
+
+    func taskId(forAgent id: String) -> String? { taskTool.first { $0.value == id }?.key }
+
+    // MARK: - Turns
+
+    /// Opens a turn unless one is open. Kore opens one on send; the CLI's own turns open on
+    /// `command_lifecycle` or `status "requesting"`.
+    func openTurn(_ origin: TurnOrigin, at date: Date = .now) {
+        guard turn == nil else { return }
+        let id = ToolText.newID()
+        turn = id
+        turnStart = date
+        turnItems = []
+        block = nil
+        if replaying { replayChanges = [] } else { files.begin() }
+        out.append(.turnStarted(id, origin: origin, at: date))
+    }
+
+    /// Closes a turn that never reached the CLI (the send failed).
+    func abandonTurn() {
+        guard let turn else { return }
+        out.append(.turnFinished(turn, .completed, duration: nil))
+        _ = files.finish()
+        self.turn = nil
+    }
+
+    private func finishTurn(_ outcome: TurnOutcome, duration: Duration?) {
+        if let answer = finalAnswer() { out.append(.finalAnswer(answer)) }
+        out.append(.turnFinished(turn, outcome, duration: duration))
+        if let turn {
+            if replaying {
+                let changes = FileChange.mergedByPath(replayChanges)
+                if !changes.isEmpty { out.append(.turnChanges(turn, changes)) }
+            } else {
+                followups.append(.changes(turn, files.finish()))
+            }
+        }
+        turn = nil
+        turnItems = []
+        block = nil
+    }
+
+    /// Claude doesn't mark its final answer: it's the text after the turn's last tool call.
+    private func finalAnswer() -> BlockID? {
+        let lastTool = turnItems.lastIndex { if case .tool = $0 { true } else { false } }
+        for item in turnItems[(lastTool.map { $0 + 1 } ?? 0)...] {
+            if case .answer(let id) = item { return id }
+        }
+        return nil
+    }
+
+    // MARK: - Events
+
+    func translate(_ event: ClaudeEvent) {
+        switch event {
+        case .sessionStarted(let info):
+            identify(info.sessionId)
+            if let mode = info.permissionMode { out.append(.modeChanged(mode)) }
+        case .permissionModeChanged(let mode):
+            out.append(.modeChanged(mode))
+        case .textDelta(let text, nil):
+            stream(.answer, text)
+        case .thinkingDelta(let text, nil):
+            stream(.thinking, text)
+        case .assistant(_, let blocks, let parent):
+            assistant(blocks, agent: parent.map(AgentID.sub) ?? .main)
+        case .user(let blocks, let parent, let result):
+            toolResults(blocks, result, agent: parent.map(AgentID.sub) ?? .main)
+        case .permissionRequest(let request):
+            pending[request.id] = request
+            out.append(.approvalRequested(approval(request)))
+        case .permissionCancelled(let id):
+            pending[id] = nil
+            out.append(.approvalWithdrawn(id))
+        case .commandStarted(let id, let session):
+            // In a chat with nothing sent yet, this comes before system/init.
+            if sessionId == nil, let session { identify(session) }
+            openTurn(.cli)
+            if let turn { followups.append(.peer(uuid: id, turn: turn)) }
+        case .turnCompleted(let result):
+            pending.removeAll()
+            let outcome: TurnOutcome =
+                !result.isError
+                ? .completed
+                : result.subtype == "error_during_execution" ? .interrupted : .failed(result.result ?? result.subtype)
+            finishTurn(outcome, duration: result.durationMs.map { .milliseconds($0) })
+        case .raw(let json):
+            raw(json)
+        case .exited(let status):
+            pending.removeAll()
+            turn = nil
+            turnItems = []
+            block = nil
+            out.append(.exited(status: status))
+        default:
+            break  // sub-agents' deltas (they have none), command_lifecycle completed, stderr
+        }
+    }
+
+    private func identify(_ id: String) {
+        guard !id.isEmpty, id != sessionId else { return }
+        sessionId = id
+        out.append(.sessionIdentified(id))
+    }
+
+    private func stream(_ kind: TextKind, _ text: String) {
+        guard !text.isEmpty else { return }
+        if block?.kind != kind {
+            let id = ToolText.newID()
+            block = (id, kind)
+            if kind == .answer { turnItems.append(.answer(id)) }
+        }
+        out.append(.text(block!.id, kind, text))
+    }
+
+    private func assistant(_ blocks: [ContentBlock], agent: AgentID) {
+        // The main agent's text normally arrived as deltas. A slash command's output (e.g.
+        // /context), a transcript, and a sub-agent's messages come whole.
+        if agent != .main || block == nil {
+            for case .text(let text) in blocks where !text.isEmpty {
+                let id = ToolText.newID()
+                out.append(.text(id, .answer, text, agent: agent))
+                if agent == .main { turnItems.append(.answer(id)) }
+            }
+        }
+        if agent == .main { block = nil }
+        for case .toolUse(let id, let name, let input) in blocks {
+            toolAgent[id] = agent
+            if Self.agentTools.contains(name) { agentInputs[id] = input }
+            out.append(.toolStarted(Self.toolCall(id, name, input, in: folder), agent: agent))
+            if agent == .main { turnItems.append(.tool) }
+        }
+    }
+
+    private func toolResults(_ blocks: [ContentBlock], _ result: JSONValue?, agent: AgentID) {
+        var first: String?
+        for case .toolResult(let id, let content, let isError) in blocks {
+            first = first ?? id
+            out.append(.toolFinished(id: id, output: Self.text(of: content), isError: isError, agent: agent))
+        }
+        guard let id = first, let result else { return }
+        if let change = FileChange(claudeToolResult: result) {
+            out.append(.fileChanged(toolId: id, [change], agent: agent))
+            if replaying { replayChanges.append(change) } else { files.record([change]) }
+        } else if agentInputs[id] != nil {
+            agentReturned(id, result)
+        }
+    }
+
+    private func raw(_ json: JSONValue) {
+        switch json["type"]?.string {
+        case "stream_event":
+            if json["event"]?["type"]?.string == "content_block_start", json["parent_tool_use_id"]?.string == nil {
+                block = nil
+            }
+        case "system":
+            switch json["subtype"]?.string {
+            case "status" where json["status"]?.string == "requesting" && turn == nil:
+                // Sent before every model request; with no turn open, the CLI started one itself.
+                openTurn(.cli)
+                if let turn { followups.append(.cliTurn(turn, startedAt: turnStart)) }
+            case "task_started":
+                let tool = json["tool_use_id"]?.string ?? json["task_id"]?.string ?? ""
+                if let task = json["task_id"]?.string { taskTool[task] = tool }
+                spawn(
+                    tool, name: json["description"]?.string, type: json["subagent_type"]?.string,
+                    prompt: json["prompt"]?.string, background: json["is_backgrounded"]?.bool)
+            case "task_progress":
+                let usage = json["usage"]
+                out.append(
+                    .agentProgress(
+                        id: agent(ofTask: json),
+                        AgentProgress(
+                            tokens: usage?["total_tokens"]?.int, tools: usage?["tool_uses"]?.int,
+                            duration: usage?["duration_ms"]?.int.map { .milliseconds($0) },
+                            lastTool: json["last_tool_name"]?.string)))
+            case "task_updated":
+                finishAgent(agent(ofTask: json), status: json["patch"]?["status"]?.string, result: nil)
+            case "task_notification":
+                finishAgent(agent(ofTask: json), status: json["status"]?.string, result: json["summary"]?.string)
+            default:
+                break
+            }
+        default:
+            break
+        }
+    }
+
+    // MARK: - Sub-agents
+
+    private func agent(ofTask json: JSONValue) -> String {
+        json["task_id"]?.string.flatMap { taskTool[$0] } ?? json["tool_use_id"]?.string ?? json["task_id"]?.string ?? ""
+    }
+
+    private func spawn(_ id: String, name: String? = nil, type: String? = nil, prompt: String? = nil, background: Bool? = nil) {
+        guard !id.isEmpty, spawned.insert(id).inserted else { return }
+        let input = agentInputs[id]
+        out.append(
+            .agentSpawned(
+                AgentInfo(
+                    id: id, parent: toolAgent[id] ?? .main, toolId: id,
+                    name: name ?? input?["description"]?.string ?? "Agent",
+                    type: type ?? input?["subagent_type"]?.string, model: input?["model"]?.string,
+                    prompt: prompt ?? input?["prompt"]?.string,
+                    background: background ?? input?["run_in_background"]?.bool ?? false)))
+    }
+
+    private func finishAgent(_ id: String, status: String?, result: String?) {
+        guard let status = status.flatMap(Self.agentStatus), finished.insert(id).inserted else { return }
+        out.append(.agentFinished(id: id, status, result: result))
+    }
+
+    /// The Agent call's own result. Live, the `task_*` events said it all already; a transcript
+    /// has only this, so the agent is spawned and finished from it.
+    private func agentReturned(_ id: String, _ result: JSONValue) {
+        if let file = result["agentId"]?.string { agentFiles[id] = file }
+        let status = result["status"]?.string ?? "completed"
+        spawn(id)
+        guard status != "async_launched", !finished.contains(id) else { return }  // background: ends later
+        out.append(
+            .agentProgress(
+                id: id,
+                AgentProgress(
+                    tokens: result["totalTokens"]?.int, tools: result["totalToolUseCount"]?.int,
+                    duration: result["totalDurationMs"]?.int.map { .milliseconds($0) }, lastTool: nil)))
+        finishAgent(id, status: status, result: result["content"].map(Self.text(of:)))
+    }
+
+    /// The CLI's `<task-notification>` prompt, which starts the turn after a background agent
+    /// stops: its status, result and totals (stdout's `task_notification` lacks the result).
+    func taskNotification(_ entry: JSONValue) {
+        guard let text = entry["message"]?["content"]?.string, text.contains("<task-notification>"),
+            let id = Self.tag("tool-use-id", in: text)
+        else { return }
+        if !finished.contains(id) {
+            out.append(
+                .agentProgress(
+                    id: id,
+                    AgentProgress(
+                        tokens: Self.tag("subagent_tokens", in: text).flatMap { Int($0) },
+                        tools: Self.tag("tool_uses", in: text).flatMap { Int($0) },
+                        duration: Self.tag("duration_ms", in: text).flatMap { Int($0) }.map { .milliseconds($0) },
+                        lastTool: nil)))
+        }
+        finishAgent(id, status: Self.tag("status", in: text), result: Self.tag("result", in: text))
+    }
+
+    private static func tag(_ name: String, in text: String) -> String? {
+        guard let open = text.range(of: "<\(name)>"), let close = text.range(of: "</\(name)>", range: open.upperBound..<text.endIndex)
+        else { return nil }
+        return String(text[open.upperBound..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func agentStatus(_ status: String) -> AgentStatus? {
+        switch status {
+        case "completed", "success", "done": .completed
+        case "failed", "error", "errored": .failed
+        case "killed", "stopped", "cancelled", "canceled", "interrupted": .stopped
+        default: nil  // running, pending
+        }
+    }
+
+    // MARK: - Approvals
+
+    private func approval(_ r: PermissionRequest) -> Approval {
+        let agent = r.toolUseId.flatMap { toolAgent[$0] } ?? .main
+        if r.toolName == "ExitPlanMode" {
+            return Approval(
+                id: r.id, title: "Ready to code?", detail: nil, body: nil, canAlwaysAllow: false,
+                questions: [], plan: r.input["plan"]?.string ?? "", agent: agent)
+        }
+        if r.isQuestion {
+            let questions = (r.input["questions"]?.array ?? []).map { q in
+                let text = q["question"]?.string ?? ""
+                return Approval.Question(id: text, text: text, options: ToolText.options(q["options"]))
+            }
+            return Approval(
+                id: r.id, title: "", detail: nil, body: nil, canAlwaysAllow: false, questions: questions, agent: agent)
+        }
+        return Approval(
+            id: r.id, title: "Allow \(r.toolName)?", detail: r.description,
+            body: Self.summary(of: r.input, in: folder), canAlwaysAllow: !r.suggestions.isEmpty,
+            questions: [], changes: Self.proposedChange(r.toolName, r.input).map { [$0] } ?? [], agent: agent)
+    }
+
+    /// The edit an Edit / Write approval asks about, shaped as the tool's own result would be.
+    /// Edit's line numbers come from finding `old_string` in the file.
+    static func proposedChange(_ tool: String, _ input: JSONValue) -> FileChange? {
+        guard let path = input["file_path"]?.string else { return nil }
+        switch tool {
+        case "Write":
+            let content = input["content"]?.string ?? ""
+            return FileChange(claudeToolResult: ["type": "create", "filePath": .string(path), "content": .string(content), "structuredPatch": []])
+        case "Edit":
+            guard let old = input["old_string"]?.string, let new = input["new_string"]?.string else { return nil }
+            var start = 1
+            if let data = FileManager.default.contents(atPath: path), data.count < 2_000_000,
+                let text = String(data: data, encoding: .utf8), let range = text.range(of: old)
+            {
+                start = text[..<range.lowerBound].count { $0 == "\n" } + 1
+            }
+            let removed = old.isEmpty ? [] : old.components(separatedBy: "\n").map { "-" + $0 }
+            let added = new.isEmpty ? [] : new.components(separatedBy: "\n").map { "+" + $0 }
+            let hunk: JSONValue = [
+                "oldStart": .number(Double(start)), "oldLines": .number(Double(removed.count)), "newStart": .number(Double(start)),
+                "newLines": .number(Double(added.count)), "lines": .array((removed + added).map(JSONValue.string)),
+            ]
+            return FileChange(claudeToolResult: ["filePath": .string(path), "structuredPatch": [hunk]])
+        default:
+            return nil
+        }
+    }
+
+    // MARK: - Replay
+
+    /// A transcript (`ClaudeHistory.messages`) as events: turns open at each prompt (or peer
+    /// message, cron firing, finished agent) and close before the next one, timed from the
+    /// entries' timestamps.
+    func replay(_ messages: [JSONValue]) -> [ChatEvent] {
+        replaying = true
+        defer { replaying = false }
+        var lastAnswer: Date?
+        func close() {
+            guard turn != nil else { return }
+            finishTurn(.completed, duration: lastAnswer.map { .seconds(max(0, $0.timeIntervalSince(turnStart))) })
+            lastAnswer = nil
+        }
+        for message in messages {
+            let time = Self.date(message["timestamp"]) ?? .now
+            if let peer = PeerMessage(entry: message) {
+                close()
+                openTurn(.peer, at: time)
+                out.append(.peerMessage(from: peer.from, text: peer.text, turn: turn))
+                continue
+            }
+            if message["type"]?.string == "user" {
+                if let origin = Self.origin(message["turnOrigin"]?.string), origin != .peer {
+                    close()
+                    openTurn(origin, at: time)
+                    if origin == .agentFinished { taskNotification(message) }
+                    continue
+                }
+                let content = message["message"]?["content"]
+                let prompt = Self.promptText(content)
+                let attachments = Self.attachments(content)
+                if prompt != nil || !attachments.isEmpty {
+                    close()
+                    openTurn(.user, at: time)
+                    out.append(.userMessage(text: prompt ?? "", attachments: attachments))
+                    continue
+                }
+            }
+            translate(ClaudeEvent(message: message))
+            if message["type"]?.string == "assistant" { lastAnswer = time }
+        }
+        close()
+        block = nil
+        return take().events
+    }
+
+    static func origin(_ turnOrigin: String?) -> TurnOrigin? {
+        switch turnOrigin {
+        case "scheduled": .schedule
+        case "task_notification": .agentFinished
+        case "peer": .peer
+        default: nil
+        }
+    }
+
+    private static func promptText(_ content: JSONValue?) -> String? {
+        let text = content?.string ?? content?.array?.last { $0["type"]?.string == "text" }?["text"]?.string
+        guard let text, !text.isEmpty, !text.hasPrefix("<") else { return nil }
+        return text
+    }
+
+    /// Image and document blocks of a user message.
+    private static func attachments(_ content: JSONValue?) -> [SentAttachment] {
+        (content?.array ?? []).compactMap { block in
+            switch block["type"]?.string {
+            case "image":
+                let data = block["source"]?["data"]?.string.flatMap { Data(base64Encoded: $0) }
+                return SentAttachment(name: "Image", kind: .image, url: nil, image: data)
+            case "document":
+                let isPDF = block["source"]?["media_type"]?.string == "application/pdf"
+                return SentAttachment(name: block["title"]?.string ?? "Document", kind: isPDF ? .pdf : .text, url: nil, image: nil)
+            default:
+                return nil
+            }
+        }
+    }
+
+    private static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    static func date(_ json: JSONValue?) -> Date? { json?.string.flatMap { iso.date(from: $0) } }
+
+    // MARK: - Wording
+
+    static func toolCall(_ id: String, _ name: String, _ input: JSONValue, in folder: URL) -> ToolCall {
+        let path = input["file_path"]?.string ?? input["notebook_path"]?.string
+        let full: String? =
+            switch name {
+            case "Bash": input["command"]?.string
+            case "Read":
+                path.map { p in
+                    guard let start = input["offset"]?.int else { return p }
+                    guard let count = input["limit"]?.int else { return "\(p):\(start)" }
+                    return "\(p):\(start)–\(start + count - 1)"
+                }
+            case "Grep", "Glob":
+                input["pattern"]?.string.map { p in input["path"]?.string.map { "\(p)  in \($0)" } ?? p }
+            case "Edit", "Write", "MultiEdit", "NotebookEdit": path
+            case "WebFetch": input["url"]?.string
+            case "WebSearch": input["query"]?.string
+            default: input.pretty
+            }
+        return ToolCall(
+            id: id, name: name, detail: summary(of: input, in: folder), input: full,
+            description: input["description"]?.string, path: path)
+    }
+
+    /// The one input field worth showing for a tool call.
+    static func summary(of input: JSONValue, in folder: URL) -> String {
+        if let command = input["command"]?.string { return command }
+        if let questions = input["questions"]?.array {  // AskUserQuestion
+            return questions.compactMap { $0["question"]?.string }.joined(separator: " · ")
+        }
+        if let path = input["file_path"]?.string ?? input["notebook_path"]?.string ?? input["path"]?.string {
+            return ToolText.relative(path, in: folder)
+        }
+        for key in ["pattern", "url", "query", "description", "prompt"] {
+            if let value = input[key]?.string { return value }
+        }
+        return String(input.compact.prefix(160))
+    }
+
+    static func text(of content: JSONValue) -> String {
+        if let s = content.string { return s }
+        return content.array?.compactMap { $0["text"]?.string }.joined(separator: "\n") ?? content.compact
+    }
+}

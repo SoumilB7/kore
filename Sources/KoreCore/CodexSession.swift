@@ -151,6 +151,11 @@ public actor CodexSession {
         _ = try await server.request("turn/interrupt", ["threadId": .string(threadId), "turnId": .string(turnId)])
     }
 
+    /// Stops a sub-agent's running turn (its own thread on this app-server).
+    public func interrupt(thread: String, turn: String) async throws {
+        _ = try await server.request("turn/interrupt", ["threadId": .string(thread), "turnId": .string(turn)])
+    }
+
     /// Takes effect from the next turn.
     public func setPermissions(_ permissions: Permissions) {
         self.permissions = permissions
@@ -258,28 +263,37 @@ public actor CodexSession {
     }
 
     private func event(method: String, params: JSONValue) -> CodexEvent {
+        switch method {
+        case "turn/started": activeTurnId = params["turn"]?["id"]?.string
+        case "turn/completed": activeTurnId = nil
+        default: break
+        }
+        return CodexEvent(notification: method, params: params)
+    }
+}
+
+extension CodexEvent {
+    /// Maps one notification. Also maps a sub-agent's (`.subThread`) notifications, which have the
+    /// same shapes.
+    public init(notification method: String, params: JSONValue) {
         let itemId = params["itemId"]?.string ?? ""
         let delta = params["delta"]?.string ?? ""
-        switch method {
-        case "turn/started":
-            activeTurnId = params["turn"]?["id"]?.string
-            return .turnStarted(turnId: activeTurnId ?? "")
-        case "turn/completed":
-            activeTurnId = nil
-            return .turnCompleted(CodexTurnResult(params))
-        case "item/started": return .itemStarted(CodexItem(params["item"] ?? .null))
-        case "item/completed": return .itemCompleted(CodexItem(params["item"] ?? .null))
-        case "item/agentMessage/delta": return .textDelta(itemId: itemId, delta)
-        case "item/reasoning/summaryTextDelta": return .reasoningDelta(itemId: itemId, delta)
-        case "item/plan/delta": return .planDelta(itemId: itemId, delta)
-        case "item/commandExecution/outputDelta": return .commandOutputDelta(itemId: itemId, delta)
-        case "serverRequest/resolved": return .approvalResolved(requestId: params["requestId"] ?? .null)
-        case "error":
-            return .error(
-                message: params["error"]?["message"]?.string ?? "unknown error",
-                willRetry: params["willRetry"]?.bool ?? false)
-        default:
-            return .raw(method: method, params: params)
-        }
+        self =
+            switch method {
+            case "turn/started": .turnStarted(turnId: params["turn"]?["id"]?.string ?? "")
+            case "turn/completed": .turnCompleted(CodexTurnResult(params))
+            case "item/started": .itemStarted(CodexItem(params["item"] ?? .null))
+            case "item/completed": .itemCompleted(CodexItem(params["item"] ?? .null))
+            case "item/agentMessage/delta": .textDelta(itemId: itemId, delta)
+            case "item/reasoning/summaryTextDelta": .reasoningDelta(itemId: itemId, delta)
+            case "item/plan/delta": .planDelta(itemId: itemId, delta)
+            case "item/commandExecution/outputDelta": .commandOutputDelta(itemId: itemId, delta)
+            case "serverRequest/resolved": .approvalResolved(requestId: params["requestId"] ?? .null)
+            case "error":
+                .error(
+                    message: params["error"]?["message"]?.string ?? "unknown error",
+                    willRetry: params["willRetry"]?.bool ?? false)
+            default: .raw(method: method, params: params)
+            }
     }
 }

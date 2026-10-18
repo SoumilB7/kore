@@ -3,8 +3,8 @@ import SwiftUI
 // MARK: - Approvals
 
 struct PermissionCard: View {
-    let approval: ChatModel.Approval
-    let decide: (ChatModel.Decision) -> Void
+    let approval: Approval
+    let decide: (Decision) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.lg) {
@@ -44,7 +44,7 @@ struct PermissionCard: View {
 
 /// Pick one option per question; submits once every question is answered.
 struct QuestionCard: View {
-    let approval: ChatModel.Approval
+    let approval: Approval
     let submit: ([String: String]) -> Void
     @StateObject private var picked = Local([String: String]())
 
@@ -87,7 +87,7 @@ struct QuestionCard: View {
 /// Claude Code's exit-plan prompt.
 struct PlanApprovalCard: View {
     let plan: String
-    let decide: (ChatModel.Decision) -> Void
+    let decide: (Decision) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.lg) {

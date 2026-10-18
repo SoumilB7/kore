@@ -61,10 +61,33 @@ public enum ClaudeHistory {
         }
         return chain.reversed().filter { entry in
             let type = entry["type"]?.string
-            // Peer messages are meta entries, but part of the conversation.
+            // Peer messages, cron firings and finished-agent notices are meta entries, but they
+            // start turns of the conversation.
             return (type == "user" || type == "assistant")
-                && (entry["isMeta"]?.bool != true || PeerMessage(entry: entry) != nil)
+                && (entry["isMeta"]?.bool != true || PeerMessage(entry: entry) != nil
+                    || cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? ""))
         }
+    }
+
+    /// `turnOrigin` values of turns the CLI starts by itself ("sdk" is a typed prompt).
+    public static let cliTurnOrigins: Set<String> = ["scheduled", "task_notification", "peer"]
+
+    /// The newest entry that started a turn the CLI began itself (a cron firing, a finished
+    /// agent, a peer's message), searched from the end like `entry(uuid:)`.
+    public static func latestCLITurn(sessionId: String, in folder: URL) -> JSONValue? {
+        let file = projectDirectory(for: folder).appendingPathComponent("\(sessionId).jsonl")
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+        defer { try? handle.close() }
+        let chunk: UInt64 = 512 * 1024
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: size > chunk ? size - chunk : 0)
+        let tail = (try? handle.readToEnd()) ?? Data()
+        let needle = Data("\"turnOrigin\"".utf8)
+        for line in tail.split(separator: 0x0A).reversed() where line.range(of: needle) != nil {
+            guard let entry = try? JSONValue.parse(Data(line)), entry["type"]?.string == "user" else { continue }
+            if cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? "") { return entry }
+        }
+        return nil
     }
 
     /// One transcript entry by uuid, searched from the end (where a just-started command is).

@@ -83,32 +83,36 @@ final class Workspace {
 
     private func load() async {
         let folder = folder
-        let hidden = ClaudeArchive.ids
-        let claude = await Task.detached { ClaudeHistory.sessions(in: folder) }.value.map { session in
-            var session = session
-            session.archived = hidden.contains(session.id)
-            return session
+        var lists: [String: [SessionSummary]] = [:]
+        await withTaskGroup(of: (String, [SessionSummary]?).self) { group in
+            for provider in Registry.all {
+                group.addTask { (provider.id, await provider.sessions(folder)) }
+            }
+            // Each CLI's list shows as it comes (Claude's is a quick file read; Codex asks its
+            // app-server). A CLI that hasn't answered keeps what was shown.
+            for await (id, list) in group {
+                if let list { lists[id] = list }
+                let shown = chats
+                chats = Registry.all.flatMap { provider in
+                    lists[provider.id] ?? shown.filter { $0.agent == provider.historyAgent }
+                }
+                .sorted { $0.updated > $1.updated }
+            }
         }
-        // Claude's list is a quick file read; show it before Codex's app-server answers.
-        if !loaded {
-            chats = (claude + chats.filter { $0.agent == .codex }).sorted { $0.updated > $1.updated }
-        }
-        let codexThreads = try? await CodexHistory.threads(in: folder)
-        chats = (claude + (codexThreads ?? [])).sorted { $0.updated > $1.updated }
-        if !loaded { reconcileRestored(codexListed: codexThreads != nil) }
+        if !loaded { reconcileRestored(listed: Set(lists.keys)) }
         loaded = true
     }
 
-    /// Restored tabs against the CLIs' list: chats archived or deleted elsewhere since last
-    /// time are dropped, and titles renamed elsewhere are taken up. (Codex tabs are left alone
-    /// if its list couldn't be read.)
-    private func reconcileRestored(codexListed: Bool) {
+    /// Restored tabs against the CLIs' lists: chats archived or deleted elsewhere since last
+    /// time are dropped, and titles renamed elsewhere are taken up. (Tabs of a CLI whose list
+    /// couldn't be read are left alone.)
+    private func reconcileRestored(listed: Set<String>) {
         let byId = Dictionary(chats.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for tab in tabs {
             guard let chat = tab.chat, chat.resumed, let id = chat.sessionId else { continue }
             if let session = byId[id] {
                 if session.archived { close(tab) } else { chat.adoptName(session.title) }
-            } else if chat.provider == .claude || codexListed {
+            } else if listed.contains(chat.provider.id) {
                 close(tab)
             }
         }
@@ -118,10 +122,7 @@ final class Workspace {
     /// Kore keeps a hidden list, as the Claude Code extension does) and closes its tab.
     func archive(_ session: SessionSummary) async {
         if let tab = tab(for: session.id) { close(tab) }
-        switch session.agent {
-        case .claude: ClaudeArchive.set(session.id, archived: true)
-        case .codex: try? await CodexHistory.archive(session.id, in: folder)
-        }
+        await Registry.provider(for: session.agent).setArchived(session.id, true, folder)
         setArchived(session.id, true)
     }
 
@@ -145,10 +146,7 @@ final class Workspace {
 
     /// Brings an archived chat back and opens it.
     func unarchive(_ session: SessionSummary) async {
-        switch session.agent {
-        case .claude: ClaudeArchive.set(session.id, archived: false)
-        case .codex: try? await CodexHistory.unarchive(session.id, in: folder)
-        }
+        await Registry.provider(for: session.agent).setArchived(session.id, false, folder)
         setArchived(session.id, false)
         open(session)
     }
@@ -163,7 +161,7 @@ final class Workspace {
     }
 
     private func chat(_ session: SessionSummary) -> ChatModel {
-        ChatModel(provider: session.agent == .claude ? .claude : .codex, folder: folder, resume: session)
+        ChatModel(provider: Registry.provider(for: session.agent), folder: folder, resume: session)
     }
 
     // MARK: - Open tabs
@@ -211,23 +209,9 @@ final class Workspace {
         guard let provider = saved.provider.flatMap(Provider.init(rawValue:)) else { return tab }
         let session = saved.session.map {
             SessionSummary(
-                id: $0, agent: provider == .claude ? .claude : .codex, title: saved.title ?? provider.name, updated: .now)
+                id: $0, agent: provider.historyAgent, title: saved.title ?? provider.name, updated: .now)
         }
         tab.chat = ChatModel(provider: provider, folder: folder, resume: session)
         return tab
-    }
-}
-
-/// Archived Claude sessions. The Claude CLI has no archive for local sessions (each of its
-/// clients keeps a hidden list; the VS Code extension's is `hiddenSessionIds`), so this is Kore's.
-enum ClaudeArchive {
-    private static let key = "archivedClaudeSessions"
-
-    static var ids: Set<String> { Set(UserDefaults.standard.stringArray(forKey: key) ?? []) }
-
-    static func set(_ id: String, archived: Bool) {
-        var ids = ids
-        if archived { ids.insert(id) } else { ids.remove(id) }
-        UserDefaults.standard.set(ids.sorted(), forKey: key)
     }
 }

@@ -144,7 +144,7 @@ struct ComposerView: View {
         return String(draft.dropFirst()).lowercased()
     }
 
-    private var slashMatches: [ChatModel.SlashCommand] {
+    private var slashMatches: [SlashCommand] {
         guard !slashDismissed.value, let query = slashQuery else { return [] }
         // Foundation's `contains("")` is false, so a bare "/" must list everything explicitly.
         if query.isEmpty { return chat.commands }
@@ -166,7 +166,7 @@ struct ComposerView: View {
         return .handled
     }
 
-    private func accept(_ command: ChatModel.SlashCommand) {
+    private func accept(_ command: SlashCommand) {
         chat.draft = command.insertion
         focused.wrappedValue = true
     }

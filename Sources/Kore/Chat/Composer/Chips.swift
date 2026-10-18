@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct PlanChip: View {
+    let mode: ModeOption
     let turnOff: () -> Void
     @StateObject private var hovered = Local(false)
 
@@ -11,7 +12,7 @@ struct PlanChip: View {
                 if hovered.value {
                     Image(systemName: "xmark.circle.fill").font(TextStyle.label)
                 } else {
-                    ModeIcon(mode: Provider.codexPlan)
+                    ModeIcon(mode: mode)
                 }
                 Text("Plan").font(TextStyle.labelMedium)
             }

@@ -49,8 +49,8 @@ struct ComposerBar: View {
                 ModelMenu(chat: chat, showEffort: density == .full)
             }
             Spacer(minLength: 0)
-            if chat.provider == .codex && chat.planMode {
-                PlanChip { chat.setPlanMode(false) }
+            if let plan = chat.provider.planToggle, chat.planMode {
+                PlanChip(mode: plan) { chat.setPlanMode(false) }
             }
             ModeMenu(chat: chat, showLabel: density == .full || density == .noEffort)
         }
@@ -146,12 +146,13 @@ struct ModeMenu: View {
             ForEach(chat.availableModes) { mode in
                 toggle(mode, isOn: chat.mode == mode.id) { chat.setMode(mode.id) }
             }
-            if chat.provider == .codex {
+            if let plan = chat.provider.planToggle {
                 Divider()
-                toggle(Provider.codexPlan, isOn: chat.planMode) { chat.setPlanMode(!chat.planMode) }
+                toggle(plan, isOn: chat.planMode) { chat.setPlanMode(!chat.planMode) }
             }
         } label: {
-            let mode = chat.provider == .codex ? chat.permissionsMode : chat.activeMode
+            // A plan toggle shows as its own chip, so the menu keeps the permissions mode.
+            let mode = chat.provider.planToggle != nil ? chat.permissionsMode : chat.activeMode
             HStack(spacing: Space.xs) {
                 ModeIcon(mode: mode)
                 if showLabel {

@@ -77,6 +77,8 @@ struct FolderWindow: View {
                 workspace.value.activeTab.chat?.launchModel = DevSnapshot.model
             }
             DevSnapshot.captureIfRequested()
+            DevSnapshot.dumpIfRequested { workspace.value.activeTab.chat }
+            if let chat = workspace.value.activeTab.chat { DevSnapshot.drive(chat) }
         }
         // The folder's chats, for history, and to check the restored tabs against them.
         .task { if !DevSnapshot.singleTab { await workspace.value.refresh() } }

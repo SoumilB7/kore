@@ -1,9 +1,11 @@
+import AppKit
 import Foundation
 import KoreCore
 import Observation
 import SwiftUI
 
-/// One conversation with Claude or Codex. Turns either CLI's events into a flat transcript.
+/// One conversation with a CLI, as a flat transcript. It runs on a `ChatBackend` and applies
+/// its `ChatEvent`s; the feature stores of phase 07 take this over.
 @MainActor @Observable
 final class ChatModel: Identifiable {
     struct Entry: Identifiable {
@@ -13,7 +15,7 @@ final class ChatModel: Identifiable {
         var kind: Kind
         var text: String
         var toolName: String?
-        /// Claude tool_use id or Codex item id.
+        /// The tool call or text block it shows.
         var toolId: String?
         var result: String?
         var done = false
@@ -24,82 +26,17 @@ final class ChatModel: Identifiable {
         var from: String?
     }
 
-    struct Approval: Identifiable {
-        struct Option {
-            let label: String
-            let description: String
-        }
-
-        struct Question {
-            let id: String
-            let text: String
-            let options: [Option]
-        }
-
-        enum Source {
-            case claude(PermissionRequest)
-            case codex(CodexApproval)
-            /// Not from a CLI: the test gallery's samples. Answering does nothing.
-            case sample
-        }
-
-        let id: String
-        let title: String
-        let detail: String?
-        let body: String?
-        let canAlwaysAllow: Bool
-        /// Non-empty means render as a question card.
-        let questions: [Question]
-        let source: Source
-        /// Set for Claude's ExitPlanMode: the plan awaiting "Ready to code?".
-        var plan: String? = nil
-    }
-
-    enum Decision {
-        case allow, allowAlways, deny
-        /// Claude's "Ready to code?": approve the plan, optionally switching to Accept edits.
-        case approvePlan(autoAcceptEdits: Bool)
-        case keepPlanning
-        /// Keyed by `Approval.Question.id`.
-        case answers([String: String])
-    }
-
-    /// An entry in the `/` menu. Picking it inserts `insertion` into the draft.
-    struct SlashCommand: Identifiable, Hashable {
-        enum Kind { case command, skill }
-        let name: String
-        let description: String
-        let hint: String
-        let kind: Kind
-        var id: String { name }
-        /// Claude runs `/name`; Codex invokes skills by mentioning `$name`.
-        var insertion: String { kind == .skill ? "$\(name) " : "/\(name) " }
-    }
-
-    struct ModelOption: Identifiable, Hashable {
-        let id: String
-        let name: String
-        let resolved: String
-        let efforts: [String]
-        var supportsAutoMode = false
-    }
-
-    private enum Backend {
-        case claude(ClaudeSession)
-        case codex(CodexSession)
-    }
-
     let id = UUID()
-    let provider: Provider
+    let provider: ProviderDescriptor
     let folder: URL
     private(set) var entries: [Entry] = []
     private(set) var approvals: [Approval] = []
     private(set) var isRunning = false
-    /// Claude permission mode or Codex permissions preset (the CLI's own id).
+    /// The provider's mode id (Claude permission mode / Codex permissions preset).
     private(set) var mode: String
-    /// Codex's Plan collaboration mode; Claude's plan is just `mode == "plan"`.
+    /// The provider's plan toggle (Codex); Claude's plan is a mode.
     private(set) var planMode = false
-    /// Codex finished a plan in Plan mode: offer "Implement this plan?" like its CLI.
+    /// A plan finished in plan mode: offer "Implement this plan?" like the Codex CLI.
     private(set) var offerImplementPlan = false
     private(set) var models: [ModelOption] = []
     private(set) var modelId: String?
@@ -112,29 +49,26 @@ final class ChatModel: Identifiable {
     /// The CLI's name for the conversation (AI title or rename); nil until there is one.
     private(set) var name: String?
 
-    private var backend: Backend?
-    /// A past session to show and continue; replayed into `entries` on launch.
-    private var resuming: SessionSummary?
-    private var starting: Task<Void, Never>?
+    private var backend: (any ChatBackend)?
     private var pump: Task<Void, Never>?
-    /// Kept across process restarts so an exited CLI resumes the same conversation.
+    private let resume: SessionSummary?
     private var resumeId: String?
-    /// A past session, or one where something was said: `sessionId` can be resumed.
-    var hasConversation: Bool { resumed || entries.contains { $0.kind == .user || $0.kind == .peer } }
     /// Opened from a past session (history, or restored tabs).
     let resumed: Bool
     /// Launch with this model instead of the CLI's default (set by the dev hook).
     var launchModel: String?
-    /// Claude: entry receiving streamed text; reset at each new content block.
-    private var streamingIndex: Int?
-    /// Codex: item id → entry index.
-    private var itemIndex: [String: Int] = [:]
+    /// Where each block, tool call and turn sits in `entries`.
+    private var blockIndex: [BlockID: Int] = [:]
+    private var toolIndex: [String: Int] = [:]
+    private var turnIndex: [TurnID: Int] = [:]
+    /// Applying a resumed session's past: its turns' outcomes aren't announced again.
+    private var replaying = false
 
-    init(provider: Provider, folder: URL, resume session: SessionSummary? = nil) {
+    init(provider: ProviderDescriptor, folder: URL, resume session: SessionSummary? = nil) {
         self.provider = provider
         self.folder = folder
         mode = provider.modes[0].id
-        resuming = session
+        resume = session
         resumeId = session?.id
         name = session?.title
         resumed = session != nil
@@ -142,6 +76,9 @@ final class ChatModel: Identifiable {
 
     /// Claude session id / Codex thread id, once known.
     var sessionId: String? { resumeId }
+
+    /// A past session, or one where something was said: `sessionId` can be resumed.
+    var hasConversation: Bool { resumed || entries.contains { $0.kind == .user || $0.kind == .peer } }
 
     var title: String {
         if let name { return name }
@@ -163,24 +100,17 @@ final class ChatModel: Identifiable {
         guard !newName.isEmpty else { return }
         name = newName
         await start()
-        switch backend {
-        case .claude(let session): try? await session.rename(newName)
-        case .codex(let session): try? await session.rename(newName)
-        case nil: break
-        }
+        try? await backend?.rename(newName)
     }
 
-    /// Modes to offer; Claude's Auto only when the model supports it.
-    var availableModes: [ModeOption] {
-        provider.modes.filter { $0.listed && ($0.id != "auto" || currentModel?.supportsAutoMode != false) }
-    }
+    var availableModes: [ModeOption] { provider.availableModes(currentModel) }
 
     var activeMode: ModeOption {
-        if provider == .codex && planMode { return Provider.codexPlan }
-        return provider.modes.first { $0.id == mode } ?? provider.modes[0]
+        if planMode, let plan = provider.planToggle { return plan }
+        return permissionsMode
     }
 
-    /// Codex's permissions preset, shown apart from its Plan chip.
+    /// The mode apart from a plan toggle.
     var permissionsMode: ModeOption { provider.modes.first { $0.id == mode } ?? provider.modes[0] }
 
     /// The chat's highlight color for the active mode; nil when neutral.
@@ -192,30 +122,29 @@ final class ChatModel: Identifiable {
 
     var effortLabel: String? {
         guard let effort else { return nil }
-        switch effort {
-        case "xhigh": return "Extra high"
-        default: return effort.capitalized
-        }
+        return effort == "xhigh" ? "Extra high" : effort.capitalized
     }
 
     // MARK: - Actions
 
     func start() async {
-        if backend != nil { return }
-        if let starting { return await starting.value }
-        let task = Task {
-            do {
-                switch provider {
-                case .claude: try await launchClaude()
-                case .codex: try await launchCodex()
-                }
-            } catch {
-                append(.notice, String(describing: error), isError: true)
-            }
+        do {
+            try await connect().start()
+        } catch {
+            append(.notice, String(describing: error), isError: true)
         }
-        starting = task
-        await task.value
-        starting = nil
+    }
+
+    /// The backend, made on first use with the chat's current settings.
+    private func connect() -> any ChatBackend {
+        if let backend { return backend }
+        let backend = provider.makeBackend(
+            BackendOptions(folder: folder, resume: resume, mode: mode, planMode: planMode, model: launchModel))
+        self.backend = backend
+        pump = Task {
+            for await event in backend.events { self.apply(event) }
+        }
+        return backend
     }
 
     var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty }
@@ -240,45 +169,21 @@ final class ChatModel: Identifiable {
         guard !text.isEmpty || !sent.isEmpty else { return }
         draft = ""
         attachments = []
-        // Codex extension's /plan: a local toggle, nothing is sent.
-        if provider == .codex && text == "/plan" && sent.isEmpty {
+        // The Codex extension's /plan flips the plan toggle; it isn't a message.
+        if text == "/plan" && sent.isEmpty && provider.planToggle != nil {
             setPlanMode(!planMode)
             return
         }
-        streamingIndex = nil
         offerImplementPlan = false
-        let isFirstPrompt = name == nil && !entries.contains { $0.kind == .user }
         var entry = Entry(kind: .user, text: text)
         entry.attachments = sent
         entries.append(entry)
         isRunning = true
-        let files = Attachments.files(sent)
-        let folder = folder
+        let backend = connect()
         Task {
-            await start()
             do {
-                switch backend {
-                case .claude(let session):
-                    if files.isEmpty {
-                        try await session.send(text)
-                    } else {
-                        // Reading and encoding files can take a moment; keep it off the main actor.
-                        let content = await Task.detached {
-                            Attachments.claudeContent(text: text, files: files, folder: folder)
-                        }.value
-                        try await session.send(content: content)
-                    }
-                    if isFirstPrompt && !text.isEmpty && !text.hasPrefix("/") {
-                        if let title = try? await session.generateTitle(from: text), name == nil { name = title }
-                    }
-                case .codex(let session):
-                    if files.isEmpty {
-                        try await sendCodex(text, to: session)
-                    } else {
-                        try await session.send(input: Attachments.codexInput(text: text, files: files))
-                    }
-                case nil: isRunning = false
-                }
+                try await backend.start()
+                if try await !backend.send(text, files: Attachments.files(sent)) { isRunning = false }
             } catch {
                 isRunning = false
                 append(.notice, String(describing: error), isError: true)
@@ -286,28 +191,9 @@ final class ChatModel: Identifiable {
         }
     }
 
-    /// Codex's own slash commands map to RPCs (as in t3code); anything else is a prompt.
-    private func sendCodex(_ text: String, to session: CodexSession) async throws {
-        if text == "/compact" {
-            try await session.compact()
-        } else if text.hasPrefix("/goal ") {
-            try await session.setGoal(String(text.dropFirst(6)).trimmingCharacters(in: .whitespaces))
-            isRunning = false
-            append(.notice, "Goal set")
-        } else {
-            try await session.send(text)
-        }
-    }
-
     func stop() {
         let backend = backend
-        Task {
-            switch backend {
-            case .claude(let session): try? await session.interrupt()
-            case .codex(let session): try? await session.interrupt()
-            case nil: break
-            }
-        }
+        Task { await backend?.interrupt() }
     }
 
     func setMode(_ id: String) {
@@ -316,13 +202,7 @@ final class ChatModel: Identifiable {
         let backend = backend
         Task {
             do {
-                switch backend {
-                case .claude(let session):
-                    if let m = ClaudeSession.PermissionMode(rawValue: id) { try await session.setPermissionMode(m) }
-                case .codex(let session):
-                    if let p = CodexSession.Permissions(rawValue: id) { await session.setPermissions(p) }
-                case nil: break
-                }
+                try await backend?.setMode(id)
             } catch {
                 mode = previous
                 append(.notice, "Couldn't switch mode: \(error)", isError: true)
@@ -332,29 +212,19 @@ final class ChatModel: Identifiable {
 
     func setPlanMode(_ on: Bool) {
         planMode = on
-        if case .codex(let session) = backend { Task { await session.setPlanMode(on) } }
+        let backend = backend
+        Task { await backend?.setPlanMode(on) }
     }
 
-    /// Shift+Tab, as in each CLI: Claude cycles Manual → Edit automatically → Plan → Auto
-    /// (if available) → Manual; Codex toggles Plan mode.
+    /// Shift+Tab, as in each CLI.
     func cycleMode() {
-        switch provider {
-        case .claude:
-            let autoAvailable = availableModes.contains { $0.id == "auto" }
-            let next =
-                switch mode {
-                case "default": "acceptEdits"
-                case "acceptEdits": "plan"
-                case "plan": autoAvailable ? "auto" : "default"
-                default: "default"
-                }
-            setMode(next)
-        case .codex:
-            setPlanMode(!planMode)
+        switch provider.nextMode(mode, planMode, availableModes) {
+        case .mode(let next): setMode(next)
+        case .togglePlan: setPlanMode(!planMode)
         }
     }
 
-    /// Codex CLI's "Yes, implement this plan": switch to Default and start coding.
+    /// Codex CLI's "Yes, implement this plan": switch plan off and start coding.
     func implementPlan() {
         setPlanMode(false)
         draft = "Implement the plan."
@@ -368,18 +238,12 @@ final class ChatModel: Identifiable {
     func setModel(_ option: ModelOption) {
         modelId = option.id
         if let current = effort, !option.efforts.isEmpty, !option.efforts.contains(current) {
-            let next = option.efforts.contains("high") ? "high" : option.efforts[0]
-            effort = next
-            apply(effort: next)
+            setEffort(option.efforts.contains("high") ? "high" : option.efforts[0])
         }
         let backend = backend
         Task {
             do {
-                switch backend {
-                case .claude(let session): try await session.setModel(option.id)
-                case .codex(let session): await session.setModel(option.id)
-                case nil: break
-                }
+                try await backend?.setModel(option.id)
             } catch {
                 append(.notice, "Couldn't switch model: \(error)", isError: true)
             }
@@ -388,492 +252,103 @@ final class ChatModel: Identifiable {
 
     func setEffort(_ level: String) {
         effort = level
-        apply(effort: level)
+        let backend = backend
+        Task { await backend?.setEffort(level) }
     }
 
     func answer(_ approval: Approval, _ decision: Decision) {
         approvals.removeAll { $0.id == approval.id }
-        Task {
-            switch approval.source {
-            case .claude(let request):
-                guard case .claude(let session) = backend else { return }
-                let mapped: PermissionDecision =
-                    switch decision {
-                    case .allow: .allow
-                    case .allowAlways: .allowAlways
-                    case .deny: .deny(message: "The user denied this tool call.")
-                    case .answers(let dict): .answers(dict)
-                    case .approvePlan(let autoAcceptEdits): autoAcceptEdits ? .allowSettingMode("acceptEdits") : .allow
-                    case .keepPlanning: .deny(message: "The user wants to keep planning. Ask what to change.")
-                    }
-                try? await session.respond(to: request, mapped)
-            case .sample:
-                return
-            case .codex(let request):
-                guard case .codex(let session) = backend else { return }
-                let mapped: CodexDecision =
-                    switch decision {
-                    case .allow: .accept
-                    case .allowAlways: .acceptForSession
-                    case .deny: .decline
-                    case .answers(let dict): .answers(dict.mapValues { [$0] })
-                    case .approvePlan: .accept
-                    case .keepPlanning: .decline
-                    }
-                try? await session.respond(to: request, mapped)
-            }
-        }
+        let backend = backend
+        Task { await backend?.respond(to: approval.id, decision) }
     }
 
     func close() {
         pump?.cancel()
         let backend = backend
         self.backend = nil
-        Task {
-            switch backend {
-            case .claude(let session): await session.close()
-            case .codex(let session): await session.close()
-            case nil: break
-            }
-        }
+        Task { await backend?.close() }
     }
 
-    private func apply(effort level: String) {
-        let backend = backend
-        Task {
-            switch backend {
-            case .claude(let session): try? await session.setEffort(level)
-            case .codex(let session): await session.setEffort(level)
-            case nil: break
-            }
-        }
-    }
+    // MARK: - Events
 
-    // MARK: - Launch
-
-    private func launchClaude() async throws {
-        let session = try await ClaudeSession.start(
-            .init(
-                cwd: folder, model: launchModel,
-                permissionMode: ClaudeSession.PermissionMode(rawValue: mode) ?? .default,
-                resume: resumeId))
-        if resuming != nil {
-            let folder = folder, id = resumeId ?? ""
-            let messages = await Task.detached { ClaudeHistory.messages(sessionId: id, in: folder) }.value
-            replayClaude(messages)
-            resuming = nil
-        }
-        backend = .claude(session)
-        // Cancelled by close(), which ends the loop and releases the model.
-        pump = Task {
-            for await event in session.events { self.handleClaude(event) }
-        }
-
-        let list = await session.capabilities["models"]?.array ?? []
-        models = list.compactMap { json in
-            guard let value = json["value"]?.string, value != "default" else { return nil }
-            return ModelOption(
-                id: value,
-                name: json["displayName"]?.string ?? value,
-                resolved: json["resolvedModel"]?.string ?? value,
-                efforts: json["supportedEffortLevels"]?.array?.compactMap(\.string) ?? [],
-                supportsAutoMode: json["supportsAutoMode"]?.bool ?? false)
-        }
-        commands = (await session.capabilities["commands"]?.array ?? []).compactMap { json in
-            guard let name = json["name"]?.string else { return nil }
-            return SlashCommand(
-                name: name, description: json["description"]?.string ?? "",
-                hint: json["argumentHint"]?.string ?? "", kind: .command)
-        }
-        if let applied = try? await session.settings()["applied"] {
-            if let model = applied["model"]?.string {
-                modelId = models.first { $0.resolved == model }?.id ?? model
-            }
-            effort = applied["effort"]?.string
-        }
-    }
-
-    private func launchCodex() async throws {
-        let session = try await CodexSession.start(
-            .init(
-                cwd: folder, model: launchModel,
-                permissions: CodexSession.Permissions(rawValue: mode) ?? .askForApproval,
-                plan: planMode, resume: resumeId))
-        if resuming != nil {
-            replayCodex(await session.history)
-            resuming = nil
-        }
-        backend = .codex(session)
-        pump = Task {
-            for await event in session.events { self.handleCodex(event) }
-        }
-
-        let list = (try? await session.models()) ?? []
-        models = list.compactMap { json in
-            guard let id = json["id"]?.string, json["hidden"]?.bool != true else { return nil }
-            let efforts = json["supportedReasoningEfforts"]?.array?.compactMap {
-                $0["reasoningEffort"]?.string ?? $0.string
-            }
-            return ModelOption(
-                id: id,
-                name: json["displayName"]?.string ?? id,
-                resolved: json["model"]?.string ?? id,
-                efforts: efforts ?? [])
-        }
-        var current = await session.model
-        if current == nil || !models.contains(where: { $0.id == current }) {
-            let fallbackJSON = list.first { $0["isDefault"]?.bool == true } ?? list.first
-            if let fallback = fallbackJSON?["id"]?.string {
-                if let old = current {
-                    append(.notice, "\(old) isn't available on this account, using \(fallback)")
-                }
-                await session.setModel(fallback)
-                current = fallback
-            }
-        }
-        let skills = (try? await session.skills()) ?? []
-        commands =
-            [
-                SlashCommand(name: "plan", description: "Plan mode", hint: "", kind: .command),
-                SlashCommand(name: "compact", description: "Summarize the thread to free up context", hint: "", kind: .command),
-                SlashCommand(
-                    name: "goal", description: "Set a goal Codex keeps working toward until it is done",
-                    hint: "objective", kind: .command),
-            ]
-            + skills.compactMap { json in
-                guard let name = json["name"]?.string, json["enabled"]?.bool != false else { return nil }
-                return SlashCommand(
-                    name: name, description: json["shortDescription"]?.string ?? json["description"]?.string ?? "",
-                    hint: "", kind: .skill)
-            }
-        modelId = current
-        if let current, let json = list.first(where: { $0["id"]?.string == current }) {
-            effort = json["defaultReasoningEffort"]?.string
-        }
-    }
-
-    // MARK: - History
-
-    /// Claude transcript entries go through the live event handling; only user prompts
-    /// need adding here (live, the composer adds them).
-    /// Stdout doesn't carry a peer's message, so it's read from the transcript (written as the
-    /// turn starts, so retried briefly) and placed where its turn began.
-    private func showPeerMessage(_ id: String, at index: Int) {
-        guard let sessionId = resumeId else { return }
-        let folder = folder
-        Task {
-            for _ in 0..<15 {
-                let entry = await Task.detached { ClaudeHistory.entry(uuid: id, sessionId: sessionId, in: folder) }.value
-                if let entry {
-                    guard let peer = PeerMessage(entry: entry) else { return }  // e.g. a queued prompt of ours
-                    var message = Entry(kind: .peer, text: peer.text)
-                    message.from = peer.from
-                    let index = min(index, entries.count)
-                    entries.insert(message, at: index)
-                    if let i = streamingIndex, i >= index { streamingIndex = i + 1 }
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(200))
-            }
-        }
-    }
-
-    private func replayClaude(_ messages: [JSONValue]) {
-        for message in messages {
-            if let peer = PeerMessage(entry: message) {
-                var entry = Entry(kind: .peer, text: peer.text)
-                entry.from = peer.from
-                entries.append(entry)
-                continue
-            }
-            if message["type"]?.string == "user", let content = message["message"]?["content"] {
-                let prompt = Self.promptText(content)
-                let chips = Attachments.chips(fromClaude: content)
-                if prompt != nil || !chips.isEmpty {
-                    var entry = Entry(kind: .user, text: prompt ?? "")
-                    entry.attachments = chips
-                    entries.append(entry)
-                    continue
-                }
-            }
-            handleClaude(ClaudeEvent(message: message))
-        }
-        streamingIndex = nil
-    }
-
-    private func replayCodex(_ turns: [JSONValue]) {
-        for item in turns.flatMap({ $0["items"]?.array ?? [] }).map(CodexItem.init) {
-            if item.type == "userMessage" {
-                let content = item.raw["content"] ?? []
-                let text = content.array?.compactMap { $0["text"]?.string }.joined(separator: "\n") ?? ""
-                let chips = Attachments.chips(fromCodex: content)
-                if !text.isEmpty || !chips.isEmpty {
-                    var entry = Entry(kind: .user, text: text)
-                    entry.attachments = chips
-                    entries.append(entry)
-                }
-            } else {
-                codexItemStarted(item)
-                codexItemCompleted(item)
-            }
-        }
-        offerImplementPlan = false
-    }
-
-    private static func promptText(_ content: JSONValue?) -> String? {
-        let text = content?.string ?? content?.array?.last { $0["type"]?.string == "text" }?["text"]?.string
-        guard let text, !text.isEmpty, !text.hasPrefix("<") else { return nil }
-        return text
-    }
-
-    // MARK: - Claude events
-
-    private func handleClaude(_ event: ClaudeEvent) {
+    private func apply(_ event: ChatEvent) {
         switch event {
-        case .sessionStarted(let info):
-            resumeId = info.sessionId
-            if let current = info.permissionMode { mode = current }
-        case .permissionModeChanged(let current):
-            mode = current
-        case .textDelta(let text, nil):
-            stream(.assistant, text)
-        case .thinkingDelta(let text, nil):
-            stream(.thinking, text)
-        case .assistant(_, let blocks, nil):
-            // Normally the text already arrived as deltas. Slash command output (e.g. /context)
-            // comes as one complete message with none, so show its text here.
-            if streamingIndex == nil {
-                for case .text(let text) in blocks where !text.isEmpty { append(.assistant, text) }
-            }
-            streamingIndex = nil
-            for case .toolUse(let id, let name, let input) in blocks {
-                var entry = Entry(kind: .tool, text: Self.summary(of: input, in: folder))
-                entry.toolName = name
-                entry.toolId = id
-                entries.append(entry)
-            }
-        case .user(let blocks, nil):
-            for case .toolResult(let id, let content, let isError) in blocks {
-                guard let i = entries.lastIndex(where: { $0.toolId == id }) else { continue }
-                entries[i].result = Self.text(of: content)
-                entries[i].done = true
-                entries[i].isError = isError
-            }
-        case .permissionRequest(let r):
-            approvals.append(claudeApproval(r))
-        case .permissionCancelled(let id):
-            approvals.removeAll { $0.id == id }
-        case .commandStarted(let id, let sessionId):
-            if resumeId == nil { resumeId = sessionId }
-            // A turn the CLI started itself (e.g. a peer's message): running like any other.
+        case .sessionIdentified(let id):
+            resumeId = id
+        case .titleChanged(let title):
+            if name == nil { name = title }
+        case .controlsLoaded(let controls):
+            models = controls.models
+            modelId = controls.model
+            effort = controls.effort
+            commands = controls.commands
+        case .modeChanged(let id):
+            mode = id
+        case .planModeChanged(let on):
+            planMode = on
+        case .turnStarted(let turn, _, _):
             isRunning = true
-            streamingIndex = nil
-            showPeerMessage(id, at: entries.count)
-        case .turnCompleted(let r):
-            isRunning = false
-            streamingIndex = nil
-            approvals.removeAll()
-            if r.isError {
-                let interrupted = r.subtype == "error_during_execution"
-                append(.notice, interrupted ? "Interrupted" : (r.result ?? r.subtype), isError: !interrupted)
-            }
-        case .raw(let json):
-            if json["type"]?.string == "stream_event", json["event"]?["type"]?.string == "content_block_start" {
-                streamingIndex = nil
-            }
-        case .exited(let status):
-            exited(status, name: "Claude")
-        default:
-            break  // subagent traffic, stderr
-        }
-    }
-
-    private func claudeApproval(_ r: PermissionRequest) -> Approval {
-        if r.toolName == "ExitPlanMode" {
-            return Approval(
-                id: r.id, title: "Ready to code?", detail: nil, body: nil, canAlwaysAllow: false,
-                questions: [], source: .claude(r), plan: r.input["plan"]?.string ?? "")
-        }
-        if r.isQuestion {
-            let questions = (r.input["questions"]?.array ?? []).map { q in
-                let text = q["question"]?.string ?? ""
-                return Approval.Question(id: text, text: text, options: Self.options(q["options"]))
-            }
-            return Approval(
-                id: r.id, title: "", detail: nil, body: nil, canAlwaysAllow: false,
-                questions: questions, source: .claude(r))
-        }
-        return Approval(
-            id: r.id, title: "Allow \(r.toolName)?", detail: r.description,
-            body: Self.summary(of: r.input, in: folder), canAlwaysAllow: !r.suggestions.isEmpty,
-            questions: [], source: .claude(r))
-    }
-
-    private func stream(_ kind: Entry.Kind, _ text: String) {
-        guard !text.isEmpty else { return }
-        if let i = streamingIndex, entries.indices.contains(i), entries[i].kind == kind {
-            entries[i].text += text
-        } else {
-            append(kind, text)
-            streamingIndex = entries.count - 1
-        }
-    }
-
-    // MARK: - Codex events
-
-    private func handleCodex(_ event: CodexEvent) {
-        switch event {
-        case .threadStarted(let threadId, _, _):
-            resumeId = threadId
-        case .turnStarted:
-            isRunning = true
-        case .textDelta(let itemId, let t):
-            streamItem(itemId, .assistant, t)
-        case .reasoningDelta(let itemId, let t):
-            streamItem(itemId, .thinking, t)
-        case .planDelta(let itemId, let t):
-            streamItem(itemId, .plan, t)
-        case .commandOutputDelta(let itemId, let t):
-            if let i = itemIndex[itemId], entries.indices.contains(i) {
-                entries[i].result = (entries[i].result ?? "") + t
-            }
-        case .itemStarted(let item):
-            codexItemStarted(item)
-        case .itemCompleted(let item):
-            codexItemCompleted(item)
-        case .approvalRequest(let a):
-            approvals.append(codexApproval(a))
-        case .approvalResolved(let requestId):
-            approvals.removeAll { $0.id == requestId.compact }
-        case .turnCompleted(let r):
+            offerImplementPlan = false
+            turnIndex[turn] = entries.count
+        case .turnFinished(_, let outcome, _):
             isRunning = false
             approvals.removeAll()
-            switch r.status {
-            case "interrupted": append(.notice, "Interrupted")
-            case "failed": append(.notice, Self.cleanError(r.errorMessage ?? "Turn failed"), isError: true)
-            default: break
+            guard !replaying else { return }
+            switch outcome {
+            case .completed: break
+            case .interrupted: append(.notice, "Interrupted")
+            case .failed(let message): append(.notice, message, isError: true)
             }
-        case .subThread:
-            break  // a sub-agent's own stream; not shown yet
-        case .exited(let status):
-            exited(status, name: "Codex")
-        case .error, .raw, .stderr:
-            break
-        }
-    }
-
-    private func streamItem(_ itemId: String, _ kind: Entry.Kind, _ text: String) {
-        guard !text.isEmpty else { return }
-        if let i = itemIndex[itemId], entries.indices.contains(i) {
-            entries[i].text += text
-        } else {
-            var entry = Entry(kind: kind, text: text)
-            entry.toolId = itemId
+        case .userMessage(let text, let sent):
+            var entry = Entry(kind: .user, text: text)
+            entry.attachments = sent.map(Attachment.init(sent:))
             entries.append(entry)
-            itemIndex[itemId] = entries.count - 1
-        }
-    }
-
-    private func codexItemStarted(_ item: CodexItem) {
-        let name: String
-        let text: String
-        switch item.type {
-        case "commandExecution":
-            name = "Run"
-            text = Self.codexCommand(item.raw) ?? item.command ?? ""
-        case "fileChange":
-            name = "Edit"
-            let paths = (item.raw["changes"]?.array ?? []).compactMap { $0["path"]?.string }
-            text = paths.map { Self.relative($0, in: folder) }.joined(separator: ", ")
-        case "mcpToolCall":
-            name = "\(item.raw["server"]?.string ?? "mcp").\(item.raw["tool"]?.string ?? "tool")"
-            text = String((item.raw["arguments"]?.compact ?? "").prefix(160))
-        case "webSearch":
-            name = "Search"
-            text = item.raw["query"]?.string ?? ""
-        default:
-            return
-        }
-        var entry = Entry(kind: .tool, text: text)
-        entry.toolName = name
-        entry.toolId = item.id
-        entries.append(entry)
-        itemIndex[item.id] = entries.count - 1
-    }
-
-    private func codexItemCompleted(_ item: CodexItem) {
-        let failed = ["failed", "declined"].contains(item.status ?? "")
-        switch item.type {
-        case "plan":
-            if itemIndex[item.id] == nil, let text = item.text, !text.isEmpty {
-                var entry = Entry(kind: .plan, text: text)
-                entry.toolId = item.id
+        case .peerMessage(let from, let text, let turn):
+            var entry = Entry(kind: .peer, text: text)
+            entry.from = from
+            insert(entry, at: turn.flatMap { turnIndex[$0] } ?? entries.count)
+        case .text(let block, let kind, let text, .main):
+            if let i = blockIndex[block], entries.indices.contains(i) {
+                entries[i].text += text
+            } else {
+                var entry = Entry(kind: kind == .thinking ? .thinking : kind == .plan ? .plan : .assistant, text: text)
+                entry.toolId = block
                 entries.append(entry)
-                itemIndex[item.id] = entries.count - 1
+                blockIndex[block] = entries.count - 1
             }
-            if planMode { offerImplementPlan = true }
-        case "agentMessage":
-            if itemIndex[item.id] == nil, let text = item.text, !text.isEmpty {
-                var entry = Entry(kind: .assistant, text: text)
-                entry.toolId = item.id
-                entries.append(entry)
-                itemIndex[item.id] = entries.count - 1
-            }
-        case "commandExecution":
-            guard let i = itemIndex[item.id], entries.indices.contains(i) else { return }
-            let streamed = entries[i].result?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let aggregated = item.raw["aggregatedOutput"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            entries[i].result =
-                !streamed.isEmpty ? streamed : (!aggregated.isEmpty ? aggregated : "exit \(item.exitCode ?? 0)")
+        case .toolStarted(let tool, .main):
+            var entry = Entry(kind: .tool, text: tool.detail)
+            entry.toolName = tool.name
+            entry.toolId = tool.id
+            entries.append(entry)
+            toolIndex[tool.id] = entries.count - 1
+        case .toolOutput(let id, let text, .main):
+            if let i = toolIndex[id], entries.indices.contains(i) { entries[i].result = (entries[i].result ?? "") + text }
+        case .toolFinished(let id, let output, let isError, .main):
+            guard let i = toolIndex[id], entries.indices.contains(i) else { return }
+            entries[i].result = output ?? entries[i].result?.trimmingCharacters(in: .whitespacesAndNewlines)
             entries[i].done = true
-            entries[i].isError = (item.exitCode != nil && item.exitCode != 0) || failed
-        case "fileChange", "mcpToolCall", "webSearch":
-            guard let i = itemIndex[item.id], entries.indices.contains(i) else { return }
-            entries[i].result = item.status ?? "done"
-            entries[i].done = true
-            entries[i].isError = failed
+            entries[i].isError = isError
+        case .notice(let text, let isError):
+            append(.notice, text, isError: isError)
+        case .approvalRequested(let approval):
+            approvals.append(approval)
+        case .approvalWithdrawn(let id):
+            approvals.removeAll { $0.id == id }
+        case .planReady:
+            offerImplementPlan = true
+        case .exited(let status):
+            isRunning = false
+            approvals.removeAll()
+            if status != 0 && status != 15 { append(.notice, "\(provider.name) exited (\(status))", isError: true) }
+        case .replayed(let events):
+            replaying = true
+            for event in events { apply(event) }
+            replaying = false
+            offerImplementPlan = false
         default:
-            break
+            break  // sub-agents' content, agent cards, final answers, turn origins and changes: phase 08's views
         }
-    }
-
-    private func codexApproval(_ a: CodexApproval) -> Approval {
-        let id = a.id.compact
-        func make(_ title: String, body: String? = nil, always: Bool = false, questions: [Approval.Question] = [])
-            -> Approval
-        {
-            Approval(
-                id: id, title: title, detail: a.reason, body: body, canAlwaysAllow: always,
-                questions: questions, source: .codex(a))
-        }
-        switch a.kind {
-        case .command:
-            return make("Run command?", body: Self.codexCommand(a.params) ?? a.command, always: true)
-        case .fileChange:
-            let body = a.itemId.flatMap { itemIndex[$0] }.flatMap { entries.indices.contains($0) ? entries[$0].text : nil }
-            return make("Apply file changes?", body: body, always: true)
-        case .permissions:
-            return make("Grant extra permissions?", body: a.params["permissions"]?.compact)
-        case .mcpElicitation:
-            return make("Allow MCP request?")
-        case .userInput:
-            let questions = a.questions.map { q in
-                Approval.Question(
-                    id: q["id"]?.string ?? "", text: q["question"]?.string ?? "",
-                    options: Self.options(q["options"]))
-            }
-            return make("", questions: questions)
-        }
-    }
-
-    // MARK: - Shared
-
-    private func exited(_ status: Int32, name: String) {
-        // The next send restarts the CLI and resumes `resumeId`.
-        backend = nil
-        isRunning = false
-        approvals.removeAll()
-        if status != 0 && status != 15 { append(.notice, "\(name) exited (\(status))", isError: true) }
     }
 
     private func append(_ kind: Entry.Kind, _ text: String, isError: Bool = false) {
@@ -882,52 +357,25 @@ final class ChatModel: Identifiable {
         entries.append(entry)
     }
 
-    // MARK: - Formatting
-
-    private static func options(_ json: JSONValue?) -> [Approval.Option] {
-        (json?.array ?? []).map {
-            Approval.Option(label: $0["label"]?.string ?? "", description: $0["description"]?.string ?? "")
+    /// Inserts before later entries, keeping the indexes pointing at the same entries.
+    private func insert(_ entry: Entry, at index: Int) {
+        let index = min(index, entries.count)
+        entries.insert(entry, at: index)
+        func shift(_ map: inout [String: Int]) {
+            for (key, i) in map where i >= index { map[key] = i + 1 }
         }
+        shift(&blockIndex)
+        shift(&toolIndex)
+        shift(&turnIndex)
     }
+}
 
-    /// The one input field worth showing for a tool call.
-    static func summary(of input: JSONValue, in folder: URL) -> String {
-        if let command = input["command"]?.string { return command }
-        if let questions = input["questions"]?.array {  // AskUserQuestion
-            return questions.compactMap { $0["question"]?.string }.joined(separator: " · ")
+extension Attachment {
+    init(sent: SentAttachment) {
+        if let url = sent.url {
+            self.init(url: url)
+        } else {
+            self.init(name: sent.name, kind: sent.kind, thumbnail: sent.image.flatMap(NSImage.init(data:)))
         }
-        if let path = input["file_path"]?.string ?? input["notebook_path"]?.string ?? input["path"]?.string {
-            return relative(path, in: folder)
-        }
-        for key in ["pattern", "url", "query", "description", "prompt"] {
-            if let value = input[key]?.string { return value }
-        }
-        return String(input.compact.prefix(160))
-    }
-
-    static func text(of content: JSONValue) -> String {
-        if let s = content.string { return s }
-        return content.array?.compactMap { $0["text"]?.string }.joined(separator: "\n") ?? content.compact
-    }
-
-    /// Codex wraps a shell command in `bash -lc`; `commandActions` carries the readable form.
-    static func codexCommand(_ json: JSONValue) -> String? {
-        if let actions = json["commandActions"]?.array, actions.count == 1, let c = actions[0]["command"]?.string {
-            return c
-        }
-        return json["command"]?.string
-    }
-
-    static func relative(_ path: String, in folder: URL) -> String {
-        let root = folder.path + "/"
-        return path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
-    }
-
-    /// Codex errors are often a JSON string like {"error":{"message":"..."}}.
-    static func cleanError(_ raw: String) -> String {
-        guard let json = try? JSONValue.parse(Data(raw.utf8)),
-            let message = json["error"]?["message"]?.string
-        else { return raw }
-        return message
     }
 }

@@ -3,9 +3,9 @@ import SwiftUI
 /// Commands matching the typed "/word"; ↑↓ move, Return/Tab accept (handled by the composer).
 /// Descriptions give way before names in a narrow tile.
 struct SlashMenu: View {
-    let matches: [ChatModel.SlashCommand]
+    let matches: [SlashCommand]
     let selected: Int
-    let accept: (ChatModel.SlashCommand) -> Void
+    let accept: (SlashCommand) -> Void
 
     var body: some View {
         ScrollViewReader { proxy in

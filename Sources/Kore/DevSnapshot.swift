@@ -24,6 +24,10 @@ import KoreCore
 ///   KORE_SIZE=<w>,<h>        resize the folder window's content first (tile-size checks)
 ///   KORE_HANGS=1             log main-thread stalls over 60ms and each click/key, with times, to stderr
 ///   KORE_SNAPSHOT=<png path> once a folder window is up, save an image of it and quit
+///   KORE_DUMP=<path>         write the chat's transcript entries as text and quit (KORE_DUMP_AFTER=<s>, default 6)
+///   KORE_EVENT_LOG=<path>    append every ChatEvent the backend emits, one per line
+///   KORE_STOP_AFTER=<s>      press Stop that many seconds after launch
+///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
     static let startProvider = ProcessInfo.processInfo.environment["KORE_START"].flatMap(Provider.init(rawValue:))
@@ -79,6 +83,44 @@ enum DevSnapshot {
                 }
             }
             return event
+        }
+    }
+
+    /// KORE_DUMP=<path>: after KORE_DUMP_AFTER seconds (default 6), write the active chat's
+    /// transcript entries as text, one per line, and quit (to compare replays between builds).
+    @MainActor static func dumpIfRequested(_ chat: @escaping @MainActor () -> ChatModel?) {
+        let env = ProcessInfo.processInfo.environment
+        guard let path = env["KORE_DUMP"] else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (Double(env["KORE_DUMP_AFTER"] ?? "") ?? 6)) {
+            let lines = (chat()?.entries ?? []).map { e in
+                let files = e.attachments.map { "\($0.name):\($0.kind):\($0.thumbnail != nil)" }.joined(separator: ",")
+                return ["\(e.kind)", e.toolName ?? "", e.text, e.result ?? "", "\(e.done)", "\(e.isError)", files, e.from ?? ""]
+                    .joined(separator: " | ").replacingOccurrences(of: "\n", with: "⏎")
+            }
+            try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// KORE_STOP_AFTER / KORE_ANSWER: drive a started chat without clicking.
+    @MainActor static func drive(_ chat: ChatModel) {
+        let env = ProcessInfo.processInfo.environment
+        if let after = env["KORE_STOP_AFTER"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) { chat.stop() }
+        }
+        let decision: Decision? =
+            switch env["KORE_ANSWER"] {
+            case "allow": .allow
+            case "always": .allowAlways
+            case "deny": .deny
+            default: nil
+            }
+        guard let decision else { return }
+        Task { @MainActor in
+            while true {
+                if let approval = chat.approvals.first { chat.answer(approval, decision) }
+                try? await Task.sleep(for: .milliseconds(300))
+            }
         }
     }
 

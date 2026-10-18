@@ -27,7 +27,7 @@ func runClaude(_ options: ClaudeSession.Options, debug: Bool) async {
                 for case .toolUse(_, let name, let input) in blocks {
                     out("\n\(bold)⏺ \(name)\(reset)\(dim) \(input.compact.prefix(160))\(reset)\n")
                 }
-            case .user(let blocks, nil):
+            case .user(let blocks, nil, _):
                 for case .toolResult(_, let content, let isError) in blocks {
                     let text = content.string ?? content[0]?["text"]?.string ?? content.compact
                     let first = text.split(separator: "\n").first.map(String.init) ?? ""

@@ -209,7 +209,7 @@ private struct HistoryRow: View {
     private var title: some View {
         Button(action: open) {
             HStack(spacing: Space.md) {
-                ProviderLogo(provider: session.agent == .claude ? .claude : .codex, size: Size.logoRow)
+                ProviderLogo(provider: Registry.provider(for: session.agent), size: Size.logoRow)
                 Text(session.title)
                     .font(Chrome.body)
                     .foregroundStyle(session.archived ? Theme.secondary : Theme.text)
@@ -234,7 +234,7 @@ private struct HistoryRow: View {
 
     private var renameField: some View {
         HStack(spacing: Space.md) {
-            ProviderLogo(provider: session.agent == .claude ? .claude : .codex, size: Size.logoRow)
+            ProviderLogo(provider: Registry.provider(for: session.agent), size: Size.logoRow)
             TextField("Name", text: $draft.value)
                 .textFieldStyle(.plain)
                 .font(Chrome.body)

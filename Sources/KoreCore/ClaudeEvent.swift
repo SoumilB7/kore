@@ -10,8 +10,9 @@ public enum ClaudeEvent: Sendable {
     case thinkingDelta(String, parentToolUseId: String?)
     /// A finalized assistant content block (the CLI sends one message per block).
     case assistant(messageId: String?, content: [ContentBlock], parentToolUseId: String?)
-    /// User-role messages: tool results, and echoes of slash command output.
-    case user(content: [ContentBlock], parentToolUseId: String?)
+    /// User-role messages: tool results, and echoes of slash command output. `toolUseResult` is
+    /// the CLI's structured result of the tool (an edit's patch, a sub-agent's totals).
+    case user(content: [ContentBlock], parentToolUseId: String?, toolUseResult: JSONValue?)
     /// The CLI is blocked until `ClaudeSession.respond(to:_:)` is called.
     case permissionRequest(PermissionRequest)
     /// A pending permission request was withdrawn (e.g. the turn was interrupted).
@@ -197,7 +198,10 @@ extension ClaudeEvent {
                 content: ContentBlock.list(json["message"]?["content"]),
                 parentToolUseId: parent)
         case "user":
-            self = .user(content: ContentBlock.list(json["message"]?["content"]), parentToolUseId: parent)
+            self = .user(
+                content: ContentBlock.list(json["message"]?["content"]), parentToolUseId: parent,
+                // stdout says tool_use_result; transcripts say toolUseResult.
+                toolUseResult: json["tool_use_result"] ?? json["toolUseResult"])
         case "result":
             self = .turnCompleted(TurnResult(json))
         case "command_lifecycle" where json["command_uuid"]?.string != nil:
