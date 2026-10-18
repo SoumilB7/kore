@@ -16,6 +16,13 @@ struct ComposerView: View {
     /// Where the caret is, so Shift+Return can put a line break there.
     @StateObject private var selection = Local<TextSelection?>(nil)
 
+    /// Empty, except while a turn runs (look.md §10): a message sent then waits for it, or joins
+    /// it where the CLI can steer (Codex).
+    private var placeholder: String {
+        guard chat.status.isRunning else { return "" }
+        return chat.provider == .codex ? "Add to this turn…" : "Queue another message…"
+    }
+
     var body: some View {
         VStack(spacing: Space.lg) {
             if !slashMatches.isEmpty {
@@ -79,7 +86,7 @@ struct ComposerView: View {
     }
 
     private var field: some View {
-        TextField("", text: Binding(get: { chat.draft }, set: { chat.draft = $0 }), selection: $selection.value, axis: .vertical)
+        TextField(placeholder, text: Binding(get: { chat.draft }, set: { chat.draft = $0 }), selection: $selection.value, axis: .vertical)
             .textFieldStyle(.plain)
             .font(TextStyle.body)
             .foregroundStyle(Theme.text)

@@ -34,6 +34,9 @@ enum ChatEvent: Sendable {
 
     /// A message Kore sent while a turn ran, by the id Kore gave it: where the CLI took it.
     case queuedMessage(id: String, QueuedDelivery)
+    /// Kore's own record of a message the user sent while a turn ran (`Chat` dispatches it): it
+    /// waits at the transcript's end until its `.queuedMessage` says where it went.
+    case messageQueued(id: String, text: String, attachments: [SentAttachment])
 
     /// The user's own message. `Chat` dispatches it at send time; backends emit it only in replay.
     case userMessage(text: String, attachments: [SentAttachment], id: String? = nil)

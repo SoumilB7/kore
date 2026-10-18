@@ -308,3 +308,10 @@ extension Size {
     static let modeMarkIcon: CGFloat = 14
     static let modeItemIcon: CGFloat = 12
 }
+
+// MARK: Queued messages (phase 10 look.md §10)
+
+extension Theme {
+    /// A message sent while a turn runs, until the CLI takes it.
+    static let queuedOpacity: Double = 0.6
+}

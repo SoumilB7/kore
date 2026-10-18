@@ -90,6 +90,8 @@ struct RowContent: View {
             SpinnerRow(since: since, claude: claude, word: word)
         case .summary(let entry, let expanded):
             CompactionSummary(entry: entry, expanded: expanded, actions: actions)
+        case .queued(let entry):
+            QueuedMessage(entry: entry, actions: actions)
         case .message(let entry, let open, let expanded):
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         case .rule:

@@ -84,6 +84,10 @@ extension TranscriptStore {
             compacted(at: at, auto: auto)
         case .compactionSummary(let text):
             compactionSummary(text)
+        case .messageQueued(let id, let text, let attachments):
+            messageQueued(id: id, text: text, attachments: attachments.map(Self.attachment))
+        case .queuedMessage(let id, let delivery):
+            queuedMessage(id: id, delivery)
         case .earlierHistory(let available):
             earlierHistory(available)
 
@@ -92,7 +96,7 @@ extension TranscriptStore {
         case .planModeChanged(let change):
             planModeChanged(change)
         case .sessionIdentified, .titleChanged, .controlsLoaded, .turnOrigin,
-            .planReady, .contextUsage, .queuedMessage:
+            .planReady, .contextUsage:
             break
         }
     }

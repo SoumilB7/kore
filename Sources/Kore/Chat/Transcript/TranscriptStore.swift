@@ -52,6 +52,8 @@ final class TranscriptStore {
         var modeFrom: String?
         /// A notice with a warning dot (a mode the CLI refused).
         var warning = false
+        /// A user message the CLI took into a running turn (look.md §10): it doesn't open a section.
+        var inTurn = false
         /// A user message's id in its CLI's history (where a fork from it starts); nil for one
         /// sent in this run. `forkSource` on a fork's "Forked from" line.
         var source: String?
@@ -138,6 +140,8 @@ final class TranscriptStore {
         case message(Entry, open: Bool, expanded: Bool)
         /// A compaction's summary, collapsed until `expanded` (look.md §5).
         case summary(Entry, expanded: Bool)
+        /// A message sent while the turn runs, waiting at the end (look.md §10).
+        case queued(Entry)
         /// The running turn's last row: glyph and verb (look.md §12); `word` in place of the
         /// random verb ("Compacting").
         case spinner(turn: String, since: Date, claude: Bool, word: String?)
@@ -145,7 +149,7 @@ final class TranscriptStore {
         var id: String {
             switch self {
             case .entry(let e), .tool(let e, _), .thinking(let e, _), .file(let e, _, _), .agent(let e, _, _),
-                .message(let e, _, _), .summary(let e, _):
+                .message(let e, _, _), .summary(let e, _), .queued(let e):
                 e.id.uuidString
             case .fold(let f): "fold-\(f.turn)"
             case .rule(let t): "rule-\(t)"
@@ -897,6 +901,38 @@ final class TranscriptStore {
         update(tool: id) { $0.changes = changes }
     }
 
+    // MARK: Queued messages (look.md §10)
+
+    /// Sent while a turn runs, in order, by Kore's id.
+    @ObservationIgnored private var queued: [(id: String, entry: Entry)] = []
+
+    func messageQueued(id: String, text: String, attachments: [Attachment]) {
+        queued.append((id, Entry(kind: .user, text: text, attachments: attachments)))
+        changed(at: entries.count - 1)
+    }
+
+    /// Where a waiting message went: into the running turn after `after`, as the next turn's
+    /// message, or nowhere (its text is back in the composer).
+    func queuedMessage(id: String, _ delivery: QueuedDelivery) {
+        guard let i = queued.firstIndex(where: { $0.id == id }) else { return }
+        var entry = queued.remove(at: i).entry
+        switch delivery {
+        case .inTurn(let after):
+            entry.inTurn = true
+            entry.turn = current
+            let anchor = after.flatMap { tools[$0] ?? blocks[$0] }.flatMap { position[$0] }
+            if let anchor, anchor + 1 < entries.count {
+                insert(entry, at: anchor + 1)
+            } else {
+                append(entry)
+            }
+        case .nextTurn:
+            user(entry.text, attachments: entry.attachments)
+        case .dropped:
+            changed(at: entries.count - 1)
+        }
+    }
+
     // MARK: Mode changes (look.md §8)
 
     /// The provider, for its modes' names, icons and colours.
@@ -1132,6 +1168,8 @@ final class TranscriptStore {
             layout(turn, entries[i..<end], into: &rows)
             i = end
         }
+        // Messages waiting for the running turn come last, after its spinner.
+        rows.append(contentsOf: queued.map { .queued($0.entry) })
         let summary = summarizeAgents()
         if summary != agentSummary { agentSummary = summary }
         if touchesDirty {
@@ -1190,7 +1228,7 @@ final class TranscriptStore {
             sections.append(Section(id: id, header: header, headerOpen: headerOpen, items: items))
         }
         for row in rows {
-            if case .entry(let e) = row, e.kind == .user || e.kind == .peer {
+            if case .entry(let e) = row, (e.kind == .user && !e.inTurn) || e.kind == .peer {
                 flush()
                 header = e
                 id = "s-" + e.id.uuidString
@@ -1227,7 +1265,7 @@ final class TranscriptStore {
         case .explored(let calls, _):
             if calls.contains(where: { !$0.done }) { return .running }
             return calls.contains(where: \.isError) ? .failure : .success
-        case .spinner, .message, .summary: return nil
+        case .spinner, .message, .summary, .queued: return nil
         case .rule: return TimelineDot.none
         case .outcome(_, let text): return text == "Interrupted" ? .warning : .failure
         case .changes: return .plain

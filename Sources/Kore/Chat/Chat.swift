@@ -43,6 +43,8 @@ final class Chat: Identifiable {
     /// so they come after it rather than above it.
     @ObservationIgnored private var awaitingHistory: Bool
     @ObservationIgnored private var held: [ChatEvent] = []
+    /// Messages sent while a turn ran, by Kore's id, until the CLI takes or drops them.
+    @ObservationIgnored private var waiting: [String: (text: String, files: [Attachment])] = [:]
     /// That chat, while it's open (its "Forked from" line switches to it).
     @ObservationIgnored weak var original: Chat?
 
@@ -101,6 +103,7 @@ final class Chat: Identifiable {
         approvals.apply(event)
         controls.apply(event)
         noteAgentModeChange(event)
+        restoreQueued(event)
         status.apply(event)
         context.apply(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
@@ -191,7 +194,13 @@ final class Chat: Identifiable {
             return
         }
         approvals.offerImplementPlan = false
-        let message = ChatEvent.userMessage(text: text, attachments: sent.map(SentAttachment.init))
+        // Sent while a turn runs, it waits (look.md §10) until the CLI says where it went.
+        let queued = status.isRunning ? UUID().uuidString : nil
+        let shown = sent.map(SentAttachment.init)
+        let message: ChatEvent =
+            queued.map { .messageQueued(id: $0, text: text, attachments: shown) }
+            ?? .userMessage(text: text, attachments: shown)
+        if let queued { waiting[queued] = (text, sent) }
         if awaitingHistory { held.append(message) } else { dispatch(message) }
         status.setRunning(true)
         let backend = connect()
@@ -200,9 +209,11 @@ final class Chat: Identifiable {
             await previous?.value
             do {
                 try await backend.start()
-                if try await !backend.send(text, files: Attachments.files(sent)) { status.setRunning(false) }
+                let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued)
+                if !turn, queued == nil { status.setRunning(false) }
             } catch {
-                status.setRunning(false)
+                // A queued message that couldn't go goes back to the composer.
+                if let queued { dispatch(.queuedMessage(id: queued, .dropped)) } else { status.setRunning(false) }
                 fail(String(describing: error))
             }
         }
@@ -273,14 +284,18 @@ final class Chat: Identifiable {
 
     /// Dev hook (`KORE_QUEUE`): sends `text` the way a message sent mid-turn goes, with an id
     /// for `.queuedMessage`, until the composer queues (look.md §10).
+    /// KORE_QUEUE: sends as the composer does (queued, since a turn runs).
     func devQueue(_ text: String) {
-        let backend = connect()
-        let id = UUID().uuidString
-        let previous = sending
-        sending = Task {
-            await previous?.value
-            _ = try? await backend.send(text, files: [], queued: id)
-        }
+        draft = text
+        send()
+    }
+
+    /// A queued message dropped by Stop: its text and files go back to the composer.
+    private func restoreQueued(_ event: ChatEvent) {
+        guard case .queuedMessage(let id, let delivery) = event, let message = waiting.removeValue(forKey: id) else { return }
+        guard delivery == .dropped else { return }
+        draft = draft.isEmpty ? message.text : message.text + "\n" + draft
+        attachments = message.files + attachments
     }
 
     func stopAgent(_ id: String) {

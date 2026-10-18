@@ -418,3 +418,20 @@ struct CompactionSummary: View {
         }
     }
 }
+
+/// A message sent while the turn runs (look.md §10): the user's box at 60%, with "Queued" under
+/// it, until the CLI takes it.
+struct QueuedMessage: View {
+    let entry: TranscriptStore.Entry
+    let actions: TranscriptActions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            MessageHeader(entry: entry, open: true, actions: actions)
+                .padding(.vertical, -Layout.Timeline.itemPadding)
+                .opacity(Theme.queuedOpacity)
+            Text("Queued").font(TextStyle.caption).foregroundStyle(Theme.tertiary)
+        }
+        .padding(.vertical, Space.sm / 2)
+    }
+}
