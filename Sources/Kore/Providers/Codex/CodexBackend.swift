@@ -108,7 +108,9 @@ final class CodexBackend: ChatBackend {
                     name: name, description: json["shortDescription"]?.string ?? json["description"]?.string ?? "",
                     hint: "", kind: .skill)
             }
-        let effort = options.effort
+        // What the thread runs at; the model's default only when Codex didn't say.
+        let running = await session.reasoningEffort
+        let effort = options.effort ?? running
             ?? current.flatMap { id in list.first { $0["id"]?.string == id } }?["defaultReasoningEffort"]?.string
         return ChatControls(models: models, model: current, effort: effort, commands: commands)
     }

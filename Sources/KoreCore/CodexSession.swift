@@ -85,6 +85,9 @@ public actor CodexSession {
     private var permissions: Permissions
     private var plan: Bool
     private var effort: String?
+    /// The reasoning effort the thread runs at: Kore's choice, else what the thread started or
+    /// resumed with (config.toml's, or the one it last ran on).
+    public var reasoningEffort: String? { effort }
 
     public private(set) var threadId = ""
     public private(set) var activeTurnId: String?
@@ -247,6 +250,7 @@ public actor CodexSession {
         threadId = result["thread"]?["id"]?.string ?? ""
         rolloutPath = result["thread"]?["path"]?.string
         model = result["model"]?.string
+        if effort == nil { effort = result["reasoningEffort"]?.string }
         sink.yield(.threadStarted(threadId: threadId, model: result["model"]?.string, raw: result))
 
         // Holds the session alive for as long as the app-server runs.
