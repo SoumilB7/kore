@@ -13,7 +13,7 @@ struct TranscriptActions {
     var openAgent: (String) -> Void = { _ in }
     /// Scrolls back to a sticky user message.
     var reveal: (String) -> Void = { _ in }
-    /// A message row's top moved (for its pinned copy).
+    /// A message row's bottom moved (for its pinned copy).
     var messageMoved: (String, CGFloat) -> Void = { _, _ in }
     var folder: URL?
 }
@@ -177,10 +177,10 @@ struct MessageHeader: View {
                 actions.reveal(entry.id.uuidString)
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { y in
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
             guard place == .row else { return }
-            top.value = y
-            actions.messageMoved(entry.id.uuidString, y)
+            top.value = frame.minY
+            actions.messageMoved(entry.id.uuidString, frame.maxY)
         }
     }
 
@@ -292,7 +292,8 @@ private struct StickyBackground: ViewModifier {
 }
 
 /// The section's pinned header: no height of its own, so its message row scrolls normally; once
-/// that row has gone above the top, the message's first three lines hang from here.
+/// that row has gone fully above the top (its bottom too), the message's first three lines hang
+/// from here. While any of the row shows, the row itself names the turn (look.md §15).
 struct StickyMessage: View {
     let entry: TranscriptStore.Entry
     var open: Bool
@@ -314,8 +315,8 @@ struct StickyMessage: View {
     }
 }
 
-/// Which sections' messages have scrolled above their pinned header. Rows and headers report
-/// their tops as they move; `stuck` changes only when one crosses.
+/// Which sections' messages have scrolled fully above their pinned header. Headers report their
+/// tops and rows their bottoms as they move; `stuck` changes only when one crosses.
 @MainActor
 final class StickyTracker: ObservableObject {
     @Published private(set) var stuck: Set<String> = []
