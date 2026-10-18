@@ -323,7 +323,7 @@ struct UsageModal: View {
     }
 }
 
-/// A limit row's button, under its grid row: toolHover on hover, surfaceHover while picked.
+/// A limit row's button, under its grid row: the row hover under the pointer, selected while picked.
 private struct UsagePickRow: View {
     let selected: Bool
     let help: String
@@ -339,7 +339,7 @@ private struct UsagePickRow: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .hoverFill(selected || hovered.value, selected ? Theme.surfaceHover : Theme.toolHover)
+        .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.surface) : Theme.Row.hover(.surface))
         .onHover { hovered.value = $0 }
         .help(help)
         .accessibilityLabel(label)
@@ -428,7 +428,7 @@ private struct UsageChatRow: View {
             }
             .frame(height: Size.usageResetRow)
             .padding(.horizontal, Space.sm)
-            .hoverFill(lit, Theme.toolHover)
+            .hoverFill(lit, Theme.Row.hover(.surface))
             .padding(.horizontal, -Space.sm)
             .contentShape(Rectangle())
         }

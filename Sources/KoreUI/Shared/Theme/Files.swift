@@ -7,9 +7,6 @@ import SwiftUI
 
 extension Theme {
     enum Tree {
-        static let hover = tabHover
-        static let selected = surface
-        static let selectedFocused = accent.opacity(0.16)
         static let guide = border
         static let guideActive = timelineLine
         static let dropTarget = accent.opacity(0.10)

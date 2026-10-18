@@ -215,7 +215,7 @@ private struct CrumbMenuRow: View {
             }
             .padding(.horizontal, Space.md)
             .frame(height: Size.QuickOpen.row)
-            .hoverFill(selected)
+            .hoverFill(selected, Theme.Row.selected(.surface))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

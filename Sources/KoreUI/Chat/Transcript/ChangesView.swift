@@ -221,7 +221,7 @@ private struct FileListRow: View {
                 ChangeCounts(added: change.added, removed: change.removed)
             }
             .padding(Inset.row)
-            .hoverFill(selected || hovered.value)
+            .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.window) : Theme.Row.hover(.window))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -61,10 +61,12 @@ struct QuickOpenView: View {
                 .onExitCommand { close() }
                 .onKeyPress(.downArrow) {
                     selected.value = min(selected.value + 1, max(list.count - 1, 0))
+                    PointerGate.keyed()
                     return .handled
                 }
                 .onKeyPress(.upArrow) {
                     selected.value = max(selected.value - 1, 0)
+                    PointerGate.keyed()
                     return .handled
                 }
             if !lineMode {
@@ -79,11 +81,16 @@ struct QuickOpenView: View {
         .onAppear {
             if mode == .line { query.value = ":" }
             focused = true
+            // Opened by a key: the first row is lit, whatever is under the pointer.
+            PointerGate.keyed()
         }
         .task {
             index.value = await FileIndex.files(in: URL(fileURLWithPath: root))
         }
-        .onChange(of: query.value) { selected.value = 0 }
+        .onChange(of: query.value) {
+            selected.value = 0
+            PointerGate.keyed()
+        }
     }
 
     private var placeholder: String {
@@ -114,11 +121,15 @@ struct QuickOpenView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(spacing: 0) {
+                            // One highlight: the pointer moves the selection, as in a menu.
                             ForEach(Array(list.enumerated()), id: \.element.id) { offset, match in
-                                QuickOpenRow(path: match.path, positions: match.positions, isSelected: offset == selected.value)
-                                    .id(offset)
-                                    .onTapGesture { open(match) }
-                                    .storyID(StoryID.QuickOpen.row(match.path), press: { open(match) })
+                                Button { open(match) } label: {
+                                    QuickOpenRow(path: match.path, positions: match.positions, isSelected: offset == selected.value)
+                                }
+                                .buttonStyle(.plain)
+                                .highlightRow(StoryID.QuickOpen.row(match.path), lit: offset == selected.value) { selected.value = offset }
+                                .id(offset)
+                                .storyID(StoryID.QuickOpen.row(match.path), press: { open(match) })
                             }
                         }
                         .padding(Space.xs)
@@ -158,7 +169,6 @@ private struct QuickOpenRow: View {
     let path: String
     let positions: [Int]
     let isSelected: Bool
-    @StateObject private var hovered = Local(false)
 
     var body: some View {
         let nameStart = path.utf16.count - (path as NSString).lastPathComponent.utf16.count
@@ -175,9 +185,8 @@ private struct QuickOpenRow: View {
         }
         .padding(.horizontal, Space.md)
         .frame(height: Size.QuickOpen.row)
-        .background(isSelected || hovered.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+        .hoverFill(isSelected, Theme.Row.selected(.surface))
         .contentShape(Rectangle())
-        .onHover { hovered.value = $0 }
     }
 
     /// The UTF-16 span of the path, with matched characters in the accent.

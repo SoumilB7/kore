@@ -27,7 +27,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
 
     package enum Area: String, Sendable, CaseIterable {
         case titlebar, tabs, newtab, composer, transcript, approval, agentmap, history, explorer, editor, quickopen,
-            search, changes, viewer, usage
+            search, changes, viewer, usage, welcome
     }
 
     package enum Part: String, Sendable, CaseIterable {
@@ -36,6 +36,9 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track, outside, extended
         case signIn = "signin", signOut = "signout"
         case `continue`
+        /// A list row's stand-in for the pointer entering it; there while it's lit; a popup
+        /// button's keyboard focus ring.
+        case hover, lit, focus
     }
 }
 
@@ -151,6 +154,11 @@ extension StoryID {
         package static let open = StoryID(.agentmap, "open")
         package static let stop = StoryID(.agentmap, "stop")
         package static let close = StoryID(.agentmap, "close")
+    }
+
+    package enum Welcome {
+        /// A recent folder, by its path.
+        package static func recent(_ path: String) -> StoryID { StoryID(.welcome, "recent", key: path) }
     }
 
     package enum History {

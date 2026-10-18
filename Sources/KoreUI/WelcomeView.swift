@@ -4,6 +4,8 @@ struct WelcomeView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    /// The one lit recent folder: the pointer's, or the keys'.
+    @StateObject private var lit = Local<Int?>(nil)
 
     var body: some View {
         VStack(spacing: Layout.Welcome.sectionGap) {
@@ -32,8 +34,9 @@ struct WelcomeView: View {
                         .foregroundStyle(Theme.tertiary)
                         .padding(.horizontal, Space.lg)
                         .padding(.bottom, Space.xxs)
-                    ForEach(app.recents, id: \.self) { folder in
-                        RecentRow(folder: folder) { open(folder) }
+                    ForEach(Array(app.recents.enumerated()), id: \.element) { index, folder in
+                        RecentRow(folder: folder, lit: lit.value == index) { open(folder) }
+                            .highlightRow(StoryID.Welcome.recent(folder.path), lit: lit.value == index) { lit.value = index }
                     }
                 }
                 .frame(width: Layout.Welcome.contentWidth)
@@ -75,8 +78,8 @@ struct WelcomeView: View {
 
 private struct RecentRow: View {
     let folder: URL
-    let action: () -> Void
-    @StateObject private var hovering = Local(false)
+    let lit: Bool
+    let action: @MainActor @Sendable () -> Void
 
     var body: some View {
         Button(action: action) {
@@ -95,11 +98,11 @@ private struct RecentRow: View {
                     .truncationMode(.head)
             }
             .padding(Inset.row)
-            .hoverFill(hovering.value, Theme.surface)
+            .hoverFill(lit, Theme.Row.selected(.window))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering.value = $0 }
         .help(folder.path)
+        .storyID(StoryID.Welcome.recent(folder.path), press: action)
     }
 }

@@ -62,7 +62,7 @@ struct ComposerView: View {
                 if !matches.isEmpty {
                     SlashMenu(
                         matches: matches, selected: min(slashSelection.value, matches.count - 1), current: chat.command?.name,
-                        accept: accept)
+                        select: { slashSelection.value = $0 }, accept: accept)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuFrame.value = $0 }
                         .onDisappear { menuFrame.value = nil }
                         // Its bottom a gap above the box's top, its height its own.
@@ -210,6 +210,8 @@ struct ComposerView: View {
         .storyID(StoryID.Composer.field)
         .onChange(of: slashToken) { old, new in
             slashSelection.value = 0
+            // Typed: the first row is lit, whatever the menu opens under.
+            PointerGate.keyed()
             // Esc closes the menu for this "/word"; the next one opens it again.
             if new?.range.lowerBound != old?.range.lowerBound { slashDismissed.value = false }
         }
@@ -320,6 +322,7 @@ struct ComposerView: View {
         let count = slashMatches.count
         guard count > 0, !composing else { return .ignored }
         slashSelection.value = min(max(slashSelection.value + delta, 0), count - 1)
+        PointerGate.keyed()
         return .handled
     }
 

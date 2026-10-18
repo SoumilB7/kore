@@ -70,7 +70,7 @@ extension Theme {
         static let rowNumber = tertiary
         static let selection = accent.opacity(0.12)
         static let selectionLine = accent
-        static let hover = Tree.hover
+        static let hover = Row.hover(.window)
         static let sort = accent
     }
 

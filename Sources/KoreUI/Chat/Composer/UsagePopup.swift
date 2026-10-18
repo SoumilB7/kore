@@ -819,7 +819,7 @@ private struct ResetRowView: View {
         .transition(.opacity.animation(Motion.fade))
         .padding(.horizontal, Space.sm)
         .frame(maxWidth: .infinity, minHeight: Size.usageResetRow, maxHeight: Size.usageResetRow, alignment: .leading)
-        .hoverFill(step == .asking || (hovered.value && step == nil), step == .asking ? Theme.surfaceHover : Theme.toolHover)
+        .hoverFill(step == .asking || (hovered.value && step == nil), step == .asking ? Theme.Row.selected(.surface) : Theme.Row.hover(.surface))
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .help(step == nil ? row.credit.map { UsageText.expiresAt($0.expiresAt, now: now) } ?? "" : "")

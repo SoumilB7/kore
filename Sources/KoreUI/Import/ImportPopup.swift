@@ -172,7 +172,8 @@ private struct ImportRow: View {
             .padding(.horizontal, Space.md)
             .frame(height: Size.importRow)
             .background(
-                selected ? Theme.surfaceHover : hovered.value ? Theme.toolHover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip)
+                selected ? Theme.Row.selected(.surface) : hovered.value ? Theme.Row.hover(.surface) : .clear,
+                in: RoundedRectangle(cornerRadius: Radius.chip)
             )
             .contentShape(RoundedRectangle(cornerRadius: Radius.chip))
         }

@@ -202,6 +202,7 @@ private struct SearchFileRow: View {
     let focused: Bool
     let action: () -> Void
     @StateObject private var hovered = Local(false)
+    @Environment(\.listGround) private var ground
 
     var body: some View {
         let open = !store.collapsed.contains(file.path)
@@ -252,8 +253,8 @@ private struct SearchFileRow: View {
     }
 
     private func fill(_ selected: Bool) -> Color {
-        if selected { return focused ? Theme.Tree.selectedFocused : Theme.Tree.selected }
-        return hovered.value ? Theme.Tree.hover : .clear
+        if selected { return focused ? Theme.Row.selectedFocused : Theme.Row.selected(ground) }
+        return hovered.value ? Theme.Row.hover(ground) : .clear
     }
 }
 
@@ -263,6 +264,7 @@ private struct SearchHitRow: View {
     let focused: Bool
     let action: (_ double: Bool) -> Void
     @StateObject private var hovered = Local(false)
+    @Environment(\.listGround) private var ground
 
     var body: some View {
         let selected = store.selection == .hit(hit.path, line: hit.line)
@@ -324,8 +326,8 @@ private struct SearchHitRow: View {
     }
 
     private func fill(_ selected: Bool) -> Color {
-        if selected { return focused ? Theme.Tree.selectedFocused : Theme.Tree.selected }
-        return hovered.value ? Theme.Tree.hover : .clear
+        if selected { return focused ? Theme.Row.selectedFocused : Theme.Row.selected(ground) }
+        return hovered.value ? Theme.Row.hover(ground) : .clear
     }
 }
 

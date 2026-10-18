@@ -62,6 +62,8 @@ struct ExplorerSidebar: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(floating ? Theme.surface : Theme.background)
+        // Floating, the rows sit on the panel: their hover and selection a step above it.
+        .environment(\.listGround, floating ? .surface : .window)
         .onHover { hovered.value = $0 }
     }
 
@@ -323,6 +325,7 @@ private struct TreeRow: View {
     let focus: () -> Void
     @StateObject private var hovered = Local(false)
     @Environment(\.undoManager) private var undoManager
+    @Environment(\.listGround) private var ground
 
     private var isSelected: Bool { store.selection == row.id }
 
@@ -372,6 +375,8 @@ private struct TreeRow: View {
         .onTapGesture { click() }
         // A tap gesture, not a button: pressed through its action.
         .storyID(StoryID.Explorer.row(store.relative(row.id)), press: click)
+        // The pointer's stand-in: no synthetic event reaches `.onHover`.
+        .storyAction(StoryID.Explorer.row(store.relative(row.id)).part(.hover)) { hovered.value = true }
         // As a file URL: it drops into another folder here, or into Finder.
         .onDrag {
             NSItemProvider(object: URL(fileURLWithPath: row.id) as NSURL)
@@ -383,8 +388,8 @@ private struct TreeRow: View {
 
     private var fill: Color {
         if inDropTarget { return Theme.Tree.dropTarget }
-        if isSelected { return focused ? Theme.Tree.selectedFocused : Theme.Tree.selected }
-        return hovered.value ? Theme.Tree.hover : .clear
+        if isSelected { return focused ? Theme.Row.selectedFocused : Theme.Row.selected(ground) }
+        return hovered.value ? Theme.Row.hover(ground) : .clear
     }
 
     @ViewBuilder private var chevron: some View {

@@ -175,7 +175,7 @@ private struct Crumb: View {
             }
             .padding(.horizontal, Space.xs)
             .padding(.vertical, Space.xxs)
-            .background(hovered.value || open ? Theme.Tree.hover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+            .background(hovered.value || open ? Theme.Row.hover(.window) : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -205,7 +205,7 @@ private struct TurnMark: View {
             }
             .padding(.horizontal, Space.xs)
             .padding(.vertical, Space.xxs)
-            .background(hovered.value ? Theme.Tree.hover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+            .background(hovered.value ? Theme.Row.hover(.window) : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -377,7 +377,7 @@ private struct StatusItem<Items: View>: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .padding(.horizontal, Space.xs)
-        .background(hovered.value ? Theme.Tree.hover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+        .background(hovered.value ? Theme.Row.hover(.window) : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
         .onHover { hovered.value = $0 }
         .help(help)
     }

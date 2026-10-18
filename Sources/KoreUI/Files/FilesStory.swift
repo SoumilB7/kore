@@ -18,6 +18,9 @@ extension Workspace {
         if tabs.indices.contains(index) { select(tabs[index]) }
     }
 
+    /// The tree's selected row, relative to the folder.
+    package var storyTreeSelection: String? { files.flatMap { store in store.selection.map(store.relative) } }
+
     /// Opens the tree's folders down to the item and selects it, as Reveal in Explorer does.
     package func storyRevealInTree(_ relativePath: String) {
         let store = filesStore()

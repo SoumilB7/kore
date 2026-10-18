@@ -1,12 +1,14 @@
 import SwiftUI
 
 /// Commands matching the typed "/word"; ↑↓ move, Return/Tab accept (handled by the composer).
-/// Descriptions give way before names in a narrow tile.
+/// One highlight: the pointer moves the selection, as in a menu. Descriptions give way before
+/// names in a narrow tile.
 struct SlashMenu: View {
     let matches: [SlashCommand]
     let selected: Int
     /// The command in the composer's chip, marked: a pick replaces it.
     let current: String?
+    let select: (Int) -> Void
     let accept: (SlashCommand) -> Void
 
     var body: some View {
@@ -14,36 +16,9 @@ struct SlashMenu: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(matches.enumerated()), id: \.element.id) { index, command in
-                        HStack(spacing: Space.md) {
-                            // Kore's own entries: a glyph where the sigil goes, the name a word.
-                            if let glyph = command.glyph {
-                                Image(systemName: glyph).font(Glyph.rowIcon).foregroundStyle(Theme.secondary)
-                            }
-                            Text(command.label)
-                                .font(TextStyle.bodyMedium)
-                                .foregroundStyle(Theme.text)
-                                .lineLimit(1)
-                                .layoutPriority(1)
-                            if command.name == current, command.kind == .command {
-                                Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
-                            }
-                            if !command.hint.isEmpty {
-                                Text(command.hint)
-                                    .font(TextStyle.label)
-                                    .foregroundStyle(Theme.tertiary)
-                                    .lineLimit(1)
-                            }
-                            Spacer(minLength: Space.xl)
-                            Text(command.description)
-                                .font(TextStyle.label)
-                                .foregroundStyle(Theme.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                        .padding(Inset.row)
-                        .hoverFill(index == selected)
-                        .contentShape(Rectangle())
-                        .onTapGesture { accept(command) }
+                        Button { accept(command) } label: { row(command, lit: index == selected) }
+                        .buttonStyle(.plain)
+                        .highlightRow(StoryID.Composer.command(command.name), lit: index == selected) { select(index) }
                         .help(command.description)
                         .storyID(StoryID.Composer.command(command.name), press: { accept(command) })
                         .id(command.id)
@@ -51,11 +26,43 @@ struct SlashMenu: View {
                 }
                 .padding(Space.xs)
             }
-            .onChange(of: selected) { proxy.scrollTo(matches[selected].id) }
+            .onChange(of: selected) { if matches.indices.contains(selected) { proxy.scrollTo(matches[selected].id) } }
         }
         .frame(maxHeight: Size.menuMax)
         .fixedSize(horizontal: false, vertical: true)
         .panel(.panel)
+    }
+
+    private func row(_ command: SlashCommand, lit: Bool) -> some View {
+        HStack(spacing: Space.md) {
+            // Kore's own entries: a glyph where the sigil goes, the name a word.
+            if let glyph = command.glyph {
+                Image(systemName: glyph).font(Glyph.rowIcon).foregroundStyle(Theme.secondary)
+            }
+            Text(command.label)
+                .font(TextStyle.bodyMedium)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .layoutPriority(1)
+            if command.name == current, command.kind == .command {
+                Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
+            }
+            if !command.hint.isEmpty {
+                Text(command.hint)
+                    .font(TextStyle.label)
+                    .foregroundStyle(Theme.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: Space.xl)
+            Text(command.description)
+                .font(TextStyle.label)
+                .foregroundStyle(Theme.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(Inset.row)
+        .hoverFill(lit, Theme.Row.selected(.surface))
+        .contentShape(Rectangle())
     }
 }
 

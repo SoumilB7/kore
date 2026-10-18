@@ -331,10 +331,10 @@ private final class TreeCanvas: CanvasView {
             let y = CGFloat(row) * rowHeight
             let fill = NSRect(x: gutter + Size.Tree.rowInset, y: y, width: bounds.width - gutter - 2 * Size.Tree.rowInset, height: rowHeight)
             if row == selected {
-                NSColor(focused ? Theme.Tree.selectedFocused : Theme.Tree.selected).setFill()
+                NSColor(focused ? Theme.Row.selectedFocused : Theme.Row.selected(.window)).setFill()
                 NSBezierPath(roundedRect: fill, xRadius: Radius.chip, yRadius: Radius.chip).fill()
             } else if row == hoverRow {
-                NSColor(Theme.Tree.hover).setFill()
+                NSColor(Theme.Row.hover(.window)).setFill()
                 NSBezierPath(roundedRect: fill, xRadius: Radius.chip, yRadius: Radius.chip).fill()
             }
             // Indent guides at each ancestor's chevron; the selected row's parent's is brighter.

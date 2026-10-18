@@ -494,7 +494,7 @@ private struct AccountRow: View {
         .transition(.opacity.animation(Motion.fade))
         .padding(.horizontal, state.askingSignOut ? Space.sm : 0)
         .frame(maxWidth: .infinity, minHeight: Size.usageResetRow, maxHeight: Size.usageResetRow, alignment: .leading)
-        .hoverFill(state.askingSignOut, Theme.surfaceHover)
+        .hoverFill(state.askingSignOut, Theme.Row.selected(.surface))
         // The question's fill reaches past the text's edge, the text staying on it.
         .padding(.horizontal, state.askingSignOut ? -Space.sm : 0)
         .accessibilityElement(children: .contain)

@@ -44,6 +44,9 @@ struct HistoryPanel: View {
     @StateObject private var renaming = Local<String?>(nil)
     @StateObject private var frame = Local(CGRect.zero)
     @StateObject private var monitor = Local<Any?>(nil)
+    /// The one lit row, by its place in `matches`: the pointer's or the keys'. Nil until either
+    /// moves it, when the first row is lit and Return opens it.
+    @StateObject private var lit = Local<Int?>(nil)
     @FocusState private var searchFocused: Bool
 
     private var matches: [SessionSummary] {
@@ -60,9 +63,11 @@ struct HistoryPanel: View {
             searchBar
             ScrollView {
                 LazyVStack(spacing: Space.xxs) {
-                    ForEach(matches) { chat in
+                    ForEach(Array(matches.enumerated()), id: \.element.id) { index, chat in
                         HistoryRow(
                             session: chat,
+                            lit: (lit.value ?? 0) == index,
+                            showsActions: lit.value == index,
                             isRenaming: renaming.value == chat.id,
                             open: { open(chat) },
                             startRename: { renaming.value = chat.id },
@@ -73,6 +78,7 @@ struct HistoryPanel: View {
                             toggleArchive: {
                                 Task { chat.archived ? await workspace.unarchive(chat) : await workspace.archive(chat) }
                             })
+                        .highlightRow(StoryID.History.row(chat.id), lit: (lit.value ?? 0) == index) { lit.value = index }
                     }
                 }
             }
@@ -91,8 +97,12 @@ struct HistoryPanel: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
         .opacity(isOpen ? 1 : 0)
         .allowsHitTesting(isOpen)
+        .onChange(of: query.value) { lit.value = nil }
+        .onChange(of: showArchived.value) { lit.value = nil }
         .onChange(of: isOpen, initial: true) { _, open in
+            lit.value = nil
             if open {
+                PointerGate.keyed()
                 searchFocused = true
                 monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { event in
                     handle(event)
@@ -177,13 +187,16 @@ struct HistoryPanel: View {
 
 private struct HistoryRow: View {
     let session: SessionSummary
+    /// The panel's one highlight: the pointer's row, or the keys'.
+    let lit: Bool
+    /// Rename and Archive: on the row the pointer or the keys moved to.
+    let showsActions: Bool
     let isRenaming: Bool
     let open: () -> Void
     let startRename: () -> Void
     /// The new name, or nil when cancelled.
     let finishRename: (String?) -> Void
     let toggleArchive: () -> Void
-    @StateObject private var hovered = Local(false)
     @StateObject private var draft = Local("")
     /// Return and the focus loss that follows it both end a rename; only the first counts.
     @StateObject private var finished = Local(false)
@@ -192,7 +205,7 @@ private struct HistoryRow: View {
     var body: some View {
         HStack(spacing: 0) {
             if isRenaming { renameField } else { title.storyID(StoryID.History.row(session.id)) }
-            if hovered.value && !isRenaming {
+            if showsActions && !isRenaming {
                 iconButton("pencil", help: "Rename", action: startRename)
                 iconButton(session.archived ? "tray.and.arrow.up" : "archivebox", help: session.archived ? "Unarchive" : "Archive", action: toggleArchive)
                     .storyID(StoryID.History.row(session.id).part(.archive))
@@ -201,8 +214,7 @@ private struct HistoryRow: View {
         }
         // Archive is built only on hover: pressed through its action meanwhile.
         .storyAction(StoryID.History.row(session.id).part(.archive)) { toggleArchive() }
-        .hoverFill(hovered.value || isRenaming)
-        .onHover { hovered.value = $0 }
+        .hoverFill(lit || isRenaming, Theme.Row.selected(.surface))
         .contextMenu {
             Button("Open", action: open)
             Button("Rename…", action: startRename)
@@ -224,7 +236,7 @@ private struct HistoryRow: View {
                     Text("from \(source)").font(Chrome.label).foregroundStyle(Theme.tertiary).fixedSize()
                 }
                 Spacer(minLength: Space.md)
-                if !hovered.value {
+                if !showsActions {
                     Text(session.updated.historyAge)
                         .font(Chrome.label)
                         .foregroundStyle(Theme.tertiary)
@@ -232,7 +244,7 @@ private struct HistoryRow: View {
                 }
             }
             .padding(.leading, Space.lg)
-            .padding(.trailing, hovered.value ? 4 : 10)
+            .padding(.trailing, showsActions ? 4 : 10)
             .padding(.vertical, Space.md)
             .contentShape(Rectangle())
         }

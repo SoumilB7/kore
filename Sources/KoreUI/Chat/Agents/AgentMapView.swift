@@ -427,7 +427,7 @@ private struct ClosedGroupRow: View {
                     GraphWires(depth: -1, rails: [], isLast: true, hasChildren: true, mark: Size.disclosure / 2).canvas(elbow: nil)
                 }
             }
-            .hoverFill(selected || hovered.value, selected ? Theme.surfaceHover : Theme.toolHover)
+            .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.window) : Theme.Row.hover(.window))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -474,7 +474,7 @@ private struct AgentGraphRow: View {
             .frame(height: m.row * Zoom.shared.scale)
             .background { wires.canvas(elbow: elbowColour).storyMark(StoryID.AgentMap.wires(info.id)) }
             .opacity(dimmed ? Theme.dimmed : 1)
-            .hoverFill(selected || hovered.value, selected ? Theme.surfaceHover : Theme.toolHover)
+            .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.window) : Theme.Row.hover(.window))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
