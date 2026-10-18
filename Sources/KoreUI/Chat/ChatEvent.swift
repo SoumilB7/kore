@@ -3,7 +3,7 @@ import KoreCore
 
 /// Kore's own vocabulary for what happens in a chat. Each provider's backend translates its
 /// CLI into these, so nothing past `Providers/` knows which CLI is talking.
-enum ChatEvent: Sendable {
+package enum ChatEvent: Sendable {
     // MARK: Session
 
     /// Claude session id / Codex thread id: what `--resume` / `thread/resume` takes.
@@ -99,7 +99,7 @@ enum ChatEvent: Sendable {
 }
 
 /// Who changed a mode.
-enum ModeSource: Sendable, Equatable {
+package enum ModeSource: Sendable, Equatable {
     /// The mode a session started or resumed in: not a change anyone made.
     case session
     /// From Kore (the mode menu, Shift+Tab, `/plan`), or between turns in another client.
@@ -110,7 +110,7 @@ enum ModeSource: Sendable, Equatable {
     case refused
 }
 
-enum ModeCause: Sendable, Equatable {
+package enum ModeCause: Sendable, Equatable {
     /// It started planning (Claude's EnterPlanMode).
     case enteredPlanMode
     /// Its plan was approved (Claude's ExitPlanMode accepted): plan mode left for the chosen mode.
@@ -119,36 +119,56 @@ enum ModeCause: Sendable, Equatable {
     case other
 }
 
-struct ModeChange: Sendable, Equatable {
+package struct ModeChange: Sendable, Equatable {
     /// The provider's mode id ("plan", "acceptEdits", "fullAccess", …).
-    let mode: String
+    package let mode: String
     /// nil for the first mode a chat learns.
-    let previous: String?
-    let source: ModeSource
+    package let previous: String?
+    package let source: ModeSource
     /// The CLI's own time in replay (the transcript entry); when it was reported, live.
-    let at: Date
+    package let at: Date
+
+    package init(mode: String, previous: String?, source: ModeSource, at: Date) {
+        self.mode = mode
+        self.previous = previous
+        self.source = source
+        self.at = at
+    }
 }
 
-struct PlanModeChange: Sendable, Equatable {
-    let on: Bool
-    let source: ModeSource
-    let at: Date
+package struct PlanModeChange: Sendable, Equatable {
+    package let on: Bool
+    package let source: ModeSource
+    package let at: Date
+
+    package init(on: Bool, source: ModeSource, at: Date) {
+        self.on = on
+        self.source = source
+        self.at = at
+    }
 }
 
-struct ContextUsage: Sendable, Equatable {
+package struct ContextUsage: Sendable, Equatable {
     /// Tokens in context now.
-    let used: Int
+    package let used: Int
     /// What the fill is measured against, as each CLI's own extension does: Claude's effective
     /// window (contextWindow − min(maxOutputTokens, 20k) − 13k, where it auto-compacts), Codex's
     /// model context window. nil until the CLI says.
-    let window: Int?
+    package let window: Int?
     /// The CLI compacts by itself when `used` reaches `window`; nil when it doesn't say.
-    let autoCompacts: Bool?
-    let at: Date
+    package let autoCompacts: Bool?
+    package let at: Date
+
+    package init(used: Int, window: Int?, autoCompacts: Bool?, at: Date) {
+        self.used = used
+        self.window = window
+        self.autoCompacts = autoCompacts
+        self.at = at
+    }
 }
 
 /// Where a message sent while a turn ran went (`ChatBackend.send(_:files:queued:)`).
-enum QueuedDelivery: Sendable, Equatable {
+package enum QueuedDelivery: Sendable, Equatable {
     /// The CLI took it into the running turn, after `after` (the last main tool call or text
     /// block; nil when the turn had none yet).
     case inTurn(after: String?)
@@ -158,143 +178,223 @@ enum QueuedDelivery: Sendable, Equatable {
     case dropped
 }
 
-typealias TurnID = String
-typealias BlockID = String
+package typealias TurnID = String
+package typealias BlockID = String
 
 /// Who produced something: the chat's own agent, or a sub-agent it spawned (Claude task id /
 /// Codex child thread id).
-enum AgentID: Hashable, Sendable {
+package enum AgentID: Hashable, Sendable {
     case main
     case sub(String)
 }
 
 /// Why a turn started. `.cli` is a turn the CLI started itself whose cause isn't known yet.
-enum TurnOrigin: Sendable, Equatable {
+package enum TurnOrigin: Sendable, Equatable {
     case user, cli, schedule, agentFinished, peer
 }
 
-enum TextKind: Sendable, Equatable {
+package enum TextKind: Sendable, Equatable {
     case answer, thinking, plan
 }
 
-enum TurnOutcome: Sendable, Equatable {
+package enum TurnOutcome: Sendable, Equatable {
     case completed, interrupted
     case failed(String)
 }
 
 /// A tool call, already worded for display.
-struct ToolCall: Sendable {
+package struct ToolCall: Sendable {
     /// Claude tool_use id / Codex item id.
-    let id: String
+    package let id: String
     /// "Bash", "Edit", "Run", "Search", "server.tool"…
-    let name: String
+    package let name: String
     /// The one input worth showing: a command, a path relative to the folder, a query.
-    let detail: String
+    package let detail: String
     /// The whole input, for an expanded view: a full command, or the input pretty-printed.
-    var input: String? = nil
+    package var input: String? = nil
     /// The tool's own description of the call (Claude's Bash and Agent `description`).
-    var description: String? = nil
+    package var description: String? = nil
     /// The file a file tool works on (absolute).
-    var path: String? = nil
+    package var path: String? = nil
     /// Only reads, searches or lists: consecutive ones group into "Explored N".
-    var readOnly = false
+    package var readOnly = false
+
+    package init(id: String, name: String, detail: String, input: String? = nil, description: String? = nil, path: String? = nil, readOnly: Bool = false) {
+        self.id = id
+        self.name = name
+        self.detail = detail
+        self.input = input
+        self.description = description
+        self.path = path
+        self.readOnly = readOnly
+    }
 }
 
 /// An attachment as a transcript shows it. Images travel as bytes; views make thumbnails lazily.
-struct SentAttachment: Sendable {
-    let name: String
-    let kind: Attachment.Kind
-    let url: URL?
-    let image: Data?
+package struct SentAttachment: Sendable {
+    package let name: String
+    package let kind: Attachment.Kind
+    package let url: URL?
+    package let image: Data?
+
+    package init(name: String, kind: Attachment.Kind, url: URL?, image: Data?) {
+        self.name = name
+        self.kind = kind
+        self.url = url
+        self.image = image
+    }
 }
 
-struct ChatControls: Sendable {
-    var models: [ModelOption]
-    var model: String?
-    var effort: String?
-    var commands: [SlashCommand]
+package struct ChatControls: Sendable {
+    package var models: [ModelOption]
+    package var model: String?
+    package var effort: String?
+    package var commands: [SlashCommand]
+
+    package init(models: [ModelOption], model: String? = nil, effort: String? = nil, commands: [SlashCommand]) {
+        self.models = models
+        self.model = model
+        self.effort = effort
+        self.commands = commands
+    }
 }
 
-struct ModelOption: Identifiable, Hashable, Sendable {
-    let id: String
-    let name: String
-    let resolved: String
-    let efforts: [String]
-    var supportsAutoMode = false
+package struct ModelOption: Identifiable, Hashable, Sendable {
+    package let id: String
+    package let name: String
+    package let resolved: String
+    package let efforts: [String]
+    package var supportsAutoMode = false
+
+    package init(id: String, name: String, resolved: String, efforts: [String], supportsAutoMode: Bool = false) {
+        self.id = id
+        self.name = name
+        self.resolved = resolved
+        self.efforts = efforts
+        self.supportsAutoMode = supportsAutoMode
+    }
 }
 
 /// An entry in the `/` menu. Picking it inserts `insertion` into the draft.
-struct SlashCommand: Identifiable, Hashable, Sendable {
-    enum Kind: Sendable { case command, skill }
-    let name: String
-    let description: String
-    let hint: String
-    let kind: Kind
-    var id: String { name }
+package struct SlashCommand: Identifiable, Hashable, Sendable {
+    package enum Kind: Sendable { case command, skill }
+    package let name: String
+    package let description: String
+    package let hint: String
+    package let kind: Kind
+    package var id: String { name }
     /// Claude runs `/name`; Codex invokes skills by mentioning `$name`.
-    var insertion: String { kind == .skill ? "$\(name) " : "/\(name) " }
+    package var insertion: String { kind == .skill ? "$\(name) " : "/\(name) " }
+
+    package init(name: String, description: String, hint: String, kind: Kind) {
+        self.name = name
+        self.description = description
+        self.hint = hint
+        self.kind = kind
+    }
 }
 
 // MARK: - Sub-agents
 
-struct AgentInfo: Sendable {
-    let id: String
+package struct AgentInfo: Sendable {
+    package let id: String
     /// The agent whose tool call spawned it.
-    let parent: AgentID
+    package let parent: AgentID
     /// The spawning tool call (Claude's Agent tool_use, Codex's spawn item), where its card goes.
-    let toolId: String?
+    package let toolId: String?
     /// What it was asked to do, in a few words (Claude's description, Codex's agent path).
-    let name: String
+    package let name: String
     /// Claude's subagent_type; nil for Codex.
-    let type: String?
-    let model: String?
-    let prompt: String?
+    package let type: String?
+    package let model: String?
+    package let prompt: String?
     /// Runs on after its spawning call returns (Claude `run_in_background`).
-    let background: Bool
+    package let background: Bool
+
+    package init(id: String, parent: AgentID, toolId: String?, name: String, type: String?, model: String?, prompt: String?, background: Bool) {
+        self.id = id
+        self.parent = parent
+        self.toolId = toolId
+        self.name = name
+        self.type = type
+        self.model = model
+        self.prompt = prompt
+        self.background = background
+    }
 }
 
-struct AgentProgress: Sendable {
-    var tokens: Int?
-    var tools: Int?
-    var duration: Duration?
-    var lastTool: String?
+package struct AgentProgress: Sendable {
+    package var tokens: Int?
+    package var tools: Int?
+    package var duration: Duration?
+    package var lastTool: String?
+
+    package init(tokens: Int? = nil, tools: Int? = nil, duration: Duration? = nil, lastTool: String? = nil) {
+        self.tokens = tokens
+        self.tools = tools
+        self.duration = duration
+        self.lastTool = lastTool
+    }
 }
 
-enum AgentStatus: Sendable, Equatable {
+package enum AgentStatus: Sendable, Equatable {
     case completed, failed, stopped
 }
 
 // MARK: - Approvals
 
 /// Something the CLI waits on the user for: a permission, questions, or a plan.
-struct Approval: Identifiable, Sendable {
-    struct Option: Sendable {
-        let label: String
-        let description: String
+package struct Approval: Identifiable, Sendable {
+    package struct Option: Sendable {
+        package let label: String
+        package let description: String
+
+        package init(label: String, description: String) {
+            self.label = label
+            self.description = description
+        }
     }
 
-    struct Question: Sendable {
-        let id: String
-        let text: String
-        let options: [Option]
+    package struct Question: Sendable {
+        package let id: String
+        package let text: String
+        package let options: [Option]
+
+        package init(id: String, text: String, options: [Option]) {
+            self.id = id
+            self.text = text
+            self.options = options
+        }
     }
 
-    let id: String
-    let title: String
-    let detail: String?
-    let body: String?
-    let canAlwaysAllow: Bool
+    package let id: String
+    package let title: String
+    package let detail: String?
+    package let body: String?
+    package let canAlwaysAllow: Bool
     /// Non-empty means render as a question card.
-    let questions: [Question]
+    package let questions: [Question]
     /// Set for Claude's ExitPlanMode: the plan awaiting "Ready to code?".
-    var plan: String? = nil
+    package var plan: String? = nil
     /// The edit being asked about, when it is one.
-    var changes: [FileChange] = []
+    package var changes: [FileChange] = []
     /// A sub-agent asking, for the card's header.
-    var agent: AgentID = .main
+    package var agent: AgentID = .main
+
+    package init(id: String, title: String, detail: String?, body: String?, canAlwaysAllow: Bool, questions: [Question], plan: String? = nil, changes: [FileChange] = [], agent: AgentID = .main) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.body = body
+        self.canAlwaysAllow = canAlwaysAllow
+        self.questions = questions
+        self.plan = plan
+        self.changes = changes
+        self.agent = agent
+    }
 }
 
-enum Decision: Sendable {
+package enum Decision: Sendable {
     case allow, allowAlways, deny
     /// Claude's "Ready to code?": approve the plan, optionally switching to Accept edits.
     case approvePlan(autoAcceptEdits: Bool)

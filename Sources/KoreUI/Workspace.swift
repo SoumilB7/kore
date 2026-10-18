@@ -6,9 +6,9 @@ import Observation
 /// A tab: empty (provider picker), showing a chat, one of a chat's sub-agents, or a file.
 /// An agent tab holds its parent's chat and reads its stores, so it can't drift from it.
 @MainActor @Observable
-final class ChatTab: Identifiable {
-    let id = UUID()
-    var chat: Chat?
+package final class ChatTab: Identifiable {
+    package let id = UUID()
+    package var chat: Chat?
     /// Set for an agent tab: the sub-agent of `chat` it shows.
     var agent: String?
     /// Set for a file tab.
@@ -18,7 +18,7 @@ final class ChatTab: Identifiable {
 
     var isEmpty: Bool { chat == nil && file == nil }
 
-    var title: String {
+    package var title: String {
         if let file { return file.name }
         if let agent, let name = chat?.transcript.agent(agent)?.name { return name }
         return chat?.title ?? "New tab"
@@ -29,9 +29,9 @@ final class ChatTab: Identifiable {
 /// app (Kore, the VS Code extensions, the CLIs) sees the same list, shown in the history
 /// popover. The tabs are what was open in this folder last time, restored as they were.
 @MainActor @Observable
-final class Workspace {
-    let folder: URL
-    private(set) var tabs: [ChatTab]
+package final class Workspace {
+    package let folder: URL
+    package private(set) var tabs: [ChatTab]
     private(set) var activeID: UUID
     /// Every chat the CLIs have for this folder, newest first, archived ones flagged.
     private(set) var chats: [SessionSummary] = []
@@ -80,7 +80,7 @@ final class Workspace {
         if tabs.contains(where: { $0.file != nil }) { _ = filesStore() }
     }
 
-    var activeTab: ChatTab { tabs.first { $0.id == activeID } ?? tabs[0] }
+    package var activeTab: ChatTab { tabs.first { $0.id == activeID } ?? tabs[0] }
 
     func select(_ tab: ChatTab) {
         activeID = tab.id
@@ -369,7 +369,7 @@ final class Workspace {
     var unsavedFiles: [FileDocument] { tabs.compactMap { $0.file?.isDirty == true ? $0.file : nil } }
 
     /// Every open folder window's workspace, for the quit check.
-    static let all = NSHashTable<Workspace>.weakObjects()
+    package static let all = NSHashTable<Workspace>.weakObjects()
 
     private func remember(_ path: String) {
         recentFiles.removeAll { $0 == path }

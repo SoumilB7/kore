@@ -3,10 +3,10 @@ import KoreCore
 import UniformTypeIdentifiers
 
 /// A file attached to a message: picked with +, pasted, or dropped.
-struct Attachment: Identifiable {
-    enum Kind: Sendable { case image, text, pdf, other }
+package struct Attachment: Identifiable {
+    package enum Kind: Sendable { case image, text, pdf, other }
 
-    let id = UUID()
+    package let id = UUID()
     let name: String
     let kind: Kind
     /// Where it lives on disk (pasted images are saved to a temp file); nil when only known
@@ -33,7 +33,7 @@ struct Attachment: Identifiable {
 /// - Claude (as its VS Code extension): images as base64 image blocks, text files as text
 ///   document blocks, PDFs as base64 document blocks; anything else as an @path reference.
 /// - Codex: images as `localImage`, everything else as a `mention` it reads itself.
-enum Attachments {
+package enum Attachments {
     // MARK: Classification (the Claude extension's lists)
 
     private static let textMIMETypes: Set<String> = [
@@ -120,10 +120,16 @@ enum Attachments {
     // MARK: Encoding
 
     /// What gets sent; plain values so encoding can run off the main actor.
-    struct File: Sendable {
-        let url: URL
-        let name: String
-        let kind: Attachment.Kind
+    package struct File: Sendable {
+        package let url: URL
+        package let name: String
+        package let kind: Attachment.Kind
+
+        package init(url: URL, name: String, kind: Attachment.Kind) {
+            self.url = url
+            self.name = name
+            self.kind = kind
+        }
     }
 
     static func files(_ attachments: [Attachment]) -> [File] {

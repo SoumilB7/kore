@@ -5,7 +5,7 @@ import KoreCore
 /// behind this: request objects, item ids, how a tool's input is worded, attachment encoding,
 /// local slash commands, and relaunching after the process exits.
 @MainActor
-protocol ChatBackend: AnyObject {
+package protocol ChatBackend: AnyObject {
     var events: AsyncStream<ChatEvent> { get }
     /// Claude session id / Codex thread id, once known.
     var sessionId: String? { get }
@@ -51,25 +51,39 @@ protocol ChatBackend: AnyObject {
 }
 
 /// What a backend is made with.
-struct BackendOptions {
-    let folder: URL
+package struct BackendOptions {
+    package let folder: URL
     /// A past session to show and continue.
-    var resume: SessionSummary?
+    package var resume: SessionSummary?
     /// The provider's mode id to launch in.
-    var mode: String
-    var planMode = false
+    package var mode: String
+    package var planMode = false
     /// Launch on this model and effort instead of the CLI's defaults (a fork keeps the
     /// original's; the dev hook's cheap test models).
-    var model: String?
-    var effort: String?
+    package var model: String?
+    package var effort: String?
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude), and the
     /// title it gets.
-    var fork: ForkPoint?
-    var forkTitle: String?
+    package var fork: ForkPoint?
+    package var forkTitle: String?
+
+    package init(
+        folder: URL, resume: SessionSummary? = nil, mode: String, planMode: Bool = false, model: String? = nil,
+        effort: String? = nil, fork: ForkPoint? = nil, forkTitle: String? = nil
+    ) {
+        self.folder = folder
+        self.resume = resume
+        self.mode = mode
+        self.planMode = planMode
+        self.model = model
+        self.effort = effort
+        self.fork = fork
+        self.forkTitle = forkTitle
+    }
 }
 
 /// How a fork begins.
-enum ForkStart: Sendable {
+package enum ForkStart: Sendable {
     /// The new tab's CLI makes the fork: launch with this.
     case pending(ForkPoint)
     /// The message was the first one: nothing comes before it, so a new chat.
@@ -77,12 +91,18 @@ enum ForkStart: Sendable {
 }
 
 /// A session to fork, and the message its history runs through.
-struct ForkPoint: Sendable {
-    let from: String
-    let at: String
+package struct ForkPoint: Sendable {
+    package let from: String
+    package let at: String
     /// That history, already read while finding the message (Claude), so the new tab shows it
     /// without reading the transcript again.
-    var history: ClaudeHistory.Page?
+    package var history: ClaudeHistory.Page?
+
+    package init(from: String, at: String, history: ClaudeHistory.Page? = nil) {
+        self.from = from
+        self.at = at
+        self.history = history
+    }
 }
 
 enum ForkError: LocalizedError {
@@ -96,12 +116,12 @@ enum ForkError: LocalizedError {
 /// merged per file. Two chats running in one folder at once see each other's edits in their
 /// git diffs.
 extension ChatBackend {
-    func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
+    package func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
         try await send(text, files: files, queued: nil)
     }
 
     /// For a backend that can't compact.
-    func compact() async throws { throw CompactUnavailable() }
+    package func compact() async throws { throw CompactUnavailable() }
 }
 
 struct CompactUnavailable: Error, CustomStringConvertible {

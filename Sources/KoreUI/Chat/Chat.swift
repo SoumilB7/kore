@@ -10,10 +10,10 @@ import Observation
 /// re-renders the composer alone. The composer's draft and attachments live here, sent and
 /// cleared by `send()`.
 @MainActor @Observable
-final class Chat: Identifiable {
-    let id = UUID()
+package final class Chat: Identifiable {
+    package let id = UUID()
     let provider: ProviderDescriptor
-    let folder: URL
+    package let folder: URL
     let transcript = TranscriptStore()
     let approvals = ApprovalsStore()
     let controls: ControlsStore
@@ -24,7 +24,7 @@ final class Chat: Identifiable {
 
     /// Waiting in the composer, sent with the next message.
     private(set) var attachments: [Attachment] = []
-    var draft = ""
+    package var draft = ""
     /// Launch with this model and effort instead of the CLI's defaults (a fork, the dev hook).
     @ObservationIgnored var launchModel: String?
     @ObservationIgnored var launchEffort: String?
@@ -108,6 +108,7 @@ final class Chat: Identifiable {
         context.apply(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
+        StorylineSeams.events?(self, event)
     }
 
     /// The user's messages that waited for the history.
@@ -142,7 +143,13 @@ final class Chat: Identifiable {
     /// The backend, made on first use with the chat's current settings.
     private func connect() -> any ChatBackend {
         if let backend { return backend }
-        let make: (BackendOptions) -> any ChatBackend = FeedBackend.enabled ? FeedBackend.init : provider.makeBackend
+        let make: (BackendOptions) -> any ChatBackend
+        if let seam = StorylineSeams.backend {
+            let id = provider.id
+            make = { seam(id, $0) }
+        } else {
+            make = FeedBackend.enabled ? FeedBackend.init : provider.makeBackend
+        }
         let backend = make(
             BackendOptions(
                 folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
