@@ -7,7 +7,8 @@ import KoreUI
 ///
 ///     kore-storylines [--tag a,b] [--name A,B] [--provider claude|codex] [--list]
 ///                     [--out <dir>] [--size WxH] [--replay name|folder|agent:id;…]
-///                     [--real-input [--real-keys]]
+///                     [--cli scripted|process] [--live <model>] [--record] [--fake-cli <path>]
+///                     [--cassettes <dir>] [--real-input [--real-keys]]
 @MainActor
 package enum StorylineHost {
     private static var runner: Runner?
@@ -58,6 +59,11 @@ package enum StorylineHost {
                 case "--provider": selection.provider = args.next()
                 case "--list": list = true
                 case "--out": out = URL(fileURLWithPath: args.next() ?? out.path, isDirectory: true)
+                case "--cli": flags.cli = args.next() == "process" ? .process : .scripted
+                case "--live": flags.cli = .live(model: args.next() ?? "haiku")
+                case "--record": flags.record = true
+                case "--fake-cli": flags.fakeCLI = args.next().map { URL(fileURLWithPath: $0) }
+                case "--cassettes": flags.cassettes = args.next().map { URL(fileURLWithPath: $0, isDirectory: true) }
                 case "--real-input": flags.realInput = true
                 case "--real-keys": flags.realKeys = true
                 case "--size":

@@ -10,7 +10,9 @@ package struct AppProbe {
     package var workspace: Workspace? {
         guard let folder else { return nil }
         let path = folder.resolvingSymlinksInPath().path
-        return Workspace.all.allObjects.first { $0.folder.resolvingSymlinksInPath().path == path }
+        let matching = Workspace.all.allObjects.filter { $0.folder.resolvingSymlinksInPath().path == path }
+        // A window of the folder that an earlier storyline closed can linger until it's freed.
+        return matching.first { $0.window?.isVisible == true } ?? matching.first
     }
 
     package var tab: ChatTab? { workspace?.activeTab }
@@ -27,6 +29,14 @@ package struct RunFlags: Sendable {
     package var size: CGSize?
     /// `--replay name|folder|agent:id;…`: recorded sessions, by name.
     package var replays: [String: (folder: URL, session: String)] = [:]
+    /// `--cli scripted|process` or `--live <model>`: what the chats talk to.
+    package var cli: CLIModes.Mode = .scripted
+    /// `--record`: live chats are recorded as cassettes.
+    package var record = false
+    /// `--fake-cli <path>`: kore-fake-cli, for `--cli process`.
+    package var fakeCLI: URL?
+    /// `--cassettes <dir>`: where cassettes are read and recorded.
+    package var cassettes: URL?
 }
 
 /// Everything a step works with: the app, its window, the waits, the event log, the run's

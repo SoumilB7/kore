@@ -79,18 +79,19 @@ package struct Needs: Sendable {
 
     /// Which CLI its chats talk to.
     package enum CLI: Sendable {
-        /// The scripted CLI (`ScriptedBackend`), the default.
-        case scripted
-        /// The real `claude` / `codex`: recorded sessions, live models.
+        /// The run's CLI (`--cli scripted`, the default; `--cli process`; `--live <model>`).
+        case run
+        /// The real `claude` / `codex` on the owner's own stores, whatever the run's mode: the
+        /// recorded sessions verify-landing replays (`--replay`).
         case real
     }
 
     package var folder: Folder = .empty
-    package var cli: CLI = .scripted
+    package var cli: CLI = .run
     /// The window's content size; the runner's `--size` overrides it.
     package var window = CGSize(width: 1000, height: 760)
 
-    package init(folder: Folder = .empty, cli: CLI = .scripted, window: CGSize = CGSize(width: 1000, height: 760)) {
+    package init(folder: Folder = .empty, cli: CLI = .run, window: CGSize = CGSize(width: 1000, height: 760)) {
         self.folder = folder
         self.cli = cli
         self.window = window
