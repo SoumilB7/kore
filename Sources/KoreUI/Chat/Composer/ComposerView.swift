@@ -3,9 +3,10 @@ import Combine
 import SwiftUI
 
 /// The input box: attachments, text, and the bar of controls under it, with the slash menu
-/// above it while a command is being typed. Files can be pasted (⌘V), picked (+), or dropped
-/// onto the box. One box serves every chat tab: what it holds (draft, files, mode, model) is
-/// the chat's, and what it keeps itself (caret, slash pick, undo) starts over with another chat.
+/// floating over the chat above it while a command is being typed. Files can be pasted (⌘V),
+/// picked (+), or dropped onto the box. One box serves every chat tab: what it holds (draft,
+/// files, mode, model) is the chat's, and what it keeps itself (caret, slash pick, undo) starts
+/// over with another chat.
 struct ComposerView: View {
     let chat: Chat
     var focused: FocusState<Bool>.Binding
@@ -19,6 +20,11 @@ struct ComposerView: View {
     /// The chat in the box now, for the monitor: it was made with the first one.
     @StateObject private var pasteChat = Held<Chat?>(nil)
     @StateObject private var dropTargeted = Local(false)
+    /// The slash menu's frame while it shows, and the box's (global): a click outside both
+    /// closes the menu. Kept for the click monitor, never shown.
+    @StateObject private var menuFrame = Held<CGRect?>(nil)
+    @StateObject private var boxFrame = Held<CGRect>(.zero)
+    @StateObject private var clickMonitor = Held<Any?>(nil)
     /// Where the caret is, so Shift+Return can put a line break there: in that chat's draft.
     @StateObject private var caret = Local(Caret(chat: nil, selection: nil))
 
@@ -42,21 +48,32 @@ struct ComposerView: View {
     }
 
     var body: some View {
-        VStack(spacing: Space.lg) {
-            if !slashMatches.isEmpty {
-                SlashMenu(matches: slashMatches, selected: min(slashSelection.value, slashMatches.count - 1), accept: accept)
+        box
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { boxFrame.value = $0 }
+            // The menu floats over the chat just above the box: the transcript keeps its height
+            // and stays in view beside it.
+            .overlay(alignment: .top) {
+                let matches = slashMatches
+                if !matches.isEmpty {
+                    SlashMenu(matches: matches, selected: min(slashSelection.value, matches.count - 1), accept: accept)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuFrame.value = $0 }
+                        .onDisappear { menuFrame.value = nil }
+                        // Its bottom a gap above the box's top, its height its own.
+                        .padding(.bottom, Space.lg)
+                        .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
+                }
             }
-            box
-        }
         .background(WindowReader { window.value = $0 })
         .animation(Motion.fadeSlow, value: chat.controls.activeMode.id)
         .onAppear {
             pasteChat.value = chat
             pasteMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { pasteAttachments($0) }
+            clickMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { closeMenu(onClick: $0) }
         }
         .onDisappear {
-            if let monitor = pasteMonitor.value { NSEvent.removeMonitor(monitor) }
+            for monitor in [pasteMonitor.value, clickMonitor.value].compactMap({ $0 }) { NSEvent.removeMonitor(monitor) }
             pasteMonitor.value = nil
+            clickMonitor.value = nil
         }
         .onReceive(Self.undoChanges) { draftFromUndo($0) }
         .onChange(of: chat.id) {
@@ -123,10 +140,7 @@ struct ComposerView: View {
             }
             field
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
-            ComposerBar(chat: chat, attach: attach) {
-                if chat.draft.isEmpty { chat.draft = "/" }
-                focused.wrappedValue = true
-            }
+            ComposerBar(chat: chat, attach: attach, slash: openSlash)
         }
         .modeOutline(chat.controls.activeMode.rung, focused: focused.wrappedValue, highlighted: dropTargeted.value)
         // Only the box takes drops; the rest of the chat ignores them.
@@ -250,8 +264,30 @@ struct ComposerView: View {
         return .handled
     }
 
+    /// The `/` key: an empty draft becomes "/", the caret after it, and the menu opens.
+    private func openSlash() {
+        if chat.draft.isEmpty {
+            chat.draft = "/"
+            selection.wrappedValue = TextSelection(insertionPoint: chat.draft.endIndex)
+        }
+        slashDismissed.value = false
+        focused.wrappedValue = true
+    }
+
+    /// The command takes the draft, the caret after it and its space, ready for arguments.
     private func accept(_ command: SlashCommand) {
         chat.draft = command.insertion
+        selection.wrappedValue = TextSelection(insertionPoint: chat.draft.endIndex)
         focused.wrappedValue = true
+    }
+
+    /// A click outside the menu and the box closes the menu; the click goes on as it was.
+    private func closeMenu(onClick event: NSEvent) -> NSEvent? {
+        guard let menu = menuFrame.value, let window = window.value, event.window === window, let content = window.contentView
+        else { return event }
+        // Window coordinates (bottom-left) to SwiftUI's global ones (top-left).
+        let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+        if !menu.contains(point), !boxFrame.value.contains(point) { slashDismissed.value = true }
+        return event
     }
 }

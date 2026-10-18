@@ -67,6 +67,8 @@ extension StoryID {
         package static let model = StoryID(.composer, "model")
         package static let effort = StoryID(.composer, "effort")
         package static let context = StoryID(.composer, "context")
+        /// A row of the slash menu, by the command's name.
+        package static func command(_ name: String) -> StoryID { StoryID(.composer, "command", key: name) }
         /// A message waiting for the turn to end; `.part(.cancel)` takes it back.
         package static func queued(_ id: UUID) -> StoryID { StoryID(.composer, "queued", key: id.uuidString) }
     }

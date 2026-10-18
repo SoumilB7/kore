@@ -36,6 +36,7 @@ struct SlashMenu: View {
                         .contentShape(Rectangle())
                         .onTapGesture { accept(command) }
                         .help(command.description)
+                        .storyID(StoryID.Composer.command(command.name), press: { accept(command) })
                         .id(command.id)
                     }
                 }
