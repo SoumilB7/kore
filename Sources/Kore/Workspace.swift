@@ -70,6 +70,7 @@ final class Workspace {
             explorerWidth = explorer.width
             explorerOpen = explorer.open
         }
+        Self.all.add(self)
         // Restored file tabs follow the disk too.
         if tabs.contains(where: { $0.file != nil }) { _ = filesStore() }
     }
@@ -190,6 +191,66 @@ final class Workspace {
 
     func keep(_ tab: ChatTab) { tab.isPreview = false }
 
+    // MARK: - Files the agents' turns changed
+
+    /// A file changed by the running or latest turn of this window's chats (look §8): the
+    /// counts add up across chats, and each chat that wrote it is named.
+    struct Touch: Equatable {
+        var added = 0
+        var removed = 0
+        var writing = false
+        var agentIndex: Int?
+        var agentName: String?
+        var sources: [Source] = []
+
+        struct Source: Equatable {
+            let chat: String
+            let turn: String
+            let tab: UUID
+        }
+
+        var help: String { sources.map(\.chat).joined(separator: ", ") }
+    }
+
+    /// By real path; reading it tracks every open chat's turn.
+    var turnTouches: [String: Touch] {
+        var touches: [String: Touch] = [:]
+        for tab in tabs where tab.agent == nil && tab.file == nil {
+            guard let chat = tab.chat else { continue }
+            for (path, file) in chat.transcript.turnChanges() {
+                var touch = touches[path] ?? Touch()
+                touch.added += file.added
+                touch.removed += file.removed
+                touch.writing = touch.writing || file.writing
+                if let index = file.agentIndex {
+                    touch.agentIndex = index
+                    touch.agentName = file.agentName
+                }
+                touch.sources.append(Touch.Source(chat: "\(chat.provider.name) · \(chat.title)", turn: file.turn, tab: tab.id))
+                touches[path] = touch
+            }
+        }
+        return touches
+    }
+
+    /// The folders above changed files, for the tree's change points.
+    static func folders(of touches: [String: Touch]) -> Set<String> {
+        var folders: Set<String> = []
+        for path in touches.keys {
+            var folder = (path as NSString).deletingLastPathComponent
+            while folder.count > 1, folders.insert(folder).inserted {
+                folder = (folder as NSString).deletingLastPathComponent
+            }
+        }
+        return folders
+    }
+
+    /// The changes a turn made to one file, for the changes modal.
+    func changes(of path: String, in source: Touch.Source) -> [FileChange] {
+        guard let chat = tabs.first(where: { $0.id == source.tab })?.chat else { return [] }
+        return chat.transcript.changes(ofTurn: source.turn).filter { realPath($0.path) == path }
+    }
+
     /// A file or folder was renamed in the explorer: open files under it follow.
     func renamed(_ old: String, to new: String) {
         for tab in tabs {
@@ -218,6 +279,11 @@ final class Workspace {
     }
 
     var hasUnsavedFiles: Bool { tabs.contains { $0.file?.isDirty == true } }
+
+    var unsavedFiles: [FileDocument] { tabs.compactMap { $0.file?.isDirty == true ? $0.file : nil } }
+
+    /// Every open folder window's workspace, for the quit check.
+    static let all = NSHashTable<Workspace>.weakObjects()
 
     private func remember(_ path: String) {
         recentFiles.removeAll { $0 == path }

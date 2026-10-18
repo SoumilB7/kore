@@ -180,6 +180,12 @@ final class FileDocument: Identifiable {
         revision += 1
     }
 
+    /// The disk against the unsaved edits, for the changes modal.
+    func compare() async -> FileChange? {
+        guard case .text(let disk) = TextFile.read(url).content else { return nil }
+        return await UnifiedDiff.compare(old: disk, new: storage.string, path: path)
+    }
+
     /// Keeps the edits; the next save overwrites the disk.
     func keepMine() {
         file.stamp = TextFile.Stamp.of(url)

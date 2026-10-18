@@ -62,6 +62,13 @@ struct KoreApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let app = AppModel()
 
+    /// Unsaved file edits in any window are asked about first.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let workspaces = Workspace.all.allObjects
+        let files = workspaces.flatMap(\.unsavedFiles)
+        return UnsavedGuard.confirm(files) { workspaces.forEach { $0.saveAll() } } ? .terminateNow : .terminateCancel
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         app.openFromOutside(urls)
     }

@@ -8,13 +8,19 @@ struct FileEditorView: View {
     let document: FileDocument
     let tab: ChatTab
     let workspace: Workspace
+    /// The turn's changes to this file, open in the changes modal.
+    @StateObject private var changes = Local<[FileChange]?>(nil)
 
     var body: some View {
         VStack(spacing: 0) {
-            PathRow(document: document, workspace: workspace)
+            PathRow(document: document, workspace: workspace) { changes.value = $0 }
             Rule()
             if let notice = document.notice {
-                NoticeBar(notice: notice, document: document, close: { workspace.close(tab) })
+                NoticeBar(notice: notice, document: document, close: { workspace.close(tab) }) {
+                    Task {
+                        if let change = await document.compare() { changes.value = [change] }
+                    }
+                }
             }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -24,6 +30,12 @@ struct FileEditorView: View {
             }
         }
         .background(Theme.background)
+        .overlay {
+            if let list = changes.value {
+                ChangesView(changes: list, folder: workspace.folder) { changes.value = nil }
+            }
+        }
+        .animation(Motion.fade, value: changes.value == nil)
         .onAppear { document.loadIfNeeded() }
         // An edit keeps a preview tab.
         .onChange(of: document.isDirty) { _, dirty in if dirty { workspace.keep(tab) } }
@@ -78,6 +90,7 @@ struct FileEditorView: View {
 private struct PathRow: View {
     let document: FileDocument
     let workspace: Workspace
+    let showChanges: ([FileChange]) -> Void
 
     var body: some View {
         let relative = workspace.relativePath(document.path)
@@ -94,6 +107,14 @@ private struct PathRow: View {
                     workspace: workspace)
             }
             Spacer(minLength: Space.md)
+            if let touch = workspace.turnTouches[document.path] {
+                TurnMark(touch: touch) {
+                    if let source = touch.sources.last {
+                        let list = workspace.changes(of: document.path, in: source)
+                        if !list.isEmpty { showChanges(list) }
+                    }
+                }
+            }
         }
         .padding(.horizontal, Size.Editor.pathInset)
         .frame(height: Size.Editor.pathRow)
@@ -135,12 +156,40 @@ private struct Crumb: View {
     }
 }
 
+/// "+12 −3 this turn" at the path row's end; opens the turn's changes to this file.
+private struct TurnMark: View {
+    let touch: Workspace.Touch
+    let action: () -> Void
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Space.sm) {
+                if touch.writing { BlinkingDot(size: Size.Tree.point) }
+                if let index = touch.agentIndex {
+                    AgentAvatar(index: index, name: touch.agentName ?? "", place: .crumb)
+                }
+                ChangeCounts(added: touch.added, removed: touch.removed, font: Chrome.labelDigits)
+                Text("this turn").font(Chrome.label).foregroundStyle(hovered.value ? Theme.secondary : Theme.tertiary)
+            }
+            .padding(.horizontal, Space.xs)
+            .padding(.vertical, Space.xxs)
+            .background(hovered.value ? Theme.Tree.hover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
+        .help("\(touch.help) · View changes")
+    }
+}
+
 // MARK: - Notice
 
 private struct NoticeBar: View {
     let notice: FileDocument.Notice
     let document: FileDocument
     let close: () -> Void
+    let compare: () -> Void
 
     var body: some View {
         HStack(spacing: Space.md) {
@@ -154,6 +203,7 @@ private struct NoticeBar: View {
                 Button("Save") { document.save() }.buttonStyle(SubtleButtonStyle())
                 Button("Close", action: close).buttonStyle(SubtleButtonStyle())
             case .changed:
+                Button("Compare", action: compare).buttonStyle(SubtleButtonStyle())
                 Button("Reload") { document.reloadInPlace() }.buttonStyle(SubtleButtonStyle())
                 Button("Keep Mine") { document.keepMine() }.buttonStyle(SubtleButtonStyle())
             }

@@ -48,6 +48,9 @@ struct ExplorerSidebar: View {
     let floating: Bool
     @FocusState private var focused: Bool
     @StateObject private var hovered = Local(false)
+    /// Type to find: what's been typed, cleared after a pause or by Esc.
+    @StateObject private var typed = Local("")
+    @StateObject private var typedAt = Held(Date.distantPast)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -95,20 +98,26 @@ struct ExplorerSidebar: View {
     private var tree: some View {
         let rows = store.rows
         let active = activeGuide(rows)
+        let touches = workspace.turnTouches
+        let touchedFolders = Workspace.folders(of: touches)
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(rows) { row in
                         TreeRow(
                             row: row, store: store, workspace: workspace, focused: focused,
-                            activeGuide: active.flatMap { row.id.hasPrefix($0.path + "/") ? $0.depth : nil }
+                            activeGuide: active.flatMap { row.id.hasPrefix($0.path + "/") ? $0.depth : nil },
+                            touch: row.isFolder ? nil : touches[row.id],
+                            folderTouched: row.isFolder && touchedFolders.contains(row.id),
+                            typed: store.selection == row.id ? typed.value : "",
+                            focus: { focused = true }
                         )
                         .id(row.id)
                     }
                 }
                 .padding(.bottom, Space.md)
             }
-            .focusable()
+            .focusable(interactions: .edit)
             .focused($focused)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in key(press, rows: rows) }
@@ -160,10 +169,35 @@ struct ExplorerSidebar: View {
             if let index { store.edit = .rename(rows[index].id) }
         case .delete where press.modifiers.contains(.command):
             if let index { TreeActions.trash(rows[index].id, store: store) }
+        case .escape where !typed.value.isEmpty:
+            typed.value = ""
         default:
-            return .ignored
+            return find(press, rows: rows, from: index) ? .handled : .ignored
         }
         return .handled
+    }
+
+    /// Typing jumps to the next row whose name starts with what's typed (VS Code's type to
+    /// find, as Finder does it); a pause starts over.
+    private func find(_ press: KeyPress, rows: [FilesStore.Row], from index: Int?) -> Bool {
+        guard press.modifiers.isDisjoint(with: [.command, .control, .option]), !press.characters.isEmpty,
+            press.characters.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+        else { return false }
+        let now = Date()
+        let fresh = now.timeIntervalSince(typedAt.value) > 1
+        typedAt.value = now
+        let query = (fresh ? "" : typed.value) + press.characters
+        // Repeating the same letter steps through the names that start with it.
+        let start = fresh || query.count == 1 ? (index ?? -1) + 1 : (index ?? 0)
+        let order = Array(rows[start...]) + Array(rows[..<min(start, rows.count)])
+        guard let match = order.first(where: { $0.kind == .node && $0.names.last?.lowercased().hasPrefix(query.lowercased()) == true })
+        else {
+            typed.value = query
+            return true
+        }
+        typed.value = query
+        store.selection = match.id
+        return true
     }
 }
 
@@ -228,6 +262,13 @@ private struct TreeRow: View {
     let workspace: Workspace
     let focused: Bool
     let activeGuide: Int?
+    /// Changed by the running or latest agent turn (look §8).
+    let touch: Workspace.Touch?
+    let folderTouched: Bool
+    /// Type to find's text, shown on the selected row's name.
+    let typed: String
+    /// A click puts the keyboard in the tree, as in VS Code.
+    let focus: () -> Void
     @StateObject private var hovered = Local(false)
 
     private var isSelected: Bool { store.selection == row.id }
@@ -295,15 +336,39 @@ private struct TreeRow: View {
                 separator.foregroundColor = Theme.tertiary
                 text += separator
             }
-            var part = AttributedString(name)
-            part.foregroundColor = ignored ? Theme.tertiary : Theme.text
-            text += part
+            let last = i == row.names.count - 1
+            if last, !typed.isEmpty, name.lowercased().hasPrefix(typed.lowercased()) {
+                var matched = AttributedString(String(name.prefix(typed.count)))
+                matched.foregroundColor = Theme.accent
+                matched.font = Chrome.bodySemibold
+                var rest = AttributedString(String(name.dropFirst(typed.count)))
+                rest.foregroundColor = ignored ? Theme.tertiary : Theme.text
+                text += matched + rest
+            } else {
+                var part = AttributedString(name)
+                part.foregroundColor = ignored ? Theme.tertiary : Theme.text
+                text += part
+            }
         }
         return Text(text).font(Chrome.body).lineLimit(1).truncationMode(.tail)
     }
 
     @ViewBuilder private func trailing(_ state: GitStatus.State?) -> some View {
-        if let state, state != .ignored {
+        if let touch {
+            // The turn's counts take the git letter's place.
+            HStack(spacing: Space.xs) {
+                if touch.writing { BlinkingDot(size: Size.Tree.point) }
+                if let index = touch.agentIndex {
+                    AgentAvatar(index: index, name: touch.agentName ?? "", place: .crumb)
+                }
+                ChangeCounts(added: touch.added, removed: touch.removed, font: Chrome.captionDigits)
+            }
+            .help("Changed this turn · \(touch.help)")
+        } else if row.isFolder, folderTouched || (state != nil && state != .ignored) {
+            Circle()
+                .fill(state == .conflicted ? Theme.danger : Theme.accent)
+                .frame(width: Size.Tree.point, height: Size.Tree.point)
+        } else if let state, state != .ignored {
             if row.isFolder {
                 Circle()
                     .fill(state == .conflicted ? Theme.danger : Theme.accent)
@@ -331,6 +396,7 @@ private struct TreeRow: View {
 
     private func click() {
         guard !editing else { return }
+        focus()
         store.selection = row.id
         if row.isFolder {
             store.toggle(row.id)

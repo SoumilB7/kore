@@ -36,6 +36,7 @@ import KoreCore
 ///   KORE_FILE=<path>[:...]   open those files in tabs (the last one shown)
 ///   KORE_QUICK_OPEN=files|line  open quick open at launch
 ///   KORE_LINE=<n>            put the caret on that line of the shown file
+///   KORE_CLOSE_AFTER=<s>     ask the folder window to close (as ⌘W does) that many seconds after launch
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
     static let startProvider = ProcessInfo.processInfo.environment["KORE_START"].flatMap(Provider.init(rawValue:))
@@ -216,6 +217,11 @@ enum DevSnapshot {
         for (index, point) in clicks.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + clickStart + Double(index)) {
                 real ? post(click: point) : send(click: point)
+            }
+        }
+        if let after = ProcessInfo.processInfo.environment["KORE_CLOSE_AFTER"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) {
+                NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }?.performClose(nil)
             }
         }
         let delay = Double(ProcessInfo.processInfo.environment["KORE_WAIT"] ?? "") ?? 4

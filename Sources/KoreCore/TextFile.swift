@@ -163,3 +163,21 @@ public struct TextFile: Sendable {
         return .spaces(width)
     }
 }
+
+extension UnifiedDiff {
+    /// What changed from `old` to `new`, as one file at `path` (git's own diff, no repository
+    /// needed); nil when they're the same or git fails.
+    public static func compare(old: String, new: String, path: String) async -> FileChange? {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Kore-compare-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let a = folder.appendingPathComponent("old")
+        let b = folder.appendingPathComponent("new")
+        guard (try? old.write(to: a, atomically: false, encoding: .utf8)) != nil,
+            (try? new.write(to: b, atomically: false, encoding: .utf8)) != nil,
+            let diff = await Git.run(["diff", "--no-index", "--no-color", "--no-ext-diff", "old", "new"], in: folder),
+            let file = files(diff.output).first
+        else { return nil }
+        return FileChange(path: path, kind: .update, hunks: file.hunks)
+    }
+}

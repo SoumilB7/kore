@@ -167,13 +167,14 @@ private struct DiffRowView: View {
 struct ChangeCounts: View {
     let added: Int
     let removed: Int
+    var font: Font? = nil
 
     var body: some View {
         HStack(spacing: Space.xs) {
             if added > 0 { Text("+\(added)").foregroundStyle(Theme.diffAdd) }
             if removed > 0 { Text("−\(removed)").foregroundStyle(Theme.diffRemove) }
         }
-        .font(TextStyle.codeSmallDigits)
+        .font(font ?? TextStyle.codeSmallDigits)
         .lineLimit(1)
         .fixedSize()
     }

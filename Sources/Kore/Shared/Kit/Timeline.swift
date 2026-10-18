@@ -93,14 +93,16 @@ struct TimelineDotView: View {
 }
 
 /// A running item's dot, blinking.
-private struct BlinkingDot: View {
+/// The in-progress dot: blinks unless motion is reduced. Also marks a file an agent is writing.
+struct BlinkingDot: View {
+    var size = Layout.Timeline.dot
     @StateObject private var dim = Local(false)
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Circle()
             .fill(Theme.dot)
-            .frame(width: Layout.Timeline.dot, height: Layout.Timeline.dot)
+            .frame(width: size, height: size)
             .opacity(dim.value ? Motion.blinkLow : 1)
             .animation(reduceMotion ? nil : Motion.blink, value: dim.value)
             .onAppear { if !reduceMotion { dim.value = true } }

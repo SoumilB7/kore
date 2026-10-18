@@ -88,6 +88,9 @@ struct FolderWindow: View {
             .animation(Motion.fade, value: historyOpen.value)
         }
         .background(TitleBar { fullScreen.value = $0 })
+        .background(WindowReader { window in
+            if let window { UnsavedGuard.install(on: window, for: workspace.value) }
+        })
         // Small minimum: every part has to work as a tile, not just as a full window.
         .frame(minWidth: Layout.Window.minWidth, minHeight: Layout.Window.minHeight)
         .navigationTitle(folder.lastPathComponent)
