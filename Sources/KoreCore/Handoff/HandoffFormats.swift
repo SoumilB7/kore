@@ -13,8 +13,10 @@ public protocol HandoffFormat: Sendable {
     /// What the file is, from its first lines only; nil when it isn't this format. Strict: the
     /// format's own structure, not merely JSON lines.
     func identify(_ head: HandoffHead) -> HandoffIdentity?
-    /// The whole history, or a throw: a file damaged part-way imports nothing.
-    func read(_ file: URL, identity: HandoffIdentity) throws -> HandoffSegment
+    /// The history, or a throw: a file damaged part-way imports nothing. `window`: the target's,
+    /// when known; a format that can read from the end may stop once its turns fill that
+    /// window's budget (`HandoffSegment.earlier` counts what it left unread).
+    func read(_ file: URL, identity: HandoffIdentity, window: Int?) throws -> HandoffSegment
 }
 
 /// A file's first lines, parsed (nil: a line that isn't JSON). A last line cut off by the read
@@ -97,20 +99,20 @@ public enum HandoffFormats {
     /// A file's history in the neutral form; nil, quietly, for a file no format recognises, one
     /// damaged part-way, or one with nothing to carry. Blocking file IO: call it off the main
     /// thread. The last file read is kept (a preview, then the import, read it once).
-    public static func read(_ file: URL) -> HandoffSegment? {
-        try? check(file).get()
+    public static func read(_ file: URL, window: Int? = nil) -> HandoffSegment? {
+        try? check(file, window: window).get()
     }
 
     /// `read`, with why a file isn't importable, in a line (for a tooltip, never an alert).
-    public static func check(_ file: URL) -> Result<HandoffSegment, HandoffReadError> {
-        let stamp = Self.stamp(file)
+    public static func check(_ file: URL, window: Int? = nil) -> Result<HandoffSegment, HandoffReadError> {
+        let stamp = Self.stamp(file) + "/\(window ?? 0)"
         if let cached = lock.withLock({ last }), cached.file == file, cached.stamp == stamp { return .success(cached.segment) }
         guard let identity = identify(file), let format = format(identity.format) else {
             return .failure(HandoffReadError("Not a chat format Kore knows"))
         }
         let segment: HandoffSegment
         do {
-            segment = try format.read(file, identity: identity)
+            segment = try format.read(file, identity: identity, window: window)
         } catch let error as HandoffReadError {
             return .failure(error)
         } catch {

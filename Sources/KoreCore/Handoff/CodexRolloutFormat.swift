@@ -28,34 +28,100 @@ public struct CodexRolloutFormat: HandoffFormat {
         return HandoffIdentity(format: id, product: product, file: head.file, sessionId: thread, cwd: meta["cwd"]?.string)
     }
 
-    public func read(_ file: URL, identity: HandoffIdentity) throws -> HandoffSegment {
-        let data = try Data(contentsOf: file, options: .alwaysMapped)
-        var reader = Reader(folder: URL(fileURLWithPath: identity.cwd ?? file.deletingLastPathComponent().path))
+    /// Read from the file's end, newest turn first, only as far as the target's budget takes
+    /// turns (a rollout can be well over a GB): lines are cut into turns at each turn's start
+    /// (`task_started`, or `turn_context` in rollouts without it), and each turn is read by
+    /// itself, oldest line first. The turns before the last one read are counted with a byte scan
+    /// when the file is small enough, else left uncounted. With no window, the whole file.
+    public func read(_ file: URL, identity: HandoffIdentity, window: Int?) throws -> HandoffSegment {
+        guard var tail = TailLines(file: file) else { throw HandoffReadError("Couldn't read the file") }
+        let folder = URL(fileURLWithPath: identity.cwd ?? file.deletingLastPathComponent().path)
         // A thread Kore made by an import holds that import's items before its first turn starts
         // (after the context Codex writes as the thread starts): a translation, not Codex's own.
-        reader.injected = HandoffRecords.record(target: identity.sessionId) != nil
-        let lines = data.jsonLines()
-        for (index, line) in lines.enumerated() {
-            // Only the records the history needs are parsed; the rest (token counts, display
-            // events that repeat the items) are skipped by their type, near each line's start.
+        // Its turns are cut at `task_started` only, and what comes before the first is left out.
+        let made = HandoffRecords.record(target: identity.sessionId) != nil
+        var budget = window.map(HandoffBudget.init(window:))
+        var segment = HandoffSegment(source: id, product: product, sessionId: identity.sessionId)
+        segment.cwd = identity.cwd
+        var newestFirst: [HandoffTurn] = []
+        /// One turn's records, newest first, until its start.
+        var lines: [JSONValue] = []
+        var started = 0
+        var cutAtContext = false
+        var full = false
+        func take(_ records: [JSONValue]) {
+            var reader = Reader(folder: folder)
+            for record in records.reversed() { reader.read(record) }
+            reader.close()
+            // The newest turn that says each one.
+            segment.model = segment.model ?? reader.model
+            segment.mode = segment.mode ?? reader.mode
+            segment.effort = segment.effort ?? reader.effort
+            segment.unknown += reader.unknown
+            for turn in reader.turns.reversed() where !full {
+                newestFirst.append(turn)
+                if budget?.offer(turn) == false { full = true }
+            }
+        }
+        while !full, let (_, line) = tail.next() {
             let head = line.prefix(240)
             guard Self.wanted.contains(where: { head.range(of: $0) != nil }) else { continue }
-            guard let record = try? JSONValue.parse(line) else {
-                // A last line still being written isn't damage.
-                if index == lines.count - 1, data.last != 0x0A { break }
-                throw HandoffReadError("Line \(index + 1) isn't valid JSON")
+            // What the turns still to come can't carry isn't parsed: outputs once they can't be
+            // full, tool calls once they can only be bare.
+            if let level = budget?.level, level != .full, Self.outputs.contains(where: { head.range(of: $0) != nil }) { continue }
+            if budget?.level == .bare, Self.calls.contains(where: { head.range(of: $0) != nil }) { continue }
+            guard let record = try? JSONValue.parse(line) else { throw HandoffReadError("A line isn't valid JSON") }
+            lines.append(record)
+            let start = record["type"]?.string == "event_msg" && record["payload"]?["type"]?.string == "task_started"
+            if start { started += 1 }
+            let context = !made && record["type"]?.string == "turn_context"
+            // A turn cut at its context still has its start just before it: counted as read.
+            if context { started += 1 } else if start, cutAtContext { started -= 1 }
+            cutAtContext = context
+            if start || context {
+                take(lines)
+                lines = []
             }
-            reader.read(record)
         }
-        reader.close()
-        var segment = HandoffSegment(source: id, product: product, sessionId: identity.sessionId, model: reader.model, turns: reader.turns)
-        segment.unknown = reader.unknown
-        segment.cwd = identity.cwd
-        segment.mode = reader.mode
-        segment.effort = reader.effort
+        if !full, !made { take(lines) }
+        segment.turns = newestFirst.reversed()
+        if !full {
+            segment.earlier = 0
+        } else if let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= Self.countLimit {
+            // Older rollouts mark no turn starts: their turn contexts count instead.
+            let starts = Self.count(Self.taskStarted, in: file)
+            segment.earlier = max(0, (starts > 0 ? starts : Self.count(Self.turnContext, in: file)) - started)
+        } else {
+            segment.earlier = nil
+        }
         return segment
     }
 
+    /// Files up to this size have their turns counted (a byte scan, no parsing); a longer one's
+    /// older turns are "earlier turns", uncounted.
+    static let countLimit = 256 << 20
+    private static let taskStarted = Data(#""type":"task_started""#.utf8)
+    private static let turnContext = Data(#""type":"turn_context""#.utf8)
+
+    /// How many times `needle` occurs in the file, scanned in place.
+    static func count(_ needle: Data, in file: URL) -> Int {
+        guard let data = try? Data(contentsOf: file, options: .alwaysMapped) else { return 0 }
+        return data.withUnsafeBytes { bytes -> Int in
+            guard let base = bytes.baseAddress else { return 0 }
+            var found = 0
+            var at = 0
+            needle.withUnsafeBytes { pattern in
+                while at < bytes.count, let hit = memmem(base + at, bytes.count - at, pattern.baseAddress, pattern.count) {
+                    found += 1
+                    at = base.distance(to: UnsafeRawPointer(hit)) + pattern.count
+                }
+            }
+            return found
+        }
+    }
+
+    private static let outputs = [#""type":"function_call_output""#, #""type":"custom_tool_call_output""#].map { Data($0.utf8) }
+    private static let calls = [#""type":"function_call""#, #""type":"custom_tool_call""#, #""type":"web_search_call""#].map { Data($0.utf8) }
     private static let wanted = [#""type":"response_item""#, #""type":"turn_context""#, #""type":"task_started""#, #""type":"turn_aborted""#, #""type":"error""#]
         .map { Data($0.utf8) }
 
@@ -77,8 +143,6 @@ public struct CodexRolloutFormat: HandoffFormat {
         var mode: String?
         var effort: String?
         var unknown = 0
-        /// Items before the first turn starts are skipped.
-        var injected = false
 
         init(folder: URL) { self.folder = folder }
 
@@ -93,13 +157,12 @@ public struct CodexRolloutFormat: HandoffFormat {
                 if let settings = CodexTurnSettings(payload) { mode = settings.plan ? "plan" : settings.permissions.rawValue }
             case "event_msg":
                 switch payload["type"]?.string {
-                case "task_started": injected = false
                 case "turn_aborted": current?.end = .interrupted
                 case "error": current?.end = .failed(CodexError.readable(payload["message"]?.string ?? "the turn failed"))
                 default: break
                 }
             case "response_item":
-                if !injected { item(payload) }
+                item(payload)
             default:
                 break
             }
@@ -224,10 +287,10 @@ public struct CodexRolloutFormat: HandoffFormat {
                 if let command = CodexRolloutFormat.execCommand(input) {
                     add(HandoffStep(kind: .command, tool: "exec_command", title: command, detail: "command: \(command)"), call: call)
                 } else {
-                    add(HandoffStep(kind: .other, tool: "exec", title: "a script", detail: input), call: call)
+                    add(HandoffStep(kind: .other, tool: "exec", title: "a script", detail: HandoffRender.cut(input)), call: call)
                 }
             default:
-                add(HandoffStep(kind: .other, tool: name, title: name, detail: input), call: call)
+                add(HandoffStep(kind: .other, tool: name, title: name, detail: HandoffRender.cut(input)), call: call)
             }
         }
 
@@ -236,7 +299,7 @@ public struct CodexRolloutFormat: HandoffFormat {
             var indexes: [Int] = []
             for file in CodexRolloutFormat.patchFiles(text) {
                 var step = HandoffStep(kind: file.kind, tool: "apply_patch", title: HandoffPaths.relative(file.path, in: folder))
-                step.detail = "file: \(step.title)\n" + file.body
+                step.detail = HandoffRender.cut("file: \(step.title)\n" + file.body)
                 step.added = file.added
                 step.removed = file.removed
                 add(step)
@@ -252,13 +315,14 @@ public struct CodexRolloutFormat: HandoffFormat {
             if let indexes = patches.removeValue(forKey: call) {
                 let failed = !text.contains("Success") && !text.isEmpty
                 for index in indexes where index < (current?.steps.count ?? 0) {
-                    current?.steps[index].output = failed ? text : "ok"
+                    current?.steps[index].output = failed ? HandoffRender.cut(text) : "ok"
                     if failed { current?.steps[index].status = .error }
                 }
                 return
             }
             guard let index = pending.removeValue(forKey: call), index < (current?.steps.count ?? 0) else { return }
-            current?.steps[index].output = text
+            // Only its start and end are ever carried: a long output isn't held whole.
+            current?.steps[index].output = HandoffRender.cut(text)
             if let exit = Self.exitCode(text) {
                 current?.steps[index].exitCode = exit
                 if exit != 0 { current?.steps[index].status = .error }
@@ -273,7 +337,7 @@ public struct CodexRolloutFormat: HandoffFormat {
             let name = author.split(separator: "/").last.map(String.init) ?? author
             let answer = text.range(of: "Payload:\n").map { String(text[$0.upperBound...]) } ?? ""
             if let index = current?.steps.lastIndex(where: { $0.kind == .agent && $0.title == "Agent: \(name)" }) {
-                current?.steps[index].output = answer
+                current?.steps[index].output = HandoffRender.cut(answer)
             } else {
                 add(HandoffStep(kind: .agent, tool: "spawn_agent", title: "Agent: \(name)", output: answer))
             }

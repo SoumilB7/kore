@@ -196,9 +196,10 @@ final class ImportState {
     /// "23 turns", "40 of 104 turns", "Summary + 18 turns".
     static func count(_ preview: HandoffPreview) -> String {
         let turns = { (n: Int) in n == 1 ? "1 turn" : "\(n) turns" }
-        if preview.summary { return "Summary + " + turns(preview.carried) }
-        if preview.notCarried > 0 { return "\(preview.carried) of \(turns(preview.turns))" }
-        return turns(preview.turns)
+        if preview.summary { return preview.carried == 0 ? "Summary only" : "Summary + " + turns(preview.carried) }
+        guard let total = preview.turns else { return "\(preview.carried) recent " + (preview.carried == 1 ? "turn" : "turns") }
+        if preview.notCarried > 0 { return "\(preview.carried) of \(turns(total))" }
+        return turns(total)
     }
 
     /// "~84k tokens".
@@ -213,7 +214,11 @@ final class ImportState {
         if preview.full > 0 { parts.append("\(preview.full) in full") }
         if preview.condensed > 0 { parts.append("\(preview.condensed) condensed") }
         if preview.bare > 0 { parts.append("\(preview.bare) as prompt and reply") }
-        if preview.notCarried > 0 { parts.append("\(preview.notCarried) earlier not carried" + span(preview.notCarriedFrom, preview.notCarriedTo)) }
+        if preview.turns == nil {
+            parts.append("earlier turns not carried")
+        } else if preview.notCarried > 0 {
+            parts.append("\(preview.notCarried) earlier not carried" + span(preview.notCarriedFrom, preview.notCarriedTo))
+        }
         return parts.joined(separator: " · ")
     }
 

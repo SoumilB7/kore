@@ -40,7 +40,12 @@ final class ImportedHistory {
     func cutMark(product: String) -> (text: String, help: String)? {
         let carried = record.carried
         guard carried.notCarried > 0, !carried.summary else { return nil }
-        var parts = ["\(carried.notCarried) earlier \(carried.notCarried == 1 ? "turn" : "turns") not carried" + ImportState.span(carried.notCarriedFrom, carried.notCarriedTo)]
+        var parts = [
+            carried.notCarriedKnown == false
+                ? "Earlier turns not carried"
+                : "\(carried.notCarried) earlier \(carried.notCarried == 1 ? "turn" : "turns") not carried"
+                    + ImportState.span(carried.notCarriedFrom, carried.notCarriedTo)
+        ]
         if carried.condensed > 0 { parts.append("\(carried.condensed) condensed") }
         if carried.bare > 0 { parts.append("\(carried.bare) as prompt and reply") }
         return ("Carried to \(product) from here", parts.joined(separator: " · "))

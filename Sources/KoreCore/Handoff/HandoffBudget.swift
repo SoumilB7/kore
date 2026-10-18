@@ -18,8 +18,10 @@ public struct HandoffPlan: Sendable, Codable {
     public let summary: String?
     /// Oldest first.
     public let entries: [Entry]
-    /// Turns before the carried ones, and the times they span.
+    /// Turns before the carried ones, and the times they span. `notCarriedKnown`: false when a
+    /// long source's older turns weren't counted (there are more than `notCarried`).
     public let notCarried: Int
+    public var notCarriedKnown = true
     public let notCarriedFrom: Date?
     public let notCarriedTo: Date?
     /// Source items that couldn't be carried (types the reader doesn't know).
@@ -57,7 +59,7 @@ public struct HandoffBudget: Sendable {
 
     public let tokens: Int
     private(set) var used: Int
-    private var level = 0
+    private var step = 0
     private var taken: [HandoffPlan.Entry] = []
     private var stopped = false
     private var summary: String?
@@ -78,14 +80,14 @@ public struct HandoffBudget: Sendable {
     @discardableResult
     public mutating func offer(_ turn: HandoffTurn) -> Bool {
         guard !stopped else { return false }
-        while level < Self.limits.count {
-            let (kind, share) = Self.limits[level]
+        while step < Self.limits.count {
+            let (kind, share) = Self.limits[step]
             let cost = Self.cost(HandoffRender.turn(turn, kind))
             if used + cost <= Int(Double(tokens) * share) {
                 take(turn, kind, cost)
                 return true
             }
-            level += 1
+            step += 1
         }
         if taken.isEmpty {
             take(turn, .bare, Self.cost(HandoffRender.turn(turn, .bare)))
@@ -98,6 +100,10 @@ public struct HandoffBudget: Sendable {
     /// Whether another turn is still worth reading.
     public var isFull: Bool { stopped }
 
+    /// The most an older turn can now be carried at: levels only step down going back, so a
+    /// reader can skip what that level leaves out (outputs past Full, steps past Condensed).
+    public var level: HandoffPlan.Level { Self.limits[min(step, Self.limits.count - 1)].0 }
+
     private mutating func take(_ turn: HandoffTurn, _ level: HandoffPlan.Level, _ cost: Int) {
         taken.append(HandoffPlan.Entry(turn: turn, level: level))
         used += cost
@@ -106,10 +112,13 @@ public struct HandoffBudget: Sendable {
     /// The plan, once every turn wanted has been offered. `notCarried`: the turns not taken (or
     /// never read), and the times they span.
     public func plan(_ segment: HandoffSegment, notCarried: Int, from: Date? = nil, to: Date? = nil) -> HandoffPlan {
-        HandoffPlan(
+        var plan = HandoffPlan(
             source: segment.source, product: segment.product, sessionId: segment.sessionId, model: segment.model,
-            summary: summary, entries: taken.reversed(), notCarried: notCarried, notCarriedFrom: from, notCarriedTo: to,
-            unknown: segment.unknown, cutoff: segment.lastItem ?? taken.first?.turn.lastItem, tokens: used, budget: tokens)
+            summary: summary, entries: taken.reversed(), notCarried: notCarried + (segment.earlier ?? 0), notCarriedFrom: from,
+            notCarriedTo: to, unknown: segment.unknown, cutoff: segment.lastItem ?? taken.first?.turn.lastItem, tokens: used,
+            budget: tokens)
+        plan.notCarriedKnown = segment.earlier != nil
+        return plan
     }
 
     /// A whole segment fitted into a window at once.
@@ -243,7 +252,9 @@ public enum HandoffRender {
         if plan.count(.condensed) + plan.count(.bare) > 0 {
             text += " Older turns are shortened: their tool calls are listed one line each, or left out."
         }
-        if plan.notCarried > 0 {
+        if !plan.notCarriedKnown {
+            text += " Earlier turns are not carried."
+        } else if plan.notCarried > 0 {
             let span = [plan.notCarriedFrom, plan.notCarriedTo].compactMap { $0.map(day) }
             let when = span.count == 2 ? (span[0] == span[1] ? " from \(span[0])" : " from \(span[0]) to \(span[1])") : ""
             text += " \(plan.notCarried) earlier \(plan.notCarried == 1 ? "turn" : "turns")\(when) \(plan.notCarried == 1 ? "is" : "are") not carried."

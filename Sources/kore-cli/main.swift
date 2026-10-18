@@ -5,6 +5,8 @@
 //   swift run kore-cli --archive|--unarchive ID [--cwd DIR]   archive a Codex thread (Codex's own archive)
 //   swift run kore-cli [--codex] --import FILE [--cwd DIR] [--model M]   import a chat's history file into a new
 //                                    chat of this CLI, print what was carried, then continue it
+//   swift run kore-cli [--codex] --preview FILE [--model M]   what an import would carry, its time and peak
+//                                    memory; nothing is written
 //
 // Claude modes: default, acceptEdits, plan, auto, dontAsk, bypassPermissions
 // Codex modes:  readOnly, askForApproval, approveForMe, fullAccess (+ /plan, /default)
@@ -18,6 +20,7 @@ import KoreCore
 var codex = false, debug = false, history = false
 var cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 var model: String?, effort: String?, mode: String?, resume: String?, archive: (id: String, on: Bool)?, importFile: String?
+var previewFile: String?
 
 var argv = CommandLine.arguments.dropFirst().makeIterator()
 while let arg = argv.next() {
@@ -33,6 +36,7 @@ while let arg = argv.next() {
     case "--archive": archive = (argv.next() ?? "", true)
     case "--unarchive": archive = (argv.next() ?? "", false)
     case "--import": importFile = argv.next()
+    case "--preview": previewFile = argv.next()
     default: fail("unknown argument \(arg)")
     }
 }
@@ -57,6 +61,23 @@ if history {
     for session in (ClaudeHistory.sessions(in: cwd) + codexThreads).sorted(by: { $0.updated > $1.updated }) {
         out("\(session.agent.rawValue.padding(toLength: 6, withPad: " ", startingAt: 0)) \(session.updated.formatted(date: .abbreviated, time: .shortened))  \(session.title)\(session.archived ? "  [archived]" : "")  \(dim)\(session.id)\(reset)\n")
     }
+    exit(0)
+}
+
+if let previewFile {
+    guard let writer = HandoffWriters.writer(codex ? "codex" : "claude") else { fail("no writer") }
+    let began = ContinuousClock.now
+    let result = HandoffImport.inspect(URL(fileURLWithPath: previewFile), for: writer, model: model)
+    let took = ContinuousClock.now - began
+    var usage = rusage()
+    getrusage(RUSAGE_SELF, &usage)
+    switch result {
+    case .success(let p):
+        out("\(p.product) · \(p.turns.map(String.init) ?? "?") turns · \(p.full) full, \(p.condensed) condensed, \(p.bare) bare, \(p.notCarried)\(p.turns == nil ? "+" : "") not carried\(p.summary ? ", summary" : "") · ~\(p.tokens) of \(p.budget) tokens\n")
+    case .failure(let why):
+        out("not importable: \(why)\n")
+    }
+    out("preview \(took) · peak memory \(usage.ru_maxrss / (1 << 20)) MB\n")
     exit(0)
 }
 

@@ -31,7 +31,9 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
         return HandoffIdentity(format: id, product: product, file: head.file, sessionId: session, cwd: entry["cwd"]?.string, title: title)
     }
 
-    public func read(_ file: URL, identity: HandoffIdentity) throws -> HandoffSegment {
+    /// The page back to the last compaction, read from the file's end for a long transcript
+    /// (`ClaudeTranscript.latest`); the window isn't needed to stop it.
+    public func read(_ file: URL, identity: HandoffIdentity, window: Int?) throws -> HandoffSegment {
         let transcript = ClaudeTranscript(file: file)
         let page = transcript.latest()?.page ?? transcript.page()
         guard transcript.malformed == 0 else {
@@ -165,7 +167,8 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
             guard let id = block["tool_use_id"]?.string, let index = pending.removeValue(forKey: id), var step = current?.steps[index]
             else { return }
             let content = block["content"]
-            step.output = content?.string ?? Self.texts(content).joined(separator: "\n")
+            // Only its start and end are ever carried: a long output isn't held whole.
+            step.output = HandoffRender.cut(content?.string ?? Self.texts(content).joined(separator: "\n"))
             step.images = (content?.array ?? []).compactMap { $0["type"]?.string == "image" ? Self.image($0) : nil }
             if block["is_error"]?.bool == true { step.status = .error }
             // Edits carry their exact hunks: the diff replaces what the call's input said.

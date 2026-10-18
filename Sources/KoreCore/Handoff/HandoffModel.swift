@@ -118,6 +118,9 @@ public struct HandoffSegment: Sendable, Codable {
     public var turns: [HandoffTurn]
     /// Items of types this reader doesn't know (a newer CLI's), counted for the note.
     public var unknown = 0
+    /// Turns before `turns` that weren't read (a long file read from its end only as far as the
+    /// budget needed); nil when there are some but they weren't counted.
+    public var earlier: Int? = 0
 
     public init(
         source: String, product: String, sessionId: String, model: String? = nil, summary: String? = nil, turns: [HandoffTurn] = []

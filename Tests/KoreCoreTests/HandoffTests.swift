@@ -61,9 +61,10 @@ struct HandoffTests {
     private func rollout(_ items: [[String: Any]]) -> [String] {
         [json(["timestamp": "2026-10-20T09:00:00.000Z", "type": "session_meta", "payload": ["id": "thread-1", "cwd": scratch.path]])]
             + items.enumerated().map { index, item in
-                var line = item
-                line["timestamp"] = String(format: "2026-10-20T09:00:%02d.000Z", index + 1)
-                return json(line)
+                // As Codex writes them: time and type first, then the payload.
+                let time = String(format: "2026-10-20T09:%02d:%02d.000Z", (index + 1) / 60, (index + 1) % 60)
+                let payload = json(["p": item["payload"] ?? [:]]).dropFirst(5).dropLast()
+                return #"{"timestamp":"\#(time)","type":"\#(item["type"] as? String ?? "")","payload":\#(payload)}"#
             }
     }
 
@@ -292,5 +293,25 @@ struct HandoffTests {
         try HandoffRecords.save(record, history: [])
         let segment = try #require(HandoffFormats.read(try file("made-thread.jsonl", lines)))
         #expect(segment.turns.map(\.prompt) == ["What did we find?"])
+    }
+
+    @Test func aLongRolloutIsReadFromItsEndOnlyAsFarAsTheBudget() throws {
+        var items: [[String: Any]] = []
+        for n in 1...30 {
+            items.append(["type": "event_msg", "payload": ["type": "task_started", "turn_id": "turn-\(n)"]])
+            items.append(["type": "turn_context", "payload": ["turn_id": "turn-\(n)", "model": "fixture-model"]])
+            items.append(message("user", "Prompt \(n) " + String(repeating: "x", count: 4000)))
+            items.append(message("assistant", "Reply \(n)"))
+        }
+        let rollout = try file("long.jsonl", rollout(items))
+        let whole = try #require(HandoffFormats.read(rollout))
+        #expect(whole.turns.count == 30 && whole.earlier == 0)
+        let read = try #require(HandoffFormats.read(rollout, window: 20_000))
+        #expect(read.turns.count < 30)
+        #expect(read.turns.last?.reply == "Reply 30")
+        // The turns not read are counted, and the plan says so.
+        #expect(read.turns.count + (read.earlier ?? -1) == 30)
+        let plan = HandoffBudget.plan(read, window: 20_000)
+        #expect(plan.notCarriedKnown && plan.carried + plan.notCarried == 30)
     }
 }

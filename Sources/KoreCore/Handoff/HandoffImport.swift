@@ -15,8 +15,9 @@ public struct HandoffPreview: Sendable, Equatable {
     public let product: String
     public let sessionId: String
     public let title: String
-    /// The source's turns, and what's carried of them at each level.
-    public let turns: Int
+    /// The source's turns (nil when a long file's older part wasn't counted), and what's
+    /// carried of them at each level.
+    public let turns: Int?
     public let full: Int
     public let condensed: Int
     public let bare: Int
@@ -44,7 +45,7 @@ public struct HandoffPreview: Sendable, Equatable {
         product = segment.product
         sessionId = segment.sessionId
         title = segment.shownTitle
-        turns = segment.turns.count
+        turns = segment.earlier.map { segment.turns.count + $0 }
         full = plan.count(.full)
         condensed = plan.count(.condensed)
         bare = plan.count(.bare)
@@ -71,8 +72,9 @@ public enum HandoffImport {
     public static func plan(_ file: URL, for writer: any HandoffWriter, model: String?, window: Int? = nil)
         -> (segment: HandoffSegment, plan: HandoffPlan)?
     {
-        guard let segment = HandoffFormats.read(file) else { return nil }
-        let plan = HandoffBudget.plan(segment, window: window ?? writer.window(model: model))
+        let window = window ?? writer.window(model: model)
+        guard let segment = HandoffFormats.read(file, window: window) else { return nil }
+        let plan = HandoffBudget.plan(segment, window: window)
         return plan.isEmpty ? nil : (segment, plan)
     }
 
@@ -84,8 +86,9 @@ public enum HandoffImport {
     public static func inspect(_ file: URL, for writer: any HandoffWriter, model: String?, window: Int? = nil)
         -> Result<HandoffPreview, HandoffReadError>
     {
-        HandoffFormats.check(file).map { segment in
-            HandoffPreview(segment, HandoffBudget.plan(segment, window: window ?? writer.window(model: model)), file: file)
+        let window = window ?? writer.window(model: model)
+        return HandoffFormats.check(file, window: window).map { segment in
+            HandoffPreview(segment, HandoffBudget.plan(segment, window: window), file: file)
         }
     }
 
