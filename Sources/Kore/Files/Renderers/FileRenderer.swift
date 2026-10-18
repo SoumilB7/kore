@@ -79,7 +79,9 @@ struct RendererContext {
 
 /// The renderers, in priority order: the first match owns the file.
 @MainActor enum Renderers {
-    static let all: [any FileRenderer.Type] = []
+    static let all: [any FileRenderer.Type] = [
+        MarkdownRenderer.self,
+    ]
 
     static func renderer(for file: FileInfo) -> (any FileRenderer.Type)? {
         all.first { $0.matches(file) }

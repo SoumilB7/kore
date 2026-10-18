@@ -104,15 +104,10 @@ struct PreviewSourceSwitch: View {
         .clipShape(RoundedRectangle(cornerRadius: Radius.chip))
         .overlay(RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.border, lineWidth: Stroke.hairline))
         .fixedSize()
-        .background {
-            // ⇧⌘V flips it, as VS Code's Markdown preview key does.
-            Button("") { rendering.showsRaw.toggle() }
-                .keyboardShortcut("v", modifiers: [.command, .shift])
-                .opacity(0)
-                .allowsHitTesting(false)
-        }
     }
 
+    /// The segment that isn't selected carries ⇧⌘V (VS Code's Markdown preview key), so the
+    /// key always flips it.
     private func segment(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         SwitchSegment(title: title, selected: selected, action: action)
             .help(selected ? title : (title == "Preview" ? "Show Preview (⇧⌘V)" : "Show Source (⇧⌘V)"))
@@ -136,6 +131,8 @@ private struct SwitchSegment: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Only the other segment takes the key, so it always flips.
+        .keyboardShortcut(selected ? nil : KeyboardShortcut("v", modifiers: [.command, .shift]))
         .onHover { hovered.value = $0 }
     }
 }
