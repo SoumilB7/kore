@@ -84,6 +84,8 @@ struct RendererContext {
         DelimitedRenderer.self,
         JSONRenderer.self,
         NotebookRenderer.self,
+        HTMLRenderer.self,
+        SVGRenderer.self,
     ]
 
     static func renderer(for file: FileInfo) -> (any FileRenderer.Type)? {

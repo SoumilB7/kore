@@ -157,11 +157,12 @@ struct RendererFacts: View {
 /// source." (phase 09's notice bar, with a warning point).
 struct RendererNotice: View {
     let message: String
+    var point = Theme.warning
     var action: (title: String, run: () -> Void)?
 
     var body: some View {
         HStack(spacing: Space.md) {
-            Circle().fill(Theme.warning).frame(width: Size.statusPoint, height: Size.statusPoint)
+            Circle().fill(point).frame(width: Size.statusPoint, height: Size.statusPoint)
             Text(message).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
             Spacer(minLength: Space.md)
             if let action {
