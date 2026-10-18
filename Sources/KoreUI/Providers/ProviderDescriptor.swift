@@ -24,6 +24,8 @@ struct ProviderDescriptor: Identifiable, Sendable {
     /// The folder's chats; nil when the CLI couldn't be asked.
     let sessions: @Sendable (_ folder: URL) async -> [SessionSummary]?
     let setArchived: @Sendable (_ id: String, _ archived: Bool, _ folder: URL) async -> Void
+    /// A chat's own history file (what an import of it reads); nil when there's none.
+    let historyFile: @Sendable (_ id: String, _ folder: URL) async -> URL?
     /// What the usage popup says of this CLI without a reading.
     let usage: UsageWording
     /// Its login: the sign-in methods, the status, the file it's kept in.

@@ -43,6 +43,10 @@ package final class Chat: Identifiable {
     @ObservationIgnored private let fork: ForkPoint?
     /// The chat this one was forked from, for the line after its history.
     @ObservationIgnored private var forkedFrom: String?
+    /// An imported chat's carried part (`ImportedHistory`), shown above its own history, and
+    /// its events once read.
+    @ObservationIgnored let imported: ImportedHistory?
+    @ObservationIgnored private var importedEvents: [ChatEvent]?
     /// A past session's history hasn't been shown yet; messages sent meanwhile wait in `held`,
     /// so they come after it rather than above it.
     @ObservationIgnored private var awaitingHistory: Bool
@@ -83,13 +87,16 @@ package final class Chat: Identifiable {
     /// own until then. `forkedFrom` names the original chat.
     init(
         provider: ProviderDescriptor, folder: URL, resume session: SessionSummary? = nil, fork: ForkPoint? = nil,
-        forkedFrom: String? = nil, modeMemory: ModeMemory = .shared, compactMemory: AutoCompactMemory = .shared
+        forkedFrom: String? = nil, imported: ImportedHistory? = nil, modeMemory: ModeMemory = .shared,
+        compactMemory: AutoCompactMemory = .shared
     ) {
         self.provider = provider
         self.folder = folder
         resume = session
         self.fork = fork
         self.forkedFrom = forkedFrom
+        // A reopened chat Kore made by an import has its record.
+        self.imported = imported ?? (fork == nil ? session.flatMap { ImportedHistory.of(session: $0.id) } : nil)
         awaitingHistory = session != nil
         controls = ControlsStore(provider: provider, memory: modeMemory)
         self.compactMemory = compactMemory
@@ -141,6 +148,7 @@ package final class Chat: Identifiable {
             return
         }
         let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
+        if case .replayed = event { showImported(in: transcript) }
         transcript.apply(event)
         noteSinceReplay(event)
         if case .replayed = event, let original = forkedFrom {
@@ -190,6 +198,7 @@ package final class Chat: Identifiable {
         let store = TranscriptStore()
         store.providerName = transcript.providerName
         store.provider = transcript.provider
+        showImported(in: store)
         store.apply(.replayed(events))
         for event in sinceReplay ?? [] { store.apply(event) }
         transcript = store
@@ -202,6 +211,13 @@ package final class Chat: Identifiable {
         context.apply(replay)
     }
 
+    /// An imported chat's carried part and its divider, before its own history.
+    private func showImported(in store: TranscriptStore) {
+        guard let imported, let events = importedEvents else { return }
+        store.apply(.replayed(events))
+        store.continued(imported.divider(product: provider.usage.product))
+    }
+
     /// The user's messages that waited for the history.
     private func showHeld() {
         awaitingHistory = false
@@ -212,6 +228,11 @@ package final class Chat: Identifiable {
 
     private static func isReplay(_ event: ChatEvent) -> Bool {
         if case .replayed = event { return true }
+        return false
+    }
+
+    private static func isCorrection(_ event: ChatEvent) -> Bool {
+        if case .historyReplaced = event { return true }
         return false
     }
 
@@ -250,13 +271,23 @@ package final class Chat: Identifiable {
         } else {
             make = FeedBackend.enabled ? FeedBackend.init : provider.makeBackend
         }
-        let backend = make(
-            BackendOptions(
-                folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
-                model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name))
+        var options = BackendOptions(
+            folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
+            model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
+        if let imported {
+            options.hiddenRows = Set(imported.record.written)
+            options.instructions = imported.record.instructions.map { URL(fileURLWithPath: $0) }
+        }
+        let backend = make(options)
         self.backend = backend
         pump = Task {
-            for await event in backend.events { self.dispatch(event) }
+            for await event in backend.events {
+                // An imported chat's carried part is read before its own history shows.
+                if let imported, importedEvents == nil, Self.isReplay(event) || Self.isCorrection(event) {
+                    importedEvents = await imported.events()
+                }
+                self.dispatch(event)
+            }
         }
         return backend
     }

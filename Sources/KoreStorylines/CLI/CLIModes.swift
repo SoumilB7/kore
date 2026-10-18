@@ -51,6 +51,7 @@ package final class CLIModes {
         UsagePaths.host.value = UsagePaths(
             support: run.appendingPathComponent("usage"), caches: run.appendingPathComponent("usage-index"),
             claudeProjects: claudeStore.appendingPathComponent("projects"), codexSessions: codexHome.appendingPathComponent("sessions"))
+        HandoffRecords.root.value = run.appendingPathComponent("handoffs")
         switch mode {
         case .scripted:
             ScriptedWorld.shared.install()
@@ -123,6 +124,8 @@ package final class CLIModes {
         CLIExecutable.standIns.value = [:]
         TurnChangeLog.root.value = nil
         UsagePaths.host.value = nil
+        HandoffRecords.root.value = nil
+        HandoffWriters.standIns.value = [:]
     }
 }
 

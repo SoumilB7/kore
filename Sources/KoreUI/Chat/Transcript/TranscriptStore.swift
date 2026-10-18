@@ -569,6 +569,12 @@ final class TranscriptStore {
         append(Entry(kind: .divider, text: "Forked from \u{201C}\(title)\u{201D}", source: Self.forkSource))
     }
 
+    /// After an imported chat's carried part: "Continued in Codex · gpt-6-luna · 24 Oct". The
+    /// fork's line, so it reads and behaves as one.
+    func continued(_ text: String) {
+        append(Entry(kind: .divider, text: text, source: Self.forkSource))
+    }
+
     static let forkSource = "fork"
     /// The turn id of a compaction's own live row.
     static let compactionRow = "compaction"

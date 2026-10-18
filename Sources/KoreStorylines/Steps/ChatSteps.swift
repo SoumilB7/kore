@@ -199,3 +199,37 @@ extension StoryContext {
         return backend
     }
 }
+
+/// Imports a history file into the active chat (the picker's import, without its UI): writes
+/// `file` (its lines) where the storyline keeps its outputs, outside the folder, and waits for
+/// the tab to carry on in the imported chat. `refused`: the import is expected to be refused
+/// so, and the chat to stay as it was.
+package struct ImportHistory: Step {
+    let name: String
+    let lines: [String]
+    let refused: ImportRefusal?
+    package var label: String { "Import \(name)" + (refused == nil ? "" : ", refused") }
+
+    package init(_ name: String, lines: [String], refused: ImportRefusal? = nil) {
+        self.name = name
+        self.lines = lines
+        self.refused = refused
+    }
+
+    package func run(_ story: StoryContext) async throws {
+        guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the folder's workspace") }
+        let chat = try story.activeChat()
+        let file = story.outputs.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: story.outputs, withIntermediateDirectories: true)
+        try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let outcome = await workspace.importChat(.file(file), into: chat)
+        guard outcome == refused else {
+            throw StoryFailure.other("import gave \(outcome.map { "\($0)" } ?? "an imported chat"), wanted \(refused.map { "\($0)" } ?? "an imported chat")")
+        }
+        if refused != nil { return }
+        let imported = try await story.wait("the imported chat") { story.app.chat.flatMap { $0 === chat ? nil : $0 } }
+        try await story.until("its history") {
+            story.chatEvents(imported).contains { if case .replayed = $0 { true } else { false } }
+        }
+    }
+}

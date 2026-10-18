@@ -30,6 +30,10 @@ public final class ClaudeTranscript: @unchecked Sendable {
     /// How much of the file the pages so far were read from: what's written after it is new.
     public var length: UInt64 { lock.withLock { indexed } }
 
+    /// Entry lines indexed so far that weren't JSON at all (a damaged or foreign file).
+    public var malformed: Int { lock.withLock { broken } }
+    private var broken = 0
+
     /// The current branch back to its last compaction (`before` nil), or `userTurns` user turns
     /// ending at `before`, crossing compactions (see `ClaudeHistory.page`).
     public func page(before: String? = nil, userTurns: Int? = nil) -> ClaudeHistory.Page {
@@ -152,9 +156,11 @@ public final class ClaudeTranscript: @unchecked Sendable {
                 // are skipped unparsed.
                 if length > 0, memmem(buffer + position, length, needle, needle.count) != nil {
                     let line = Data(bytesNoCopy: buffer + position, count: length, deallocator: .none)
-                    if let link = try? decoder.decode(ClaudeHistory.Link.self, from: line) {
-                        links.add(link, span: (offset + UInt64(position), length))
-                    }
+                    do {
+                        links.add(try decoder.decode(ClaudeHistory.Link.self, from: line), span: (offset + UInt64(position), length))
+                    } catch DecodingError.dataCorrupted {
+                        broken += 1
+                    } catch {}
                 }
                 position = end + 1
             }

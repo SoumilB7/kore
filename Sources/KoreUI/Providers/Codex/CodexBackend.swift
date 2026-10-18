@@ -74,13 +74,16 @@ final class CodexBackend: ChatBackend {
         let fresh = unwritten && forkAt == nil && !CodexSession.rolloutExists(rolloutPath)
         let resume = fresh ? nil : sessionId
         let kind = fresh ? "fresh" : launches > 1 ? "again" : forkAt != nil ? "fork" : sessionId != nil ? "resume" : "new"
+        // An imported chat's other-agent instructions (a CLAUDE.md), given each time it opens.
+        var instructions: String?
+        if let file = options.instructions { instructions = await Task.detached { HandoffWriters.instructionText(file) }.value }
         let session: CodexSession
         do {
             session = try await CodexSession.launch(
                 .init(
                     cwd: options.folder, model: options.model, effort: options.effort,
                     permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
-                    plan: options.planMode, resume: resume, forkAt: forkAt))
+                    plan: options.planMode, resume: resume, forkAt: forkAt, developerInstructions: instructions))
         } catch {
             log.startFailed("codex", chat: sessionId, launch: kind)
             throw error

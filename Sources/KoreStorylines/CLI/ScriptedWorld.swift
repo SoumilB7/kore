@@ -21,6 +21,8 @@ package final class ScriptedWorld {
     /// What each session played, by session id.
     var sessions: [String: [ChatEvent]] = [:]
     private var made = 0
+    /// Each import's history as Kore gave it to the scripted CLI, oldest first.
+    package private(set) var imports: [(provider: String, plan: HandoffPlan, target: HandoffTarget)] = []
 
     /// Makes every chat's backend a scripted one.
     package func install() {
@@ -30,6 +32,7 @@ package final class ScriptedWorld {
             backends.append(backend)
             return backend
         }
+        HandoffWriters.standIns.value = Dictionary(uniqueKeysWithValues: HandoffWriters.all.map { ($0.id, ScriptedHandoffWriter(real: $0)) })
     }
 
     /// The backend of the chat with this session id (`Chat.status.sessionId`).
@@ -41,6 +44,7 @@ package final class ScriptedWorld {
     package func reset() {
         backends = []
         sessions = [:]
+        imports = []
         scripts = [:]
         script = .echo
         rate = nil
@@ -51,10 +55,34 @@ package final class ScriptedWorld {
         return "scripted-\(provider)-\(made)"
     }
 
+    /// An import's new session: empty, as Kore shows the carried part from its own record.
+    func imported(_ provider: String, _ plan: HandoffPlan, _ target: HandoffTarget) -> HandoffWritten {
+        let id = newSession(provider)
+        sessions[id] = []
+        imports.append((provider, plan, target))
+        return HandoffWritten(session: id)
+    }
+
     /// A session's history up to (not including) event `at` (`ForkPoint.at`).
     func history(of session: String, through at: String) -> [ChatEvent] {
         let events = sessions[session] ?? []
         return Array(events.prefix(min(Int(at) ?? events.count, events.count)))
+    }
+}
+
+/// The scripted CLI's side of an import, in place of the real CLI's writer: its window and
+/// instruction files are the real one's, the history goes to `ScriptedWorld`.
+struct ScriptedHandoffWriter: HandoffWriter {
+    let real: any HandoffWriter
+    var id: String { real.id }
+    var product: String { real.product }
+    var instructionFiles: [String] { real.instructionFiles }
+
+    func window(model: String?) -> Int { real.window(model: model) }
+
+    func write(_ plan: HandoffPlan, into target: HandoffTarget) async throws -> HandoffWritten {
+        let id = id
+        return await MainActor.run { ScriptedWorld.shared.imported(id, plan, target) }
     }
 }
 

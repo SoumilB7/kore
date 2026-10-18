@@ -509,5 +509,7 @@ enum DevSnapshot {
     /// KORE_FORK: which user message to fork from, 1-based.
     static let forkMessage = ProcessInfo.processInfo.environment["KORE_FORK"].flatMap { Int($0) }
     static let forkSend = ProcessInfo.processInfo.environment["KORE_FORK_SEND"]
+    /// KORE_IMPORT=<history file>: imported into the first empty chat shown.
+    static let importFile = ProcessInfo.processInfo.environment["KORE_IMPORT"].map { URL(fileURLWithPath: $0) }
     static let forkAfter = ProcessInfo.processInfo.environment["KORE_FORK_AFTER"].flatMap { Double($0) } ?? 0
 }

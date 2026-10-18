@@ -632,6 +632,14 @@ public enum CodexHistory {
         return threads
     }
 
+    /// A thread's rollout file (`thread/read`), to read its history from directly.
+    public static func rolloutPath(_ id: String, in folder: URL, executable: URL? = nil) async throws -> URL? {
+        let server = try await CodexAppServer.start(cwd: folder, executable: executable)
+        defer { Task { await server.close() } }
+        let thread = try await server.request("thread/read", ["threadId": .string(id), "includeTurns": false])["thread"]
+        return thread?["path"]?.string.map { URL(fileURLWithPath: $0) }
+    }
+
     public static func archive(_ id: String, in folder: URL, executable: URL? = nil) async throws {
         try await call("thread/archive", id, in: folder, executable: executable)
     }

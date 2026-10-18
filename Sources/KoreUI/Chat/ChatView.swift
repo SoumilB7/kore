@@ -11,8 +11,9 @@ struct ChatView: View {
     let active: Chat?
     @Environment(\.chatColumn) private var column
     @FocusState private var composerFocused: Bool
-    /// KORE_FORK forks once per run.
+    /// KORE_FORK forks once per run, KORE_IMPORT imports once.
     private static var forkedOnce = false
+    private static var importedOnce = false
     @StateObject private var kept = KeptChats()
     /// The image open in the viewer, and the turn whose changes are open in the modal: the
     /// active chat's, by its id, so a switch never shows them over another chat.
@@ -182,6 +183,14 @@ struct ChatView: View {
     /// KORE_VIEW_IMAGE, KORE_FORK_ANSWER and KORE_FORK_MESSAGE, as a chat is shown.
     private func devHooks(_ chat: Chat) {
         if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, of: chat, pending: true) }
+        if let file = DevSnapshot.importFile, !Self.importedOnce, !chat.hasConversation {
+            Self.importedOnce = true
+            let workspace = workspace
+            Task { @MainActor in
+                let refusal = await workspace.importChat(.file(file), into: chat)
+                FileHandle.standardError.write(Data("KORE_IMPORT: \(refusal.map { $0.reason ?? "not importable" } ?? "imported")\n".utf8))
+            }
+        }
         // KORE_FORK_ANSWER=<n>: fork through the nth answer's turn, the same way.
         if let n = ProcessInfo.processInfo.environment["KORE_FORK_ANSWER"].flatMap(Int.init), !Self.forkedOnce,
             !chat.title.hasSuffix(" (fork)")

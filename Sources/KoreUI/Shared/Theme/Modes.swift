@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The mode ladder: how strongly the composer outline signals a mode. Providers say which
 /// rung each of their modes takes (`ModeOption.rung`); the look of each rung is decided here.
-struct Rung: Sendable {
+struct Rung: Sendable, Equatable {
     let color: Color
     /// Outline opacity when focused (×0.65 unfocused).
     let opacity: Double

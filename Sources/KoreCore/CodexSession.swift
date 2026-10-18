@@ -52,6 +52,9 @@ public actor CodexSession {
         public var resume: String?
         /// Opens a new thread holding `resume`'s turns through this one (`thread/fork`) instead.
         public var forkAt: String?
+        /// Developer instructions for the thread, given each time it's opened (a handed-off chat's
+        /// CLAUDE.md, in a folder without AGENTS.md).
+        public var developerInstructions: String?
         public var executable: URL?
         public var environment: [String: String]
 
@@ -63,6 +66,7 @@ public actor CodexSession {
             plan: Bool = false,
             resume: String? = nil,
             forkAt: String? = nil,
+            developerInstructions: String? = nil,
             executable: URL? = nil,
             environment: [String: String] = [:]
         ) {
@@ -73,6 +77,7 @@ public actor CodexSession {
             self.plan = plan
             self.resume = resume
             self.forkAt = forkAt
+            self.developerInstructions = developerInstructions
             self.executable = executable
             self.environment = environment
         }
@@ -358,6 +363,13 @@ public actor CodexSession {
         _ = try await server.request("thread/name/set", ["threadId": .string(threadId), "name": .string(name)])
     }
 
+    /// Appends Responses items to the thread's model-visible history (`thread/inject_items`):
+    /// written to its rollout at once, seen by the model from the next turn, and shown as no
+    /// turn in any Codex view.
+    public func inject(_ items: [JSONValue]) async throws {
+        _ = try await server.request("thread/inject_items", ["threadId": .string(threadId), "items": .array(items)])
+    }
+
     /// Sets an objective Codex keeps working toward across turns.
     public func setGoal(_ objective: String) async throws {
         _ = try await server.request("thread/goal/set", ["threadId": .string(threadId), "objective": .string(objective)])
@@ -382,6 +394,7 @@ public actor CodexSession {
             "sandbox": options.permissions.sandboxMode,
         ]
         if let model = options.model { params["model"] = .string(model) }
+        if let instructions = options.developerInstructions { params["developerInstructions"] = .string(instructions) }
 
         let result: JSONValue
         var page: (turns: [JSONValue], earlier: String?)?

@@ -31,6 +31,10 @@ extension ProviderDescriptor {
             }
         },
         setArchived: { id, archived, _ in ClaudeArchive.set(id, archived: archived) },
+        historyFile: { id, folder in
+            let file = ClaudeHistory.transcript(sessionId: id, in: folder)
+            return FileManager.default.fileExists(atPath: file.path) ? file : nil
+        },
         usage: UsageWording(product: "Claude Code", rows: ["Session (5hr)", "Weekly (7 day)"], resetsCaption: nil),
         account: .claude)
 }

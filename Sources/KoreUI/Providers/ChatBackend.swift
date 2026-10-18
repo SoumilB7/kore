@@ -79,6 +79,10 @@ package struct BackendOptions {
     /// title it gets.
     package var fork: ForkPoint?
     package var forkTitle: String?
+    /// An imported chat: rows Kore wrote into its history (shown from the source instead), and
+    /// another agent's instruction file it gets at each launch.
+    package var hiddenRows: Set<String> = []
+    package var instructions: URL?
 
     package init(
         folder: URL, resume: SessionSummary? = nil, mode: String, planMode: Bool = false, model: String? = nil,

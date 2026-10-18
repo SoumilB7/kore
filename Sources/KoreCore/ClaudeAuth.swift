@@ -94,6 +94,16 @@ public enum ClaudeAuth {
         }
     }
 
+    /// The installed CLI's version ("2.1.293"), as its own transcripts record it.
+    public static func version(executable: URL? = nil) async throws -> String {
+        let run = try await run(["--version"], executable: executable)
+        let text = String(decoding: run.out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard run.status == 0, let version = text.split(separator: " ").first, version.first?.isNumber == true else {
+            throw Failure.said(String(decoding: run.err, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return String(version)
+    }
+
     private static func run(_ arguments: [String], executable: URL?) async throws -> (out: Data, err: Data, status: Int32) {
         let launch = try await CLIExecutable.resolve("claude", override: executable)
         return try await Task.detached {

@@ -41,7 +41,15 @@ final class ClaudeBackend: ChatBackend {
     /// History pages for `id`, read off the main thread.
     private func page(_ id: String, before: String? = nil, userTurns: Int? = nil) async -> ClaudeHistory.Page {
         let reader = reader(id)
-        return await Task.detached(priority: .userInitiated) { reader.page(before: before, userTurns: userTurns) }.value
+        return shown(await Task.detached(priority: .userInitiated) { reader.page(before: before, userTurns: userTurns) }.value)
+    }
+
+    /// A page without the rows Kore wrote into an imported chat (the source's own history shows
+    /// above its divider instead).
+    private func shown(_ page: ClaudeHistory.Page) -> ClaudeHistory.Page {
+        guard !options.hiddenRows.isEmpty else { return page }
+        let hidden = options.hiddenRows
+        return ClaudeHistory.Page(messages: page.messages.filter { !hidden.contains($0["uuid"]?.string ?? "") }, earlier: page.earlier)
     }
 
     private func reader(_ id: String) -> ClaudeTranscript {
@@ -57,7 +65,7 @@ final class ClaudeBackend: ChatBackend {
     private func firstPage(_ id: String, before: String?) async -> (page: ClaudeHistory.Page, latest: ClaudeTranscript.Latest?) {
         let reader = reader(id)
         if before == nil, let latest = await Task.detached(priority: .userInitiated, operation: { reader.latest() }).value {
-            return (latest.page, latest)
+            return (shown(latest.page), latest)
         }
         return (await page(id, before: before), nil)
     }
@@ -112,6 +120,7 @@ final class ClaudeBackend: ChatBackend {
             permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
             resume: fork?.from ?? sessionId)
         if let fork { launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at] }
+        if let instructions = options.instructions { launch.extraArgs += ["--append-system-prompt-file", instructions.path] }
         let starting = Task { try await ClaudeSession.start(launch) }
         launches += 1
         let kind = launches > 1 ? "again" : fork != nil ? "fork" : sessionId != nil ? "resume" : "new"
@@ -140,7 +149,7 @@ final class ClaudeBackend: ChatBackend {
             if let confirming {
                 let confirmed = await confirming.value
                 earlierFrom = confirmed.earlier
-                if let exact = confirmed.page {
+                if let exact = confirmed.page.map({ self.shown($0) }) {
                     corrected = true
                     let again = await ClaudeTranslator.replayed(exact.messages, folder: folder, sessionId: translator.sessionId)
                     carried = again.carried

@@ -1,0 +1,273 @@
+import Foundation
+import Testing
+
+@testable import KoreCore
+
+/// Importing a chat's history: each format's sniff and read, the budget, both writers and the
+/// record, on tiny histories written in the test (the CLIs' own row shapes).
+@Suite("Chat import", .serialized)
+struct HandoffTests {
+    let scratch: URL
+
+    init() throws {
+        scratch = FileManager.default.temporaryDirectory.appendingPathComponent("kore-import-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        HandoffRecords.root.value = scratch.appendingPathComponent("records")
+    }
+
+    private func file(_ name: String, _ lines: [String]) throws -> URL {
+        let url = scratch.appendingPathComponent(name)
+        try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    private func json(_ object: [String: Any]) -> String {
+        String(decoding: try! JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+    }
+
+    // MARK: Fixtures
+
+    private func claudeRow(_ uuid: String, _ parent: String?, _ type: String, _ content: Any, extra: [String: Any] = [:]) -> String {
+        var row: [String: Any] = [
+            "type": type, "uuid": uuid, "parentUuid": parent as Any, "sessionId": "s-1", "cwd": scratch.path,
+            "timestamp": "2026-10-20T09:00:0\(min(uuid.count, 9)).000Z",
+            "message": type == "user"
+                ? ["role": "user", "content": content]
+                : ["id": "m-\(uuid)", "role": "assistant", "model": "fixture-model", "content": content],
+        ]
+        row.merge(extra) { _, new in new }
+        return json(row)
+    }
+
+    private var claude: [String] {
+        [
+            claudeRow("u1", nil, "user", "Check the build."),
+            claudeRow("a1", "u1", "assistant", [["type": "thinking", "thinking": "", "signature": "x"], ["type": "tool_use", "id": "t1", "name": "Bash", "input": ["command": "cat BUILD"]]]),
+            claudeRow("r1", "a1", "user", [["type": "tool_result", "tool_use_id": "t1", "content": "Build 7781"]]),
+            claudeRow("a2", "r1", "assistant", [["type": "tool_use", "id": "t2", "name": "Edit", "input": ["file_path": scratch.path + "/VERSION", "old_string": "1.4.0", "new_string": "1.4.1"]]]),
+            claudeRow(
+                "r2", "a2", "user", [["type": "tool_result", "tool_use_id": "t2", "content": "ok"]],
+                extra: ["toolUseResult": ["filePath": scratch.path + "/VERSION", "structuredPatch": [["oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1, "lines": ["-1.4.0", "+1.4.1"]]]]]),
+            claudeRow("a3", "r2", "assistant", [["type": "text", "text": "Build 7781, bumped to 1.4.1."]]),
+            claudeRow("c1", "a3", "user", "<command-name>/model</command-name>"),
+            claudeRow("c2", "c1", "assistant", [["type": "text", "text": "Set model"]]).replacingOccurrences(of: "fixture-model", with: "<synthetic>"),
+            claudeRow("u2", "c2", "user", "Now run the tests."),
+            claudeRow("a4", "u2", "assistant", [["type": "tool_use", "id": "t3", "name": "Bash", "input": ["command": "swift test"]]]),
+            claudeRow("x1", "a4", "user", "[Request interrupted by user]"),
+            json(["type": "custom-title", "customTitle": "Build check", "sessionId": "s-1"]),
+        ]
+    }
+
+    private func rollout(_ items: [[String: Any]]) -> [String] {
+        [json(["timestamp": "2026-10-20T09:00:00.000Z", "type": "session_meta", "payload": ["id": "thread-1", "cwd": scratch.path]])]
+            + items.enumerated().map { index, item in
+                var line = item
+                line["timestamp"] = String(format: "2026-10-20T09:00:%02d.000Z", index + 1)
+                return json(line)
+            }
+    }
+
+    private func response(_ payload: [String: Any]) -> [String: Any] { ["type": "response_item", "payload": payload] }
+    private func message(_ role: String, _ text: String) -> [String: Any] {
+        response(["type": "message", "role": role, "content": [["type": role == "assistant" ? "output_text" : "input_text", "text": text]]])
+    }
+
+    private var codex: [String] {
+        rollout([
+            ["type": "turn_context", "payload": ["turn_id": "turn-1", "model": "fixture-model", "approval_policy": "never", "sandbox_policy": ["type": "danger-full-access"]]],
+            message("developer", "Codex's own instructions"),
+            message("user", "<environment_context>\n</environment_context>"),
+            message("user", "Check the build."),
+            response(["type": "reasoning", "summary": [], "encrypted_content": "gAAAA"]),
+            response(["type": "custom_tool_call", "name": "exec", "call_id": "c1", "input": "text(await tools.exec_command({cmd:\"cat BUILD\"}));"]),
+            response(["type": "custom_tool_call_output", "call_id": "c1", "output": "Script completed\nOutput:\nBuild 7781"]),
+            response(["type": "custom_tool_call", "name": "apply_patch", "call_id": "c2", "input": "*** Begin Patch\n*** Update File: VERSION\n@@\n-1.4.0\n+1.4.1\n*** End Patch\n"]),
+            response(["type": "custom_tool_call_output", "call_id": "c2", "output": "Success. Updated the following files:\nM VERSION\n"]),
+            message("assistant", "Build 7781, bumped to 1.4.1."),
+            ["type": "event_msg", "payload": ["type": "task_complete", "turn_id": "turn-1"]],
+            ["type": "turn_context", "payload": ["turn_id": "turn-2", "model": "fixture-model"]],
+            message("user", "Now run the tests."),
+            response(["type": "function_call", "name": "exec_command", "call_id": "c3", "arguments": "{\"cmd\":\"swift test\"}"]),
+            response(["type": "function_call_output", "call_id": "c3", "output": "Process exited with code 1\nOutput:\n1 failure"]),
+            ["type": "event_msg", "payload": ["type": "turn_aborted", "turn_id": "turn-2"]],
+        ])
+    }
+
+    // MARK: Recognising files
+
+    @Test func eachFormatKnowsOnlyItsOwnFiles() throws {
+        let transcript = try file("t.jsonl", claude)
+        let thread = try file("r.jsonl", codex)
+        #expect(HandoffFormats.identify(transcript)?.format == "claude")
+        #expect(HandoffFormats.identify(transcript)?.title == "Build check")
+        #expect(HandoffFormats.identify(thread)?.format == "codex")
+        #expect(HandoffFormats.identify(thread)?.sessionId == "thread-1")
+        // JSON lines that aren't a chat, and a file that isn't JSON at all.
+        #expect(HandoffFormats.identify(try file("n.jsonl", [#"{"type":"user","text":"hi"}"#, #"{"a":1}"#])) == nil)
+        #expect(HandoffFormats.identify(try file("x.jsonl", ["hello", "world"])) == nil)
+        #expect(HandoffFormats.read(try file("n2.jsonl", [#"{"note":1}"#])) == nil)
+    }
+
+    @Test func aHistoryWithNoTurnsOrDamageImportsNothing() throws {
+        #expect(HandoffFormats.read(try file("empty.jsonl", rollout([]))) == nil)
+        var damaged = codex
+        damaged.insert(#"{"timestamp":"2026-10-20T09:00:30.000Z","type":"response_item","payload":{"type":"mess"#, at: 5)
+        #expect(HandoffFormats.read(try file("damaged.jsonl", damaged)) == nil)
+    }
+
+    // MARK: Reading
+
+    @Test func aClaudeTranscriptReadsAsTurnsAndSteps() throws {
+        let segment = try #require(HandoffFormats.read(try file("t2.jsonl", claude)))
+        #expect(segment.turns.map(\.prompt) == ["Check the build.", "Now run the tests."])
+        let first = segment.turns[0]
+        #expect(first.steps.map(\.kind) == [.command, .edit])
+        #expect(first.steps[0].output == "Build 7781")
+        #expect(first.steps[1].detail == "file: VERSION\n@@ -1,1 +1,1 @@\n-1.4.0\n+1.4.1")
+        // The command's synthetic reply doesn't replace the turn's own.
+        #expect(first.reply == "Build 7781, bumped to 1.4.1.")
+        #expect(segment.turns[1].end == .interrupted)
+        #expect(segment.turns[1].steps[0].status == .interrupted)
+        #expect(segment.model == "fixture-model")
+    }
+
+    @Test func aCompactedClaudeTranscriptCarriesItsSummary() throws {
+        let lines = [
+            claudeRow("o1", nil, "user", "An old prompt."),
+            json(["type": "system", "subtype": "compact_boundary", "uuid": "b1", "parentUuid": NSNull(), "logicalParentUuid": "o1", "sessionId": "s-1"]),
+            claudeRow("s1", "b1", "user", "What happened so far.", extra: ["isCompactSummary": true]),
+            claudeRow("n1", "s1", "user", "A new prompt."),
+            claudeRow("n2", "n1", "assistant", [["type": "text", "text": "Done."]]),
+        ]
+        let segment = try #require(HandoffFormats.read(try file("c.jsonl", lines)))
+        #expect(segment.summary == "What happened so far.")
+        #expect(segment.turns.map(\.prompt) == ["A new prompt."])
+    }
+
+    @Test func aCodexRolloutReadsFromItsOwnItems() throws {
+        let segment = try #require(HandoffFormats.read(try file("r2.jsonl", codex)))
+        #expect(segment.turns.map(\.prompt) == ["Check the build.", "Now run the tests."])
+        let first = segment.turns[0]
+        #expect(first.id == "turn-1")
+        #expect(first.steps.map(\.kind) == [.command, .edit])
+        #expect(first.steps[0].title == "cat BUILD")
+        #expect(first.steps[1].added == 1 && first.steps[1].removed == 1)
+        #expect(first.reply == "Build 7781, bumped to 1.4.1.")
+        let second = segment.turns[1]
+        #expect(second.end == .interrupted)
+        #expect(second.steps[0].exitCode == 1 && second.steps[0].status == .error)
+        #expect(segment.mode == "fullAccess")
+    }
+
+    // MARK: Budget
+
+    private func turn(_ n: Int, prompt: Int = 400, output: Int = 0) -> HandoffTurn {
+        var turn = HandoffTurn(id: "t\(n)", prompt: "p\(n) " + String(repeating: "a", count: prompt))
+        if output > 0 {
+            turn.steps = [HandoffStep(kind: .command, tool: "Bash", title: "make", detail: "command: make", output: String(repeating: "o", count: output))]
+        }
+        turn.reply = "r\(n)"
+        return turn
+    }
+
+    @Test func newestTurnsGoInFullThenShorterThenNotAtAll() {
+        var segment = HandoffSegment(source: "claude", product: "Claude Code", sessionId: "s")
+        segment.turns = (1...40).map { turn($0, output: 2000) }
+        // A 10k window: a 4k budget.
+        let plan = HandoffBudget.plan(segment, window: 10_000)
+        let levels = plan.entries.map(\.level)
+        #expect(plan.entries.last?.turn.id == "t40")
+        #expect(levels.last == .full)
+        #expect(levels.contains(.condensed) && levels.contains(.bare))
+        // Levels only step down going back.
+        #expect(levels == levels.sorted { ["bare": 0, "condensed": 1, "full": 2][$0.rawValue]! < ["bare": 0, "condensed": 1, "full": 2][$1.rawValue]! })
+        #expect(plan.notCarried == 40 - plan.carried && plan.notCarried > 0)
+        #expect(plan.tokens <= plan.budget)
+    }
+
+    @Test func theSourcesOwnSummaryIsAlwaysCarried() {
+        var segment = HandoffSegment(source: "claude", product: "Claude Code", sessionId: "s", summary: String(repeating: "s", count: 50_000))
+        segment.turns = [turn(1)]
+        let plan = HandoffBudget.plan(segment, window: 10_000)
+        #expect(plan.summary != nil)
+        #expect(plan.carried == 1)
+    }
+
+    @Test func longOutputsKeepTheirStartAndEnd() {
+        let lines = (1...2000).map { "line \($0)" }.joined(separator: "\n")
+        let cut = HandoffRender.cut(lines)
+        #expect(cut.hasPrefix("line 1\n"))
+        #expect(cut.hasSuffix("line 2000"))
+        #expect(cut.contains("lines cut …]"))
+        #expect(cut.count < 3500)
+    }
+
+    // MARK: Writers
+
+    private var plan: HandoffPlan {
+        get throws { try #require(HandoffImport.plan(try file("p.jsonl", claude), for: CodexHandoffWriter(), model: nil)?.plan) }
+    }
+
+    @Test func codexGetsPlainMessagesOnly() throws {
+        let items = CodexHandoffWriter.items(try plan)
+        #expect(items.first?["role"]?.string == "developer")
+        #expect(items.allSatisfy { $0["type"]?.string == "message" })
+        let texts = items.compactMap { $0["content"]?[0]?["text"]?.string }
+        #expect(texts.contains("Check the build."))
+        #expect(texts.contains { $0.hasPrefix("[external_agent_tool_call: Bash]\ncommand: cat BUILD") && $0.contains("Build 7781") })
+        #expect(texts.contains("Build 7781, bumped to 1.4.1."))
+        #expect(items.filter { $0["role"]?.string == "assistant" }.allSatisfy { $0["content"]?[0]?["type"]?.string == "output_text" })
+    }
+
+    @Test func claudeGetsANewChainedTranscript() throws {
+        let (lines, rows) = ClaudeHandoffWriter.lines(try plan, sessionId: "new-1", cwd: scratch.path, version: "1.0.0", title: "Build check", plan: false)
+        let conversation = lines.filter { $0["uuid"] != nil }
+        #expect(conversation.map { $0["uuid"]?.string ?? "" } == rows)
+        #expect(conversation.first?["isMeta"]?.bool == true)
+        #expect(conversation.first?["parentUuid"] == .null)
+        for (row, parent) in zip(conversation.dropFirst(), conversation) { #expect(row["parentUuid"]?.string == parent["uuid"]?.string) }
+        let replies = conversation.filter { $0["type"]?.string == "assistant" }
+        #expect(replies.count == 2 && replies.allSatisfy { $0["message"]?["model"]?.string == "<synthetic>" })
+        #expect(lines.contains { $0["type"]?.string == "custom-title" && $0["customTitle"]?.string == "Build check" })
+        #expect(lines.last?["type"]?.string == "last-prompt" && lines.last?["leafUuid"]?.string == rows.last)
+        // Every text block has words in it (the API refuses empty ones).
+        let blocks = replies.flatMap { $0["message"]?["content"]?.array ?? [] }
+        #expect(blocks.allSatisfy { !($0["text"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    }
+
+    @Test func anExistingFileIsNeverWritten() throws {
+        let target = scratch.appendingPathComponent("existing.jsonl")
+        try Data("kept".utf8).write(to: target)
+        #expect(throws: HandoffError.self) { try ClaudeHandoffWriter.create(target, Data("new".utf8)) }
+        #expect(try String(contentsOf: target, encoding: .utf8) == "kept")
+    }
+
+    // MARK: Records
+
+    @Test func theRecordAndItsTurnsComeBackBySession() throws {
+        let plan = try plan
+        let record = HandoffRecord(
+            source: .init(cli: "claude", session: "s-1"), sourceFile: scratch, sourceProduct: "Claude Code", cutoff: plan.cutoff,
+            sourceTitle: "Build check", sourceModel: nil, target: .init(cli: "codex", session: "thread-new"), targetModel: nil,
+            folder: scratch, carried: .init(plan), written: ["w1"])
+        try HandoffRecords.save(record, history: plan.entries.map(\.turn))
+        #expect(HandoffRecords.record(target: "thread-new")?.written == ["w1"])
+        #expect(HandoffRecords.history(target: "thread-new")?.map(\.prompt) == ["Check the build.", "Now run the tests."])
+        #expect(HandoffRecords.record(target: "another") == nil)
+        #expect(throws: HandoffError.self) { try HandoffRecords.save(record, history: []) }
+    }
+
+    @Test func rowsKoreWroteArentReadBackAsTheChatsOwn() throws {
+        let plan = try plan
+        let (lines, rows) = ClaudeHandoffWriter.lines(plan, sessionId: "made-1", cwd: scratch.path, version: "1.0.0", title: "t", plan: false)
+        let record = HandoffRecord(
+            source: .init(cli: "codex", session: "thread-1"), sourceFile: scratch, sourceProduct: "Codex", cutoff: nil,
+            sourceTitle: "t", sourceModel: nil, target: .init(cli: "claude", session: "made-1"), targetModel: nil, folder: scratch,
+            carried: .init(plan), written: rows)
+        try HandoffRecords.save(record, history: [])
+        let own = claudeRow("z1", rows.last, "user", "My own prompt.").replacingOccurrences(of: "\"s-1\"", with: "\"made-1\"")
+        let made = try file("made.jsonl", lines.map(\.compact) + [own])
+        let segment = try #require(HandoffFormats.read(made))
+        #expect(segment.turns.map(\.prompt) == ["My own prompt."])
+    }
+}

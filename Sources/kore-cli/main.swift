@@ -3,6 +3,8 @@
 //   swift run kore-cli [--codex] [--cwd DIR] [--model M] [--effort E] [--mode MODE] [--resume ID] [--debug]
 //   swift run kore-cli --history [--cwd DIR]     list both CLIs' past sessions for the folder
 //   swift run kore-cli --archive|--unarchive ID [--cwd DIR]   archive a Codex thread (Codex's own archive)
+//   swift run kore-cli [--codex] --import FILE [--cwd DIR] [--model M]   import a chat's history file into a new
+//                                    chat of this CLI, print what was carried, then continue it
 //
 // Claude modes: default, acceptEdits, plan, auto, dontAsk, bypassPermissions
 // Codex modes:  readOnly, askForApproval, approveForMe, fullAccess (+ /plan, /default)
@@ -15,7 +17,7 @@ import KoreCore
 
 var codex = false, debug = false, history = false
 var cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-var model: String?, effort: String?, mode: String?, resume: String?, archive: (id: String, on: Bool)?
+var model: String?, effort: String?, mode: String?, resume: String?, archive: (id: String, on: Bool)?, importFile: String?
 
 var argv = CommandLine.arguments.dropFirst().makeIterator()
 while let arg = argv.next() {
@@ -30,6 +32,7 @@ while let arg = argv.next() {
     case "--resume": resume = argv.next()
     case "--archive": archive = (argv.next() ?? "", true)
     case "--unarchive": archive = (argv.next() ?? "", false)
+    case "--import": importFile = argv.next()
     default: fail("unknown argument \(arg)")
     }
 }
@@ -55,6 +58,24 @@ if history {
         out("\(session.agent.rawValue.padding(toLength: 6, withPad: " ", startingAt: 0)) \(session.updated.formatted(date: .abbreviated, time: .shortened))  \(session.title)\(session.archived ? "  [archived]" : "")  \(dim)\(session.id)\(reset)\n")
     }
     exit(0)
+}
+
+if let importFile {
+    let file = URL(fileURLWithPath: importFile)
+    guard let writer = HandoffWriters.writer(codex ? "codex" : "claude") else { fail("no writer") }
+    guard let identity = HandoffFormats.identify(file) else { fail("not a chat Kore can import") }
+    guard let (segment, plan) = HandoffImport.plan(file, for: writer, model: model) else { fail("nothing importable in \(file.lastPathComponent)") }
+    out("\(dim)\(identity.product) \(segment.sessionId) · \(segment.turns.count) turns: \(plan.count(.full)) full, \(plan.count(.condensed)) condensed, \(plan.count(.bare)) bare, \(plan.notCarried) not carried\(plan.summary == nil ? "" : ", summary") · ~\(plan.tokens) of \(plan.budget) tokens\(reset)\n")
+    let target = HandoffTarget(
+        folder: cwd, title: segment.shownTitle, model: model, effort: effort, mode: mode ?? (codex ? "askForApproval" : "default"),
+        planMode: false, instructions: HandoffWriters.instructions(for: writer, in: cwd))
+    do {
+        let record = try await HandoffImport.write(segment, plan, file: file, into: target, writer: writer)
+        resume = record.target.session
+        out("\(dim)imported as \(writer.product) \(record.target.session)\(record.written.isEmpty ? "" : " (\(record.written.count) rows)")\(reset)\n")
+    } catch {
+        fail("couldn't import: \(error)")
+    }
 }
 
 if codex {
