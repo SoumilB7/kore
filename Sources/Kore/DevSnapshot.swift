@@ -13,10 +13,14 @@ import KoreCore
 ///   KORE_THEN_SEND=<text>    after that, send this text with whatever got attached
 ///   KORE_FULLSCREEN=1        enter full screen before the snapshot
 ///   KORE_DRAG=<x>,<y>,<dx>,<dy> real drag from that point (after any clicks); logs the window's move to stderr
-///   KORE_KEYS=<code>[;cmd+<code>...] real key presses (virtual key codes) after the clicks and drag, 0.5s apart
+///   KORE_KEYS=<code>[;cmd+<code>...] key presses (virtual key codes) after the clicks and drag, 0.5s apart,
+///                            delivered inside Kore; KORE_REAL_KEYS=1 posts them through the window server
+///                            instead (they then go to whatever app is frontmost)
 ///   KORE_CLICK=<x>,<y>[;...] click those points (from the window's top-left), 1s apart, before the snapshot
 ///   KORE_REAL_CLICK=1        post that click through the window server (moves the real cursor),
 ///                            to catch title-bar regions that swallow clicks
+///   KORE_SIZE=<w>,<h>        resize the folder window's content first (tile-size checks)
+///   KORE_HANGS=1             log main-thread stalls over 60ms and each click/key, with times, to stderr
 ///   KORE_SNAPSHOT=<png path> once a folder window is up, save an image of it and quit
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
@@ -42,8 +46,44 @@ enum DevSnapshot {
             return xy.count == 2 ? NSPoint(x: xy[0], y: xy[1]) : nil
         }
 
+    /// KORE_HANGS=1: logs every main-thread stall over 50ms (with what was happening) to stderr.
+    @MainActor static func watchHangs() {
+        guard ProcessInfo.processInfo.environment["KORE_HANGS"] == "1" else { return }
+        let start = Date()
+        final class Tick: @unchecked Sendable { var last = Date() }
+        let tick = Tick()
+        Timer.scheduledTimer(withTimeInterval: 0.01, repeats: true) { _ in
+            let now = Date()
+            let gap = now.timeIntervalSince(tick.last)
+            if gap > 0.06 {
+                FileHandle.standardError.write(Data(String(format: "HANG %.0fms at %.2fs\n", gap * 1000, now.timeIntervalSince(start)).utf8))
+            }
+            tick.last = now
+        }
+        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .keyDown]) { event in
+            var focus = event.window?.firstResponder.map { String(describing: type(of: $0)) } ?? "none"
+            if let editor = event.window?.firstResponder as? NSTextView, let field = editor.delegate as? NSTextField {
+                focus += " field[\(field.placeholderString ?? "")]=\(editor.string) editable=\(editor.isEditable)/\(field.isEditable) enabled=\(field.isEnabled)"
+            }
+            FileHandle.standardError.write(Data(String(format: "EVENT %@ at %.2fs focus=%@\n", event.type == .keyDown ? "key" : "click", Date().timeIntervalSince(start), focus).utf8))
+            if event.type == .keyDown, let window = event.window {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    let after = (window.firstResponder as? NSTextView)?.string ?? "-"
+                    FileHandle.standardError.write(Data("  after key: \(after) key=\(NSApp.keyWindow === window) active=\(NSApp.isActive)\n".utf8))
+                }
+            }
+            return event
+        }
+    }
+
     @MainActor static func captureIfRequested() {
         guard let output else { return }
+        if let size = ProcessInfo.processInfo.environment["KORE_SIZE"]?.split(separator: ",").compactMap({ Double($0) }), size.count == 2 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }?
+                    .setContentSize(NSSize(width: size[0], height: size[1]))
+            }
+        }
         if ProcessInfo.processInfo.environment["KORE_FULLSCREEN"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }?.toggleFullScreen(nil)
@@ -62,10 +102,15 @@ enum DevSnapshot {
             guard let code = CGKeyCode(key.dropFirst(command ? 4 : 0)) else { continue }
             let start = 2.5 + Double(clicks.count) + (ProcessInfo.processInfo.environment["KORE_DRAG"] == nil ? 0 : 1.5)
             DispatchQueue.main.asyncAfter(deadline: .now() + start + Double(index) * 0.5) {
-                for down in [true, false] {
-                    let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
-                    if command { event?.flags = .maskCommand }
-                    event?.post(tap: .cghidEventTap)
+                if ProcessInfo.processInfo.environment["KORE_REAL_KEYS"] == "1" {
+                    // Through the window server: goes to whichever app is frontmost.
+                    for down in [true, false] {
+                        let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
+                        if command { event?.flags = .maskCommand }
+                        event?.post(tap: .cghidEventTap)
+                    }
+                } else {
+                    send(key: code, command: command)
                 }
             }
         }
@@ -166,7 +211,24 @@ enum DevSnapshot {
         }
     }
 
-    /// A mouse down/up through NSWindow.sendEvent (in-process, skips the window server).
+    /// A key press delivered inside Kore (NSApp.sendEvent, so event monitors see it), aimed at
+    /// the folder window. It can't reach another app, even if the user brings one to the front.
+    @MainActor private static func send(key code: CGKeyCode, command: Bool) {
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }) else { return }
+        if !window.isKeyWindow { window.makeKey() }
+        let probe = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true).flatMap(NSEvent.init(cgEvent:))
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            if let event = NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: command ? .command : [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, characters: probe?.characters ?? "",
+                charactersIgnoringModifiers: probe?.charactersIgnoringModifiers ?? "", isARepeat: false, keyCode: code)
+            {
+                NSApp.sendEvent(event)
+            }
+        }
+    }
+
+    /// A mouse down/up delivered inside Kore (skips the window server).
     @MainActor private static func send(click point: NSPoint) {
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }) else { return }
         let location = NSPoint(x: point.x, y: window.frame.height - point.y)
@@ -175,7 +237,8 @@ enum DevSnapshot {
                 with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
             {
-                window.sendEvent(event)
+                // Through NSApp, so local event monitors (outside-click handling) see it too.
+                NSApp.sendEvent(event)
             }
         }
     }

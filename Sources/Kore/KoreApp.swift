@@ -10,6 +10,7 @@ struct KoreApp: App {
     init() {
         // Needed when launched as a bare binary (`swift run Kore`); a no-op inside Kore.app.
         NSApplication.shared.setActivationPolicy(.regular)
+        DispatchQueue.main.async { DevSnapshot.watchHangs() }
     }
 
     var body: some Scene {
