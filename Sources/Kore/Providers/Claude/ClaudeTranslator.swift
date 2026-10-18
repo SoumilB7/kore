@@ -47,8 +47,8 @@ final class ClaudeTranslator {
     /// The turn's first main assistant message id: its key in `TurnChangeLog`, the same live, in
     /// the transcript and in a fork's copy of it.
     private var turnKey: String?
-    /// Replay: each recorded turn's changes (`TurnChangeLog.read`), by key.
-    private var recordedChanges: [String: [FileChange]] = [:]
+    /// Replay: each recorded turn's changes (`TurnChangeLog`), decoded only for the turns replayed.
+    private var recordedChanges: TurnChangeLog.Lookup?
     private var turnStart = Date()
     /// The main agent's answer blocks and tool calls, in order, to find the final answer.
     private var turnItems: [TurnItem] = []
@@ -146,7 +146,7 @@ final class ClaudeTranslator {
         if let turn {
             if replaying {
                 // What Kore saw live (shell edits included) beats what the edit tools recorded.
-                let changes = turnKey.flatMap { recordedChanges[$0] } ?? FileChange.mergedByPath(replayChanges)
+                let changes = turnKey.flatMap { recordedChanges?.changes($0) } ?? FileChange.mergedByPath(replayChanges)
                 if !changes.isEmpty { out.append(.turnChanges(turn, changes)) }
             } else {
                 followups.append(.changes(turn, key: turnKey, files.finish()))
@@ -637,7 +637,7 @@ final class ClaudeTranslator {
     static func replayed(_ messages: [JSONValue], folder: URL, sessionId: String?) async -> Replayed {
         await Task.detached(priority: .userInitiated) {
             let translator = ClaudeTranslator(folder: folder, sessionId: sessionId)
-            translator.recordedChanges = TurnChangeLog.read(folder: folder)
+            translator.recordedChanges = TurnChangeLog.lookup(folder: folder)
             let events = translator.replay(messages)
             return Replayed(events: events, carried: translator.carried)
         }.value
