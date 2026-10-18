@@ -130,10 +130,15 @@ final class CodexBackend: ChatBackend {
     private func flush() {
         let (events, changes) = translator.take()
         for event in events { yield(event) }
+        let folder = options.folder
         for (turn, task) in changes {
             Task {
                 let changes = await task.value
                 if !changes.isEmpty { yield(.turnChanges(turn, changes)) }
+                // Kept for a resumed chat, by Codex's turn id: shell edits are in no item.
+                if !changes.isEmpty {
+                    Task.detached(priority: .utility) { TurnChangeLog.record(changes, key: turn, folder: folder) }
+                }
             }
         }
     }

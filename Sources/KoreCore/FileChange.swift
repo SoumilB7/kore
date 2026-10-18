@@ -2,14 +2,14 @@ import Foundation
 
 /// One file's change, as hunks of a unified diff. Every source maps to it: Claude's
 /// `tool_use_result` (Edit / Write), Codex's `fileChange` items, and a git turn diff.
-public struct FileChange: Sendable, Hashable, Identifiable {
-    public enum Kind: Sendable, Hashable {
+public struct FileChange: Sendable, Hashable, Identifiable, Codable {
+    public enum Kind: Sendable, Hashable, Codable {
         case add, update, delete
         case move(from: String)
     }
 
-    public struct Line: Sendable, Hashable {
-        public enum Kind: Sendable, Hashable { case context, add, remove }
+    public struct Line: Sendable, Hashable, Codable {
+        public enum Kind: Sendable, Hashable, Codable { case context, add, remove }
         public let kind: Kind
         public let text: String
         /// Line number in the old file (context and removed lines).
@@ -18,7 +18,7 @@ public struct FileChange: Sendable, Hashable, Identifiable {
         public let new: Int?
     }
 
-    public struct Hunk: Sendable, Hashable {
+    public struct Hunk: Sendable, Hashable, Codable {
         public let oldStart: Int
         public let newStart: Int
         public let lines: [Line]

@@ -10,8 +10,9 @@ final class ClaudeTranslator {
         case peer(uuid: String, turn: TurnID)
         /// A turn the CLI started with no command (a cron firing, a finished agent): read its cause.
         case cliTurn(TurnID, startedAt: Date)
-        /// The turn's changed files, once its end snapshot is diffed.
-        case changes(TurnID, Task<[FileChange], Never>)
+        /// The turn's changed files, once its end snapshot is diffed; `key` records them for replay
+        /// (`TurnChangeLog`).
+        case changes(TurnID, key: String?, Task<[FileChange], Never>)
         /// Ask the CLI how full the context is now (after a compaction).
         case contextUsage
     }
@@ -43,6 +44,11 @@ final class ClaudeTranslator {
     private var block: (id: BlockID, kind: TextKind)?
 
     private(set) var turn: TurnID?
+    /// The turn's first main assistant message id: its key in `TurnChangeLog`, the same live, in
+    /// the transcript and in a fork's copy of it.
+    private var turnKey: String?
+    /// Replay: each recorded turn's changes (`TurnChangeLog.read`), by key.
+    private var recordedChanges: [String: [FileChange]] = [:]
     private var turnStart = Date()
     /// The main agent's answer blocks and tool calls, in order, to find the final answer.
     private var turnItems: [TurnItem] = []
@@ -121,6 +127,7 @@ final class ClaudeTranslator {
         turnStart = date
         turnItems = []
         block = nil
+        turnKey = nil
         if replaying { replayChanges = [] } else { files.begin() }
         out.append(.turnStarted(id, origin: origin, at: date))
     }
@@ -138,10 +145,11 @@ final class ClaudeTranslator {
         out.append(.turnFinished(turn, outcome, duration: duration))
         if let turn {
             if replaying {
-                let changes = FileChange.mergedByPath(replayChanges)
+                // What Kore saw live (shell edits included) beats what the edit tools recorded.
+                let changes = turnKey.flatMap { recordedChanges[$0] } ?? FileChange.mergedByPath(replayChanges)
                 if !changes.isEmpty { out.append(.turnChanges(turn, changes)) }
             } else {
-                followups.append(.changes(turn, files.finish()))
+                followups.append(.changes(turn, key: turnKey, files.finish()))
             }
         }
         turn = nil
@@ -173,7 +181,8 @@ final class ClaudeTranslator {
             stream(.answer, text)
         case .thinkingDelta(let text, nil):
             stream(.thinking, text)
-        case .assistant(_, let blocks, let parent, let usage):
+        case .assistant(let messageId, let blocks, let parent, let usage):
+            if parent == nil, turn != nil, turnKey == nil { turnKey = messageId }
             assistant(blocks, agent: parent.map(AgentID.sub) ?? .main)
             if parent == nil, let usage { context(usage) }
         case .user(let blocks, let parent, let result):
@@ -628,6 +637,7 @@ final class ClaudeTranslator {
     static func replayed(_ messages: [JSONValue], folder: URL, sessionId: String?) async -> Replayed {
         await Task.detached(priority: .userInitiated) {
             let translator = ClaudeTranslator(folder: folder, sessionId: sessionId)
+            translator.recordedChanges = TurnChangeLog.read(folder: folder)
             let events = translator.replay(messages)
             return Replayed(events: events, carried: translator.carried)
         }.value

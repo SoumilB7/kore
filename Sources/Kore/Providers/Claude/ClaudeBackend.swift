@@ -215,10 +215,14 @@ final class ClaudeBackend: ChatBackend {
                     try? await Task.sleep(for: .milliseconds(200))
                 }
             }
-        case .changes(let turn, let task):
+        case .changes(let turn, let key, let task):
             Task {
                 let changes = await task.value
                 if !changes.isEmpty { yield(.turnChanges(turn, changes)) }
+                // Kept for a resumed chat: the transcript has no record of shell edits.
+                if let key, !changes.isEmpty {
+                    Task.detached(priority: .utility) { TurnChangeLog.record(changes, key: key, folder: folder) }
+                }
             }
         }
     }

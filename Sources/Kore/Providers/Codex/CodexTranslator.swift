@@ -40,6 +40,8 @@ final class CodexTranslator {
     private enum TurnItem { case message(String), tool }
     private var finalMarked = false
     private var replayChanges: [FileChange] = []
+    /// Replay: each recorded turn's changes (`TurnChangeLog.read`), by Codex turn id.
+    private var recordedChanges: [String: [FileChange]] = [:]
 
     // Sub-agents: child thread id → its running turn, tool count, state.
     private var childTurns: [String: String] = [:]
@@ -93,7 +95,8 @@ final class CodexTranslator {
         }
         out.append(.turnFinished(id, outcome, duration: duration))
         if replaying {
-            let changes = FileChange.mergedByPath(replayChanges)
+            // What Kore saw live (shell edits included) beats the turn's patch items.
+            let changes = recordedChanges[id] ?? FileChange.mergedByPath(replayChanges)
             if !changes.isEmpty { out.append(.turnChanges(id, changes)) }
         } else {
             changeTasks.append((id, files.finish()))
@@ -519,6 +522,7 @@ final class CodexTranslator {
         await Task.detached(priority: .userInitiated) {
             let translator = CodexTranslator(folder: folder)
             translator.agentThreads = agents
+            translator.recordedChanges = TurnChangeLog.read(folder: folder)
             let context = rollout.lastTokens.map { (used: $0, window: rollout.contextWindow) }
             let events = translator.replay(turns, settings: rollout.turnSettings, context: context)
             return Replayed(
