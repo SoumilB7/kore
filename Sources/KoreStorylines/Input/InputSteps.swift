@@ -111,6 +111,30 @@ package struct Scroll: Step {
     }
 }
 
+/// A wheel turn over an element: to the AppKit scroll view under it, if any.
+package struct Wheel: Step {
+    let target: Locator
+    let points: CGFloat
+    package var label: String { "Turn the wheel over \(target) by \(Int(points)) pt" }
+    package init(_ target: Locator, by points: CGFloat) {
+        self.target = target
+        self.points = points
+    }
+
+    package func run(_ story: StoryContext) async throws {
+        try await story.input.wheel(try await story.element(target), by: points)
+    }
+}
+
+/// Text pasted into whatever has focus, without the clipboard.
+package struct PasteText: Step {
+    let text: String
+    package var label: String { "Paste \(text.count) characters" }
+    package init(_ text: String) { self.text = text }
+
+    package func run(_ story: StoryContext) async throws { try await story.input.paste(text) }
+}
+
 /// Presses an element and drags it onto another.
 package struct Drag: Step {
     let target: Locator

@@ -100,6 +100,113 @@ final class ComposerUndo: ChatStoryline {
     }
 }
 
+/// A long draft, two lines typed and sixty pasted: the box stops at its ten lines with the
+/// caret's end in view, a wheel turn over it scrolls its text and not the transcript (nor a
+/// transcript scroll the box), a click in the middle puts the caret there, typing goes in there,
+/// and Return sends it all.
+final class ComposerLongDraft: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    static let typed = "First typed line\nSecond typed line\n"
+    static let pasted = (1...60).map { "Pasted line \($0) of a long draft, a sentence or so." }.joined(separator: "\n")
+
+    /// The composer's text view, under the field's centre.
+    @MainActor static func text(_ story: StoryContext) -> NSTextView? {
+        var view = StoryElement(StoryID.Composer.field)?.view
+        while let current = view {
+            if let text = current as? NSTextView { return text }
+            view = current.superview
+        }
+        return nil
+    }
+
+    /// The caret is in the visible part of the text.
+    @MainActor static func caretInView(_ text: NSTextView) -> Bool {
+        guard let window = text.window else { return false }
+        let screen = text.firstRect(forCharacterRange: text.selectedRange(), actualRange: nil)
+        let rect = text.convert(window.convertFromScreen(screen), from: nil)
+        return text.visibleRect.insetBy(dx: -1, dy: -1).contains(CGPoint(x: rect.minX, y: rect.midY))
+    }
+
+    /// Where the box's text is scrolled to, the transcript's last row's top, and the caret, as
+    /// noted between steps.
+    private var textTop: CGFloat?
+    private var rowTop: CGFloat?
+    private var caret: Int?
+
+    @MainActor private static func lastRowTop(_ story: StoryContext) throws -> CGFloat? {
+        try SwitchTab.rowIDs(story.activeChat()).last.flatMap { SwitchTab.top(of: $0) }
+    }
+
+    override func steps() -> [any Step] {
+        let field = Locator.id(StoryID.Composer.field)
+        let whole = Self.typed + Self.pasted
+        let inserted = "INSERTED "
+        return super.steps() + [
+            ReplayTurns([("Long one", PressesOutsideText.long(1)), ("Long two", PressesOutsideText.long(2))]),
+            WaitForFocus(field),
+            TypeText("First typed line"), Key(KeyChord(.returnKey, .shift)),
+            TypeText("Second typed line"), Key(KeyChord(.returnKey, .shift)),
+            PasteText(Self.pasted),
+            Expect("the whole text in the draft") { try $0.activeChat().draft == whole },
+            Expect("the box at its ten lines, scrolled to the caret at the end", found: { story in
+                guard let text = Self.text(story), let scroll = text.enclosingScrollView else { return "no composer text" }
+                return "box \(scroll.frame.height) pt, text \(text.frame.height) pt, caret \(text.selectedRange().location)"
+            }) { story in
+                guard let text = Self.text(story), let scroll = text.enclosingScrollView, let font = text.font,
+                    let line = text.layoutManager?.defaultLineHeight(for: font)
+                else { return false }
+                return abs(scroll.frame.height - (line * 10).rounded(.up)) < 1 && text.frame.height > scroll.frame.height * 2
+                    && text.selectedRange().location == (whole as NSString).length && Self.caretInView(text)
+            },
+            Expect("the box's and the transcript's places, noted") { [unowned self] story in
+                textTop = Self.text(story)?.visibleRect.minY
+                rowTop = try Self.lastRowTop(story)
+                return textTop != nil && rowTop != nil
+            },
+            Wheel(field, by: -300),
+            Expect("the box's text scrolled up, the transcript where it was", found: { [unowned self] story in
+                "text at \(Self.text(story)?.visibleRect.minY ?? -1) (was \(textTop ?? -1)), row at \((try? Self.lastRowTop(story)) ?? nil ?? -1) (was \(rowTop ?? -1))"
+            }) { [unowned self] story in
+                guard let top = Self.text(story)?.visibleRect.minY, let before = textTop, let row = try Self.lastRowTop(story), let was = rowTop
+                else { return false }
+                return top < before - 100 && abs(row - was) < 0.5
+            },
+            Click(field),
+            Expect("the caret in the middle of the text, in view") { [unowned self] story in
+                guard let text = Self.text(story), story.window?.firstResponder === text else { return false }
+                let at = text.selectedRange()
+                caret = at.location
+                return at.length == 0 && at.location > 100 && at.location < (whole as NSString).length - 100 && Self.caretInView(text)
+            },
+            TypeText(inserted),
+            Expect("the typing there, the caret after it and in view") { [unowned self] story in
+                guard let at = caret, let text = Self.text(story) else { return false }
+                let expected = (whole as NSString).replacingCharacters(in: NSRange(location: at, length: 0), with: inserted)
+                return try story.activeChat().draft == expected && text.string == expected
+                    && text.selectedRange().location == at + (inserted as NSString).length && Self.caretInView(text)
+            },
+            // The transcript scrolled leaves the box's text where it is.
+            Expect("the box's place, noted") { [unowned self] story in
+                textTop = Self.text(story)?.visibleRect.minY
+                return textTop != nil
+            },
+            Scroll(.answer(turn: 2), to: .by(-300)),
+            Expect("the box's text where it was") { [unowned self] story in
+                guard let top = Self.text(story)?.visibleRect.minY, let before = textTop else { return false }
+                return abs(top - before) < 0.5
+            },
+            Key(.returnKey),
+            Expect("all of it sent to the CLI") { [unowned self] story in
+                guard let at = caret else { return false }
+                let sent = (whole as NSString).replacingCharacters(in: NSRange(location: at, length: 0), with: inserted)
+                return try story.scriptedBackend().log.contains(.send(sent))
+            },
+            Expect("the composer empty") { story in try story.activeChat().draft.isEmpty && Self.text(story)?.string == "" },
+        ]
+    }
+}
+
 /// Fork from the second message: a new tab with the history before it, the message back in its
 /// composer, and the original left as it was.
 final class ForkFromMessage: ChatStoryline {

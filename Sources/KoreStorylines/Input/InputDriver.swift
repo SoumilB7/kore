@@ -182,6 +182,31 @@ package final class InputDriver {
         }
     }
 
+    /// A wheel turn over the element's centre, to the AppKit view under it as the window hands
+    /// one on: `points` positive moves down the content. A scroll view of AppKit's own (the
+    /// composer's text) takes it; SwiftUI's lists don't (see `scroll`).
+    package func wheel(_ element: StoryElement, by points: CGFloat) async throws {
+        let (window, point) = try await aim(element)
+        guard let view = window.contentView?.hitTest(point),
+            let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: points.isFinite ? Int32(max(min(-points, 10_000), -10_000)) : 0, wheel2: 0, wheel3: 0),
+            let event = NSEvent(cgEvent: wheel)
+        else { throw StoryFailure.other("can't turn the wheel over \(element.id)") }
+        view.scrollWheel(with: event)
+        await pass()
+    }
+
+    /// Text pasted into the focused text view, as ⌘V pastes it, from a pasteboard of the
+    /// storyline's own: the owner's clipboard is never touched.
+    package func paste(_ text: String) async throws {
+        guard let view = try keyWindow().firstResponder as? NSTextView else { throw StoryFailure.other("no text in focus to paste into") }
+        let board = NSPasteboard(name: NSPasteboard.Name("kore-storylines-paste"))
+        board.clearContents()
+        board.setString(text, forType: .string)
+        defer { board.releaseGlobally() }
+        guard view.readSelection(from: board) else { throw StoryFailure.other("the text in focus took no paste") }
+        await pass()
+    }
+
     /// Centres the element in its scroll view's visible part.
     private func bringIntoView(_ element: StoryElement, in scrollView: NSScrollView) async throws {
         guard let document = scrollView.documentView, let frame = element.frame else { return }
