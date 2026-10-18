@@ -24,6 +24,8 @@ package enum StorylineHost {
             }
             exit(0)
         }
+        // The app's own story registry runs only under a host.
+        StoryHost.installed = true
         StorylineSeams.events = { chat, event in Runner.current?.record(chat, event) }
         let runner = Runner(selection: options.selection, flags: options.flags, out: options.out)
         self.runner = runner
