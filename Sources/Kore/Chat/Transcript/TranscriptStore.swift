@@ -303,6 +303,9 @@ final class TranscriptStore {
     @ObservationIgnored private var sectionStarts: [Int] = []
     /// The latest turn's tools changed, so `fileTouches` is due again.
     @ObservationIgnored private var touchesDirty = false
+    /// Each turn's first entry. A turn can span sections (a message sent while it ran lands in
+    /// the middle of it), so a change to the turn marks from here.
+    @ObservationIgnored private var turnFirst: [String: UUID] = [:]
     /// Changes waiting to be drawn: streamed deltas are drawn once per `drawInterval`.
     @ObservationIgnored private var drawScheduled = false
     static let drawInterval: TimeInterval = 1.0 / 30
@@ -483,7 +486,7 @@ final class TranscriptStore {
         turns[turn]?.answerFrom = entry
         turns[turn]?.workEnded = Date()
         announceFold(turn)
-        changed(at: position[entry])
+        changed(turn: turn)
     }
 
     func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date()) {
@@ -846,6 +849,7 @@ final class TranscriptStore {
             entries[i] = entry
             position[entry.id] = i
             position[existing] = nil
+            if let turn = entry.turn, turnFirst[turn] == existing { turnFirst[turn] = entry.id }
             tools[tool] = entry.id
             touchesDirty = true
             changed(at: i)
@@ -1278,11 +1282,10 @@ final class TranscriptStore {
         changed(at: turnIndex(id))
     }
 
-    /// One of the turn's entries (all of them sit in one section), or the last entry for a turn
-    /// with none yet; nil for no turn.
+    /// The turn's first entry, or the last entry for a turn with none yet; nil for no turn.
     private func turnIndex(_ id: String?) -> Int? {
         guard let id else { return entries.count - 1 }
-        return entries.lastIndex { $0.turn == id } ?? (current == id ? entries.count - 1 : nil)
+        return turnFirst[id].flatMap { position[$0] } ?? (current == id ? entries.count - 1 : nil)
     }
 
     /// The chat's own card an agent's work shows in: its card, or its parent's, up to the one
@@ -1299,12 +1302,16 @@ final class TranscriptStore {
     private func append(_ entry: Entry) {
         position[entry.id] = entries.count
         entries.append(entry)
+        if let turn = entry.turn, turnFirst[turn] == nil { turnFirst[turn] = entry.id }
         changed(at: entries.count - 1)
     }
 
     private func insert(_ entry: Entry, at index: Int) {
         entries.insert(entry, at: index)
         for i in index..<entries.count { position[entries[i].id] = i }
+        if let turn = entry.turn, turnFirst[turn].flatMap({ position[$0] }).map({ index <= $0 }) ?? true {
+            turnFirst[turn] = entry.id
+        }
         invalidateAll()
         countHidden()
         changed()
