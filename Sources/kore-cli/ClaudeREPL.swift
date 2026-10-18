@@ -23,7 +23,7 @@ func runClaude(_ options: ClaudeSession.Options, debug: Bool) async {
                 out(text)
             case .thinkingDelta(let text, nil):
                 out("\(dim)\(text)\(reset)")
-            case .assistant(_, let blocks, nil):
+            case .assistant(_, let blocks, nil, _):
                 for case .toolUse(_, let name, let input) in blocks {
                     out("\n\(bold)⏺ \(name)\(reset)\(dim) \(input.compact.prefix(160))\(reset)\n")
                 }

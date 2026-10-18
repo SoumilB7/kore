@@ -52,9 +52,9 @@ final class CodexBackend: ChatBackend {
         if replayPending {
             replayPending = false
             // Read and parsed into events off the main thread, on a translator of its own.
-            let rollout = await session.rolloutPath
-            let settings = await Task.detached { rollout.map { CodexHistory.turnSettings(rollout: $0) } ?? [:] }.value
-            let replayed = await CodexTranslator.replayed(await session.history, settings: settings, folder: options.folder)
+            let path = await session.rolloutPath
+            let rollout = await Task.detached { path.map { CodexHistory.rollout(at: $0) } ?? CodexRollout() }.value
+            let replayed = await CodexTranslator.replayed(await session.history, rollout: rollout, folder: options.folder)
             translator.adopt(replayed.carried)
             yield(.replayed(replayed.events))
         }
@@ -146,6 +146,7 @@ final class CodexBackend: ChatBackend {
         guard let session else { return false }
         // Its own slash commands map to RPCs (as in t3code); anything else is a prompt.
         if text == "/compact" && files.isEmpty {
+            translator.compactRequested = true
             try await session.compact()
             return true
         }
@@ -179,6 +180,14 @@ final class CodexBackend: ChatBackend {
             case .answers(let answers): .answers(answers.mapValues { [$0] })
             }
         try? await session.respond(to: request, mapped)
+    }
+
+    /// `thread/compact/start`: Codex runs it as a turn of its own (a `contextCompaction` item).
+    func compact() async throws {
+        try await start()
+        guard let session else { return }
+        translator.compactRequested = true
+        try await session.compact()
     }
 
     func setMode(_ id: String) async throws {

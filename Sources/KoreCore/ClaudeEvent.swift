@@ -9,7 +9,8 @@ public enum ClaudeEvent: Sendable {
     case textDelta(String, parentToolUseId: String?)
     case thinkingDelta(String, parentToolUseId: String?)
     /// A finalized assistant content block (the CLI sends one message per block).
-    case assistant(messageId: String?, content: [ContentBlock], parentToolUseId: String?)
+    /// `usage`: the API call's token counts (how full the context is, as of this message).
+    case assistant(messageId: String?, content: [ContentBlock], parentToolUseId: String?, usage: JSONValue?)
     /// User-role messages: tool results, and echoes of slash command output. `toolUseResult` is
     /// the CLI's structured result of the tool (an edit's patch, a sub-agent's totals).
     case user(content: [ContentBlock], parentToolUseId: String?, toolUseResult: JSONValue?)
@@ -196,7 +197,7 @@ extension ClaudeEvent {
             self = .assistant(
                 messageId: json["message"]?["id"]?.string,
                 content: ContentBlock.list(json["message"]?["content"]),
-                parentToolUseId: parent)
+                parentToolUseId: parent, usage: json["message"]?["usage"])
         case "user":
             self = .user(
                 content: ContentBlock.list(json["message"]?["content"]), parentToolUseId: parent,

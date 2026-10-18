@@ -173,6 +173,13 @@ public actor ClaudeSession {
     }
 
     /// Effective settings; `applied.model` and `applied.effort` are what the next turn uses.
+    /// How full the context is: `totalTokens`, `maxTokens` (the window), `autoCompactThreshold`,
+    /// `isAutoCompactEnabled`, by category. "summary" answers from the last response's usage and
+    /// local estimates, without token-count calls. Works before the first message.
+    public func contextUsage() async throws -> JSONValue {
+        try await control("get_context_usage", ["detail": "summary"])
+    }
+
     public func settings() async throws -> JSONValue {
         try await control("get_settings")
     }

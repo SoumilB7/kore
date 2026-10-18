@@ -103,6 +103,8 @@ final class ClaudeBackend: ChatBackend {
             for await event in session.events { self.handle(event) }
         }
         yield(.controlsLoaded(await controls(session)))
+        // The context's fill and window as soon as the CLI is up (a resumed chat's too).
+        refreshContext()
     }
 
     private func controls(_ session: ClaudeSession) async -> ChatControls {
@@ -157,9 +159,21 @@ final class ClaudeBackend: ChatBackend {
         EventLog.loadAgents(event, from: self)
     }
 
+    /// Asks the CLI how full the context is (`get_context_usage`).
+    private func refreshContext() {
+        guard let session else { return }
+        Task {
+            guard let usage = try? await session.contextUsage() else { return }
+            translator.contextReported(usage)
+            flush()
+        }
+    }
+
     private func run(_ followup: ClaudeTranslator.Followup) {
         let folder = options.folder
         switch followup {
+        case .contextUsage:
+            refreshContext()
         case .peer(let uuid, let turn):
             // Stdout doesn't carry a peer's message; its transcript entry is written as the
             // turn starts, so it's retried briefly.
@@ -278,11 +292,23 @@ final class ClaudeBackend: ChatBackend {
         return (replayed.events, older.earlier != nil)
     }
 
+    // MARK: - Context
+
+    /// `/compact` as the CLI's own command (as Claude's VS Code extension sends it): no user
+    /// message in the transcript; "compacting", then the boundary, come from the CLI.
+    func compact() async throws {
+        try await start()
+        guard let session else { return }
+        translator.compactRequested = true
+        try await session.send("/compact")
+    }
+
     // MARK: - Actions
 
     func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
         try await start()
         guard let session else { return false }
+        if text.trimmingCharacters(in: .whitespaces) == "/compact" { translator.compactRequested = true }
         translator.openTurn(.user)
         flush()
         // Snapshot before the CLI can edit anything.

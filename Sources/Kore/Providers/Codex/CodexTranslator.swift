@@ -14,6 +14,13 @@ final class CodexTranslator {
     /// client asks (Kore, per turn): no agent switches them.
     private(set) var mode: String?
     private var planKnown = false
+    /// Kore asked for the compaction now running (`compact()`); a compaction Codex starts by itself is auto.
+    var compactRequested = false
+    private var compacting = false
+    /// The context in use (`tokenUsage.last.totalTokens`) and the model's window.
+    private var contextUsed: Int?
+    private var contextWindow: Int?
+    private var reportedContext: ContextUsage?
     private var replaying = false
 
     private var out: [ChatEvent] = []
@@ -139,6 +146,14 @@ final class CodexTranslator {
                 return
             }
             pending.removeAll()
+            if compacting {
+                // A compaction runs as a turn of its own: ending without its item completing is a failure.
+                compacting = false
+                compactRequested = false
+                if result.status != "completed" {
+                    out.append(.compactionFailed(Self.cleanError(result.errorMessage ?? "Compaction \(result.status)")))
+                }
+            }
             let outcome: TurnOutcome =
                 switch result.status {
                 case "interrupted": .interrupted
@@ -155,6 +170,12 @@ final class CodexTranslator {
             if method == "thread/settings/updated", agent == .main, let settings = CodexTurnSettings(params["threadSettings"] ?? .null) {
                 apply(settings, .user, at: .now)
             }
+            // After each model call, and after a compaction: the context's size and the window.
+            if method == "thread/tokenUsage/updated", agent == .main, let used = params["tokenUsage"]?["last"]?["totalTokens"]?.int {
+                contextUsed = used
+                contextWindow = params["tokenUsage"]?["modelContextWindow"]?.int ?? contextWindow
+                reportContext(used, at: .now)
+            }
         case .subThread(let thread, let method, let params):
             let child = CodexEvent(notification: method, params: params)
             if !spawned.contains(thread) { spawn(thread, parent: .main, toolId: nil, name: nil, prompt: nil, model: nil) }
@@ -169,6 +190,10 @@ final class CodexTranslator {
     }
 
     private func itemStarted(_ item: CodexItem, agent: AgentID) {
+        if item.type == "contextCompaction", agent == .main, !replaying {
+            compacting = true
+            out.append(.compactionStarted(auto: !compactRequested))
+        }
         if let tool = tool(item) {
             out.append(.toolStarted(tool, agent: agent))
             if agent == .main { turnItems.append(.tool) }
@@ -227,6 +252,8 @@ final class CodexTranslator {
         case "subAgentActivity", "collabAgentToolCall":
             agentItem(item, agent: agent)
         case "contextCompaction" where agent == .main:
+            compacting = false
+            compactRequested = false
             out.append(.compacted(at: .now))
         default:
             break
@@ -361,6 +388,17 @@ final class CodexTranslator {
         return out
     }
 
+    // MARK: - Context
+
+    /// As the Codex extension shows it: `last.totalTokens` of the raw window. Codex doesn't say
+    /// whether it compacts by itself. Sent only when something changed.
+    private func reportContext(_ used: Int, at date: Date) {
+        let usage = ContextUsage(used: used, window: contextWindow, autoCompacts: nil, at: date)
+        if let last = reportedContext, last.used == usage.used, last.window == usage.window { return }
+        reportedContext = usage
+        out.append(.contextUsage(usage))
+    }
+
     // MARK: - Modes
 
     /// The user picked a preset in Kore; Codex runs the next turn with it.
@@ -399,6 +437,8 @@ final class CodexTranslator {
         var spawned: Set<String>
         var finished: Set<String>
         var lastText: [String: String]
+        var contextUsed: Int?
+        var contextWindow: Int?
     }
 
     struct Replayed: Sendable {
@@ -407,15 +447,17 @@ final class CodexTranslator {
     }
 
     /// Replays `thread/resume` turns on a translator of its own, off the main thread.
-    static func replayed(_ turns: [JSONValue], settings: [String: CodexTurnSettings], folder: URL) async -> Replayed {
+    static func replayed(_ turns: [JSONValue], rollout: CodexRollout, folder: URL) async -> Replayed {
         await Task.detached(priority: .userInitiated) {
             let translator = CodexTranslator(folder: folder)
-            let events = translator.replay(turns, settings: settings)
+            let context = rollout.lastTokens.map { (used: $0, window: rollout.contextWindow) }
+            let events = translator.replay(turns, settings: rollout.turnSettings, context: context)
             return Replayed(
                 events: events,
                 carried: Carried(
                     mode: translator.mode, planMode: translator.planMode, planKnown: translator.planKnown,
-                    spawned: translator.spawned, finished: translator.finished, lastText: translator.lastText))
+                    spawned: translator.spawned, finished: translator.finished, lastText: translator.lastText,
+                    contextUsed: translator.contextUsed, contextWindow: translator.contextWindow))
         }.value
     }
 
@@ -428,6 +470,10 @@ final class CodexTranslator {
         spawned.formUnion(replayed.spawned)
         finished.formUnion(replayed.finished)
         lastText.merge(replayed.lastText) { live, _ in live }
+        contextUsed = replayed.contextUsed ?? contextUsed
+        contextWindow = replayed.contextWindow ?? contextWindow
+        // What the replay reported counts as reported (thread/resume sends the same count again).
+        if let used = contextUsed { reportedContext = ContextUsage(used: used, window: contextWindow, autoCompacts: nil, at: .now) }
     }
 
     // MARK: - Replay
@@ -435,7 +481,7 @@ final class CodexTranslator {
     /// `thread/resume` turns as events.
     /// `settings`: each turn's settings from the rollout (`CodexHistory.turnSettings`), for the
     /// mode changes between turns.
-    func replay(_ turns: [JSONValue], settings: [String: CodexTurnSettings] = [:]) -> [ChatEvent] {
+    func replay(_ turns: [JSONValue], settings: [String: CodexTurnSettings] = [:], context: (used: Int, window: Int?)? = nil) -> [ChatEvent] {
         replaying = true
         defer { replaying = false }
         for turn in turns {
@@ -466,6 +512,12 @@ final class CodexTranslator {
                 default: .completed
                 }
             finishTurn(id, outcome, duration: turn["durationMs"]?.int.map { .milliseconds($0) })
+        }
+        // The rollout's last token count: the fill when the chat was left.
+        if let context {
+            contextUsed = context.used
+            contextWindow = context.window ?? contextWindow
+            reportContext(context.used, at: Self.date(turns.last?["completedAt"]) ?? .now)
         }
         return take().events
     }

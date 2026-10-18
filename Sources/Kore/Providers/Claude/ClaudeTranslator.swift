@@ -12,6 +12,8 @@ final class ClaudeTranslator {
         case cliTurn(TurnID, startedAt: Date)
         /// The turn's changed files, once its end snapshot is diffed.
         case changes(TurnID, Task<[FileChange], Never>)
+        /// Ask the CLI how full the context is now (after a compaction).
+        case contextUsage
     }
 
     let files: TurnFiles
@@ -73,6 +75,18 @@ final class ClaudeTranslator {
     private var replayTime = Date()
     private var replayExitMode: String?
     static let modeTools: Set<String> = ["EnterPlanMode", "ExitPlanMode"]
+
+    // Context. `used` is the main agent's last model call: input + cache creation + cache read +
+    // output tokens, as Claude's VS Code extension counts it.
+    /// The session's model (system/init), whose window `result.modelUsage` names.
+    private var model: String?
+    private var contextUsed: Int?
+    /// The effective window, as the extension computes it (`Self.effectiveWindow`).
+    private var contextWindow: Int?
+    private var autoCompacts: Bool?
+    private var reportedContext: ContextUsage?
+    /// Kore asked for this compaction (`compact()` or a typed /compact): not an automatic one.
+    var compactRequested = false
 
     init(folder: URL, sessionId: String?) {
         self.folder = folder
@@ -148,6 +162,7 @@ final class ClaudeTranslator {
         switch event {
         case .sessionStarted(let info):
             identify(info.sessionId)
+            model = info.model ?? model
             // Repeated at every turn; it differs only when Kore launched in another mode.
             if let reported = info.permissionMode { setMode(reported, .user, at: .now) }
         case .permissionModeChanged(let reported):
@@ -156,8 +171,9 @@ final class ClaudeTranslator {
             stream(.answer, text)
         case .thinkingDelta(let text, nil):
             stream(.thinking, text)
-        case .assistant(_, let blocks, let parent):
+        case .assistant(_, let blocks, let parent, let usage):
             assistant(blocks, agent: parent.map(AgentID.sub) ?? .main)
+            if parent == nil, let usage { context(usage) }
         case .user(let blocks, let parent, let result):
             toolResults(blocks, result, agent: parent.map(AgentID.sub) ?? .main)
         case .permissionRequest(let request):
@@ -173,6 +189,14 @@ final class ClaudeTranslator {
             if let turn { followups.append(.peer(uuid: id, turn: turn)) }
         case .turnCompleted(let result):
             pending.removeAll()
+            // The window of the session's model (the extension reads it from here too).
+            let models = result.raw["modelUsage"]
+            if let usage = model.flatMap({ models?[$0] }) ?? models?.object?.values.first(where: { $0["contextWindow"] != nil }),
+                let window = usage["contextWindow"]?.int
+            {
+                contextWindow = Self.effectiveWindow(window, maxOutput: usage["maxOutputTokens"]?.int ?? 0)
+                if let used = contextUsed { reportContext(used, at: .now) }
+            }
             let outcome: TurnOutcome =
                 !result.isError
                 ? .completed
@@ -276,8 +300,16 @@ final class ClaudeTranslator {
                 openTurn(.cli)
                 if let turn { followups.append(.cliTurn(turn, startedAt: turnStart)) }
             case "compact_boundary":
-                // /compact live: the divider goes above the summary that follows.
-                out.append(.compacted(at: .now))
+                // /compact live: the divider goes above the summary that follows. The context's
+                // new size is asked for (it isn't on the boundary).
+                out.append(.compacted(at: .now, from: Self.preTokens(json)))
+                compactRequested = false
+                followups.append(.contextUsage)
+            case "status" where json["status"]?.string == "compacting":
+                out.append(.compactionStarted(auto: !compactRequested))
+            case "status" where json["compact_result"]?.string.map({ $0 != "success" }) == true:
+                compactRequested = false
+                out.append(.compactionFailed(json["compact_error"]?.string ?? "Compaction \(json["compact_result"]?.string ?? "failed")"))
             case "task_started" where !(json["task_type"]?.string.map { !$0.contains("agent") } ?? false):
                 // Background shell commands are tasks too (local_bash); only agents get a card.
                 let tool = json["tool_use_id"]?.string ?? json["task_id"]?.string ?? ""
@@ -460,12 +492,59 @@ final class ClaudeTranslator {
         for (index, entry) in entries.enumerated() {
             if skippingPrompt && index == 0 && entry["type"]?.string == "user" { continue }
             switch ClaudeEvent(message: entry) {
-            case .assistant(_, let blocks, _): assistant(blocks, agent: .sub(id))
+            case .assistant(_, let blocks, _, _): assistant(blocks, agent: .sub(id))
             case .user(let blocks, _, let result): toolResults(blocks, result, agent: .sub(id))
             default: break
             }
         }
         return out
+    }
+
+    // MARK: - Context
+
+    private func context(_ usage: JSONValue) {
+        let used = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"]
+            .compactMap { usage[$0]?.int }.reduce(0, +)
+        guard used > 0 else { return }
+        contextUsed = used
+        // A replay reports only its last value (`replay`), at the end.
+        if !replaying { reportContext(used, at: .now) }
+    }
+
+    /// The CLI's own count (`get_context_usage`): when it comes up, and after a compaction. Its
+    /// `autoCompactThreshold` is the effective window (967,000 of haiku's 1,000,000).
+    func contextReported(_ json: JSONValue) {
+        guard let used = json["totalTokens"]?.int else { return }
+        if let threshold = json["autoCompactThreshold"]?.int {
+            contextWindow = threshold
+        } else if let window = json["maxTokens"]?.int {
+            contextWindow = Self.effectiveWindow(window, maxOutput: 0)
+        }
+        autoCompacts = json["isAutoCompactEnabled"]?.bool ?? autoCompacts
+        contextUsed = used
+        reportContext(used, at: .now)
+    }
+
+    /// The context's size before a compaction: stdout says `compact_metadata.pre_tokens`, the
+    /// transcript `compactMetadata.preTokens`.
+    static func preTokens(_ boundary: JSONValue) -> Int? {
+        boundary["compact_metadata"]?["pre_tokens"]?.int ?? boundary["compactMetadata"]?["preTokens"]?.int
+    }
+
+    /// Claude's VS Code extension's `Wv0`: the window less the output reserve (at most 20k) and a
+    /// 13k buffer. The CLI auto-compacts there.
+    static func effectiveWindow(_ window: Int, maxOutput: Int) -> Int {
+        window - min(maxOutput > 0 ? maxOutput : 20_000, 20_000) - 13_000
+    }
+
+    /// Sent only when something changed.
+    private func reportContext(_ used: Int, at date: Date) {
+        let usage = ContextUsage(used: used, window: contextWindow, autoCompacts: autoCompacts, at: date)
+        if let last = reportedContext, last.used == usage.used, last.window == usage.window, last.autoCompacts == usage.autoCompacts {
+            return
+        }
+        reportedContext = usage
+        out.append(.contextUsage(usage))
     }
 
     // MARK: - Modes
@@ -515,6 +594,7 @@ final class ClaudeTranslator {
         var spawned: Set<String>
         var finished: [String: Bool]
         var agentFiles: [String: String]
+        var contextUsed: Int?
     }
 
     struct Replayed: Sendable {
@@ -542,7 +622,7 @@ final class ClaudeTranslator {
     private var carried: Carried {
         Carried(
             mode: mode, toolAgent: toolAgent, agentInputs: agentInputs, taskTool: taskTool, spawned: spawned,
-            finished: finished, agentFiles: agentFiles)
+            finished: finished, agentFiles: agentFiles, contextUsed: contextUsed)
     }
 
     /// Takes on a replay's state. `history` (an older page, prepended): only where its agents'
@@ -551,6 +631,9 @@ final class ClaudeTranslator {
         agentFiles.merge(replayed.agentFiles) { live, _ in live }
         guard !history else { return }
         mode = replayed.mode ?? mode
+        contextUsed = replayed.contextUsed ?? contextUsed
+        // What the replay reported counts as reported.
+        if let used = replayed.contextUsed { reportedContext = ContextUsage(used: used, window: nil, autoCompacts: nil, at: .now) }
         toolAgent.merge(replayed.toolAgent) { live, _ in live }
         agentInputs.merge(replayed.agentInputs) { live, _ in live }
         taskTool.merge(replayed.taskTool) { live, _ in live }
@@ -602,7 +685,8 @@ final class ClaudeTranslator {
             }
             if ClaudeHistory.isBoundary(message) {
                 close()
-                out.append(.compacted(at: time))
+                out.append(.compacted(at: time, from: Self.preTokens(message)))
+                contextUsed = nil  // the last call before the compaction no longer describes it
                 continue
             }
             if message["type"]?.string == "user" {
@@ -628,6 +712,7 @@ final class ClaudeTranslator {
         }
         close()
         block = nil
+        if let used = contextUsed { reportContext(used, at: replayTime) }
         return take().events
     }
 
