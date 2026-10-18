@@ -8,30 +8,39 @@ struct ComposerBar: View {
     let attach: () -> Void
     let slash: () -> Void
     @StateObject private var plusHovered = Local(false)
+    @StateObject private var slashHovered = Local(false)
 
     var body: some View {
         HStack(spacing: Space.xxl) {
-            Button(action: attach) {
-                Image(systemName: "plus")
-                    .font(Glyph.attach)
-                    .foregroundStyle(plusHovered.value ? Theme.text : Theme.secondary)
-            }
-            .buttonStyle(.plain)
-            .onHover { plusHovered.value = $0 }
-            .help("Attach")
-            .accessibilityLabel(Text("Attach files"))
-            .storyID(StoryID.Composer.attach)
+            // Each key takes clicks over a whole icon-button square, not just its inked pixels;
+            // the pair takes the same room as before, so nothing in the row moves.
+            HStack(spacing: 0) {
+                Button(action: attach) {
+                    Image(systemName: "plus")
+                        .font(Glyph.attach)
+                        .foregroundStyle(plusHovered.value ? Theme.text : Theme.secondary)
+                        .hitBox()
+                }
+                .buttonStyle(.plain)
+                .onHover { plusHovered.value = $0 }
+                .help("Attach")
+                .accessibilityLabel(Text("Attach files"))
+                .storyID(StoryID.Composer.attach)
 
-            Button(action: slash) {
-                Text("/")
-                    .font(Glyph.slash)
-                    .foregroundStyle(Theme.secondary)
-                    .frame(width: Size.slashGlyph, height: Size.slashGlyph)
-                    .overlay(RoundedRectangle(cornerRadius: Radius.glyph).stroke(Theme.secondary, lineWidth: Size.slashStroke))
+                Button(action: slash) {
+                    let color = slashHovered.value ? Theme.text : Theme.secondary
+                    SlashMark()
+                        .stroke(color, style: StrokeStyle(lineWidth: Size.slashLine, lineCap: .round))
+                        .frame(width: Size.slashGlyph, height: Size.slashGlyph)
+                        .overlay(RoundedRectangle(cornerRadius: Radius.glyph).stroke(color, lineWidth: Size.slashStroke))
+                        .hitBox()
+                }
+                .buttonStyle(.plain)
+                .onHover { slashHovered.value = $0 }
+                .help("Slash commands")
+                .storyID(StoryID.Composer.slash)
             }
-            .buttonStyle(.plain)
-            .help("Slash commands")
-            .storyID(StoryID.Composer.slash)
+            .padding(.horizontal, -Space.sm)
 
             // The slot is kept once there's a session, so the bar doesn't shift when usage arrives.
             if chat.status.sessionId != nil {
@@ -59,7 +68,7 @@ struct ComposerBar: View {
         HStack(spacing: Space.xxl) {
             if compacting {
                 Text("Compacting…").font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(1).fixedSize()
-                    .padding(.leading, -Space.sm)
+                    .padding(.horizontal, -Space.sm)
             }
             if !chat.controls.models.isEmpty && density != .minimal {
                 ModelMenu(chat: chat, showEffort: density == .full).storyID(StoryID.Composer.model)
@@ -211,5 +220,22 @@ struct ModeMenu: View {
                 Image(nsImage: ModeIcons.image(mode.icon))
             }
         }
+    }
+}
+
+/// The "/" key's stroke, drawn rather than set in type so it sits in the middle of its box.
+private struct SlashMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.minX + rect.width * 0.62, y: rect.minY + rect.height * 0.27))
+            path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.38, y: rect.minY + rect.height * 0.73))
+        }
+    }
+}
+
+extension View {
+    /// A glyph key's click area: the icon-button square around it.
+    fileprivate func hitBox() -> some View {
+        frame(width: Size.iconButton, height: Size.iconButton).contentShape(Rectangle())
     }
 }

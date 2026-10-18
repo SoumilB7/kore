@@ -24,7 +24,6 @@ enum TextStyle {
 @MainActor
 enum Glyph {
     static var attach: Font { .kore(14) }
-    static var slash: Font { .kore(11, .semibold) }
     static var send: Font { .kore(12, .bold) }
     static var remove: Font { .kore(13) }
 }

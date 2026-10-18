@@ -92,6 +92,7 @@ enum Size {
     static let closeGlyph: CGFloat = 18
     static let slashGlyph: CGFloat = 16
     static let slashStroke: CGFloat = 1.2
+    static let slashLine: CGFloat = 1.4
     static let thumb: CGFloat = 44
     static let chip: CGFloat = 30
     static let chipNameMax: CGFloat = 180
