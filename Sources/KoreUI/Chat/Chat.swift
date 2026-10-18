@@ -54,7 +54,7 @@ package final class Chat: Identifiable {
     /// own until then. `forkedFrom` names the original chat.
     init(
         provider: ProviderDescriptor, folder: URL, resume session: SessionSummary? = nil, fork: ForkPoint? = nil,
-        forkedFrom: String? = nil
+        forkedFrom: String? = nil, modeMemory: ModeMemory = .shared
     ) {
         self.provider = provider
         self.folder = folder
@@ -62,7 +62,7 @@ package final class Chat: Identifiable {
         self.fork = fork
         self.forkedFrom = forkedFrom
         awaitingHistory = session != nil
-        controls = ControlsStore(provider: provider)
+        controls = ControlsStore(provider: provider, memory: modeMemory)
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
         transcript.providerName = provider.name
@@ -105,6 +105,7 @@ package final class Chat: Identifiable {
         approvals.apply(event)
         controls.apply(event)
         noteAgentModeChange(event)
+        dropUnofferedMode(event)
         restoreQueued(event)
         status.apply(event)
         context.apply(event)
@@ -368,7 +369,8 @@ package final class Chat: Identifiable {
         controls.agentChangeSeq &+= 1
     }
 
-    func setMode(_ id: String) {
+    /// `remember`: the user picked it, so new chats start in it.
+    func setMode(_ id: String, remember: Bool = true) {
         controls.changedBy = nil
         let previous = controls.mode
         controls.mode = id
@@ -376,6 +378,7 @@ package final class Chat: Identifiable {
         Task {
             do {
                 try await backend?.setMode(id)
+                if remember { controls.remember(id) }
             } catch {
                 controls.mode = previous
                 fail("Couldn't switch mode: \(error)")
@@ -388,6 +391,12 @@ package final class Chat: Identifiable {
         controls.planMode = on
         let backend = backend
         Task { await backend?.setPlanMode(on) }
+    }
+
+    /// A new chat's mode (the one last picked) that its model doesn't offer gives way to the first.
+    private func dropUnofferedMode(_ event: ChatEvent) {
+        guard case .controlsLoaded = event, resume == nil, !controls.modeOffered else { return }
+        setMode(provider.modes[0].id, remember: false)
     }
 
     /// Shift+Tab, as in each CLI.

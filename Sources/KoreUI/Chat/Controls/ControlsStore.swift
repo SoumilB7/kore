@@ -19,10 +19,20 @@ final class ControlsStore {
     var changedBy: String?
     /// Bumped by each agent change: the pill flashes once.
     var agentChangeSeq = 0
+    private let memory: ModeMemory
 
-    init(provider: ProviderDescriptor) {
+    /// Starts in the mode the user last picked, while it's offered; else the provider's first.
+    init(provider: ProviderDescriptor, memory: ModeMemory = .shared) {
         self.provider = provider
-        mode = provider.modes[0].id
+        self.memory = memory
+        let offered = provider.availableModes(nil)
+        mode = memory.mode(for: provider).flatMap { id in offered.first { $0.id == id && $0.id != "plan" }?.id } ?? provider.modes[0].id
+    }
+
+    /// The user picked `id`: new chats start in it. Plan isn't kept: it's for the task at hand.
+    func remember(_ id: String) {
+        guard id != "plan", provider.modes.contains(where: { $0.id == id }) else { return }
+        memory.remember(id, for: provider)
     }
 
     func apply(_ event: ChatEvent) {
@@ -45,6 +55,9 @@ final class ControlsStore {
 
     var availableModes: [ModeOption] { provider.availableModes(currentModel) }
 
+    /// The mode is one this model offers (a model without Auto doesn't).
+    var modeOffered: Bool { availableModes.contains { $0.id == mode } }
+
     var activeMode: ModeOption {
         if planMode, let plan = provider.planToggle { return plan }
         return permissionsMode
@@ -64,4 +77,23 @@ final class ControlsStore {
         guard let effort else { return nil }
         return effort == "xhigh" ? "Extra high" : effort.capitalized
     }
+}
+
+/// The mode the user last picked for each provider, which new chats start in: one small key
+/// per provider ("lastMode.claude"). The agent's own changes aren't picks.
+struct ModeMemory {
+    private static let key = "lastMode."
+    /// Nil keeps and reads nothing.
+    let defaults: UserDefaults?
+
+    /// Dev runs (any KORE_ hook) and storylines start where a fresh install does, and leave
+    /// the owner's choice alone.
+    @MainActor static var shared: ModeMemory {
+        let dev = StoryHost.installed || ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KORE_") }
+        return ModeMemory(defaults: dev ? nil : .standard)
+    }
+
+    func mode(for provider: ProviderDescriptor) -> String? { defaults?.string(forKey: Self.key + provider.id) }
+
+    func remember(_ id: String, for provider: ProviderDescriptor) { defaults?.set(id, forKey: Self.key + provider.id) }
 }

@@ -77,6 +77,16 @@ final class CodexBackend: ChatBackend {
             rollout = await session.rolloutPath.map(CodexRolloutReader.init)
             let replayed = await replay(newest?.turns ?? [], session)
             translator.adopt(replayed.carried)
+            // It carries on with the settings its history ended with (the pill shows them), not
+            // the ones it launched with.
+            if let mode = replayed.carried.mode, let permissions = CodexSession.Permissions(rawValue: mode) {
+                options.mode = mode
+                await session.setPermissions(permissions)
+            }
+            if replayed.carried.planKnown {
+                options.planMode = replayed.carried.planMode
+                await session.setPlanMode(replayed.carried.planMode)
+            }
             yield(.replayed(replayed.events))
             yield(.earlierHistory(earlierFrom != nil))
         }

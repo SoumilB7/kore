@@ -86,6 +86,7 @@ final class ClaudeBackend: ChatBackend {
             resume: fork?.from ?? sessionId)
         if let fork { launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at] }
         let starting = Task { try await ClaudeSession.start(launch) }
+        var pastMode: String?
         if let past {
             replayPending = false
             let first = await past.value
@@ -93,11 +94,20 @@ final class ClaudeBackend: ChatBackend {
             // Parsed into events off the main thread, on a translator of its own.
             let replayed = await ClaudeTranslator.replayed(first.messages, folder: folder, sessionId: translator.sessionId)
             translator.adopt(replayed.carried)
+            pastMode = replayed.carried.mode
             yield(.replayed(replayed.events))
             yield(.earlierHistory(earlierFrom != nil))
         }
         let session = try await starting.value
         self.session = session
+        // A resumed chat carries on in the mode its history ended in (the pill shows it), not
+        // the one it launched in. One the CLI refuses (Bypass) it reports at the first turn.
+        if let mode = pastMode, mode != options.mode, let permission = ClaudeSession.PermissionMode(rawValue: mode) {
+            do {
+                try await session.setPermissionMode(permission)
+                options.mode = mode
+            } catch {}
+        }
         // Ends when the process does; `close()` cancels it.
         pump = Task {
             for await event in session.events { self.handle(event) }
