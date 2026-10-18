@@ -63,6 +63,51 @@ final class AgentMapOpen: ChatStoryline {
     }
 }
 
+/// A stopped agent waits in the map's closed group below the tree; opened, the group shows it.
+/// Run again, it leaves the group for its place in the tree, live under the open map.
+final class AgentMapStopped: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents] }
+    override class var script: CLIScript {
+        func spawn(_ id: String, _ name: String) -> Beat {
+            .event(.agentSpawned(AgentInfo(
+                id: id, parent: .main, toolId: nil, name: name, type: nil, model: nil, prompt: "\(name).", background: false)))
+        }
+        return CLIScript(turns: [
+            [
+                .startTurn, spawn("scout", "Scout the code"), spawn("writer", "Write the summary"),
+                .event(.agentFinished(id: "writer", .completed, result: "Written")),
+                .event(.agentFinished(id: "scout", .stopped, result: nil)),
+                .stream(.answer, "The scout stopped."), .finishTurn(.completed),
+            ],
+            [.startTurn, .event(.agentResumed(id: "scout")), .stream(.answer, "The scout goes on."), .finishTurn(.completed)],
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        let scout = StoryID.AgentMap.row("scout"), writer = StoryID.AgentMap.row("writer")
+        return super.steps() + [
+            Send("Use some helpers"), TurnFinished(1), WaitIdle(),
+            Press(.id(StoryID.Titlebar.agents)),
+            ExpectElement(.id(writer), .visible),
+            ExpectElement(.id(StoryID.AgentMap.stopped), .visible),
+            ExpectElement(.id(scout), .absent),
+            Press(.id(StoryID.AgentMap.stopped)),
+            ExpectElement(.id(scout), .visible),
+            Expect("the stopped agent below the tree") { _ in
+                guard let top = StoryElement(writer)?.frame?.maxY, let below = StoryElement(scout)?.frame?.maxY else { return false }
+                return below < top
+            },
+            Send("Go on"), TurnFinished(2),
+            ExpectElement(.id(StoryID.AgentMap.stopped), .absent),
+            ExpectElement(.id(scout), .visible),
+            Expect("the resumed agent back in its place, above the next") { _ in
+                guard let top = StoryElement(scout)?.frame?.maxY, let below = StoryElement(writer)?.frame?.maxY else { return false }
+                return top > below
+            },
+        ]
+    }
+}
+
 extension AgentMapOpen {
     /// Each folder window's chats and whether their maps are open, for a failure's report.
     @MainActor static func maps(_ story: StoryContext) -> String? {
