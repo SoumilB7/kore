@@ -19,9 +19,10 @@ struct ContextWheel: View {
             chat.compact()
         } label: {
             ZStack {
-                if context.compacting {
+                switch Self.face(context) {
+                case .spinning:
                     SpinningArc(lineWidth: Size.contextRingStroke)
-                } else {
+                case .ring:
                     ContextRing(fraction: context.fraction ?? 0, threshold: context.threshold)
                         .overlay {
                             Image(systemName: "arrow.down.right.and.arrow.up.left")
@@ -55,6 +56,11 @@ struct ContextWheel: View {
         }
         .onDisappear { card.close() }
     }
+
+    enum Face { case spinning, ring }
+
+    /// What the slot draws: never nothing, so its hover fill always has a ring in it.
+    static func face(_ context: ContextStore) -> Face { context.compacting ? .spinning : .ring }
 
     /// "Context 62% used, 597k of 967k tokens. Compact."
     private static func accessibility(_ context: ContextStore) -> String {

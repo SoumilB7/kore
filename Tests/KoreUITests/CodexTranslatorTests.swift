@@ -37,4 +37,22 @@ struct CodexTranslatorTests {
         #expect(!shape.contains("final"))
         #expect(shape[stopped...].contains("toolFinished"))
     }
+
+    /// A compaction Codex can't run (the thread's model isn't the account's): one line with the
+    /// API's message, not its JSON, and no second line for its turn (Codex's `error`
+    /// notification and the failed turn both carry it).
+    @Test func aFailedCompactionIsOneParsedLine() throws {
+        let events = try Drive.codex("codex-compact-failed")
+        let failures = events.compactMap { if case .compactionFailed(let reason) = $0 { reason } else { nil } }
+        #expect(failures == ["The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."])
+        #expect(shape(events).suffix(3) == ["compactionStarted false", "compactionFailed", "turnFinished completed"])
+    }
+
+    /// Moved to the fallback model first, it compacts: the divider, then the context it left.
+    @Test func aCompactionOnTheFallbackModel() throws {
+        let events = try Drive.codex("codex-compact-fallback")
+        #expect(shape(events).suffix(3) == ["compactionStarted false", "compacted", "turnFinished completed"])
+        let used = events.compactMap { if case .contextUsage(let usage) = $0 { usage.used } else { nil } }
+        #expect(used.last == 5482)
+    }
 }

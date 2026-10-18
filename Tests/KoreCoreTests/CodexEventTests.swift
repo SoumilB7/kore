@@ -68,4 +68,18 @@ struct CodexEventTests {
         }
         #expect(order == ["turn", "command"])
     }
+
+    /// Codex passes the API's error body through: alone, after its own words, or not at all.
+    @Test func errorsReadAsTheirMessage() {
+        let model = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account."
+        let compact = #"Error running remote compact task: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"\#(model)"}}"#
+        #expect(CodexError.readable(compact) == model)
+        #expect(CodexError.readable(#"{"error":{"message":"Rate limit reached"}}"#) == "Rate limit reached")
+        #expect(CodexError.readable(#"{"message":"Bad gateway"}"#) == "Bad gateway")
+        #expect(CodexError.readable("stream disconnected before completion") == "stream disconnected before completion")
+        #expect(CodexError.readable("unbalanced { brace") == "unbalanced { brace")
+        #expect(CodexAppServer.Failure.rpc(code: -32603, message: compact).localizedDescription == model)
+        let failed = CodexTurnResult(["turn": ["id": "t", "status": "failed", "error": ["message": .string(compact)]]])
+        #expect(failed.errorMessage == model)
+    }
 }

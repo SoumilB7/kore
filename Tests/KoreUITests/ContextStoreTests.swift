@@ -57,4 +57,16 @@ struct ContextStoreTests {
         #expect([999, 1_234, 18_400, 1_100_000].map(ContextStore.tokens) == ["999", "1.2k", "18k", "1.1M"])
         #expect([0.004, 0.62, 0].map(ContextStore.percent) == ["<1%", "62%", "0%"])
     }
+
+    /// The wheel's slot always has a ring: before any usage (a thread resumed with none), and
+    /// after a compaction that failed before one came. An empty slot took the hover fill alone.
+    @Test func theWheelDrawsARingWithoutUsage() {
+        let store = ContextStore()
+        #expect(ContextWheel.face(store) == .ring)
+        store.begin()
+        #expect(ContextWheel.face(store) == .spinning)
+        store.apply(.compactionFailed("The model is not supported"))
+        #expect(store.usage == nil)
+        #expect(ContextWheel.face(store) == .ring)
+    }
 }

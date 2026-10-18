@@ -91,6 +91,31 @@ struct FakeCLITests {
         #expect(kinds == ["sessionStarted cwd", "tool Bash", "result hi false", "text done", "turnCompleted"])
     }
 
+    /// A thread opened on a model the account can't use, moved to the fallback (`setModel`, as
+    /// the chat does) with no turn since: the compaction runs on the fallback. Codex only takes a
+    /// model with a turn, or as the thread loads, so it's unloaded and resumed on it first.
+    @Test func compactsOnTheModelTheChatMovedTo() async throws {
+        let work = try standIn("codex", "codex-compact-fallback.jsonl")
+        defer { done(work) }
+        let session = try await CodexSession.start(.init(cwd: work, model: "gpt-6.1-sol"))
+        #expect(await session.threadModel == "gpt-6.1-sol")
+        await session.setModel("gpt-6-luna")
+        try await session.compact()
+        #expect(await session.threadModel == "gpt-6-luna")
+        var status: String?
+        for await event in session.events {
+            if case .turnCompleted(let result) = event {
+                status = result.status
+                break
+            }
+        }
+        await session.close()
+        #expect(status == "completed")
+        let resume = CodexSession.reopenParams("t", model: "gpt-6-luna", cwd: work, .askForApproval)
+        #expect(resume["model"]?.string == "gpt-6-luna")
+        #expect(resume["excludeTurns"]?.bool == true)
+    }
+
     @Test func endsWithAReasonWhenKoreSendsSomethingElse() async throws {
         let work = try standIn("codex", "codex-command-turn.jsonl")
         defer { done(work) }
