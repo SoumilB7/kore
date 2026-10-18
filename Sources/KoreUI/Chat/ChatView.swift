@@ -1,127 +1,131 @@
 import SwiftUI
 
-/// One chat: the transcript above, approval cards and the composer below, overlays on top.
-/// Each part is its own view reading only its own store, so typing re-renders the composer
-/// alone and a streamed token re-renders one row.
+/// The chat tabs: the transcripts of the last chats shown, kept as they were, under one set of
+/// approval cards, composer and overlays bound to the active chat. Switching between kept chats
+/// shows another transcript and puts another chat in the composer; nothing is built again and
+/// focus stays where it is. Each part is its own view reading only its own store, so typing
+/// re-renders the composer alone and a streamed token re-renders one row.
 struct ChatView: View {
-    let chat: Chat
-    /// Opens one of the chat's sub-agents in its own tab.
-    var openAgent: (String) -> Void = { _ in }
-    /// Opens a fork of the chat in a new tab.
-    var openFork: (ForkStart, String) -> Void = { _, _ in }
+    let workspace: Workspace
+    /// The active tab's chat; nil while another kind of tab shows, and this view waits hidden.
+    let active: Chat?
     @Environment(\.chatColumn) private var column
-    /// Switches to the tab of the chat this one was forked from, while it's open.
-    var openOriginal: (() -> Void)?
     @FocusState private var composerFocused: Bool
-    /// KORE_FORK forks once per run (the original's view appears again when switched back to).
+    /// KORE_FORK forks once per run.
     private static var forkedOnce = false
-    @StateObject private var viewer = Local<ImageEditor?>(nil)
-    /// The turn whose changes are open in the modal.
-    @StateObject private var changesTurn = Local<String?>(nil)
+    @StateObject private var kept = KeptChats()
+    /// The image open in the viewer, and the turn whose changes are open in the modal: the
+    /// active chat's, by its id, so a switch never shows them over another chat.
+    @StateObject private var viewer = Local<(chat: UUID, editor: ImageEditor)?>(nil)
+    @StateObject private var changesTurn = Local<(chat: UUID, turn: String)?>(nil)
 
     var body: some View {
+        let chats = kept.update(active, tabs: workspace.tabs)
+        if let chat = active ?? kept.latest {
+            content(chat, chats: chats)
+                .opacity(active == nil ? 0 : 1)
+                .allowsHitTesting(active != nil)
+                .accessibilityHidden(active == nil)
+        }
+    }
+
+    private func content(_ chat: Chat, chats: [Chat]) -> some View {
         VStack(spacing: 0) {
-            TranscriptTimeline(store: chat.transcript, actions: actions).equatable()
-                // The spinner's glyph takes the mode's colour, as the composer outline does.
-                .environment(\.spinnerTint, chat.controls.tint)
+            ZStack {
+                ForEach(chats) { kept in
+                    let shown = kept === active
+                    TranscriptTimeline(store: kept.transcript, actions: actions(kept)).equatable()
+                        // The spinner's glyph takes the mode's colour, as the composer outline does.
+                        .environment(\.spinnerTint, kept.controls.tint)
+                        .environment(\.hiddenTab, !shown)
+                        .opacity(shown ? 1 : 0)
+                        .allowsHitTesting(shown)
+                        .accessibilityHidden(!shown)
+                }
+            }
             VStack(spacing: Space.lg) {
                 ApprovalsView(chat: chat)
-                ComposerView(chat: chat, focused: $composerFocused) { view($0, pending: true) }
+                ComposerView(chat: chat, focused: $composerFocused) { view($0, of: chat, pending: true) }
+                    // Hidden under another tab, it takes no focus.
+                    .disabled(active == nil)
             }
             .padding(.horizontal, column.composerPadding)
             .padding(.bottom, Space.xxxl)
             .frame(maxWidth: column.composerMaxWidth)
         }
         .contextCard(chat)
+        .environment(\.hiddenTab, active == nil)
         .overlay {
-            if chat.agentMap.isOpen {
-                AgentMapView(chat: chat) { id in
-                    chat.agentMap.close()
-                    openAgent(id)
-                }
-            } else if let turn = changesTurn.value {
-                ChangesView(changes: chat.transcript.changes(ofTurn: turn), folder: chat.folder, close: closeChanges)
-            } else if let editor = viewer.value {
-                ImageViewer(
-                    editor: editor, actionTitle: editor.pendingID == nil ? "Add to message" : "Done",
-                    finish: { finishViewing(editor) }, close: closeViewer
-                )
-            }
+            // None while hidden: the agent map's keys would reach it from under a file.
+            if active != nil { overlay(chat) }
         }
-        .animation(Motion.fade, value: viewer.value?.id)
-        .animation(Motion.fade, value: changesTurn.value)
+        .animation(Motion.fade, value: viewer.value?.editor.id)
+        .animation(Motion.fade, value: changesTurn.value?.turn)
         .animation(Motion.fade, value: chat.agentMap.isOpen)
-        .onChange(of: chat.agentMap.isOpen) { _, open in composerFocused = !open }
-        .onAppear {
-            composerFocused = true
-            if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, pending: true) }
-            // KORE_FORK_ANSWER=<n>: fork through the nth answer's turn, the same way.
-            if let n = ProcessInfo.processInfo.environment["KORE_FORK_ANSWER"].flatMap(Int.init), !Self.forkedOnce,
-                !chat.title.hasSuffix(" (fork)")
-            {
-                Self.forkedOnce = true
-                let actions = actions
-                Task { @MainActor in
-                    for _ in 0..<40 {
-                        let answers = chat.transcript.entries.filter { $0.kind == .answer && $0.done }
-                        if answers.indices.contains(n - 1), !chat.controls.models.isEmpty {
-                            actions.forkAfter(answers[n - 1])
-                            return
-                        }
-                        try? await Task.sleep(for: .milliseconds(500))
-                    }
-                }
-            }
-            if let n = DevSnapshot.forkMessage, !Self.forkedOnce, !chat.title.hasSuffix(" (fork)") {
-                Self.forkedOnce = true
-                // Test hook: fork from the nth user message once the history and the CLI's
-                // controls are in (the fork takes the model and effort from them).
-                let actions = actions
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(DevSnapshot.forkAfter))
-                    for _ in 0..<40 {
-                        let users = chat.transcript.entries.filter { $0.kind == .user }
-                        if users.indices.contains(n - 1), !chat.controls.models.isEmpty {
-                            actions.fork(users[n - 1])
-                            return
-                        }
-                        try? await Task.sleep(for: .milliseconds(500))
-                    }
-                }
-            }
+        // A switch shows the other chat as it is: its mode's outline, its context, its overlays
+        // appear at once, not animated from the last chat's.
+        .transaction(value: chat.id) { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
         }
-        .task { await chat.startOnce() }
+        .onChange(of: chat.agentMap.isOpen) { _, open in composerFocused = !open }
+        .onChange(of: active?.id, initial: true) {
+            // The viewer and the changes modal belonged to the last chat.
+            if viewer.value != nil { viewer.value = nil }
+            if changesTurn.value != nil { changesTurn.value = nil }
+            guard let active else { return }
+            composerFocused = true
+            devHooks(active)
+        }
+        .task(id: chat.id) { await chat.startOnce() }
     }
 
-    /// What the transcript's rows do.
-    private var actions: TranscriptActions {
-        let chat = chat
+    /// The agent map, the changes modal or the image viewer, over the active chat.
+    @ViewBuilder private func overlay(_ chat: Chat) -> some View {
+        if chat.agentMap.isOpen {
+            AgentMapView(chat: chat) { id in
+                chat.agentMap.close()
+                workspace.openAgent(id, of: chat)
+            }
+        } else if let open = changesTurn.value, open.chat == chat.id {
+            ChangesView(changes: chat.transcript.changes(ofTurn: open.turn), folder: chat.folder, close: closeChanges)
+        } else if let open = viewer.value, open.chat == chat.id {
+            let editor = open.editor
+            ImageViewer(
+                editor: editor, actionTitle: editor.pendingID == nil ? "Add to message" : "Done",
+                finish: { finishViewing(editor, in: chat) }, close: closeViewer
+            )
+        }
+    }
+
+    /// What the rows of a chat's transcript do.
+    private func actions(_ chat: Chat) -> TranscriptActions {
+        let workspace = workspace
         var actions = TranscriptActions()
         actions.toggleTurn = { chat.transcript.toggle(turn: $0) }
         actions.toggle = { key in
             chat.transcript.toggle(key)
             if let agent = chat.transcript.agentID(forCard: key) { chat.loadAgentIfNeeded(agent) }
         }
-        actions.openImage = { view($0, pending: false) }
+        actions.openImage = { view($0, of: chat, pending: false) }
         actions.viewChanges = { turn in
-            changesTurn.value = turn
+            changesTurn.value = (chat.id, turn)
             composerFocused = false
         }
         actions.stopAgent = { chat.stopAgent($0) }
-        actions.openAgent = openAgent
-        let openFork = openFork
+        actions.openAgent = { workspace.openAgent($0, of: chat) }
         actions.fork = { entry in
             Task {
-                if let start = await chat.forkStart(entry) { openFork(start, entry.text) }
+                if let start = await chat.forkStart(entry) { workspace.fork(chat, start, text: entry.text) }
             }
         }
         actions.forkAfter = { entry in
             Task {
-                if let start = await chat.forkStart(after: entry) { openFork(start, "") }
+                if let start = await chat.forkStart(after: entry) { workspace.fork(chat, start, text: "") }
             }
         }
         actions.loadEarlierConversation = { chat.loadEarlierConversation() }
-        actions.openOriginal = openOriginal
+        actions.openOriginal = workspace.openOriginal(of: chat)
         actions.folder = chat.folder
         return actions
     }
@@ -133,14 +137,14 @@ struct ChatView: View {
 
     // MARK: Image viewer
 
-    private func view(_ attachment: Attachment, pending: Bool) {
-        viewer.value = ImageEditor(attachment, pending: pending)
+    private func view(_ attachment: Attachment, of chat: Chat, pending: Bool) {
+        viewer.value = ImageEditor(attachment, pending: pending).map { (chat.id, $0) }
         composerFocused = false
     }
 
     /// A composer image takes its markup in place; a sent image (marked up or not) is added to
     /// the next message.
-    private func finishViewing(_ editor: ImageEditor) {
+    private func finishViewing(_ editor: ImageEditor, in chat: Chat) {
         if let id = editor.pendingID {
             if !editor.strokes.isEmpty, let url = editor.render() { chat.replaceAttachment(id, with: url) }
         } else if let url = editor.strokes.isEmpty ? (editor.url ?? editor.render()) : editor.render() {
@@ -152,5 +156,83 @@ struct ChatView: View {
     private func closeViewer() {
         viewer.value = nil
         composerFocused = true
+    }
+
+    // MARK: Dev hooks
+
+    /// KORE_VIEW_IMAGE, KORE_FORK_ANSWER and KORE_FORK_MESSAGE, as a chat is shown.
+    private func devHooks(_ chat: Chat) {
+        if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, of: chat, pending: true) }
+        // KORE_FORK_ANSWER=<n>: fork through the nth answer's turn, the same way.
+        if let n = ProcessInfo.processInfo.environment["KORE_FORK_ANSWER"].flatMap(Int.init), !Self.forkedOnce,
+            !chat.title.hasSuffix(" (fork)")
+        {
+            Self.forkedOnce = true
+            let actions = actions(chat)
+            Task { @MainActor in
+                for _ in 0..<40 {
+                    let answers = chat.transcript.entries.filter { $0.kind == .answer && $0.done }
+                    if answers.indices.contains(n - 1), !chat.controls.models.isEmpty {
+                        actions.forkAfter(answers[n - 1])
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+            }
+        }
+        if let n = DevSnapshot.forkMessage, !Self.forkedOnce, !chat.title.hasSuffix(" (fork)") {
+            Self.forkedOnce = true
+            // Test hook: fork from the nth user message once the history and the CLI's
+            // controls are in (the fork takes the model and effort from them).
+            let actions = actions(chat)
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(DevSnapshot.forkAfter))
+                for _ in 0..<40 {
+                    let users = chat.transcript.entries.filter { $0.kind == .user }
+                    if users.indices.contains(n - 1), !chat.controls.models.isEmpty {
+                        actions.fork(users[n - 1])
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+            }
+        }
+    }
+}
+
+/// The chats whose transcripts stay mounted: each from the first time it's shown, until it's
+/// one of more than `limit` and the longest unseen, or its tab closes. A running chat stays
+/// whatever its age. Their views keep the order the chats were first shown in, so a switch
+/// moves none of them.
+@MainActor
+final class KeptChats: ObservableObject {
+    static let limit = 3
+    private(set) var chats: [Chat] = []
+    /// The chat shown last: the composer's while another kind of tab shows.
+    private(set) var latest: Chat?
+    private var shownAt: [UUID: Int] = [:]
+    private var clock = 0
+
+    /// The chats to keep, `active` among them. Asked on every render: without a change, it
+    /// changes nothing.
+    func update(_ active: Chat?, tabs: [ChatTab]) -> [Chat] {
+        if let active, latest !== active {
+            clock += 1
+            shownAt[active.id] = clock
+            latest = active
+            if !chats.contains(where: { $0 === active }) { chats.append(active) }
+        }
+        let open = chats.filter { chat in tabs.contains { $0.chat === chat && $0.agent == nil } }
+        if open.count != chats.count {
+            chats = open
+            if let latest, !chats.contains(where: { $0 === latest }) { self.latest = nil }
+        }
+        while chats.count > Self.limit {
+            let idle = chats.filter { $0 !== latest && !$0.status.isRunning }
+            guard let oldest = idle.min(by: { shownAt[$0.id, default: 0] < shownAt[$1.id, default: 0] }) else { break }
+            chats.removeAll { $0 === oldest }
+            shownAt[oldest.id] = nil
+        }
+        return chats
     }
 }

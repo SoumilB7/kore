@@ -2,24 +2,23 @@ import KoreCore
 import Observation
 import SwiftUI
 
-/// The active tab's chat, or the provider picker for an empty tab.
+/// The active tab: a file, a sub-agent, the provider picker, or a chat. The chats' view stays
+/// under the others once a chat has shown, hidden, so going back to a chat is as quick as
+/// switching between chats.
 struct WorkspaceView: View {
     let workspace: Workspace
 
     var body: some View {
         let tab = workspace.activeTab
-        if let file = tab.file {
-            FileEditorView(document: file, tab: tab, workspace: workspace).id(file.id)
-        } else if let chat = tab.chat, let agent = tab.agent {
-            AgentTabView(chat: chat, id: agent, workspace: workspace).id(tab.id)
-        } else if let chat = tab.chat {
-            ChatView(
-                chat: chat, openAgent: { workspace.openAgent($0, of: chat) },
-                openFork: { start, text in workspace.fork(chat, start, text: text) },
-                openOriginal: workspace.openOriginal(of: chat)
-            ).id(chat.id)
-        } else {
-            EmptyTab(tab: tab, workspace: workspace).id(tab.id)
+        ZStack {
+            ChatView(workspace: workspace, active: tab.agent == nil ? tab.chat : nil)
+            if let file = tab.file {
+                FileEditorView(document: file, tab: tab, workspace: workspace).id(file.id)
+            } else if let chat = tab.chat, let agent = tab.agent {
+                AgentTabView(chat: chat, id: agent, workspace: workspace).id(tab.id)
+            } else if tab.chat == nil {
+                EmptyTab(tab: tab, workspace: workspace).id(tab.id)
+            }
         }
     }
 }
