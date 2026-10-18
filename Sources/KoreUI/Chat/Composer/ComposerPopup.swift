@@ -3,8 +3,9 @@ import SwiftUI
 
 /// A popup over the composer (the / menu's Usage and Account, the model and mode pickers), in
 /// the menu's place over the chat: a card at most `usagePopupMax` wide at the composer's leading
-/// edge, opaque, no shadow. `room`: the most it may be tall, scrolling past it; nil, its
-/// content's height.
+/// edge (or, `edge` trailing, its trailing one), opaque, no shadow. `room`: the most it may be
+/// tall, scrolling past it; nil, its content's height. `hugs`: as wide as its content, not the
+/// most it may be.
 ///
 /// Esc steps back (`stepBack`) and, with nothing to step back from, closes it and goes no
 /// further; Return closes it and never sends nor confirms; any other key closes it and goes on
@@ -21,6 +22,8 @@ struct ComposerPopup<Content: View>: View {
     let chat: Chat
     let id: StoryID
     var room: CGFloat?
+    var edge: HorizontalEdge = .leading
+    var hugs = false
     /// Still open: a popup fading out takes no more keys or clicks.
     let isOpen: @MainActor () -> Bool
     let stepBack: @MainActor () -> Bool
@@ -43,7 +46,7 @@ struct ComposerPopup<Content: View>: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
             .background(WindowReader { window.value = $0 })
             .storyID(id)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: edge == .leading ? .leading : .trailing)
             .onChange(of: chat.draft) { close() }
             .onChange(of: chat.attachments.count) { close() }
             .onAppear {
@@ -68,10 +71,14 @@ struct ComposerPopup<Content: View>: View {
         }
     }
 
-    private var padded: some View {
-        content()
-            .padding(Inset.well)
-            .frame(maxWidth: .infinity, alignment: .leading)
+    @ViewBuilder private var padded: some View {
+        if hugs {
+            content().padding(Inset.well).fixedSize()
+        } else {
+            content()
+                .padding(Inset.well)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {

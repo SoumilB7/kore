@@ -72,8 +72,8 @@ extension StoryID {
         package static let stop = StoryID(.composer, "stop")
         package static let attach = StoryID(.composer, "attach")
         package static let slash = StoryID(.composer, "slash")
+        /// The mode pill and the model chip, each opening its picker.
         package static let mode = StoryID(.composer, "mode")
-        /// The model chip, which opens the model picker.
         package static let model = StoryID(.composer, "model")
         /// The model picker; its effort slider is `effort`, a level on it `effortLevel`.
         package static let models = StoryID(.composer, "models")
@@ -84,6 +84,9 @@ extension StoryID {
         package static func modelFold(_ name: String) -> StoryID { StoryID(.composer, "models.more", key: name) }
         package static let effort = StoryID(.composer, "effort")
         package static func effortLevel(_ level: String) -> StoryID { StoryID(.composer, "effort.level", key: level) }
+        /// The mode popup, and its rows by the mode's id (Codex's Plan switch by "plan").
+        package static let modes = StoryID(.composer, "modes")
+        package static func modeRow(_ id: String) -> StoryID { StoryID(.composer, "modes.row", key: id) }
         package static let context = StoryID(.composer, "context")
         /// The command chip before the text.
         package static let chip = StoryID(.composer, "chip")
@@ -263,7 +266,7 @@ extension StoryID {
         let fixed: [StoryID] = [
             Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab, Titlebar.awake,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
-            Composer.model, Composer.models, Composer.effort, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
+            Composer.model, Composer.models, Composer.effort, Composer.modes, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
             Composer.usage.part(.reset), Composer.account, Composer.account.part(.signIn), Composer.account.part(.method),
             Composer.account.part(.switch), Composer.account.part(.signOut), Composer.account.part(.allow),
             Composer.account.part(.cancel), Composer.account.part(.copy), Composer.account.part(.credentials),
@@ -286,6 +289,7 @@ extension StoryID {
             StoryID(.composer, "account.method", key: k), StoryID(.composer, "account.choice", key: k),
             StoryID(.composer, "models.chip", key: k), StoryID(.composer, "models.family", key: k),
             StoryID(.composer, "models.more", key: k), StoryID(.composer, "effort.level", key: k),
+            StoryID(.composer, "modes.row", key: k),
             StoryID(.composer, "usage.reset", key: k), StoryID(.composer, "usage.reset", key: k).part(.use),
             StoryID(.composer, "usage.reset", key: k).part(.allow), StoryID(.composer, "usage.reset", key: k).part(.cancel),
             StoryID(.transcript, "user", key: k), StoryID(.transcript, "user", key: k).part(.copy),

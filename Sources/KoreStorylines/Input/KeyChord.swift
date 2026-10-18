@@ -102,7 +102,8 @@ package struct KeyChord: Sendable, Equatable, CustomStringConvertible {
             return (Self.shifted[c] ?? 0, String(c), Self.shifted[c] == nil ? [] : .shift)
         case .returnKey: return (36, "\r", [])
         case .escape: return (53, "\u{1b}", [])
-        case .tab: return (48, "\t", [])
+        // ⇧Tab types the back-tab character, as the keyboard does: the text view's insertBacktab.
+        case .tab: return (48, modifiers.contains(.shift) ? "\u{19}" : "\t", [])
         case .backspace: return (51, "\u{7f}", [])
         case .space: return (49, " ", [])
         case .forwardDelete: return (117, function(NSDeleteFunctionKey), .function)

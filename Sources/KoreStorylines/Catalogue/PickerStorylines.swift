@@ -224,6 +224,108 @@ final class ModelPicker: ChatStoryline {
     }
 }
 
+/// The mode pill's popup: the modes the model offers, as the CLI's own menu lists them (Claude's
+/// Auto where the model supports it), the current one ✓, Codex's Plan as a switch under a rule. ↓ and Return pick and close; a click on a mode picks and closes, the Plan
+/// switch flips and stays; ⇧Tab cycles without opening it. With it open, a press on the model
+/// chip switches to the model picker in one click.
+final class ModePicker: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    /// A model that offers Claude's Auto.
+    override class var script: CLIScript {
+        let model = ModelOption(id: "lyra-3", name: "Lyra 3", resolved: "lyra-3", efforts: ["low", "medium"], supportsAutoMode: true)
+        return CLIScript(
+            start: [.event(.controlsLoaded(ChatControls(models: [model], model: model.id, effort: "low", commands: [])))],
+            turns: [CLIScript.reply("OK")])
+    }
+
+    override func steps() -> [any Step] {
+        let codex = variant == .codex
+        let pill = Locator.id(StoryID.Composer.mode)
+        let popup = Locator.id(StoryID.Composer.modes)
+        let row = { (id: String) in Locator.id(StoryID.Composer.modeRow(id)) }
+        let (first, second) = codex ? ("askForApproval", "approveForMe") : ("default", "acceptEdits")
+        let rows = { (what: String, _ want: [String]) in
+            Expect(what, found: { $0.app.chat?.storyModeRows.joined(separator: " | ") }) { $0.app.chat?.storyModeRows == want }
+        }
+        let mode = { (what: String, _ id: String) in
+            Expect(what, found: { $0.app.chat?.mode }) { $0.app.chat?.mode == id }
+        }
+        let open: [any Step] = [Press(pill), WaitForElement(popup)]
+        var steps: [any Step] = super.steps() + [WaitForFocus(.id(StoryID.Composer.field))]
+        // 1 · The modes, the current one checked.
+        steps += open + [
+            rows(
+                "the modes, Manual checked",
+                codex
+                    ? ["✓ Ask for approval", "Approve for me", "Full access", "Plan: off"]
+                    : ["✓ Manual", "Edit automatically", "Plan", "Auto"]),
+            FadesEnd(),
+            Snapshot("mode-picker"),
+            // 2 · ↓ and Return pick and close.
+            Key(.down),
+            Expect("the keys on the next mode", found: { $0.app.chat?.storyModeRows.joined(separator: " | ") }) {
+                $0.app.chat?.storyModeRows.dropFirst().first?.hasPrefix("*") == true
+            },
+            Key(.returnKey),
+            ExpectElement(popup, .absent),
+            mode("Return picked it", second),
+            Expect("the CLI told") { try $0.scriptedBackend().log.contains(.setMode(second)) },
+        ]
+        // 3 · A click on a mode picks it and closes.
+        steps += open + [Press(row(first)), ExpectElement(popup, .absent), mode("the click picked it", first)]
+        if codex {
+            // Plan is a switch: it flips and the popup stays.
+            steps += open + [
+                Press(row("plan")),
+                Expect("plan on") { $0.app.chat?.storyPlanMode == true },
+                Expect("the popup still open") { $0.app.chat?.isModePickerOpen == true },
+                FadesEnd(),
+                Snapshot("mode-picker-plan"),
+                Press(row("plan")),
+                Expect("plan off") { $0.app.chat?.storyPlanMode == false },
+                Key(.escape),
+                ExpectElement(popup, .absent),
+            ]
+        }
+        // 4 · ⇧Tab cycles without opening it.
+        steps += [
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Key(KeyChord(.tab, .shift)),
+            codex ? Expect("⇧Tab: plan on") { $0.app.chat?.storyPlanMode == true } : mode("⇧Tab: the next mode", second),
+            ExpectElement(popup, .absent),
+        ]
+        // 5 · One click switches to the model picker; the chip's own click closes that.
+        steps += open + [
+            Press(ModelPicker.chip),
+            WaitForElement(ModelPicker.popup),
+            Expect("the model picker open, the mode popup gone") {
+                $0.app.chat?.isModelPickerOpen == true && $0.app.chat?.isModePickerOpen == false
+            },
+            Click(ModelPicker.chip),
+            ExpectElement(ModelPicker.popup, .absent),
+        ]
+        // 6 · Claude's Auto, offered by the model: picked, it's checked in its own tint, and the
+        // pill reads it.
+        if !codex {
+            steps += open + [
+                Press(row("auto")),
+                ExpectElement(popup, .absent),
+                mode("Auto picked", "auto"),
+            ] + open + [
+                rows("Auto checked", ["Manual", "Edit automatically", "Plan", "✓ Auto"]),
+                Expect("Auto in the accent's rung, as its pill", found: { $0.app.chat?.storyModeTint("auto") }) {
+                    $0.app.chat?.storyModeTint("auto") == "auto" && $0.app.chat?.storyModePill == "Auto"
+                },
+                FadesEnd(),
+                Snapshot("mode-picker-auto"),
+                Key(.escape),
+                ExpectElement(popup, .absent),
+            ]
+        }
+        return steps
+    }
+}
+
 /// Gives the window back the run's size.
 struct RestoreWindow: Step {
     var label: String { "Size the window back" }

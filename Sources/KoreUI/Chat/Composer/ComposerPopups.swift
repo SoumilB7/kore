@@ -2,11 +2,11 @@ import Foundation
 
 /// What can be open over the composer: one at a time. Whatever opens closes the rest
 /// (`Chat.closePopups(keeping:)`); Account's sign-in methods menu is Account's own and opens
-/// only inside it. The model chip opens its picker, one more of them; the mode and + controls
-/// open the system's menus and panel. A press on the composer's bar closes the rest as it goes
+/// only inside it. The model chip and the mode pill open their pickers, two more of them; the
+/// + opens the system's panel. A press on the composer's bar closes the rest as it goes
 /// down, before they open, all but the picker whose chip it lands on (its chip closes it).
 enum OpenPopup: Equatable {
-    case slash, usage, usageCard, account, importer, contextCard, agentMap, menu, model
+    case slash, usage, usageCard, account, importer, contextCard, agentMap, menu, model, mode
 }
 
 extension Chat {

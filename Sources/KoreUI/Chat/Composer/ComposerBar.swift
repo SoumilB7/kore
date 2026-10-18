@@ -76,7 +76,7 @@ struct ComposerBar: View {
                 PlanChip(mode: plan) { chat.setPlanMode(false) }
             }
             ModeMenu(chat: chat, showLabel: density == .full || density == .noEffort)
-                .storyID(StoryID.Composer.mode, press: { chat.closePopups(keeping: .menu) })
+                .storyID(StoryID.Composer.mode, press: { chat.togglePicker(.mode) })
         }
     }
 
@@ -135,7 +135,7 @@ struct ModelMenu: View {
     }
 }
 
-/// The provider's modes (icon + label), as in its VS Code extension.
+/// The provider's mode (icon + label), as in its VS Code extension: opens the mode picker.
 struct ModeMenu: View {
     let chat: Chat
     var showLabel = true
@@ -144,30 +144,30 @@ struct ModeMenu: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Menu {
-            ForEach(chat.controls.availableModes) { mode in
-                toggle(mode, isOn: chat.controls.mode == mode.id) { chat.setMode(mode.id) }
-            }
-            if let plan = chat.provider.planToggle {
-                Divider()
-                toggle(plan, isOn: chat.controls.planMode) { chat.setPlanMode(!chat.controls.planMode) }
-            }
+        // A plan toggle shows as its own chip, so the pill keeps the permissions mode.
+        let mode = chat.provider.planToggle != nil ? chat.controls.permissionsMode : chat.controls.activeMode
+        let open = chat.picker.open == .mode
+        Button {
+            chat.togglePicker(.mode)
         } label: {
-            // A plan toggle shows as its own chip, so the menu keeps the permissions mode.
-            let mode = chat.provider.planToggle != nil ? chat.controls.permissionsMode : chat.controls.activeMode
             HStack(spacing: Space.xs) {
                 ModeIcon(mode: mode)
                 if showLabel {
                     Text(mode.label).font(mode.tint == nil ? TextStyle.label : TextStyle.labelMedium).lineLimit(1)
                 }
             }
-            .foregroundStyle(mode.tint ?? Theme.secondary)
-            .background(Theme.modeFlash(mode.rung).opacity(flash.value), in: RoundedRectangle(cornerRadius: Radius.chip))
+            .foregroundStyle(mode.tint ?? (open ? Theme.text : Theme.secondary))
+            .padding(.horizontal, Space.xs)
+            .background(
+                open ? Theme.surfaceHover : Theme.modeFlash(mode.rung).opacity(flash.value),
+                in: RoundedRectangle(cornerRadius: Radius.chip)
+            )
+            .padding(.horizontal, -Space.xs)
+            .contentShape(Rectangle())
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { chat.picker.chips[.mode] = $0 }
         .help(chat.controls.changedBy.map { "Changed by \($0)" } ?? "Mode (⇧Tab)")
         // Only the agent's own change flashes, not a switch to a chat that had one.
         .onChange(of: AgentChange(chat: chat.id, seq: chat.controls.agentChangeSeq)) { old, new in
@@ -181,16 +181,6 @@ struct ModeMenu: View {
     private struct AgentChange: Equatable {
         let chat: UUID
         let seq: Int
-    }
-
-    private func toggle(_ mode: ModeOption, isOn: Bool, action: @escaping () -> Void) -> some View {
-        Toggle(isOn: Binding(get: { isOn }, set: { _ in action() })) {
-            Label {
-                Text(mode.label)
-            } icon: {
-                Image(nsImage: ModeIcons.image(mode.icon))
-            }
-        }
     }
 }
 

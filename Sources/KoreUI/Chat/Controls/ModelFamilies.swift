@@ -165,6 +165,8 @@ enum EffortScale {
 enum PickerSpot: Hashable {
     case chip(row: Int, column: Int)
     case effort
+    /// A row of the mode popup.
+    case row(Int)
 }
 
 /// The model picker's arrow keys over its rows: ←→ through a row's versions, ↑↓ between
@@ -193,6 +195,8 @@ struct ModelPickerGrid {
             return .chip(row: rows.count - 1, column: 0)
         case (.effort, _):
             return .effort
+        case (.row, _):
+            return .chip(row: 0, column: 0)
         }
     }
 

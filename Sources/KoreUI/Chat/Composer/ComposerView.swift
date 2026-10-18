@@ -85,8 +85,13 @@ struct ComposerView: View {
                     AccountPopup(chat: chat, state: chat.account)
                         .padding(.bottom, Space.lg)
                         .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
-                } else if chat.picker.open == .model {
-                    ModelPicker(chat: chat, state: chat.picker)
+                } else if let kind = chat.picker.open {
+                    Group {
+                        switch kind {
+                        case .model: ModelPicker(chat: chat, state: chat.picker)
+                        case .mode: ModePicker(chat: chat, state: chat.picker)
+                        }
+                    }
                     .padding(.bottom, Space.lg)
                     .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 } else if chat.importer.isOpen {

@@ -53,8 +53,12 @@ extension Chat {
 
     /// The mode menu.
     package func storySetMode(_ id: String) { setMode(id) }
-    /// Whether the model picker is open.
+    /// Codex's plan switch.
+    package var storyPlanMode: Bool { controls.planMode }
+
+    /// The model and mode pickers: which is open.
     package var isModelPickerOpen: Bool { picker.open == .model }
+    package var isModePickerOpen: Bool { picker.open == .mode }
     /// The chat's model (its id) and effort, and the pill as it reads ("Lyra 3 · High").
     package var storyModel: String? { controls.modelId }
     package var storyEffort: String? { controls.effort }
@@ -79,6 +83,26 @@ extension Chat {
             !offered.contains(level) ? "(\(level))" : level == controls.effort ? "[\(level)]" : level
         }
         return (picker.lit == .effort ? ["*"] : []) + stops
+    }
+    /// The mode pill as it reads ("Auto"), and a mode's tint by its rung: "neutral", "plan",
+    /// "edits", "auto" or "danger".
+    package var storyModePill: String { (provider.planToggle != nil ? controls.permissionsMode : controls.activeMode).label }
+    package func storyModeTint(_ id: String) -> String? {
+        guard let mode = (provider.modes + [provider.planToggle].compactMap { $0 }).first(where: { $0.id == id }) else { return nil }
+        let rungs: [(Rung, String)] = [(.plan, "plan"), (.edits, "edits"), (.auto, "auto"), (.danger, "danger")]
+        return mode.rung.map { rung in rungs.first { $0.0 == rung }?.1 ?? "other" } ?? "neutral"
+    }
+    /// The mode popup's rows as they read: "✓ Manual", "Plan: on" for Codex's switch, the lit
+    /// row starred.
+    package var storyModeRows: [String] {
+        let modes = controls.availableModes
+        var rows = modes.enumerated().map { index, mode in
+            (picker.lit == .row(index) ? "*" : "") + (mode.id == controls.mode ? "✓ " : "") + mode.label
+        }
+        if let plan = provider.planToggle {
+            rows.append((picker.lit == .row(modes.count) ? "*" : "") + plan.label + (controls.planMode ? ": on" : ": off"))
+        }
+        return rows
     }
 
     /// The `/` menu's names, and the command chip's.

@@ -2,15 +2,15 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// The model picker's state in one chat: whether it's open (in the popups' place), where the keys
-/// and the pointer are, and the rows whose folded chips were shown.
+/// The model and mode pickers' state in one chat: which is open (one at a time, in the popups'
+/// place), where the keys and the pointer are, and the rows whose folded chips were shown.
 @MainActor @Observable
 final class PickerState {
     enum Kind: Equatable {
-        case model
+        case model, mode
 
         /// Its kind among what's open over the composer.
-        var popup: OpenPopup { .model }
+        var popup: OpenPopup { self == .model ? .model : .mode }
     }
 
     private(set) var open: Kind?
@@ -18,7 +18,7 @@ final class PickerState {
     var lit: PickerSpot?
     /// Families whose "…" chip was pressed: their row wraps to show every version.
     private(set) var unfolded: Set<String> = []
-    /// The chip (global frame): a click on one isn't outside its popup, so the chip's
+    /// The chip and pill (global frames): a click on one isn't outside its popup, so the chip's
     /// own action can close it. Kept for the click monitor, never shown.
     @ObservationIgnored var chips: [Kind: CGRect] = [:]
 
