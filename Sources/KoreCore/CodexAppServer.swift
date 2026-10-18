@@ -90,7 +90,7 @@ public actor CodexAppServer {
     // MARK: - Process lifecycle
 
     private func launch(cwd: URL, executable: URL?, arguments: [String], environment: [String: String]) async throws {
-        let resolved = try CLIExecutable.resolve("codex", override: executable)
+        let resolved = try await CLIExecutable.resolve("codex", override: executable)
         let io = try StdioProcess(
             executable: resolved.url,
             arguments: ["app-server"] + arguments,

@@ -26,8 +26,7 @@ public enum ClaudeAuth {
     /// Runs `claude auth status --json` with the same binary and environment sessions use.
     public static func status(executable: URL? = nil) async throws -> Status {
         let data = try await Task.detached {
-            // Resolving may spawn the login shell once; keep that off the caller's actor.
-            let launch = try CLIExecutable.resolve("claude", override: executable)
+            let launch = try await CLIExecutable.resolve("claude", override: executable)
             let process = Process()
             process.executableURL = launch.url
             process.arguments = ["auth", "status", "--json"]

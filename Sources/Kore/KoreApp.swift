@@ -1,3 +1,4 @@
+import KoreCore
 import SwiftUI
 
 @main
@@ -10,6 +11,8 @@ struct KoreApp: App {
     init() {
         // Needed when launched as a bare binary (`swift run Kore`); a no-op inside Kore.app.
         NSApplication.shared.setActivationPolicy(.regular)
+        // The login shell's PATH takes a second or two; read it while the window opens.
+        CLIExecutable.prepare()
         DispatchQueue.main.async {
             DevSnapshot.watchHangs()
             DevGallery.showIfRequested()

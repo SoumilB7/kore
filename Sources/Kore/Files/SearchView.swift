@@ -21,8 +21,6 @@ struct SearchView: View {
         }
         .onAppear {
             field = .query
-            // rg's PATH lookup is a one-time half second; pay it before the first search.
-            Task.detached { _ = try? CLIExecutable.resolve("rg") }
         }
         .onChange(of: store.focusRequest) { field = .query }
     }

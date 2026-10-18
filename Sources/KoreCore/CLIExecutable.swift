@@ -3,7 +3,9 @@ import Foundation
 /// Finds an agent CLI (`claude`, `codex`) and the environment to run it with.
 ///
 /// Apps launched from Finder/Dock get a bare PATH (/usr/bin:/bin:...), so we ask the
-/// user's login shell for its PATH once. That picks up nvm, Homebrew, ~/.local/bin, etc.
+/// user's login shell for its PATH once per run. That picks up nvm, Homebrew, ~/.local/bin,
+/// etc. An interactive login shell takes a second or two, so it starts at app launch
+/// (`prepare()`), off the main thread, and only the first CLI start waits for what's left.
 public enum CLIExecutable {
     public struct Launch: Sendable {
         public let url: URL
@@ -21,8 +23,8 @@ public enum CLIExecutable {
         }
     }
 
-    public static func resolve(_ name: String, override: URL? = nil) throws -> Launch {
-        let env = environment
+    public static func resolve(_ name: String, override: URL? = nil) async throws -> Launch {
+        let env = await environment()
         if let override { return Launch(url: override, environment: env) }
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -50,13 +52,19 @@ public enum CLIExecutable {
     /// passed on, they'd record Kore's sessions as that host's.
     static let inheritedHostVariables = ["CLAUDE_CODE_ENTRYPOINT", "CLAUDECODE"]
 
-    /// Process environment with PATH taken from the login shell. Computed once.
-    public static let environment: [String: String] = {
+    /// Starts reading the login shell's PATH, once per run. Called at app launch.
+    public static func prepare() { _ = loading }
+
+    /// Process environment with PATH taken from the login shell. Read once; callers wait
+    /// for it without holding a thread.
+    public static func environment() async -> [String: String] { await loading.value }
+
+    private static let loading = Task.detached(priority: .userInitiated) { () -> [String: String] in
         var env = ProcessInfo.processInfo.environment
         if let path = loginShellPATH() { env["PATH"] = path }
         for name in foreignAuthVariables + inheritedHostVariables { env[name] = nil }
         return env
-    }()
+    }
 
     private static func loginShellPATH() -> String? {
         let marker = "__KORE_PATH__"

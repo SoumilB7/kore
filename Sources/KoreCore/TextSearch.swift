@@ -69,18 +69,20 @@ public enum TextSearch {
             return stream
         }
         let root = realPath(folder.path)
-        let rg = engine == .builtin ? nil : try? CLIExecutable.resolve("rg")
-        if engine == .ripgrep && rg == nil {
-            sink.yield(.failed("ripgrep (rg) isn't installed"))
-            sink.finish()
-            return stream
-        }
         let search = Search(query: query, root: root, sink: sink)
         sink.onTermination = { _ in search.cancel() }
-        if let rg {
-            search.ripgrep(rg)
-        } else {
-            Task.detached { await search.scan() }
+        // Finding rg waits for the login shell's PATH on the first search of a run: never on
+        // the caller's thread.
+        Task.detached {
+            let rg = engine == .builtin ? nil : try? await CLIExecutable.resolve("rg")
+            if engine == .ripgrep && rg == nil {
+                sink.yield(.failed("ripgrep (rg) isn't installed"))
+                sink.finish()
+            } else if let rg {
+                search.ripgrep(rg)
+            } else {
+                await search.scan()
+            }
         }
         return stream
     }

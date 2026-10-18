@@ -193,7 +193,7 @@ public actor ClaudeSession {
     // MARK: - Process lifecycle
 
     private func launch() async throws {
-        let resolved = try CLIExecutable.resolve("claude", override: options.executable)
+        let resolved = try await CLIExecutable.resolve("claude", override: options.executable)
         let io = try StdioProcess(
             executable: resolved.url,
             arguments: options.arguments,

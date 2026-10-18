@@ -5,7 +5,7 @@ enum Git {
     static func run(_ args: [String], in folder: URL, env extra: [String: String] = [:]) async
         -> (status: Int32, output: String)?
     {
-        guard let git = try? CLIExecutable.resolve("git") else { return nil }
+        guard let git = try? await CLIExecutable.resolve("git") else { return nil }
         var env = git.environment.merging(extra) { $1 }
         // Paths come back raw (not octal-escaped), and no pager or prompt can block.
         env["GIT_CONFIG_COUNT"] = "1"
