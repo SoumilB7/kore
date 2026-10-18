@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 
 // What a chat's controls do, for a storyline host (phase 12): the same calls the composer, the
 // Stop button, approval cards and Fork buttons make, plus the rows in plain terms for checks.
@@ -80,23 +81,61 @@ extension Chat {
     /// then the action row's words ("Waiting for the browser…"), or the signed-out row alone.
     package var isAccountOpen: Bool { account.isOpen }
     package var storyAccount: [String] { account.lines(product: provider.usage.product) }
-    /// The caption under the action row ("Also signs out Terminal and VS Code on this Mac.").
+    /// The caption under the action row ("Also signs out Terminal and VS Code on this Mac.",
+    /// "Stored in your Keychain.", "Pick Console account, then …").
     package var storyAccountCaption: String? {
-        if account.askingSignOut { return AccountText.signOutCaption(working: AccountStore.shared.workingChats(provider.id)) }
-        guard let flow = AccountStore.shared.flow(provider.id), flow.switching, flow.step.live, flow.step != .signingOut else { return nil }
+        let store = AccountStore.shared
+        if account.askingSignOut {
+            return AccountText.signOutCaption(working: store.workingChats(provider.id), setting: account.identity?.isKoreSetting == true)
+        }
+        if account.showsKeyField {
+            if case .keyFailed(let reason) = store.flow(provider.id)?.step { return AccountText.signInFailed(reason) }
+            return AccountText.keyCaption(provider.id)
+        }
+        guard let flow = store.flow(provider.id) else { return nil }
+        if flow.step == .terminal { return AccountText.terminalCaption(flow.method) }
+        guard flow.switching, flow.step.cancellable else { return nil }
         return AccountText.moving
     }
     /// Whether "Yes, sign out" would go yet (a double-click's time after Sign out).
     package var storyAccountConfirmable: Bool { account.confirmable }
-    /// The ⌄ menu as it last opened: "✓ " before the current method, "—" for a separator,
-    /// " (off)" after one Kore can't run; nil while it isn't open.
+    /// The ⌄ menu as it last opened, leaf by leaf in its order: each by its path
+    /// ("3rd-party platform/Amazon Bedrock…"), "✓ " before the current one, "—" for a separator;
+    /// nil while it isn't open.
     package var storyAccountMenu: [String]? {
-        account.hostMenu?.flatMap { item in
-            (item.separated ? ["—"] : []) + [(item.checked ? "✓ " : "") + item.method.label + (item.method.runs ? "" : " (off)")]
+        account.hostMenu.map { items in
+            MethodMenuItem.paths(items).flatMap { path, item in
+                (item.separated ? ["—"] : []) + [(item.checked ? "✓ " : "") + path]
+            }
         }
     }
-    /// Picks an item of the open ⌄ menu by its title, as a click on it does.
-    package func storyPickMethod(_ title: String) { account.pickHostMenu(title) }
+    /// The open menu's top level with its hints: "Claude account with subscription · Pro, Max,
+    /// Team, or Enterprise", "Anthropic Console account ▸ · API usage billing".
+    package var storyAccountMenuTop: [String]? {
+        account.hostMenu.map { items in
+            items.map { item in [item.title + (item.method == nil ? " ▸" : ""), item.hint].compactMap { $0 }.joined(separator: " · ") }
+        }
+    }
+    /// Picks an item of the open ⌄ menu by its path (or title), as a click on it does.
+    package func storyPickMethod(_ path: String) { account.pickHostMenu(path) }
+    /// Whether the ⌄ shows (more than one method to pick).
+    package var storyAccountHasMenu: Bool { account.hasMenu }
+    /// A form's picker, as a pick from its menu: "credentials" by the choice's case name
+    /// ("profile", "apiKey", "accessKey", "environment"; "gcloud", "keyFile"), "profile" by name.
+    package func storyAccountChoose(_ picker: String, _ value: String) {
+        switch (account.editor, picker) {
+        case (.platform(.bedrock), "credentials"):
+            if let choice = ClaudeSettings.BedrockCredentials(rawValue: value) { account.form.bedrock = choice }
+        case (.platform(.vertex), "credentials"):
+            if let choice = ClaudeSettings.VertexCredentials(rawValue: value) { account.form.vertex = choice }
+        case (.platform(.bedrock), "profile"):
+            account.form.pick(profile: value)
+        default: break
+        }
+        account.editedForm()
+    }
+    /// Whether a field or form is open in the popup, and has the keys.
+    package var storyAccountEditing: Bool { account.isEditing }
     /// The account changed since the chat's CLI started: it hasn't started again yet.
     package var storyAccountGeneration: Int { AccountStore.shared.generation(provider.id) }
 

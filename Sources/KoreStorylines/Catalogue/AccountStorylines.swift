@@ -52,11 +52,8 @@ final class AccountPopup: ChatStoryline {
         }
         let open: [any Step] = [Press(.id(StoryID.Composer.slash)), Press(row("account")), WaitForElement(popup)]
         let relaunches = { (story: StoryContext) in try story.scriptedBackend().log.filter { $0 == .relaunch }.count }
-        let methods =
-            codex
-            ? ["✓ Sign in with ChatGPT", "Sign in with Device Code", "—", "API key: run codex login --with-api-key in Terminal (off)"]
-            : ["✓ Claude account with subscription", "Anthropic Console account"]
-        let second = codex ? "Sign in with Device Code" : "Anthropic Console account"
+        let methods = codex ? AccountMethods.codexMenu : AccountMethods.claudeMenu
+        let second = codex ? "Sign in with Device Code" : "Anthropic Console account/Create an API key (legacy)"
         let reason = codex ? "Login cancelled." : "the sign-in page was closed."
 
         var steps: [any Step] = [UseScript(Self.script(provider), for: provider), OpenFolder(), StartChat(), WaitForFocus(.id(StoryID.Composer.field))]

@@ -30,18 +30,40 @@ package final class AccountStore {
         case starting
         case browser(URL)
         case code(String, URL)
+        /// Handed to Terminal; ends when the account changes.
+        case terminal
+        /// The `awsAuthRefresh` script running.
+        case refreshing
+        /// A typed key on its way (it takes under a second: no Cancel).
+        case signingIn
         case signingOut
         case signedIn
         case switched
         case same
+        case refreshed
+        /// A platform form saved.
+        case saved
+        /// A platform or Kore's key removed, a login still underneath: its name.
+        case signedOutOf(String)
         case failed(String?)
+        /// A typed key refused: the field comes back, saying why.
+        case keyFailed(String?)
+        case refreshFailed(String?)
         case signOutFailed(String?)
         case timedOut
 
         /// A sign-in or sign-out under way, not an outcome.
         var live: Bool {
             switch self {
-            case .starting, .browser, .code, .signingOut: true
+            case .starting, .browser, .code, .terminal, .refreshing, .signingIn, .signingOut: true
+            default: false
+            }
+        }
+
+        /// It can be cancelled.
+        var cancellable: Bool {
+            switch self {
+            case .starting, .browser, .code, .terminal, .refreshing: true
             default: false
             }
         }
@@ -56,6 +78,8 @@ package final class AccountStore {
     }
 
     private(set) var statuses: [String: Status] = [:]
+    /// What each CLI's settings allow, from its last status read.
+    private(set) var policies: [String: LoginPolicy] = [:]
     private(set) var flows: [String: Flow] = [:]
     private(set) var generations: [String: Int] = [:]
     /// Providers being read now.
@@ -93,12 +117,26 @@ package final class AccountStore {
         return AccountOps(methods: ops.methods, parse: ops.parse, calls: calls, loginFile: ops.loginFile, stamp: ops.stamp)
     }
 
-    func methods(_ provider: String) -> [SignInMethod] { ops(provider)?.methods ?? [] }
+    /// Every method the CLI's login has.
+    func allMethods(_ provider: String) -> [SignInMethod] { ops(provider)?.methods ?? [] }
+
+    func policy(_ provider: String) -> LoginPolicy { policies[provider] ?? LoginPolicy() }
+
+    /// The methods the CLI's policy lets the menu list, in its order.
+    func methods(_ provider: String) -> [SignInMethod] {
+        let policy = policy(provider)
+        return allMethods(provider).filter { $0.allowed(by: policy) }
+    }
+
+    /// The ⌄ menu: those methods in their submenus, the current one checked.
+    func menu(_ provider: String) -> [MethodMenuItem] {
+        MethodMenuItem.build(allMethods(provider), policy: policy(provider), current: currentMethod(provider)?.id)
+    }
 
     /// The method a plain Sign in runs: the last one Kore ran, else the account's own, else the
     /// first.
     func currentMethod(_ provider: String) -> SignInMethod? {
-        let runnable = methods(provider).filter(\.runs)
+        let runnable = methods(provider)
         let current: String? =
             if case .signedIn(let identity) = status(provider) { identity.methodID } else { nil }
         for id in [lastMethod[provider], current].compactMap({ $0 }) {
@@ -118,7 +156,9 @@ package final class AccountStore {
             do { result = .success(try await ops.calls.status()) } catch { result = .failure(error) }
             guard self.epoch == epoch else { return }
             switch result {
-            case .success(let reply): note(provider, ops.parse(reply))
+            case .success(let reply):
+                policies[provider] = LoginPolicy(reply)
+                note(provider, ops.parse(reply))
             case .failure(let error): statuses[provider] = .unreadable(AccountReason.of(error))
             }
             reading.remove(provider)
@@ -142,6 +182,19 @@ package final class AccountStore {
         }
         defer { known[provider] = key }
         guard let before = known[provider], before != key else { return }
+        bump(provider)
+        // A Terminal hand-off ends when the account it was for shows up.
+        if flows[provider]?.step == .terminal, case .signedIn = reading {
+            serials[provider, default: 0] += 1
+            let handle = end(provider)
+            Task { await handle?.cancel() }
+            flows[provider]?.step = before.isEmpty ? .signedIn : .switched
+        }
+    }
+
+    /// The account (or how the CLI reaches it) changed: every chat of the CLI starts again at its
+    /// next turn boundary.
+    private func bump(_ provider: String) {
         generations[provider, default: 0] += 1
         for chat in liveChats(provider) { chat.accountChanged() }
     }
@@ -150,21 +203,27 @@ package final class AccountStore {
 
     /// Starts a sign-in by `method` (nil: `currentMethod`). Over an account, it's a switch: the
     /// old login works until the new one lands. One flow at a time per CLI.
-    func signIn(_ provider: String, method: SignInMethod? = nil) {
-        guard flows[provider]?.step.live != true, let ops = ops(provider), let method = method ?? currentMethod(provider), method.runs
+    func signIn(_ provider: String, method: SignInMethod? = nil, in folder: URL) {
+        guard flows[provider]?.step.live != true, let ops = ops(provider), let method = method ?? currentMethod(provider), method.runs,
+            !method.opensEditor
         else { return }
         let serial = (serials[provider] ?? 0) + 1
         serials[provider] = serial
         let before: AccountIdentity? = if case .signedIn(let identity) = status(provider) { identity } else { nil }
         lastMethod[provider] = method.id
-        flows[provider] = Flow(method: method.id, step: .starting, switching: before != nil)
+        let refreshing = method.mechanism == .awsRefresh
+        flows[provider] = Flow(method: method.id, step: refreshing ? .refreshing : .starting, switching: before != nil && !refreshing)
         Task {
             do {
-                let handle = try await ops.calls.signIn(method.mechanism)
+                let handle = try await ops.calls.signIn(method.mechanism, SignInContext(folder: folder))
                 guard serials[provider] == serial else { return await handle.cancel() }
                 handles[provider] = handle
-                Self.open(handle.url)
-                flows[provider]?.step = handle.code.map { .code($0, handle.url) } ?? .browser(handle.url)
+                if let url = handle.url {
+                    if !handle.opensItself { Self.open(url) }
+                    flows[provider]?.step = handle.code.map { .code($0, url) } ?? .browser(url)
+                } else if !refreshing {
+                    flows[provider]?.step = .terminal
+                }
                 // The store lives as long as the app.
                 timers[provider] = Task {
                     try? await Task.sleep(for: handle.code == nil ? Self.patience : Self.deviceExpiry)
@@ -174,6 +233,11 @@ package final class AccountStore {
                 let reply = try await handle.wait()
                 guard serials[provider] == serial else { return }
                 end(provider)
+                if refreshing {
+                    flows[provider]?.step = .refreshed
+                    await refresh(provider)
+                    return
+                }
                 let reading: AccountReading
                 if let reply { reading = ops.parse(reply) } else { reading = ops.parse(try await ops.calls.status()) }
                 guard serials[provider] == serial else { return }
@@ -188,14 +252,72 @@ package final class AccountStore {
             } catch {
                 guard serials[provider] == serial else { return }
                 end(provider)
-                flows[provider]?.step = .failed(AccountReason.of(error))
+                flows[provider]?.step = refreshing ? .refreshFailed(AccountReason.of(error)) : .failed(AccountReason.of(error))
             }
         }
     }
 
+    /// A typed key, sent once: the CLI takes it (Codex), or Kore keeps it in the Keychain for
+    /// Claude's helper. `done` says whether it landed; on failure the row says why and the field
+    /// comes back. The key goes nowhere else.
+    func useKey(_ provider: String, _ key: String, done: @escaping @MainActor (Bool) -> Void) {
+        guard flows[provider]?.step.live != true, let ops = ops(provider), let method = allMethods(provider).first(where: \.isKey)
+        else { return done(false) }
+        let serial = (serials[provider] ?? 0) + 1
+        serials[provider] = serial
+        let before: AccountIdentity? = if case .signedIn(let identity) = status(provider) { identity } else { nil }
+        lastMethod[provider] = method.id
+        flows[provider] = Flow(method: method.id, step: .signingIn, switching: before != nil)
+        Task {
+            do {
+                let reply = try await ops.calls.useKey(key)
+                let reading: AccountReading
+                if let reply { reading = ops.parse(reply) } else { reading = ops.parse(try await ops.calls.status()) }
+                guard serials[provider] == serial else { return }
+                note(provider, reading)
+                bumpIfSame(provider, before, reading)
+                flows[provider]?.step = before == nil ? .signedIn : .switched
+                done(true)
+            } catch {
+                guard serials[provider] == serial else { return }
+                flows[provider]?.step = .keyFailed(AccountReason.of(error))
+                done(false)
+            }
+        }
+    }
+
+    /// Saves a platform form into Claude's settings: then the status again, and every chat of the
+    /// CLI starts again. `done` has the reason when it couldn't save.
+    func save(_ provider: String, _ setup: ClaudeSettings.Setup, done: @escaping @MainActor (String?) -> Void) {
+        guard flows[provider]?.step.live != true, let ops = ops(provider) else { return done(nil) }
+        let serial = (serials[provider] ?? 0) + 1
+        serials[provider] = serial
+        let before: AccountIdentity? = if case .signedIn(let identity) = status(provider) { identity } else { nil }
+        do {
+            try ClaudeSettingsStore.change { ClaudeSettings.saving(setup, in: $0) }
+        } catch {
+            return done(AccountReason.of(error) ?? "Claude's settings couldn't be written.")
+        }
+        lastMethod[provider] = setup.platform.rawValue
+        Task {
+            let reading = (try? ops.parse(await ops.calls.status())) ?? .signedOut
+            guard serials[provider] == serial else { return }
+            note(provider, reading)
+            bumpIfSame(provider, before, reading)
+            flows[provider] = Flow(method: setup.platform.rawValue, step: .saved, switching: false)
+            done(nil)
+        }
+    }
+
+    /// The settings changed though the account reads the same (a key replaced, a region
+    /// moved back): the chats still start again, to pick the settings up.
+    private func bumpIfSame(_ provider: String, _ before: AccountIdentity?, _ reading: AccountReading) {
+        if case .signedIn(let now) = reading, let before, now.isSameAccount(as: before) { bump(provider) }
+    }
+
     /// Stops a sign-in: back to rest, nothing said, the old login as it was.
     func cancel(_ provider: String) {
-        guard let flow = flows[provider], flow.step.live, flow.step != .signingOut else { return }
+        guard let flow = flows[provider], flow.step.cancellable else { return }
         serials[provider, default: 0] += 1
         let handle = end(provider)
         flows[provider] = nil
@@ -222,14 +344,31 @@ package final class AccountStore {
         guard flows[provider]?.step.live != true, let ops = ops(provider) else { return }
         let serial = (serials[provider] ?? 0) + 1
         serials[provider] = serial
+        let setting: AccountIdentity? = if case .signedIn(let identity) = status(provider), identity.isKoreSetting { identity } else { nil }
         flows[provider] = Flow(method: nil, step: .signingOut, switching: false)
         for chat in liveChats(provider) where chat.isWorking { chat.stop() }
         Task {
             do {
-                try await ops.calls.signOut()
+                if let setting {
+                    // Kore's own setting: exactly what it wrote comes out of Claude's settings.
+                    if let platform = setting.methodID.flatMap(ClaudeSettings.Platform.init(rawValue:)) {
+                        try ClaudeSettingsStore.change { ClaudeSettings.removing(platform, from: $0) }
+                    } else {
+                        try ClaudeSettingsStore.removeKey()
+                    }
+                } else {
+                    try await ops.calls.signOut()
+                }
                 let reading = (try? ops.parse(await ops.calls.status())) ?? .signedOut
                 guard serials[provider] == serial else { return }
                 note(provider, reading)
+                if let setting {
+                    bump(provider)
+                    if case .signedIn = reading {
+                        flows[provider] = Flow(method: nil, step: .signedOutOf(AccountText.header(setting)), switching: false)
+                        return
+                    }
+                }
                 flows[provider] = nil
             } catch {
                 guard serials[provider] == serial else { return }
@@ -320,8 +459,16 @@ package final class AccountStore {
 
     private func becameActive() {
         for watch in watches.values { watch.rearm() }
+        checkHandOffs()
         guard activation.pass() else { return }
         for provider in statuses.keys where flows[provider]?.step.live != true {
+            Task { await refresh(provider) }
+        }
+    }
+
+    /// Back in Kore during a Terminal hand-off: read at once, whatever the throttle says.
+    private func checkHandOffs() {
+        for (provider, flow) in flows where flow.step == .terminal {
             Task { await refresh(provider) }
         }
     }
@@ -334,6 +481,7 @@ package final class AccountStore {
         for provider in Array(handles.keys) { let handle = end(provider); Task { await handle?.cancel() } }
         for provider in serials.keys { serials[provider, default: 0] += 1 }
         statuses = [:]
+        policies = [:]
         flows = [:]
         known = [:]
         lastMethod = [:]

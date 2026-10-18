@@ -3,7 +3,8 @@ import Foundation
 /// Auth is owned by the Codex CLI: Kore never handles credentials. It asks who Codex is logged
 /// in as (`account/read`), asks it to sign in in the browser (`account/login/start`) and to
 /// sign out (`account/logout`), each on a short-lived app-server of its own. Never asked for:
-/// `getAuthStatus` with its token, and the login types that take a secret (API keys, tokens).
+/// `getAuthStatus` with its token, and the token login types. An API key the user types goes
+/// to Codex once (`signIn(apiKey:)`).
 public enum CodexAuth {
     public struct Status: Sendable, Equatable {
         public let loggedIn: Bool
@@ -53,6 +54,48 @@ public enum CodexAuth {
         let server = try await CodexAppServer.start(cwd: FileManager.default.homeDirectoryForCurrentUser, executable: executable)
         defer { Task { await server.close() } }
         _ = try await server.request("account/logout")
+    }
+
+    /// Signs in with an API key the user typed: `account/login/start {type: "apiKey", apiKey}` on
+    /// a short-lived app-server (Codex stores the key itself), then the account it now reads.
+    /// The key is in the request only, and the caller forgets it.
+    public static func signIn(apiKey: String, executable: URL? = nil) async throws -> JSONValue {
+        let server = try await CodexAppServer.start(cwd: FileManager.default.homeDirectoryForCurrentUser, executable: executable)
+        defer { Task { await server.close() } }
+        _ = try await server.request("account/login/start", ["type": "apiKey", "apiKey": .string(apiKey)])
+        return try await server.request("account/read")
+    }
+
+    /// The config files that may set `forced_login_method`, the managed one first.
+    public static func configFiles(environment: [String: String] = ProcessInfo.processInfo.environment) -> [URL] {
+        let home = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
+        return [URL(fileURLWithPath: "/etc/codex/managed_config.toml"), home.appendingPathComponent("config.toml")]
+    }
+
+    /// The one login Codex allows ("chatgpt" or "api"), from the first file that says; nil when
+    /// any is.
+    public static func forcedLoginMethod(files: [URL]) -> String? {
+        for file in files {
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            if let method = forcedLoginMethod(toml: text) { return method }
+        }
+        return nil
+    }
+
+    /// `forced_login_method = "…"` at the top level of a config.toml (before any table).
+    public static func forcedLoginMethod(toml: String) -> String? {
+        for raw in toml.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") { return nil }
+            guard line.hasPrefix("forced_login_method"), let equals = line.firstIndex(of: "=") else { continue }
+            guard line[..<equals].trimmingCharacters(in: .whitespaces) == "forced_login_method" else { continue }
+            var value = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+            if let hash = value.firstIndex(of: "#") { value = value[..<hash].trimmingCharacters(in: .whitespaces) }
+            let unquoted = value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            return ["chatgpt", "api"].contains(unquoted) ? unquoted : nil
+        }
+        return nil
     }
 
     /// What `account/login/start` answers: the page to open, and for a device code, the code.

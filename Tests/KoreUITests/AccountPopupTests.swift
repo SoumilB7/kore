@@ -36,7 +36,8 @@ struct AccountPopupTests {
         ]
         for (status, word) in rows {
             let identity = Self.identity(Self.claude(status))
-            #expect(identity?.method == word)
+            // A platform is named in the header; its caption says where it was set.
+            #expect(identity?.method == word || identity.map(AccountText.header) == word)
             #expect(identity?.changeable == false)
         }
         #expect(Self.claude(["loggedIn": false, "authMethod": "none"]) == .signedOut)
@@ -99,13 +100,12 @@ struct AccountPopupTests {
 
     @Test func eachCLIsMethodsAsData() {
         let claude = ProviderDescriptor.claude.account.methods
-        #expect(claude.map(\.label) == ["Claude account with subscription", "Anthropic Console account"])
-        #expect(claude.map(\.runs) == [true, true])
         #expect(claude.first?.mechanism == .claudeAuthenticate(["loginWithClaudeAi": true]))
+        let allRun = claude.allSatisfy(\.runs)
+        #expect(allRun)
         let codex = ProviderDescriptor.codex.account.methods
-        #expect(codex.map(\.runs) == [true, true, false])
         #expect(codex[1].mechanism == .codexLogin(["type": "chatgptDeviceCode"]))
-        #expect(codex[2].label == "API key: run codex login --with-api-key in Terminal")
+        #expect(codex[2].mechanism == .codexKey && codex[2].label == "Provide your own API key…")
     }
 
     // MARK: The / menu entry

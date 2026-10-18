@@ -147,6 +147,136 @@ public enum ClaudeAuth {
         public func cancel() async { await session.close() }
     }
 
+    /// `claude auth login --sso` over pipes: the CLI opens the browser itself and prints the page
+    /// as "If the browser didn't open, visit: <url>" (plain, with `FORCE_HYPERLINK=0`). It ends
+    /// with exit 0 once signed in, or "Login failed: <reason>" on stderr. Nothing is ever written
+    /// to its input: the pasted-code path stays unused. Cancelling ends the process.
+    public final class SSOLogin: @unchecked Sendable {
+        private let process = Process()
+        private let lock = NSLock()
+        private var out = ""
+        private var err = ""
+        private var page: CheckedContinuation<URL, any Error>?
+        private var found: URL?
+        private var ended: Int32?
+        private var waiting: CheckedContinuation<Int32, Never>?
+        /// Held open and never written: a closed input would read as an empty pasted code.
+        private let input = Pipe()
+
+        /// Starts it; the page it prints, once printed.
+        public static func start(executable: URL? = nil) async throws -> (SSOLogin, URL) {
+            let launch = try await CLIExecutable.resolve("claude", override: executable)
+            let login = SSOLogin()
+            let url = try await login.run(launch)
+            return (login, url)
+        }
+
+        private func run(_ launch: CLIExecutable.Launch) async throws -> URL {
+            process.executableURL = launch.url
+            process.arguments = ["auth", "login", "--sso"]
+            process.environment = launch.environment.merging(["FORCE_HYPERLINK": "0"]) { $1 }
+            process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+            let stdout = Pipe(), stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+            process.standardInput = input
+            stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                if data.isEmpty { handle.readabilityHandler = nil } else { self?.said(data, error: false) }
+            }
+            stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                if data.isEmpty { handle.readabilityHandler = nil } else { self?.said(data, error: true) }
+            }
+            process.terminationHandler = { [weak self] process in self?.exited(process.terminationStatus) }
+            return try await withCheckedThrowingContinuation { continuation in
+                lock.withLock { page = continuation }
+                do {
+                    try process.run()
+                    ChildReaper.shared.watch(process.processIdentifier)
+                } catch {
+                    lock.withLock { page = nil }
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+
+        private func said(_ data: Data, error: Bool) {
+            let text = String(decoding: data, as: UTF8.self)
+            let resume: (CheckedContinuation<URL, any Error>, URL)? = lock.withLock {
+                if error {
+                    err += text
+                    return nil
+                }
+                out += text
+                guard found == nil, let url = ClaudeAuth.visitURL(out), let page else { return nil }
+                found = url
+                self.page = nil
+                return (page, url)
+            }
+            if let (page, url) = resume { page.resume(returning: url) }
+        }
+
+        private func exited(_ status: Int32) {
+            ChildReaper.shared.forget(process.processIdentifier)
+            let (page, waiter, reason): (CheckedContinuation<URL, any Error>?, CheckedContinuation<Int32, Never>?, String?) = lock.withLock {
+                ended = status
+                defer { (self.page, waiting) = (nil, nil) }
+                return (self.page, waiting, ClaudeAuth.loginReason(err))
+            }
+            page?.resume(throwing: Failure.said(reason ?? "Claude Code exited \(status)."))
+            waiter?.resume(returning: status)
+        }
+
+        /// Waits for the CLI to finish; throws its reason when it didn't sign in.
+        public func wait() async throws {
+            let status: Int32 = await withCheckedContinuation { continuation in
+                let done: Int32? = lock.withLock {
+                    if let ended { return ended }
+                    waiting = continuation
+                    return nil
+                }
+                if let done { continuation.resume(returning: done) }
+            }
+            guard status != 0 else { return }
+            let reason = lock.withLock { ClaudeAuth.loginReason(err) }
+            throw Failure.said(reason ?? "Claude Code exited \(status).")
+        }
+
+        public func cancel() {
+            if process.isRunning { process.terminate() }
+        }
+    }
+
+    /// The page in `auth login`'s output: the address after "visit:", any terminal hyperlink
+    /// around it taken off; nil until the line is whole, or when it isn't a web address.
+    public static func visitURL(_ output: String) -> URL? {
+        // Whole lines only: the last piece may still be arriving.
+        for line in output.components(separatedBy: "\n").dropLast() {
+            guard let range = line.range(of: "visit:") else { continue }
+            let rest = String(line[range.upperBound...])
+            // OSC 8 hyperlinks: ESC ] 8 ; ; <url> BEL|ESC\ <text> ESC ] 8 ; ; BEL|ESC\
+            let plain = rest.replacingOccurrences(of: "\u{1B}\\]8;[^;]*;[^\u{07}\u{1B}]*(\u{07}|\u{1B}\\\\)", with: " ", options: .regularExpression)
+            for word in plain.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\r" }) {
+                guard let url = URL(string: String(word)), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+                    url.host() != nil
+                else { continue }
+                return url
+            }
+        }
+        return nil
+    }
+
+    /// The reason in `auth login`'s stderr: the text after "Login failed:", else its first line.
+    public static func loginReason(_ stderr: String) -> String? {
+        let lines = stderr.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if let failed = lines.first(where: { $0.hasPrefix("Login failed:") }) {
+            let reason = failed.dropFirst("Login failed:".count).trimmingCharacters(in: .whitespaces)
+            return reason.isEmpty ? nil : reason
+        }
+        return lines.first
+    }
+
     /// `claude_authenticate`'s `automaticUrl`, when it's a web address.
     public static func automaticURL(_ reply: JSONValue) -> URL? {
         guard let text = reply["automaticUrl"]?.string, let url = URL(string: text), let scheme = url.scheme?.lowercased(),
