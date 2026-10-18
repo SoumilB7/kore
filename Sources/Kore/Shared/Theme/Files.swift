@@ -172,6 +172,9 @@ extension Size {
         static let find: CGFloat = 360
         static let findToggle: CGFloat = 20
         static let findMargin: CGFloat = 12
+        /// A find match's mark on the vertical scroller (look §5: VS Code's overview ruler).
+        static let findTick = CGSize(width: 6, height: 2)
+        static let findTickInset: CGFloat = 2
         static let stateWidth: CGFloat = 320
         static let tabDirty: CGFloat = 8
     }

@@ -314,3 +314,31 @@ private struct Toggle: View {
         .help(help)
     }
 }
+
+// MARK: - The scroller's ticks
+
+/// A 2pt accent tick on the vertical scroller per match, at its line's place in the file (look
+/// §5), so where the matches are shows at a glance. One tick per pixel row however many share it.
+struct FindTicks: View {
+    let find: FindModel
+    let lines: LineIndex
+
+    var body: some View {
+        let matches = find.matches
+        let count = max(lines.count, 1)
+        Canvas { context, size in
+            guard !matches.isEmpty, size.height > 0 else { return }
+            let tick = Size.Editor.findTick
+            let track = size.height - tick.height
+            var drawn = Set<Int>()
+            for range in matches {
+                let y = (CGFloat(lines.line(at: range.location)) / CGFloat(count)) * track
+                guard drawn.insert(Int(y)).inserted else { continue }
+                context.fill(Path(CGRect(x: 0, y: y, width: tick.width, height: tick.height)), with: .color(Theme.accent))
+            }
+        }
+        .frame(width: Size.Editor.findTick.width)
+        .padding(.trailing, Size.Editor.findTickInset)
+        .allowsHitTesting(false)
+    }
+}

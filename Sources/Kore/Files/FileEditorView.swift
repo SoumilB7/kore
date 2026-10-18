@@ -52,6 +52,10 @@ struct FileEditorView: View {
                 CodeEditorView(
                     document: document, zoom: Zoom.shared.scale, wrap: document.wrap,
                     goToLine: { workspace.quickOpen = .line })
+                .overlay(alignment: .trailing) {
+                    if document.editor.find.isOpen { FindTicks(find: document.editor.find, lines: document.editor.lines) }
+                }
+                .onAppear { DevFileHooks.editorShown(document) }
                 .overlay(alignment: .topTrailing) {
                     if document.editor.find.isOpen {
                         FindBar(find: document.editor.find)
