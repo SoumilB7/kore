@@ -25,8 +25,21 @@ public enum JSONValue: Sendable, Hashable {
     public var array: [JSONValue]? { if case .array(let a) = self { a } else { nil } }
     public var object: [String: JSONValue]? { if case .object(let o) = self { o } else { nil } }
 
+    /// Through Foundation's `JSONSerialization`: several times faster than decoding through
+    /// `Codable`, which tries each type in turn at every level (a 61 MB transcript took seconds).
     public static func parse(_ data: Data) throws -> JSONValue {
-        try JSONDecoder().decode(JSONValue.self, from: data)
+        JSONValue(foundation: try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]))
+    }
+
+    init(foundation value: Any) {
+        switch value {
+        case let number as NSNumber:
+            self = CFGetTypeID(number) == CFBooleanGetTypeID() ? .bool(number.boolValue) : .number(number.doubleValue)
+        case let string as String: self = .string(string)
+        case let array as [Any]: self = .array(array.map(JSONValue.init(foundation:)))
+        case let object as [String: Any]: self = .object(object.mapValues(JSONValue.init(foundation:)))
+        default: self = .null
+        }
     }
 
     public func encoded() throws -> Data {

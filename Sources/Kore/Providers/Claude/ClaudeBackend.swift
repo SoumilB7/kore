@@ -39,16 +39,18 @@ final class ClaudeBackend: ChatBackend {
     }
 
     private func launch() async throws {
+        // A resumed session's past is read while the CLI starts (both take about a second on a
+        // long session), not after.
+        let folder = options.folder
+        let past = replayPending ? sessionId.map { id in Task.detached { ClaudeHistory.messages(sessionId: id, in: folder) } } : nil
         let session = try await ClaudeSession.start(
             .init(
                 cwd: options.folder, model: options.model,
                 permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
                 resume: sessionId))
-        if replayPending, let id = sessionId {
+        if let past {
             replayPending = false
-            let folder = options.folder
-            let messages = await Task.detached { ClaudeHistory.messages(sessionId: id, in: folder) }.value
-            yield(.replayed(translator.replay(messages)))
+            yield(.replayed(translator.replay(await past.value)))
         }
         self.session = session
         // Ends when the process does; `close()` cancels it.

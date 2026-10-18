@@ -53,8 +53,12 @@ public enum ClaudeHistory {
         var byId: [String: JSONValue] = [:]
         var order: [String] = []
         var leaf: String?
-        for line in data.split(separator: 0x0A) {
-            guard let entry = try? JSONValue.parse(Data(line)), let uuid = entry["uuid"]?.string else { continue }
+        // Only entries with a uuid (user, assistant, attachment, system) can be on the branch. The
+        // rest, such as api-request bodies (a third of a long session's bytes), are skipped
+        // unparsed: a line without this key can't have it at the top level.
+        let uuidKey = Data("\"uuid\":\"".utf8)
+        for line in data.jsonLines() where line.range(of: uuidKey) != nil {
+            guard let entry = try? JSONValue.parse(line), let uuid = entry["uuid"]?.string else { continue }
             byId[uuid] = entry
             let type = entry["type"]?.string
             guard (type == "user" || type == "assistant") && entry["isSidechain"]?.bool != true else { continue }
@@ -99,8 +103,8 @@ public enum ClaudeHistory {
         try? handle.seek(toOffset: size > chunk ? size - chunk : 0)
         let tail = (try? handle.readToEnd()) ?? Data()
         let needle = Data("\"turnOrigin\"".utf8)
-        for line in tail.split(separator: 0x0A).reversed() where line.range(of: needle) != nil {
-            guard let entry = try? JSONValue.parse(Data(line)), entry["type"]?.string == "user" else { continue }
+        for line in tail.jsonLines().reversed() where line.range(of: needle) != nil {
+            guard let entry = try? JSONValue.parse(line), entry["type"]?.string == "user" else { continue }
             if cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? "") { return entry }
         }
         return nil
@@ -116,8 +120,8 @@ public enum ClaudeHistory {
         try? handle.seek(toOffset: size > chunk ? size - chunk : 0)
         let tail = (try? handle.readToEnd()) ?? Data()
         let needle = Data(uuid.utf8)
-        for line in tail.split(separator: 0x0A).reversed() where line.range(of: needle) != nil {
-            if let entry = try? JSONValue.parse(Data(line)), entry["uuid"]?.string == uuid { return entry }
+        for line in tail.jsonLines().reversed() where line.range(of: needle) != nil {
+            if let entry = try? JSONValue.parse(line), entry["uuid"]?.string == uuid { return entry }
         }
         return nil
     }
@@ -145,7 +149,7 @@ public enum ClaudeHistory {
         let data = (try? handle.readToEnd()) ?? Data()
         guard let end = data.lastIndex(of: 0x0A) else { return ([], offset) }
         let whole = data[data.startIndex...end]
-        let entries = whole.split(separator: 0x0A).compactMap { try? JSONValue.parse(Data($0)) }.filter {
+        let entries = whole.jsonLines().compactMap { try? JSONValue.parse($0) }.filter {
             let type = $0["type"]?.string
             return type == "user" || type == "assistant"
         }
@@ -178,8 +182,8 @@ public enum ClaudeHistory {
         }
 
         var custom: String?, ai: String?, firstPrompt: String?, firstPeer: String?, lastMessage: Date?
-        for line in (head + tail).split(separator: 0x0A) {
-            guard let entry = try? JSONValue.parse(Data(line)) else { continue }
+        for line in (head + tail).jsonLines() {
+            guard let entry = try? JSONValue.parse(line) else { continue }
             let type = entry["type"]?.string
             if type == "user" || type == "assistant", let time = entry["timestamp"]?.string.flatMap(parseDate) {
                 lastMessage = max(lastMessage ?? time, time)
@@ -261,3 +265,22 @@ public enum CodexHistory {
             updated: Date(timeIntervalSince1970: thread["updatedAt"]?.double ?? 0), archived: archived)
     }
 }
+
+extension Data {
+    /// The non-empty lines, found with `memchr` (Foundation's `split` is several times slower on
+    /// a large transcript). The lines share this data's storage.
+    func jsonLines() -> [Data] {
+        var ranges: [Range<Int>] = []
+        withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            guard let base = bytes.baseAddress else { return }
+            var start = 0
+            while start < bytes.count {
+                let end = memchr(base + start, 0x0A, bytes.count - start).map { base.distance(to: UnsafeRawPointer($0)) } ?? bytes.count
+                if end > start { ranges.append(start..<end) }
+                start = end + 1
+            }
+        }
+        return ranges.map { self[(startIndex + $0.lowerBound)..<(startIndex + $0.upperBound)] }
+    }
+}
+
