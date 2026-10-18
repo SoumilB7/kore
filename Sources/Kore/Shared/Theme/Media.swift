@@ -41,7 +41,7 @@ extension Size {
     enum Media {
         /// An audio file's glyph above the controls.
         static let audioGlyphGap: CGFloat = 12
-        static let audioControlsWidth: CGFloat = 360
+        static let audioControlsWidth: CGFloat = 420
         static let audioControls: CGFloat = 40
     }
 }
