@@ -47,7 +47,14 @@ final class DevFramePacer: NSObject {
 
     func start(on view: NSView, probe: @escaping () -> Probe?) {
         self.probe = probe
-        let link = view.displayLink(target: self, selector: #selector(tick(_:)))
+        // A view's link follows its window's screen, and a window off every screen (a
+        // storyline's) gets no frames from it: the main display's clock paces it instead.
+        let link: CADisplayLink
+        if view.window?.screen == nil, let screen = NSScreen.main ?? NSScreen.screens.first {
+            link = screen.displayLink(target: self, selector: #selector(tick(_:)))
+        } else {
+            link = view.displayLink(target: self, selector: #selector(tick(_:)))
+        }
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         self.link = link
