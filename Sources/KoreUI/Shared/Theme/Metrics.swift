@@ -85,6 +85,8 @@ enum Size {
     static let tabMinWidth: CGFloat = 90
     static let tabMaxWidth: CGFloat = 180
     static let tabGap: CGFloat = 4
+    /// A tab drag starts after this much movement, so clicks and double clicks stay clicks.
+    static let tabDragStart: CGFloat = 4
     static let iconButton: CGFloat = 28
     static let iconButtonSmall: CGFloat = 26
     static let closeGlyph: CGFloat = 18

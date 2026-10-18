@@ -43,6 +43,58 @@ struct TabBar: View {
     /// Each tab's frame in the window, for the double-click monitor below.
     @StateObject private var tabFrames = Held<[UUID: CGRect]>([:])
     @StateObject private var doubleClicks = Held<Any?>(nil)
+    /// A tab being dragged to a new place: which one, where it started, and how far it's gone.
+    @StateObject private var drag = Local<TabDrag?>(nil)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private struct TabDrag: Equatable {
+        let id: UUID
+        let from: Int
+        var dx: CGFloat
+    }
+
+    /// One tab and the gap after it: every tab has the same width, so a slot is arithmetic, not
+    /// measured.
+    private var slot: CGFloat { tabWidth + Size.tabGap }
+
+    /// Where the dragged tab would land now.
+    private func target(_ drag: TabDrag) -> Int {
+        min(max(drag.from + Int((drag.dx / slot).rounded()), 0), workspace.tabs.count - 1)
+    }
+
+    /// How far a tab is moved from its place while another is dragged: the dragged one with the
+    /// pointer, the ones it passes one slot aside.
+    private func shift(_ index: Int) -> CGFloat {
+        guard let drag = drag.value else { return 0 }
+        let to = target(drag)
+        if index == drag.from { return drag.dx }
+        if drag.from < to, index > drag.from, index <= to { return -slot }
+        if drag.from > to, index < drag.from, index >= to { return slot }
+        return 0
+    }
+
+    /// Drag a tab left or right to reorder (VS Code, Safari). It starts after a few points, so a
+    /// click selects and a double click keeps a preview tab as before.
+    private func reorder(_ tab: ChatTab, at index: Int) -> some Gesture {
+        DragGesture(minimumDistance: Size.tabDragStart, coordinateSpace: .global)
+            .onChanged { value in
+                if drag.value?.id != tab.id {
+                    workspace.select(tab)
+                }
+                let count = workspace.tabs.count
+                // Kept within the strip.
+                let dx = min(max(value.translation.width, -CGFloat(index) * slot), CGFloat(count - 1 - index) * slot)
+                drag.value = TabDrag(id: tab.id, from: index, dx: dx)
+            }
+            .onEnded { _ in
+                guard let ended = drag.value else { return }
+                let to = target(ended)
+                withAnimation(reduceMotion ? nil : Motion.fade) {
+                    workspace.moveTab(tab, to: to)
+                    drag.value = nil
+                }
+            }
+    }
 
     private var tabWidth: CGFloat {
         let count = CGFloat(workspace.tabs.count)
@@ -58,9 +110,15 @@ struct TabBar: View {
             ScrollViewReader { scroller in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Size.tabGap) {
-                        ForEach(workspace.tabs) { tab in
+                        ForEach(Array(workspace.tabs.enumerated()), id: \.element.id) { index, tab in
+                            let dragged = drag.value?.id == tab.id
                             TabItem(tab: tab, workspace: workspace, height: tabHeight)
                                 .frame(width: tabWidth)
+                                .offset(x: shift(index))
+                                .zIndex(dragged ? 1 : 0)
+                                // The others slide aside as the dragged one passes; it follows the pointer.
+                                .animation(reduceMotion || dragged ? nil : Motion.fade, value: drag.value.map(target))
+                                .simultaneousGesture(reorder(tab, at: index))
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
                                     tabFrames.value[tab.id] = $0
                                 }

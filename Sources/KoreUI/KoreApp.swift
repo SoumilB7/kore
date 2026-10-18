@@ -122,6 +122,14 @@ private struct FileCommands: View {
             .keyboardShortcut("t")
             .disabled(workspace == nil)
 
+        // VS Code's keys for moving the active tab.
+        Button("Move Tab Right") { workspace?.moveActive(by: 1) }
+            .keyboardShortcut(.pageDown, modifiers: [.control, .shift])
+            .disabled(workspace == nil)
+        Button("Move Tab Left") { workspace?.moveActive(by: -1) }
+            .keyboardShortcut(.pageUp, modifiers: [.control, .shift])
+            .disabled(workspace == nil)
+
         Button("Open Folder…") {
             if let folder = app.chooseFolder() {
                 app.open(folder, openWindow: openWindow, dismissWindow: dismissWindow)

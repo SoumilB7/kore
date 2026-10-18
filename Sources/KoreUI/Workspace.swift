@@ -281,6 +281,24 @@ package final class Workspace {
 
     func keep(_ tab: ChatTab) { tab.isPreview = false }
 
+    // MARK: - Order
+
+    /// Puts a tab at `index` among the tabs (a drag in the tab bar). A preview tab that's moved is
+    /// kept, as in VS Code: placing it says it's wanted. The order is saved with the folder.
+    func moveTab(_ tab: ChatTab, to index: Int) {
+        guard let from = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        let to = min(max(index, 0), tabs.count - 1)
+        keep(tab)
+        guard to != from else { return }
+        tabs.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+    }
+
+    /// Moves the active tab one place right (`+1`) or left (`-1`): ⌃⇧⇟ / ⌃⇧⇞.
+    func moveActive(by step: Int) {
+        guard let from = tabs.firstIndex(where: { $0.id == activeID }) else { return }
+        moveTab(tabs[from], to: from + step)
+    }
+
     // MARK: - Files the agents' turns changed
 
     /// A file changed by the running or latest turn of this window's chats (look §8): the
