@@ -61,6 +61,8 @@ func runCodex(_ options: CodexSession.Options, debug: Bool) async {
                 if debug { FileHandle.standardError.write(Data("\(dim)\(s)\(reset)".utf8)) }
             case .raw(let method, let params):
                 if debug { out("\(dim)[\(method)] \(params.compact.prefix(200))\(reset)\n") }
+            case .subThread(let thread, let method, _):
+                if debug { out("\(dim)[sub \(thread.suffix(6))] \(method)\(reset)\n") }
             case .exited(let status):
                 out("\n\(dim)codex exited (\(status))\(reset)\n")
                 exit(status)

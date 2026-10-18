@@ -234,7 +234,12 @@ public actor CodexSession {
     private func handle(_ message: CodexAppServer.Incoming) async {
         switch message {
         case .notification(let method, let params):
-            sink.yield(event(method: method, params: params))
+            // Sub-agents share the connection; only our thread's notifications are the chat's.
+            if let other = params["threadId"]?.string, !threadId.isEmpty, other != threadId {
+                sink.yield(.subThread(threadId: other, method: method, params: params))
+            } else {
+                sink.yield(event(method: method, params: params))
+            }
         case .request(let id, let method, let params):
             if let approval = CodexApproval(id: id, method: method, params: params) {
                 sink.yield(.approvalRequest(approval))

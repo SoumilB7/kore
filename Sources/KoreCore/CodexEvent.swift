@@ -22,6 +22,9 @@ public enum CodexEvent: Sendable {
     case approvalResolved(requestId: JSONValue)
     case turnCompleted(CodexTurnResult)
     case error(message: String, willRetry: Bool)
+    /// A notification for another thread on this app-server: a sub-agent the chat's thread
+    /// spawned (`collaboration.spawn_agent`) streams its own items and turns here.
+    case subThread(threadId: String, method: String, params: JSONValue)
     case raw(method: String, params: JSONValue)
     case stderr(String)
     case exited(status: Int32)

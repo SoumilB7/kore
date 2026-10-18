@@ -749,6 +749,8 @@ final class ChatModel: Identifiable {
             case "failed": append(.notice, Self.cleanError(r.errorMessage ?? "Turn failed"), isError: true)
             default: break
             }
+        case .subThread:
+            break  // a sub-agent's own stream; not shown yet
         case .exited(let status):
             exited(status, name: "Codex")
         case .error, .raw, .stderr:
