@@ -242,3 +242,75 @@ final class SelectableOnHover: ChatStoryline {
     }
     return window?.contentView.map(count) ?? 0
 }
+
+/// The `/` key opens the command menu with the caret after the "/", and a pick leaves the caret
+/// after the command and its space, ready for arguments. The menu floats over the chat: the
+/// transcript stays where it was beside it, and a click outside closes it.
+final class SlashMenuCaret: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var variants: [Variant] { [.claude] }
+    override class var script: CLIScript {
+        let commands = [
+            SlashCommand(name: "compact", description: "Summarize the conversation", hint: "", kind: .command),
+            SlashCommand(name: "review", description: "Review a pull request", hint: "", kind: .command),
+        ]
+        return CLIScript(
+            start: [
+                .event(.controlsLoaded(ChatControls(
+                    models: [ModelOption(id: "haiku", name: "Haiku", resolved: "haiku", efforts: ["low"])],
+                    model: "haiku", effort: "low", commands: commands)))
+            ],
+            turns: [CLIScript.reply("OK")])
+    }
+
+    /// The draft, and where the caret sits in the field (in characters).
+    @MainActor static func caret(_ story: StoryContext) -> (draft: String, at: Int)? {
+        guard let editor = story.window?.firstResponder as? NSTextView, editor.isFieldEditor else { return nil }
+        return (editor.string, editor.selectedRange().location)
+    }
+
+    static func expectCaret(_ what: String, _ draft: String) -> Expect {
+        Expect(what, found: { story in
+            caret(story).map { "“\($0.draft)” with the caret at \($0.at)" } ?? "no field editor"
+        }) { story in
+            guard let now = caret(story) else { return false }
+            return now.draft == draft && now.at == (draft as NSString).length && story.app.chat?.draft == draft
+        }
+    }
+
+    /// Where the last answer's top is, before the menu opens.
+    private var answerTop: CGFloat?
+
+    @MainActor private static func lastRowTop(_ story: StoryContext) throws -> CGFloat? {
+        try SwitchTab.rowIDs(story.activeChat()).last.flatMap { SwitchTab.top(of: $0) }
+    }
+
+    override func steps() -> [any Step] {
+        let tab = Locator("the chat's tab") { app in
+            app.workspace.map { .success(StoryID.Tabs.tab($0.activeTab.id)) } ?? .failure(LocatorMiss("no workspace"))
+        }
+        return super.steps() + [
+            Send("Hello"),
+            TurnFinished(1),
+            Expect("the answer in view") { [unowned self] story in
+                answerTop = try Self.lastRowTop(story)
+                return answerTop != nil
+            },
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Press(.id(StoryID.Composer.slash)),
+            WaitForElement(.id(StoryID.Composer.command("compact"))),
+            Snapshot("slash-menu"),
+            Self.expectCaret("“/” with the caret after it", "/"),
+            Expect("the answer where it was, the transcript not cut short by the menu") { [unowned self] story in
+                guard let top = try Self.lastRowTop(story), let before = answerTop else { return false }
+                return abs(top - before) < 0.5
+            },
+            Click(tab),
+            ExpectElement(.id(StoryID.Composer.command("compact")), .absent),
+            Press(.id(StoryID.Composer.slash)),
+            Press(.id(StoryID.Composer.command("review"))),
+            Self.expectCaret("the command picked, the caret after its space", "/review "),
+            ExpectElement(.id(StoryID.Composer.command("compact")), .absent),
+        ]
+    }
+}
