@@ -79,9 +79,11 @@ extension TranscriptStore {
         case .compactionFailed(let reason):
             compacting(false)
             notice("Couldn't compact: " + reason, isError: true)
-        case .compacted(let at, _, _):
+        case .compacted(let at, _, let auto):
             compacting(false)
-            compacted(at: at)
+            compacted(at: at, auto: auto)
+        case .compactionSummary(let text):
+            compactionSummary(text)
         case .earlierHistory(let available):
             earlierHistory(available)
 
@@ -90,7 +92,7 @@ extension TranscriptStore {
         case .planModeChanged(let change):
             planModeChanged(change)
         case .sessionIdentified, .titleChanged, .controlsLoaded, .turnOrigin,
-            .planReady, .contextUsage, .compactionSummary:
+            .planReady, .contextUsage:
             break
         }
     }

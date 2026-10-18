@@ -13,7 +13,8 @@ final class TranscriptStore {
         /// "Forked from …"), off the timeline.
         /// `mode`: a permission mode change (look.md §8): the user's is a divider between turns,
         /// the agent's (with `modeLead`) an item on its turn's timeline.
-        enum Kind: Equatable { case user, answer, thinking, plan, tool, agent, notice, peer, divider, mode }
+        /// `summary`: what a compaction left (Claude), under its divider, off the timeline.
+        enum Kind: Equatable { case user, answer, thinking, plan, tool, agent, notice, peer, divider, mode, summary }
 
         let id = UUID()
         var kind: Kind
@@ -135,6 +136,8 @@ final class TranscriptStore {
         case explored([Entry], open: Bool)
         /// A user or peer message, first in its section; `expanded` shows a long one whole.
         case message(Entry, open: Bool, expanded: Bool)
+        /// A compaction's summary, collapsed until `expanded` (look.md §5).
+        case summary(Entry, expanded: Bool)
         /// The running turn's last row: glyph and verb (look.md §12); `word` in place of the
         /// random verb ("Compacting").
         case spinner(turn: String, since: Date, claude: Bool, word: String?)
@@ -142,7 +145,7 @@ final class TranscriptStore {
         var id: String {
             switch self {
             case .entry(let e), .tool(let e, _), .thinking(let e, _), .file(let e, _, _), .agent(let e, _, _),
-                .message(let e, _, _):
+                .message(let e, _, _), .summary(let e, _):
                 e.id.uuidString
             case .fold(let f): "fold-\(f.turn)"
             case .rule(let t): "rule-\(t)"
@@ -465,8 +468,16 @@ final class TranscriptStore {
     }
 
     /// "Conversation compacted · 14:32" above the summary that follows.
-    func compacted(at date: Date) {
-        append(Entry(kind: .divider, text: "Conversation compacted · " + Self.time.string(from: date)))
+    /// The divider names who started it: "Conversation compacted · 14:32" (the user, or not
+    /// known), "Compacted automatically · 14:32" (the CLI).
+    func compacted(at date: Date, auto: Bool? = nil) {
+        let cause = auto == true ? "Compacted automatically" : "Conversation compacted"
+        append(Entry(kind: .divider, text: cause + " · " + Self.time.string(from: date)))
+    }
+
+    /// What the compaction kept (Claude's summary), under its divider.
+    func compactionSummary(_ text: String) {
+        append(Entry(kind: .summary, text: text))
     }
 
     /// After a fork's history: "Forked from "Refactor theme tokens"".
@@ -1216,7 +1227,7 @@ final class TranscriptStore {
         case .explored(let calls, _):
             if calls.contains(where: { !$0.done }) { return .running }
             return calls.contains(where: \.isError) ? .failure : .success
-        case .spinner, .message: return nil
+        case .spinner, .message, .summary: return nil
         case .rule: return TimelineDot.none
         case .outcome(_, let text): return text == "Interrupted" ? .warning : .failure
         case .changes: return .plain
@@ -1432,6 +1443,8 @@ final class TranscriptStore {
             return .tool(entry, open: openKeys.contains(entry.id.uuidString))
         case .thinking:
             return .thinking(entry, open: openKeys.contains(entry.id.uuidString))
+        case .summary:
+            return .summary(entry, expanded: openKeys.contains(MessageHeader.expandKey(entry)))
         default:
             return .entry(entry)
         }

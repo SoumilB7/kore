@@ -116,6 +116,8 @@ enum Stroke {
     static let hairline: CGFloat = 1
     /// An outline that has to read as active (the composer while a file is dragged over it).
     static let emphasis: CGFloat = 1.5
+    /// The rule at a quote's left (a compaction's summary).
+    static let quote: CGFloat = 2
 }
 
 /// The one shadow: the history panel floating over content (owner kept it, 2026-10-20).

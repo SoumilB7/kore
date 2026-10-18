@@ -361,3 +361,60 @@ struct ModeItemText: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+/// What a compaction kept (look.md §5): "Summary from Claude", then the summary as a quiet
+/// quote (a rule at its left, secondary text, no box), collapsed like a long message with
+/// "Show full summary". Copy takes the whole summary, also while it's collapsed.
+struct CompactionSummary: View {
+    let entry: TranscriptStore.Entry
+    let expanded: Bool
+    let actions: TranscriptActions
+    /// Its laid-out lines, from an estimate until measured.
+    @StateObject private var lines: Local<Int>
+
+    init(entry: TranscriptStore.Entry, expanded: Bool, actions: TranscriptActions) {
+        self.entry = entry
+        self.expanded = expanded
+        self.actions = actions
+        let text = entry.text
+        _lines = StateObject(wrappedValue: Local(max(text.utf8.reduce(1) { $1 == 10 ? $0 + 1 : $0 }, text.utf8.count / Layout.Timeline.charsPerLine)))
+    }
+
+    private var collapsible: Bool { lines.value >= Layout.Timeline.collapseFrom }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            Text("Summary from Claude")
+                .font(TextStyle.caption)
+                .foregroundStyle(Theme.tertiary)
+            HStack(alignment: .top, spacing: Space.lg) {
+                Rectangle().fill(Theme.timelineLine).frame(width: Stroke.quote)
+                VStack(alignment: .leading, spacing: 0) {
+                    MessageText(
+                        text: entry.text, lines: collapsible && !expanded ? Layout.Timeline.collapsedLines : nil,
+                        fade: Size.collapseFade * Zoom.shared.scale, ground: Theme.background, color: Theme.secondary
+                    ) { lines.value = $0 }
+                    if collapsible {
+                        HStack {
+                            Spacer(minLength: 0)
+                            MessageToggle(expanded: expanded, title: "Show full summary") {
+                                actions.toggle(MessageHeader.expandKey(entry))
+                            }
+                        }
+                        .padding(.top, Space.messageToggle)
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, Space.sm)
+        .padding(.bottom, Layout.Timeline.itemPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contextMenu {
+            Button("Copy Summary") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(entry.text, forType: .string)
+            }
+        }
+    }
+}

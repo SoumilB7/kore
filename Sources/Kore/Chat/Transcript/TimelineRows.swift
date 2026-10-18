@@ -40,6 +40,8 @@ struct TimelineRow: View, Equatable {
             ModeDivider(mode: mode)
         } else if case .message(let entry, let open, let expanded) = item.row {
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
+        } else if case .summary(let entry, let expanded) = item.row {
+            CompactionSummary(entry: entry, expanded: expanded, actions: actions)
         } else if case .spinner(_, let since, let claude, let word) = item.row {
             // Not a timeline item: no dot, and the line doesn't run into it.
             SpinnerRow(since: since, claude: claude, word: word)
@@ -86,6 +88,8 @@ struct RowContent: View {
             ExploredItem(calls: calls.count, open: open) { actions.toggle("explored-\(calls[0].id.uuidString)") }
         case .spinner(_, let since, let claude, let word):
             SpinnerRow(since: since, claude: claude, word: word)
+        case .summary(let entry, let expanded):
+            CompactionSummary(entry: entry, expanded: expanded, actions: actions)
         case .message(let entry, let open, let expanded):
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         case .rule:
@@ -377,14 +381,16 @@ final class StickyTracker: ObservableObject {
 }
 
 /// "Show full message" / "Show less": label text in secondary, filled on hover (look.md §15).
-private struct MessageToggle: View {
+struct MessageToggle: View {
     let expanded: Bool
+    /// What opens it: "Show full message", "Show full summary".
+    var title = "Show full message"
     let action: () -> Void
     @StateObject private var hovered = Local(false)
 
     var body: some View {
         Button(action: action) {
-            Text(expanded ? "Show less" : "Show full message")
+            Text(expanded ? "Show less" : title)
                 .font(TextStyle.label)
                 .foregroundStyle(hovered.value ? Theme.text : Theme.secondary)
                 .padding(Inset.messageToggle)
@@ -400,12 +406,13 @@ private struct MessageToggle: View {
 /// box's fill (an overlay, not a mask: a mask costs an offscreen pass). Stopped, it lays out
 /// only the text's start, enough to fill the lines and to tell a long message from a short one;
 /// selection then takes what shows. Reports how many lines it lays out to at this width.
-private struct MessageText: View {
+struct MessageText: View {
     let text: String
     let lines: Int?
     let fade: CGFloat
     /// What's behind the text: the fade ends in it.
     let ground: Color
+    var color = Theme.text
     let measured: (Int) -> Void
 
     /// The body font's line height, worked out once per zoom.
@@ -430,7 +437,7 @@ private struct MessageText: View {
         let shown = lines == nil ? text : TextPrefix.of(text, lines: Self.prefixLines, bytes: Self.prefixBytes).text
         Text(shown)
             .font(TextStyle.body)
-            .foregroundStyle(Theme.text)
+            .foregroundStyle(color)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: Int.self) { Int(($0.size.height / line).rounded()) } action: { measured($0) }
