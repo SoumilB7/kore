@@ -7,6 +7,7 @@ import KoreCore
 ///   KORE_RESUME=<agent>:<id> open that past session instead
 ///   KORE_SEND=<text>         send that message in the started chat
 ///   KORE_MODE=<mode id>      switch the started chat to that mode
+///   KORE_MODEL=<model>       launch the started or resumed chat on that model (haiku / gpt-6-luna keep tests cheap)
 ///   KORE_ATTACH=<path>[:...] attach those files to the started chat's composer
 ///   KORE_PASTE=1             press ⌘V (a real key event) in the composer
 ///   KORE_THEN_SEND=<text>    after that, send this text with whatever got attached
@@ -28,6 +29,7 @@ enum DevSnapshot {
     static let send = ProcessInfo.processInfo.environment["KORE_SEND"]
     static let mode = ProcessInfo.processInfo.environment["KORE_MODE"]
     static let thenSend = ProcessInfo.processInfo.environment["KORE_THEN_SEND"]
+    static let model = ProcessInfo.processInfo.environment["KORE_MODEL"]
     static let attach = ProcessInfo.processInfo.environment["KORE_ATTACH"].map {
         $0.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
     }

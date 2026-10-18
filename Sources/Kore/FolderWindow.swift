@@ -35,6 +35,7 @@ struct FolderWindow: View {
         .onAppear {
             if let provider = DevSnapshot.startProvider {
                 workspace.value.start(provider, in: workspace.value.activeTab)
+                workspace.value.activeTab.chat?.launchModel = DevSnapshot.model
                 if let mode = DevSnapshot.mode { workspace.value.activeTab.chat?.setMode(mode) }
                 if let urls = DevSnapshot.attach { workspace.value.activeTab.chat?.attach(urls) }
                 if let text = DevSnapshot.thenSend, let chat = workspace.value.activeTab.chat {
@@ -48,7 +49,10 @@ struct FolderWindow: View {
                     chat.send()
                 }
             }
-            if let session = DevSnapshot.resume { workspace.value.open(session) }
+            if let session = DevSnapshot.resume {
+                workspace.value.open(session)
+                workspace.value.activeTab.chat?.launchModel = DevSnapshot.model
+            }
             DevSnapshot.captureIfRequested()
         }
         // The folder's chats come from the CLIs; re-read them when coming back to Kore, so chats
