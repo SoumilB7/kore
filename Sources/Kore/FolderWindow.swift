@@ -36,6 +36,7 @@ struct FolderWindow: View {
             if let provider = DevSnapshot.startProvider {
                 workspace.value.start(provider, in: workspace.value.activeTab)
                 if let mode = DevSnapshot.mode { workspace.value.activeTab.chat?.setMode(mode) }
+                if let urls = DevSnapshot.attach { workspace.value.activeTab.chat?.attach(urls) }
                 if let text = DevSnapshot.thenSend, let chat = workspace.value.activeTab.chat {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                         chat.draft = text

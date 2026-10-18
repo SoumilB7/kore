@@ -7,10 +7,12 @@ import KoreCore
 ///   KORE_RESUME=<agent>:<id> open that past session instead
 ///   KORE_SEND=<text>         send that message in the started chat
 ///   KORE_MODE=<mode id>      switch the started chat to that mode
+///   KORE_ATTACH=<path>[:...] attach those files to the started chat's composer
 ///   KORE_PASTE=1             press ⌘V (a real key event) in the composer
 ///   KORE_THEN_SEND=<text>    after that, send this text with whatever got attached
 ///   KORE_FULLSCREEN=1        enter full screen before the snapshot
-///   KORE_DRAG=<x>,<y>,<dx>,<dy> real drag from that point; logs the window's move to stderr
+///   KORE_DRAG=<x>,<y>,<dx>,<dy> real drag from that point (after any clicks); logs the window's move to stderr
+///   KORE_KEYS=<code>[;cmd+<code>...] real key presses (virtual key codes) after the clicks and drag, 0.5s apart
 ///   KORE_CLICK=<x>,<y>[;...] click those points (from the window's top-left), 1s apart, before the snapshot
 ///   KORE_REAL_CLICK=1        post that click through the window server (moves the real cursor),
 ///                            to catch title-bar regions that swallow clicks
@@ -26,6 +28,9 @@ enum DevSnapshot {
     static let send = ProcessInfo.processInfo.environment["KORE_SEND"]
     static let mode = ProcessInfo.processInfo.environment["KORE_MODE"]
     static let thenSend = ProcessInfo.processInfo.environment["KORE_THEN_SEND"]
+    static let attach = ProcessInfo.processInfo.environment["KORE_ATTACH"].map {
+        $0.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
+    }
     private static let output = ProcessInfo.processInfo.environment["KORE_SNAPSHOT"]
     private static let clicks: [NSPoint] = (ProcessInfo.processInfo.environment["KORE_CLICK"] ?? "")
         .split(separator: ";").compactMap { pair in
@@ -43,8 +48,21 @@ enum DevSnapshot {
         if let drag = ProcessInfo.processInfo.environment["KORE_DRAG"]?.split(separator: ",").compactMap({ Double($0) }),
             drag.count == 4
         {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (clicks.isEmpty ? 2 : 2.5 + Double(clicks.count))) {
                 post(drag: NSPoint(x: drag[0], y: drag[1]), by: CGVector(dx: drag[2], dy: drag[3]))
+            }
+        }
+        let keys = (ProcessInfo.processInfo.environment["KORE_KEYS"] ?? "").split(separator: ";")
+        for (index, key) in keys.enumerated() {
+            let command = key.hasPrefix("cmd+")
+            guard let code = CGKeyCode(key.dropFirst(command ? 4 : 0)) else { continue }
+            let start = 2.5 + Double(clicks.count) + (ProcessInfo.processInfo.environment["KORE_DRAG"] == nil ? 0 : 1.5)
+            DispatchQueue.main.asyncAfter(deadline: .now() + start + Double(index) * 0.5) {
+                for down in [true, false] {
+                    let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
+                    if command { event?.flags = .maskCommand }
+                    event?.post(tap: .cghidEventTap)
+                }
             }
         }
         if ProcessInfo.processInfo.environment["KORE_PASTE"] == "1" {
