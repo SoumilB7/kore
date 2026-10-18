@@ -189,10 +189,77 @@ private struct WebPage: NSViewRepresentable {
 
 // MARK: - SVG
 
+/// An SVG drawn by the system, kept as its bytes and size; it's drawn to a bitmap only at the
+/// size it shows (a large SVG drawn at its own size would hold a bitmap of that size).
+private struct SVGFile: @unchecked Sendable {
+    let data: Data
+    let size: CGSize
+
+    /// The system's SVG objects are let go as soon as each step ends (a pool around each),
+    /// not when the thread's pool next drains.
+    static func read(_ url: URL) -> SVGFile? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        // The size from the root tag, so a large file is parsed only to be drawn.
+        if let size = rootSize(data) { return SVGFile(data: data, size: size) }
+        return autoreleasepool {
+            guard let image = NSImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
+            return SVGFile(data: data, size: image.size)
+        }
+    }
+
+    /// `width`/`height` in px (or unitless), else the `viewBox`'s, from the `<svg>` tag.
+    static func rootSize(_ data: Data) -> CGSize? {
+        let head = String(decoding: data.prefix(4096), as: UTF8.self)
+        guard let open = head.range(of: "<svg", options: .caseInsensitive),
+            let close = head[open.upperBound...].firstIndex(of: ">")
+        else { return nil }
+        let tag = String(head[open.upperBound..<close])
+        func attribute(_ name: String) -> String? {
+            guard let match = tag.range(of: "(^|\\s)\(name)\\s*=\\s*[\"']([^\"']*)[\"']", options: .regularExpression) else { return nil }
+            let text = tag[match]
+            guard let quote = text.firstIndex(where: { $0 == "\"" || $0 == "'" }) else { return nil }
+            return String(text[text.index(after: quote)..<text.index(before: text.endIndex)])
+        }
+        func length(_ value: String?) -> CGFloat? {
+            guard var value = value?.trimmingCharacters(in: .whitespaces), !value.hasSuffix("%") else { return nil }
+            if value.hasSuffix("px") { value.removeLast(2) }
+            return Double(value).map { CGFloat($0) }.flatMap { $0 > 0 ? $0 : nil }
+        }
+        if let width = length(attribute("width")), let height = length(attribute("height")) {
+            return CGSize(width: width, height: height)
+        }
+        let box = attribute("viewBox")?.split(whereSeparator: { $0 == " " || $0 == "," }).compactMap { Double($0) }
+        if let box, box.count == 4, box[2] > 0, box[3] > 0 { return CGSize(width: box[2], height: box[3]) }
+        return nil
+    }
+
+    /// Off the main actor: the drawing at `pixels`.
+    func render(_ pixels: CGSize) -> CGImage? {
+        autoreleasepool { draw(pixels) }
+    }
+
+    private func draw(_ pixels: CGSize) -> CGImage? {
+        guard let image = NSImage(data: data), pixels.width >= 1, pixels.height >= 1,
+            let context = CGContext(
+                data: nil, width: Int(pixels.width), height: Int(pixels.height), bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        image.draw(in: NSRect(origin: .zero, size: pixels))
+        NSGraphicsContext.restoreGraphicsState()
+        return context.makeImage()
+    }
+}
+
+private struct RenderedImage: @unchecked Sendable {
+    let image: CGImage
+}
+
 private struct SVGView: View {
     let file: FileInfo
     let context: RendererContext
-    @StateObject private var loaded = Local<Loaded<NSImage>>(.loading)
+    @StateObject private var loaded = Local<Loaded<SVGFile>>(.loading)
 
     var body: some View {
         Group {
@@ -202,16 +269,13 @@ private struct SVGView: View {
             case .failed:
                 // The system couldn't draw it: the web view can.
                 HTMLView(file: file, context: context)
-            case .ready(let image):
+            case .ready(let svg):
                 GeometryReader { geometry in
                     let room = CGSize(
                         width: max(geometry.size.width - 2 * Layout.Viewer.canvasSide, 1),
                         height: max(geometry.size.height - 2 * Layout.Viewer.canvasSide, 1))
-                    let scale = min(1, room.width / image.size.width, room.height / image.size.height)
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: image.size.width * scale, height: image.size.height * scale)
+                    let scale = min(1, room.width / svg.size.width, room.height / svg.size.height)
+                    SVGBitmap(svg: svg, size: CGSize(width: svg.size.width * scale, height: svg.size.height * scale))
                         .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                 }
             }
@@ -226,13 +290,43 @@ private struct SVGView: View {
             return
         }
         let url = file.url
-        let data = await Task.detached { try? Data(contentsOf: url) }.value
-        if let data, let image = NSImage(data: data), image.size.width > 0, image.size.height > 0 {
-            loaded.value = .ready(image)
-            context.setFacts(["\(Int(image.size.width)) × \(Int(image.size.height))", FileEditorView.size(Int(file.size))])
+        if let svg = await Task.detached(operation: { SVGFile.read(url) }).value {
+            loaded.value = .ready(svg)
+            context.setFacts(["\(Int(svg.size.width)) × \(Int(svg.size.height))", FileEditorView.size(Int(file.size))])
         } else {
             loaded.value = .failed("")
         }
-        RenderTiming.ready(SVGRenderer.id)
+    }
+}
+
+/// The SVG drawn for its on-screen size and the screen's scale, again when either changes.
+private struct SVGBitmap: View {
+    let svg: SVGFile
+    let size: CGSize
+    @Environment(\.displayScale) private var displayScale
+    @StateObject private var bitmap = Local<RenderedImage?>(nil)
+
+    var body: some View {
+        let pixels = CGSize(width: (size.width * displayScale).rounded(), height: (size.height * displayScale).rounded())
+        Group {
+            if let bitmap = bitmap.value {
+                Image(decorative: bitmap.image, scale: displayScale)
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .task(id: pixels) {
+            // A live resize settles before the redraw.
+            if bitmap.value != nil { try? await Task.sleep(for: .milliseconds(120)) }
+            guard !Task.isCancelled else { return }
+            let svg = svg
+            let drawn = await Task.detached(priority: .userInitiated) { svg.render(pixels).map(RenderedImage.init) }.value
+            guard !Task.isCancelled, let drawn else { return }
+            bitmap.value = drawn
+            RenderTiming.ready(SVGRenderer.id)
+        }
     }
 }
