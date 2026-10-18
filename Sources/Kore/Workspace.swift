@@ -12,8 +12,8 @@ final class ChatTab: Identifiable {
 }
 
 /// The tabs of one folder window. The folder's chats live in the CLIs' own stores, so every
-/// app (Kore, the VS Code extensions, the CLIs) sees the same list: each one that isn't
-/// archived is a tab. Closing a tab only hides it for this window; archiving is the CLIs'.
+/// app (Kore, the VS Code extensions, the CLIs) sees the same list, shown in the history
+/// popover. The tabs are what was open in this folder last time, restored as they were.
 @MainActor @Observable
 final class Workspace {
     let folder: URL
@@ -22,15 +22,15 @@ final class Workspace {
     /// Every chat the CLIs have for this folder, newest first, archived ones flagged.
     private(set) var chats: [SessionSummary] = []
     private(set) var loaded = false
-    /// Chats whose tab was closed in this window; a refresh doesn't bring them back.
-    private var closed: Set<String> = []
     private var refreshing: Task<Void, Never>?
 
-    init(folder: URL) {
+    init(folder: URL, restore: Bool = true) {
         self.folder = folder
-        let tab = ChatTab()
-        tabs = [tab]
-        activeID = tab.id
+        let saved = restore ? Self.saved(for: folder) : nil
+        var restored = saved?.tabs.map { Self.tab($0, in: folder) } ?? []
+        if restored.isEmpty { restored = [ChatTab()] }
+        tabs = restored
+        activeID = restored[min(max(saved?.active ?? 0, 0), restored.count - 1)].id
     }
 
     var activeTab: ChatTab { tabs.first { $0.id == activeID } ?? tabs[0] }
@@ -49,7 +49,6 @@ final class Workspace {
 
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.
     func open(_ session: SessionSummary) {
-        closed.remove(session.id)
         if let tab = tab(for: session.id) {
             select(tab)
             return
@@ -61,7 +60,6 @@ final class Workspace {
     /// Ends the tab's chat. Closing the last tab leaves a fresh empty one.
     func close(_ tab: ChatTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
-        if let id = tab.chat?.sessionId { closed.insert(id) }
         tab.chat?.close()
         tabs.remove(at: index)
         if tabs.isEmpty { tabs = [ChatTab()] }
@@ -74,8 +72,7 @@ final class Workspace {
 
     // MARK: - The folder's chats
 
-    /// Re-reads both CLIs' chats for the folder and adds a tab for each new one (newest first,
-    /// before the others). A chat starts its CLI only once its tab is shown.
+    /// Re-reads both CLIs' chats for the folder (for the history popover).
     func refresh() async {
         if let refreshing { return await refreshing.value }
         let task = Task { await load() }
@@ -87,28 +84,30 @@ final class Workspace {
     private func load() async {
         let folder = folder
         let claude = await Task.detached { ClaudeHistory.sessions(in: folder) }.value
-        let codex = (try? await CodexHistory.threads(in: folder)) ?? []
+        let codexThreads = try? await CodexHistory.threads(in: folder)
+        let codex = codexThreads ?? []
         let hidden = ClaudeArchive.ids
         chats = (claude.map { session in
             var session = session
             session.archived = hidden.contains(session.id)
             return session
         } + codex).sorted { $0.updated > $1.updated }
+        if !loaded { reconcileRestored(codexListed: codexThreads != nil) }
+        loaded = true
+    }
 
-        let fresh = chats.filter { !$0.archived && !closed.contains($0.id) && tab(for: $0.id) == nil }
-        defer { loaded = true }
-        guard !fresh.isEmpty else { return }
-        // The window's untouched starting tab gives way to the folder's chats.
-        let placeholder = !loaded && tabs.count == 1 && tabs[0].chat == nil ? tabs[0] : nil
-        let added = fresh.map { session in
-            let tab = ChatTab()
-            tab.chat = chat(session)
-            return tab
-        }
-        tabs.insert(contentsOf: added, at: 0)
-        if let placeholder {
-            tabs.removeAll { $0.id == placeholder.id }
-            activeID = added[0].id
+    /// Restored tabs against the CLIs' list: chats archived or deleted elsewhere since last
+    /// time are dropped, and titles renamed elsewhere are taken up. (Codex tabs are left alone
+    /// if its list couldn't be read.)
+    private func reconcileRestored(codexListed: Bool) {
+        let byId = Dictionary(chats.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for tab in tabs {
+            guard let chat = tab.chat, chat.resumed, let id = chat.sessionId else { continue }
+            if let session = byId[id] {
+                if session.archived { close(tab) } else { chat.adoptName(session.title) }
+            } else if chat.provider == .claude || codexListed {
+                close(tab)
+            }
         }
     }
 
@@ -144,6 +143,57 @@ final class Workspace {
 
     private func chat(_ session: SessionSummary) -> ChatModel {
         ChatModel(provider: session.agent == .claude ? .claude : .codex, folder: folder, resume: session)
+    }
+
+    // MARK: - Open tabs
+
+    /// The folder's open tabs, kept so its window reopens with what was open last time, not
+    /// every chat. A restored chat starts its CLI only once its tab is shown.
+    struct Saved: Codable, Equatable {
+        struct Tab: Codable, Equatable {
+            /// `Provider` raw value; nil for an empty tab.
+            var provider: String?
+            /// nil for a chat with nothing in it yet: it comes back as a fresh chat.
+            var session: String?
+            var title: String?
+        }
+
+        var tabs: [Tab]
+        var active: Int
+    }
+
+    var saved: Saved {
+        Saved(
+            tabs: tabs.map { tab in
+                guard let chat = tab.chat else { return Saved.Tab() }
+                let resumable = chat.hasConversation ? chat.sessionId : nil
+                return Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title })
+            },
+            active: tabs.firstIndex { $0.id == activeID } ?? 0)
+    }
+
+    func save() {
+        var all = UserDefaults.standard.dictionary(forKey: Self.savedKey) ?? [:]
+        all[folder.standardizedFileURL.path] = try? JSONEncoder().encode(saved)
+        UserDefaults.standard.set(all, forKey: Self.savedKey)
+    }
+
+    private static let savedKey = "openTabs"
+
+    private static func saved(for folder: URL) -> Saved? {
+        let data = UserDefaults.standard.dictionary(forKey: savedKey)?[folder.standardizedFileURL.path] as? Data
+        return data.flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }
+    }
+
+    private static func tab(_ saved: Saved.Tab, in folder: URL) -> ChatTab {
+        let tab = ChatTab()
+        guard let provider = saved.provider.flatMap(Provider.init(rawValue:)) else { return tab }
+        let session = saved.session.map {
+            SessionSummary(
+                id: $0, agent: provider == .claude ? .claude : .codex, title: saved.title ?? provider.name, updated: .now)
+        }
+        tab.chat = ChatModel(provider: provider, folder: folder, resume: session)
+        return tab
     }
 }
 

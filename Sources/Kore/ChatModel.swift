@@ -117,6 +117,10 @@ final class ChatModel: Identifiable {
     private var pump: Task<Void, Never>?
     /// Kept across process restarts so an exited CLI resumes the same conversation.
     private var resumeId: String?
+    /// A past session, or one where something was said: `sessionId` can be resumed.
+    var hasConversation: Bool { resumed || entries.contains { $0.kind == .user || $0.kind == .peer } }
+    /// Opened from a past session (history, or restored tabs).
+    let resumed: Bool
     /// Launch with this model instead of the CLI's default (set by the dev hook).
     var launchModel: String?
     /// Claude: entry receiving streamed text; reset at each new content block.
@@ -131,6 +135,7 @@ final class ChatModel: Identifiable {
         resuming = session
         resumeId = session?.id
         name = session?.title
+        resumed = session != nil
     }
 
     /// Claude session id / Codex thread id, once known.
@@ -141,6 +146,9 @@ final class ChatModel: Identifiable {
         guard let first = entries.first(where: { $0.kind == .user }) else { return provider.name }
         return first.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? first.text
     }
+
+    /// The CLI's current name for a past session (it may have been renamed elsewhere).
+    func adoptName(_ newName: String) { name = newName }
 
     /// A user rename, saved by the CLI (Claude: custom title, Codex: thread name).
     func rename(_ newName: String) {

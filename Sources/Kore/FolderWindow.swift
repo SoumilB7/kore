@@ -8,7 +8,8 @@ struct FolderWindow: View {
 
     init(folder: URL) {
         self.folder = folder
-        _workspace = StateObject(wrappedValue: Local(Workspace(folder: folder)))
+        // Dev runs that start or resume a chat begin from a single clean tab.
+        _workspace = StateObject(wrappedValue: Local(Workspace(folder: folder, restore: !DevSnapshot.singleTab)))
     }
 
     var body: some View {
@@ -55,13 +56,9 @@ struct FolderWindow: View {
             }
             DevSnapshot.captureIfRequested()
         }
-        // The folder's chats come from the CLIs; re-read them when coming back to Kore, so chats
-        // made elsewhere (VS Code, a terminal) show up. Dev runs that start or resume a chat
-        // keep their single tab.
+        // The folder's chats, for history, and to check the restored tabs against them.
         .task { if !DevSnapshot.singleTab { await workspace.value.refresh() } }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            if !DevSnapshot.singleTab { Task { await workspace.value.refresh() } }
-        }
+        .onChange(of: workspace.value.saved) { workspace.value.save() }
         .onDisappear { workspace.value.closeAll() }
     }
 }
