@@ -15,6 +15,10 @@ final class StdioProcess: @unchecked Sendable {
     // handlers, which is why the unchecked Sendable is safe.
     private let process = Process()
     private let stdin: FileHandle
+    private let track: CassetteTrack?
+
+    /// Records every CLI started from here into a cassette (phase 12's `--record`). Nil in Kore.
+    package static let recorder = HostSetting<CassetteRecorder?>(nil)
 
     init(executable: URL, arguments: [String], cwd: URL?, environment: [String: String]) throws {
         // A write to a dead child must fail with EPIPE, not kill the app.
@@ -29,6 +33,8 @@ final class StdioProcess: @unchecked Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         stdin = stdinPipe.fileHandleForWriting
+        let track = Self.recorder.value?.begin(executable: executable, arguments: arguments, cwd: cwd)
+        self.track = track
 
         let (output, sink) = AsyncStream<Output>.makeStream(bufferingPolicy: .unbounded)
         self.output = output
@@ -48,7 +54,9 @@ final class StdioProcess: @unchecked Sendable {
             if data.isEmpty {
                 handle.readabilityHandler = nil
             } else {
-                sink.yield(.stderr(String(decoding: data, as: UTF8.self)))
+                let text = String(decoding: data, as: UTF8.self)
+                if let track { for line in text.split(separator: "\n") { track.record(.err, String(line)) } }
+                sink.yield(.stderr(text))
             }
         }
         let (exits, exitSink) = AsyncStream<Int32>.makeStream()
@@ -62,11 +70,18 @@ final class StdioProcess: @unchecked Sendable {
         Task {
             var lines = LineSplitter()
             for await chunk in chunks {
-                for line in lines.feed(chunk) { sink.yield(.line(line)) }
+                for line in lines.feed(chunk) {
+                    track?.record(.out, String(decoding: line, as: UTF8.self))
+                    sink.yield(.line(line))
+                }
             }
-            if let last = lines.finish() { sink.yield(.line(last)) }
+            if let last = lines.finish() {
+                track?.record(.out, String(decoding: last, as: UTF8.self))
+                sink.yield(.line(last))
+            }
             var status: Int32 = -1
             for await s in exits { status = s }
+            track?.exited(status)
             sink.yield(.exited(status: status))
             sink.finish()
         }
@@ -74,6 +89,7 @@ final class StdioProcess: @unchecked Sendable {
 
     func write(_ message: JSONValue) throws {
         var data = try message.encoded()
+        track?.record(.in, String(decoding: data, as: UTF8.self))
         data.append(0x0A)
         try stdin.write(contentsOf: data)
     }

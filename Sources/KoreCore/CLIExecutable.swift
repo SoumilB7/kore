@@ -24,7 +24,30 @@ public enum CLIExecutable {
         }
     }
 
+    /// What a storyline host (phase 12) runs in place of a CLI, by name (`claude`, `codex`).
+    package struct StandIn: Sendable {
+        /// Run this instead (`kore-fake-cli`); nil runs the real CLI.
+        package var executable: URL?
+        /// Added to the CLI's environment: the cassette to play, or live mode's scratch `CODEX_HOME`.
+        package var environment: [String: String]
+
+        package init(executable: URL? = nil, environment: [String: String] = [:]) {
+            self.executable = executable
+            self.environment = environment
+        }
+    }
+
+    /// Empty in Kore. An explicit `override` (kore-cli's) wins over a stand-in.
+    package static let standIns = HostSetting<[String: StandIn]>([:])
+
     public static func resolve(_ name: String, override: URL? = nil) async throws -> Launch {
+        let standIn = override == nil ? standIns.value[name] : nil
+        let launch = try await locate(name, override: override ?? standIn?.executable)
+        guard let standIn else { return launch }
+        return Launch(url: launch.url, environment: launch.environment.merging(standIn.environment) { $1 })
+    }
+
+    private static func locate(_ name: String, override: URL?) async throws -> Launch {
         // Last run's PATH counts only if the CLI is in it, not just in the usual folders below:
         // a CLI found there with a stale PATH would run its own tools without theirs.
         if shellResult.value == nil, let cached = cachedEnvironment,

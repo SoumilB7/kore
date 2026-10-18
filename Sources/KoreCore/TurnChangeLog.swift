@@ -136,11 +136,16 @@ public enum TurnChangeLog {
 
     /// `~/Library/Application Support/Kore/turn-changes/<sha256 of the folder's real path>.log`.
     static func file(for folder: URL) -> URL {
+        let digest = SHA256.hash(data: Data(realPath(folder.path).utf8)).map { String(format: "%02x", $0) }.joined()
+        if let root = root.value { return root.appendingPathComponent("\(digest.prefix(32)).log") }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        let digest = SHA256.hash(data: Data(realPath(folder.path).utf8)).map { String(format: "%02x", $0) }.joined()
         return base.appendingPathComponent("Kore/turn-changes/\(digest.prefix(32)).log")
     }
+
+    /// Where the logs go instead: a storyline run's scratch folder, so a run never writes the
+    /// owner's Application Support. Nil in Kore.
+    package static let root = HostSetting<URL?>(nil)
 
     /// The turn's changes with at most `lineLimit` diff lines between them.
     static func capped(_ changes: [FileChange]) -> [FileChange] {
