@@ -47,6 +47,8 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var waiting: [String: (text: String, files: [Attachment])] = [:]
     /// That chat, while it's open (its "Forked from" line switches to it).
     @ObservationIgnored weak var original: Chat?
+    /// The chat has been shown, so its CLI was started once (`startOnce`).
+    @ObservationIgnored private var shown = false
 
     /// `fork` makes this chat a fork of `session` that its CLI creates; it has no session of its
     /// own until then. `forkedFrom` names the original chat.
@@ -131,6 +133,15 @@ package final class Chat: Identifiable {
     }
 
     // MARK: Lifecycle
+
+    /// Starts the CLI the first time the chat shows. Showing it again (switching back to its
+    /// tab) leaves the CLI be: one that failed to start, or has exited, starts again with the
+    /// next send, not with a tab switch.
+    func startOnce() async {
+        guard !shown else { return }
+        shown = true
+        await start()
+    }
 
     func start() async {
         do {

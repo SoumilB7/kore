@@ -90,7 +90,7 @@ struct ChatView: View {
                 }
             }
         }
-        .task { await chat.start() }
+        .task { await chat.startOnce() }
     }
 
     /// What the transcript's rows do.
