@@ -106,9 +106,12 @@ final class CodexTranslator {
 
     func translate(_ event: CodexEvent, agent: AgentID = .main) {
         switch event {
-        case .threadStarted(let id, _, _):
+        case .threadStarted(let id, _, let raw):
             threadId = id
             out.append(.sessionIdentified(id))
+            // Codex names a thread only when a client sets one (a rename, or the Codex app's own
+            // generated title); until then the chat goes by its first prompt.
+            if let name = Self.threadName(raw["thread"]?["name"]) { out.append(.titleChanged(name)) }
         case .turnStarted(let id):
             if case .sub(let thread) = agent {
                 childTurns[thread] = id
@@ -166,6 +169,9 @@ final class CodexTranslator {
                 }
             finishTurn(turn ?? result.turnId, outcome, duration: result.durationMs.map { .milliseconds($0) })
         case .raw(let method, let params):
+            if method == "thread/name/updated", agent == .main, let name = Self.threadName(params["threadName"]) {
+                out.append(.titleChanged(name))
+            }
             if method == "turn/diff/updated", agent == .main, let diff = params["diff"]?.string {
                 files.setTurnDiff(UnifiedDiff.files(diff, root: folder))
             }
@@ -604,6 +610,12 @@ final class CodexTranslator {
             return c
         }
         return json["command"]?.string
+    }
+
+    /// A thread's name, when it has a usable one.
+    static func threadName(_ json: JSONValue?) -> String? {
+        guard let name = json?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        return name
     }
 
     /// Codex errors are often a JSON string like {"error":{"message":"..."}}.
