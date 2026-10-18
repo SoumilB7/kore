@@ -79,7 +79,8 @@ final class TranscriptStore {
         var prompt: String?
         /// The agent that spawned it; nil for the chat's own agent.
         var parent: String?
-        /// A Claude background agent: its commands aren't on stdout.
+        /// A background agent: a Claude one's commands aren't on stdout; a Codex child thread
+        /// outlived its parent's turn.
         var background = false
         var status = Status.running
         /// Approvals it's waiting on the user for.
@@ -1234,6 +1235,12 @@ final class TranscriptStore {
             if let duration = $0.duration { $0.startedAt = date.addingTimeInterval(-duration) }
             $0.duration = nil
         }
+    }
+
+    /// It outlived the turn that spawned it: it runs on in the background.
+    func agentBackgrounded(id: String) {
+        guard let info = agent(id), !info.background else { return }
+        updateAgent(id) { $0.background = true }
     }
 
     // MARK: Opening and closing

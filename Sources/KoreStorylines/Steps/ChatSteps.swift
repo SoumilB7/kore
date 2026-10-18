@@ -181,6 +181,14 @@ package struct Compact: Step {
     }
 }
 
+/// Lets the active chat's scripted CLI go on past a `.wait(.release)`.
+package struct Release: Step {
+    package var label: String { "Let the script go on" }
+    package init() {}
+
+    package func run(_ story: StoryContext) async throws { try story.scriptedBackend().release() }
+}
+
 extension StoryContext {
     /// The scripted backend of the active chat (`--cli scripted`).
     package func scriptedBackend() throws -> ScriptedBackend {

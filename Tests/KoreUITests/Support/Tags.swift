@@ -36,6 +36,7 @@ func tag(_ event: ChatEvent) -> String {
     case .agentProgress: "agentProgress"
     case .agentFinished: "agentFinished"
     case .agentResumed: "agentResumed"
+    case .agentBackgrounded: "agentBackgrounded"
     case .approvalRequested: "approval"
     case .approvalWithdrawn: "approvalWithdrawn"
     case .planReady: "planReady"

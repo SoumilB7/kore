@@ -110,57 +110,94 @@ final class AgentMapStopped: ChatStoryline {
 
 /// A background agent that has finished waits in the map's closed "Done in background" group,
 /// just above the stopped one; opened, the group shows it. Run again, it leaves the group for the
-/// Background section, live under the open map.
+/// Background section, live under the open map. Codex says nothing at the spawn: its child thread
+/// is one once it outlives the turn, in the Background section until it ends.
 final class AgentMapDoneInBackground: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .agents] }
+    private static func spawn(_ id: String, _ name: String, background: Bool) -> Beat {
+        .event(.agentSpawned(AgentInfo(
+            id: id, parent: .main, toolId: nil, name: name, type: nil, model: nil, prompt: "\(name).", background: background)))
+    }
+    private static let again: [Beat] = [
+        .startTurn, .event(.agentResumed(id: "scout")), .stream(.answer, "The scout goes on."), .finishTurn(.completed),
+    ]
+
     override class var script: CLIScript {
-        func spawn(_ id: String, _ name: String, background: Bool = true) -> Beat {
-            .event(.agentSpawned(AgentInfo(
-                id: id, parent: .main, toolId: nil, name: name, type: nil, model: nil, prompt: "\(name).", background: background)))
-        }
-        return CLIScript(turns: [
+        CLIScript(turns: [
             [
-                .startTurn, spawn("scout", "Scout the code"), spawn("writer", "Write the summary", background: false),
-                spawn("gone", "Watch the build"),
+                .startTurn, spawn("scout", "Scout the code", background: true),
+                spawn("writer", "Write the summary", background: false), spawn("gone", "Watch the build", background: true),
                 .event(.agentFinished(id: "writer", .completed, result: "Written")),
                 .event(.agentFinished(id: "scout", .completed, result: "Scouted")),
                 .event(.agentFinished(id: "gone", .stopped, result: nil)),
                 .stream(.answer, "The scout is done."), .finishTurn(.completed),
             ],
-            [.startTurn, .event(.agentResumed(id: "scout")), .stream(.answer, "The scout goes on."), .finishTurn(.completed)],
+            again,
+        ])
+    }
+
+    /// As Codex tells it: the scout still runs when the turn ends, and ends once let go.
+    static var codexScript: CLIScript {
+        CLIScript(turns: [
+            [
+                .startTurn, spawn("scout", "Scout the code", background: false),
+                spawn("writer", "Write the summary", background: false), spawn("gone", "Watch the build", background: false),
+                .event(.agentFinished(id: "writer", .completed, result: "Written")),
+                .event(.agentFinished(id: "gone", .stopped, result: nil)),
+                .stream(.answer, "The scout runs on."), .event(.agentBackgrounded(id: "scout")), .finishTurn(.completed),
+                .wait(.release),
+                .event(.agentFinished(id: "scout", .completed, result: "Scouted")),
+            ],
+            again,
         ])
     }
 
     override func steps() -> [any Step] {
         let scout = StoryID.AgentMap.row("scout"), writer = StoryID.AgentMap.row("writer")
-        let done = StoryID.AgentMap.done, stopped = StoryID.AgentMap.stopped
-        return super.steps() + [
+        let done = StoryID.AgentMap.done, stopped = StoryID.AgentMap.stopped, background = StoryID.AgentMap.background
+        let codex: [any Step] = [
+            ExpectElement(.id(background), .visible),
+            ExpectElement(.id(scout), .visible),
+            ExpectElement(.id(done), .absent),
+            Expect("the running scout below the tree") { _ in
+                guard let tree = StoryElement(writer)?.frame?.maxY, let row = StoryElement(scout)?.frame?.maxY else {
+                    return false
+                }
+                // Window coordinates: y grows upwards.
+                return row < tree
+            },
+            Release(),
+        ]
+        return [UseScript(Self.codexScript, for: "codex")] + super.steps() + [
             Send("Use some helpers"), TurnFinished(1), WaitIdle(),
             Press(.id(StoryID.Titlebar.agents)),
-            ExpectElement(.id(writer), .visible),
-            ExpectElement(.id(done), .visible),
-            ExpectElement(.id(stopped), .visible),
-            ExpectElement(.id(StoryID.AgentMap.background), .absent),
-            ExpectElement(.id(scout), .absent),
-            Expect("the done group just above the stopped one") { _ in
-                guard let top = StoryElement(done)?.frame, let below = StoryElement(stopped)?.frame else { return false }
-                // Window coordinates: y grows upwards.
-                return top.minY >= below.maxY
-            },
-            Press(.id(done)),
-            ExpectElement(.id(scout), .visible),
-            Expect("the done agent below the tree, above the stopped group") { _ in
-                guard let tree = StoryElement(writer)?.frame?.maxY, let row = StoryElement(scout)?.frame,
-                    let below = StoryElement(stopped)?.frame?.maxY
-                else { return false }
-                return row.maxY < tree && row.minY >= below
-            },
-            Send("Go on"), TurnFinished(2),
-            ExpectElement(.id(done), .absent),
-            ExpectElement(.id(StoryID.AgentMap.background), .visible),
-            ExpectElement(.id(scout), .visible),
-            ExpectElement(.id(stopped), .visible),
         ]
+            + (variant.provider == "codex" ? codex : [])
+            + [
+                ExpectElement(.id(writer), .visible),
+                ExpectElement(.id(done), .visible),
+                ExpectElement(.id(stopped), .visible),
+                ExpectElement(.id(background), .absent),
+                ExpectElement(.id(scout), .absent),
+                Expect("the done group just above the stopped one") { _ in
+                    guard let top = StoryElement(done)?.frame, let below = StoryElement(stopped)?.frame else { return false }
+                    // Window coordinates: y grows upwards.
+                    return top.minY >= below.maxY
+                },
+                Press(.id(done)),
+                ExpectElement(.id(scout), .visible),
+                Expect("the done agent below the tree, above the stopped group") { _ in
+                    guard let tree = StoryElement(writer)?.frame?.maxY, let row = StoryElement(scout)?.frame,
+                        let below = StoryElement(stopped)?.frame?.maxY
+                    else { return false }
+                    return row.maxY < tree && row.minY >= below
+                },
+                Send("Go on"), TurnFinished(2),
+                ExpectElement(.id(done), .absent),
+                ExpectElement(.id(background), .visible),
+                ExpectElement(.id(scout), .visible),
+                ExpectElement(.id(stopped), .visible),
+            ]
     }
 }
 

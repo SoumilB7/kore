@@ -65,6 +65,9 @@ package enum ChatEvent: Sendable {
     /// A stopped or finished agent runs again (Claude's SendMessage, a Codex follow-up): the
     /// same agent, in its place, running.
     case agentResumed(id: String)
+    /// One still running when the turn that spawned it ended runs on in the background (a Codex
+    /// child thread; Claude says so at the spawn).
+    case agentBackgrounded(id: String)
 
     // MARK: Approvals
 
@@ -311,7 +314,8 @@ package struct AgentInfo: Sendable {
     package let type: String?
     package let model: String?
     package let prompt: String?
-    /// Runs on after its spawning call returns (Claude `run_in_background`).
+    /// Runs on after its spawning call returns (Claude `run_in_background`). A Codex child thread
+    /// becomes one when it outlives its parent's turn (`agentBackgrounded`).
     package let background: Bool
 
     package init(id: String, parent: AgentID, toolId: String?, name: String, type: String?, model: String?, prompt: String?, background: Bool) {

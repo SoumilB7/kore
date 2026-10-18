@@ -55,6 +55,9 @@ final class CodexTranslator {
     private var childTools: [String: Int] = [:]
     private var spawned: Set<String> = []
     private var finished: Set<String> = []
+    /// Each child's spawning thread, and the children that outlived its turn (`outlived`).
+    private var parents: [String: AgentID] = [:]
+    private var background: Set<String> = []
     /// The `subAgentActivity` item that ended each child's latest run.
     private var finishedBy: [String: String] = [:]
     /// Children that have started a turn (or ran before this session): a later one is the child
@@ -172,6 +175,12 @@ final class CodexTranslator {
         case .turnCompleted(let result):
             if case .sub(let thread) = agent {
                 childTurns[thread] = nil
+                if result.status != "interrupted" { outlived(agent) }
+                // One that outlived its parent's turn ends with its own: no item of the parent's
+                // says so until the parent's next turn.
+                if background.contains(thread) {
+                    finish(thread, result.status == "interrupted" ? .stopped : result.status == "failed" ? .failed : .completed)
+                }
                 return
             }
             pending.removeAll()
@@ -195,6 +204,7 @@ final class CodexTranslator {
                 }
             }
             finishTurn(turn ?? result.turnId, outcome, duration: result.durationMs.map { .milliseconds($0) })
+            if outcome != .interrupted { outlived(.main) }
         case .raw(let method, let params):
             if method == "thread/name/updated", agent == .main, let name = Self.threadName(params["threadName"]) {
                 out.append(.titleChanged(name))
@@ -398,6 +408,7 @@ final class CodexTranslator {
 
     private func spawn(_ thread: String, parent: AgentID, toolId: String?, name: String?, prompt: String?, model: String?) {
         guard spawned.insert(thread).inserted else { return }
+        parents[thread] = parent
         // Its nickname ("Hume") or role names it; else its task, from an agent path like
         // /root/count_lines. Beside the name goes what's left: the role, else the task.
         let info = agentThreads[thread]
@@ -427,6 +438,17 @@ final class CodexTranslator {
     }
 
     func isFinished(_ thread: String) -> Bool { finished.contains(thread) }
+
+    /// `parent`'s turn ended: the child threads it spawned that still run outlive it, and run on
+    /// in the background, as a Claude agent run in the background does. One that finished within
+    /// the turn stays where it is. Live and replayed alike: a child's end is an item of its
+    /// parent's turn (`subAgentActivity`, a wait's states), so a replay sees it before the turn
+    /// ends exactly when the live turn did.
+    private func outlived(_ parent: AgentID) {
+        for thread in spawned.subtracting(finished).sorted() where parents[thread] == parent {
+            if background.insert(thread).inserted { out.append(.agentBackgrounded(id: thread)) }
+        }
+    }
 
     /// Child threads the history never saw end.
     func unfinishedAgents() -> [String] {
@@ -570,6 +592,7 @@ final class CodexTranslator {
         var planKnown: Bool
         var spawned: Set<String>
         var finished: Set<String>
+        var background: Set<String> = []
         var lastText: [String: String]
         var contextUsed: Int?
         var contextWindow: Int?
@@ -594,8 +617,8 @@ final class CodexTranslator {
                 events: events,
                 carried: Carried(
                     mode: translator.mode, planMode: translator.planMode, planKnown: translator.planKnown,
-                    spawned: translator.spawned, finished: translator.finished, lastText: translator.lastText,
-                    contextUsed: translator.contextUsed, contextWindow: translator.contextWindow))
+                    spawned: translator.spawned, finished: translator.finished, background: translator.background,
+                    lastText: translator.lastText, contextUsed: translator.contextUsed, contextWindow: translator.contextWindow))
         }.value
     }
 
@@ -620,6 +643,7 @@ final class CodexTranslator {
     func adopt(_ replayed: Carried, history: Bool = false) {
         spawned.formUnion(replayed.spawned)
         finished.formUnion(replayed.finished)
+        background.formUnion(replayed.background)
         // They ran in an earlier session: a turn of theirs now runs them again.
         childRan.formUnion(replayed.spawned)
         lastText.merge(replayed.lastText) { live, _ in live }
@@ -685,6 +709,8 @@ final class CodexTranslator {
                 outcome = .completed
             }
             finishTurn(id, outcome, duration: turn["durationMs"]?.int.map { .milliseconds($0) })
+            // A turn another client still runs hasn't ended for its children either.
+            if outcome != .interrupted, turn["status"]?.string != "inProgress" { outlived(.main) }
         }
         // The rollout's last token count: the fill when the chat was left.
         if let context {

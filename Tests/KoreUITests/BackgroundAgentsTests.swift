@@ -164,34 +164,107 @@ struct BackgroundAgentsTests {
         #expect(names(script.store.agentTree().done) == ["toolu_bgA", "toolu_bgB"])
     }
 
-    // MARK: Codex
-
-    /// Codex marks no child thread as run in the background: one that finished, as its rollout
-    /// says, keeps its place in the tree with its totals, and the done group stays empty.
-    @Test func aFinishedCodexChildStaysInTheTree() {
-        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
-        let item = CodexItem(.object([
-            "id": .string("call_1"), "type": .string("subAgentActivity"), "kind": .string("started"),
-            "agentThreadId": .string("child"), "agentPath": .string("/root/scout"),
+    private func activity(_ kind: String, _ id: String, thread: String = "child") -> CodexItem {
+        CodexItem(.object([
+            "id": .string(id), "type": .string("subAgentActivity"), "kind": .string(kind),
+            "agentThreadId": .string(thread), "agentPath": .string("/root/\(thread)"),
         ]))
+    }
+
+    private func turnParams(_ id: String, _ status: String = "completed") -> JSONValue {
+        .object(["turn": .object(["id": .string(id), "status": .string(status)])])
+    }
+
+    private func turnCompleted(_ id: String, _ status: String = "completed") -> CodexEvent {
+        CodexEvent(notification: "turn/completed", params: turnParams(id, status))
+    }
+
+    /// A Codex child thread that finished within its parent's turn (its end an item of that
+    /// turn) is no background agent: it keeps its place in the tree with its totals.
+    @Test func aCodexChildThatFinishedInItsTurnStaysInTheTree() {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
         let script = Script()
         script.send("Go")
-        script.start("t1")
-        translator.translate(.itemStarted(item))
-        translator.translate(.itemCompleted(item))
-        translator.take().events.forEach(script.store.apply)
+        translator.translate(CodexEvent(notification: "turn/started", params: .object(["turn": .object(["id": .string("t1")])])))
+        translator.translate(.itemCompleted(activity("started", "call_1")))
         var info = CodexAgentThread(nickname: "Scout")
         info.tokens = 900
         info.duration = .seconds(75)
-        translator.agentEnded("child", .completed, info)
-        translator.take().events.forEach(script.store.apply)
+        translator.agentThreads["child"] = info
+        translator.translate(.itemCompleted(activity("completed", "subagent-completed-1")))
+        translator.translate(turnCompleted("t1"))
+        let events = translator.take().events
+        #expect(!events.contains { if case .agentBackgrounded = $0 { true } else { false } })
+        events.forEach(script.store.apply)
         _ = script.sections
         let map = script.store.agentTree()
         #expect(names(map.tree) == ["child"])
         #expect(map.done.isEmpty && map.background.isEmpty)
-        #expect(script.store.agent("child")?.status == .finished)
-        #expect(script.store.agent("child")?.duration == 75)
+        #expect(script.store.agent("child")?.background == false)
         #expect(script.store.agent("child")?.tokens == 900)
+    }
+
+    /// One still running when its parent's turn ends runs on in the background, as a Claude agent
+    /// run in the background does: the Background section while it runs, ended by its own turn,
+    /// then the done group.
+    @Test func aCodexChildRunningAtItsTurnsEndRunsInTheBackground() {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
+        let script = Script()
+        func on(_ event: CodexEvent) {
+            translator.translate(event)
+            translator.take().events.forEach(script.store.apply)
+        }
+        script.send("Go")
+        on(CodexEvent(notification: "turn/started", params: .object(["turn": .object(["id": .string("t1")])])))
+        on(.itemCompleted(activity("started", "call_1")))
+        on(.itemCompleted(activity("started", "call_2", thread: "quick")))
+        on(.itemCompleted(activity("completed", "subagent-completed-2", thread: "quick")))
+        on(turnCompleted("t1"))
+        _ = script.sections
+        var map = script.store.agentTree()
+        #expect(names(map.tree) == ["quick"])
+        #expect(names(map.background) == ["child"])
+        #expect(script.store.agent("child")?.background == true)
+        #expect(script.store.agent("child")?.status == .running)
+
+        let said: JSONValue = .object([
+            "item": .object(["id": .string("m1"), "type": .string("agentMessage"), "text": .string("Found it.")]),
+        ])
+        on(.subThread(threadId: "child", method: "item/completed", params: said))
+        on(.subThread(threadId: "child", method: "turn/completed", params: turnParams("c1")))
+        _ = script.sections
+        map = script.store.agentTree()
+        #expect(map.background.isEmpty)
+        #expect(names(map.done) == ["child"])
+        #expect(script.store.agent("child")?.status == .finished)
+        #expect(script.store.agent("child")?.result == "Found it.")
+    }
+
+    /// Read back, the same: a child whose end the turn's items hold stays in the tree; one whose
+    /// end comes in a later turn ran on in the background. A turn stopped, or still running in
+    /// another client, leaves its children as they are.
+    @Test func aCodexReadBackMarksTheSameChildrenBackground() {
+        func turn(_ id: String, _ status: String, _ items: [CodexItem]) -> JSONValue {
+            .object(["id": .string(id), "status": .string(status), "items": .array(items.map(\.raw))])
+        }
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
+        let events = translator.replay([
+            turn("t1", "completed", [
+                activity("started", "call_1", thread: "quick"), activity("started", "call_2", thread: "long"),
+                activity("completed", "subagent-completed-1", thread: "quick"),
+            ]),
+            turn("t2", "completed", [activity("completed", "subagent-completed-2", thread: "long")]),
+            turn("t3", "interrupted", [activity("started", "call_3", thread: "cut")]),
+            turn("t4", "inProgress", [activity("started", "call_4", thread: "live")]),
+        ])
+        let backgrounded = events.compactMap { if case .agentBackgrounded(let id) = $0 { id } else { nil } }
+        #expect(backgrounded == ["long"])
+        let script = Script()
+        script.on(.replayed(events))
+        _ = script.sections
+        let map = script.store.agentTree()
+        #expect(names(map.done) == ["long"])
+        #expect(map.tree.map(\.id).contains("quick"))
     }
 
     /// A child thread another client runs outlives its parent's turn: its rollout says it still

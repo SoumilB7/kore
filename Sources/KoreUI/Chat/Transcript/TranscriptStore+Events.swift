@@ -65,6 +65,8 @@ extension TranscriptStore {
             agentFinished(id: id, status: status, result: result)
         case .agentResumed(let id):
             agentResumed(id: id)
+        case .agentBackgrounded(let id):
+            agentBackgrounded(id: id)
 
         case .exited(let status):
             compacting(false)
