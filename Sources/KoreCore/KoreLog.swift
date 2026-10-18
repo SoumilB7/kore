@@ -46,12 +46,16 @@ public final class KoreLog: @unchecked Sendable {
         if let path = env["KORE_LOG_DIR"] {
             return ["", "0", "off", "no"].contains(path.lowercased()) ? nil : URL(fileURLWithPath: path)
         }
-        let process = ProcessInfo.processInfo.processName
-        let testing =
-            ["xctest", "swiftpm-testing-helper", "kore-storylines"].contains(process) || Bundle.main.bundlePath.hasSuffix(".xctest")
-            || env["XCTestConfigurationFilePath"] != nil
-        if testing { return nil }
+        if isTestProcess { return nil }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Kore")
+    }()
+
+    /// A test run or a storyline host: it keeps nothing in the owner's folders unless told where.
+    package static let isTestProcess: Bool = {
+        let env = ProcessInfo.processInfo.environment
+        let process = ProcessInfo.processInfo.processName
+        return ["xctest", "swiftpm-testing-helper", "kore-storylines"].contains(process) || Bundle.main.bundlePath.hasSuffix(".xctest")
+            || env["XCTestConfigurationFilePath"] != nil
     }()
 
     /// One event; fields with no value are left out.

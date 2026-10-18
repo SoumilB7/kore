@@ -87,6 +87,7 @@ final class CodexBackend: ChatBackend {
         }
         let thread = await session.threadId
         log.started("codex", chat: sessionId ?? (thread.isEmpty ? nil : thread), pid: await session.process.id, launch: kind)
+        KoreSessions.shared.record(cli: "codex", session: thread.isEmpty ? sessionId : thread, folder: options.folder, launch: kind)
         let began = ContinuousClock.now
         if replayPending { log.replayStart("codex", chat: sessionId, read: "thread") }
         // A resumed or forked thread's newest turns, read while Codex resumes it.
@@ -285,6 +286,10 @@ final class CodexBackend: ChatBackend {
     // MARK: - Events
 
     private func handle(_ event: CodexEvent) {
+        if case .raw("account/rateLimits/updated", let params) = event {
+            // The plan's windows as Codex pushed them during a turn: kept for usage attribution.
+            PlanSnapshotLog.shared.append(PlanSnapshot.codex(rateLimits: params, account: nil, source: "stream"))
+        }
         translator.translate(event)
         flush()
         if case .turnCompleted(let result) = event {

@@ -416,6 +416,7 @@ public enum PlanUsage {
             if !PlanReading.claudeSignedIn(account), !(await claudeLoggedIn(executable)) {
                 return PlanReading(account: .signedOut, limits: nil)
             }
+            PlanSnapshotLog.shared.append(PlanSnapshot.claude(usage: usage, account: PlanSnapshot.account(email: account?["email"]?.string)))
             return PlanReading.claude(account: account, usage: usage)
         } catch ClaudeSession.Failure.notRunning {
             throw ClaudeSession.Failure.notRunning
@@ -455,6 +456,8 @@ public enum PlanUsage {
         let account = try replies[0].get()
         switch replies[1] {
         case .success(let limits):
+            let email = PlanSnapshot.account(email: account["account"]?["email"]?.string)
+            PlanSnapshotLog.shared.append(PlanSnapshot.codex(rateLimits: limits, account: email, source: "read"))
             return PlanReading.codex(account: account, rateLimits: limits)
         case .failure(let error):
             let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"

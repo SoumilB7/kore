@@ -67,6 +67,8 @@ final class ClaudeBackend: ChatBackend {
     /// Why the next launch happens, when Kore ended the last one.
     private var relaunchReason: String?
     private let log = SessionLog.shared
+    /// The signed-in account's key in the plan snapshot log.
+    private var planAccount: String?
 
     init(_ options: BackendOptions) {
         self.options = options
@@ -179,6 +181,8 @@ final class ClaudeBackend: ChatBackend {
             throw error
         }
         log.started("claude", chat: sessionId ?? fork?.from, pid: await session.processId, launch: kind)
+        KoreSessions.shared.record(cli: "claude", session: sessionId, folder: options.folder, launch: kind)
+        planAccount = PlanSnapshot.account(email: await session.capabilities["account"]?["email"]?.string)
         relaunchReason = nil
         self.session = session
         // A resumed chat carries on in the mode its history ended in (the pill shows it), not
@@ -232,6 +236,14 @@ final class ClaudeBackend: ChatBackend {
     // MARK: - Events
 
     private func handle(_ event: ClaudeEvent) {
+        switch event {
+        case .sessionStarted(let info):
+            KoreSessions.shared.record(cli: "claude", session: info.sessionId, folder: options.folder, launch: "started")
+        case .raw(let json) where json["type"]?.string == "rate_limit_event":
+            // The plan's windows as this turn began: kept for usage attribution.
+            PlanSnapshotLog.shared.append(PlanSnapshot.claude(rateLimitEvent: json, account: planAccount))
+        default: break
+        }
         translator.translate(event)
         flush()
         if case .exited(let status) = event {
