@@ -4,8 +4,9 @@ import SwiftUI
 /// raised layers are lighter, and saturation is kept for what acts. Red is the one exception.
 /// Every colour a view uses is named here; views hold no colour values or opacities.
 enum Theme {
-    /// Ground, 8 / 11 / 14% lightness.
-    static let background = Color(hex: 0x111518)
+    /// The window ground stays the original neutral near-black (owner, 2026-10-21: the blue-tinted
+    /// one read as dark blue); the raised layers above it carry the hue.
+    static let background = Color(hex: 0x111113)
     static let surface = Color(hex: 0x171D21)
     static let surfaceHover = Color(hex: 0x1D252A)
     static let border = Color(hex: 0xBED7EB).opacity(0.09)
