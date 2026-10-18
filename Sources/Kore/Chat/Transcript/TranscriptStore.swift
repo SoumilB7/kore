@@ -642,7 +642,6 @@ final class TranscriptStore {
         case .file(let e, _, _): return state(e)
         case .agent(let e, _, _):
             return e.agent.map { .agent(index: $0.index, name: $0.name, status: $0.status, waiting: $0.waiting > 0) }
-        default: return nil
         }
     }
 
