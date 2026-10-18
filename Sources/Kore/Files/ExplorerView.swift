@@ -50,6 +50,8 @@ struct ExplorerSidebar: View {
     @StateObject private var hovered = Local(false)
     /// Type to find: what's been typed, cleared after a pause or by Esc.
     @StateObject private var typed = Local("")
+    /// The tree's visible height, for the empty area below the rows.
+    @StateObject private var treeHeight = Local<CGFloat>(0)
     @StateObject private var typedAt = Held(Date.distantPast)
 
     var body: some View {
@@ -130,13 +132,28 @@ struct ExplorerSidebar: View {
                             touch: row.isFolder ? nil : touches[row.id],
                             folderTouched: row.isFolder && touchedFolders.contains(row.id),
                             typed: store.selection == row.id ? typed.value : "",
+                            // Focus with nothing selected marks where the keys start (look §3).
+                            outlined: focused && store.selection == nil && row.id == rows.first?.id,
                             focus: { focused = true }
                         )
                         .id(row.id)
                     }
                 }
                 .padding(.bottom, Space.md)
+                // The empty part below the rows: a click there puts the keyboard in the tree
+                // without selecting anything, as in VS Code.
+                Button {
+                    focused = true
+                } label: {
+                    Color.clear
+                        .frame(height: max(treeHeight.value - CGFloat(rows.count) * Size.Tree.row - Space.md, 0))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .accessibilityHidden(true)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { treeHeight.value = $0 }
             .focusable(interactions: .edit)
             .focused($focused)
             .focusEffectDisabled()
@@ -289,6 +306,8 @@ private struct TreeRow: View {
     let folderTouched: Bool
     /// Type to find's text, shown on the selected row's name.
     let typed: String
+    /// The tree has focus and nothing is selected: this first row gets the focus line.
+    var outlined = false
     /// A click puts the keyboard in the tree, as in VS Code.
     let focus: () -> Void
     @StateObject private var hovered = Local(false)
@@ -320,6 +339,11 @@ private struct TreeRow: View {
         .padding(.trailing, Size.Tree.trailing)
         .frame(height: Size.Tree.row)
         .background(fill, in: RoundedRectangle(cornerRadius: Radius.chip))
+        .overlay {
+            if outlined {
+                RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.accentLine, lineWidth: Stroke.hairline)
+            }
+        }
         .padding(.horizontal, Size.Tree.rowInset)
         .background(alignment: .leading) { guides }
         .contentShape(Rectangle())
