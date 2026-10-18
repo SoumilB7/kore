@@ -24,7 +24,10 @@ struct TimelineRow: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item }
 
     var body: some View {
-        if let dot = item.dot {
+        if case .spinner(_, let since, let claude) = item.row {
+            // Not a timeline item: no dot, and the line doesn't run into it.
+            SpinnerRow(since: since, claude: claude)
+        } else if let dot = item.dot {
             let rule = if case .rule = item.row { true } else { false }
             TimelineItem(
                 dot: dot, above: item.above, below: item.below,
@@ -57,9 +60,16 @@ struct RowContent: View {
         case .agent(let entry, let lane, let open):
             AgentItem(entry: entry, lane: lane, open: open, actions: actions)
         case .fold(let fold):
-            WorkedFor(label: fold.label, outcome: fold.outcome, denied: fold.denied, isOpen: fold.open) {
+            WorkedFor(
+                label: fold.label, outcome: fold.outcome, denied: fold.denied, isOpen: fold.open, live: fold.live,
+                count: fold.count
+            ) {
                 actions.toggleTurn(fold.turn)
             }
+        case .explored(let calls, let open):
+            ExploredItem(calls: calls.count, open: open) { actions.toggle("explored-\(calls[0].id.uuidString)") }
+        case .spinner(_, let since, let claude):
+            SpinnerRow(since: since, claude: claude)
         case .rule:
             Rule()
         case .outcome(_, let text):
@@ -92,11 +102,8 @@ private struct EntryContent: View {
         case .user, .peer:
             MessageHeader(entry: entry, open: true, actions: actions)
         default:
-            Text(planMarkdown(entry.text))
-                .font(TextStyle.body)
-                .foregroundStyle(Theme.text)
-                .lineSpacing(TextStyle.leading)
-                .textSelection(.enabled)
+            // While it streams, whole blocks only (the row's text already stops at the last one).
+            MarkdownView(text: entry.text, streaming: !entry.done)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

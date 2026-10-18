@@ -153,3 +153,40 @@ extension Size {
     static let statusPoint: CGFloat = 6
     static let statusPointInset: CGFloat = 3
 }
+
+// MARK: The live turn (look.md §12)
+
+extension Theme {
+    /// The spinner glyph follows the permission mode, as the composer outline does.
+    static func spinnerGlyph(_ tint: Color?) -> Color { tint ?? accent }
+    /// The live fold row's "N tool calls".
+    static let liveCount = secondary
+}
+
+extension TextStyle {
+    /// Menlo 16; the symbols fall back to the system's symbol font.
+    static var spinnerGlyph: Font { .koreMono(16) }
+    static var spinnerVerb: Font { bodyMedium }
+}
+
+extension Size {
+    /// The spinner glyph's box, centred on the timeline's line; and the spinner row's height.
+    static let spinnerGlyphBox: CGFloat = 24
+    static let spinnerRow: CGFloat = 24
+}
+
+extension Space {
+    /// Above the spinner row.
+    static let spinnerTop: CGFloat = 4
+}
+
+extension Motion {
+    /// One spinner glyph per 0.12s; the verb's decode moves one character per 0.04s.
+    static let spinnerFrame: TimeInterval = 0.12
+    static let decodeFrame: TimeInterval = 0.04
+    /// The spinner row fading in.
+    static let rowFadeIn = Animation.easeInOut(duration: 0.3)
+    /// The live fold label: opacity 1 ↔ 0.55 over 1.6s.
+    static let livePulse = Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+    static let livePulseLow: Double = 0.55
+}

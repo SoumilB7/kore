@@ -35,6 +35,8 @@ final class TranscriptStore {
         /// Thinking: when it began, and how long it took once the next block started.
         var startedAt: Date?
         var duration: TimeInterval?
+        /// A tool that only reads, searches or lists (grouped into "Explored N").
+        var readOnly = false
 
         static func == (a: Self, b: Self) -> Bool {
             a.id == b.id && a.kind == b.kind && a.text == b.text && a.result == b.result && a.done == b.done
@@ -83,8 +85,13 @@ final class TranscriptStore {
         /// When the answer began, for the fold's label while the answer still streams.
         var workEnded: Date?
         var changes: [FileChange] = []
+        /// The fold's open state once the user has set it; until then it's open while the turn
+        /// works and closed once its answer starts.
         var open = false
+        var touched = false
         var denied = 0
+        /// What the live fold row last said ("Running Bash…"); it stays until the next state.
+        var liveLabel: String?
     }
 
     /// One drawn row.
@@ -103,6 +110,10 @@ final class TranscriptStore {
         case rule(turn: String)
         case outcome(turn: String, text: String)
         case changes(turn: String, files: Int, added: Int, removed: Int)
+        /// Two or more consecutive read-only tool calls, as one "Explored N" item.
+        case explored([Entry], open: Bool)
+        /// The running turn's last row: glyph and verb (look.md §12).
+        case spinner(turn: String, since: Date, claude: Bool)
 
         var id: String {
             switch self {
@@ -112,6 +123,8 @@ final class TranscriptStore {
             case .rule(let t): "rule-\(t)"
             case .outcome(let t, _): "outcome-\(t)"
             case .changes(let t, _, _, _): "changes-\(t)"
+            case .explored(let entries, _): "explored-\(entries.first?.id.uuidString ?? "")"
+            case .spinner(let t, _, _): "spinner-\(t)"
             }
         }
     }
@@ -122,6 +135,27 @@ final class TranscriptStore {
         let outcome: WorkedFor.Outcome?
         let denied: Int
         let open: Bool
+        /// The turn is still working: the label says what's happening, and pulses.
+        var live = false
+        /// "3 tool calls · 1 failed"; nil before the first tool call.
+        var count: String?
+        /// Some tool call failed (its dot turns red once the turn ends).
+        var failed = false
+    }
+
+    /// A file the latest turn changed, for the file explorer and editor (phase 09 §8).
+    struct FileTouch: Equatable {
+        /// Absolute, with symlinks resolved (as FSEvents reports it).
+        let path: String
+        var added: Int
+        var removed: Int
+        /// `changes(ofTurn:)` opens the changes modal on it.
+        let turn: String
+        /// Set when a sub-agent wrote it: its `AgentAvatar` index and name.
+        var agentIndex: Int?
+        var agentName: String?
+        /// A tool writing this file hasn't finished.
+        var writing: Bool
     }
 
     /// A drawn row and its place on the timeline: a dot (nil: off the timeline) and whether the
@@ -183,6 +217,26 @@ final class TranscriptStore {
     }
     /// Bumped when a turn folds by itself, so the view can keep the answer where it was.
     private(set) var folded: (turn: String, answer: String, seq: Int)?
+    /// User turns before the shown window: the "Load earlier turns" row shows while any are.
+    private(set) var hiddenTurns = 0
+    /// The files the latest turn changed, by path (`turnChanges()`).
+    private(set) var fileTouches: [String: FileTouch] = [:]
+
+    /// When the user last sent a message (live, not replayed): the view glides to the end for
+    /// 2s after it, as the extension does.
+    @ObservationIgnored private(set) var sentAt: Date?
+    /// Where the reader was when the chat's view went away (another tab), to come back to.
+    @ObservationIgnored var savedScroll: (offset: CGFloat, atEnd: Bool)?
+
+    /// User turns shown, counted from the end (T3 Code opens a thread on its last 10).
+    @ObservationIgnored private var windowTurns = 10
+    /// Changes waiting to be drawn: streamed deltas are drawn once per `drawInterval`.
+    @ObservationIgnored private var drawScheduled = false
+    static let drawInterval: TimeInterval = 1.0 / 30
+    /// Pending approvals of this chat: id → it's a question (AskUserQuestion, Codex user input).
+    @ObservationIgnored private var pendingApprovals: [String: Bool] = [:]
+    /// The most recently started turn, for `turnChanges()`.
+    @ObservationIgnored private var latestTurn: String?
 
     @ObservationIgnored private(set) var entries: [Entry] = []
     @ObservationIgnored private var position: [UUID: Int] = [:]
@@ -223,10 +277,16 @@ final class TranscriptStore {
         batching = true
         changes()
         batching = false
-        // Replayed thinking has no timing; it's finished all the same.
-        for i in entries.indices where entries[i].kind == .thinking && entries[i].startedAt == nil {
+        // Replayed thinking has no timing, and replayed text isn't streaming; both are finished.
+        for i in entries.indices where entries[i].startedAt == nil && (entries[i].kind == .thinking || entries[i].kind == .answer) {
             entries[i].done = true
         }
+        rebuild()
+    }
+
+    /// Twenty more user turns above the window.
+    func loadEarlier() {
+        windowTurns += 20
         rebuild()
     }
 
@@ -235,6 +295,7 @@ final class TranscriptStore {
     func turnStarted(_ id: String, at date: Date = Date()) {
         turns[id] = Turn(id: id, startedAt: date)
         current = id
+        latestTurn = id
         changed()
     }
 
@@ -252,6 +313,9 @@ final class TranscriptStore {
         guard let id = id ?? current, var turn = turns[id] else { return }
         endThinking()
         settleAll()
+        pendingApprovals.removeAll()
+        // Its text has stopped streaming.
+        for i in entries.indices.reversed() where entries[i].turn == id && entries[i].kind == .answer { entries[i].done = true }
         turn.finished = true
         // A replayed turn's outcome isn't announced again (replay never showed it).
         turn.outcome = batching ? .completed : outcome
@@ -272,6 +336,60 @@ final class TranscriptStore {
     }
 
     func changes(ofTurn id: String) -> [FileChange] { turns[id]?.changes ?? [] }
+
+    /// The files the running turn changed, or else the latest finished turn's, by path; reading
+    /// it from a view follows it.
+    func turnChanges() -> [String: FileTouch] { fileTouches }
+
+    /// Tools that write a file before reporting its change.
+    private static let writeTools: Set<String> = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+
+    private func touchedFiles() -> [String: FileTouch] {
+        guard let id = latestTurn, let turn = turns[id] else { return [:] }
+        var touches: [String: FileTouch] = [:]
+        func touch(_ path: String, added: Int, removed: Int, writing: Bool, agent: AgentInfo?) {
+            let path = Self.resolved(path)
+            var t = touches[path] ?? FileTouch(
+                path: path, added: 0, removed: 0, turn: id, agentIndex: agent?.index, agentName: agent?.name,
+                writing: false)
+            t.added += added
+            t.removed += removed
+            t.writing = t.writing || writing
+            touches[path] = t
+        }
+        func add(_ e: Entry, agent: AgentInfo?) {
+            guard e.kind == .tool else { return }
+            if e.changes.isEmpty {
+                if !e.done, Self.writeTools.contains(e.toolName ?? ""), let path = e.path {
+                    touch(path, added: 0, removed: 0, writing: true, agent: agent)
+                }
+            } else {
+                for c in e.changes { touch(c.path, added: c.added, removed: c.removed, writing: !e.done, agent: agent) }
+            }
+        }
+        for e in entries where e.turn == id {
+            add(e, agent: nil)
+            if let info = e.agent { (lanes[info.id] ?? []).forEach { add($0, agent: info) } }
+        }
+        // The turn's own diff (git, or the CLI's), once it's in, has the final counts and any
+        // file changed by a shell command.
+        for c in turn.changes {
+            let path = Self.resolved(c.path)
+            var t = touches[path] ?? FileTouch(
+                path: path, added: 0, removed: 0, turn: id, agentIndex: nil, agentName: nil, writing: false)
+            t.added = c.added
+            t.removed = c.removed
+            touches[path] = t
+        }
+        return touches
+    }
+
+    /// Symlinks resolved (/tmp → /private/tmp), as FSEvents reports paths.
+    private static func resolved(_ path: String) -> String {
+        guard let real = realpath(path, nil) else { return (path as NSString).standardizingPath }
+        defer { free(real) }
+        return String(cString: real)
+    }
 
     // MARK: The agent map
 
@@ -324,8 +442,15 @@ final class TranscriptStore {
         updateAgent(agent) { $0.waiting += 1 }
     }
 
+    /// The CLI waits on the user: the live fold row says so, and the spinner hides.
+    func approvalAsked(_ approval: String, question: Bool) {
+        pendingApprovals[approval] = question
+        changed()
+    }
+
     /// The question was answered or withdrawn.
     func approvalSettled(_ approval: String) {
+        if pendingApprovals.removeValue(forKey: approval) != nil { changed() }
         guard let agent = askedBy.removeValue(forKey: approval) else { return }
         updateAgent(agent) { $0.waiting = max(0, $0.waiting - 1) }
     }
@@ -391,7 +516,10 @@ final class TranscriptStore {
     // MARK: Content
 
     func user(_ text: String, attachments: [Attachment]) {
+        if !batching { sentAt = Date() }
         append(Entry(kind: .user, text: text, attachments: attachments))
+        // Sending is drawn at once (the view scrolls to it).
+        if !batching { rebuild() }
     }
 
     /// A peer's message, placed where its turn began.
@@ -422,6 +550,7 @@ final class TranscriptStore {
             entries[i].text += text
         } else {
             endThinking()
+            endAnswer()
             var entry = Entry(kind: kind, text: text)
             entry.turn = current
             if kind == .thinking { entry.startedAt = Date() }
@@ -433,14 +562,18 @@ final class TranscriptStore {
 
     func toolStarted(
         id: String, name: String, detail: String, input: String? = nil, summary: String? = nil, path: String? = nil,
-        agent: String? = nil
+        readOnly: Bool = false, agent: String? = nil
     ) {
         var entry = Entry(kind: .tool, text: detail, toolName: name, toolId: id)
+        entry.readOnly = readOnly
         // Most commands' input is their detail; keep one copy.
         entry.input = input == detail ? nil : input
         entry.summary = summary
         entry.path = path
-        if agent == nil { endThinking() }
+        if agent == nil {
+            endThinking()
+            endAnswer()
+        }
         if let agent {
             laneAppend(agent: agent, entry)
             laneTools[id] = (agent, lanes[agent]!.count - 1)
@@ -546,13 +679,22 @@ final class TranscriptStore {
     // MARK: Opening and closing
 
     func toggle(turn id: String) {
-        turns[id]?.open.toggle()
-        changed()
+        guard var turn = turns[id] else { return }
+        turn.open = !Self.isOpen(turn)
+        turn.touched = true
+        turns[id] = turn
+        rebuild()
     }
 
     func toggle(_ key: String) {
         if openKeys.remove(key) == nil { openKeys.insert(key) }
-        changed()
+        rebuild()
+    }
+
+    /// A fold is open while its turn works, and closed once the answer starts, until the user
+    /// opens or closes it.
+    private static func isOpen(_ turn: Turn) -> Bool {
+        turn.touched ? turn.open : !turn.finished && turn.answerFrom == nil
     }
 
     /// The user denied an action in the current turn (counted on its fold line).
@@ -564,12 +706,24 @@ final class TranscriptStore {
     // MARK: Building rows
 
     private func rebuild() {
+        // Only the last `windowTurns` user turns are built (T3 Code's paging): a long chat costs
+        // what its last few turns cost. Everything stays in `entries`.
+        var users = 0
+        var start = 0
+        for i in entries.indices.reversed() where entries[i].kind == .user {
+            users += 1
+            if users == windowTurns { start = i }
+        }
+        let hidden = max(0, users - windowTurns)
+        if hidden == 0 { start = 0 }
+        if hidden != hiddenTurns { hiddenTurns = hidden }
+
         var rows: [Row] = []
-        rows.reserveCapacity(entries.count)
-        var i = 0
+        rows.reserveCapacity(entries.count - start)
+        var i = start
         while i < entries.count {
             guard let turnID = entries[i].turn, let turn = turns[turnID] else {
-                rows.append(row(entries[i]))
+                if let row = visibleRow(entries[i]) { rows.append(row) }
                 i += 1
                 continue
             }
@@ -580,6 +734,8 @@ final class TranscriptStore {
         }
         let summary = summarizeAgents()
         if summary != agentSummary { agentSummary = summary }
+        let touches = touchedFiles()
+        if touches != fileTouches { fileTouches = touches }
         // Sections are the one built form of the transcript; nothing else keeps the rows.
         let sections = Self.sections(rows, open: openKeys)
         guard sections != self.sections else { return }
@@ -630,11 +786,16 @@ final class TranscriptStore {
             }
         case .thinking: return .plain
         case .fold(let f):
+            if f.live { return .running }
             switch f.outcome {
             case .failed: return .failure
             case .interrupted: return .warning
-            case nil: return .plain
+            case nil: return f.failed ? .failure : .plain
             }
+        case .explored(let calls, _):
+            if calls.contains(where: { !$0.done }) { return .running }
+            return calls.contains(where: \.isError) ? .failure : .success
+        case .spinner: return nil
         case .rule: return TimelineDot.none
         case .outcome(_, let text): return text == "Interrupted" ? .warning : .failure
         case .changes: return .plain
@@ -643,6 +804,13 @@ final class TranscriptStore {
         case .agent(let e, _, _):
             return e.agent.map { .agent(index: $0.index, name: $0.name, status: $0.status, waiting: $0.waiting > 0) }
         }
+    }
+
+    /// The answer block in progress ends when another block or a tool starts: it's no longer
+    /// streaming, so all of it shows.
+    private func endAnswer() {
+        guard let last = entries.indices.last, entries[last].kind == .answer, !entries[last].done else { return }
+        entries[last].done = true
     }
 
     /// The thinking block in progress ends when anything else starts.
@@ -654,33 +822,111 @@ final class TranscriptStore {
         entries[last].done = true
     }
 
-    /// A turn: still working, everything shows; once its answer starts, the work folds.
+    /// A turn. While it works, a live fold row (look.md §12) heads its work, open, saying what's
+    /// happening, and a spinner row ends it. Once its answer starts, the work folds above the
+    /// answer.
     private func layout(_ turn: Turn, _ group: ArraySlice<Entry>, into rows: inout [Row]) {
-        guard let split = answerStart(turn, group) else {
-            rows.append(contentsOf: group.map(row))
-            if turn.finished { trailer(turn, folded: false, into: &rows) }
-            return
-        }
-        let work = group[group.startIndex..<split]
-        let answer = group[split...]
+        let split = answerStart(turn, group)
+        let work = split.map { group[group.startIndex..<$0] } ?? group
         let foldable = work.filter { !Self.pinned($0) }
-        if foldable.isEmpty {
-            rows.append(contentsOf: group.map(row))
-            if turn.finished { trailer(turn, folded: false, into: &rows) }
+        let live = !turn.finished && split == nil
+        // A live turn's fold comes with its first piece of work; a finished turn's, when work
+        // went before its answer.
+        let folds = live ? foldable.contains(where: Self.isWork) : split != nil && !foldable.isEmpty
+        guard folds else {
+            rows.append(contentsOf: grouped(group))
+            finish(turn, folded: false, into: &rows)
             return
         }
         // Prompts (a peer's message) stay above the fold.
-        rows.append(contentsOf: work.prefix { $0.kind == .peer || $0.kind == .user }.map(row))
-        let worked = turn.finished ? turn.duration : turn.workEnded.map { $0.timeIntervalSince(turn.startedAt) }
-        let label = WorkedFor.label(duration: worked, items: foldable.count)
-        rows.append(.fold(Fold(
-            turn: turn.id, label: label, outcome: foldOutcome(turn), denied: turn.denied, open: turn.open)))
-        for entry in work where entry.kind != .peer && entry.kind != .user {
-            if turn.open || Self.pinned(entry) { rows.append(row(entry)) }
+        let prompts = work.prefix { $0.kind == .peer || $0.kind == .user }
+        rows.append(contentsOf: prompts.compactMap(visibleRow))
+        let tools = group.filter { $0.kind == .tool || $0.kind == .agent }
+        let failed = tools.filter { $0.isError || $0.agent?.status == .failed }.count
+        let label: String
+        if live {
+            label = liveLabel(turn, group)
+            turns[turn.id]?.liveLabel = label
+        } else {
+            let worked = turn.finished ? turn.duration : turn.workEnded.map { $0.timeIntervalSince(turn.startedAt) }
+            label = WorkedFor.label(duration: worked, items: foldable.count)
         }
-        rows.append(.rule(turn: turn.id))
-        rows.append(contentsOf: answer.map(row))
-        if turn.finished { trailer(turn, folded: true, into: &rows) }
+        let open = Self.isOpen(turn)
+        rows.append(.fold(Fold(
+            turn: turn.id, label: label, outcome: foldOutcome(turn), denied: turn.denied, open: open, live: live,
+            count: live && !tools.isEmpty ? Self.count(tools.count, failed: failed) : nil, failed: failed > 0)))
+        let rest = work.dropFirst(prompts.count)
+        rows.append(contentsOf: open ? grouped(rest) : rest.filter(Self.pinned).compactMap(visibleRow))
+        if let split {
+            rows.append(.rule(turn: turn.id))
+            rows.append(contentsOf: grouped(group[split...]))
+        }
+        finish(turn, folded: split != nil, into: &rows)
+    }
+
+    /// A running turn ends with the spinner (hidden while an approval waits: the fold says so);
+    /// a finished one with its outcome and files.
+    private func finish(_ turn: Turn, folded: Bool, into rows: inout [Row]) {
+        if turn.finished {
+            trailer(turn, folded: folded, into: &rows)
+        } else if pendingApprovals.isEmpty {
+            rows.append(.spinner(turn: turn.id, since: turn.startedAt, claude: providerName == "Claude"))
+        }
+    }
+
+    /// What the live fold row says: waiting on the user, the tool that's running, thinking, or
+    /// else what it said last.
+    private func liveLabel(_ turn: Turn, _ group: ArraySlice<Entry>) -> String {
+        if !pendingApprovals.isEmpty {
+            return pendingApprovals.values.contains(true) ? "Waiting for your answer…" : "Waiting for permission…"
+        }
+        if let running = group.last(where: { ($0.kind == .tool && !$0.done) || $0.agent?.status == .running }) {
+            // Codex calls every command "Run"; "Running Run…" would read oddly.
+            let name = running.kind == .agent ? "Agent" : running.toolName == "Run" ? "command" : running.toolName ?? "tool"
+            return "Running \(name)…"
+        }
+        if let last = group.last, last.kind == .thinking, !last.done { return "Thinking…" }
+        return turn.liveLabel ?? "Thinking…"
+    }
+
+    /// "3 tool calls · 1 failed".
+    private static func count(_ calls: Int, failed: Int) -> String {
+        let text = calls == 1 ? "1 tool call" : "\(calls) tool calls"
+        return failed > 0 ? "\(text) · \(failed) failed" : text
+    }
+
+    /// Rows for a run of entries, with two or more consecutive read-only tool calls grouped into
+    /// one "Explored N" item (open, it's followed by the calls themselves).
+    private func grouped(_ run: some Collection<Entry>) -> [Row] {
+        let run = Array(run)
+        var rows: [Row] = []
+        var i = 0
+        while i < run.count {
+            var end = i
+            while end < run.count, run[end].kind == .tool, run[end].readOnly, run[end].changes.isEmpty { end += 1 }
+            if end - i >= 2 {
+                let calls = Array(run[i..<end])
+                let open = openKeys.contains("explored-\(calls[0].id.uuidString)")
+                rows.append(.explored(calls, open: open))
+                if open { rows.append(contentsOf: calls.map(row)) }
+                i = end
+            } else {
+                if let row = visibleRow(run[i]) { rows.append(row) }
+                i += 1
+            }
+        }
+        return rows
+    }
+
+    /// A row as drawn now. A streaming answer shows up to its last blank line (the extension's
+    /// settled blocks; `MarkdownView` cuts at the same place), so its row changes only when a
+    /// block completes; before the first one, it has no row yet.
+    private func visibleRow(_ entry: Entry) -> Row? {
+        guard entry.kind == .answer, !entry.done else { return row(entry) }
+        guard let blank = entry.text.range(of: "\n\n", options: .backwards) else { return nil }
+        var settled = entry
+        settled.text = String(entry.text[..<blank.upperBound])
+        return .entry(settled)
     }
 
     /// The outcome notice and the files-changed line, under the answer and never folded.
@@ -749,8 +995,16 @@ final class TranscriptStore {
 
     // MARK: Plumbing
 
+    /// Draws the change: at once for a batch's end or a user's action, else at most once per
+    /// `drawInterval`, so a fast stream of deltas costs one rebuild per frame, not one per token.
     private func changed() {
-        if !batching { rebuild() }
+        guard !batching, !drawScheduled else { return }
+        drawScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.drawInterval) { [weak self] in
+            guard let self else { return }
+            drawScheduled = false
+            rebuild()
+        }
     }
 
     private func append(_ entry: Entry, rebuild: Bool = true) {
@@ -802,7 +1056,9 @@ final class TranscriptStore {
             lanes[agent]![i].text += text
             agentsVersion &+= 1
         } else {
-            let entry = Entry(kind: kind, text: text)
+            // A sub-agent's text isn't drawn as it streams (Claude's comes whole anyway).
+            var entry = Entry(kind: kind, text: text)
+            entry.done = true
             blocks[key] = entry.id
             laneAppend(agent: agent, entry)
         }

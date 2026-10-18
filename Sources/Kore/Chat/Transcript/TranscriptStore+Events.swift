@@ -37,7 +37,7 @@ extension TranscriptStore {
         case .toolStarted(let call, let agent):
             toolStarted(
                 id: call.id, name: call.name, detail: call.detail, input: call.input, summary: call.description,
-                path: call.path, agent: agent.sub)
+                path: call.path, readOnly: call.readOnly, agent: agent.sub)
         case .toolOutput(let id, let text, _):
             toolOutput(id: id, text)
         case .toolFinished(let id, let output, let isError, _):
@@ -67,6 +67,7 @@ extension TranscriptStore {
             if status != 0 && status != 15 { notice("\(providerName) exited (\(status))", isError: true) }
 
         case .approvalRequested(let approval):
+            approvalAsked(approval.id, question: !approval.questions.isEmpty)
             if case .sub(let agent) = approval.agent { agentAsked(approval.id, agent: agent) }
         case .approvalWithdrawn(let id):
             approvalSettled(id)

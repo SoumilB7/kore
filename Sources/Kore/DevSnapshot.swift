@@ -30,6 +30,8 @@ import KoreCore
 ///   KORE_TIME_REPLAY=1       print how long applying a resumed session's past took (main thread)
 ///   KORE_STOP_AFTER=<s>      press Stop that many seconds after launch
 ///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
+///   KORE_EARLIER=top|load    after KORE_EARLIER_AFTER seconds (default 4), scroll the transcript to its
+///                            top; with load, then press "Load earlier turns"
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
     static let startProvider = ProcessInfo.processInfo.environment["KORE_START"].flatMap(Provider.init(rawValue:))
@@ -300,6 +302,15 @@ enum DevSnapshot {
                 // Through NSApp, so local event monitors (outside-click handling) see it too.
                 NSApp.sendEvent(event)
             }
+        }
+    }
+
+    /// KORE_EARLIER: drives the transcript's top for a snapshot (see the list above).
+    @MainActor static func earlier(_ run: @escaping @MainActor (_ load: Bool) -> Void) {
+        let env = ProcessInfo.processInfo.environment
+        guard let mode = env["KORE_EARLIER"] else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (Double(env["KORE_EARLIER_AFTER"] ?? "") ?? 4)) {
+            run(mode == "load")
         }
     }
 }

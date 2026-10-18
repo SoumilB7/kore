@@ -10,17 +10,36 @@ struct WorkedFor: View {
     var outcome: Outcome?
     var denied = 0
     let isOpen: Bool
+    /// The turn still works: the label says what's happening (look.md §12), pulsing.
+    var live = false
+    /// "3 tool calls · 1 failed", after a live label.
+    var count: String?
     let toggle: () -> Void
     @StateObject private var hovered = Local(false)
+    @StateObject private var dim = Local(false)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Outcome: Equatable { case interrupted, failed }
 
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: Space.xs) {
-                Text(label)
-                    .foregroundStyle(hovered.value || isOpen ? Theme.secondary : Theme.tertiary)
-                    .lineLimit(1)
+                if live {
+                    Text(label)
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                        .opacity(dim.value ? Motion.livePulseLow : 1)
+                        .animation(reduceMotion ? nil : Motion.livePulse, value: dim.value)
+                        .onAppear { if !reduceMotion { dim.value = true } }
+                    if let count {
+                        Text(count).font(TextStyle.toolName).foregroundStyle(Theme.liveCount).lineLimit(1)
+                            .padding(.leading, Space.sm - Space.xs)
+                    }
+                } else {
+                    Text(label)
+                        .foregroundStyle(hovered.value || isOpen ? Theme.secondary : Theme.tertiary)
+                        .lineLimit(1)
+                }
                 Disclosure(isOpen: isOpen)
                     .foregroundStyle(hovered.value || isOpen ? Theme.secondary : Theme.tertiary)
                 if let outcome {
