@@ -55,6 +55,11 @@ final class CodexTranslator {
     private var childTools: [String: Int] = [:]
     private var spawned: Set<String> = []
     private var finished: Set<String> = []
+    /// The `subAgentActivity` item that ended each child's latest run.
+    private var finishedBy: [String: String] = [:]
+    /// Children that have started a turn (or ran before this session): a later one is the child
+    /// running again.
+    private var childRan: Set<String> = []
     /// Each child's latest message: its result when it finishes.
     private var lastText: [String: String] = [:]
     /// Child threads' nicknames, roles and (in a replay) outcomes, which the backend looks up
@@ -129,6 +134,8 @@ final class CodexTranslator {
             if let name = Self.threadName(raw["thread"]?["name"]) { out.append(.titleChanged(name)) }
         case .turnStarted(let id):
             if case .sub(let thread) = agent {
+                // A follow-up (followup_task, resume_agent) runs a child again as a turn of its own.
+                if !childRan.insert(thread).inserted { resume(thread) }
                 childTurns[thread] = id
             } else {
                 openTurn(id, at: .now)
@@ -361,14 +368,17 @@ final class CodexTranslator {
             guard let thread = raw["agentThreadId"]?.string else { return }
             spawn(thread, parent: agent, toolId: item.id, name: raw["agentPath"]?.string, prompt: nil, model: nil)
             switch raw["kind"]?.string {
-            case "completed": finish(thread, .completed)
-            case "interrupted": finish(thread, .stopped)
-            case "errored", "failed": finish(thread, .failed)
+            case "completed": finish(thread, .completed, by: item.id)
+            case "interrupted": finish(thread, .stopped, by: item.id)
+            case "errored", "failed": finish(thread, .failed, by: item.id)
             default: break
             }
             return
         }
         let receivers = raw["receiverThreadIds"]?.array?.compactMap(\.string) ?? []
+        if raw["tool"]?.string == "resumeAgent" {
+            for thread in receivers where finished.contains(thread) { resume(thread) }
+        }
         if raw["tool"]?.string == "spawnAgent" {
             for thread in receivers {
                 spawn(thread, parent: agent, toolId: item.id, name: nil, prompt: raw["prompt"]?.string, model: raw["model"]?.string)
@@ -399,7 +409,12 @@ final class CodexTranslator {
                     background: false)))
     }
 
-    private func finish(_ thread: String, _ status: AgentStatus) {
+    /// `by`: the activity item reporting it. Each run's end is an item of its own, so another
+    /// one is a later run's (a replay has no child turns to say it ran again).
+    private func finish(_ thread: String, _ status: AgentStatus, by item: String? = nil) {
+        if let item, let earlier = finishedBy.updateValue(item, forKey: thread), earlier != item {
+            finished.remove(thread)
+        }
         guard finished.insert(thread).inserted else { return }
         // A replay carries no child messages: the result, tokens and time its rollout ended with.
         let info = agentThreads[thread]
@@ -407,6 +422,12 @@ final class CodexTranslator {
             out.append(.agentProgress(id: thread, AgentProgress(tokens: info?.tokens, duration: info?.duration)))
         }
         out.append(.agentFinished(id: thread, status, result: lastText[thread] ?? info?.result))
+    }
+
+    private func resume(_ thread: String) {
+        finished.remove(thread)
+        finishedBy[thread] = nil
+        out.append(.agentResumed(id: thread))
     }
 
     /// Child threads this event names that haven't been looked up yet.
@@ -582,6 +603,8 @@ final class CodexTranslator {
     func adopt(_ replayed: Carried, history: Bool = false) {
         spawned.formUnion(replayed.spawned)
         finished.formUnion(replayed.finished)
+        // They ran in an earlier session: a turn of theirs now runs them again.
+        childRan.formUnion(replayed.spawned)
         lastText.merge(replayed.lastText) { live, _ in live }
         guard !history else { return }
         if replayed.planKnown {

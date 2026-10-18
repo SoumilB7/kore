@@ -71,6 +71,11 @@ package final class ClaudeTranslator {
     private var finished: [String: Bool] = [:]
     /// Agent tool_use id → the CLI's agent id (its `subagents/agent-<id>.jsonl`).
     private(set) var agentFiles: [String: String] = [:]
+    /// SendMessage calls not yet answered → the agent they're to.
+    private var sendCalls: [String: String] = [:]
+    /// A SendMessage call that ran a stopped or finished agent again → that agent's Agent call:
+    /// the CLI reports the new run under the SendMessage call's id, with the agent's task id.
+    private var resumedBy: [String: String] = [:]
 
     static let agentTools: Set<String> = ["Agent", "Task"]
 
@@ -196,7 +201,7 @@ package final class ClaudeTranslator {
             stream(.thinking, text)
         case .assistant(let messageId, let blocks, let parent, let usage):
             if parent == nil, turn != nil, turnKey == nil { turnKey = messageId }
-            assistant(blocks, agent: parent.map(AgentID.sub) ?? .main)
+            assistant(blocks, agent: agentID(parent))
             if parent == nil, let usage { context(usage) }
         case .user(let blocks, let parent, let result):
             // After a compaction's boundary, stdout sends its summary as a plain user message
@@ -206,7 +211,7 @@ package final class ClaudeTranslator {
                 out.append(.compactionSummary(text))
                 return
             }
-            toolResults(blocks, result, agent: parent.map(AgentID.sub) ?? .main)
+            toolResults(blocks, result, agent: agentID(parent))
         case .permissionRequest(let request):
             pending[request.id] = request
             out.append(.approvalRequested(approval(request)))
@@ -301,6 +306,7 @@ package final class ClaudeTranslator {
         for case .toolUse(let id, let name, let input) in blocks where firstTime("start:" + id, agent) {
             toolAgent[id] = agent
             if Self.agentTools.contains(name) { agentInputs[id] = input }
+            if name == "SendMessage", let to = input["to"]?.string { sendCalls[id] = to }
             if Self.modeTools.contains(name) {
                 if replaying { modeCalls[id] = (name, agent) } else { modeCall = (id, name, agent) }
             }
@@ -348,6 +354,8 @@ package final class ClaudeTranslator {
             }
         } else if agentInputs[id] != nil {
             agentReturned(id, result)
+        } else if let to = sendCalls.removeValue(forKey: id) {
+            messageSent(id, to: to, result)
         }
     }
 
@@ -378,6 +386,14 @@ package final class ClaudeTranslator {
             case "task_started" where !(json["task_type"]?.string.map { !$0.contains("agent") } ?? false):
                 // Background shell commands are tasks too (local_bash); only agents get a card.
                 let tool = json["tool_use_id"]?.string ?? json["task_id"]?.string ?? ""
+                if let task = json["task_id"]?.string, let agent = agent(forTask: task) {
+                    // An agent run again starts once more under its own task id, from the call
+                    // that ran it (SendMessage): the same agent.
+                    if tool != agent { resumedBy[tool] = agent }
+                    taskTool[task] = agent
+                    resume(agent)
+                    break
+                }
                 if let task = json["task_id"]?.string { taskTool[task] = tool }
                 spawn(
                     tool, name: json["description"]?.string, type: json["subagent_type"]?.string,
@@ -406,7 +422,38 @@ package final class ClaudeTranslator {
     // MARK: - Sub-agents
 
     private func agent(ofTask json: JSONValue) -> String {
-        json["task_id"]?.string.flatMap { taskTool[$0] } ?? json["tool_use_id"]?.string ?? json["task_id"]?.string ?? ""
+        json["task_id"]?.string.flatMap { taskTool[$0] } ?? json["tool_use_id"]?.string.map { resumedBy[$0] ?? $0 }
+            ?? json["task_id"]?.string ?? ""
+    }
+
+    /// The spawned agent a task id (the CLI's agent id) belongs to, if any.
+    private func agent(forTask task: String) -> String? {
+        let agent = taskTool[task] ?? agentFiles.first { $0.value == task }?.key
+        return agent.flatMap { spawned.contains($0) ? $0 : nil }
+    }
+
+    /// Messages name the call that started their agent's run: a resumed run's, its SendMessage.
+    private func agentID(_ parent: String?) -> AgentID {
+        parent.map { .sub(resumedBy[$0] ?? $0) } ?? .main
+    }
+
+    /// It runs again, until it reports once more.
+    private func resume(_ id: String) {
+        finished[id] = nil
+        out.append(.agentResumed(id: id))
+    }
+
+    /// SendMessage to an agent that isn't running runs it again: the CLI answers "Resuming agent
+    /// …" with its id, or that it "resumed from transcript". To a running one it's only queued,
+    /// and to one the user stopped it fails.
+    private func messageSent(_ call: String, to target: String, _ result: JSONValue) {
+        guard result["success"]?.bool == true else { return }
+        let message = result["message"]?.string ?? ""
+        guard let task = result["resumedAgentId"]?.string ?? (message.contains("resumed from transcript") ? target : nil),
+            let agent = agent(forTask: task) ?? (spawned.contains(task) ? task : nil)
+        else { return }
+        resumedBy[call] = agent
+        resume(agent)
     }
 
     private func spawn(_ id: String, name: String? = nil, type: String? = nil, prompt: String? = nil, background: Bool? = nil) {
@@ -457,8 +504,10 @@ package final class ClaudeTranslator {
     /// stops: its status, result and totals (stdout's `task_notification` lacks the result).
     func taskNotification(_ entry: JSONValue) {
         guard let text = entry["message"]?["content"]?.string, text.contains("<task-notification>"),
-            let id = Self.tag("tool-use-id", in: text)
+            let call = Self.tag("tool-use-id", in: text)
         else { return }
+        // A resumed run's names the SendMessage call that ran it.
+        let id = resumedBy[call] ?? (spawned.contains(call) ? call : Self.tag("task-id", in: text).flatMap(agent(forTask:)) ?? call)
         if finished[id] == nil {
             out.append(
                 .agentProgress(
@@ -664,6 +713,7 @@ package final class ClaudeTranslator {
         var spawned: Set<String>
         var finished: [String: Bool]
         var agentFiles: [String: String]
+        var resumedBy: [String: String]
         var contextUsed: Int?
     }
 
@@ -693,7 +743,7 @@ package final class ClaudeTranslator {
     private var carried: Carried {
         Carried(
             mode: mode, toolAgent: toolAgent, agentInputs: agentInputs, taskTool: taskTool, spawned: spawned,
-            finished: finished, agentFiles: agentFiles, contextUsed: contextUsed)
+            finished: finished, agentFiles: agentFiles, resumedBy: resumedBy, contextUsed: contextUsed)
     }
 
     /// Takes on a replay's state. `history` (an older page, prepended): only where its agents'
@@ -710,6 +760,7 @@ package final class ClaudeTranslator {
         taskTool.merge(replayed.taskTool) { live, _ in live }
         spawned.formUnion(replayed.spawned)
         finished.merge(replayed.finished) { live, _ in live }
+        resumedBy.merge(replayed.resumedBy) { live, _ in live }
     }
 
     // MARK: - Replay

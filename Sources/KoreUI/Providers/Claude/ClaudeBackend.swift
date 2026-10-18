@@ -159,6 +159,9 @@ final class ClaudeBackend: ChatBackend {
             yield(event)
             // A background agent's commands don't reach stdout; its transcript has them.
             if case .agentSpawned(let agent) = event, agent.background { tail(agent.id) }
+            // Run again, it runs in the background: its new entries only (the CLI may have
+            // written its first ones a moment before this came).
+            if case .agentResumed(let id) = event { tail(id, since: .now.addingTimeInterval(-Self.resumeLead)) }
         }
         for followup in followups { run(followup) }
     }
@@ -249,8 +252,11 @@ final class ClaudeBackend: ChatBackend {
         return await ClaudeTranslator.agentHistory(entries, agent: id, folder: folder)
     }
 
-    /// Reads a running background agent's transcript as it grows, until the agent finishes.
-    private func tail(_ id: String) {
+    private static let resumeLead: TimeInterval = 2
+
+    /// Reads a running background agent's transcript as it grows, until the agent finishes;
+    /// `since`, the entries written from then on.
+    private func tail(_ id: String, since: Date? = nil) {
         guard tails[id] == nil, let session = sessionId else { return }
         let folder = options.folder
         tails[id] = Task {
@@ -263,9 +269,10 @@ final class ClaudeBackend: ChatBackend {
                 }
                 if let file {
                     let start = offset
-                    let (entries, next) = await Task.detached { ClaudeHistory.entries(in: file, from: start) }.value
+                    var (entries, next) = await Task.detached { ClaudeHistory.entries(in: file, from: start) }.value
                     offset = next
-                    for event in translator.agentEntries(entries, agent: id, skippingPrompt: start == 0, live: true) {
+                    if let since { entries = entries.filter { (ClaudeTranslator.date($0["timestamp"]) ?? since) >= since } }
+                    for event in translator.agentEntries(entries, agent: id, skippingPrompt: start == 0 && since == nil, live: true) {
                         yield(event)
                     }
                 }
