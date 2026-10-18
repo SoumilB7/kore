@@ -355,12 +355,13 @@ package final class InputDriver {
     }
 
     /// The menu item a key equivalent matches. Items with a target are performed by the menu; an
-    /// item that goes up the responder chain (Undo, Copy, Paste, Select All) is sent to the storyline
-    /// window's first responder when it takes it, since AppKit would send it to the key window's.
+    /// item that goes up the responder chain (Undo, Copy, Paste, Select All) goes to the first
+    /// responder up the storyline window's chain that takes it, since AppKit would send it up the
+    /// key window's.
     private func menu(_ event: NSEvent, in window: NSWindow) -> Bool {
         guard let main = NSApp.mainMenu else { return false }
         if let item = Self.item(in: main, matching: event), item.target == nil, let action = item.action,
-            let target = NSApp.target(forAction: action, to: window.firstResponder, from: item) as AnyObject?
+            let target = Self.target(for: action, in: window)
         {
             // The item's own enabled state was last worked out for another window's responder:
             // the storyline window's own responder says whether it takes the action now.
@@ -369,6 +370,21 @@ package final class InputDriver {
             if valid, NSApp.sendAction(action, to: target, from: item) { return true }
         }
         return main.performKeyEquivalent(with: event)
+    }
+
+    /// What takes a nil-targeted action for the window: the first responder or one up its chain
+    /// (the window among them), then the window's delegate, the app and its delegate.
+    /// `NSApp.target(forAction:to:from:)` hands back a target it's given whether or not it takes
+    /// the action, and sending one an action it doesn't take raises (with the caret in a text
+    /// field, Undo is the window's, not the field editor's).
+    private static func target(for action: Selector, in window: NSWindow) -> AnyObject? {
+        var responder = window.firstResponder
+        while let current = responder {
+            if current.responds(to: action) { return current }
+            responder = current.nextResponder
+        }
+        let rest: [AnyObject?] = [window.delegate, NSApp, NSApp.delegate]
+        return rest.lazy.compactMap { $0 }.first { $0.responds(to: action) }
     }
 
     private static func item(in menu: NSMenu, matching event: NSEvent) -> NSMenuItem? {
