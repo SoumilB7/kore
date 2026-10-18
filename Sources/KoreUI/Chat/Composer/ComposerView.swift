@@ -72,9 +72,14 @@ struct ComposerView: View {
                     // In the menu's place, its height at most the room above the box.
                     let box = boxFrame.value
                     UsagePopup(
-                        state: chat.usage, wording: chat.provider.usage, width: box.width,
+                        state: chat.usage, wording: chat.provider.usage,
                         room: max(box.minY - Size.titleRow - Space.lg - Space.xxxl, Size.usageMinRoom)
                     )
+                    // What reaches the draft without a key the popup sees (a paste the composer
+                    // takes first, a menu's Paste, dictation) closes it too; it shows only from
+                    // here, so the change that opened it never counts.
+                    .onChange(of: chat.draft) { chat.usage.close() }
+                    .onChange(of: chat.attachments.count) { chat.usage.close() }
                     .padding(.bottom, Space.lg)
                     .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 }

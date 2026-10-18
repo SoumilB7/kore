@@ -5,7 +5,7 @@ import Testing
 
 @testable import KoreUI
 
-/// The usage popup's wording and layout, and its / menu entry.
+/// The usage popup's wording, and its / menu entry.
 @Suite("Usage popup")
 @MainActor
 struct UsagePopupTests {
@@ -41,16 +41,39 @@ struct UsagePopupTests {
         #expect(UsageText.stamp(nil, now: Self.now) == nil)
     }
 
-    @Test func columnsFitTheWidthUpToTheBars() {
-        // clamp(1, ⌊(W − 24 + 16) / 196⌋, bars)
-        #expect(UsageText.columns(width: 552, bars: 4) == 2)
-        #expect(UsageText.columns(width: 600, bars: 4) == 3)
-        #expect(UsageText.columns(width: 760, bars: 4) == 3)
-        #expect(UsageText.columns(width: 1000, bars: 5) == 5)
-        #expect(UsageText.columns(width: 1000, bars: 2) == 2)
-        #expect(UsageText.columns(width: 300, bars: 4) == 1)
-        #expect(UsageText.columns(width: 0, bars: 3) == 1)
-        #expect(UsageText.columns(width: 760, bars: 0) == 1)
+    @Test func aRowsResetIsShort() {
+        let later = { (seconds: Double) in UsageText.resetsShort(Self.now.addingTimeInterval(seconds), now: Self.now) }
+        #expect(later(12 * 60) == "12m")
+        #expect(later(3 * 3600 - 300) == "3h")
+        #expect(later(6 * 86400 + 4 * 3600) == "6d")
+        #expect(later(30) == "now")
+        #expect(later(-600) == "now")
+        #expect(UsageText.resetsShort(nil, now: Self.now) == "")
+    }
+
+    @Test func aRowsTooltipIsTheResetsClockTime() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let locale = Locale(identifier: "en_US")
+        // 2027-01-15 08:00 UTC, a Friday.
+        let at = { (seconds: Double) in
+            UsageText.resetsAt(Self.now.addingTimeInterval(seconds), now: Self.now, calendar: calendar, locale: locale)
+                .replacingOccurrences(of: "\u{202F}", with: " ")
+        }
+        #expect(at(2 * 3600 + 600) == "Resets today 10:10 AM")
+        #expect(at(6 * 86400 + 3600) == "Resets Thu 9:00 AM")
+        #expect(at(26 * 86400) == "Resets Feb 10")
+        #expect(UsageText.resetsAt(nil, now: Self.now) == "")
+    }
+
+    @Test func titlesLoseTheirWindowAndTheWordLimit() {
+        #expect(UsageText.label("Session (5hr)") == "Session")
+        #expect(UsageText.label("Weekly (7 day)") == "Weekly")
+        #expect(UsageText.label("Weekly Fable") == "Weekly Fable")
+        #expect(UsageText.label("5h limit") == "5h")
+        #expect(UsageText.label("Weekly limit · gpt-6-luna") == "Weekly · gpt-6-luna")
+        #expect(UsageText.label("Limit") == "Limit")
+        #expect(UsageText.label("Limit · gpt-6-luna") == "Limit · gpt-6-luna")
     }
 
     @Test func fillTurnsAsTheLimitNears() {
@@ -60,13 +83,21 @@ struct UsagePopupTests {
         #expect(Theme.usageFill(1) == Theme.danger)
     }
 
-    @Test func theHeaderAndExtrasLines() {
-        let both = PlanAccount(email: "you@example.com", organization: "Example Org", access: .plan)
-        #expect(UsageText.who(both) == "you@example.com · Example Org")
-        #expect(UsageText.who(PlanAccount(email: "you@example.com", access: .plan)) == "you@example.com")
+    @Test func theAccountLeavesOutAPersonalOrg() {
+        let account = { (org: String?) in UsageText.who(PlanAccount(email: "you@example.com", organization: org, access: .plan)) }
+        #expect(account("Acme Labs") == "you@example.com · Acme Labs")
+        #expect(account(nil) == "you@example.com")
+        #expect(account("") == "you@example.com")
+        #expect(account("you@example.com") == "you@example.com")
+        #expect(account("You@Example.com's Organization") == "you@example.com")
+        #expect(account("you@example.com\u{2019}s organization") == "you@example.com")
+        #expect(UsageText.who(PlanAccount(organization: "Acme Labs", access: .plan)) == "Acme Labs")
+        #expect(UsageText.who(PlanAccount(access: .plan)) == "")
+    }
+
+    @Test func theExtrasLine() {
         let extras = [PlanExtra("Credits", "47,161.94"), PlanExtra(nil, "2 full resets available")]
         #expect(UsageText.extras(extras) == "Credits 47,161.94 · 2 full resets available")
-        #expect(String(UsageText.extrasText(extras).characters) == "Credits 47,161.94 · 2 full resets available")
     }
 
     @Test func theWordingForEachCLI() {

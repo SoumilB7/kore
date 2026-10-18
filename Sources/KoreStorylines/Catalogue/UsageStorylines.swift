@@ -5,9 +5,10 @@ import KoreUI
 
 /// The / menu's Usage: first on a bare "/" (in place of the CLI's own usage command), picked
 /// with Return it takes the "/" out and opens the popup where the menu was, with no chip and
-/// nothing sent. The popup shows the plan's limits with their resets and the extras line. Esc
-/// closes it with the composer still focused; reopened from a typed "/lim" mid-text, typing
-/// closes it and the key lands in the field; a click outside closes it too.
+/// nothing sent. The popup shows the plan's limits, their titles shortened, with their resets
+/// and the extras line. Esc closes it with the composer still focused; reopened from a typed
+/// "/lim" mid-text, typing closes it and the key lands in the field; a click outside closes it
+/// too, and so does a paste that reaches the draft without a key.
 final class UsagePopup: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
 
@@ -85,6 +86,7 @@ final class UsagePopup: ChatStoryline {
             ? ["5h limit · 84% · Resets in 2h", "Weekly limit · 6% · Resets in 4d"]
             : ["Session (5hr) · 30% · Resets in 3h", "Weekly (7 day) · 44% · Resets in 6d", "Weekly Fable · 0% · Resets in 6d"]
         let titles = bars.compactMap { $0.components(separatedBy: " · ").first }
+        let shown = codex ? ["5h", "Weekly"] : ["Session", "Weekly", "Weekly Fable"]
         let header = codex ? "ChatGPT Pro Lite · you@example.com" : "Claude Max · you@example.com · Example Org"
         let composer = { (what: String, draft: String) in
             Expect(what, found: { "chip \($0.app.chat?.command?.name ?? "none"), draft “\($0.app.chat?.draft ?? "?")”" }) { story in
@@ -115,6 +117,10 @@ final class UsagePopup: ChatStoryline {
             },
         ]
         steps += titles.map { ExpectElement(.id(StoryID.Composer.usageLimit($0))) }
+        steps.append(
+            Expect("the rows' titles shortened", found: { $0.app.chat?.storyUsageTitles.joined(separator: " | ") }) {
+                $0.app.chat?.storyUsageTitles == shown
+            })
         steps += [
             Expect("the extras line", found: { $0.app.chat?.storyUsageExtras }) { story in
                 let extras = story.app.chat?.storyUsageExtras ?? ""
@@ -158,6 +164,14 @@ final class UsagePopup: ChatStoryline {
             Expect("nothing sent") { story in
                 try !story.scriptedBackend().log.contains { if case .send = $0 { true } else { false } }
             },
+            // A paste closes it as typing does, though no key reaches the popup.
+            Press(.id(StoryID.Composer.slash)),
+            Press(row("usage")),
+            WaitForElement(popup),
+            WaitForFocus(.id(StoryID.Composer.field)),
+            PasteText("pasted"),
+            ExpectElement(popup, .absent),
+            composer("the paste in the field", "fix the bug x pasted"),
         ]
         if codex {
             // A "$" lists skills alone.

@@ -95,7 +95,7 @@ extension PlanReading {
     }
 }
 
-/// The popup's wording and layout arithmetic.
+/// The popup's wording.
 enum UsageText {
     /// Whole percents, rounded down: 29.9% used is "29%".
     static func percent(_ used: Double) -> String { "\(Int(max(used, 0).rounded(.down)))%" }
@@ -105,14 +105,34 @@ enum UsageText {
 
     /// "Resets in 3h", "Resets in 12m", "Resets in 6d", "Resets soon"; nothing without a time.
     static func resets(_ date: Date?, now: Date) -> String {
+        let short = resetsShort(date, now: now)
+        return short.isEmpty ? "" : short == "now" ? "Resets soon" : "Resets in \(short)"
+    }
+
+    /// The row's reset after its ↻: "12m", "3h", "6d", "now" under a minute; nothing without a time.
+    static func resetsShort(_ date: Date?, now: Date) -> String {
         guard let date else { return "" }
         let seconds = date.timeIntervalSince(now)
-        if seconds < 60 { return "Resets soon" }
+        if seconds < 60 { return "now" }
         let minutes = Int((seconds / 60).rounded())
-        if minutes < 60 { return "Resets in \(minutes)m" }
+        if minutes < 60 { return "\(minutes)m" }
         let hours = Int((seconds / 3600).rounded())
-        if hours < 24 { return "Resets in \(hours)h" }
-        return "Resets in \(Int((seconds / 86400).rounded()))d"
+        if hours < 24 { return "\(hours)h" }
+        return "\(Int((seconds / 86400).rounded()))d"
+    }
+
+    /// The row's tooltip, the reset as a clock time: "Resets today 4:10 PM", "Resets Thu 9:00 AM"
+    /// within the week, "Resets Nov 10" past it; nothing without a time.
+    static func resetsAt(_ date: Date?, now: Date, calendar: Calendar = .autoupdatingCurrent, locale: Locale = .autoupdatingCurrent)
+        -> String
+    {
+        guard let date else { return "" }
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        let time = date.formatted(style.hour().minute())
+        if calendar.isDate(date, inSameDayAs: now) { return "Resets today \(time)" }
+        let week = calendar.date(byAdding: .day, value: 7, to: calendar.startOfDay(for: now)) ?? now
+        if date > now, date < week { return "Resets \(date.formatted(style.weekday(.abbreviated))) \(time)" }
+        return "Resets \(date.formatted(style.month(.abbreviated).day()))"
     }
 
     /// "as of 4 min ago"; nil for a reading under a minute old.
@@ -125,79 +145,72 @@ enum UsageText {
         return "as of \(minutes / (24 * 60)) d ago"
     }
 
-    /// clamp(1, ⌊(W − 24 + 16) / (180 + 16)⌋, bars) for a popup `width` wide: its padding off,
-    /// then as many columns of at least `usageColumnMin` as fit with their gaps.
-    static func columns(width: CGFloat, bars: Int) -> Int {
-        let inner = width - Inset.block.leading - Inset.block.trailing
-        let fit = Int(((inner + Space.xxxl) / (Size.usageColumnMin + Space.xxxl)).rounded(.down))
-        return min(max(fit, 1), max(bars, 1))
+    /// The plan name's tooltip: "you@example.com", with " · Acme Labs" only for an org that says
+    /// more than the address (not a personal "you@example.com's Organization").
+    static func who(_ account: PlanAccount) -> String {
+        let email = account.email ?? ""
+        let org = account.organization.flatMap { distinct($0, from: email) ? $0 : nil }
+        return [email, org ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// "you@example.com · Acme Labs".
-    static func who(_ account: PlanAccount) -> String {
-        [account.email, account.organization].compactMap { $0 }.joined(separator: " · ")
+    private static func distinct(_ org: String, from email: String) -> Bool {
+        let org = org.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+        let email = email.lowercased()
+        return !org.isEmpty && org != email && org != email + "'s organization"
+    }
+
+    /// A limit's title as the row shows it, without its window in brackets or the word "limit":
+    /// "Session (5hr)" is "Session", "Weekly limit · gpt-6-luna" "Weekly · gpt-6-luna". Codex's
+    /// bare "Limit" stays.
+    static func label(_ title: String) -> String {
+        var label = title
+        if let open = label.range(of: " ("), let close = label[open.upperBound...].firstIndex(of: ")") {
+            label.removeSubrange(open.lowerBound...close)
+        }
+        if label.hasSuffix(" limit") {
+            label.removeLast(" limit".count)
+        } else if let limit = label.range(of: " limit · ") {
+            label.replaceSubrange(limit, with: " · ")
+        }
+        return label.isEmpty ? title : label
     }
 
     /// "Credits 47,161.94 · 2 full resets available".
     static func extras(_ extras: [PlanExtra]) -> String {
         extras.map { [$0.key, $0.value].compactMap { $0 }.joined(separator: " ") }.joined(separator: " · ")
     }
-
-    /// The same line, its keys in the secondary colour.
-    static func extrasText(_ extras: [PlanExtra]) -> AttributedString {
-        var line = AttributedString()
-        for (index, extra) in extras.enumerated() {
-            if index > 0 { line += AttributedString(" · ") }
-            if let key = extra.key {
-                var part = AttributedString(key + " ")
-                part.foregroundColor = Theme.secondary
-                line += part
-            }
-            line += AttributedString(extra.value)
-        }
-        return line
-    }
 }
 
-/// The / menu's Usage, in the menu's place over the chat (variant B of the design): the plan,
-/// who's signed in and the freshness on one line with the link to manage usage, then a bar per
-/// limit in columns that fit the width, then one caption of extras. Opaque, no shadow. Esc
-/// closes it and goes no further; a click outside or typing closes it and goes on, so the
-/// composer keeps focus throughout (the context card's monitor pattern).
+/// The / menu's Usage, in the menu's place over the chat (A · Ledger in usage-popup-calm.html):
+/// a card at most `usagePopupMax` wide at the composer's leading edge. The plan name (the account
+/// on hover), the freshness and the ↗ to manage usage, then one row per limit (title, bar,
+/// percent, ↻ reset), then one caption of extras. Opaque, no shadow. Esc closes it and goes no
+/// further; a click outside or typing closes it and goes on, so the composer keeps focus
+/// throughout (the context card's monitor pattern).
 struct UsagePopup: View {
     let state: UsageState
     let wording: UsageWording
     /// The most it may be tall: the room above the composer.
     let room: CGFloat
-    @StateObject private var width: Local<CGFloat>
     @StateObject private var frame = Held(CGRect.zero)
     @StateObject private var window = Held<NSWindow?>(nil)
     @StateObject private var monitor = Held<Any?>(nil)
 
-    init(state: UsageState, wording: UsageWording, width: CGFloat, room: CGFloat) {
-        self.state = state
-        self.wording = wording
-        self.room = room
-        // The composer's width from the first pass, so the grid opens at its final size.
-        _width = StateObject(wrappedValue: Local(width))
-    }
-
     var body: some View {
         ScrollView {
             content
-                .padding(Inset.block)
+                .padding(Inset.well)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.automatic)
         .frame(maxHeight: room)
         .fixedSize(horizontal: false, vertical: true)
         .panel(.panel)
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-            frame.value = $0
-            width.value = $0.width
-        }
+        .frame(maxWidth: Size.usagePopupMax)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
         .background(WindowReader { window.value = $0 })
         .storyID(StoryID.Composer.usage)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
         }
@@ -228,20 +241,30 @@ struct UsagePopup: View {
 
     // MARK: Header
 
+    /// The plan, the freshness and the ↗, as high as the ↗.
     private func header(_ account: PlanAccount?) -> some View {
-        let who = account.map(UsageText.who) ?? ""
-        return HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-            Text(account?.plan ?? " ").font(TextStyle.title).foregroundStyle(Theme.text).lineLimit(1).layoutPriority(1)
-            Text(who)
-                .font(TextStyle.label)
-                .foregroundStyle(Theme.secondary)
+        HStack(spacing: Space.md) {
+            Text(account?.plan ?? " ")
+                .font(TextStyle.title)
+                .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(who)
+                .help(account.map(UsageText.who) ?? "")
             Spacer(minLength: 0)
             freshness
-            if let url = account?.manage { link(url) }
+            if let url = account?.manage {
+                IconButton(
+                    symbol: "arrow.up.right", kind: .mini, font: Glyph.chevron, help: "Manage usage on \(url.host() ?? url.absoluteString)"
+                ) {
+                    NSWorkspace.shared.open(url)
+                    state.close()
+                }
+                // The glyph, not its box, on the rows' trailing edge.
+                .padding(.trailing, -Space.sm)
+                .storyID(StoryID.Composer.usage.part(.open))
+            }
         }
+        .frame(minHeight: Size.MessageActions.button)
     }
 
     /// The spinner while the first reading loads; "as of …" while an older one shows.
@@ -253,25 +276,6 @@ struct UsagePopup: View {
         }
     }
 
-    private func link(_ url: URL) -> some View {
-        Button {
-            NSWorkspace.shared.open(url)
-            state.close()
-        } label: {
-            HStack(spacing: Space.xs) {
-                if width.value >= Size.usageLinkFull { Text("Manage usage") }
-                Image(systemName: "arrow.up.right").font(Glyph.chevron)
-            }
-            .font(TextStyle.label)
-            .foregroundStyle(Theme.accent)
-            .fixedSize()
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Manage usage on \(url.host() ?? url.absoluteString)")
-        .storyID(StoryID.Composer.usage.part(.open))
-    }
-
     // MARK: Limits
 
     @ViewBuilder private var limits: some View {
@@ -281,46 +285,78 @@ struct UsagePopup: View {
                 .font(TextStyle.caption)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, state.reading == nil ? 0 : Space.sm)
+                .padding(.top, state.reading == nil ? 0 : Space.xs)
         }
         let bars = state.reading?.limits?.bars
         // Loading with nothing kept: the usual rows, empty.
         let rows = bars.map { $0.map(Optional.some) } ?? (state.status == .loading ? wording.rows.map { _ in nil } : [])
         if !rows.isEmpty {
-            let columns = UsageText.columns(width: width.value, bars: rows.count)
-            VStack(alignment: .leading, spacing: Space.lg) {
-                ForEach(Array(stride(from: 0, to: rows.count, by: columns)), id: \.self) { start in
-                    HStack(alignment: .top, spacing: Space.xxxl) {
-                        ForEach(start..<start + columns, id: \.self) { index in
-                            if index < rows.count {
-                                LimitCell(limit: rows[index], placeholder: wording.rows.indices.contains(index) ? wording.rows[index] : "")
-                            } else {
-                                Color.clear.frame(maxWidth: .infinity, maxHeight: 0)  // lint:allow an empty slot, not a size
-                            }
-                        }
-                    }
+            let now = Date()
+            Grid(alignment: .leading, horizontalSpacing: Space.lg, verticalSpacing: Space.sm) {
+                ForEach(rows.indices, id: \.self) { index in
+                    row(rows[index], placeholder: wording.rows.indices.contains(index) ? wording.rows[index] : "", now: now)
                 }
             }
-            .padding(.top, Space.lg)
+            .padding(.top, Space.sm)
             .opacity(unavailable == nil ? 1 : Theme.dimmed)
         }
         let extras = state.reading?.limits?.extras ?? []
         if !extras.isEmpty {
-            Text(UsageText.extrasText(extras))
+            let line = UsageText.extras(extras)
+            Text(line)
                 .font(TextStyle.caption)
-                .foregroundStyle(Theme.text)
+                .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(UsageText.extras(extras))
-                .padding(.top, Space.lg)
+                .help(line)
+                .padding(.top, Space.md)
                 .opacity(unavailable == nil ? 1 : Theme.dimmed)
+        }
+    }
+
+    /// One limit: its shortened title, the bar, the percent and the ↻ reset, the reset's clock
+    /// time on hover. Nil while loading: the title it usually has, an empty track and "—".
+    private func row(_ limit: PlanLimit?, placeholder: String, now: Date) -> some View {
+        let reset = limit.map { UsageText.resetsShort($0.resetsAt, now: now) } ?? ""
+        let help = limit.map { UsageText.resetsAt($0.resetsAt, now: now) } ?? ""
+        return GridRow {
+            CappedWidth(cap: Size.usageTitleMax) {
+                Text(UsageText.label(limit?.title ?? placeholder))
+                    .font(TextStyle.label)
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(minHeight: Size.contextCardLine)
+            .help(help)
+                .storyID(limit.map { StoryID.Composer.usageLimit($0.title) })
+            LimitBar(fraction: limit.map { UsageText.fraction($0.used) } ?? 0)
+                .frame(minWidth: Size.usageBarMin, maxWidth: .infinity)
+                .help(help)
+            Text(limit.map { UsageText.percent($0.used) } ?? "—")
+                .font(TextStyle.label.monospacedDigit())
+                .foregroundStyle(Theme.secondary)
+                .lineLimit(1)
+                .gridColumnAlignment(.trailing)
+                .help(help)
+            // Blank while loading or without a time, still as wide as a short time.
+            HStack(spacing: Space.xxs) {
+                Image(systemName: "arrow.clockwise").font(Glyph.chevron).foregroundStyle(Theme.tertiary)
+                Text(reset.isEmpty ? "00m" : reset).font(TextStyle.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+            }
+            .lineLimit(1)
+            .fixedSize()
+            .opacity(reset.isEmpty ? 0 : 1)
+            .help(help)
         }
     }
 
     // MARK: Dismissal
 
     /// Esc and Return close it and go no further (Return never sends from under it); any other
-    /// key closes it and goes on to the field; a click outside it closes it and goes on.
+    /// key closes it and goes on to the field; a click outside it closes it and goes on. What
+    /// reaches the draft without a key here (a paste the composer takes first, a menu's Paste,
+    /// dictation) closes it from the composer, as the draft changes.
     private func handle(_ event: NSEvent) -> NSEvent? {
         guard let window = window.value, event.window === window else { return event }
         if event.type == .keyDown {
@@ -335,43 +371,39 @@ struct UsagePopup: View {
     }
 }
 
-/// One limit: its title and percent, the bar, and when it resets. Nil while loading: the title
-/// it usually has, an empty track and "—".
-private struct LimitCell: View {
-    let limit: PlanLimit?
-    let placeholder: String
-    /// The bar's fill as drawn: it moves to a new value on its own, so the grid's reflow when
-    /// more bars arrive isn't animated with it.
+/// Its content as wide as it would be, up to `cap`, never wider: the grid's title column is its
+/// longest title's width rather than all it's offered, so the bars take the rest.
+private struct CappedWidth: SwiftUI.Layout {
+    let cap: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let width = min(content.sizeThatFits(.unspecified).width, cap, proposal.width ?? .infinity)
+        return content.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+/// A limit's bar, its fill as drawn: it moves to a new value on its own, so a reading landing
+/// fills the bars in place.
+private struct LimitBar: View {
+    let fraction: Double
     @StateObject private var shown: Local<Double>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(limit: PlanLimit?, placeholder: String) {
-        self.limit = limit
-        self.placeholder = placeholder
-        _shown = StateObject(wrappedValue: Local(limit.map { UsageText.fraction($0.used) } ?? 0))
+    init(fraction: Double) {
+        self.fraction = fraction
+        _shown = StateObject(wrappedValue: Local(fraction))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: Space.xl) {
-                Text(limit?.title ?? placeholder).font(TextStyle.labelMedium).lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: 0)
-                Text(limit.map { UsageText.percent($0.used) } ?? "—").font(TextStyle.label.monospacedDigit()).lineLimit(1)
+        UsageBar(fraction: shown.value)
+            .onChange(of: fraction) { _, now in
+                if reduceMotion { shown.value = now } else { withAnimation(Motion.contextArc) { shown.value = now } }
             }
-            .foregroundStyle(Theme.text)
-            UsageBar(fraction: shown.value)
-                .padding(.top, Space.xs)
-                .padding(.bottom, Size.usageBarBelow)
-            Text(limit.map { UsageText.resets($0.resetsAt, now: Date()) } ?? " ")
-                .font(TextStyle.caption)
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .storyID(limit.map { StoryID.Composer.usageLimit($0.title) })
-        .onChange(of: limit.map { UsageText.fraction($0.used) } ?? 0) { _, now in
-            if reduceMotion { shown.value = now } else { withAnimation(Motion.contextArc) { shown.value = now } }
-        }
     }
 }
 

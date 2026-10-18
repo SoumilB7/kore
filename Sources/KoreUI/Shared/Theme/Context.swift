@@ -69,12 +69,12 @@ extension Theme {
 }
 
 extension Size {
-    /// The narrowest a limit's column gets before the grid drops one.
-    static let usageColumnMin: CGFloat = 180
-    /// Below a limit's bar, before its reset line.
-    static let usageBarBelow: CGFloat = 3
-    /// Narrower than this, "Manage usage ↗" is the arrow alone.
-    static let usageLinkFull: CGFloat = 380
+    /// The popup's widest: narrower composers give it their width.
+    static let usagePopupMax: CGFloat = 420
+    /// A limit's title column at its widest; longer titles truncate.
+    static let usageTitleMax: CGFloat = 120
+    /// A limit's bar at its narrowest.
+    static let usageBarMin: CGFloat = 48
     /// The least height the popup keeps however little room the window has above the composer.
     static let usageMinRoom: CGFloat = 72
 }
