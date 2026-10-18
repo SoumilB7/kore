@@ -77,18 +77,37 @@ package enum Attachments {
 
     // MARK: Sources
 
-    /// Files copied in Finder, else an image with no text alongside it (e.g. a screenshot);
-    /// nil means "paste as text".
+    /// Files copied in Finder, else a copied image (a screenshot, or one from a browser, Slack,
+    /// Preview or Photos); nil means "paste as text".
     @MainActor static func fromPasteboard(_ pasteboard: NSPasteboard) -> [URL]? {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL], !urls.isEmpty {
             return urls
         }
-        guard pasteboard.string(forType: .string) == nil,
-            let data = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff),
-            let url = saveImage(data)
+        guard !isText(pasteboard.string(forType: .string)), let data = imageData(pasteboard), let url = saveImage(data)
         else { return nil }
         return [url]
+    }
+
+    /// The image on a pasteboard, in the first of its types an image can be read from (PNG,
+    /// TIFF, JPEG, HEIC, …).
+    static func imageData(_ pasteboard: NSPasteboard) -> Data? {
+        let readable = Set(NSBitmapImageRep.imageTypes)
+        guard let type = pasteboard.types?.first(where: { readable.contains($0.rawValue) }) else { return nil }
+        return pasteboard.data(forType: type)
+    }
+
+    /// Whether the text copied alongside an image is what was copied: not when it's only the
+    /// image's address or file name (browsers and Slack add those), but a spreadsheet's or an
+    /// editor's text that comes with a picture of itself is.
+    static func isText(_ string: String?) -> Bool {
+        let text = (string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        guard !text.contains(where: \.isNewline) else { return true }
+        if let scheme = URL(string: text)?.scheme?.lowercased(), ["http", "https", "file", "data"].contains(scheme) {
+            return false
+        }
+        return UTType(filenameExtension: (text as NSString).pathExtension)?.conforms(to: .image) != true
     }
 
     /// Dropped files or image data, delivered on the main actor.

@@ -16,6 +16,8 @@ struct ComposerView: View {
     /// composer appears doesn't draw it again.
     @StateObject private var window = Held<NSWindow?>(nil)
     @StateObject private var pasteMonitor = Held<Any?>(nil)
+    /// The chat in the box now, for the monitor: it was made with the first one.
+    @StateObject private var pasteChat = Held<Chat?>(nil)
     @StateObject private var dropTargeted = Local(false)
     /// Where the caret is, so Shift+Return can put a line break there: in that chat's draft.
     @StateObject private var caret = Local(Caret(chat: nil, selection: nil))
@@ -49,6 +51,7 @@ struct ComposerView: View {
         .background(WindowReader { window.value = $0 })
         .animation(Motion.fadeSlow, value: chat.controls.activeMode.id)
         .onAppear {
+            pasteChat.value = chat
             pasteMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { pasteAttachments($0) }
         }
         .onDisappear {
@@ -57,6 +60,7 @@ struct ComposerView: View {
         }
         .onReceive(Self.undoChanges) { draftFromUndo($0) }
         .onChange(of: chat.id) {
+            pasteChat.value = chat
             // The caret goes to the end of this chat's draft, ready to go on typing.
             caret.value = Caret(chat: chat.id, selection: TextSelection(insertionPoint: chat.draft.endIndex))
             slashSelection.value = 0
@@ -198,7 +202,7 @@ struct ComposerView: View {
     private func pasteAttachments(_ event: NSEvent) -> NSEvent? {
         guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
             event.charactersIgnoringModifiers == "v",
-            let window = window.value, event.window === window, focused.wrappedValue,
+            let window = window.value, event.window === window, focused.wrappedValue, let chat = pasteChat.value,
             let urls = Attachments.fromPasteboard(.general)
         else { return event }
         chat.attach(urls)
