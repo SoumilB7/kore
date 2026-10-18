@@ -106,7 +106,6 @@ private struct PathRow: View {
                     workspace: workspace)
             }
             Spacer(minLength: Space.md)
-            RendererToggle(document: document)
             if let touch = workspace.turnTouches[document.path] {
                 TurnMark(touch: touch) {
                     if let source = touch.sources.last {
@@ -115,6 +114,7 @@ private struct PathRow: View {
                     }
                 }
             }
+            RendererToggle(document: document)
         }
         .padding(.horizontal, Size.Editor.pathInset)
         .frame(height: Size.Editor.pathRow)

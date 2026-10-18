@@ -63,9 +63,18 @@ struct RendererContext {
     var reloadToken: Int
     /// The window's folder: links and web content stay inside it.
     var folder: URL
-    /// Links to other files open them in Kore tabs.
+    /// Links to other files open them in Kore tabs (a preview tab).
     var openURL: (URL) -> Void
     var zoom: CGFloat
+    /// The rendered file's facts for the status row ("1,204 rows · 12 columns · Comma").
+    var setFacts: ([String]) -> Void = { _ in }
+    /// The file couldn't be parsed: a renderer with a raw form opens the source with a notice
+    /// (and the caret on `line`, 1-based, when known).
+    var failed: (_ reason: String, _ line: Int?) -> Void = { _, _ in }
+    /// Switches the tab to the editor.
+    var showSource: () -> Void = {}
+    /// Switches to the editor with the file as plain text, past the editor's size limit.
+    var openAsText: () -> Void = {}
 }
 
 /// The renderers, in priority order: the first match owns the file.
@@ -85,7 +94,18 @@ final class FileRendering {
     /// Resolved for this URL (nil: not yet).
     private(set) var resolved: URL?
     /// The tab shows the editor although a renderer matches.
-    var showsRaw = false
+    var showsRaw = false {
+        didSet { if !showsRaw { failure = nil } }
+    }
+    /// The status row's facts while the renderer shows.
+    var facts: [String] = []
+    /// Why the renderer gave the file to the editor, shown over it.
+    var failure: Failure?
+
+    struct Failure: Equatable {
+        let reason: String
+        let line: Int?
+    }
 
     /// The renderer's view is up (not the editor or its states).
     var showsRenderer: Bool {

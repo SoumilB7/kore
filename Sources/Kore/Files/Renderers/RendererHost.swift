@@ -10,14 +10,27 @@ struct RendererHost<Fallback: View>: View {
 
     var body: some View {
         let rendering = document.rendering
-        Group {
+        VStack(spacing: 0) {
             if rendering.resolved != document.url {
                 Color.clear
             } else if rendering.showsRenderer, let renderer = rendering.renderer, let info = rendering.info {
                 renderer.makeView(info, context: context)
                     .id(renderer.id)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if !rendering.facts.isEmpty {
+                    Rule()
+                    RendererFacts(facts: rendering.facts)
+                }
             } else {
-                fallback().onAppear { document.loadIfNeeded() }
+                if let failure = rendering.failure {
+                    RendererNotice(message: failure.reason, action: ("Show Preview", { rendering.showsRaw = false }))
+                }
+                fallback()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onAppear {
+                        document.loadIfNeeded()
+                        if let line = rendering.failure?.line { goTo(line) }
+                    }
             }
         }
         .task(id: document.url) { await rendering.resolve(document.url) }
@@ -27,28 +40,39 @@ struct RendererHost<Fallback: View>: View {
 
     private var context: RendererContext {
         let workspace = workspace
+        let rendering = document.rendering
+        let document = document
         return RendererContext(
             reloadToken: document.revision, folder: workspace.folder,
-            openURL: { workspace.openFile($0) }, zoom: Zoom.shared.scale)
+            openURL: { workspace.openFile($0, preview: true) }, zoom: Zoom.shared.scale,
+            setFacts: { facts in if rendering.facts != facts { rendering.facts = facts } },
+            failed: { reason, line in
+                rendering.showsRaw = true
+                rendering.failure = .init(reason: reason, line: line)
+            },
+            showSource: { rendering.showsRaw = true },
+            openAsText: {
+                rendering.showsRaw = true
+                document.loadIfNeeded()
+                document.openAnyway()
+            })
+    }
+
+    /// The caret on the line the parser stopped at, once the editor is in the window.
+    private func goTo(_ line: Int) {
+        let editor = document.editor
+        DispatchQueue.main.async { editor.goTo(line: line) }
     }
 }
 
-/// The path row's Raw ⇄ Rendered switch (VS Code's "Show Source" / "Open Preview"). Nothing
-/// when the file's renderer has no raw form, or there's no renderer.
+/// The path row's Preview | Source switch. Nothing when the file's renderer has no raw form,
+/// or there's no renderer.
 struct RendererToggle: View {
     let document: FileDocument
 
     var body: some View {
-        let rendering = document.rendering
-        if rendering.hasToggle {
-            IconButton(
-                symbol: rendering.showsRaw ? "doc.text.magnifyingglass" : "chevron.left.forwardslash.chevron.right",
-                kind: .small, font: Chrome.label,
-                help: rendering.showsRaw ? "Open Preview (⇧⌘V)" : "Show Source (⇧⌘V)"
-            ) {
-                rendering.showsRaw.toggle()
-            }
-            .keyboardShortcut("v", modifiers: [.command, .shift])
+        if document.rendering.hasToggle {
+            PreviewSourceSwitch(rendering: document.rendering)
         }
     }
 }
