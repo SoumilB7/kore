@@ -32,7 +32,7 @@ enum ChatEvent: Sendable {
     // MARK: Transcript
 
     /// The user's own message. `Chat` dispatches it at send time; backends emit it only in replay.
-    case userMessage(text: String, attachments: [SentAttachment])
+    case userMessage(text: String, attachments: [SentAttachment], id: String? = nil)
     /// A message from another session, placed where `turn` began (at the end when nil).
     case peerMessage(from: String, text: String, turn: TurnID?)
     /// Appends to the block, creating it if the id is new.
@@ -65,6 +65,12 @@ enum ChatEvent: Sendable {
 
     /// The CLI process ended. The next send relaunches it and resumes the session.
     case exited(status: Int32)
+
+    /// The conversation was compacted here: a divider over its summary.
+    case compacted(at: Date)
+    /// Older conversation exists before the history shown (before a compaction):
+    /// `ChatBackend.earlier()` loads it.
+    case earlierHistory(Bool)
 
     /// A resumed session's past, in order, as one event so it lands as one change.
     case replayed([ChatEvent])

@@ -9,7 +9,9 @@ import Observation
 @MainActor @Observable
 final class TranscriptStore {
     struct Entry: Identifiable, Equatable {
-        enum Kind: Equatable { case user, answer, thinking, plan, tool, agent, notice, peer }
+        /// `divider`: a quiet line across the transcript ("Conversation compacted · 14:32",
+        /// "Forked from …"), off the timeline.
+        enum Kind: Equatable { case user, answer, thinking, plan, tool, agent, notice, peer, divider }
 
         let id = UUID()
         var kind: Kind
@@ -37,6 +39,9 @@ final class TranscriptStore {
         var duration: TimeInterval?
         /// A tool that only reads, searches or lists (grouped into "Explored N").
         var readOnly = false
+        /// A user message's id in its CLI's history (where a fork from it starts); nil for one
+        /// sent in this run.
+        var source: String?
 
         static func == (a: Self, b: Self) -> Bool {
             a.id == b.id && a.kind == b.kind && a.text == b.text && a.result == b.result && a.done == b.done
@@ -222,6 +227,10 @@ final class TranscriptStore {
     private(set) var folded: (turn: String, answer: String, seq: Int)?
     /// User turns before the shown window: the "Load earlier turns" row shows while any are.
     private(set) var hiddenTurns = 0
+    /// Conversation before what the CLI's history shows (before a compaction): once the shown
+    /// turns are all in view, the top row loads it.
+    private(set) var earlierAvailable = false
+    private(set) var loadingEarlier = false
     /// The files the latest turn changed, by path (`turnChanges()`).
     private(set) var fileTouches: [String: FileTouch] = [:]
 
@@ -288,6 +297,57 @@ final class TranscriptStore {
     }
 
     /// Twenty more user turns above the window.
+    /// The conversation before a compaction is being read.
+    func startLoadingEarlier() {
+        loadingEarlier = true
+    }
+
+    /// A page of earlier conversation goes above everything, shown; `more` says if there's
+    /// more before it. A turn that's running stays the running one.
+    func prepend(_ events: [ChatEvent], more: Bool) {
+        let later = entries
+        let (running, latest) = (current, latestTurn)
+        entries = []
+        position = [:]
+        batching = true
+        events.forEach(apply)
+        let added = entries.count { $0.kind == .user }
+        for entry in later {
+            position[entry.id] = entries.count
+            entries.append(entry)
+        }
+        batching = false
+        (current, latestTurn) = (running, latest)
+        for i in entries.indices where entries[i].startedAt == nil && (entries[i].kind == .thinking || entries[i].kind == .answer) {
+            entries[i].done = true
+        }
+        windowTurns += added
+        earlierAvailable = more
+        loadingEarlier = false
+        rebuild()
+    }
+
+    func earlierHistory(_ available: Bool) {
+        earlierAvailable = available
+    }
+
+    /// "Conversation compacted · 14:32" above the summary that follows.
+    func compacted(at date: Date) {
+        append(Entry(kind: .divider, text: "Conversation compacted · " + Self.time.string(from: date)))
+    }
+
+    /// After a fork's history: "Forked from "Refactor theme tokens"".
+    func forkedFrom(_ title: String) {
+        append(Entry(kind: .divider, text: "Forked from \u{201C}\(title)\u{201D}"))
+    }
+
+    private static let time: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        f.dateStyle = .none
+        return f
+    }()
+
     func loadEarlier() {
         windowTurns += 20
         rebuild()
@@ -518,9 +578,11 @@ final class TranscriptStore {
 
     // MARK: Content
 
-    func user(_ text: String, attachments: [Attachment]) {
+    func user(_ text: String, attachments: [Attachment], source: String? = nil) {
         if !batching { sentAt = Date() }
-        append(Entry(kind: .user, text: text, attachments: attachments))
+        var entry = Entry(kind: .user, text: text, attachments: attachments)
+        entry.source = source
+        append(entry)
         // Sending is drawn at once (the view scrolls to it).
         if !batching { rebuild() }
     }

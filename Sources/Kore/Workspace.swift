@@ -123,6 +123,38 @@ final class Workspace {
         activeID = tab.id
     }
 
+    /// A fork of `chat` from one of its user messages, in a new tab right after it: the history
+    /// before that message, the message itself in the composer (not sent), the same mode, and
+    /// "<title> (fork)" (the Claude Code extension's fork).
+    func fork(_ chat: Chat, _ start: ForkStart, text: String) {
+        let title = "\(chat.title) (fork)"
+        let fork: Chat
+        switch start {
+        case .pending(let point):
+            fork = Chat(
+                provider: chat.provider, folder: folder,
+                resume: SessionSummary(id: point.from, agent: chat.provider.historyAgent, title: title, updated: .now),
+                fork: point, forkedFrom: chat.title)
+        case .fresh:
+            fork = Chat(provider: chat.provider, folder: folder)
+        }
+        fork.controls.mode = chat.controls.mode
+        fork.controls.planMode = chat.controls.planMode
+        fork.draft = text
+        if let probe = DevSnapshot.forkSend {
+            // Test hook: send a probe in the fork, once its CLI is up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                fork.draft = probe
+                fork.send()
+            }
+        }
+        let tab = ChatTab()
+        tab.chat = fork
+        let index = tabs.firstIndex { $0.chat === chat && $0.agent == nil } ?? tabs.count - 1
+        tabs.insert(tab, at: index + 1)
+        activeID = tab.id
+    }
+
     /// The tab showing a chat itself (not one of its agents).
     func tab(of chat: Chat) -> ChatTab? {
         tabs.first { $0.chat === chat && $0.agent == nil }

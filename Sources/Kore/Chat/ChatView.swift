@@ -7,6 +7,8 @@ struct ChatView: View {
     let chat: Chat
     /// Opens one of the chat's sub-agents in its own tab.
     var openAgent: (String) -> Void = { _ in }
+    /// Opens a fork of the chat in a new tab.
+    var openFork: (ForkStart, String) -> Void = { _, _ in }
     @FocusState private var composerFocused: Bool
     @StateObject private var viewer = Local<ImageEditor?>(nil)
     /// The turn whose changes are open in the modal.
@@ -47,6 +49,20 @@ struct ChatView: View {
         .onAppear {
             composerFocused = true
             if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, pending: true) }
+            if let n = DevSnapshot.forkMessage, !chat.title.hasSuffix(" (fork)") {
+                // Test hook: fork from the nth user message once the history is in.
+                let actions = actions
+                Task { @MainActor in
+                    for _ in 0..<40 {
+                        let users = chat.transcript.entries.filter { $0.kind == .user }
+                        if users.indices.contains(n - 1) {
+                            actions.fork(users[n - 1])
+                            return
+                        }
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                }
+            }
         }
         .task { await chat.start() }
     }
@@ -67,6 +83,13 @@ struct ChatView: View {
         }
         actions.stopAgent = { chat.stopAgent($0) }
         actions.openAgent = openAgent
+        let openFork = openFork
+        actions.fork = { entry in
+            Task {
+                if let start = await chat.forkStart(entry) { openFork(start, entry.text) }
+            }
+        }
+        actions.loadEarlierConversation = { chat.loadEarlierConversation() }
         actions.folder = chat.folder
         return actions
     }

@@ -255,3 +255,33 @@ extension Layout {
         static let labelRoom: CGFloat = 200
     }
 }
+
+// MARK: Fork and earlier conversation (phase 10 look.md §4–§5)
+
+extension Size {
+    /// A user message's action button: 20 round, its glyph inset 3.
+    static let messageAction: CGFloat = 20
+    static let messageActionInset: CGFloat = 3
+    /// The fork menu: at least 200 wide; a row is about this tall (for flipping it above).
+    static let forkMenu: CGFloat = 220
+    static let forkMenuRow: CGFloat = 36
+}
+
+extension Inset {
+    static let forkMenuRow = EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
+}
+
+extension Space {
+    /// Between the action button and its menu.
+    static let menuGap: CGFloat = 4
+}
+
+extension Motion {
+    /// The action button showing and hiding; the menu fading in.
+    static let actionFade = Animation.easeOut(duration: 0.2)
+    static let menuFade = Animation.easeOut(duration: 0.1)
+    /// The action button pressed.
+    static let pressScale: CGFloat = 0.95
+    /// The action button while its message is under the pointer (1 on the button itself).
+    static let actionHint: Double = 0.7
+}

@@ -21,8 +21,8 @@ extension TranscriptStore {
         case .turnChanges(let id, let changes):
             turnChanges(id, changes)
 
-        case .userMessage(let text, let attachments):
-            user(text, attachments: attachments.map(Self.attachment))
+        case .userMessage(let text, let attachments, let id):
+            user(text, attachments: attachments.map(Self.attachment), source: id)
         case .peerMessage(let from, let text, let turn):
             peer(from: from, text: text, turn: turn)
         case .text(let block, let kind, let text, let agent):
@@ -71,6 +71,11 @@ extension TranscriptStore {
             if case .sub(let agent) = approval.agent { agentAsked(approval.id, agent: agent) }
         case .approvalWithdrawn(let id):
             approvalSettled(id)
+
+        case .compacted(let at):
+            compacted(at: at)
+        case .earlierHistory(let available):
+            earlierHistory(available)
 
         case .sessionIdentified, .titleChanged, .controlsLoaded, .modeChanged, .planModeChanged, .turnOrigin,
             .planReady:

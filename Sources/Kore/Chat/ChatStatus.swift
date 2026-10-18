@@ -39,7 +39,7 @@ final class ChatStatus {
             isRunning = true
         case .turnFinished, .exited:
             isRunning = false
-        case .userMessage(let text, _):
+        case .userMessage(let text, _, _):
             if firstPrompt == nil, !text.isEmpty { firstPrompt = text }
         case .peerMessage:
             heardFrom = true

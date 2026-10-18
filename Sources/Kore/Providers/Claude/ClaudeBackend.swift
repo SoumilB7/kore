@@ -18,13 +18,22 @@ final class ClaudeBackend: ChatBackend {
     private var resolvedTurns: Set<String> = []
     /// Background agents being followed through their transcripts.
     private var tails: [String: Task<Void, Never>] = [:]
+    /// Where the conversation before what's shown goes on (a compaction's logical parent).
+    private var earlierFrom: String?
+    /// A fork's new session got its "(fork)" title.
+    private var forkNamed = false
 
     var sessionId: String? { translator.sessionId }
+
+    /// The session whose transcript holds the history: a fork reads the one it was made from
+    /// until its own exists.
+    private var source: String? { sessionId ?? options.fork?.from }
 
     init(_ options: BackendOptions) {
         self.options = options
         (events, sink) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
-        translator = ClaudeTranslator(folder: options.folder, sessionId: options.resume?.id)
+        // A fork has no session of its own until its first message makes one.
+        translator = ClaudeTranslator(folder: options.folder, sessionId: options.fork == nil ? options.resume?.id : nil)
         replayPending = options.resume != nil
         titled = options.resume != nil
     }
@@ -39,19 +48,36 @@ final class ClaudeBackend: ChatBackend {
     }
 
     private func launch() async throws {
-        // A resumed session's past is read while the CLI starts (both take about a second on a
-        // long session), not after.
+        // A resumed session's past is read while the CLI starts, and shown as soon as it's read
+        // (a page takes a fraction of a second, the CLI a second or more).
         let folder = options.folder
-        let past = replayPending ? sessionId.map { id in Task.detached { ClaudeHistory.messages(sessionId: id, in: folder) } } : nil
-        let session = try await ClaudeSession.start(
-            .init(
-                cwd: options.folder, model: options.model,
-                permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
-                resume: sessionId))
+        // A fork not yet made: its history is the original's up to the fork point, and the CLI
+        // makes the new session (`--fork-session`) on the first message.
+        let fork = sessionId == nil ? options.fork : nil
+        let past: Task<ClaudeHistory.Page, Never>? =
+            if !replayPending {
+                nil
+            } else if let history = fork?.history {
+                Task { history }
+            } else {
+                source.map { id in Task.detached { ClaudeHistory.page(sessionId: id, in: folder, before: fork?.at) } }
+            }
+        // Only needed once: the transcript holds it from here.
+        options.fork?.history = nil
+        var launch = ClaudeSession.Options(
+            cwd: options.folder, model: options.model,
+            permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
+            resume: fork?.from ?? sessionId)
+        if let fork { launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at] }
+        let starting = Task { try await ClaudeSession.start(launch) }
         if let past {
             replayPending = false
-            yield(.replayed(translator.replay(await past.value)))
+            let page = await past.value
+            earlierFrom = page.earlier
+            yield(.replayed(translator.replay(page.messages)))
+            yield(.earlierHistory(earlierFrom != nil))
         }
+        let session = try await starting.value
         self.session = session
         // Ends when the process does; `close()` cancels it.
         pump = Task {
@@ -202,6 +228,35 @@ final class ClaudeBackend: ChatBackend {
         }
     }
 
+    // MARK: - Fork and earlier history
+
+    /// The history before the user message, as a fork the CLI makes on its first message
+    /// (`--fork-session --resume-session-at` the message before it, as the extension does).
+    func fork(message id: String?, text: String) async throws -> ForkStart {
+        guard let source else { return .fresh }
+        let folder = options.folder
+        // A replayed message is found by its id (also in an earlier page); one sent in this run,
+        // by its text from the end of the current history.
+        let page = await Task.detached { ClaudeHistory.page(sessionId: source, in: folder, before: id) }.value
+        let messages = page.messages
+        let target = id.flatMap { id in messages.lastIndex { $0["uuid"]?.string == id } }
+            ?? messages.lastIndex { $0["type"]?.string == "user" && ClaudeTranslator.promptText($0["message"]?["content"]) == text }
+        guard let target else { throw ForkError.notFound }
+        guard let before = messages[..<target].lastIndex(where: { !ClaudeHistory.isBoundary($0) }),
+            let at = messages[before]["uuid"]?.string
+        else { return .fresh }
+        let history = ClaudeHistory.Page(messages: Array(messages[...before]), earlier: page.earlier)
+        return .pending(ForkPoint(from: source, at: at, history: history))
+    }
+
+    func earlier() async -> (events: [ChatEvent], more: Bool)? {
+        guard let from = earlierFrom, let source else { return nil }
+        let folder = options.folder
+        let page = await Task.detached { ClaudeHistory.page(sessionId: source, in: folder, before: from, userTurns: 10) }.value
+        earlierFrom = page.earlier
+        return (translator.replay(page.messages), page.earlier != nil)
+    }
+
     // MARK: - Actions
 
     func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
@@ -224,6 +279,11 @@ final class ClaudeBackend: ChatBackend {
             translator.abandonTurn()
             flush()
             throw error
+        }
+        // A fork's session exists from its first message: give it its "(fork)" title.
+        if let title = options.forkTitle, !forkNamed {
+            forkNamed = true
+            try? await session.rename(title)
         }
         // Headless sessions don't name themselves; ask, as the VS Code extension does.
         if !titled && !text.isEmpty && !text.hasPrefix("/") {

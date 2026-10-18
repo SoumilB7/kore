@@ -13,7 +13,9 @@ struct WorkspaceView: View {
         } else if let chat = tab.chat, let agent = tab.agent {
             AgentTabView(chat: chat, id: agent, workspace: workspace).id(tab.id)
         } else if let chat = tab.chat {
-            ChatView(chat: chat) { workspace.openAgent($0, of: chat) }.id(chat.id)
+            ChatView(chat: chat, openAgent: { workspace.openAgent($0, of: chat) }, openFork: { start, text in
+                workspace.fork(chat, start, text: text)
+            }).id(chat.id)
         } else {
             EmptyTab(tab: tab, workspace: workspace).id(tab.id)
         }
@@ -154,6 +156,8 @@ private struct TabItem: View {
                         .foregroundStyle(isActive ? Theme.text : Theme.secondary)
                         .strikethrough(tab.file?.notice == .deleted)
                         .lineLimit(1)
+                        // A fork's title is cut in the middle, so " (fork)" always shows.
+                        .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
                     if let parent = duplicateParent {
                         Text(parent).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
                     }

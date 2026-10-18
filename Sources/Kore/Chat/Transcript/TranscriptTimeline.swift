@@ -30,6 +30,13 @@ struct TranscriptTimeline: View {
     @StateObject private var sticky = StickyTracker()
 
     private static let end = "transcript-end"
+    private static let loadRow = "transcript-load-row"
+    /// The timeline's own coordinate space: where the message menu is placed.
+    nonisolated static let space = "transcript"
+    /// A user message's open action menu, and its button's frame.
+    @StateObject private var menu = Local<(entry: TranscriptStore.Entry, frame: CGRect)?>(nil)
+    /// After earlier conversation is added: the section to keep where it was, and where.
+    @StateObject private var pendingAnchor = Held((id: String, point: UnitPoint)?.none)
     /// "At the bottom" within this, as in the extension.
     private static let atBottom: CGFloat = 50
     /// After a send, new content glides into view for this long.
@@ -39,9 +46,18 @@ struct TranscriptTimeline: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    // One row at the top, never two: earlier turns of this history first, then the
+                    // conversation before its compaction.
                     if store.hiddenTurns > 0 {
-                        LoadEarlierRow { loadEarlier(proxy) }
+                        LoadEarlierRow(label: "Load earlier turns") { loadEarlier(proxy) }
                             .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { loadRow.value = $0 }
+                    } else if store.earlierAvailable {
+                        LoadEarlierRow(
+                            label: "Load earlier conversation",
+                            loading: store.loadingEarlier ? "Loading earlier conversation…" : nil
+                        ) { loadEarlierConversation() }
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { loadRow.value = $0 }
+                            .id(Self.loadRow)
                     }
                     ForEach(store.sections) { section in
                         Section {
@@ -64,11 +80,15 @@ struct TranscriptTimeline: View {
                 .frame(maxWidth: column.maxWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
+            .overlay(alignment: .topLeading) { messageMenu }
+            .environment(\.messageMenuOpen, menu.value?.entry.id)
+            .coordinateSpace(.named(Self.space))
             .scrollPosition(binding)
             .defaultScrollAnchor(.bottom, for: .alignment)
             .onScrollPhaseChange { old, new, context in
                 if new == .interacting {
                     following.value = false
+                    menu.value = nil
                 } else if new == .idle, old == .interacting || old == .decelerating {
                     let g = context.geometry
                     following.value = g.contentOffset.y + g.containerSize.height >= g.contentSize.height - Self.atBottom
@@ -107,7 +127,15 @@ struct TranscriptTimeline: View {
                 geometry.value = (height, offset)
             }
             .onChange(of: store.folded?.seq) { pendingFold.value = true }
-            .onChange(of: store.tail, initial: true) { follow(proxy) }
+            .onChange(of: store.tail, initial: true) {
+                if let anchor = pendingAnchor.value {
+                    // Earlier conversation arrived above: keep the old first section in place.
+                    pendingAnchor.value = nil
+                    DispatchQueue.main.async { proxy.scrollTo(anchor.id, anchor: anchor.point) }
+                    return
+                }
+                follow(proxy)
+            }
             .onAppear {
                 restore.value = store.savedScroll
                 lastSend.value = store.sentAt
@@ -116,7 +144,32 @@ struct TranscriptTimeline: View {
                     following.value = false
                     position.value.scrollTo(edge: .top)
                     nudge.value &+= 1
-                    if load { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { loadEarlier(proxy) } }
+                    // Each press takes the top row: earlier turns, then earlier conversation.
+                    let env = ProcessInfo.processInfo.environment
+                    let times = Int(env["KORE_EARLIER_TIMES"] ?? "") ?? 1
+                    if let show = env["KORE_EARLIER_SHOW"] {
+                        // Then show the first divider, or the top.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2 + 2 * Double(load ? times : 0)) {
+                            let divider = store.sections.lazy.flatMap(\.items).first {
+                                if case .entry(let e) = $0.row { return e.kind == .divider }
+                                return false
+                            }
+                            if show == "divider", let divider {
+                                proxy.scrollTo(divider.id, anchor: .center)
+                            } else {
+                                proxy.scrollTo(Self.loadRow, anchor: .top)
+                            }
+                        }
+                    }
+                    for press in 0..<(load ? times : 0) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1 + 2 * Double(press)) {
+                            if store.hiddenTurns > 0 {
+                                loadEarlier(proxy)
+                            } else if store.earlierAvailable {
+                                loadEarlierConversation()
+                            }
+                        }
+                    }
                 }
             }
             .onDisappear {
@@ -154,6 +207,38 @@ struct TranscriptTimeline: View {
         DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: point) }
     }
 
+    /// The conversation before a compaction; it arrives later (read from disk), and the section
+    /// that was first then stays where it was.
+    private func loadEarlierConversation() {
+        following.value = false
+        if let anchor = store.sections.first?.id {
+            let height = visibleHeight.value
+            pendingAnchor.value = (anchor, UnitPoint(x: 0, y: height > 0 ? min(max(loadRow.value.maxY / height, 0), 1) : 0))
+        }
+        actions.loadEarlierConversation()
+    }
+
+    /// A message's action menu, under its button (above it near the bottom), over the rows.
+    @ViewBuilder private var messageMenu: some View {
+        if let open = menu.value {
+            ZStack(alignment: .topLeading) {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { menu.value = nil }
+                let below = open.frame.maxY + Space.menuGap
+                let y = below + Size.forkMenuRow > visibleHeight.value && visibleHeight.value > 0
+                    ? open.frame.minY - Space.menuGap - Size.forkMenuRow : below
+                MessageMenu {
+                    menu.value = nil
+                    actions.fork(open.entry)
+                }
+                .offset(x: max(0, open.frame.maxX - Size.forkMenu), y: y)
+                .transition(.opacity)
+            }
+            .animation(Motion.menuFade, value: open.entry.id)
+        }
+    }
+
     private var binding: Binding<ScrollPosition> {
         _ = nudge.value
         return Binding(get: { position.value }, set: { position.value = $0 })
@@ -164,6 +249,8 @@ struct TranscriptTimeline: View {
         var actions = reveal(proxy)
         let sticky = sticky
         actions.messageMoved = { id, y in sticky.row(id, y) }
+        let menu = menu
+        actions.messageMenu = { entry, frame in menu.value = (entry, frame) }
         return actions
     }
 

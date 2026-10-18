@@ -13,6 +13,12 @@ struct TranscriptActions {
     var openAgent: (String) -> Void = { _ in }
     /// Scrolls back to a sticky user message.
     var reveal: (String) -> Void = { _ in }
+    /// Forks the conversation from a user message (its action menu).
+    var fork: (TranscriptStore.Entry) -> Void = { _ in }
+    /// Loads the conversation before a compaction.
+    var loadEarlierConversation: () -> Void = {}
+    /// A user message's action button was pressed: its menu opens under this frame.
+    var messageMenu: (TranscriptStore.Entry, CGRect) -> Void = { _, _ in }
     /// A message row's bottom moved (for its pinned copy).
     var messageMoved: (String, CGFloat) -> Void = { _, _ in }
     var folder: URL?
@@ -26,7 +32,9 @@ struct TimelineRow: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item }
 
     var body: some View {
-        if case .message(let entry, let open, let expanded) = item.row {
+        if case .entry(let entry) = item.row, entry.kind == .divider {
+            DividerRow(text: entry.text)
+        } else if case .message(let entry, let open, let expanded) = item.row {
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         } else if case .spinner(_, let since, let claude) = item.row {
             // Not a timeline item: no dot, and the line doesn't run into it.
@@ -137,6 +145,9 @@ struct MessageHeader: View {
     @StateObject private var lines: Local<Int>
     /// The row's top in the visible area (for "Show less"), held without re-rendering.
     @StateObject private var top = Held(CGFloat(0))
+    /// Under the pointer: its action button shows.
+    @StateObject private var hovered = Local(false)
+    @Environment(\.messageMenuOpen) private var menuOpen
 
     init(
         entry: TranscriptStore.Entry, open: Bool = true, expanded: Bool = false, place: Place = .row,
@@ -170,6 +181,7 @@ struct MessageHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(StickyBackground(on: place == .sticky))
         .contentShape(Rectangle())
+        .onHover { if place == .row { hovered.value = $0 } }
         .onTapGesture {
             if entry.kind == .peer && place == .row {
                 actions.toggle(entry.id.uuidString)
@@ -232,6 +244,15 @@ struct MessageHeader: View {
                 }
                 .padding(Inset.userBox)
                 .panel(.userBox)
+                .overlay(alignment: .topTrailing) {
+                    // Centred on the box's top-right corner (phase 10 look.md §4).
+                    if place == .row {
+                        MessageActionButton(messageHovered: hovered.value, open: menuOpen == entry.id) { frame in
+                            actions.messageMenu(entry, frame)
+                        }
+                        .offset(x: Size.messageAction / 2, y: -Size.messageAction / 2)
+                    }
+                }
             }
         }
     }

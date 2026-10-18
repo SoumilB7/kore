@@ -218,6 +218,8 @@ final class CodexTranslator {
             out.append(.toolFinished(id: item.id, output: item.status ?? "done", isError: failed, agent: agent))
         case "subAgentActivity", "collabAgentToolCall":
             agentItem(item, agent: agent)
+        case "contextCompaction" where agent == .main:
+            out.append(.compacted(at: .now))
         default:
             break
         }
@@ -365,7 +367,11 @@ final class CodexTranslator {
                     let content = item.raw["content"] ?? []
                     let text = content.array?.compactMap { $0["text"]?.string }.joined(separator: "\n") ?? ""
                     let attachments = Self.attachments(content)
-                    if !text.isEmpty || !attachments.isEmpty { out.append(.userMessage(text: text, attachments: attachments)) }
+                    // The turn's id is where a fork from this message starts.
+                    if !text.isEmpty || !attachments.isEmpty { out.append(.userMessage(text: text, attachments: attachments, id: id)) }
+                } else if item.type == "contextCompaction" {
+                    // Its turn holds nothing else; resume keeps the turns before it.
+                    out.append(.compacted(at: Self.date(turn["startedAt"]) ?? .now))
                 } else {
                     itemStarted(item, agent: .main)
                     itemCompleted(item, agent: .main)

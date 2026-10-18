@@ -29,13 +29,25 @@ final class Chat: Identifiable {
     @ObservationIgnored private var backend: (any ChatBackend)?
     @ObservationIgnored private var pump: Task<Void, Never>?
     @ObservationIgnored private let resume: SessionSummary?
+    /// A fork the CLI makes when it starts (Codex) or on its first message (Claude).
+    @ObservationIgnored private let fork: ForkPoint?
+    /// The chat this one was forked from, for the line after its history.
+    @ObservationIgnored private var forkedFrom: String?
 
-    init(provider: ProviderDescriptor, folder: URL, resume session: SessionSummary? = nil) {
+    /// `fork` makes this chat a fork of `session` that its CLI creates; it has no session of its
+    /// own until then. `forkedFrom` names the original chat.
+    init(
+        provider: ProviderDescriptor, folder: URL, resume session: SessionSummary? = nil, fork: ForkPoint? = nil,
+        forkedFrom: String? = nil
+    ) {
         self.provider = provider
         self.folder = folder
         resume = session
+        self.fork = fork
+        self.forkedFrom = forkedFrom
         controls = ControlsStore(provider: provider)
-        status = ChatStatus(resume: session)
+        status = ChatStatus(resume: fork == nil ? session : nil)
+        if fork != nil { status.name = session?.title }
         transcript.providerName = provider.name
     }
 
@@ -67,6 +79,11 @@ final class Chat: Identifiable {
     private func dispatch(_ event: ChatEvent) {
         let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
         transcript.apply(event)
+        if case .replayed = event, let original = forkedFrom {
+            // A fork's history ends with where it came from.
+            forkedFrom = nil
+            transcript.forkedFrom(original)
+        }
         approvals.apply(event)
         controls.apply(event)
         status.apply(event)
@@ -97,7 +114,8 @@ final class Chat: Identifiable {
         if let backend { return backend }
         let backend = provider.makeBackend(
             BackendOptions(
-                folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode, model: launchModel))
+                folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode, model: launchModel,
+                fork: fork, forkTitle: fork == nil ? nil : status.name))
         self.backend = backend
         pump = Task {
             for await event in backend.events { self.dispatch(event) }
@@ -172,6 +190,28 @@ final class Chat: Identifiable {
             try? await backend.start()
             let events = await backend.agentHistory(id)
             if !events.isEmpty { transcript.replaceLane(of: id, with: events) }
+        }
+    }
+
+    /// Where a fork from this user message starts (`ChatBackend.fork`); nil after a failure,
+    /// which shows as "Couldn't fork: …" in this chat.
+    func forkStart(_ entry: TranscriptStore.Entry) async -> ForkStart? {
+        do {
+            return try await connect().fork(message: entry.source, text: entry.text)
+        } catch {
+            fail("Couldn't fork: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// The conversation before a compaction, ten turns at a time.
+    func loadEarlierConversation() {
+        guard transcript.earlierAvailable, !transcript.loadingEarlier else { return }
+        transcript.startLoadingEarlier()
+        let backend = connect()
+        Task {
+            let page = await backend.earlier()
+            transcript.prepend(page?.events ?? [], more: page?.more ?? false)
         }
     }
 

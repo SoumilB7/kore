@@ -50,6 +50,8 @@ public actor CodexSession {
         public var plan: Bool
         /// Thread id from a previous `.threadStarted`, to continue that conversation.
         public var resume: String?
+        /// Opens a new thread holding `resume`'s turns through this one (`thread/fork`) instead.
+        public var forkAt: String?
         public var executable: URL?
         public var environment: [String: String]
 
@@ -60,6 +62,7 @@ public actor CodexSession {
             permissions: Permissions = .askForApproval,
             plan: Bool = false,
             resume: String? = nil,
+            forkAt: String? = nil,
             executable: URL? = nil,
             environment: [String: String] = [:]
         ) {
@@ -69,6 +72,7 @@ public actor CodexSession {
             self.permissions = permissions
             self.plan = plan
             self.resume = resume
+            self.forkAt = forkAt
             self.executable = executable
             self.environment = environment
         }
@@ -227,7 +231,8 @@ public actor CodexSession {
         let result: JSONValue
         if let resume = options.resume {
             params["threadId"] = .string(resume)
-            result = try await server.request("thread/resume", .object(params))
+            if let turn = options.forkAt { params["lastTurnId"] = .string(turn) }
+            result = try await server.request(options.forkAt == nil ? "thread/resume" : "thread/fork", .object(params))
             history = result["thread"]?["turns"]?.array ?? []
         } else {
             result = try await server.request("thread/start", .object(params))

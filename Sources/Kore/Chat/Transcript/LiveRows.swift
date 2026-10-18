@@ -188,26 +188,126 @@ struct ExploredItem: View {
     }
 }
 
-/// Above the shown turns while earlier ones exist: "──── Load earlier turns ────" (T3 Code).
+/// The one row at the top while there's more history above (look.md phase 08 §14, phase 10 §5):
+/// "──── Load earlier turns ────", or "Load earlier conversation" once the shown history is
+/// all in view and a compaction hides more. A plain button; while it loads, it says so.
 struct LoadEarlierRow: View {
+    let label: String
+    var loading: String?
     let load: () -> Void
     @StateObject private var hovered = Local(false)
 
     var body: some View {
         Button(action: load) {
-            HStack(spacing: Space.md) {
+            HStack(spacing: Space.xl) {
                 Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
-                Text("Load earlier turns")
-                    .font(TextStyle.caption)
-                    .foregroundStyle(hovered.value ? Theme.secondary : Theme.tertiary)
+                Text(loading ?? label)
+                    .font(TextStyle.label)
+                    .foregroundStyle(hovered.value && loading == nil ? Theme.text : Theme.secondary)
                     .fixedSize()
                 Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
             }
-            .padding(.vertical, Layout.Timeline.itemPadding)
+            .padding(.vertical, Space.sm)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(loading != nil)
         .onHover { hovered.value = $0 }
-        .help("Show 20 more turns")
+        .padding(.bottom, Space.md)
+    }
+}
+
+/// A quiet line across the transcript, the load row's geometry but not a button:
+/// "Conversation compacted · 14:32", "Forked from "…"".
+struct DividerRow: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: Space.xl) {
+            Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
+            Text(text)
+                .font(TextStyle.label)
+                .foregroundStyle(Theme.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
+        }
+        .padding(.vertical, Space.sm)
+    }
+}
+
+/// A user message's action button (the Claude Code extension's `actionButton`): a small round
+/// return arrow on the box's top-right corner. Hidden until the message is under the pointer.
+struct MessageActionButton: View {
+    /// Its message is under the pointer, or its menu is open.
+    let messageHovered: Bool
+    let open: Bool
+    let press: (CGRect) -> Void
+    @StateObject private var hovered = Local(false)
+    @StateObject private var frame = Held(CGRect.zero)
+
+    var body: some View {
+        Button { press(frame.value) } label: {
+            Image(systemName: "arrow.uturn.backward")
+                .font(Glyph.small)
+                .scaleEffect(0.9)
+                .foregroundStyle(hovered.value || open ? Theme.text : Theme.secondary)
+                .padding(Size.messageActionInset)
+                .frame(width: Size.messageAction, height: Size.messageAction)
+                .background(Theme.background, in: Circle())
+                .overlay(Circle().strokeBorder(Theme.secondary, lineWidth: Stroke.fine))
+                .contentShape(Circle())
+        }
+        .buttonStyle(PressScale())
+        .opacity(hovered.value || open ? 1 : messageHovered ? Motion.actionHint : 0)
+        .animation(Motion.actionFade, value: hovered.value || open)
+        .animation(Motion.actionFade, value: messageHovered)
+        .allowsHitTesting(messageHovered || open)
+        .onHover { hovered.value = $0 }
+        .help("Message actions")
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TranscriptTimeline.space)) } action: { frame.value = $0 }
+    }
+}
+
+private struct PressScale: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.scaleEffect(configuration.isPressed ? Motion.pressScale : 1)
+    }
+}
+
+/// The action button's menu (the extension's `popup`): an in-window panel, no shadow.
+struct MessageMenu: View {
+    let fork: () -> Void
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        Button(action: fork) {
+            Text("Fork conversation from here")
+                .font(Chrome.body)
+                .foregroundStyle(hovered.value ? Theme.text : Theme.secondary)
+                .lineLimit(1)
+                .padding(Inset.forkMenuRow)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(hovered.value ? Theme.surfaceHover : Color.clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
+        .frame(width: Size.forkMenu)
+        .background(Theme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.control))
+        .overlay(RoundedRectangle(cornerRadius: Radius.control).strokeBorder(Theme.border, lineWidth: Stroke.hairline))
+    }
+}
+
+/// Which user message's menu is open (its button stays shown).
+struct MessageMenuOpenKey: EnvironmentKey {
+    static let defaultValue: UUID? = nil
+}
+
+extension EnvironmentValues {
+    var messageMenuOpen: UUID? {
+        get { self[MessageMenuOpenKey.self] }
+        set { self[MessageMenuOpenKey.self] = newValue }
     }
 }

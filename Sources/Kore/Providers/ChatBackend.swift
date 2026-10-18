@@ -32,6 +32,13 @@ protocol ChatBackend: AnyObject {
     /// opened later; a live foreground agent's events arrive as it runs, and a Claude
     /// background agent's are tailed from its transcript while it runs.
     func agentHistory(_ id: String) async -> [ChatEvent]
+    /// Where a fork from a user message starts: the history before that message, in a new
+    /// session. `id` is the message's id from replay (nil for one sent in this run: it's found by
+    /// its text from the end).
+    func fork(message id: String?, text: String) async throws -> ForkStart
+    /// The page of conversation before what's shown (before a compaction), oldest first, and
+    /// whether more comes before it; nil when there's none.
+    func earlier() async -> (events: [ChatEvent], more: Bool)?
     func close() async
 }
 
@@ -45,6 +52,32 @@ struct BackendOptions {
     var planMode = false
     /// Launch on this model instead of the CLI's default (the dev hook's cheap test models).
     var model: String?
+    /// A fork the CLI makes when it starts (Codex) or on its first message (Claude), and the
+    /// title it gets.
+    var fork: ForkPoint?
+    var forkTitle: String?
+}
+
+/// How a fork begins.
+enum ForkStart: Sendable {
+    /// The new tab's CLI makes the fork: launch with this.
+    case pending(ForkPoint)
+    /// The message was the first one: nothing comes before it, so a new chat.
+    case fresh
+}
+
+/// A session to fork, and the message its history runs through.
+struct ForkPoint: Sendable {
+    let from: String
+    let at: String
+    /// That history, already read while finding the message (Claude), so the new tab shows it
+    /// without reading the transcript again.
+    var history: ClaudeHistory.Page?
+}
+
+enum ForkError: LocalizedError {
+    case notFound
+    var errorDescription: String? { "that message isn't in the session's history" }
 }
 
 /// The files a turn changed. In a git work tree that's the diff between snapshots taken at

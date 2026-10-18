@@ -13,6 +13,8 @@ final class CodexBackend: ChatBackend {
     private var pump: Task<Void, Never>?
     private var replayPending: Bool
     private var resumeId: String?
+    /// A fork not opened yet: its first launch forks `resumeId` through this turn.
+    private var forkAt: String?
 
     var sessionId: String? { translator.threadId ?? resumeId }
 
@@ -23,6 +25,7 @@ final class CodexBackend: ChatBackend {
         translator.planMode = options.planMode
         replayPending = options.resume != nil
         resumeId = options.resume?.id
+        forkAt = options.fork?.at
     }
 
     func start() async throws {
@@ -39,7 +42,13 @@ final class CodexBackend: ChatBackend {
             .init(
                 cwd: options.folder, model: options.model,
                 permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
-                plan: options.planMode, resume: sessionId))
+                plan: options.planMode, resume: sessionId, forkAt: forkAt))
+        if forkAt != nil {
+            // The fork is its own thread from here on (a relaunch resumes it).
+            forkAt = nil
+            resumeId = await session.threadId
+            if let title = options.forkTitle { try? await session.rename(title) }
+        }
         if replayPending {
             replayPending = false
             yield(.replayed(translator.replay(await session.history)))
@@ -198,6 +207,28 @@ final class CodexBackend: ChatBackend {
         guard let session, let turns = try? await session.readThread(id) else { return [] }
         return translator.agentTurns(turns, agent: id)
     }
+
+    /// The turns before the message's turn, forked by the new tab's own app-server when it opens
+    /// (`thread/fork` through the turn before; a thread forked here would stay this process's to
+    /// write); the message itself goes in the new tab's composer.
+    func fork(message id: String?, text: String) async throws -> ForkStart {
+        try await start()
+        guard let session, let thread = sessionId else { return .fresh }
+        let turns = try await session.readThread(thread)
+        let ids = turns.map { $0["id"]?.string ?? "" }
+        let index = id.flatMap { ids.firstIndex(of: $0) } ?? turns.lastIndex { turn in
+            (turn["items"]?.array ?? []).contains { item in
+                item["type"]?.string == "userMessage"
+                    && (item["content"]?.array ?? []).compactMap { $0["text"]?.string }.joined(separator: "\n") == text
+            }
+        }
+        guard let index else { throw ForkError.notFound }
+        guard index > 0 else { return .fresh }
+        return .pending(ForkPoint(from: thread, at: ids[index - 1]))
+    }
+
+    /// Codex keeps a compacted thread's earlier turns in `thread/resume`, so nothing is held back.
+    func earlier() async -> (events: [ChatEvent], more: Bool)? { nil }
 
     func close() async {
         pump?.cancel()

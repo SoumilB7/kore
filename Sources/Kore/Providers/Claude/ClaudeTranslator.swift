@@ -244,6 +244,9 @@ final class ClaudeTranslator {
                 // Sent before every model request; with no turn open, the CLI started one itself.
                 openTurn(.cli)
                 if let turn { followups.append(.cliTurn(turn, startedAt: turnStart)) }
+            case "compact_boundary":
+                // /compact live: the divider goes above the summary that follows.
+                out.append(.compacted(at: .now))
             case "task_started" where !(json["task_type"]?.string.map { !$0.contains("agent") } ?? false):
                 // Background shell commands are tasks too (local_bash); only agents get a card.
                 let tool = json["tool_use_id"]?.string ?? json["task_id"]?.string ?? ""
@@ -456,6 +459,11 @@ final class ClaudeTranslator {
                 out.append(.peerMessage(from: peer.from, text: peer.text, turn: turn))
                 continue
             }
+            if ClaudeHistory.isBoundary(message) {
+                close()
+                out.append(.compacted(at: time))
+                continue
+            }
             if message["type"]?.string == "user" {
                 if let origin = Self.origin(message["turnOrigin"]?.string), origin != .peer {
                     close()
@@ -469,7 +477,8 @@ final class ClaudeTranslator {
                 if prompt != nil || !attachments.isEmpty {
                     close()
                     openTurn(.user, at: time)
-                    out.append(.userMessage(text: prompt ?? "", attachments: attachments))
+                    // Its transcript id is where a fork from it starts.
+                    out.append(.userMessage(text: prompt ?? "", attachments: attachments, id: message["uuid"]?.string))
                     continue
                 }
             }
@@ -490,7 +499,7 @@ final class ClaudeTranslator {
         }
     }
 
-    private static func promptText(_ content: JSONValue?) -> String? {
+    static func promptText(_ content: JSONValue?) -> String? {
         let text = content?.string ?? content?.array?.last { $0["type"]?.string == "text" }?["text"]?.string
         guard let text, !text.isEmpty, !text.hasPrefix("<") else { return nil }
         return text

@@ -30,8 +30,11 @@ import KoreCore
 ///   KORE_TIME_REPLAY=1       print how long applying a resumed session's past took (main thread)
 ///   KORE_STOP_AFTER=<s>      press Stop that many seconds after launch
 ///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
+///   KORE_FORK=<n>            fork the opened chat from its nth user message (after 6s); KORE_FORK_SEND=<text>
+///                            then sends that text in the fork's tab
 ///   KORE_EARLIER=top|load    after KORE_EARLIER_AFTER seconds (default 4), scroll the transcript to its
-///                            top; with load, then press "Load earlier turns"
+///                            top; with load, then press the top row KORE_EARLIER_TIMES times (default 1); then
+///                            KORE_EARLIER_SHOW=divider|top scrolls to the first divider or the top
 ///   KORE_EXPLORER=1          open the explorer at launch
 ///   KORE_FILE=<path>[:...]   open those files in tabs (the last one shown)
 ///   KORE_QUICK_OPEN=files|line  open quick open at launch
@@ -347,4 +350,8 @@ enum DevSnapshot {
             run(mode == "load")
         }
     }
+
+    /// KORE_FORK: which user message to fork from, 1-based.
+    static let forkMessage = ProcessInfo.processInfo.environment["KORE_FORK"].flatMap { Int($0) }
+    static let forkSend = ProcessInfo.processInfo.environment["KORE_FORK_SEND"]
 }
