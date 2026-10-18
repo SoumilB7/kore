@@ -108,6 +108,62 @@ final class AgentMapStopped: ChatStoryline {
     }
 }
 
+/// A background agent that has finished waits in the map's closed "Done in background" group,
+/// just above the stopped one; opened, the group shows it. Run again, it leaves the group for the
+/// Background section, live under the open map.
+final class AgentMapDoneInBackground: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents] }
+    override class var script: CLIScript {
+        func spawn(_ id: String, _ name: String, background: Bool = true) -> Beat {
+            .event(.agentSpawned(AgentInfo(
+                id: id, parent: .main, toolId: nil, name: name, type: nil, model: nil, prompt: "\(name).", background: background)))
+        }
+        return CLIScript(turns: [
+            [
+                .startTurn, spawn("scout", "Scout the code"), spawn("writer", "Write the summary", background: false),
+                spawn("gone", "Watch the build"),
+                .event(.agentFinished(id: "writer", .completed, result: "Written")),
+                .event(.agentFinished(id: "scout", .completed, result: "Scouted")),
+                .event(.agentFinished(id: "gone", .stopped, result: nil)),
+                .stream(.answer, "The scout is done."), .finishTurn(.completed),
+            ],
+            [.startTurn, .event(.agentResumed(id: "scout")), .stream(.answer, "The scout goes on."), .finishTurn(.completed)],
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        let scout = StoryID.AgentMap.row("scout"), writer = StoryID.AgentMap.row("writer")
+        let done = StoryID.AgentMap.done, stopped = StoryID.AgentMap.stopped
+        return super.steps() + [
+            Send("Use some helpers"), TurnFinished(1), WaitIdle(),
+            Press(.id(StoryID.Titlebar.agents)),
+            ExpectElement(.id(writer), .visible),
+            ExpectElement(.id(done), .visible),
+            ExpectElement(.id(stopped), .visible),
+            ExpectElement(.id(StoryID.AgentMap.background), .absent),
+            ExpectElement(.id(scout), .absent),
+            Expect("the done group just above the stopped one") { _ in
+                guard let top = StoryElement(done)?.frame, let below = StoryElement(stopped)?.frame else { return false }
+                // Window coordinates: y grows upwards.
+                return top.minY >= below.maxY
+            },
+            Press(.id(done)),
+            ExpectElement(.id(scout), .visible),
+            Expect("the done agent below the tree, above the stopped group") { _ in
+                guard let tree = StoryElement(writer)?.frame?.maxY, let row = StoryElement(scout)?.frame,
+                    let below = StoryElement(stopped)?.frame?.maxY
+                else { return false }
+                return row.maxY < tree && row.minY >= below
+            },
+            Send("Go on"), TurnFinished(2),
+            ExpectElement(.id(done), .absent),
+            ExpectElement(.id(StoryID.AgentMap.background), .visible),
+            ExpectElement(.id(scout), .visible),
+            ExpectElement(.id(stopped), .visible),
+        ]
+    }
+}
+
 /// Every agent stopped and the group closed, nothing is selected: the tree keeps its place at
 /// the map's left, where it stays once a stopped agent is picked.
 final class AgentMapAllStopped: ChatStoryline {

@@ -106,29 +106,75 @@ struct BackgroundAgentsTests {
     }
 
     /// The map lists the chat's background agents still running apart, below the tree, each
-    /// with its own agents; a finished one is back in the tree, a stopped one with the stopped,
-    /// and one another agent runs in the background stays under it.
+    /// with its own agents; those that finished (done or failed) wait in a group of their own
+    /// with theirs, a stopped one with the stopped, and one another agent runs in the background
+    /// stays under it.
     @Test func theMapListsBackgroundAgentsApart() {
-        func spawn(_ id: String, under parent: AgentID = .main, background: Bool = false) -> ChatEvent {
-            .agentSpawned(AgentInfo(
-                id: id, parent: parent, toolId: nil, name: id, type: nil, model: nil, prompt: nil, background: background))
-        }
         let script = Script()
         script.send("Go")
         script.start("t1")
         script.on(
-            spawn("done", background: true), spawn("writer"), spawn("helper", under: .sub("writer"), background: true),
-            spawn("scout", background: true), spawn("reader", under: .sub("scout")), spawn("gone", background: true),
-            .agentFinished(id: "done", .completed, result: "Done"), .agentFinished(id: "gone", .stopped, result: nil))
+            spawn("done", background: true), spawn("note", under: .sub("done")), spawn("writer"),
+            spawn("helper", under: .sub("writer"), background: true), spawn("scout", background: true),
+            spawn("reader", under: .sub("scout")), spawn("gone", background: true), spawn("broke", background: true),
+            spawn("left", under: .sub("broke")),
+            .agentFinished(id: "note", .completed, result: "Noted"), .agentFinished(id: "done", .completed, result: "Done"),
+            .agentFinished(id: "writer", .completed, result: "Written"), .agentFinished(id: "broke", .failed, result: nil),
+            .agentFinished(id: "gone", .stopped, result: nil))
         _ = script.sections
         let map = script.store.agentTree()
-        let names = { (nodes: [TranscriptStore.AgentNode]) in nodes.map { String(repeating: ".", count: $0.depth) + $0.id } }
-        #expect(names(map.tree) == ["done", "writer", ".helper"])
+        #expect(names(map.tree) == ["writer", ".helper", "left"])
         #expect(names(map.background) == ["scout", ".reader"])
+        #expect(names(map.done) == ["done", ".note", "broke"])
         #expect(names(map.stopped) == ["gone"])
+        // Counted as the agents that did work, as before.
+        #expect(script.store.agentSummary.count == 8)
+        #expect(script.store.agentSummary.stopped == 1)
+
+        // Run again, it's back in the Background section with its own.
+        script.on(.agentResumed(id: "done"))
+        _ = script.sections
+        let resumed = script.store.agentTree()
+        #expect(names(resumed.background) == ["done", ".note", "scout", ".reader"])
+        #expect(names(resumed.done) == ["broke"])
     }
 
-    // MARK: Codex
+    private func spawn(_ id: String, under parent: AgentID = .main, background: Bool = false) -> ChatEvent {
+        .agentSpawned(AgentInfo(
+            id: id, parent: parent, toolId: nil, name: id, type: nil, model: nil, prompt: nil, background: background))
+    }
+
+    private func names(_ nodes: [TranscriptStore.AgentNode]) -> [String] {
+        nodes.map { String(repeating: ".", count: $0.depth) + $0.id }
+    }
+
+    /// Codex marks no child thread as run in the background: one that finished, as its rollout
+    /// says, keeps its place in the tree with its totals, and the done group stays empty.
+    @Test func aFinishedCodexChildStaysInTheTree() {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
+        let item = CodexItem(.object([
+            "id": .string("call_1"), "type": .string("subAgentActivity"), "kind": .string("started"),
+            "agentThreadId": .string("child"), "agentPath": .string("/root/scout"),
+        ]))
+        let script = Script()
+        script.send("Go")
+        script.start("t1")
+        translator.translate(.itemStarted(item))
+        translator.translate(.itemCompleted(item))
+        translator.take().events.forEach(script.store.apply)
+        var info = CodexAgentThread(nickname: "Scout")
+        info.tokens = 900
+        info.duration = .seconds(75)
+        translator.agentEnded("child", .completed, info)
+        translator.take().events.forEach(script.store.apply)
+        _ = script.sections
+        let map = script.store.agentTree()
+        #expect(names(map.tree) == ["child"])
+        #expect(map.done.isEmpty && map.background.isEmpty)
+        #expect(script.store.agent("child")?.status == .finished)
+        #expect(script.store.agent("child")?.duration == 75)
+        #expect(script.store.agent("child")?.tokens == 900)
+    }
 
     /// A child thread another client runs outlives its parent's turn: its rollout says it still
     /// runs until its turn's end is written there, with its last answer.

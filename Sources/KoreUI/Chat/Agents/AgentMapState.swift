@@ -12,6 +12,8 @@ final class AgentMapState {
     var folded: Set<String> = []
     /// The stopped agents' group is open (it starts closed).
     var stoppedOpen = false
+    /// The group of the background agents that have finished is open (it starts closed).
+    var doneOpen = false
 
     func open(selecting id: String? = nil) {
         if let id { selected = id }

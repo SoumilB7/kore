@@ -3,9 +3,10 @@ import SwiftUI
 /// Every agent the chat has spawned, over the chat area (phase 10 §6): a graph on the left with
 /// the chat as its root O and each agent an O whose wire drops from the bottom of its parent's,
 /// and the selected agent on the right with its prompt and its own timeline, live. The chat's
-/// background agents hang below the tree under their own label, and stopped agents wait apart in
-/// a closed group below them. ↑ ↓ select, Return opens the agent in a tab,
-/// ← → fold and unfold, Esc closes. In a narrow tile the graph becomes a menu.
+/// background agents hang below the tree under their own label while they run; those that have
+/// finished, and the stopped agents, wait apart in closed groups below them. ↑ ↓ select, Return
+/// opens the agent in a tab, ← → fold and unfold, Esc closes. In a narrow tile the graph becomes a
+/// menu.
 struct AgentMapView: View {
     let chat: Chat
     let openAgent: (String) -> Void
@@ -20,18 +21,20 @@ struct AgentMapView: View {
         _ = chat.transcript.agentsVersion
         let all = chat.transcript.agentTree()
         let nodes = shown(all)
-        // A stopped agent stays selected while its group is closed.
-        let selected = nodes.first { $0.id == map.selected } ?? all.stopped.first { $0.id == map.selected } ?? nodes.first
+        // A grouped agent stays selected while its group is closed.
+        let selected = nodes.first { $0.id == map.selected } ?? (all.done + all.stopped).first { $0.id == map.selected }
+            ?? nodes.first
         return GeometryReader { geometry in
             let narrow = geometry.size.width < Size.changesListMinWindow
             ZStack(alignment: .topTrailing) {
                 Theme.background
                 HStack(spacing: 0) {
                     if !narrow {
-                        // The stopped group's rows count whether it's open or not: opening it
+                        // The closed groups' rows count whether they're open or not: opening one
                         // doesn't move the divider.
                         tree(all, selected: selected?.id)
-                            .frame(width: paneWidth(visible(all.tree) + visible(all.background) + all.stopped, in: geometry.size.width))
+                            .frame(width: paneWidth(
+                                visible(all.tree) + visible(all.background) + all.done + all.stopped, in: geometry.size.width))
                         Rectangle().fill(Theme.border).frame(width: Stroke.hairline)
                     }
                     VStack(alignment: .leading, spacing: 0) {
@@ -42,7 +45,7 @@ struct AgentMapView: View {
                     }
                 }
                 // The tree keeps its place at the left with nothing selected (every agent
-                // stopped, the group closed), rather than sliding over to the close button.
+                // grouped, the groups closed), rather than sliding over to the close button.
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 IconButton(symbol: "xmark", help: "Close (Esc)") { map.close() }.storyID(StoryID.AgentMap.close, press: map.close)
                     .padding(Layout.Viewer.closeInset)
@@ -62,13 +65,15 @@ struct AgentMapView: View {
     }
 
     typealias Trees = (
-        tree: [TranscriptStore.AgentNode], background: [TranscriptStore.AgentNode], stopped: [TranscriptStore.AgentNode]
+        tree: [TranscriptStore.AgentNode], background: [TranscriptStore.AgentNode], done: [TranscriptStore.AgentNode],
+        stopped: [TranscriptStore.AgentNode]
     )
 
-    /// The rows ↑ ↓ move through: the tree's, the background group's, then the stopped group's
-    /// while it's open.
+    /// The rows ↑ ↓ move through: the tree's, the background group's, then the done and the
+    /// stopped groups' while they're open.
     private func shown(_ all: Trees) -> [TranscriptStore.AgentNode] {
-        visible(all.tree) + visible(all.background) + (map.stoppedOpen ? visible(all.stopped) : [])
+        visible(all.tree) + visible(all.background) + (map.doneOpen ? visible(all.done) : [])
+            + (map.stoppedOpen ? visible(all.stopped) : [])
     }
 
     /// The tree without the descendants of folded branches.
@@ -96,9 +101,18 @@ struct AgentMapView: View {
                     BackgroundGroupRow(count: all.background.count).padding(.top, Layout.AgentMap.groupTop)
                     rows(all.background, selected: selected, dimmed: false, grouped: true)
                 }
+                if !all.done.isEmpty {
+                    ClosedGroupRow(
+                        title: "Done in background", count: all.done.count, open: map.doneOpen, id: StoryID.AgentMap.done
+                    ) { map.doneOpen.toggle() }
+                    .padding(.top, Layout.AgentMap.groupTop)
+                    if map.doneOpen { rows(all.done, selected: selected, dimmed: true, grouped: true) }
+                }
                 if !all.stopped.isEmpty {
-                    StoppedGroupRow(count: all.stopped.count, open: map.stoppedOpen) { map.stoppedOpen.toggle() }
-                        .padding(.top, Layout.AgentMap.groupTop)
+                    ClosedGroupRow(
+                        title: "Stopped", count: all.stopped.count, open: map.stoppedOpen, id: StoryID.AgentMap.stopped
+                    ) { map.stoppedOpen.toggle() }
+                    .padding(.top, Layout.AgentMap.groupTop)
                     if map.stoppedOpen { rows(all.stopped, selected: selected, dimmed: true) }
                 }
             }
@@ -108,7 +122,7 @@ struct AgentMapView: View {
     }
 
     /// One tree's rows, without its folded branches' descendants.
-    /// `grouped`: under the background label, which says what their meters would.
+    /// `grouped`: under a background label, which says what their meters would.
     private func rows(_ all: [TranscriptStore.AgentNode], selected: String?, dimmed: Bool, grouped: Bool = false) -> some View {
         let parents = Set(zip(all, all.dropFirst()).filter { $1.depth > $0.depth }.map(\.0.id))
         return ForEach(visible(all)) { node in
@@ -140,6 +154,9 @@ struct AgentMapView: View {
             menuItems(all.tree)
             if !all.background.isEmpty {
                 Section("Background") { menuItems(all.background) }
+            }
+            if !all.done.isEmpty {
+                Section("Done in background") { menuItems(all.done) }
             }
             if !all.stopped.isEmpty {
                 Section("Stopped") { menuItems(all.stopped) }
@@ -240,11 +257,13 @@ private struct GraphRootRow: View {
     }
 }
 
-/// "Stopped  3" below the tree, its chevron where the chat's O is: it opens and closes the group,
-/// whose rows hang off it as the tree's hang off the chat.
-private struct StoppedGroupRow: View {
+/// "Done in background  12" or "Stopped  3" below the tree, its chevron where the chat's O is: it
+/// opens and closes the group, whose rows hang off it as the tree's hang off the chat.
+private struct ClosedGroupRow: View {
+    let title: String
     let count: Int
     let open: Bool
+    let id: StoryID
     let toggle: () -> Void
     @StateObject private var hovered = Local(false)
 
@@ -253,7 +272,7 @@ private struct StoppedGroupRow: View {
         Button(action: toggle) {
             HStack(spacing: m.labelGap) {
                 Disclosure(isOpen: open).foregroundStyle(Theme.tertiary)
-                (Text("Stopped").font(TextStyle.labelMedium).foregroundColor(Theme.secondary)
+                (Text(title).font(TextStyle.labelMedium).foregroundColor(Theme.secondary)
                     + Text("  \(count)").font(TextStyle.caption.monospacedDigit()).foregroundColor(Theme.tertiary))
                     .lineLimit(1)
                 Spacer(minLength: 0)
@@ -270,7 +289,7 @@ private struct StoppedGroupRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .storyID(StoryID.AgentMap.stopped)
+        .storyID(id)
     }
 }
 
@@ -302,9 +321,9 @@ private struct AgentGraphRow: View {
     let hasChildren: Bool
     /// Descendants folded away under it.
     let hidden: Int
-    /// In the stopped group.
+    /// In a closed group: the done or the stopped.
     let dimmed: Bool
-    /// In the background group.
+    /// Under a background label: the running or the done.
     let grouped: Bool
     let select: () -> Void
     @StateObject private var hovered = Local(false)

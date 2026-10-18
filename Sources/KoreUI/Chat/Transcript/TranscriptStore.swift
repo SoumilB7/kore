@@ -725,35 +725,46 @@ final class TranscriptStore {
 
     // MARK: The agent map
 
-    /// The agent map's three trees, parents before children, in spawn order: the agents, the
-    /// chat's own background agents still running with theirs (one that finishes goes back to the
-    /// tree, so the section is what's still going on), and the stopped ones apart. A
-    /// stopped agent takes its own agents with it, except those running: they stay in the tree,
-    /// where it was. One that runs again goes back to its place.
-    func agentTree() -> (tree: [AgentNode], background: [AgentNode], stopped: [AgentNode]) {
+    /// The agent map's four trees, parents before children, in spawn order: the agents, the
+    /// chat's own background agents still running with theirs (one that finishes leaves the
+    /// section, so it's what's still going on), those that have finished, and the stopped ones
+    /// apart. A finished or stopped agent takes its own agents with it, except those running: they
+    /// stay in the tree, where it was. One that runs again goes back to its place.
+    func agentTree() -> (tree: [AgentNode], background: [AgentNode], done: [AgentNode], stopped: [AgentNode]) {
         let infos = agentOrder.compactMap(agent)
         let byId = Dictionary(infos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // Parents spawn before their children, so each parent is settled before its children.
         var grouped: Set<String> = []
+        // The chat's own background agents that ended other than stopped, with their children.
+        var done: Set<String> = []
         // The nearest ancestor still in the tree ("" for the chat).
         var treeParent: [String: String] = [:]
         // Under the chat's own background agents, with their children.
         var behind: Set<String> = []
         for info in infos {
             let parent = info.parent.flatMap { byId[$0] == nil ? nil : $0 }
-            treeParent[info.id] = parent.map { grouped.contains($0) ? treeParent[$0] ?? "" : $0 } ?? ""
-            if info.status == .stopped || (info.status != .running && parent.map(grouped.contains) == true) {
+            let up = parent.map { grouped.contains($0) || done.contains($0) ? treeParent[$0] ?? "" : $0 } ?? ""
+            treeParent[info.id] = up
+            let running = info.status == .running
+            if info.status == .stopped || (!running && parent.map(grouped.contains) == true) {
                 grouped.insert(info.id)
-            } else if let up = treeParent[info.id], up.isEmpty ? info.background && info.status == .running : behind.contains(up) {
+            } else if !running, parent.map(done.contains) == true || (up.isEmpty && info.background) {
+                done.insert(info.id)
+            } else if up.isEmpty ? info.background && running : behind.contains(up) {
                 behind.insert(info.id)
             }
         }
-        let tree = Self.walk(infos.filter { !grouped.contains($0.id) && !behind.contains($0.id) }) { treeParent[$0.id] ?? "" }
+        let tree = Self.walk(infos.filter { !grouped.contains($0.id) && !done.contains($0.id) && !behind.contains($0.id) }) {
+            treeParent[$0.id] ?? ""
+        }
         let background = Self.walk(infos.filter { behind.contains($0.id) }) { treeParent[$0.id] ?? "" }
+        let finished = Self.walk(infos.filter { done.contains($0.id) }) { info in
+            info.parent.flatMap { done.contains($0) ? $0 : nil } ?? ""
+        }
         let stopped = Self.walk(infos.filter { grouped.contains($0.id) }) { info in
             info.parent.flatMap { grouped.contains($0) ? $0 : nil } ?? ""
         }
-        return (tree, background, stopped)
+        return (tree, background, finished, stopped)
     }
 
     private static func walk(_ infos: [AgentInfo], parent: (AgentInfo) -> String) -> [AgentNode] {
