@@ -220,6 +220,18 @@ final class TranscriptStore {
 
     func changes(ofTurn id: String) -> [FileChange] { turns[id]?.changes ?? [] }
 
+    /// Opens or closes a sub-agent's card.
+    func toggle(agent id: String) {
+        if let card = agentCards[id] ?? laneAgents[id]?.entry { toggle(card.uuidString) }
+    }
+
+    /// A sub-agent's card details, for an approval it asks for.
+    func agent(_ id: String) -> AgentInfo? {
+        if let card = agentCards[id], let i = position[card] { return entries[i].agent }
+        if let (parent, card) = laneAgents[id] { return lanes[parent]?.first { $0.id == card }?.agent }
+        return nil
+    }
+
     // MARK: Content
 
     func user(_ text: String, attachments: [Attachment]) {

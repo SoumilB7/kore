@@ -96,7 +96,7 @@ private struct TabItem: View {
             } label: {
                 HStack(spacing: Space.md) {
                     if let chat = tab.chat {
-                        if chat.isRunning {
+                        if chat.status.isRunning {
                             ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
                         } else {
                             ProviderLogo(provider: chat.provider, size: Size.logoTab)

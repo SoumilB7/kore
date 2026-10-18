@@ -1,16 +1,18 @@
 import SwiftUI
 
 /// One chat: the transcript above, approval cards and the composer below, overlays on top.
-/// Each part is its own view reading only its own state, so typing re-renders the composer
+/// Each part is its own view reading only its own store, so typing re-renders the composer
 /// alone and a streamed token re-renders one row.
 struct ChatView: View {
-    let chat: ChatModel
+    let chat: Chat
     @FocusState private var composerFocused: Bool
     @StateObject private var viewer = Local<ImageEditor?>(nil)
+    /// The turn whose changes are open in the modal.
+    @StateObject private var changesTurn = Local<String?>(nil)
 
     var body: some View {
         VStack(spacing: 0) {
-            TranscriptView(chat: chat) { view($0, pending: false) }
+            TranscriptTimeline(store: chat.transcript, actions: actions)
             VStack(spacing: Space.lg) {
                 ApprovalsView(chat: chat)
                 ComposerView(chat: chat, focused: $composerFocused) { view($0, pending: true) }
@@ -20,7 +22,9 @@ struct ChatView: View {
             .frame(maxWidth: ChatColumn.window.maxWidth)
         }
         .overlay {
-            if let editor = viewer.value {
+            if let turn = changesTurn.value {
+                ChangesView(changes: chat.transcript.changes(ofTurn: turn), folder: chat.folder, close: closeChanges)
+            } else if let editor = viewer.value {
                 ImageViewer(
                     editor: editor, actionTitle: editor.pendingID == nil ? "Add to message" : "Done",
                     finish: { finishViewing(editor) }, close: closeViewer
@@ -28,11 +32,33 @@ struct ChatView: View {
             }
         }
         .animation(Motion.fade, value: viewer.value?.id)
+        .animation(Motion.fade, value: changesTurn.value)
         .onAppear {
             composerFocused = true
             if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, pending: true) }
         }
         .task { await chat.start() }
+    }
+
+    /// What the transcript's rows do.
+    private var actions: TranscriptActions {
+        let chat = chat
+        var actions = TranscriptActions()
+        actions.toggleTurn = { chat.transcript.toggle(turn: $0) }
+        actions.toggle = { chat.transcript.toggle($0) }
+        actions.openImage = { view($0, pending: false) }
+        actions.viewChanges = { turn in
+            changesTurn.value = turn
+            composerFocused = false
+        }
+        actions.stopAgent = { chat.stopAgent($0) }
+        actions.folder = chat.folder
+        return actions
+    }
+
+    private func closeChanges() {
+        changesTurn.value = nil
+        composerFocused = true
     }
 
     // MARK: Image viewer

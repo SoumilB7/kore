@@ -34,7 +34,7 @@ struct AgentMark: View {
 
     private var color: Color {
         switch status {
-        case .running, .finished: Theme.secondary
+        case .running, .finished: Theme.agentMark
         case .failed: Theme.danger
         case .stopped: Theme.tertiary
         }
@@ -76,7 +76,15 @@ struct AgentShapeView: View {
     var body: some View {
         switch shape {
         case .circle:
-            Circle().scaleEffect(12 / 16)
+            // A ring around a point, so it never reads as a timeline dot.
+            GeometryReader { g in
+                let k = g.size.width / 16
+                ZStack {
+                    Circle().strokeBorder(lineWidth: 1.8 * k).frame(width: 12 * k, height: 12 * k)
+                    Circle().frame(width: 4.4 * k, height: 4.4 * k)
+                }
+                .frame(width: g.size.width, height: g.size.height)
+            }
         case .square:
             GeometryReader { g in
                 let k = g.size.width / 16

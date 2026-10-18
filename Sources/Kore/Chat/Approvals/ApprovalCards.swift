@@ -4,19 +4,37 @@ import SwiftUI
 
 struct PermissionCard: View {
     let approval: Approval
+    /// The sub-agent asking (its mark's index and name); nil for the chat's own agent.
+    var asker: (index: Int, name: String)?
+    var folder: URL?
     let decide: (Decision) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.lg) {
-            Text(approval.title)
-                .font(TextStyle.title)
-                .foregroundStyle(Theme.text)
+            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                if let asker {
+                    AgentMark(index: asker.index, size: Size.markLarge, box: nil)
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                    Text(asker.name)
+                        .font(TextStyle.title)
+                        .foregroundStyle(Theme.secondary)
+                        .lineLimit(1)
+                }
+                Text(approval.title)
+                    .font(TextStyle.title)
+                    .foregroundStyle(Theme.text)
+            }
             if let detail = approval.detail {
                 Text(detail)
                     .font(TextStyle.label)
                     .foregroundStyle(Theme.secondary)
             }
-            if let body = approval.body {
+            if !approval.changes.isEmpty {
+                // An edit shows what it would change.
+                ForEach(approval.changes) { change in
+                    DiffView(change: change, folder: folder, style: .well, maxHeight: Size.diffInlineMax)
+                }
+            } else if let body = approval.body {
                 Text(body)
                     .font(TextStyle.code)
                     .foregroundStyle(Theme.text)

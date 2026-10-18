@@ -5,7 +5,7 @@ import SwiftUI
 /// above it while a command is being typed. Files can be pasted (⌘V), picked (+), or dropped
 /// onto the box.
 struct ComposerView: View {
-    let chat: ChatModel
+    let chat: Chat
     var focused: FocusState<Bool>.Binding
     let openImage: (Attachment) -> Void
     @StateObject private var slashSelection = Local(0)
@@ -22,7 +22,7 @@ struct ComposerView: View {
             box
         }
         .background(WindowReader { window.value = $0 })
-        .animation(Motion.fadeSlow, value: chat.activeMode.id)
+        .animation(Motion.fadeSlow, value: chat.controls.activeMode.id)
         .onAppear {
             pasteMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { pasteAttachments($0) }
         }
@@ -67,7 +67,7 @@ struct ComposerView: View {
                 focused.wrappedValue = true
             }
         }
-        .modeOutline(chat.activeMode.rung, focused: focused.wrappedValue, highlighted: dropTargeted.value)
+        .modeOutline(chat.controls.activeMode.rung, focused: focused.wrappedValue, highlighted: dropTargeted.value)
         // Only the box takes drops; the rest of the chat ignores them.
         .onDrop(of: [.fileURL, .image], isTargeted: Binding(get: { dropTargeted.value }, set: { dropTargeted.value = $0 })) { providers in
             Attachments.load(providers) { chat.attach($0) }
@@ -147,8 +147,8 @@ struct ComposerView: View {
     private var slashMatches: [SlashCommand] {
         guard !slashDismissed.value, let query = slashQuery else { return [] }
         // Foundation's `contains("")` is false, so a bare "/" must list everything explicitly.
-        if query.isEmpty { return chat.commands }
-        let hits = chat.commands.filter { $0.name.lowercased().contains(query) }
+        if query.isEmpty { return chat.controls.commands }
+        let hits = chat.controls.commands.filter { $0.name.lowercased().contains(query) }
         return hits.filter { $0.name.lowercased().hasPrefix(query) } + hits.filter { !$0.name.lowercased().hasPrefix(query) }
     }
 

@@ -3,7 +3,7 @@ import SwiftUI
 /// The row under the text field: + · / · model … mode · send. In a narrow tile it steps down
 /// (effort, then labels, then the model pill go) instead of clipping.
 struct ComposerBar: View {
-    let chat: ChatModel
+    let chat: Chat
     let attach: () -> Void
     let slash: () -> Void
     @StateObject private var plusHovered = Local(false)
@@ -45,11 +45,11 @@ struct ComposerBar: View {
 
     private func controls(_ density: Density) -> some View {
         HStack(spacing: Space.xxl) {
-            if !chat.models.isEmpty && density != .minimal {
+            if !chat.controls.models.isEmpty && density != .minimal {
                 ModelMenu(chat: chat, showEffort: density == .full)
             }
             Spacer(minLength: 0)
-            if let plan = chat.provider.planToggle, chat.planMode {
+            if let plan = chat.provider.planToggle, chat.controls.planMode {
                 PlanChip(mode: plan) { chat.setPlanMode(false) }
             }
             ModeMenu(chat: chat, showLabel: density == .full || density == .noEffort)
@@ -58,33 +58,33 @@ struct ComposerBar: View {
 
     private var sendButton: some View {
         Button {
-            chat.isRunning ? chat.stop() : chat.send()
+            chat.status.isRunning ? chat.stop() : chat.send()
         } label: {
-            Image(systemName: chat.isRunning ? "stop.fill" : "arrow.up")
+            Image(systemName: chat.status.isRunning ? "stop.fill" : "arrow.up")
                 .font(Glyph.send)
                 .foregroundStyle(Theme.background)
                 .frame(width: Size.iconButton, height: Size.iconButton)
                 .background(Theme.text, in: RoundedRectangle(cornerRadius: Radius.chip))
         }
         .buttonStyle(.plain)
-        .disabled(!chat.isRunning && !chat.canSend)
-        .opacity(!chat.isRunning && !chat.canSend ? 0.3 : 1)
+        .disabled(!chat.status.isRunning && !chat.canSend)
+        .opacity(!chat.status.isRunning && !chat.canSend ? 0.3 : 1)
     }
 }
 
 /// Model and effort, from the CLI's own list.
 struct ModelMenu: View {
-    let chat: ChatModel
+    let chat: Chat
     var showEffort = true
 
     var body: some View {
         Menu {
             Section("Model") {
-                ForEach(chat.models) { option in
+                ForEach(chat.controls.models) { option in
                     Button {
                         chat.setModel(option)
                     } label: {
-                        if option.id == chat.modelId {
+                        if option.id == chat.controls.modelId {
                             Label(option.name, systemImage: "checkmark")
                         } else {
                             Text(option.name)
@@ -92,13 +92,13 @@ struct ModelMenu: View {
                     }
                 }
             }
-            if let efforts = chat.currentModel?.efforts, !efforts.isEmpty {
+            if let efforts = chat.controls.currentModel?.efforts, !efforts.isEmpty {
                 Section("Effort") {
                     ForEach(efforts, id: \.self) { level in
                         Button {
                             chat.setEffort(level)
                         } label: {
-                            if level == chat.effort {
+                            if level == chat.controls.effort {
                                 Label(Self.effortName(level), systemImage: "checkmark")
                             } else {
                                 Text(Self.effortName(level))
@@ -109,11 +109,11 @@ struct ModelMenu: View {
             }
         } label: {
             HStack(spacing: Space.sm) {
-                Text(chat.modelLabel)
+                Text(chat.controls.modelLabel)
                     .font(TextStyle.labelMedium)
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
-                if showEffort, let effort = chat.effortLabel {
+                if showEffort, let effort = chat.controls.effortLabel {
                     Text(effort)
                         .font(TextStyle.label)
                         .foregroundStyle(Theme.secondary)
@@ -128,7 +128,7 @@ struct ModelMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(chat.effortLabel.map { "\(chat.modelLabel) · \($0)" } ?? chat.modelLabel)
+        .help(chat.controls.effortLabel.map { "\(chat.controls.modelLabel) · \($0)" } ?? chat.controls.modelLabel)
     }
 
     static func effortName(_ level: String) -> String {
@@ -138,21 +138,21 @@ struct ModelMenu: View {
 
 /// The provider's modes (icon + label), as in its VS Code extension.
 struct ModeMenu: View {
-    let chat: ChatModel
+    let chat: Chat
     var showLabel = true
 
     var body: some View {
         Menu {
-            ForEach(chat.availableModes) { mode in
-                toggle(mode, isOn: chat.mode == mode.id) { chat.setMode(mode.id) }
+            ForEach(chat.controls.availableModes) { mode in
+                toggle(mode, isOn: chat.controls.mode == mode.id) { chat.setMode(mode.id) }
             }
             if let plan = chat.provider.planToggle {
                 Divider()
-                toggle(plan, isOn: chat.planMode) { chat.setPlanMode(!chat.planMode) }
+                toggle(plan, isOn: chat.controls.planMode) { chat.setPlanMode(!chat.controls.planMode) }
             }
         } label: {
             // A plan toggle shows as its own chip, so the menu keeps the permissions mode.
-            let mode = chat.provider.planToggle != nil ? chat.permissionsMode : chat.activeMode
+            let mode = chat.provider.planToggle != nil ? chat.controls.permissionsMode : chat.controls.activeMode
             HStack(spacing: Space.xs) {
                 ModeIcon(mode: mode)
                 if showLabel {

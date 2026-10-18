@@ -21,6 +21,8 @@ extension Theme {
     static let dot = secondary
     /// IN / OUT labels.
     static let toolLabel = secondary.opacity(0.5)
+    /// A sub-agent's mark: the accent blue, so agents stand out on the line (owner, 2026-10-21).
+    static let agentMark = accent
     /// "Thought for 1s" at rest.
     static let thinkingSummary = secondary.opacity(0.8)
 }
@@ -107,8 +109,9 @@ extension Size {
     static let changesList: CGFloat = 240
     static let changesListMinWindow: CGFloat = 560
     /// An agent mark and its status ring: in the timeline, and in the strip / map.
-    static let markBox: CGFloat = 15
-    static let mark: CGFloat = 11
+    /// In the timeline the mark stands in for the 7pt dot, so it's drawn well above its size.
+    static let markBox: CGFloat = 20
+    static let mark: CGFloat = 14
     static let markBoxLarge: CGFloat = 22
     static let markLarge: CGFloat = 14
     static let markRing: CGFloat = 1.5

@@ -6,7 +6,7 @@ import Observation
 @MainActor @Observable
 final class ChatTab: Identifiable {
     let id = UUID()
-    var chat: ChatModel?
+    var chat: Chat?
 
     var title: String { chat?.title ?? "New tab" }
 }
@@ -44,7 +44,7 @@ final class Workspace {
     }
 
     func start(_ provider: Provider, in tab: ChatTab) {
-        tab.chat = ChatModel(provider: provider, folder: folder)
+        tab.chat = Chat(provider: provider, folder: folder)
     }
 
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.
@@ -160,8 +160,8 @@ final class Workspace {
         tabs.first { $0.chat?.sessionId == sessionId }
     }
 
-    private func chat(_ session: SessionSummary) -> ChatModel {
-        ChatModel(provider: Registry.provider(for: session.agent), folder: folder, resume: session)
+    private func chat(_ session: SessionSummary) -> Chat {
+        Chat(provider: Registry.provider(for: session.agent), folder: folder, resume: session)
     }
 
     // MARK: - Open tabs
@@ -211,7 +211,7 @@ final class Workspace {
             SessionSummary(
                 id: $0, agent: provider.historyAgent, title: saved.title ?? provider.name, updated: .now)
         }
-        tab.chat = ChatModel(provider: provider, folder: folder, resume: session)
+        tab.chat = Chat(provider: provider, folder: folder, resume: session)
         return tab
     }
 }

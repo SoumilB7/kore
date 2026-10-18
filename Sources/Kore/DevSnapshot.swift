@@ -88,13 +88,15 @@ enum DevSnapshot {
 
     /// KORE_DUMP=<path>: after KORE_DUMP_AFTER seconds (default 6), write the active chat's
     /// transcript entries as text, one per line, and quit (to compare replays between builds).
-    @MainActor static func dumpIfRequested(_ chat: @escaping @MainActor () -> ChatModel?) {
+    @MainActor static func dumpIfRequested(_ chat: @escaping @MainActor () -> Chat?) {
         let env = ProcessInfo.processInfo.environment
         guard let path = env["KORE_DUMP"] else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + (Double(env["KORE_DUMP_AFTER"] ?? "") ?? 6)) {
-            let lines = (chat()?.entries ?? []).map { e in
+            let lines = (chat()?.transcript.entries ?? []).map { e in
                 let files = e.attachments.map { "\($0.name):\($0.kind):\($0.thumbnail != nil)" }.joined(separator: ",")
-                return ["\(e.kind)", e.toolName ?? "", e.text, e.result ?? "", "\(e.done)", "\(e.isError)", files, e.from ?? ""]
+                // Kinds keep their earlier names, so dumps compare across builds.
+                let kind = e.kind == .answer ? "assistant" : "\(e.kind)"
+                return [kind, e.toolName ?? "", e.text, e.result ?? "", "\(e.done)", "\(e.isError)", files, e.from ?? ""]
                     .joined(separator: " | ").replacingOccurrences(of: "\n", with: "⏎")
             }
             try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
@@ -103,7 +105,7 @@ enum DevSnapshot {
     }
 
     /// KORE_STOP_AFTER / KORE_ANSWER: drive a started chat without clicking.
-    @MainActor static func drive(_ chat: ChatModel) {
+    @MainActor static func drive(_ chat: Chat) {
         let env = ProcessInfo.processInfo.environment
         if let after = env["KORE_STOP_AFTER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + after) { chat.stop() }
@@ -118,7 +120,7 @@ enum DevSnapshot {
         guard let decision else { return }
         Task { @MainActor in
             while true {
-                if let approval = chat.approvals.first { chat.answer(approval, decision) }
+                if let approval = chat.approvals.pending.first { chat.answer(approval, decision) }
                 try? await Task.sleep(for: .milliseconds(300))
             }
         }
