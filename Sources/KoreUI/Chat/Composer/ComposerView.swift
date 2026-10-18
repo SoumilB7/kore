@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The input box: attachments, text, and the bar of controls under it, with the slash menu
 /// above it while a command is being typed. Files can be pasted (⌘V), picked (+), or dropped
-/// onto the box.
+/// onto the box. One box serves every chat tab: what it holds (draft, files, mode, model) is
+/// the chat's, and what it keeps itself (caret, slash pick, undo) starts over with another chat.
 struct ComposerView: View {
     let chat: Chat
     var focused: FocusState<Bool>.Binding
@@ -15,8 +16,20 @@ struct ComposerView: View {
     @StateObject private var window = Held<NSWindow?>(nil)
     @StateObject private var pasteMonitor = Held<Any?>(nil)
     @StateObject private var dropTargeted = Local(false)
-    /// Where the caret is, so Shift+Return can put a line break there.
-    @StateObject private var selection = Local<TextSelection?>(nil)
+    /// Where the caret is, so Shift+Return can put a line break there: in that chat's draft.
+    @StateObject private var caret = Local(Caret(chat: nil, selection: nil))
+
+    private struct Caret: Equatable {
+        let chat: UUID?
+        var selection: TextSelection?
+    }
+
+    /// The caret in this chat's draft; nil when it was placed in another chat's.
+    private var selection: Binding<TextSelection?> {
+        Binding(
+            get: { caret.value.chat == chat.id ? caret.value.selection : nil },
+            set: { caret.value = Caret(chat: chat.id, selection: $0) })
+    }
 
     /// Empty, except while a turn runs (look.md §10): a message sent then waits for it, or joins
     /// it where the CLI can steer (Codex).
@@ -41,6 +54,24 @@ struct ComposerView: View {
             if let monitor = pasteMonitor.value { NSEvent.removeMonitor(monitor) }
             pasteMonitor.value = nil
         }
+        .onChange(of: chat.id) {
+            // The caret goes to the end of this chat's draft, ready to go on typing.
+            caret.value = Caret(chat: chat.id, selection: TextSelection(insertionPoint: chat.draft.endIndex))
+            slashSelection.value = 0
+            slashDismissed.value = false
+            forgetUndo()
+        }
+    }
+
+    /// The field stays focused through a switch, and its undo was the last chat's typing: undone
+    /// here, it would edit this chat's draft. The field editor keeps its own undo manager (not
+    /// the window's, which the explorer's file moves use), so all of it goes.
+    private func forgetUndo() {
+        guard let editor = window.value?.firstResponder as? NSTextView, editor.isFieldEditor,
+            let undo = editor.undoManager
+        else { return }
+        if undo === window.value?.undoManager { undo.removeAllActions(withTarget: editor) } else { undo.removeAllActions() }
+        editor.breakUndoCoalescing()
     }
 
     private var box: some View {
@@ -88,7 +119,7 @@ struct ComposerView: View {
     }
 
     private var field: some View {
-        TextField(placeholder, text: Binding(get: { chat.draft }, set: { chat.draft = $0 }), selection: $selection.value, axis: .vertical)
+        TextField(placeholder, text: Binding(get: { chat.draft }, set: { chat.draft = $0 }), selection: selection, axis: .vertical)
             .textFieldStyle(.plain)
             .font(TextStyle.body)
             .foregroundStyle(Theme.text)
@@ -134,7 +165,7 @@ struct ComposerView: View {
     private func insertLineBreak() {
         var draft = chat.draft
         var range = draft.endIndex..<draft.endIndex
-        if case .selection(let selected) = selection.value?.indices,
+        if case .selection(let selected) = selection.wrappedValue?.indices,
             selected.lowerBound >= draft.startIndex, selected.upperBound <= draft.endIndex
         {
             range = selected
@@ -142,7 +173,7 @@ struct ComposerView: View {
         let offset = draft.distance(from: draft.startIndex, to: range.lowerBound)
         draft.replaceSubrange(range, with: "\n")
         chat.draft = draft
-        selection.value = TextSelection(insertionPoint: draft.index(draft.startIndex, offsetBy: offset + 1))
+        selection.wrappedValue = TextSelection(insertionPoint: draft.index(draft.startIndex, offsetBy: offset + 1))
     }
 
     // MARK: Paste and +

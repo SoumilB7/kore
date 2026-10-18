@@ -189,12 +189,18 @@ struct ModeMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help(chat.controls.changedBy.map { "Changed by \($0)" } ?? "Mode (⇧Tab)")
-        .onChange(of: chat.controls.agentChangeSeq) {
-            guard !reduceMotion else { return }
+        // Only the agent's own change flashes, not a switch to a chat that had one.
+        .onChange(of: AgentChange(chat: chat.id, seq: chat.controls.agentChangeSeq)) { old, new in
+            guard !reduceMotion, old.chat == new.chat else { return }
             flash.value = 1
             // From the next pass, so the fade starts from the full flash.
             DispatchQueue.main.async { withAnimation(Motion.modeFlash) { flash.value = 0 } }
         }
+    }
+
+    private struct AgentChange: Equatable {
+        let chat: UUID
+        let seq: Int
     }
 
     private func toggle(_ mode: ModeOption, isOn: Bool, action: @escaping () -> Void) -> some View {
