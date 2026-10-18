@@ -3,7 +3,7 @@ import KoreCore
 import SwiftUI
 
 /// A file tab (look §5–§7): the path row, a notice when the disk disagrees, the editor (or
-/// the image, or a state for files Kore doesn't edit), and the status row.
+/// a renderer, or a state for files Kore doesn't edit), and the status row.
 struct FileEditorView: View {
     let document: FileDocument
     let tab: ChatTab
@@ -24,7 +24,7 @@ struct FileEditorView: View {
             }
             RendererHost(document: document, workspace: workspace) { content }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if !document.rendering.showsRenderer, document.loaded, document.isText || document.file.content == .image {
+            if !document.rendering.showsRenderer, document.loaded, document.isText {
                 Rule()
                 StatusRow(document: document, workspace: workspace)
             }
@@ -57,9 +57,8 @@ struct FileEditorView: View {
                             .padding(.leading, Size.Editor.findMargin)
                     }
                 }
-            case .image:
-                ImagePane(document: document)
-            case .binary:
+            // Images and binary files go to their renderers; this shows only if one can't take them.
+            case .image, .binary:
                 FileState(
                     symbol: "doc", title: "This file is binary.", line: "Kore shows text files and images.",
                     buttons: [("Open with Default App", openDefault), ("Reveal in Finder", reveal)])
@@ -245,41 +244,6 @@ private struct FileState: View {
     }
 }
 
-private struct ImagePane: View {
-    let document: FileDocument
-    @StateObject private var image = Local<NSImage?>(nil)
-
-    var body: some View {
-        GeometryReader { geometry in
-            if let image = image.value, image.size.width > 0, image.size.height > 0 {
-                // Fitted inside the margin, never scaled past 100%.
-                let room = CGSize(
-                    width: max(geometry.size.width - 2 * Layout.Viewer.canvasSide, 1),
-                    height: max(geometry.size.height - 2 * Layout.Viewer.canvasSide, 1))
-                let scale = min(1, room.width / image.size.width, room.height / image.size.height)
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: image.size.width * scale, height: image.size.height * scale)
-                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-            }
-        }
-        .task(id: document.file.stamp?.modified) { image.value = Self.load(document.url) }
-    }
-
-    /// 100% is one image pixel per point, as in VS Code; `@2x` and `@3x` files are drawn at
-    /// their scale.
-    private static func load(_ url: URL) -> NSImage? {
-        guard let image = NSImage(contentsOf: url), let rep = image.representations.first,
-            rep.pixelsWide > 0, rep.pixelsHigh > 0
-        else { return NSImage(contentsOf: url) }
-        let name = url.deletingPathExtension().lastPathComponent
-        let scale: CGFloat = name.hasSuffix("@3x") ? 3 : name.hasSuffix("@2x") ? 2 : 1
-        image.size = NSSize(width: CGFloat(rep.pixelsWide) / scale, height: CGFloat(rep.pixelsHigh) / scale)
-        return image
-    }
-}
-
 // MARK: - Status row
 
 private struct StatusRow: View {
@@ -290,36 +254,29 @@ private struct StatusRow: View {
         HStack(spacing: Space.xl) {
             Spacer(minLength: 0)
             if document.readOnly { StatusText("Read-only") }
-            if case .image = document.file.content {
-                if let image = NSImageRep(contentsOf: document.url) {
-                    StatusText("\(image.pixelsWide) × \(image.pixelsHigh)")
-                }
-                StatusText(FileEditorView.size(document.file.stamp?.size ?? 0))
-            } else {
-                let caret = document.caret
-                StatusItem(
-                    title: "Ln \(caret.line), Col \(caret.column)" + (caret.selected > 0 ? " (\(caret.selected) selected)" : ""),
-                    help: "Go to Line (⌃G)"
-                ) {
-                    Button("Go to Line…") { workspace.quickOpen = .line }
-                }
-                StatusItem(title: document.indent.label, help: "Select Indentation") {
-                    Button("Indent Using Spaces: 2") { document.setIndent(.spaces(2)) }
-                    Button("Indent Using Spaces: 4") { document.setIndent(.spaces(4)) }
-                    Button("Indent Using Spaces: 8") { document.setIndent(.spaces(8)) }
-                    Button("Indent Using Tabs") { document.setIndent(.tabs) }
-                }
-                StatusText(document.encodingName)
-                StatusItem(title: document.lineEnding.rawValue, help: "Select End of Line Sequence") {
-                    Button("LF") { document.setLineEnding(.lf) }
-                    Button("CRLF") { document.setLineEnding(.crlf) }
-                }
-                StatusItem(title: document.language.name, help: "Select Language Mode") {
-                    ForEach(Language.all, id: \.id) { language in
-                        Button(language.name) {
-                            document.language = language
-                            document.editor.setLanguage(language)
-                        }
+            let caret = document.caret
+            StatusItem(
+                title: "Ln \(caret.line), Col \(caret.column)" + (caret.selected > 0 ? " (\(caret.selected) selected)" : ""),
+                help: "Go to Line (⌃G)"
+            ) {
+                Button("Go to Line…") { workspace.quickOpen = .line }
+            }
+            StatusItem(title: document.indent.label, help: "Select Indentation") {
+                Button("Indent Using Spaces: 2") { document.setIndent(.spaces(2)) }
+                Button("Indent Using Spaces: 4") { document.setIndent(.spaces(4)) }
+                Button("Indent Using Spaces: 8") { document.setIndent(.spaces(8)) }
+                Button("Indent Using Tabs") { document.setIndent(.tabs) }
+            }
+            StatusText(document.encodingName)
+            StatusItem(title: document.lineEnding.rawValue, help: "Select End of Line Sequence") {
+                Button("LF") { document.setLineEnding(.lf) }
+                Button("CRLF") { document.setLineEnding(.crlf) }
+            }
+            StatusItem(title: document.language.name, help: "Select Language Mode") {
+                ForEach(Language.all, id: \.id) { language in
+                    Button(language.name) {
+                        document.language = language
+                        document.editor.setLanguage(language)
                     }
                 }
             }
