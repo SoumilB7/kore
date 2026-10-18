@@ -225,7 +225,7 @@ package final class Chat: Identifiable {
         do {
             try await connect().start()
         } catch {
-            fail(String(describing: error))
+            fail(Self.reason(error))
         }
     }
 
@@ -418,7 +418,7 @@ package final class Chat: Identifiable {
             } catch {
                 // A queued message that couldn't go goes back to the composer.
                 if let queued { dispatch(.queuedMessage(id: queued, .dropped)) } else { status.setRunning(false) }
-                fail(String(describing: error))
+                fail(Self.reason(error))
             }
         }
     }
@@ -445,6 +445,14 @@ package final class Chat: Identifiable {
         Task {
             do {
                 try await backend.start()
+            } catch {
+                // The CLI didn't start: no compaction was asked of it, so it's said as any start's.
+                context.end()
+                transcript.compacting(false)
+                fail(Self.reason(error))
+                return
+            }
+            do {
                 try await backend.compact(instructions: instructions)
             } catch {
                 dispatch(.compactionFailed(Self.reason(error)))
@@ -494,9 +502,12 @@ package final class Chat: Identifiable {
         return text.dropFirst(command.count).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// An error as a short line for "Couldn't compact: …".
-    private static func reason(_ error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+    /// An error as the chat says it: its own readable text (Codex's message, parsed), else its
+    /// description. Never Foundation's "The operation couldn't be completed".
+    static func reason(_ error: Error) -> String {
+        if let text = (error as? LocalizedError)?.errorDescription { return text }
+        // Foundation's own errors have their sentence; Kore's and the CLIs' say themselves.
+        return type(of: error) is NSError.Type ? error.localizedDescription : String(describing: error)
     }
 
     /// Loads a sub-agent's own transcript the first time it's opened, when the chat doesn't have

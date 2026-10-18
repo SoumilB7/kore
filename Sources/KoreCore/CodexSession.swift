@@ -102,6 +102,25 @@ public actor CodexSession {
     private var unloaded = false
     /// The thread's rollout file, where each turn's settings are kept (`CodexRolloutReader`).
     public private(set) var rolloutPath: String?
+    /// Codex had no rollout for the thread to resume (it never ran a turn), so `open` started a
+    /// new one in its place, with the same settings.
+    public private(set) var startedFresh = false
+
+    /// The rollout is on disk. Codex writes a thread's rollout with its first turn: before that
+    /// the thread is only in memory, and can be neither resumed nor compacted.
+    public var hasRollout: Bool { Self.rolloutExists(rolloutPath) }
+
+    public nonisolated static func rolloutExists(_ path: String?) -> Bool {
+        guard let path else { return false }
+        return FileManager.default.fileExists(atPath: path)
+    }
+
+    /// Codex's answer to `thread/resume` for a thread with no rollout ("no rollout found for
+    /// thread id …"): there's nothing to resume.
+    public nonisolated static func isMissingRollout(_ error: any Error) -> Bool {
+        guard case CodexAppServer.Failure.rpc(_, let message) = error else { return false }
+        return message.localizedCaseInsensitiveContains("no rollout found")
+    }
     /// Spawns the app-server and opens (or resumes) the thread.
     public static func start(_ options: Options) async throws -> CodexSession {
         let session = try await launch(options)
@@ -283,11 +302,14 @@ public actor CodexSession {
     /// Codex compacts with the model the thread is loaded on, which only a turn changes: a model
     /// picked since (or the fallback for one the account can't use) is put on the thread first.
     public func compact() async throws {
+        // Before its first turn a thread is only in memory: there's nothing to summarize (Codex
+        // would still call the model), and unloaded it would be gone.
+        let empty = activeTurnId == nil && !hasRollout
+        if empty, rolloutPath != nil {
+            throw CodexAppServer.Failure.rpc(code: -32600, message: "Nothing to compact yet")
+        }
         if let model, model != threadModel, activeTurnId == nil {
-            // Before its first turn a thread is only in memory: unloaded, it would be gone.
-            guard let rolloutPath, FileManager.default.fileExists(atPath: rolloutPath) else {
-                throw CodexAppServer.Failure.rpc(code: -32600, message: "Nothing to compact yet")
-            }
+            if empty { throw CodexAppServer.Failure.rpc(code: -32600, message: "Nothing to compact yet") }
             try await reopen(model: model)
         }
         _ = try await server.request("thread/compact/start", ["threadId": .string(threadId)])
@@ -366,14 +388,24 @@ public actor CodexSession {
         if let resume = options.resume, options.forkAt == nil {
             params["threadId"] = .string(resume)
             params["excludeTurns"] = true
-            if let limit {
-                let replies = await server.requests([
-                    ("thread/resume", .object(params)), ("thread/turns/list", Self.turnsParams(resume, nil, limit, .full)),
-                ])
-                result = try replies[0].get()
-                page = (try? replies[1].get()).map(Self.page)
-            } else {
-                result = try await server.request("thread/resume", .object(params))
+            do {
+                if let limit {
+                    let replies = await server.requests([
+                        ("thread/resume", .object(params)), ("thread/turns/list", Self.turnsParams(resume, nil, limit, .full)),
+                    ])
+                    result = try replies[0].get()
+                    page = (try? replies[1].get()).map(Self.page)
+                } else {
+                    result = try await server.request("thread/resume", .object(params))
+                }
+            } catch where Self.isMissingRollout(error) {
+                // A thread that never ran a turn left nothing to resume: a new one, as it would
+                // have started.
+                params["threadId"] = nil
+                params["excludeTurns"] = nil
+                result = try await server.request("thread/start", .object(params))
+                page = nil
+                startedFresh = true
             }
         } else if let resume = options.resume, let turn = options.forkAt {
             params["threadId"] = .string(resume)

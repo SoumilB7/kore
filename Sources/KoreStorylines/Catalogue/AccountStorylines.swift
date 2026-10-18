@@ -284,6 +284,56 @@ final class SignInFromFailure: ChatStoryline {
     }
 }
 
+/// A new chat whose account changes before its first turn (a sign-in from Account, then the
+/// first message): its CLI starts again once, at once (nothing runs), and the first message gets
+/// its answer, with no error and nothing said about compacting. Sending again doesn't start the
+/// CLI again.
+final class AccountChangeNewChat: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Hi."), CLIScript.reply("Still here.")]) }
+
+    override func steps() -> [any Step] {
+        let codex = variant == .codex
+        let provider = codex ? "codex" : "claude"
+        let accounts = ScriptedAccounts.shared
+        let popup = Locator.id(StoryID.Composer.account)
+        let work = codex ? ScriptedAccounts.codex(email: "work@acme.dev", plan: "business") : ScriptedAccounts.claude(
+            email: "work@acme.dev", org: "Acme Labs", plan: "team")
+        let relaunches = { (story: StoryContext) in try story.scriptedBackend().log.filter { $0 == .relaunch }.count }
+        let sends = { (story: StoryContext) in
+            try story.scriptedBackend().log.filter { if case .send = $0 { true } else { false } }.count
+        }
+        return super.steps() + [
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Press(.id(StoryID.Composer.slash)),
+            Press(.id(StoryID.Composer.command("account"))),
+            WaitForElement(popup),
+            Press(.id(StoryID.Composer.account.part(.switch))),
+            Expect("a sign-in waits for the browser") { _ in accounts.isWaiting(provider) },
+            Expect("the browser finishes as work@acme.dev") { _ in
+                accounts.finish(provider, as: work)
+                return true
+            },
+            Expect("the new chat's CLI started again before its first turn", found: { try? "\(relaunches($0)) relaunches" }) {
+                try relaunches($0) == 1 && sends($0) == 0
+            },
+            Key(.escape),
+            ExpectElement(popup, .absent),
+            Send("hey"),
+            TurnFinished(1),
+            Expect.rows("the answer, and no error") { rows in
+                rows.last?.kind == "assistant" && rows.last?.text == "Hi." && !rows.contains { $0.isError }
+            },
+            Send("and again"),
+            TurnFinished(2),
+            Expect.rows("nothing about compacting") { !$0.contains { $0.text.localizedCaseInsensitiveContains("compact") } },
+            Expect("each message sent once, and no start again", found: { try? "\(relaunches($0)) relaunches, \(sends($0)) sends" }) {
+                try relaunches($0) == 1 && sends($0) == 2
+            },
+        ]
+    }
+}
+
 /// Waits out the row's fade (`Motion.fade`), so a snapshot shows where it ends.
 private struct FadesEnd: Step {
     var label: String { "Wait for the fades to end" }

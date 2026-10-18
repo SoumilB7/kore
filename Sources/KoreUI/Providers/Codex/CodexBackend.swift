@@ -31,6 +31,17 @@ final class CodexBackend: ChatBackend {
     private static let pageTurns = 10
     /// How many times the app-server was started (a relaunch, or a send after it exited, starts it again).
     private var launches = 0
+    /// The thread was started here and hasn't completed a turn: Codex writes a thread's rollout
+    /// with its first turn, so until then there's nothing to resume, and a launch again starts a
+    /// fresh thread with the chat's settings (unless a failed turn left a rollout after all).
+    private var unwritten = false
+    private var rolloutPath: String?
+    /// Codex refused to resume the thread (its answer, not a crash): a launch again would be
+    /// refused the same way, so sends say so without starting the app-server, until the
+    /// account changes (`relaunch`).
+    private var refused: (any Error)?
+    /// The user's name for the chat (`rename`): a fresh thread in place of an unwritten one takes it too.
+    private var customName: String?
     private let log = SessionLog.shared
     private static let log = Logger(subsystem: "Kore", category: "codex")
 
@@ -50,6 +61,7 @@ final class CodexBackend: ChatBackend {
     func start() async throws {
         if session != nil { return }
         if let starting { return try await starting.value }
+        if let refused { throw refused }
         let task = Task { try await launch() }
         starting = task
         defer { starting = nil }
@@ -58,14 +70,17 @@ final class CodexBackend: ChatBackend {
 
     private func launch() async throws {
         launches += 1
-        let kind = launches > 1 ? "again" : forkAt != nil ? "fork" : sessionId != nil ? "resume" : "new"
+        // A thread with no rollout can't be resumed: a fresh one takes its place.
+        let fresh = unwritten && forkAt == nil && !CodexSession.rolloutExists(rolloutPath)
+        let resume = fresh ? nil : sessionId
+        let kind = fresh ? "fresh" : launches > 1 ? "again" : forkAt != nil ? "fork" : sessionId != nil ? "resume" : "new"
         let session: CodexSession
         do {
             session = try await CodexSession.launch(
                 .init(
                     cwd: options.folder, model: options.model, effort: options.effort,
                     permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
-                    plan: options.planMode, resume: sessionId, forkAt: forkAt))
+                    plan: options.planMode, resume: resume, forkAt: forkAt))
         } catch {
             log.startFailed("codex", chat: sessionId, launch: kind)
             throw error
@@ -79,8 +94,20 @@ final class CodexBackend: ChatBackend {
         do {
             newest = try await session.open(page: replayPending ? Self.pageTurns : nil)
         } catch {
+            log.startFailed("codex", chat: resume, launch: kind)
             await session.close()
+            if resume != nil, forkAt == nil, case CodexAppServer.Failure.rpc = error { refused = error }
             throw error
+        }
+        rolloutPath = await session.rolloutPath
+        // Codex had no rollout to resume after all (`CodexSession.isMissingRollout`).
+        let replaced = await session.startedFresh
+        if replaced { log.relaunch("codex", chat: resume, reason: "no rollout to resume, new thread") }
+        if resume == nil && forkAt == nil || replaced { unwritten = true }
+        if fresh || replaced, let customName {
+            // The new thread takes the chat's name after its first turn, as a new chat does.
+            mayTitle = true
+            titlePrompt = customName
         }
         if forkAt != nil {
             // The fork is its own thread from here on (a relaunch resumes it).
@@ -260,7 +287,11 @@ final class CodexBackend: ChatBackend {
     private func handle(_ event: CodexEvent) {
         translator.translate(event)
         flush()
-        if case .turnCompleted = event { saveTitle() }
+        if case .turnCompleted(let result) = event {
+            // A turn that failed may have left no rollout: the next launch looks for it.
+            if result.status == "completed" { unwritten = false }
+            saveTitle()
+        }
         if case .exited(let status) = event {
             if let ended = session { logExit(ended, reported: status) }
             resumeId = sessionId
@@ -397,11 +428,14 @@ final class CodexBackend: ChatBackend {
     }
 
     func setEffort(_ level: String) async {
+        // Kept for a launch again (a fresh thread starts on it too).
+        options.effort = level
         await session?.setEffort(level)
     }
 
     func rename(_ title: String) async throws {
         mayTitle = false
+        customName = title
         try await start()
         try await session?.rename(title)
     }
@@ -498,6 +532,8 @@ final class CodexBackend: ChatBackend {
     }
 
     func relaunch() async {
+        // A new account may resume what the last one couldn't.
+        refused = nil
         guard let session else { return }
         log.relaunch("codex", chat: sessionId, reason: "account changed")
         // Its exit isn't the chat's news: the pump goes first.

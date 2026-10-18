@@ -16,8 +16,8 @@ struct SessionLog: Sendable {
 
     static let shared = SessionLog()
 
-    /// `launch`: "new", "resume", "fork", or "again" (the CLI exited, or was ended, and a send
-    /// starts it again).
+    /// `launch`: "new", "resume", "fork", "again" (the CLI exited, or was ended, and a send
+    /// starts it again), or "fresh" (started again on a new thread: Codex never wrote the old one).
     func started(_ cli: String, chat: String?, pid: Int32?, launch: String) {
         log.write("started", ["cli": cli, "chat": chat ?? "-", "pid": pid.map(String.init) ?? "-", "launch": launch])
     }

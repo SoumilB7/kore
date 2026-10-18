@@ -35,6 +35,9 @@ final class ContextStore {
     /// Kore asked for a compaction; the CLI's own start may follow.
     func begin() { compacting = true }
 
+    /// The compaction Kore asked for never reached the CLI (it didn't start).
+    func end() { compacting = false }
+
     /// Used / window, 0…1; nil until the CLI has said its window.
     var fraction: Double? {
         guard let usage, let window = usage.window, window > 0 else { return nil }

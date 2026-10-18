@@ -167,9 +167,24 @@ public enum CodexError {
             let message = (json["error"]?["message"]?.string ?? json["error"]?.string ?? json["message"]?.string)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
             !message.isEmpty
-        else { return raw }
-        return message
+        else { return withoutIds(raw) }
+        return withoutIds(message)
     }
+
+    /// Without the thread ids Codex names ("no rollout found for thread id 01a1…" reads "no
+    /// rollout found"): a person never sees a chat's id. Text with none is returned as it was.
+    static func withoutIds(_ text: String) -> String {
+        guard text.range(of: uuid, options: .regularExpression) != nil else { return text }
+        var out = text.replacingOccurrences(
+            of: #"\s*(?:(?:for|of)\s+)?(?:(?:thread|session|conversation)\s*)?(?:id\s*)?:?\s*"# + uuid + #"\s*\.?$"#,
+            with: "", options: [.regularExpression, .caseInsensitive])
+        out = out.replacingOccurrences(of: #"\s*"# + uuid, with: "", options: .regularExpression)
+        out = out.trimmingCharacters(in: .whitespaces)
+        while out.hasSuffix(":") { out.removeLast() }
+        return out.isEmpty ? text : out
+    }
+
+    private static let uuid = #"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b"#
 
     /// Whether a turn's `error` says the login was refused: `codexErrorInfo` "unauthorized", or
     /// an HTTP 401 on any of its variants.

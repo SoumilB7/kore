@@ -1,0 +1,8 @@
+{"args":["app-server"],"cassette":1,"cli":"codex","cwd":"/WORK","from":"written: thread/resume refused (not a missing rollout)","model":"gpt-6-luna","proc":0,"recorded":"2026-10-23"}
+{"t":0.001,"dir":"in","p":0,"line":"{\"method\":\"initialize\",\"id\":1,\"params\":{\"capabilities\":{\"experimentalApi\":true},\"clientInfo\":{\"name\":\"kore\",\"title\":\"Kore\",\"version\":\"0.1.0\"}}}"}
+{"t":0.002,"dir":"out","p":0,"line":"{\"id\":1,\"result\":{\"userAgent\":\"kore/0.159.3\",\"codexHome\":\"/CODEX_HOME\",\"platformFamily\":\"unix\",\"platformOs\":\"macos\"}}"}
+{"t":0.003,"dir":"in","p":0,"line":"{\"method\":\"initialized\"}"}
+{"t":0.004,"dir":"in","p":0,"line":"{\"method\":\"thread/resume\",\"id\":2,\"params\":{\"cwd\":\"/WORK\",\"approvalPolicy\":\"on-request\",\"approvalsReviewer\":\"user\",\"sandbox\":\"workspace-write\",\"threadId\":\"01a16a16-2ab7-73b1-ae1a-402d276d7899\",\"excludeTurns\":true}}"}
+{"t":0.005,"dir":"in","p":0,"line":"{\"method\":\"thread/turns/list\",\"id\":3,\"params\":{\"threadId\":\"01a16a16-2ab7-73b1-ae1a-402d276d7899\",\"sortDirection\":\"desc\",\"limit\":10,\"itemsView\":\"full\"}}"}
+{"t":0.006,"dir":"out","p":0,"line":"{\"id\":2,\"error\":{\"code\":-32600,\"message\":\"thread not found: 01a16a16-2ab7-73b1-ae1a-402d276d7899\"}}"}
+{"t":0.007,"dir":"out","p":0,"line":"{\"id\":3,\"error\":{\"code\":-32600,\"message\":\"thread not found: 01a16a16-2ab7-73b1-ae1a-402d276d7899\"}}"}
