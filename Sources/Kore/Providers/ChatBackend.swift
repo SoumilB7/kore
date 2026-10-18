@@ -27,6 +27,11 @@ protocol ChatBackend: AnyObject {
     func setEffort(_ level: String) async
     func rename(_ title: String) async throws
     func stopAgent(_ id: String) async
+    /// A sub-agent's own messages and tool calls, tagged with its `AgentID`, for its card: the
+    /// whole history each time. Needed for agents of a past session and for Codex children
+    /// opened later; a live foreground agent's events arrive as it runs, and a Claude
+    /// background agent's are tailed from its transcript while it runs.
+    func agentHistory(_ id: String) async -> [ChatEvent]
     func close() async
 }
 
@@ -129,6 +134,22 @@ enum EventLog {
         var text = String(describing: event)
         if text.count > 400 { text = String(text.prefix(400)) + "…" }
         write(line: prefix + text)
+    }
+
+    /// KORE_LOAD_AGENTS=1: loads every agent a replay names through `agentHistory`, logging its
+    /// events under `history <id>` (checks sub-agent loading without a card to open).
+    static func loadAgents(_ event: ChatEvent, from backend: any ChatBackend) {
+        guard handle != nil, ProcessInfo.processInfo.environment["KORE_LOAD_AGENTS"] == "1",
+            case .replayed(let events) = event
+        else { return }
+        let agents = events.compactMap { if case .agentSpawned(let agent) = $0 { agent.id } else { nil } }
+        Task { @MainActor in
+            for id in agents {
+                let history = await backend.agentHistory(id)
+                write(line: "history \(id) \(history.count)")
+                for event in history { write(event, prefix: "  ") }
+            }
+        }
     }
 
     private static func write(line: String) {

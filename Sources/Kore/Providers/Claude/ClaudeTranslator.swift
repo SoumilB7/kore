@@ -26,6 +26,17 @@ final class ClaudeTranslator {
     /// Replaying a transcript: no snapshots; a turn's files come from its tool edits.
     private var replaying = false
     private var replayChanges: [FileChange] = []
+    /// Reading a sub-agent's own transcript: its edits belong to no turn of this chat.
+    private var reading = false
+    /// Live, a sub-agent's messages can come twice (its tailed transcript, and stdout when the
+    /// CLI relays them): tool calls by id, text by content, each kept once.
+    private var seen: Set<String> = []
+    private var deduplicating = true
+
+    private func firstTime(_ key: String, _ agent: AgentID) -> Bool {
+        guard case .sub(let id) = agent, deduplicating else { return true }
+        return seen.insert(id + "|" + key).inserted
+    }
 
     /// The main agent's block receiving deltas; a new one starts at each content block.
     private var block: (id: BlockID, kind: TextKind)?
@@ -43,7 +54,8 @@ final class ClaudeTranslator {
     /// task id → Agent tool_use id.
     private var taskTool: [String: String] = [:]
     private var spawned: Set<String> = []
-    private var finished: Set<String> = []
+    /// Finished agents, and whether their result text was given yet.
+    private var finished: [String: Bool] = [:]
     /// Agent tool_use id → the CLI's agent id (its `subagents/agent-<id>.jsonl`).
     private(set) var agentFiles: [String: String] = [:]
 
@@ -66,6 +78,8 @@ final class ClaudeTranslator {
     func request(_ id: String) -> PermissionRequest? { pending.removeValue(forKey: id) }
 
     func taskId(forAgent id: String) -> String? { taskTool.first { $0.value == id }?.key }
+
+    func isFinished(_ agent: String) -> Bool { finished[agent] != nil }
 
     // MARK: - Turns
 
@@ -183,14 +197,14 @@ final class ClaudeTranslator {
         // The main agent's text normally arrived as deltas. A slash command's output (e.g.
         // /context), a transcript, and a sub-agent's messages come whole.
         if agent != .main || block == nil {
-            for case .text(let text) in blocks where !text.isEmpty {
+            for case .text(let text) in blocks where !text.isEmpty && firstTime("text:" + text, agent) {
                 let id = ToolText.newID()
                 out.append(.text(id, .answer, text, agent: agent))
                 if agent == .main { turnItems.append(.answer(id)) }
             }
         }
         if agent == .main { block = nil }
-        for case .toolUse(let id, let name, let input) in blocks {
+        for case .toolUse(let id, let name, let input) in blocks where firstTime("start:" + id, agent) {
             toolAgent[id] = agent
             if Self.agentTools.contains(name) { agentInputs[id] = input }
             out.append(.toolStarted(Self.toolCall(id, name, input, in: folder), agent: agent))
@@ -200,14 +214,19 @@ final class ClaudeTranslator {
 
     private func toolResults(_ blocks: [ContentBlock], _ result: JSONValue?, agent: AgentID) {
         var first: String?
-        for case .toolResult(let id, let content, let isError) in blocks {
+        for case .toolResult(let id, let content, let isError) in blocks where firstTime("end:" + id, agent) {
             first = first ?? id
             out.append(.toolFinished(id: id, output: Self.text(of: content), isError: isError, agent: agent))
         }
         guard let id = first, let result else { return }
         if let change = FileChange(claudeToolResult: result) {
             out.append(.fileChanged(toolId: id, [change], agent: agent))
-            if replaying { replayChanges.append(change) } else { files.record([change]) }
+            if reading {
+            } else if replaying {
+                replayChanges.append(change)
+            } else {
+                files.record([change])
+            }
         } else if agentInputs[id] != nil {
             agentReturned(id, result)
         }
@@ -225,13 +244,14 @@ final class ClaudeTranslator {
                 // Sent before every model request; with no turn open, the CLI started one itself.
                 openTurn(.cli)
                 if let turn { followups.append(.cliTurn(turn, startedAt: turnStart)) }
-            case "task_started":
+            case "task_started" where !(json["task_type"]?.string.map { !$0.contains("agent") } ?? false):
+                // Background shell commands are tasks too (local_bash); only agents get a card.
                 let tool = json["tool_use_id"]?.string ?? json["task_id"]?.string ?? ""
                 if let task = json["task_id"]?.string { taskTool[task] = tool }
                 spawn(
                     tool, name: json["description"]?.string, type: json["subagent_type"]?.string,
                     prompt: json["prompt"]?.string, background: json["is_backgrounded"]?.bool)
-            case "task_progress":
+            case "task_progress" where spawned.contains(agent(ofTask: json)):
                 let usage = json["usage"]
                 out.append(
                     .agentProgress(
@@ -271,8 +291,16 @@ final class ClaudeTranslator {
                     background: background ?? input?["run_in_background"]?.bool ?? false)))
     }
 
+    /// Once per agent, plus once more if its result text comes later (stdout's
+    /// `task_notification` has none; the notification prompt that follows has it).
     private func finishAgent(_ id: String, status: String?, result: String?) {
-        guard let status = status.flatMap(Self.agentStatus), finished.insert(id).inserted else { return }
+        guard spawned.contains(id), let status = status.flatMap(Self.agentStatus) else { return }
+        switch finished[id] {
+        case nil: break
+        case false? where result != nil: break
+        default: return
+        }
+        finished[id] = result != nil
         out.append(.agentFinished(id: id, status, result: result))
     }
 
@@ -282,14 +310,16 @@ final class ClaudeTranslator {
         if let file = result["agentId"]?.string { agentFiles[id] = file }
         let status = result["status"]?.string ?? "completed"
         spawn(id)
-        guard status != "async_launched", !finished.contains(id) else { return }  // background: ends later
+        guard status != "async_launched" else { return }  // background: ends later
+        // Live, `task_notification` finished it already, without the report; this has it.
+        defer { finishAgent(id, status: status, result: result["content"].map(Self.text(of:))) }
+        guard finished[id] == nil else { return }
         out.append(
             .agentProgress(
                 id: id,
                 AgentProgress(
                     tokens: result["totalTokens"]?.int, tools: result["totalToolUseCount"]?.int,
                     duration: result["totalDurationMs"]?.int.map { .milliseconds($0) }, lastTool: nil)))
-        finishAgent(id, status: status, result: result["content"].map(Self.text(of:)))
     }
 
     /// The CLI's `<task-notification>` prompt, which starts the turn after a background agent
@@ -298,7 +328,7 @@ final class ClaudeTranslator {
         guard let text = entry["message"]?["content"]?.string, text.contains("<task-notification>"),
             let id = Self.tag("tool-use-id", in: text)
         else { return }
-        if !finished.contains(id) {
+        if finished[id] == nil {
             out.append(
                 .agentProgress(
                     id: id,
@@ -375,6 +405,33 @@ final class ClaudeTranslator {
         default:
             return nil
         }
+    }
+
+    // MARK: - A sub-agent's transcript
+
+    /// A sub-agent's own messages (`subagents/agent-<id>.jsonl`) as events of that agent. The
+    /// first entry is the prompt it was given, which `AgentInfo` already holds.
+    /// `live`: a running agent's new lines, kept apart from what stdout already gave. A card's
+    /// full history (`live` false) is complete each time.
+    func agentEntries(_ entries: [JSONValue], agent id: String, skippingPrompt: Bool, live: Bool) -> [ChatEvent] {
+        let pending = out
+        out = []
+        reading = true
+        deduplicating = live
+        defer {
+            out = pending
+            reading = false
+            deduplicating = true
+        }
+        for (index, entry) in entries.enumerated() {
+            if skippingPrompt && index == 0 && entry["type"]?.string == "user" { continue }
+            switch ClaudeEvent(message: entry) {
+            case .assistant(_, let blocks, _): assistant(blocks, agent: .sub(id))
+            case .user(let blocks, _, let result): toolResults(blocks, result, agent: .sub(id))
+            default: break
+            }
+        }
+        return out
     }
 
     // MARK: - Replay

@@ -16,6 +16,8 @@ final class ClaudeBackend: ChatBackend {
     private var titled: Bool
     /// Transcript entries already taken as the cause of a CLI-started turn.
     private var resolvedTurns: Set<String> = []
+    /// Background agents being followed through their transcripts.
+    private var tails: [String: Task<Void, Never>] = [:]
 
     var sessionId: String? { translator.sessionId }
 
@@ -94,13 +96,18 @@ final class ClaudeBackend: ChatBackend {
 
     private func flush() {
         let (events, followups) = translator.take()
-        for event in events { yield(event) }
+        for event in events {
+            yield(event)
+            // A background agent's commands don't reach stdout; its transcript has them.
+            if case .agentSpawned(let agent) = event, agent.background { tail(agent.id) }
+        }
         for followup in followups { run(followup) }
     }
 
     private func yield(_ event: ChatEvent) {
         EventLog.write(event)
         sink.yield(event)
+        EventLog.loadAgents(event, from: self)
     }
 
     private func run(_ followup: ClaudeTranslator.Followup) {
@@ -152,6 +159,44 @@ final class ClaudeBackend: ChatBackend {
                 let changes = await task.value
                 if !changes.isEmpty { yield(.turnChanges(turn, changes)) }
             }
+        }
+    }
+
+    // MARK: - Sub-agents
+
+    func agentHistory(_ id: String) async -> [ChatEvent] {
+        guard let session = sessionId else { return [] }
+        let folder = options.folder
+        let entries = await Task.detached {
+            ClaudeHistory.subagentFile(toolUseId: id, sessionId: session, in: folder).map { ClaudeHistory.entries(in: $0).entries }
+        }.value
+        return entries.map { translator.agentEntries($0, agent: id, skippingPrompt: true, live: false) } ?? []
+    }
+
+    /// Reads a running background agent's transcript as it grows, until the agent finishes.
+    private func tail(_ id: String) {
+        guard tails[id] == nil, let session = sessionId else { return }
+        let folder = options.folder
+        tails[id] = Task {
+            var file: URL?
+            var offset: UInt64 = 0
+            while !Task.isCancelled {
+                let finished = translator.isFinished(id)
+                if file == nil {
+                    file = await Task.detached { ClaudeHistory.subagentFile(toolUseId: id, sessionId: session, in: folder) }.value
+                }
+                if let file {
+                    let start = offset
+                    let (entries, next) = await Task.detached { ClaudeHistory.entries(in: file, from: start) }.value
+                    offset = next
+                    for event in translator.agentEntries(entries, agent: id, skippingPrompt: start == 0, live: true) {
+                        yield(event)
+                    }
+                }
+                if finished { break }
+                try? await Task.sleep(for: .milliseconds(700))
+            }
+            tails[id] = nil
         }
     }
 
@@ -233,6 +278,8 @@ final class ClaudeBackend: ChatBackend {
     }
 
     func close() async {
+        for tail in tails.values { tail.cancel() }
+        tails = [:]
         pump?.cancel()
         pump = nil
         let session = session

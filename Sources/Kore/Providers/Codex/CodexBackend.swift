@@ -112,6 +112,7 @@ final class CodexBackend: ChatBackend {
     private func yield(_ event: ChatEvent) {
         EventLog.write(event)
         sink.yield(event)
+        EventLog.loadAgents(event, from: self)
     }
 
     // MARK: - Actions
@@ -190,6 +191,12 @@ final class CodexBackend: ChatBackend {
     func stopAgent(_ id: String) async {
         guard let turn = translator.childTurn(id) else { return }
         try? await session?.interrupt(thread: id, turn: turn)
+    }
+
+    func agentHistory(_ id: String) async -> [ChatEvent] {
+        try? await start()
+        guard let session, let turns = try? await session.readThread(id) else { return [] }
+        return translator.agentTurns(turns, agent: id)
     }
 
     func close() async {

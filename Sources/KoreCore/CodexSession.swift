@@ -151,6 +151,12 @@ public actor CodexSession {
         _ = try await server.request("turn/interrupt", ["threadId": .string(threadId), "turnId": .string(turnId)])
     }
 
+    /// Another thread's turns with their items, e.g. a sub-agent's (its own thread on this app-server).
+    public func readThread(_ id: String) async throws -> [JSONValue] {
+        let result = try await server.request("thread/read", ["threadId": .string(id), "includeTurns": true])
+        return result["thread"]?["turns"]?.array ?? []
+    }
+
     /// Stops a sub-agent's running turn (its own thread on this app-server).
     public func interrupt(thread: String, turn: String) async throws {
         _ = try await server.request("turn/interrupt", ["threadId": .string(thread), "turnId": .string(turn)])

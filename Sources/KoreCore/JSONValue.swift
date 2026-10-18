@@ -36,8 +36,11 @@ public enum JSONValue: Sendable, Hashable {
     }
 
     /// Compact single-line rendering, for logs and debugging.
+    /// Keys are sorted, so the same value reads the same in every run.
     public var compact: String {
-        (try? encoded()).map { String(decoding: $0, as: UTF8.self) } ?? "<invalid json>"
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes, .sortedKeys]
+        return (try? encoder.encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "<invalid json>"
     }
 }
 

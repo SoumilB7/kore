@@ -36,6 +36,8 @@ final class CodexTranslator {
     private var childTools: [String: Int] = [:]
     private var spawned: Set<String> = []
     private var finished: Set<String> = []
+    /// Each child's latest message: its result when it finishes.
+    private var lastText: [String: String] = [:]
 
     init(folder: URL) {
         self.folder = folder
@@ -162,7 +164,7 @@ final class CodexTranslator {
         if let tool = tool(item) {
             out.append(.toolStarted(tool, agent: agent))
             if agent == .main { turnItems.append(.tool) }
-            if case .sub(let thread) = agent {
+            if case .sub(let thread) = agent, !replaying {
                 childTools[thread, default: 0] += 1
                 out.append(.agentProgress(id: thread, AgentProgress(tools: childTools[thread], lastTool: tool.name)))
             }
@@ -189,6 +191,7 @@ final class CodexTranslator {
             }
             if planMode && agent == .main && !replaying { out.append(.planReady) }
         case "agentMessage":
+            if case .sub(let thread) = agent, let text = item.text, !text.isEmpty { lastText[thread] = text }
             if !streamedText.contains(item.id), let text = item.text, !text.isEmpty {
                 if agent == .main, !finalMarked, (item.raw["phase"]?.string ?? phases[item.id]) == "final_answer" {
                     finalMarked = true
@@ -292,7 +295,7 @@ final class CodexTranslator {
 
     private func finish(_ thread: String, _ status: AgentStatus) {
         guard finished.insert(thread).inserted else { return }
-        out.append(.agentFinished(id: thread, status, result: nil))
+        out.append(.agentFinished(id: thread, status, result: lastText[thread]))
     }
 
     // MARK: - Approvals
@@ -324,6 +327,25 @@ final class CodexTranslator {
             }
             return make("", questions: questions)
         }
+    }
+
+    // MARK: - A sub-agent's thread
+
+    /// A child thread's turns (`thread/read`) as events of that agent; its user messages are the
+    /// instructions it was given.
+    func agentTurns(_ turns: [JSONValue], agent thread: String) -> [ChatEvent] {
+        let pending = out
+        out = []
+        replaying = true
+        defer {
+            out = pending
+            replaying = false
+        }
+        for item in turns.flatMap({ $0["items"]?.array ?? [] }).map(CodexItem.init) where item.type != "userMessage" {
+            itemStarted(item, agent: .sub(thread))
+            itemCompleted(item, agent: .sub(thread))
+        }
+        return out
     }
 
     // MARK: - Replay

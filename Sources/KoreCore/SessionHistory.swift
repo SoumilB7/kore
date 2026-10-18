@@ -106,6 +106,36 @@ public enum ClaudeHistory {
         return nil
     }
 
+    /// A sub-agent's transcript, `<session>/subagents/agent-<id>.jsonl`, found by the Agent call
+    /// that spawned it (its `.meta.json` names the `toolUseId`). Written live while it runs.
+    public static func subagentFile(toolUseId: String, sessionId: String, in folder: URL) -> URL? {
+        let directory = projectDirectory(for: folder).appendingPathComponent(sessionId).appendingPathComponent("subagents")
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return nil }
+        for name in names where name.hasSuffix(".meta.json") {
+            guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)),
+                let meta = try? JSONValue.parse(data), meta["toolUseId"]?.string == toolUseId
+            else { continue }
+            return directory.appendingPathComponent(String(name.dropLast(".meta.json".count)) + ".jsonl")
+        }
+        return nil
+    }
+
+    /// The user / assistant entries of a JSONL transcript from byte `offset`, and the offset to
+    /// read from next. Only whole lines are read, so a file still being written can be tailed.
+    public static func entries(in file: URL, from offset: UInt64 = 0) -> (entries: [JSONValue], next: UInt64) {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return ([], offset) }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: offset)
+        let data = (try? handle.readToEnd()) ?? Data()
+        guard let end = data.lastIndex(of: 0x0A) else { return ([], offset) }
+        let whole = data[data.startIndex...end]
+        let entries = whole.split(separator: 0x0A).compactMap { try? JSONValue.parse(Data($0)) }.filter {
+            let type = $0["type"]?.string
+            return type == "user" || type == "assistant"
+        }
+        return (entries, offset + UInt64(whole.count))
+    }
+
     static func projectDirectory(for folder: URL) -> URL {
         let root = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
