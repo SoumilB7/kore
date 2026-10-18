@@ -1180,6 +1180,40 @@ final class TranscriptStore {
         let kept = whole ? 0 : (sectionStarts.lastIndex { $0 <= from } ?? 0)
         let begin = whole ? start : sectionStarts[kept]
 
+        let rows = rows(from: begin)
+        let summary = summarizeAgents()
+        if summary != agentSummary { agentSummary = summary }
+        if touchesDirty {
+            touchesDirty = false
+            let touches = touchedFiles()
+            if touches != fileTouches { fileTouches = touches }
+        }
+        // Sections are the one built form of the transcript; nothing else keeps the rows. A
+        // section that's still there keeps its model, so only its own view hears of a change.
+        let old = Dictionary(sections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var models = Array(sections.prefix(kept))
+        var starts = Array(sectionStarts.prefix(kept))
+        var changed = false
+        for section in Self.sections(rows, open: openKeys, actions: answerActions, running: runningMessage) {
+            if let model = old[section.id] {
+                if model.update(section) { changed = true }
+                models.append(model)
+            } else {
+                models.append(SectionModel(section))
+            }
+            starts.append(section.header.flatMap { position[$0.id] } ?? begin)
+        }
+        sectionStarts = starts
+        if models.count != sections.count || zip(models, sections).contains(where: { $0 !== $1 }) {
+            sections = models
+            changed = true
+        }
+        if changed { tail &+= 1 }
+    }
+
+    /// The rows of the entries from `begin` (a section's start) to the end, then the messages
+    /// waiting for the running turn; final answers' actions are noted in `answerActions`.
+    private func rows(from begin: Int) -> [Row] {
         var rows: [Row] = []
         answerActions = [:]
         var i = begin
@@ -1196,37 +1230,27 @@ final class TranscriptStore {
         }
         // Messages waiting for the running turn come last, after its spinner.
         rows.append(contentsOf: queued.map { .queued($0.entry) })
-        let summary = summarizeAgents()
-        if summary != agentSummary { agentSummary = summary }
-        if touchesDirty {
-            touchesDirty = false
-            let touches = touchedFiles()
-            if touches != fileTouches { fileTouches = touches }
-        }
-        // Sections are the one built form of the transcript; nothing else keeps the rows. A
-        // section that's still there keeps its model, so only its own view hears of a change.
-        let old = Dictionary(sections.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var models = Array(sections.prefix(kept))
-        var starts = Array(sectionStarts.prefix(kept))
-        var changed = false
-        // The message whose turn still runs can't be forked from yet.
-        let running = turnIsOpen ? entries.last(where: { ($0.kind == .user && !$0.inTurn) || $0.kind == .peer })?.id : nil
-        for section in Self.sections(rows, open: openKeys, actions: answerActions, running: running) {
-            if let model = old[section.id] {
-                if model.update(section) { changed = true }
-                models.append(model)
-            } else {
-                models.append(SectionModel(section))
-            }
-            starts.append(section.header.flatMap { position[$0.id] } ?? begin)
-        }
-        sectionStarts = starts
-        if models.count != sections.count || zip(models, sections).contains(where: { $0 !== $1 }) {
-            sections = models
-            changed = true
-        }
-        if changed { tail &+= 1 }
+        return rows
     }
+
+    /// The message whose turn still runs: it can't be forked from yet.
+    private var runningMessage: UUID? {
+        turnIsOpen ? entries.last(where: { ($0.kind == .user && !$0.inTurn) || $0.kind == .peer })?.id : nil
+    }
+
+    // MARK: Test seams
+
+    /// The window's sections built from the entries as they are now, none kept: what the
+    /// incremental rebuild has to equal (phase 12's `TranscriptRebuildTests`).
+    func sectionsFromScratch() -> [Section] {
+        let kept = answerActions
+        defer { answerActions = kept }
+        let rows = rows(from: windowStartIndex)
+        return Self.sections(rows, open: openKeys, actions: answerActions, running: runningMessage)
+    }
+
+    /// Runs a rebuild that's waiting for the next draw now, so a test doesn't wait on the clock.
+    func drawNow() { rebuild() }
 
     /// Everything is built again on the next rebuild (the window moved, or entries shifted).
     private func invalidateAll() {

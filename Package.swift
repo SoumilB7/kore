@@ -29,7 +29,7 @@ let package = Package(
         .executableTarget(name: "kore-fake-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore"]),
-        .testTarget(name: "KoreUITests", dependencies: ["KoreUI"]),
+        .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "KoreCore"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines"]),
     ]
 )
