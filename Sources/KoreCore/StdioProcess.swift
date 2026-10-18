@@ -20,6 +20,9 @@ package final class StdioProcess: @unchecked Sendable {
     /// Records every CLI started from here into a cassette (phase 12's `--record`). Nil in Kore.
     package static let recorder = HostSetting<CassetteRecorder?>(nil)
 
+    /// Every child still running, for `closeAll`.
+    static let running = Running()
+
     init(executable: URL, arguments: [String], cwd: URL?, environment: [String: String]) throws {
         // A write to a dead child must fail with EPIPE, not kill the app.
         signal(SIGPIPE, SIG_IGN)
@@ -62,12 +65,20 @@ package final class StdioProcess: @unchecked Sendable {
             }
         }
         let (exits, exitSink) = AsyncStream<Int32>.makeStream()
+        let key = ObjectIdentifier(self)
         process.terminationHandler = { process in
+            Self.running.remove(key)
             exitSink.yield(process.terminationStatus)
             exitSink.finish()
         }
 
-        try process.run()
+        // Foundation starts each child in a process group of its own, so the group is the CLI
+        // and what it runs, and nothing else.
+        Self.running.insert(self, key)
+        do { try process.run() } catch {
+            Self.running.remove(key)
+            throw error
+        }
 
         Task {
             var lines = LineSplitter()
@@ -104,10 +115,63 @@ package final class StdioProcess: @unchecked Sendable {
         try stdin.write(contentsOf: data)
     }
 
-    /// Closing stdin lets the child exit cleanly; terminate covers the rest.
-    func close() {
+    var isRunning: Bool { process.isRunning }
+    var pid: pid_t { process.processIdentifier }
+
+    /// Closes stdin and sends SIGTERM to the child and its process group. Both CLIs exit within
+    /// a second or two of SIGTERM, ending their tool processes and keeping their transcripts
+    /// whole; on EOF alone `claude -p` would first finish its turn. Still running after `grace`,
+    /// the child and every process under it get SIGKILL.
+    func close(grace: Duration = .seconds(5)) {
         try? stdin.close()
-        process.terminate()
+        send(SIGTERM)
+        let process = process, wait = Int(grace / .milliseconds(1))
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(wait)) {
+            guard process.isRunning else { return }
+            let pid = process.processIdentifier
+            let all = Self.tree(pid)
+            kill(-pid, SIGKILL)
+            for pid in all { kill(pid, SIGKILL) }
+        }
+    }
+
+    /// Closes every child (quitting). Waits up to `limit` for them to exit, so their last output
+    /// still has a reader.
+    package static func closeAll(waiting limit: Duration = .milliseconds(500)) {
+        close(running.all, waiting: limit)
+    }
+
+    static func close(_ all: [StdioProcess], waiting limit: Duration) {
+        for child in all { child.close() }
+        let deadline = ContinuousClock.now + limit
+        while all.contains(where: \.isRunning), ContinuousClock.now < deadline { usleep(10_000) }
+    }
+
+    /// Signals the child and its group, only while it is running: once reaped, its pid may be
+    /// another program's.
+    private func send(_ signal: Int32) {
+        guard process.isRunning else { return }
+        let pid = process.processIdentifier
+        kill(-pid, signal)
+        kill(pid, signal)
+    }
+
+    /// `pid` and every process under it, deepest first. Taken before killing: a killed parent's
+    /// children move to launchd.
+    static func tree(_ pid: pid_t) -> [pid_t] {
+        var buffer = [pid_t](repeating: 0, count: 256)
+        _ = proc_listchildpids(pid, &buffer, Int32(buffer.count * MemoryLayout<pid_t>.size))
+        return buffer.filter { $0 > 0 }.flatMap(tree) + [pid]
+    }
+
+    final class Running: @unchecked Sendable {
+        private let lock = NSLock()
+        private var children: [ObjectIdentifier: StdioProcess] = [:]
+
+        var all: [StdioProcess] { lock.withLock { Array(children.values) } }
+        func contains(_ child: StdioProcess) -> Bool { lock.withLock { children[ObjectIdentifier(child)] != nil } }
+        func insert(_ child: StdioProcess, _ key: ObjectIdentifier) { lock.withLock { children[key] = child } }
+        func remove(_ key: ObjectIdentifier) { _ = lock.withLock { children.removeValue(forKey: key) } }
     }
 }
 

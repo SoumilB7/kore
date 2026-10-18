@@ -76,6 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return UnsavedGuard.confirm(files) { workspaces.forEach { $0.saveAll() } } ? .terminateNow : .terminateCancel
     }
 
+    /// The CLIs end with Kore: one left running would go on acting in a session Kore resumes
+    /// in a new process next launch.
+    func applicationWillTerminate(_ notification: Notification) {
+        StdioProcess.closeAll()
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         app.openFromOutside(urls)
     }
