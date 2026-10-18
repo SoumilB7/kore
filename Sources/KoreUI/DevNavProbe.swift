@@ -52,8 +52,14 @@ package enum DevNavProbe {
     /// The actions a timeline hands its rows.
     private static func rowActions() -> TranscriptActions { TranscriptActions() }
 
-    /// What the timeline puts around its rows.
-    private static func rowStack(_ rows: some View) -> some View { rows }
+    /// What the timeline puts around its rows: the selection they report to, in its space.
+    private static func rowStack(_ rows: some View) -> some View {
+        let selection = TranscriptSelection(store: nil)
+        return rows
+            .background(alignment: .topLeading) { SelectionResponder(selection: selection, hidden: false).frame(width: Stroke.hairline, height: Stroke.hairline) }
+            .coordinateSpace(.named(TranscriptSelection.space))
+            .environment(\.transcriptSelection, selection)
+    }
 
     /// A typical answer: a heading, paragraphs with inline markup, a list, code and a table.
     package static func sample(_ i: Int) -> String {

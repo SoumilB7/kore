@@ -134,7 +134,7 @@ struct ToolBody: View {
                         .foregroundStyle(Theme.toolLabel)
                         .padding(Inset.toolLabel)
                         .gridColumnAlignment(.leading)
-                    ClippedText(text: part.text, isError: part.isError, open: open)
+                    ClippedText(text: part.text, isError: part.isError, open: open, index: index)
                         .padding(Inset.toolRow)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -153,6 +153,8 @@ private struct ClippedText: View {
     let text: String
     let isError: Bool
     let open: Bool
+    /// Its row in the box: its path in the transcript's selection, which takes it only open.
+    let index: Int
 
     var body: some View {
         let prefix = TextPrefix.of(text, lines: open ? .max : Size.clipLines, bytes: open ? .max : Size.clipBytes)
@@ -161,7 +163,7 @@ private struct ClippedText: View {
             .font(TextStyle.codeSmall)
             .foregroundStyle(Theme.text)
             .fixedSize(horizontal: false, vertical: true)
-            .selectableOnHover()
+            .selectableText([index], prefix.text, .codeSmall, enabled: open)
             .frame(maxHeight: clip ? Size.clip : nil, alignment: .top)
             .clipped()
             // The fade is the box's own fill drawn over the last lines, not a mask: a mask costs

@@ -16,7 +16,7 @@ struct MarkdownView: View {
         document.update(streaming ? MarkdownParser.settled(text) : text[...])
         var blocks = document.blocks
         if streaming, blocks.last?.isOpen == true { blocks.removeLast() }
-        return MarkdownBlocks(blocks: blocks, listDepth: 0)
+        return MarkdownBlocks(blocks: blocks, listDepth: 0, path: [])
     }
 }
 
@@ -25,16 +25,18 @@ private struct MarkdownBlocks: View {
     let blocks: [MarkdownBlock]
     /// How many lists this run sits inside (bullets change by depth; nested lists have no gap).
     let listDepth: Int
+    /// Where these blocks sit in the reply: a text's path for the transcript's selection.
+    let path: [Int]
 
     var body: some View {
         // One block (most list items) needs no stack around it.
         if blocks.count == 1 {
-            MarkdownBlockView(block: blocks[0], listDepth: listDepth)
+            MarkdownBlockView(block: blocks[0], listDepth: listDepth, path: path + [0])
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
-                    MarkdownBlockView(block: block, listDepth: listDepth)
+                    MarkdownBlockView(block: block, listDepth: listDepth, path: path + [index])
                         .padding(.top, index == 0 ? 0 : gap(blocks[index - 1], block))
                 }
             }
@@ -60,6 +62,7 @@ private struct MarkdownBlocks: View {
 private struct MarkdownBlockView: View {
     let block: MarkdownBlock
     let listDepth: Int
+    let path: [Int]
 
     var body: some View {
         switch block.kind {
@@ -67,26 +70,26 @@ private struct MarkdownBlockView: View {
             Text(text)
                 .font(TextStyle.heading(level))
                 .foregroundStyle(Theme.text)
-                .selectableOnHover()
+                .selectableText(path, text, .heading(level))
                 .fixedSize(horizontal: false, vertical: true)
         case .paragraph(let text):
             Text(text)
                 .font(TextStyle.body)
                 .foregroundStyle(Theme.text)
                 .lineSpacing(TextStyle.leading)
-                .selectableOnHover()
+                .selectableText(path, text, .running)
                 .fixedSize(horizontal: false, vertical: true)
         case .code(_, let text):
-            MarkdownCodeBlock(text: text)
+            MarkdownCodeBlock(text: text, path: path)
         case .list(let list):
-            MarkdownListView(list: list, depth: listDepth)
+            MarkdownListView(list: list, depth: listDepth, path: path)
         case .quote(let blocks):
-            MarkdownBlocks(blocks: blocks, listDepth: 0)
+            MarkdownBlocks(blocks: blocks, listDepth: 0, path: path)
                 .padding(Inset.quote)
                 .background(Theme.quoteFill, in: RoundedRectangle(cornerRadius: Radius.chip))
                 .padding(.leading, Markdown.quoteIndent)
         case .table(let table):
-            MarkdownTableView(table: table)
+            MarkdownTableView(table: table, path: path)
         case .rule:
             Rectangle()
                 .fill(Theme.rule)
@@ -98,6 +101,7 @@ private struct MarkdownBlockView: View {
 /// A fenced code block: a well that scrolls sideways (no wrap), with a copy button on hover.
 private struct MarkdownCodeBlock: View {
     let text: String
+    let path: [Int]
     @StateObject private var hovered = Local(false)
 
     var body: some View {
@@ -105,7 +109,7 @@ private struct MarkdownCodeBlock: View {
             Text(text)
                 .font(TextStyle.code)
                 .foregroundStyle(Theme.text)
-                .selectableOnHover()
+                .selectableText(path, text, .code)
                 .fixedSize()
                 .padding(Inset.codeBlock)
         }
@@ -143,6 +147,7 @@ private struct SidewaysWhenWide<Content: View>: View {
 private struct MarkdownListView: View {
     let list: MarkdownList
     let depth: Int
+    let path: [Int]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -155,7 +160,7 @@ private struct MarkdownListView: View {
                     if item.blocks.isEmpty {
                         Text(" ").font(TextStyle.body)
                     } else {
-                        MarkdownBlocks(blocks: item.blocks, listDepth: depth + 1)
+                        MarkdownBlocks(blocks: item.blocks, listDepth: depth + 1, path: path + [index])
                     }
                 }
             }
@@ -189,6 +194,7 @@ private struct MarkdownListView: View {
 /// centred header, and sideways scrolling when wider than the column.
 private struct MarkdownTableView: View {
     let table: MarkdownTable
+    let path: [Int]
 
     private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0) }
 
@@ -197,14 +203,14 @@ private struct MarkdownTableView: View {
             Grid(horizontalSpacing: Stroke.hairline, verticalSpacing: Stroke.hairline) {
                 GridRow {
                     ForEach(0..<columns, id: \.self) { column in
-                        cell(column < table.header.count ? table.header[column] : AttributedString(), header: true)
+                        cell(column < table.header.count ? table.header[column] : AttributedString(), header: true, at: [0, column])
                     }
                 }
                 ForEach(table.rows.indices, id: \.self) { row in
                     GridRow {
                         ForEach(0..<columns, id: \.self) { column in
                             let cells = table.rows[row]
-                            cell(column < cells.count ? cells[column] : AttributedString(), header: false)
+                            cell(column < cells.count ? cells[column] : AttributedString(), header: false, at: [row + 1, column])
                         }
                     }
                 }
@@ -217,12 +223,12 @@ private struct MarkdownTableView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func cell(_ text: AttributedString, header: Bool) -> some View {
+    private func cell(_ text: AttributedString, header: Bool, at cell: [Int]) -> some View {
         Text(text)
             .font(TextStyle.body)
             .bold(header)
             .foregroundStyle(Theme.text)
-            .selectableOnHover()
+            .selectableText(path + cell, text, .cell(header: header))
             .padding(Inset.tableCell)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: header ? .center : .leading)
             .background(Theme.background)

@@ -86,7 +86,15 @@ struct TranscriptTimeline: View, Equatable {
                 .padding(.bottom, Layout.Transcript.bottom)
                 .frame(maxWidth: column.maxWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
+                // One text selection over every row: rows report their texts in this space, and
+                // the responder at its corner follows the pointer in it.
+                .background(alignment: .topLeading) {
+                    SelectionResponder(selection: store.selection, hidden: hidden).frame(width: Stroke.hairline, height: Stroke.hairline)
+                }
+                .coordinateSpace(.named(TranscriptSelection.space))
+                .environment(\.transcriptSelection, store.selection)
             }
+            .accessibilityAction(named: Text("Copy Selection")) { store.selection.copy() }
             .scrollPosition(binding)
             .defaultScrollAnchor(.bottom, for: .alignment)
             .onScrollPhaseChange { old, new, context in

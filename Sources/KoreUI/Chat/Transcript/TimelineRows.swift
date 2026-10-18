@@ -48,7 +48,20 @@ struct TimelineRow: View, Equatable {
         }
     }
 
-    private var row: some View { content.storyID(Self.story(item.row), press: press) }
+    private var row: some View {
+        content.storyID(Self.story(item.row), press: press).modifier(RowSelection(entry: Self.selectable(item.row)))
+    }
+
+    /// The entry whose texts this row shows for the transcript's selection; nil for rows with
+    /// none (folds, rules, agent cards, the spinner). A tool or thinking row takes part only
+    /// while open (its texts say so), so opening one doesn't rebuild it.
+    static func selectable(_ row: TranscriptStore.Row) -> UUID? {
+        switch row {
+        case .message(let e, _, _), .summary(let e, _), .tool(let e, _), .thinking(let e, _): e.id
+        case .entry(let e): [.answer, .plan, .notice, .user, .peer].contains(e.kind) ? e.id : nil
+        default: nil
+        }
+    }
 
     /// What pressing the row does, where its name and a click on its middle could differ:
     /// open or close it.
@@ -121,6 +134,15 @@ struct TimelineRow: View, Equatable {
     }
 }
 
+/// Applies `selectionRow` for a row with selectable texts.
+private struct RowSelection: ViewModifier {
+    let entry: UUID?
+
+    func body(content: Content) -> some View {
+        if let entry { content.selectionRow(entry) } else { content }
+    }
+}
+
 /// A row's content, without its place on the timeline. Agent cards use it for their own rows.
 struct RowContent: View {
     let row: TranscriptStore.Row
@@ -182,7 +204,7 @@ private struct EntryContent: View {
             Text(entry.text)
                 .font(TextStyle.body)
                 .foregroundStyle(entry.isError ? Theme.danger : Theme.secondary)
-                .selectableOnHover()
+                .selectableText([0], entry.text, .body)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .user, .peer:
             MessageHeader(entry: entry, open: true, actions: actions)
@@ -395,6 +417,7 @@ struct StickyMessage: View, Equatable {
     var open: Bool
     let actions: TranscriptActions
     @ObservedObject var tracker: StickyTracker
+    @Environment(\.transcriptSelection) private var selection
 
     /// By content, like the rows: the actions are one shared value, and the tracker redraws it
     /// when a message crosses.
@@ -408,8 +431,14 @@ struct StickyMessage: View, Equatable {
             }
             .overlay(alignment: .top) {
                 if tracker.stuck.contains(entry.id.uuidString) {
+                    let (id, selection) = (entry.id.uuidString, selection)
                     MessageHeader(entry: entry, open: open, place: .sticky, actions: actions)
                         .fixedSize(horizontal: false, vertical: true)
+                        // Pinned over the rows: a press on it isn't a selection of what's under it.
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TranscriptSelection.space)) } action: {
+                            selection?.blocker(id, $0)
+                        }
+                        .onDisappear { selection?.blocker(id, nil) }
                 }
             }
     }
@@ -501,7 +530,7 @@ struct MessageText: View {
         Text(shown)
             .font(TextStyle.body)
             .foregroundStyle(color)
-            .selectableOnHover()
+            .selectableText([0], shown, .body)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: Int.self) { Int(($0.size.height / line).rounded()) } action: { measured($0) }
             .frame(height: height, alignment: .top)
@@ -713,7 +742,7 @@ struct ThoughtItem: View {
                     .font(TextStyle.body)
                     .foregroundStyle(Theme.secondary)
                     .lineSpacing(TextStyle.leading)
-                    .selectableOnHover()
+                    .selectableText([0], entry.text, .running)
                     .transition(.opacity)
             }
         }
