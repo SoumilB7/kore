@@ -53,6 +53,12 @@ final class ContextStore {
         return fraction >= threshold
     }
 
+    /// The tokens in use, "~58k" while they're Kore's estimate.
+    var usedText: String {
+        guard let usage else { return "" }
+        return (usage.approximate ? "~" : "") + Self.tokens(usage.used)
+    }
+
     /// 1.2k, 18k, 1.1M (T3 Code's format).
     static func tokens(_ count: Int) -> String {
         switch count {

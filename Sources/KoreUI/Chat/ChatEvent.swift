@@ -168,6 +168,9 @@ package struct ContextUsage: Sendable, Equatable {
     /// The CLI compacts by itself when `used` reaches `window`; nil when it doesn't say.
     package let autoCompacts: Bool?
     package let at: Date
+    /// Kore's estimate, not the CLI's reading (an imported chat before its first turn): shown
+    /// with "~", and the CLI's first report replaces it.
+    package var approximate = false
 
     package init(used: Int, window: Int?, autoCompacts: Bool?, at: Date) {
         self.used = used

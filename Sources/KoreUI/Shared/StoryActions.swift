@@ -240,4 +240,6 @@ extension Chat {
     package var storyImportRows: [String] { importer.shown.map(\.title) }
     package var storyImportLine: String { importer.text(in: self) }
     package var storyImportReady: Bool { importer.canImport }
+    /// The context ring's tokens as it words them ("~80k"), "" with no reading.
+    package var storyContextUsed: String { context.usedText }
 }

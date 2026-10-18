@@ -59,4 +59,23 @@ struct ImportWordsTests {
         #expect(events.contains { if case .text(_, .answer, "7781.", _) = $0 { true } else { false } })
         #expect(events.contains { if case .turnFinished(_, .interrupted, _) = $0 { true } else { false } })
     }
+
+    @Test func anImportedChatsContextIsEstimatedUntilTheCLISays() throws {
+        var segment = HandoffSegment(source: "claude", product: "Claude Code", sessionId: "s")
+        segment.turns = [HandoffTurn(id: "t", prompt: "Hi")]
+        let plan = HandoffBudget.plan(segment, window: HandoffBudget.codexWindow)
+        let record = HandoffRecord(
+            source: .init(cli: "claude", session: "s"), sourceFile: URL(fileURLWithPath: "/tmp/s.jsonl"), sourceProduct: "Claude Code",
+            cutoff: nil, sourceTitle: "Hi", sourceModel: nil, target: .init(cli: "codex", session: "t"), targetModel: nil,
+            folder: URL(fileURLWithPath: "/tmp"), carried: .init(plan))
+        let estimate = ImportedHistory(record: record).estimate
+        #expect(estimate.approximate)
+        #expect(estimate.used == plan.tokens + CodexHandoffWriter().overhead)
+        #expect(abs((estimate.window ?? 0) - HandoffBudget.codexWindow) <= 2)
+        let context = ContextStore()
+        context.apply(.contextUsage(estimate))
+        #expect(context.usedText.hasPrefix("~"))
+        context.apply(.contextUsage(ContextUsage(used: 81_174, window: 258_400, autoCompacts: nil, at: .now)))
+        #expect(context.usedText == "81k")
+    }
 }

@@ -13,6 +13,10 @@ public protocol HandoffWriter: Sendable {
     var instructionFiles: [String] { get }
     /// The target model's context window, for the budget.
     func window(model: String?) -> Int
+    /// About how many tokens the CLI's own system prompt, tools and environment take on top of
+    /// the history: an imported chat's context reads this plus what was carried until the CLI
+    /// reports its own.
+    var overhead: Int { get }
     /// Writes the history as a new session; nothing of an existing one is touched.
     func write(_ plan: HandoffPlan, into target: HandoffTarget) async throws -> HandoffWritten
 }

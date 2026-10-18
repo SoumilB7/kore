@@ -13,6 +13,8 @@ public struct ClaudeHandoffWriter: HandoffWriter {
     public let id = "claude"
     public let product = "Claude Code"
     public let company = "Anthropic"
+    /// Measured: a first turn over ~300 carried tokens read 23,532 (2026-10-24).
+    public let overhead = 23_000
     public let instructionFiles = ["CLAUDE.md", ".claude/CLAUDE.md"]
 
     public init() {}

@@ -67,9 +67,10 @@ struct ContextWheel: View {
         if context.compacting { return "Compacting context" }
         guard let usage = context.usage else { return "Context" }
         guard let window = usage.window, let fraction = context.fraction else {
-            return "Context, \(ContextStore.tokens(usage.used)) tokens. Compact."
+            return "Context, \(context.usedText) tokens. Compact."
         }
-        return "Context \(ContextStore.percent(fraction)) used, \(ContextStore.tokens(usage.used)) of \(ContextStore.tokens(window)) tokens. Compact."
+        let percent = (usage.approximate ? "about " : "") + ContextStore.percent(fraction)
+        return "Context \(percent) used, \(context.usedText) of \(ContextStore.tokens(window)) tokens. Compact."
     }
 
     private func hover(_ inside: Bool) {
@@ -328,8 +329,8 @@ private struct ContextCard: View {
     /// "597k / 967k tokens"; "182k tokens" before the CLI says its window.
     static func tokens(_ context: ContextStore) -> String {
         guard let usage = context.usage else { return "" }
-        guard let window = usage.window else { return ContextStore.tokens(usage.used) + " tokens" }
-        return "\(ContextStore.tokens(usage.used)) / \(ContextStore.tokens(window)) tokens"
+        guard let window = usage.window else { return context.usedText + " tokens" }
+        return "\(context.usedText) / \(ContextStore.tokens(window)) tokens"
     }
 }
 

@@ -9,6 +9,9 @@ public struct CodexHandoffWriter: HandoffWriter {
     public let id = "codex"
     public let product = "Codex"
     public let company = "OpenAI"
+    /// Measured: an imported thread's first gpt-6-luna turn read 81,174 tokens over a 57,621
+    /// estimate (2026-10-24).
+    public let overhead = 23_000
     public let instructionFiles = ["AGENTS.md"]
 
     public init() {}

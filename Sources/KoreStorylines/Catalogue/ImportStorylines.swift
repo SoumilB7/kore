@@ -90,6 +90,9 @@ final class ImportFromPicker: ChatStoryline {
                     && rows.last?.kind == "divider" && rows.last?.text.hasPrefix("Continued in \(codex ? "Codex" : "Claude Code")") == true
             },
             Expect("the tab named after the source") { try $0.activeChat().storyTitle == "Check the build number." },
+            Expect("the context ring on Kore's estimate", found: { $0.app.chat?.storyContextUsed }) {
+                try $0.activeChat().storyContextUsed.hasPrefix("~")
+            },
             ExpectElement(.id(StoryID.Composer.importLine), .absent),
             ExpectElement(.id(StoryID.Composer.importer), .absent),
             Send("And now?"), TurnFinished(1),

@@ -30,6 +30,16 @@ final class ImportedHistory {
         return await Task.detached { ImportedEvents.events(turns) }.value
     }
 
+    /// How full the chat's context is about to be, until its CLI says: what was carried plus the
+    /// CLI's own prompt and tools, against the window the import was fitted to.
+    var estimate: ContextUsage {
+        let overhead = HandoffWriters.writer(record.target.cli)?.overhead ?? 0
+        let window = Int((Double(record.carried.budget) / HandoffBudget.share).rounded())
+        var usage = ContextUsage(used: record.carried.tokens + overhead, window: window, autoCompacts: nil, at: record.at)
+        usage.approximate = true
+        return usage
+    }
+
     /// "Continued in Codex · gpt-6-luna · 24 Oct", under the imported part.
     func divider(product: String) -> String {
         (["Continued in \(product)", record.targetModel, Self.day.string(from: record.at)].compactMap { $0 }).joined(separator: " · ")

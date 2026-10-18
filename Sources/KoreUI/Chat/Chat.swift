@@ -169,6 +169,7 @@ package final class Chat: Identifiable {
         }
         status.apply(event)
         context.apply(event)
+        seedImportedContext(event)
         autoCompactIfDue(event)
         afterAccountEvent(event)
         continueAfterLimit(event)
@@ -211,6 +212,14 @@ package final class Chat: Identifiable {
         status.apply(replay)
         status.setRunning(running)
         context.apply(replay)
+        seedImportedContext(replay)
+    }
+
+    /// An imported chat's context before its CLI has reported any: Kore's estimate, marked as
+    /// one. Not an event, so it never starts an auto-compact; the CLI's first reading replaces it.
+    private func seedImportedContext(_ event: ChatEvent) {
+        guard case .replayed = event, context.usage == nil, let imported else { return }
+        context.apply(.contextUsage(imported.estimate))
     }
 
     /// An imported chat's carried part and its divider, before its own history.
