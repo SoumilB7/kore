@@ -8,6 +8,7 @@ import Foundation
 public struct CodexHandoffWriter: HandoffWriter {
     public let id = "codex"
     public let product = "Codex"
+    public let company = "OpenAI"
     public let instructionFiles = ["AGENTS.md"]
 
     public init() {}

@@ -270,4 +270,27 @@ struct HandoffTests {
         let segment = try #require(HandoffFormats.read(made))
         #expect(segment.turns.map(\.prompt) == ["My own prompt."])
     }
+
+    @Test func aThreadKoreMadeSkipsTheItemsItWasGiven() throws {
+        // As Codex writes it: its start-up context, Kore's injected history, then the first turn.
+        let lines = rollout([
+            message("user", "<environment_context>\n</environment_context>"),
+            ["type": "turn_context", "payload": ["turn_id": "auto-compact-1"]],
+            message("developer", "The earlier part of this conversation ran in Claude Code."),
+            message("user", "Check the build."),
+            message("assistant", "Build 7781."),
+            ["type": "event_msg", "payload": ["type": "task_started", "turn_id": "turn-9"]],
+            ["type": "turn_context", "payload": ["turn_id": "turn-9"]],
+            message("user", "What did we find?"),
+            message("assistant", "Build 7781."),
+        ]).map { $0.replacingOccurrences(of: "thread-1", with: "thread-made") }
+        let plan = try plan
+        let record = HandoffRecord(
+            source: .init(cli: "claude", session: "s-1"), sourceFile: scratch, sourceProduct: "Claude Code", cutoff: nil,
+            sourceTitle: "t", sourceModel: nil, target: .init(cli: "codex", session: "thread-made"), targetModel: nil,
+            folder: scratch, carried: .init(plan))
+        try HandoffRecords.save(record, history: [])
+        let segment = try #require(HandoffFormats.read(try file("made-thread.jsonl", lines)))
+        #expect(segment.turns.map(\.prompt) == ["What did we find?"])
+    }
 }

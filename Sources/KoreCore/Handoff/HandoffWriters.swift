@@ -7,6 +7,8 @@ public protocol HandoffWriter: Sendable {
     /// The provider id of the chats it writes for ("claude", "codex").
     var id: String { get }
     var product: String { get }
+    /// Whose model the history goes to ("OpenAI"), for the picker's note.
+    var company: String { get }
     /// The project instruction files this CLI reads by itself.
     var instructionFiles: [String] { get }
     /// The target model's context window, for the budget.

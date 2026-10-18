@@ -12,6 +12,7 @@ import Foundation
 public struct ClaudeHandoffWriter: HandoffWriter {
     public let id = "claude"
     public let product = "Claude Code"
+    public let company = "Anthropic"
     public let instructionFiles = ["CLAUDE.md", ".claude/CLAUDE.md"]
 
     public init() {}

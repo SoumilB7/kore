@@ -11,13 +11,16 @@ public struct SessionSummary: Sendable, Identifiable, Hashable {
     public let updated: Date
     /// Archived chats stay on disk but are left out of the folder's tabs.
     public var archived: Bool
+    /// Its history file, when the listing says (Claude's transcript, Codex's rollout).
+    public var file: URL?
 
-    public init(id: String, agent: Agent, title: String, updated: Date, archived: Bool = false) {
+    public init(id: String, agent: Agent, title: String, updated: Date, archived: Bool = false, file: URL? = nil) {
         self.id = id
         self.agent = agent
         self.title = title
         self.updated = updated
         self.archived = archived
+        self.file = file
     }
 }
 
@@ -46,7 +49,7 @@ public enum ClaudeHistory {
             let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             return SessionSummary(
                 id: file.deletingPathExtension().lastPathComponent, agent: .claude, title: title,
-                updated: lastMessage ?? modified ?? .distantPast)
+                updated: lastMessage ?? modified ?? .distantPast, file: file)
         }
     }
 
@@ -660,7 +663,8 @@ public enum CodexHistory {
         let line = title.split(whereSeparator: \.isNewline).first.map(String.init) ?? title
         return SessionSummary(
             id: id, agent: .codex, title: line,
-            updated: Date(timeIntervalSince1970: thread["updatedAt"]?.double ?? 0), archived: archived)
+            updated: Date(timeIntervalSince1970: thread["updatedAt"]?.double ?? 0), archived: archived,
+            file: thread["path"]?.string.map { URL(fileURLWithPath: $0) })
     }
 }
 

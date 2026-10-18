@@ -26,8 +26,8 @@ public struct CodexRolloutFormat: HandoffFormat {
     public func read(_ file: URL, identity: HandoffIdentity) throws -> HandoffSegment {
         let data = try Data(contentsOf: file, options: .alwaysMapped)
         var reader = Reader(folder: URL(fileURLWithPath: identity.cwd ?? file.deletingLastPathComponent().path))
-        // A thread Kore made by an import holds that import's items before its first turn: a
-        // translation, not Codex's own history.
+        // A thread Kore made by an import holds that import's items before its first turn starts
+        // (after the context Codex writes as the thread starts): a translation, not Codex's own.
         reader.injected = HandoffRecords.record(target: identity.sessionId) != nil
         let lines = data.jsonLines()
         for (index, line) in lines.enumerated() {
@@ -51,7 +51,7 @@ public struct CodexRolloutFormat: HandoffFormat {
         return segment
     }
 
-    private static let wanted = [#""type":"response_item""#, #""type":"turn_context""#, #""type":"turn_aborted""#, #""type":"error""#]
+    private static let wanted = [#""type":"response_item""#, #""type":"turn_context""#, #""type":"task_started""#, #""type":"turn_aborted""#, #""type":"error""#]
         .map { Data($0.utf8) }
 
     /// Images in prompts over this size don't carry (Claude takes 5 MB a block).
@@ -72,7 +72,7 @@ public struct CodexRolloutFormat: HandoffFormat {
         var mode: String?
         var effort: String?
         var unknown = 0
-        /// Items before the first turn are skipped.
+        /// Items before the first turn starts are skipped.
         var injected = false
 
         init(folder: URL) { self.folder = folder }
@@ -81,7 +81,6 @@ public struct CodexRolloutFormat: HandoffFormat {
             let payload = record["payload"] ?? .null
             switch record["type"]?.string {
             case "turn_context":
-                injected = false
                 turnId = payload["turn_id"]?.string
                 at = record["timestamp"]?.string.flatMap(Timestamp.parse)
                 model = payload["model"]?.string ?? model
@@ -89,6 +88,7 @@ public struct CodexRolloutFormat: HandoffFormat {
                 if let settings = CodexTurnSettings(payload) { mode = settings.plan ? "plan" : settings.permissions.rawValue }
             case "event_msg":
                 switch payload["type"]?.string {
+                case "task_started": injected = false
                 case "turn_aborted": current?.end = .interrupted
                 case "error": current?.end = .failed(CodexError.readable(payload["message"]?.string ?? "the turn failed"))
                 default: break

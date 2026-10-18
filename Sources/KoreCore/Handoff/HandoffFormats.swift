@@ -77,12 +77,20 @@ public enum HandoffFormats {
 
     public static func format(_ id: String) -> (any HandoffFormat)? { all.first { $0.id == id } }
 
-    /// The format of a file, from its first lines; nil for anything not recognised.
-    public static func identify(_ file: URL) -> HandoffIdentity? {
+    /// The format of a file, from its first lines; nil for anything not recognised. `quick`:
+    /// fewer lines, for a drag or an open panel asking about file after file (answers are kept
+    /// per file and modification).
+    public static func identify(_ file: URL, quick: Bool = false) -> HandoffIdentity? {
         guard (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { return nil }
-        let head = HandoffHead(file: file)
-        return all.lazy.compactMap { $0.identify(head) }.first
+        let stamp = quick ? Self.stamp(file) : ""
+        if quick, let known = lock.withLock({ sniffed[file.path] }), known.stamp == stamp { return known.identity }
+        let head = quick ? HandoffHead(file: file, maxLines: 40, maxBytes: 512 << 10) : HandoffHead(file: file)
+        let identity = all.lazy.compactMap { $0.identify(head) }.first
+        if quick { lock.withLock { sniffed[file.path] = (stamp, identity) } }
+        return identity
     }
+
+    nonisolated(unsafe) private static var sniffed: [String: (stamp: String, identity: HandoffIdentity?)] = [:]
 
     /// A file's history in the neutral form; nil, quietly, for a file no format recognises, one
     /// damaged part-way, or one with nothing to carry. Blocking file IO: call it off the main

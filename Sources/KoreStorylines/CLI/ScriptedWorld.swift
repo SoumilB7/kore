@@ -76,6 +76,7 @@ struct ScriptedHandoffWriter: HandoffWriter {
     let real: any HandoffWriter
     var id: String { real.id }
     var product: String { real.product }
+    var company: String { real.company }
     var instructionFiles: [String] { real.instructionFiles }
 
     func window(model: String?) -> Int { real.window(model: model) }
