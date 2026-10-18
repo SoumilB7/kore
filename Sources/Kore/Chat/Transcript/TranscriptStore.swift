@@ -276,8 +276,18 @@ final class TranscriptStore {
     /// When the user last sent a message (live, not replayed): the view glides to the end for
     /// 2s after it, as the extension does.
     @ObservationIgnored private(set) var sentAt: Date?
-    /// Where the reader was when the chat's view went away (another tab), to come back to.
-    @ObservationIgnored var savedScroll: (offset: CGFloat, atEnd: Bool)?
+    /// Where the reader was when the chat's view went away (another tab), to come back to: the
+    /// message row at or above the top and how far into it, or the end. Opened folds and rows
+    /// stay in this store, so they need no saving.
+    @ObservationIgnored var savedScroll: SavedScroll?
+
+    struct SavedScroll {
+        var row: String?
+        var inRow: CGFloat
+        /// The plain offset, when no message row was placed.
+        var offset: CGFloat
+        var atEnd: Bool
+    }
 
     /// The first user message built; nil: from the first entry. A replayed chat opens on its
     /// last `openTurns` (T3 Code's paging); "Load earlier turns" moves it up. A send never moves

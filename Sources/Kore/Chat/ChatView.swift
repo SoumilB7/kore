@@ -17,7 +17,7 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TranscriptTimeline(store: chat.transcript, actions: actions)
+            TranscriptTimeline(store: chat.transcript, actions: actions).equatable()
                 // The spinner's glyph takes the mode's colour, as the composer outline does.
                 .environment(\.spinnerTint, chat.controls.tint)
             VStack(spacing: Space.lg) {

@@ -6,8 +6,10 @@ import SwiftUI
 /// still. Following the end works as in the Claude Code extension (live-streaming.md): within
 /// 50pt of the bottom new content is pinned at once, for 2s after a send it glides, and once the
 /// reader scrolls up nothing moves. A turn folding above the answer keeps the answer where it was.
-struct TranscriptTimeline: View {
+struct TranscriptTimeline: View, Equatable {
     let store: TranscriptStore
+    /// Built once by the chat's view; its closures hold only references, so a new copy never
+    /// changes what the timeline does.
     var actions: TranscriptActions
     @Environment(\.chatColumn) private var column
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -21,11 +23,20 @@ struct TranscriptTimeline: View {
     @StateObject private var pendingFold = Held(false)
     /// The send already followed, and a saved place still to go back to.
     @StateObject private var lastSend = Held(Date?.none)
-    @StateObject private var restore = Held((offset: CGFloat, atEnd: Bool)?.none)
-    /// The "Load earlier turns" row's frame in the visible area, and the visible height: where
-    /// the section under it sits, so it stays there once earlier turns are added above.
-    @StateObject private var loadRow = Held(CGRect.zero)
+    @StateObject private var restore = Held(TranscriptStore.SavedScroll?.none)
+    /// After scrolling a saved row to the top: how far into it to go.
+    @StateObject private var restoreInRow = Held(CGFloat?.none)
+    /// Message rows' tops in the visible area, as they report them, for saving the place.
+    @StateObject private var messageTops = Held([String: CGFloat]())
+    /// While turns are added above (Load earlier): the message row that was first and its top
+    /// on screen. When it reports where it moved, the view follows it by as much, so what's on
+    /// screen stays put.
+    @StateObject private var anchor = Held((id: String, y: CGFloat)?.none)
     @StateObject private var visibleHeight = Held(CGFloat(0))
+    /// The scroll view's top inset (under the title bar): its offset reads -inset at the top,
+    /// while `ScrollPosition.scrollTo(y:)` counts from the content's top, so offsets are
+    /// converted (`scrollTo(offset:)`).
+    @StateObject private var insetTop = Held(CGFloat(0))
     /// Which sections' messages have scrolled past their pinned header.
     @StateObject private var sticky = StickyTracker()
 
@@ -35,8 +46,6 @@ struct TranscriptTimeline: View {
     nonisolated static let space = "transcript"
     /// A user message's open action menu, and its button's frame.
     @StateObject private var menu = Local<(entry: TranscriptStore.Entry, frame: CGRect)?>(nil)
-    /// After earlier conversation is added: the section to keep where it was, and where.
-    @StateObject private var pendingAnchor = Held((id: String, point: UnitPoint)?.none)
     /// "At the bottom" within this, as in the extension.
     private static let atBottom: CGFloat = 50
     /// After a send, new content glides into view for this long.
@@ -51,14 +60,12 @@ struct TranscriptTimeline: View {
                     // One row at the top, never two: earlier turns of this history first, then the
                     // conversation before its compaction.
                     if store.hiddenTurns > 0 {
-                        LoadEarlierRow(label: "Load earlier turns") { loadEarlier(proxy) }
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { loadRow.value = $0 }
+                        LoadEarlierRow(label: "Load earlier turns") { loadEarlier() }
                     } else if store.earlierAvailable {
                         LoadEarlierRow(
                             label: "Load earlier conversation",
                             loading: store.loadingEarlier ? "Loading earlier conversation…" : nil
                         ) { loadEarlierConversation() }
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { loadRow.value = $0 }
                             .id(Self.loadRow)
                     }
                     ForEach(store.sections) { section in
@@ -82,32 +89,51 @@ struct TranscriptTimeline: View {
                 if new == .interacting {
                     following.value = false
                     menu.value = nil
+                    // The reader took over: a place still being restored or kept is dropped.
+                    restore.value = nil
+                    restoreInRow.value = nil
+                    anchor.value = nil
                 } else if new == .idle, old == .interacting || old == .decelerating {
                     let g = context.geometry
                     following.value = g.contentOffset.y + g.containerSize.height >= g.contentSize.height - Self.atBottom
                 }
             }
             .onScrollGeometryChange(for: [CGFloat].self) {
-                [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height]
+                [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height, $0.contentInsets.top]
             } action: { _, new in
+                insetTop.value = new[3]
                 let (height, offset) = (new[0], new[1])
                 visibleHeight.value = new[2]
+                if let inRow = restoreInRow.value, height > 0 {
+                    // The saved row is at the top now: on into it.
+                    restoreInRow.value = nil
+                    let target = min(offset + inRow, max(0, height - new[2]))
+                    scroll(position, to: target)
+                    geometry.value = (height, target)
+                    nudge.value &+= 1
+                    return
+                }
                 if let saved = restore.value, height > 0 {
                     // Back to where the reader was when this chat's tab was last shown.
                     restore.value = nil
                     if !saved.atEnd {
                         following.value = false
-                        position.value.scrollTo(y: min(saved.offset, height))
-                        geometry.value = (height, saved.offset)
-                        nudge.value &+= 1
+                        if let row = saved.row {
+                            proxy.scrollTo(row, anchor: .top)
+                            restoreInRow.value = saved.inRow
+                        } else {
+                            scroll(position, to: min(saved.offset, height))
+                            geometry.value = (height, saved.offset)
+                            nudge.value &+= 1
+                        }
                         return
                     }
                 }
                 if pendingFold.value, !following.value, height < geometry.value.height {
                     // The fold took height from above the answer: scroll up by as much.
                     pendingFold.value = false
-                    let target = max(0, geometry.value.offset - (geometry.value.height - height))
-                    position.value.scrollTo(y: target)
+                    let target = max(-insetTop.value, geometry.value.offset - (geometry.value.height - height))
+                    scroll(position, to: target)
                     geometry.value = (height, target)
                     nudge.value &+= 1
                     return
@@ -120,15 +146,7 @@ struct TranscriptTimeline: View {
                 geometry.value = (height, offset)
             }
             .onChange(of: store.folded?.seq) { pendingFold.value = true }
-            .onChange(of: store.tail, initial: true) {
-                if let anchor = pendingAnchor.value {
-                    // Earlier conversation arrived above: keep the old first section in place.
-                    pendingAnchor.value = nil
-                    DispatchQueue.main.async { proxy.scrollTo(anchor.id, anchor: anchor.point) }
-                    return
-                }
-                follow(proxy)
-            }
+            .onChange(of: store.tail, initial: true) { follow(proxy) }
             .onAppear {
                 restore.value = store.savedScroll
                 lastSend.value = store.sentAt
@@ -157,7 +175,7 @@ struct TranscriptTimeline: View {
                     for press in 0..<(load ? times : 0) {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1 + 2 * Double(press)) {
                             if store.hiddenTurns > 0 {
-                                loadEarlier(proxy)
+                                loadEarlier()
                             } else if store.earlierAvailable {
                                 loadEarlierConversation()
                             }
@@ -166,7 +184,10 @@ struct TranscriptTimeline: View {
                 }
             }
             .onDisappear {
-                store.savedScroll = (geometry.value.offset, following.value)
+                // The last message row at or above the top, and how far the top is into it.
+                let above = messageTops.value.filter { $0.value <= 0.5 }.max { $0.value < $1.value }
+                store.savedScroll = TranscriptStore.SavedScroll(
+                    row: above?.key, inRow: -(above?.value ?? 0), offset: geometry.value.offset, atEnd: following.value)
             }
         }
     }
@@ -187,28 +208,28 @@ struct TranscriptTimeline: View {
         }
     }
 
-    /// Twenty more turns above; the section that was first stays exactly where it was on screen
-    /// (just under the row that was clicked).
-    private func loadEarlier(_ proxy: ScrollViewProxy) {
-        following.value = false
-        let anchor = store.sections.first?.id
-        let top = loadRow.value.maxY
-        let height = visibleHeight.value
-        store.loadEarlier()
-        guard let anchor else { return }
-        let point = UnitPoint(x: 0, y: height > 0 ? min(max(top / height, 0), 1) : 0)
-        DispatchQueue.main.async { proxy.scrollTo(anchor, anchor: point) }
+    /// Scrolls so the scroll view's offset (as its geometry reports it) becomes `offset`.
+    private func scroll(_ position: Held<ScrollPosition>, to offset: CGFloat) {
+        position.value.scrollTo(y: offset + insetTop.value)
     }
 
-    /// The conversation before a compaction; it arrives later (read from disk), and the section
-    /// that was first then stays where it was.
+    /// Twenty more turns above; what's on screen stays where it was (`anchor`).
+    private func loadEarlier() {
+        keepFirstMessage()
+        store.loadEarlier()
+    }
+
+    /// The conversation before a compaction; it arrives later (read from disk), and what's on
+    /// screen then stays where it was.
     private func loadEarlierConversation() {
-        following.value = false
-        if let anchor = store.sections.first?.id {
-            let height = visibleHeight.value
-            pendingAnchor.value = (anchor, UnitPoint(x: 0, y: height > 0 ? min(max(loadRow.value.maxY / height, 0), 1) : 0))
-        }
+        keepFirstMessage()
         actions.loadEarlierConversation()
+    }
+
+    private func keepFirstMessage() {
+        following.value = false
+        guard let id = store.sections.first?.header?.id.uuidString, let y = messageTops.value[id] else { return }
+        anchor.value = (id, y)
     }
 
     /// A message's action menu, under its button (above it near the bottom), over the rows.
@@ -241,7 +262,21 @@ struct TranscriptTimeline: View {
     private func rowActions(_ proxy: ScrollViewProxy) -> TranscriptActions {
         var actions = reveal(proxy)
         let sticky = sticky
-        actions.messageMoved = { id, y in sticky.row(id, y) }
+        let tops = messageTops
+        let (anchor, geometry, position, nudge) = (anchor, geometry, position, nudge)
+        let scroll = scroll
+        actions.messageMoved = { id, y in
+            sticky.row(id, y)
+            tops.value[id] = y
+            if let kept = anchor.value, kept.id == id, abs(y - kept.y) > 0.5 {
+                // Turns arrived above it: follow it down by as far as it moved.
+                anchor.value = nil
+                let target = geometry.value.offset + (y - kept.y)
+                scroll(position, target)
+                geometry.value.offset = target
+                nudge.value &+= 1
+            }
+        }
         let menu = menu
         actions.messageMenu = { entry, frame in menu.value = (entry, frame) }
         return actions
@@ -255,6 +290,12 @@ struct TranscriptTimeline: View {
         }
         return actions
     }
+}
+
+extension TranscriptTimeline {
+    /// One timeline per store: a chat view drawn again with new action closures doesn't draw it
+    /// again.
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.store === b.store }
 }
 
 /// One section, reading only its own model: a streamed token re-renders the section it lands
