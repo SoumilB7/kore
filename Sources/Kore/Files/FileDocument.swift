@@ -265,27 +265,36 @@ final class FileDocument: Identifiable {
     }
 
     /// Leading tabs and spaces as columns (a tab to the next multiple of `width`), then written
-    /// back as tabs (and spaces for a remainder) or as spaces.
+    /// back as tabs (and spaces for a remainder) or as spaces. Lines are what NSString counts as
+    /// lines (`\n`, `\r\n`, a lone `\r`, U+2028), each kept with its own ending; a last line
+    /// with no ending stays without one.
     static func reindent(_ text: String, width: Int, toTabs: Bool) -> String {
+        let string = text as NSString
         var out = ""
         out.reserveCapacity(text.utf8.count)
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            if line.offset > 0 { out += "\n" }
+        var start = 0
+        while start < string.length {
+            var lineEnd = 0
+            var contentsEnd = 0
+            string.getLineStart(nil, end: &lineEnd, contentsEnd: &contentsEnd, for: NSRange(location: start, length: 0))
             var column = 0
-            var rest = line.element[...]
-            while let c = rest.first, c == " " || c == "\t" {
-                column = c == "\t" ? (column / width + 1) * width : column + 1
-                rest = rest.dropFirst()
+            var indentEnd = start
+            while indentEnd < contentsEnd {
+                let c = string.character(at: indentEnd)
+                guard c == 0x20 || c == 0x09 else { break }
+                column = c == 0x09 ? (column / width + 1) * width : column + 1
+                indentEnd += 1
             }
-            // A blank line keeps what it had.
-            if rest.isEmpty || column == 0 {
-                out += line.element
-                continue
+            // A blank line, or one with no indentation, keeps what it had.
+            if indentEnd == contentsEnd || column == 0 {
+                out += string.substring(with: NSRange(location: start, length: lineEnd - start))
+            } else {
+                out += toTabs
+                    ? String(repeating: "\t", count: column / width) + String(repeating: " ", count: column % width)
+                    : String(repeating: " ", count: column)
+                out += string.substring(with: NSRange(location: indentEnd, length: lineEnd - indentEnd))
             }
-            out += toTabs
-                ? String(repeating: "\t", count: column / width) + String(repeating: " ", count: column % width)
-                : String(repeating: " ", count: column)
-            out += rest
+            start = lineEnd
         }
         return out
     }
