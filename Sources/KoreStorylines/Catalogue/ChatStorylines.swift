@@ -1,3 +1,4 @@
+import AppKit
 import KoreUI
 
 /// A chat with the scripted CLI, told once by Claude and once by Codex: the folder opens, the
@@ -146,4 +147,71 @@ final class ApproveAndDeny: ChatStoryline {
             Expect.rows("the command run") { $0.contains { $0.kind == "tool" && $0.tool == "Bash" && $0.done } },
         ]
     }
+}
+
+/// An answer's rows are built without text selection views: SwiftUI's view per selectable text
+/// was two fifths of building rows, so text becomes selectable only once the pointer reaches it.
+final class AnswerRowsWithoutSelection: ChatStoryline {
+    static let reply = """
+        Some **markdown**, as answers have it.
+
+        - one item
+        - and `another`
+
+        ```swift
+        let answer = 42
+        ```
+
+        | a | b |
+        |---|---|
+        | 1 | 2 |
+        """
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(reply)]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Show me some markdown"),
+            TurnFinished(1),
+            Expect("the answer on screen") { story in
+                if case .found(let answer) = Locator.answer(turn: 1).resolve(story.app) { return answer.frame != nil }
+                return false
+            },
+            WaitIdle(),
+            Expect("no text selection views before the pointer reaches the text") { selectionViews(in: $0.window) == 0 },
+        ]
+    }
+}
+
+/// With the real pointer: the answer's text becomes selectable when the pointer is over it.
+final class SelectableOnHover: ChatStoryline {
+    static let reply = """
+        A paragraph long enough to fill several lines of the answer, so the middle of its row is \
+        text rather than the gap between blocks. It goes on a little longer than that, and then \
+        some more, until the pointer can't miss it. One more sentence for good measure, and another.
+        """
+    override class var tags: Set<Tag> { [.chat, .realInput] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(reply)]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Write a paragraph"),
+            TurnFinished(1),
+            WaitIdle(),
+            Expect("no text selection views yet") { selectionViews(in: $0.window) == 0 },
+            Hover(.answer(turn: 1)),
+            Expect("the answer's text selectable under the pointer") { selectionViews(in: $0.window) > 0 },
+        ]
+    }
+}
+
+/// SwiftUI's text selection views (one per selectable `Text` it has built) in the window: a
+/// selection overlay hosting a text field in a window, a text interaction view in a bare hosting view.
+@MainActor private func selectionViews(in window: NSWindow?) -> Int {
+    func count(_ view: NSView) -> Int {
+        let name = String(describing: type(of: view))
+        let own = name.contains("SelectionOverlay") || name.contains("TextInteraction") ? 1 : 0
+        return view.subviews.reduce(own) { $0 + count($1) }
+    }
+    return window?.contentView.map(count) ?? 0
 }
