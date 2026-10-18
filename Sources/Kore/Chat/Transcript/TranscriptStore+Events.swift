@@ -42,6 +42,8 @@ extension TranscriptStore {
             toolOutput(id: id, text)
         case .toolFinished(let id, let output, let isError, _):
             toolFinished(id: id, output: output, isError: isError)
+        case .toolStopped(let id, _):
+            toolStopped(id: id)
         case .fileChanged(let id, let changes, _):
             fileChanged(tool: id, changes)
         case .notice(let text, let isError):

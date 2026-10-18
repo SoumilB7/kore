@@ -39,13 +39,15 @@ final class TranscriptStore {
         var duration: TimeInterval?
         /// A tool that only reads, searches or lists (grouped into "Explored N").
         var readOnly = false
+        /// A tool call cut off by Stop: no output, a muted dot.
+        var stopped = false
         /// A user message's id in its CLI's history (where a fork from it starts); nil for one
         /// sent in this run. `forkSource` on a fork's "Forked from" line.
         var source: String?
 
         static func == (a: Self, b: Self) -> Bool {
             a.id == b.id && a.kind == b.kind && a.text == b.text && a.result == b.result && a.done == b.done
-                && a.isError == b.isError && a.toolName == b.toolName && a.from == b.from
+                && a.isError == b.isError && a.stopped == b.stopped && a.toolName == b.toolName && a.from == b.from
                 && a.changes == b.changes && a.agent == b.agent && a.input == b.input && a.summary == b.summary
                 && a.duration == b.duration && a.attachments.map(\.id) == b.attachments.map(\.id)
         }
@@ -807,6 +809,16 @@ final class TranscriptStore {
         }
     }
 
+    /// The turn was stopped while the call ran.
+    func toolStopped(id: String) {
+        update(tool: id) {
+            $0.result = nil
+            $0.done = true
+            $0.isError = false
+            $0.stopped = true
+        }
+    }
+
     func fileChanged(tool id: String, _ changes: [FileChange]) {
         update(tool: id) { $0.changes = changes }
     }
@@ -1016,7 +1028,7 @@ final class TranscriptStore {
     }
 
     static func dot(_ row: Row) -> TimelineDot? {
-        func state(_ e: Entry) -> TimelineDot { !e.done ? .running : e.isError ? .failure : .success }
+        func state(_ e: Entry) -> TimelineDot { !e.done ? .running : e.stopped ? .plain : e.isError ? .failure : .success }
         switch row {
         case .entry(let e):
             switch e.kind {

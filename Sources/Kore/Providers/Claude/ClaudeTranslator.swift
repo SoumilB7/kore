@@ -281,7 +281,12 @@ final class ClaudeTranslator {
                     }
                 }
             }
-            out.append(.toolFinished(id: id, output: Self.text(of: content), isError: isError, agent: agent))
+            let output = Self.text(of: content)
+            if isError, output.hasPrefix(Self.stoppedCall) {
+                out.append(.toolStopped(id: id, agent: agent))
+            } else {
+                out.append(.toolFinished(id: id, output: output, isError: isError, agent: agent))
+            }
         }
         guard let id = first, let result else { return }
         if let change = FileChange(claudeToolResult: result) {
@@ -822,6 +827,11 @@ final class ClaudeTranslator {
         }
         return String(input.compact.prefix(160))
     }
+
+    /// What the CLI puts in the result of a call cut off by an interrupt, as an error ("…The
+    /// tool use was rejected…, STOP what you are doing…"). Kore's own denials carry Kore's
+    /// message instead.
+    static let stoppedCall = "The user doesn't want to proceed with this tool use."
 
     static func text(of content: JSONValue) -> String {
         if let s = content.string { return s }

@@ -31,6 +31,8 @@ import KoreCore
 ///   KORE_EVENT_LOG=<path>    append every ChatEvent the backend emits, one per line
 ///   KORE_TIME_REPLAY=1       print how long applying a resumed session's past took (main thread)
 ///   KORE_STOP_AFTER=<s>      press Stop that many seconds after launch
+///   KORE_STOP_AGENT_AFTER=<s> stop the first running sub-agent (its card's Stop) that many seconds after launch
+///   KORE_SEND_AFTER_STOP=<text> send that 3s after either stop
 ///   KORE_SET_MODE=<id>@<s>[;…] switch the chat's mode that many seconds after launch, as the mode
 ///                            menu does (plan-on / plan-off toggle Codex's Plan)
 ///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
@@ -217,8 +219,26 @@ enum DevSnapshot {
                 if parts.count > 2 { chat.context.apply(.compactionStarted(auto: false)) }
             }
         }
+        // The next message, 3s after a stop, to see a chat carry on after one.
+        func sendAfterStop() {
+            guard let text = env["KORE_SEND_AFTER_STOP"] else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                chat.draft = text
+                chat.send()
+            }
+        }
         if let after = env["KORE_STOP_AFTER"].flatMap(Double.init) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + after) { chat.stop() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) {
+                chat.stop()
+                sendAfterStop()
+            }
+        }
+        if let after = env["KORE_STOP_AGENT_AFTER"].flatMap(Double.init) {
+            // As a running agent card's Stop does.
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) {
+                if let agent = chat.transcript.agentSummary.running.first { chat.stopAgent(agent.id) }
+                sendAfterStop()
+            }
         }
         // As the mode menu does, mid-session: "<id>@<seconds>[;<id>@<seconds>…]".
         for step in (env["KORE_SET_MODE"] ?? "").split(separator: ";") {

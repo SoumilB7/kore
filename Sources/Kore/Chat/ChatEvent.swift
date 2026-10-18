@@ -45,6 +45,8 @@ enum ChatEvent: Sendable {
     case toolOutput(id: String, String, agent: AgentID = .main)
     /// `output` nil keeps what streamed.
     case toolFinished(id: String, output: String?, isError: Bool, agent: AgentID = .main)
+    /// The call ended because the turn was stopped: no output, not a failure.
+    case toolStopped(id: String, agent: AgentID = .main)
     /// Files a tool call changed (an edit, a write, a Codex file change).
     case fileChanged(toolId: String, [FileChange], agent: AgentID = .main)
     case notice(String, isError: Bool = false)
