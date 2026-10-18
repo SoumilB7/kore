@@ -38,6 +38,9 @@ protocol ChatBackend: AnyObject {
     /// session. `id` is the message's id from replay (nil for one sent in this run: it's found by
     /// its text from the end).
     func fork(message id: String?, text: String) async throws -> ForkStart
+    /// A fork of the whole conversation so far, in a new session (forking from the last answer;
+    /// an earlier answer forks before the next user message instead).
+    func forkAtEnd() async throws -> ForkStart
     /// The page of conversation before what's shown (before a compaction), oldest first, and
     /// whether more comes before it; nil when there's none.
     func earlier() async -> (events: [ChatEvent], more: Bool)?

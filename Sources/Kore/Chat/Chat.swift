@@ -271,6 +271,24 @@ final class Chat: Identifiable {
         }
     }
 
+    /// Where a fork from an answer starts: through that answer's turn. That's the history before
+    /// the next user message, or the whole conversation when the answer is in the last turn.
+    func forkStart(after answer: TranscriptStore.Entry) async -> ForkStart? {
+        let entries = transcript.entries
+        let next = entries.firstIndex { $0.id == answer.id }.flatMap { index in
+            // A message taken into a running turn isn't a new turn: forking there would cut it in half.
+            entries[(index + 1)...].first { ($0.kind == .user || $0.kind == .peer) && !$0.inTurn }
+        }
+        do {
+            let backend = connect()
+            if let next { return try await backend.fork(message: next.source, text: next.text) }
+            return try await backend.forkAtEnd()
+        } catch {
+            fail("Couldn't fork: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     /// The conversation before a compaction, ten turns at a time.
     func loadEarlierConversation() {
         guard transcript.earlierAvailable, !transcript.loadingEarlier else { return }

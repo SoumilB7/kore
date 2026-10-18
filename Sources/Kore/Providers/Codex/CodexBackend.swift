@@ -352,6 +352,16 @@ final class CodexBackend: ChatBackend {
         return found ? .fresh : nil
     }
 
+    /// Through the thread's last turn (`thread/fork`'s `lastTurnId` keeps turns through it):
+    /// only the newest page is read, one turn without its items.
+    func forkAtEnd() async throws -> ForkStart {
+        try await start()
+        guard let session, let thread = sessionId else { return .fresh }
+        let newest = try await session.turns(of: thread, before: nil, limit: 1, view: .notLoaded)
+        guard let last = newest.turns.last?["id"]?.string else { return .fresh }
+        return .pending(ForkPoint(from: thread, at: last))
+    }
+
     /// The ten turns before the ones shown.
     func earlier() async -> (events: [ChatEvent], more: Bool)? {
         guard let from = earlierFrom else { return nil }

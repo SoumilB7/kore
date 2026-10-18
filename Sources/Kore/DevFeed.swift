@@ -79,6 +79,7 @@ final class FeedBackend: ChatBackend {
     func stopAgent(_ id: String) async {}
     func agentHistory(_ id: String) async -> [ChatEvent] { [] }
     func fork(message id: String?, text: String) async throws -> ForkStart { .fresh }
+    func forkAtEnd() async throws -> ForkStart { .fresh }
     func earlier() async -> (events: [ChatEvent], more: Bool)? { nil }
     func close() async { sink.finish() }
 }

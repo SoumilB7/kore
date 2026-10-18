@@ -286,6 +286,17 @@ final class ClaudeBackend: ChatBackend {
         return .pending(ForkPoint(from: source, at: at, history: history))
     }
 
+    /// Through the last message of the current history (`--resume-session-at` takes an
+    /// assistant's uuid as well as a user's).
+    func forkAtEnd() async throws -> ForkStart {
+        guard let source else { return .fresh }
+        let found = await page(source)
+        guard let last = found.messages.last(where: { !ClaudeHistory.isBoundary($0) }), let at = last["uuid"]?.string else {
+            return .fresh
+        }
+        return .pending(ForkPoint(from: source, at: at, history: found))
+    }
+
     func earlier() async -> (events: [ChatEvent], more: Bool)? {
         guard let from = earlierFrom, let source else { return nil }
         let older = await page(source, before: from, userTurns: 10)
