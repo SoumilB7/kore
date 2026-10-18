@@ -8,6 +8,8 @@ struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 28) {
             VStack(spacing: 6) {
+                BrandMark(height: 56)
+                    .padding(.bottom, 10)
                 Text("Kore")
                     .font(.system(size: 30, weight: .semibold))
                     .foregroundStyle(Theme.text)
@@ -50,8 +52,11 @@ struct WelcomeView: View {
         .padding(.horizontal, 40)
         .frame(width: 480)
         .frame(minHeight: 360)
+        // The window takes the content's full height (with .contentSize), so nothing is cut off.
+        .fixedSize(horizontal: false, vertical: true)
         .task {
-            if let folder = DevSnapshot.openFolder { open(folder) }
+            // A dev snapshot of this window when no folder is opened.
+            if let folder = DevSnapshot.openFolder { open(folder) } else { DevSnapshot.captureIfRequested() }
             await app.checkCLI()
         }
     }

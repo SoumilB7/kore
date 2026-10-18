@@ -1,15 +1,30 @@
 import SwiftUI
 
-/// Near-black with a slight grey lift, never pure #000.
+/// One hue (206°, the logo's blue) in many shades: neutrals are that hue at low saturation,
+/// raised layers are lighter, and saturation is kept for what acts. Red is the one exception.
 enum Theme {
-    static let background = Color(red: 0x11 / 255, green: 0x11 / 255, blue: 0x13 / 255)
-    static let surface = Color(red: 0x19 / 255, green: 0x19 / 255, blue: 0x1C / 255)
-    static let surfaceHover = Color(red: 0x21 / 255, green: 0x21 / 255, blue: 0x25 / 255)
-    static let border = Color.white.opacity(0.08)
-    static let text = Color(white: 0.93)
-    static let secondary = Color(white: 0.56)
-    static let tertiary = Color(white: 0.36)
-    static let danger = Color(red: 0.94, green: 0.45, blue: 0.42)
+    /// Ground, 8 / 11 / 14% lightness.
+    static let background = Color(hex: 0x111518)
+    static let surface = Color(hex: 0x171D21)
+    static let surfaceHover = Color(hex: 0x1D252A)
+    static let border = Color(hex: 0xBED7EB).opacity(0.09)
+    /// 15.7, 6.0 and 3.0 : 1 on the background; tertiary is for hints only.
+    static let text = Color(hex: 0xEAEEF1)
+    static let secondary = Color(hex: 0x89959F)
+    static let tertiary = Color(hex: 0x596269)
+    static let danger = Color(hex: 0xF0736B)
+    /// Links, caret, selection, progress.
+    static let accent = Blue.b300
+
+    /// The hue's saturated steps (logo, accent, mode outlines).
+    enum Blue {
+        static let b200 = Color(hex: 0xA3C3DC)
+        static let b300 = Color(hex: 0x6AB1E7)
+        static let b400 = Color(hex: 0x3C97DD)
+        static let b500 = Color(hex: 0x257DC1)
+        static let b600 = Color(hex: 0x1B6298)
+    }
+
     // Same as the Claude Code VS Code extension: VS Code's chat font (the system font,
     // SF Pro, at 13) for text, and the editor font (Menlo, 12) for code.
     @MainActor static var body: Font { .kore(13) }
@@ -34,6 +49,14 @@ extension EnvironmentValues {
     var chatColumn: ChatColumn {
         get { self[ChatColumnKey.self] }
         set { self[ChatColumnKey.self] = newValue }
+    }
+}
+
+extension Color {
+    init(hex: UInt32) {
+        self.init(
+            red: Double(hex >> 16 & 0xFF) / 255, green: Double(hex >> 8 & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255)
     }
 }
 

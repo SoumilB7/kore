@@ -181,11 +181,13 @@ struct ChatView: View {
             .padding(.vertical, 8)
         }
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(composerBorder, lineWidth: 1))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(composerBorder, lineWidth: chat.activeMode.rung?.width ?? 1))
     }
 
     private var composerBorder: Color {
-        if let tint = chat.tint { return tint.opacity(composerFocused ? 0.7 : 0.45) }
+        if let rung = chat.activeMode.rung { return rung.color.opacity(rung.opacity * (composerFocused ? 1 : 0.65)) }
         return composerFocused ? Theme.text.opacity(0.22) : Theme.border
     }
 
@@ -604,7 +606,7 @@ private struct PlanText: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Plan")
                 .font(.kore(11, .semibold))
-                .foregroundStyle(ModeOption.teal)
+                .foregroundStyle(ModeOption.Rung.plan.color)
             Text(planMarkdown(text))
                 .font(Theme.body)
                 .foregroundStyle(Theme.text)
@@ -613,8 +615,8 @@ private struct PlanText: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ModeOption.teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ModeOption.teal.opacity(0.3)))
+        .background(ModeOption.Rung.plan.color.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ModeOption.Rung.plan.color.opacity(0.3)))
     }
 }
 
@@ -657,7 +659,7 @@ private struct PlanApprovalCard: View {
         }
         .padding(14)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ModeOption.teal.opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ModeOption.Rung.plan.color.opacity(0.45)))
     }
 }
 
@@ -679,7 +681,7 @@ private struct ImplementPlanCard: View {
         }
         .padding(14)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ModeOption.teal.opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(ModeOption.Rung.plan.color.opacity(0.45)))
     }
 }
 
@@ -698,7 +700,7 @@ private struct PlanChip: View {
                 }
                 Text("Plan").font(.kore(12, .medium))
             }
-            .foregroundStyle(ModeOption.teal)
+            .foregroundStyle(ModeOption.Rung.plan.color)
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }

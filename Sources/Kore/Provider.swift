@@ -20,36 +20,36 @@ enum Provider: String, CaseIterable, Identifiable {
         switch self {
         case .claude:
             [
-                ModeOption(id: "default", label: "Manual", icon: ModeIcons.manual, tint: nil),
+                ModeOption(id: "default", label: "Manual", icon: ModeIcons.manual, rung: nil),
                 ModeOption(
                     id: "acceptEdits", label: "Edit automatically", icon: ModeIcons.editAutomatically,
-                    tint: ModeOption.purple),
-                ModeOption(id: "plan", label: "Plan", icon: ModeIcons.plan, tint: ModeOption.teal),
-                ModeOption(id: "auto", label: "Auto", icon: ModeIcons.auto, tint: ModeOption.amber),
+                    rung: .edits),
+                ModeOption(id: "plan", label: "Plan", icon: ModeIcons.plan, rung: .plan),
+                ModeOption(id: "auto", label: "Auto", icon: ModeIcons.auto, rung: .auto),
                 // Not offered, as in the extension (Bypass needs its allowDangerouslySkipPermissions
                 // setting); kept so the label is right if the CLI reports them.
                 ModeOption(
                     id: "bypassPermissions", label: "Bypass permissions", icon: ModeIcons.bypass,
-                    tint: ModeOption.red, listed: false),
-                ModeOption(id: "dontAsk", label: "Don't ask", icon: ModeIcons.manual, tint: ModeOption.red, listed: false),
+                    rung: .danger, listed: false),
+                ModeOption(id: "dontAsk", label: "Don't ask", icon: ModeIcons.manual, rung: .danger, listed: false),
             ]
         case .codex:
             [
                 ModeOption(
-                    id: "askForApproval", label: "Ask for approval", icon: ModeIcons.askForApproval, tint: nil,
+                    id: "askForApproval", label: "Ask for approval", icon: ModeIcons.askForApproval, rung: nil,
                     iconSize: 15),
                 ModeOption(
-                    id: "approveForMe", label: "Approve for me", icon: ModeIcons.approveForMe, tint: ModeOption.amber,
+                    id: "approveForMe", label: "Approve for me", icon: ModeIcons.approveForMe, rung: .auto,
                     iconSize: 15),
                 ModeOption(
-                    id: "fullAccess", label: "Full access", icon: ModeIcons.fullAccess, tint: ModeOption.red,
+                    id: "fullAccess", label: "Full access", icon: ModeIcons.fullAccess, rung: .danger,
                     iconSize: 15),
             ]
         }
     }
 
     static let codexPlan = ModeOption(
-        id: "plan", label: "Plan", icon: ModeIcons.codexPlan, tint: ModeOption.teal, iconSize: 14)
+        id: "plan", label: "Plan", icon: ModeIcons.codexPlan, rung: .plan, iconSize: 14)
 
     @MainActor var logo: NSImage { Self.logos[self]! }
 
@@ -87,19 +87,35 @@ struct ModeOption: Identifiable {
     let label: String
     /// SVG from `ModeIcons`.
     let icon: String
-    /// Highlight for the chat while this mode is on; nil for the neutral default.
-    let tint: Color?
+    /// The composer outline while this mode is on; nil for the neutral default.
+    let rung: Rung?
     /// Shown in the mode menu.
     var listed = true
     /// Display size of the icon. Claude's SVGs center a small glyph in a 20pt box (the
     /// extension shows them at 20); Codex's fill their box (shown at 16).
     var iconSize: CGFloat = 20
 
-    // Claude Code's dark theme: planMode, autoAccept, warning, error.
-    static let teal = Color(red: 72 / 255, green: 150 / 255, blue: 140 / 255)
-    static let purple = Color(red: 175 / 255, green: 135 / 255, blue: 255 / 255)
-    static let amber = Color(red: 255 / 255, green: 193 / 255, blue: 7 / 255)
-    static let red = Color(red: 255 / 255, green: 107 / 255, blue: 128 / 255)
+    /// The mode's color (label, outline); nil for the neutral default.
+    var tint: Color? { rung?.color }
+
+    /// A step on the mode ladder, all in the theme's one hue: the outline gets brighter, more
+    /// saturated, then thicker the less the agent asks before acting. Only the last step leaves
+    /// the hue, for danger. The labels and icons still come from the VS Code extensions.
+    struct Rung {
+        let color: Color
+        /// Outline opacity while the composer is focused (lower when not).
+        let opacity: Double
+        let width: CGFloat
+
+        /// Plans and reads only: pale and calm.
+        static let plan = Rung(color: Theme.Blue.b200, opacity: 0.55, width: 1)
+        /// Edits files without asking.
+        static let edits = Rung(color: Theme.Blue.b400, opacity: 0.85, width: 1)
+        /// Runs commands without asking.
+        static let auto = Rung(color: Theme.Blue.b300, opacity: 1, width: 1.5)
+        /// Skips every check.
+        static let danger = Rung(color: Theme.danger, opacity: 0.9, width: 1.5)
+    }
 }
 
 struct ModeIcon: View {
