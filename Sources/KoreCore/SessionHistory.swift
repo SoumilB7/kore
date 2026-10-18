@@ -41,31 +41,47 @@ public enum ClaudeHistory {
 
     /// The session's user/assistant messages along its current branch, oldest first, in the
     /// same shape as stream-json `user` / `assistant` messages.
+    ///
+    /// The branch is the `parentUuid` walk back from the last message, which leaves out rewound
+    /// branches. Parallel tool calls fork that chain: each call is its own entry (blocks of one
+    /// assistant message), and results that come back out of order hang off different calls, so
+    /// the walk misses some. Those are added back: entries of the same assistant messages, then
+    /// the results of every included tool call, all in file order.
     public static func messages(sessionId: String, in folder: URL) -> [JSONValue] {
         let file = projectDirectory(for: folder).appendingPathComponent("\(sessionId).jsonl")
         guard let data = try? Data(contentsOf: file) else { return [] }
         var byId: [String: JSONValue] = [:]
+        var order: [String] = []
         var leaf: String?
         for line in data.split(separator: 0x0A) {
             guard let entry = try? JSONValue.parse(Data(line)), let uuid = entry["uuid"]?.string else { continue }
             byId[uuid] = entry
             let type = entry["type"]?.string
-            if (type == "user" || type == "assistant") && entry["isSidechain"]?.bool != true { leaf = uuid }
+            guard (type == "user" || type == "assistant") && entry["isSidechain"]?.bool != true else { continue }
+            order.append(uuid)
+            leaf = uuid
         }
-        // Walk back from the last message so rewound branches are left out.
-        var chain: [JSONValue] = []
+        var included: Set<String> = []
         var cursor = leaf
-        while let id = cursor, let entry = byId[id] {
-            chain.append(entry)
+        while let id = cursor, let entry = byId[id], included.insert(id).inserted {
             cursor = entry["parentUuid"]?.string
         }
-        return chain.reversed().filter { entry in
-            let type = entry["type"]?.string
+        func blocks(_ entry: JSONValue) -> [JSONValue] { entry["message"]?["content"]?.array ?? [] }
+        let messageIds = Set(included.compactMap { byId[$0]?["type"]?.string == "assistant" ? byId[$0]?["message"]?["id"]?.string : nil })
+        for id in order where byId[id]?["type"]?.string == "assistant" {
+            if let message = byId[id]?["message"]?["id"]?.string, messageIds.contains(message) { included.insert(id) }
+        }
+        let toolIds = Set(included.flatMap { id in
+            byId[id]?["type"]?.string == "assistant" ? blocks(byId[id]!).compactMap { $0["type"]?.string == "tool_use" ? $0["id"]?.string : nil } : []
+        })
+        for id in order where byId[id]?["type"]?.string == "user" {
+            if blocks(byId[id]!).contains(where: { toolIds.contains($0["tool_use_id"]?.string ?? "") }) { included.insert(id) }
+        }
+        return order.filter(included.contains).compactMap { byId[$0] }.filter { entry in
             // Peer messages, cron firings and finished-agent notices are meta entries, but they
             // start turns of the conversation.
-            return (type == "user" || type == "assistant")
-                && (entry["isMeta"]?.bool != true || PeerMessage(entry: entry) != nil
-                    || cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? ""))
+            entry["isMeta"]?.bool != true || PeerMessage(entry: entry) != nil
+                || cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? "")
         }
     }
 
