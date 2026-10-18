@@ -11,7 +11,8 @@ struct DiffView: View {
     /// The tool body box in the timeline, `.well` in an approval card, `.panel` in the modal.
     var style = PanelStyle.toolBody
     var maxHeight: CGFloat? = Size.diffInlineMax
-    @StateObject private var viewport = Local<CGFloat>(0)
+    /// The layout and the change it was worked out for: a body with the same change reuses it.
+    @StateObject private var cached = Held<(change: FileChange, layout: DiffLayout)?>(nil)
 
     var body: some View {
         if change.isBinary {
@@ -19,27 +20,35 @@ struct DiffView: View {
         } else if change.isTruncated || change.hunks.reduce(0, { $0 + $1.lines.count }) > Size.diffLineLimit {
             message("Diff too large to preview", open: true)
         } else if !change.hunks.isEmpty {
-            diff(DiffLayout(change.hunks))
+            diff(layout)
         }
+    }
+
+    /// Once per change. (Comparing an unchanged change is quick: its arrays share storage.)
+    private var layout: DiffLayout {
+        if let cached = cached.value, cached.change == change { return cached.layout }
+        let layout = DiffLayout(change.hunks)
+        cached.value = (change, layout)
+        return layout
     }
 
     private func diff(_ layout: DiffLayout) -> some View {
         let rowHeight = Size.diffRow * Zoom.shared.scale
         let hunkHeight = Size.diffHunk * Zoom.shared.scale
         let height = CGFloat(layout.hunkCount) * hunkHeight + CGFloat(layout.rows.count - layout.hunkCount) * rowHeight
-        let width = max(layout.width, viewport.value)
         return ScrollView(maxHeight == nil ? .horizontal : [.horizontal, .vertical]) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(layout.rows) { row in
-                    DiffRowView(row: row, numberWidth: layout.numberWidth, width: width,
-                                height: row.kind == .hunk ? hunkHeight : rowHeight)
+                    DiffRowView(row: row, numberWidth: layout.numberWidth, height: row.kind == .hunk ? hunkHeight : rowHeight)
                 }
             }
+            // Rows as wide as the widest line, or the box when that's wider: sized by layout,
+            // so a resize doesn't run this body again.
+            .containerRelativeFrame(.horizontal, alignment: .leading) { length, _ in max(length, layout.width) }
             .textSelection(.enabled)
         }
         .scrollIndicators(.automatic)
         .frame(height: maxHeight.map { min(height, $0) } ?? height)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewport.value = $0 }
         .panel(style)
         .clipShape(RoundedRectangle(cornerRadius: style.radius))
     }
@@ -107,7 +116,6 @@ struct DiffLayout {
 private struct DiffRowView: View {
     let row: DiffLayout.Row
     let numberWidth: CGFloat
-    let width: CGFloat
     let height: CGFloat
 
     var body: some View {
@@ -132,7 +140,7 @@ private struct DiffRowView: View {
         }
         .font(TextStyle.codeSmall)
         .lineLimit(1)
-        .frame(width: width, height: height, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
         .background(fill)
     }
 
