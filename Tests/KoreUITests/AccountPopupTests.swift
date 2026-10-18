@@ -121,7 +121,7 @@ struct AccountPopupTests {
     @Test func accountFollowsUsageInPlaceOfTheCLIsLogin() {
         #expect(names("") == ["Usage", "Account", "/compact"])
         #expect(SlashCommand.usage.glyph == "chart.bar.fill" && SlashCommand.usage.description == "Plan limits")
-        #expect(SlashCommand.account.glyph == "person.crop.circle" && SlashCommand.account.description == "Sign in, switch or sign out")
+        #expect(SlashCommand.account.glyph == "person" && SlashCommand.account.description == "Sign in, switch or sign out")
     }
 
     @Test func accountIsFoundByItsOtherWords() {

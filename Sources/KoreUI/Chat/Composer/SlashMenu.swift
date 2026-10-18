@@ -39,7 +39,7 @@ struct SlashMenu: View {
             if let glyph = command.glyph {
                 Image(systemName: glyph).font(Glyph.rowIcon).foregroundStyle(Theme.secondary)
             }
-            Text(command.label)
+            Self.label(command)
                 .font(TextStyle.bodyMedium)
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
@@ -64,13 +64,19 @@ struct SlashMenu: View {
         .hoverFill(lit, Theme.Row.selected(.surface))
         .contentShape(Rectangle())
     }
+
+    /// "/compact", the "/" set close to the name; Kore's entries and skills as they read.
+    private static func label(_ command: SlashCommand) -> Text {
+        guard command.kind == .command else { return Text(command.label) }
+        return Text("/").kerning(TextStyle.sigilKern) + Text(command.name)
+    }
 }
 
 extension SlashCommand {
     /// Kore's entries, each a popup: the plan's limits, and the CLI's login.
     static let usage = SlashCommand(name: "usage", description: "Plan limits", hint: "", kind: .kore, glyph: "chart.bar.fill")
     static let account = SlashCommand(
-        name: "account", description: "Sign in, switch or sign out", hint: "", kind: .kore, glyph: "person.crop.circle")
+        name: "account", description: "Sign in, switch or sign out", hint: "", kind: .kore, glyph: "person")
     static let kore = [usage, account]
     /// The CLI's own commands these stand in for: its usage panel, and its login and logout,
     /// which only work in its terminal.
