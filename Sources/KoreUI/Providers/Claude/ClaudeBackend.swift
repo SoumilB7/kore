@@ -18,6 +18,13 @@ final class ClaudeBackend: ChatBackend {
     private var resolvedTurns: Set<String> = []
     /// Background agents being followed through their transcripts.
     private var tails: [String: Task<Void, Never>] = [:]
+    /// Followed agents another client runs (its CLI process, not this one, hears them end).
+    private var alone: Set<String> = []
+    /// Their notifications, read from the chat's transcript as it's written, from `noticesFrom`.
+    private var notices: Task<Void, Never>?
+    private var noticesFrom: UInt64 = 0
+    /// Agents' transcripts found in another session's folder (a fork's copied history).
+    private var agentTranscripts: [String: URL] = [:]
     /// Where the conversation before what's shown goes on (a compaction's logical parent).
     private var earlierFrom: String?
     /// A fork's new session got its "(fork)" title.
@@ -95,8 +102,23 @@ final class ClaudeBackend: ChatBackend {
             let replayed = await ClaudeTranslator.replayed(first.messages, folder: folder, sessionId: translator.sessionId)
             translator.adopt(replayed.carried)
             pastMode = replayed.carried.mode
+            // Notifications are read from where the page was (a fork's page is another file's).
+            if let transcript, transcript.id == sessionId {
+                noticesFrom = transcript.reader.length
+            } else if let session = sessionId {
+                noticesFrom = ClaudeHistory.size(of: ClaudeHistory.transcript(sessionId: session, in: folder))
+            }
             yield(.replayed(replayed.events))
             yield(.earlierHistory(earlierFrom != nil))
+            // Agents it never saw end: their own files say which ended and which still run.
+            // Looked up after the page shows, so a chat with such agents opens no later.
+            let running = await settleUnfinished()
+            translator.take().events.forEach(yield)
+            for id in running {
+                yield(.agentResumed(id: id))
+                alone.insert(id)
+                tail(id)
+            }
         }
         let session = try await starting.value
         self.session = session
@@ -245,8 +267,9 @@ final class ClaudeBackend: ChatBackend {
     func agentHistory(_ id: String) async -> [ChatEvent] {
         guard let session = sessionId else { return [] }
         let folder = options.folder
+        let known = agentTranscripts[id]
         let entries = await Task.detached {
-            ClaudeHistory.subagentFile(toolUseId: id, sessionId: session, in: folder).map { ClaudeHistory.entries(in: $0).entries }
+            (known ?? ClaudeHistory.subagentFile(toolUseId: id, sessionId: session, in: folder)).map { ClaudeHistory.entries(in: $0).entries }
         }.value
         guard let entries else { return [] }
         return await ClaudeTranslator.agentHistory(entries, agent: id, folder: folder)
@@ -254,32 +277,111 @@ final class ClaudeBackend: ChatBackend {
 
     private static let resumeLead: TimeInterval = 2
 
+    /// An agent another client runs, whose transcript has had nothing new for this long, has
+    /// stopped: one call can run ten minutes without a line (the Bash tool's longest timeout),
+    /// and its answer a few more. Of some 218,000 gaps between lines in agents' runs, 0.04% were
+    /// longer (a machine asleep, mostly).
+    static let quietLimit: TimeInterval = 15 * 60
+    /// Its meta file marks it finished a moment before its notification (with its result)
+    /// reaches the chat's transcript.
+    private static let noticeWait: TimeInterval = 3
+
     /// Reads a running background agent's transcript as it grows, until the agent finishes;
-    /// `since`, the entries written from then on.
+    /// `since`, the entries written from then on. One another client runs (`alone`) ends when
+    /// its notification is written to the chat's transcript (`watchNotices`), its meta file
+    /// marks it ended, or its transcript stays quiet past `quietLimit`.
     private func tail(_ id: String, since: Date? = nil) {
         guard tails[id] == nil, let session = sessionId else { return }
         let folder = options.folder
+        let known = agentTranscripts[id]
+        if alone.contains(id) { watchNotices() }
         tails[id] = Task {
-            var file: URL?
+            var file = known
             var offset: UInt64 = 0
+            var markedAt: Date?
             while !Task.isCancelled {
                 let finished = translator.isFinished(id)
                 if file == nil {
                     file = await Task.detached { ClaudeHistory.subagentFile(toolUseId: id, sessionId: session, in: folder) }.value
                 }
+                var grew = false
                 if let file {
                     let start = offset
                     var (entries, next) = await Task.detached { ClaudeHistory.entries(in: file, from: start) }.value
                     offset = next
+                    grew = next > start
                     if let since { entries = entries.filter { (ClaudeTranslator.date($0["timestamp"]) ?? since) >= since } }
                     for event in translator.agentEntries(entries, agent: id, skippingPrompt: start == 0 && since == nil, live: true) {
                         yield(event)
                     }
                 }
                 if finished { break }
+                // Its own files, read only while it writes nothing.
+                if alone.contains(id), !grew, let file {
+                    let state = await Task.detached { ClaudeHistory.Subagent.read(file) }.value
+                    switch state.outcome(quiet: Self.quietLimit) {
+                    case .running:
+                        break
+                    case .finished:
+                        let marked = markedAt ?? .now
+                        markedAt = marked
+                        if Date.now.timeIntervalSince(marked) >= Self.noticeWait { end(id, .completed) }
+                    case .stopped:
+                        end(id, .stopped)
+                    }
+                }
                 try? await Task.sleep(for: .milliseconds(700))
             }
             tails[id] = nil
+            alone.remove(id)
+        }
+    }
+
+    private func end(_ id: String, _ status: AgentStatus) {
+        translator.agentEnded(id, status)
+        flush()
+    }
+
+    /// After a replay: what became of the agents it never saw end, from their own files (see
+    /// `ClaudeHistory.Subagent.outcome`). Those marked ended end (their events wait in the
+    /// translator); the background ones still running are returned, to follow.
+    private func settleUnfinished() async -> [String] {
+        let open = translator.unfinishedAgents()
+        guard let session = sessionId, !open.isEmpty else { return [] }
+        let ids = Set(open.map(\.id))
+        let agentIds = translator.agentFiles
+        let folder = options.folder
+        let found = await Task.detached(priority: .userInitiated) {
+            ClaudeHistory.subagents(toolUseIds: ids, agentIds: agentIds, sessionId: session, in: folder)
+        }.value
+        var running: [String] = []
+        for (id, background) in open {
+            guard let agent = found[id] else { continue }
+            agentTranscripts[id] = agent.transcript
+            switch agent.outcome(quiet: Self.quietLimit) {
+            case .finished: translator.agentEnded(id, .completed)
+            case .running where background: running.append(id)
+            case .running, .stopped: break  // the replay stops it
+            }
+        }
+        return running
+    }
+
+    /// The chat's transcript, read as it's written while agents another client runs are
+    /// followed: their notifications end them, with their results.
+    private func watchNotices() {
+        guard notices == nil, let session = sessionId else { return }
+        let file = ClaudeHistory.transcript(sessionId: session, in: options.folder)
+        notices = Task {
+            while !Task.isCancelled, !alone.isEmpty {
+                let start = noticesFrom
+                let (texts, next) = await Task.detached { ClaudeHistory.taskNotifications(in: file, from: start) }.value
+                noticesFrom = next
+                for text in texts { translator.taskNotification(text: text) }
+                if !texts.isEmpty { flush() }
+                try? await Task.sleep(for: .seconds(1))
+            }
+            notices = nil
         }
     }
 
@@ -443,6 +545,8 @@ final class ClaudeBackend: ChatBackend {
     func close() async {
         for tail in tails.values { tail.cancel() }
         tails = [:]
+        notices?.cancel()
+        notices = nil
         pump?.cancel()
         pump = nil
         let session = session

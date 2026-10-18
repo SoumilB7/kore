@@ -99,4 +99,65 @@ struct SessionHistoryTests {
         #expect(prompts(page).contains("second"))
         #expect(prompts(page).contains("third"))
     }
+
+    // MARK: Sub-agents another client runs
+
+    /// An agent's transcript and meta file under `session`'s subagents folder.
+    private func agent(_ id: String, session: String, tool: String, meta: [String: Any] = [:], last: [String: Any]? = nil)
+        throws -> URL
+    {
+        let dir = ClaudeHistory.projectDirectory(for: folder).appendingPathComponent(session).appendingPathComponent("subagents")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let lines = [user("x1", nil, "Find why uploads fail."), answer("x2", "x1", "Looking.")] + (last.map { [$0] } ?? [])
+        let text = try lines.map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }
+        let file = dir.appendingPathComponent("agent-\(id).jsonl")
+        try (text.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let info = meta.merging(["toolUseId": tool, "requestShape": "background"]) { mine, _ in mine }
+        try JSONSerialization.data(withJSONObject: info).write(to: dir.appendingPathComponent("agent-\(id).meta.json"))
+        return file
+    }
+
+    @Test func anAgentsOwnFilesSayWhetherItStillRuns() throws {
+        let running = ClaudeHistory.Subagent.read(try agent("r", session: "s5", tool: "t1"))
+        #expect(running.outcome(quiet: 900) == .running)
+        // Quiet past the limit with no end written: stopped.
+        #expect(running.outcome(at: Date().addingTimeInterval(1000), quiet: 900) == .stopped)
+        let done = ClaudeHistory.Subagent.read(try agent("d", session: "s5", tool: "t2", meta: ["finished": true]))
+        #expect(done.outcome(at: Date().addingTimeInterval(1000), quiet: 900) == .finished)
+        let killed = ClaudeHistory.Subagent.read(try agent("k", session: "s5", tool: "t3", meta: ["stoppedByUser": true]))
+        #expect(killed.outcome(quiet: 900) == .stopped)
+        // Its parent's turn was stopped: no meta says so, the last line does.
+        let interrupted = ClaudeHistory.Subagent.read(
+            try agent("i", session: "s5", tool: "t4", last: user("x3", "x2", "[Request interrupted by user]")))
+        #expect(interrupted.interrupted)
+        #expect(interrupted.outcome(quiet: 900) == .stopped)
+    }
+
+    /// The chat's own folder first; a fork's copied calls ran in the session it was made from.
+    @Test func agentsAreFoundInTheirSessionOrTheOneAForkCameFrom() throws {
+        let own = try agent("own", session: "s6", tool: "t1")
+        let elsewhere = try agent("away", session: "s0", tool: "t2")
+        let found = ClaudeHistory.subagents(toolUseIds: ["t1", "t2", "t9"], agentIds: [:], sessionId: "s6", in: folder)
+        #expect(found["t1"]?.transcript.lastPathComponent == own.lastPathComponent)
+        #expect(found["t2"]?.transcript.lastPathComponent == elsewhere.lastPathComponent)
+        #expect(found["t9"] == nil)
+    }
+
+    /// Only whole lines written after `from`, in whichever entry carries the notification.
+    @Test func notificationsAreReadFromWhereTheChatWas() throws {
+        let note = "<task-notification><tool-use-id>t1</tool-use-id><status>completed</status></task-notification>"
+        try write("s7", [user("u1", nil, "Start them.")])
+        let file = ClaudeHistory.transcript(sessionId: "s7", in: folder)
+        let from = ClaudeHistory.size(of: file)
+        let queued: [String: Any] = ["type": "attachment", "uuid": "n1", "attachment": ["type": "queued_command", "prompt": note]]
+        let only: [String: Any] = ["type": "user", "uuid": "n2", "queueTranscriptOnly": true, "message": ["role": "user", "content": note]]
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        for entry in [queued, only] { try handle.write(contentsOf: try JSONSerialization.data(withJSONObject: entry) + Data("\n".utf8)) }
+        try handle.write(contentsOf: Data(#"{"type":"user","message":{"content":"<task-notif"#.utf8))  // still being written
+        try handle.close()
+        let read = ClaudeHistory.taskNotifications(in: file, from: from)
+        #expect(read.texts == [note, note])
+        #expect(ClaudeHistory.taskNotifications(in: file, from: read.next).texts.isEmpty)
+    }
 }

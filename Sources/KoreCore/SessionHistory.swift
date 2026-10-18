@@ -255,6 +255,137 @@ public enum ClaudeHistory {
         return nil
     }
 
+    /// A sub-agent's transcript and what its meta file says: newer CLIs mark it `finished` when
+    /// it ends, and `stoppedByUser` when stopped. `interrupted`: its last line is a stop marker
+    /// (its parent's turn was stopped, which no meta file says). `modified`: when it last wrote
+    /// anything.
+    public struct Subagent: Sendable, Equatable {
+        public let transcript: URL
+        public let finished: Bool
+        public let stoppedByUser: Bool
+        public let interrupted: Bool
+        public let modified: Date?
+
+        public init(transcript: URL, finished: Bool, stoppedByUser: Bool, interrupted: Bool = false, modified: Date?) {
+            self.transcript = transcript
+            self.finished = finished
+            self.stoppedByUser = stoppedByUser
+            self.interrupted = interrupted
+            self.modified = modified
+        }
+
+        public enum Outcome: Sendable, Equatable { case running, finished, stopped }
+
+        /// What became of it as of `now`: running while it isn't marked finished or stopped and
+        /// its transcript was written within `quiet` (a call can run minutes without a line).
+        public func outcome(at now: Date = Date(), quiet: TimeInterval) -> Outcome {
+            if stoppedByUser { return .stopped }
+            if finished { return .finished }
+            if interrupted { return .stopped }
+            guard let modified, now.timeIntervalSince(modified) <= quiet else { return .stopped }
+            return .running
+        }
+
+        /// Read again: one small file, two stats and the transcript's last line.
+        public static func read(_ transcript: URL) -> Subagent {
+            let meta = transcript.deletingPathExtension().appendingPathExtension("meta.json")
+            let json = (try? Data(contentsOf: meta)).flatMap { try? JSONValue.parse($0) }
+            let modified = [transcript, meta].compactMap {
+                (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.modificationDate] as? Date
+            }.max()
+            return Subagent(
+                transcript: transcript, finished: json?["finished"]?.bool == true,
+                stoppedByUser: json?["stoppedByUser"]?.bool == true, interrupted: endsStopped(transcript),
+                modified: modified)
+        }
+
+        /// Whether the last whole line is a stop marker: only the file's last 4 KB are read.
+        static func endsStopped(_ file: URL) -> Bool {
+            guard let handle = try? FileHandle(forReadingFrom: file) else { return false }
+            defer { try? handle.close() }
+            let size = (try? handle.seekToEnd()) ?? 0
+            try? handle.seek(toOffset: size > 4096 ? size - 4096 : 0)
+            guard let data = try? handle.readToEnd(), let line = data.split(separator: 0x0A).last,
+                let entry = try? JSONValue.parse(Data(line)), entry["type"]?.string == "user"
+            else { return false }
+            let content = entry["message"]?["content"]
+            let texts = content?.string.map { [$0] } ?? (content?.array ?? []).compactMap { $0["text"]?.string }
+            return texts.count == 1 && stopMarkers.contains(texts[0])
+        }
+    }
+
+    /// The sub-agents of these Agent calls (tool_use ids), with the CLI's agent ids where known.
+    /// The session's own first; then other sessions' of the project, where a forked history's
+    /// agents ran (a fork copies the calls, not the agents' files): by agent id, else by meta.
+    public static func subagents(toolUseIds: Set<String>, agentIds: [String: String], sessionId: String, in folder: URL)
+        -> [String: Subagent]
+    {
+        let project = projectDirectory(for: folder)
+        let manager = FileManager.default
+        var found: [String: URL] = [:]
+        var missing = toolUseIds
+        func scan(_ directory: URL) {
+            guard !missing.isEmpty, let names = try? manager.contentsOfDirectory(atPath: directory.path) else { return }
+            for name in names where name.hasSuffix(".meta.json") {
+                guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)),
+                    let tool = (try? JSONValue.parse(data))?["toolUseId"]?.string, missing.remove(tool) != nil
+                else { continue }
+                found[tool] = directory.appendingPathComponent(String(name.dropLast(".meta.json".count)) + ".jsonl")
+                if missing.isEmpty { return }
+            }
+        }
+        scan(project.appendingPathComponent(sessionId).appendingPathComponent("subagents"))
+        if !missing.isEmpty {
+            let others = ((try? manager.contentsOfDirectory(atPath: project.path)) ?? [])
+                .filter { $0 != sessionId && !$0.hasSuffix(".jsonl") }
+                .map { project.appendingPathComponent($0).appendingPathComponent("subagents") }
+                .filter { manager.fileExists(atPath: $0.path) }
+            for tool in missing {
+                guard let agent = agentIds[tool] else { continue }
+                let name = "agent-\(agent).jsonl"
+                if let directory = others.first(where: { manager.fileExists(atPath: $0.appendingPathComponent(name).path) }) {
+                    found[tool] = directory.appendingPathComponent(name)
+                    missing.remove(tool)
+                }
+            }
+            for directory in others where !missing.isEmpty { scan(directory) }
+        }
+        return found.mapValues(Subagent.read)
+    }
+
+    /// The `<task-notification>` texts in whole lines written to a transcript since `offset`, in
+    /// whichever entry carries them (a queued prompt, an attachment, a turn's prompt), and the
+    /// offset to read from next.
+    public static func taskNotifications(in file: URL, from offset: UInt64) -> (texts: [String], next: UInt64) {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return ([], offset) }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: offset)
+        let data = (try? handle.readToEnd()) ?? Data()
+        guard let end = data.lastIndex(of: 0x0A) else { return ([], offset) }
+        let whole = data[data.startIndex...end]
+        let needle = Data("<task-notification>".utf8)
+        let texts = whole.jsonLines().filter { $0.range(of: needle) != nil }.compactMap { line in
+            (try? JSONValue.parse(line)).flatMap(notificationText)
+        }
+        return (texts, offset + UInt64(whole.count))
+    }
+
+    /// A task notification's text, from whichever entry carries it.
+    public static func notificationText(_ entry: JSONValue) -> String? {
+        let text = entry["content"]?.string ?? entry["message"]?["content"]?.string ?? entry["attachment"]?["prompt"]?.string
+        return text.flatMap { $0.hasPrefix("<task-notification>") ? $0 : nil }
+    }
+
+    /// The size of a file, for reading only what's written to it from now on.
+    public static func size(of file: URL) -> UInt64 {
+        ((try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? NSNumber)?.uint64Value ?? 0
+    }
+
+    /// A session's own transcript.
+    public static func transcript(sessionId: String, in folder: URL) -> URL {
+        projectDirectory(for: folder).appendingPathComponent("\(sessionId).jsonl")
+    }
+
     /// The user / assistant entries of a JSONL transcript from byte `offset`, and the offset to
     /// read from next. Only whole lines are read, so a file still being written can be tailed.
     public static func entries(in file: URL, from offset: UInt64 = 0) -> (entries: [JSONValue], next: UInt64) {

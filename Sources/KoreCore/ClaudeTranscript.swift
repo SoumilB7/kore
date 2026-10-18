@@ -21,6 +21,9 @@ public final class ClaudeTranscript: @unchecked Sendable {
         file = ClaudeHistory.projectDirectory(for: folder).appendingPathComponent("\(sessionId).jsonl")
     }
 
+    /// How much of the file the pages so far were read from: what's written after it is new.
+    public var length: UInt64 { lock.withLock { indexed } }
+
     /// The current branch back to its last compaction (`before` nil), or `userTurns` user turns
     /// ending at `before`, crossing compactions (see `ClaudeHistory.page`).
     public func page(before: String? = nil, userTurns: Int? = nil) -> ClaudeHistory.Page {

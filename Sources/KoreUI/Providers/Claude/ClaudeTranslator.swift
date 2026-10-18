@@ -67,6 +67,8 @@ package final class ClaudeTranslator {
     /// task id → Agent tool_use id.
     private var taskTool: [String: String] = [:]
     private var spawned: Set<String> = []
+    /// Agents run in the background: their turn can end before they do.
+    private var background: Set<String> = []
     /// Finished agents, and whether their result text was given yet.
     private var finished: [String: Bool] = [:]
     /// Agent tool_use id → the CLI's agent id (its `subagents/agent-<id>.jsonl`).
@@ -311,6 +313,9 @@ package final class ClaudeTranslator {
                 if replaying { modeCalls[id] = (name, agent) } else { modeCall = (id, name, agent) }
             }
             out.append(.toolStarted(Self.toolCall(id, name, input, in: folder), agent: agent))
+            // Read back, the call is the agent: a fork's copy of the history keeps only the last
+            // of a message's results, so a call may never get one.
+            if replaying, Self.agentTools.contains(name) { spawn(id) }
             if agent == .main {
                 turnItems.append(.tool)
                 lastItem = id
@@ -459,14 +464,29 @@ package final class ClaudeTranslator {
     private func spawn(_ id: String, name: String? = nil, type: String? = nil, prompt: String? = nil, background: Bool? = nil) {
         guard !id.isEmpty, spawned.insert(id).inserted else { return }
         let input = agentInputs[id]
+        // The flag can come as the string "true".
+        let flag = input?["run_in_background"]
+        let background = background ?? flag?.bool ?? (flag?.string == "true")
+        if background { self.background.insert(id) }
         out.append(
             .agentSpawned(
                 AgentInfo(
                     id: id, parent: toolAgent[id] ?? .main, toolId: id,
                     name: name ?? input?["description"]?.string ?? "Agent",
                     type: type ?? input?["subagent_type"]?.string, model: input?["model"]?.string,
-                    prompt: prompt ?? input?["prompt"]?.string,
-                    background: background ?? input?["run_in_background"]?.bool ?? false)))
+                    prompt: prompt ?? input?["prompt"]?.string, background: background)))
+    }
+
+    /// Agents the transcript never saw end, and whether each runs in the background.
+    func unfinishedAgents() -> [(id: String, background: Bool)] {
+        spawned.filter { finished[$0] == nil }.map { ($0, background.contains($0)) }
+    }
+
+    /// An agent another client runs ended, as its own files say.
+    func agentEnded(_ id: String, _ status: AgentStatus) {
+        guard spawned.contains(id), finished[id] == nil else { return }
+        finished[id] = false
+        out.append(.agentFinished(id: id, status, result: nil))
     }
 
     /// Once per agent, plus once more if its result text comes later (stdout's
@@ -487,6 +507,7 @@ package final class ClaudeTranslator {
     private func agentReturned(_ id: String, _ result: JSONValue) {
         if let file = result["agentId"]?.string { agentFiles[id] = file }
         let status = result["status"]?.string ?? "completed"
+        if result["isAsync"]?.bool == true { background.insert(id) }
         spawn(id)
         guard status != "async_launched" else { return }  // background: ends later
         // Live, `task_notification` finished it already, without the report; this has it.
@@ -503,11 +524,18 @@ package final class ClaudeTranslator {
     /// The CLI's `<task-notification>` prompt, which starts the turn after a background agent
     /// stops: its status, result and totals (stdout's `task_notification` lacks the result).
     func taskNotification(_ entry: JSONValue) {
-        guard let text = entry["message"]?["content"]?.string, text.contains("<task-notification>"),
-            let call = Self.tag("tool-use-id", in: text)
-        else { return }
+        if let text = ClaudeHistory.notificationText(entry) { taskNotification(text: text) }
+    }
+
+    /// One without a tool-use id isn't an agent's own: a shell command's, or the CLI's scan at
+    /// launch for tasks the previous process didn't see finish ("stopped", several task ids),
+    /// which says nothing of agents another client still runs.
+    func taskNotification(text: String) {
+        guard text.contains("<task-notification>"), let call = Self.tag("tool-use-id", in: text) else { return }
+        let task = Self.tag("task-id", in: text)
         // A resumed run's names the SendMessage call that ran it.
-        let id = resumedBy[call] ?? (spawned.contains(call) ? call : Self.tag("task-id", in: text).flatMap(agent(forTask:)) ?? call)
+        let id = resumedBy[call] ?? (spawned.contains(call) ? call : task.flatMap(agent(forTask:)) ?? call)
+        if let task, spawned.contains(id), agentFiles[id] == nil { agentFiles[id] = task }
         if finished[id] == nil {
             out.append(
                 .agentProgress(
@@ -711,6 +739,7 @@ package final class ClaudeTranslator {
         var agentInputs: [String: JSONValue]
         var taskTool: [String: String]
         var spawned: Set<String>
+        var background: Set<String>
         var finished: [String: Bool]
         var agentFiles: [String: String]
         var resumedBy: [String: String]
@@ -743,7 +772,7 @@ package final class ClaudeTranslator {
     private var carried: Carried {
         Carried(
             mode: mode, toolAgent: toolAgent, agentInputs: agentInputs, taskTool: taskTool, spawned: spawned,
-            finished: finished, agentFiles: agentFiles, resumedBy: resumedBy, contextUsed: contextUsed)
+            background: background, finished: finished, agentFiles: agentFiles, resumedBy: resumedBy, contextUsed: contextUsed)
     }
 
     /// Takes on a replay's state. `history` (an older page, prepended): only where its agents'
@@ -759,6 +788,7 @@ package final class ClaudeTranslator {
         agentInputs.merge(replayed.agentInputs) { live, _ in live }
         taskTool.merge(replayed.taskTool) { live, _ in live }
         spawned.formUnion(replayed.spawned)
+        background.formUnion(replayed.background)
         finished.merge(replayed.finished) { live, _ in live }
         resumedBy.merge(replayed.resumedBy) { live, _ in live }
     }
@@ -814,6 +844,11 @@ package final class ClaudeTranslator {
                 setMode(prompted, .user, at: time)
             }
             if message["type"]?.string == "attachment", message["attachment"]?["type"]?.string == "queued_command" {
+                // An agent's notification taken mid-turn ends it, and isn't a message.
+                if let text = ClaudeHistory.notificationText(message) {
+                    taskNotification(text: text)
+                    continue
+                }
                 // A message sent while the turn ran, taken at a tool boundary: it reads back in place.
                 if let text = message["attachment"]?["prompt"]?.string {
                     out.append(.userMessage(text: text, attachments: [], id: message["uuid"]?.string))
@@ -840,7 +875,11 @@ package final class ClaudeTranslator {
                 continue
             }
             if message["type"]?.string == "user" {
-                if let origin = Self.origin(message["turnOrigin"]?.string), origin != .peer {
+                if Self.notifiesOnly(message) {
+                    taskNotification(message)
+                    continue
+                }
+                if let origin = Self.origin(message["turnOrigin"]?.string) ?? Self.notificationOrigin(message), origin != .peer {
                     close()
                     openTurn(origin, at: time)
                     if origin == .agentFinished { taskNotification(message) }
@@ -869,6 +908,16 @@ package final class ClaudeTranslator {
         block = nil
         if let used = contextUsed { reportContext(used, at: replayTime) }
         return take().events
+    }
+
+    /// Older CLIs mark a notification's turn only with `origin.kind`.
+    private static func notificationOrigin(_ message: JSONValue) -> TurnOrigin? {
+        message["origin"]?["kind"]?.string == "task-notification" ? .agentFinished : nil
+    }
+
+    /// A notification written to the transcript only (no turn answers it).
+    private static func notifiesOnly(_ message: JSONValue) -> Bool {
+        message["queueTranscriptOnly"]?.bool == true && ClaudeHistory.notificationText(message) != nil
     }
 
     static func origin(_ turnOrigin: String?) -> TurnOrigin? {
