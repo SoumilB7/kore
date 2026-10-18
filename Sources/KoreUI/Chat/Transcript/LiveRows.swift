@@ -12,10 +12,11 @@ struct SpinnerRow: View {
     var word: String? = nil
     @Environment(\.spinnerTint) private var tint
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.hiddenTab) private var hidden
     @StateObject private var shown = Local(false)
 
     var body: some View {
-        TimelineView(Schedule(since: since, still: reduceMotion, verbs: verbs)) { context in
+        TimelineView(Schedule(since: since, still: reduceMotion, paused: hidden, verbs: verbs)) { context in
             let t = max(0, context.date.timeIntervalSince(since))
             HStack(spacing: 0) {
                 Text(reduceMotion ? "✻" : Self.glyph(t))
@@ -132,11 +133,14 @@ struct SpinnerRow: View {
     private struct Schedule: TimelineSchedule {
         let since: Date
         let still: Bool
+        /// Under another tab: no frames at all.
+        let paused: Bool
         let verbs: [String]
 
         func entries(from start: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
             var date = start
             return AnyIterator {
+                if paused { return nil }
                 let t = date.timeIntervalSince(since)
                 let step: TimeInterval
                 if still {

@@ -1024,9 +1024,10 @@ private struct NestedNote: View {
 /// "0:41 · 18.2k · 9 tools"; the time ticks while the agent runs.
 struct AgentMeter: View {
     let info: TranscriptStore.AgentInfo
+    @Environment(\.hiddenTab) private var hidden
 
     var body: some View {
-        if info.status == .running {
+        if info.status == .running, !hidden {
             TimelineView(.periodic(from: info.startedAt, by: 1)) { context in
                 line(context.date.timeIntervalSince(info.startedAt))
             }

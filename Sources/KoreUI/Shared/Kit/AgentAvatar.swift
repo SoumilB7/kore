@@ -94,18 +94,31 @@ struct AgentAvatar: View {
     static func hue(_ index: Int) -> Color { Theme.agentMark }
 }
 
-/// The running arc: a quarter of a ring, turning.
+/// The running arc: a quarter of a ring, turning. Under another tab it holds still (see `pulse`).
 struct SpinningArc: View {
     var lineWidth = Stroke.emphasis
-    @StateObject private var turning = Local(false)
+    @Environment(\.hiddenTab) private var hidden
 
     var body: some View {
+        if hidden { arc } else { Turning(arc: arc) }
+    }
+
+    private var arc: some View {
         Circle()
             .trim(from: 0, to: 0.28)
             .stroke(Theme.agentArc, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-            .rotationEffect(.degrees(turning.value ? 360 : 0))
-            .animation(Motion.ring, value: turning.value)
-            .onAppear { turning.value = true }
+    }
+
+    private struct Turning<Arc: View>: View {
+        let arc: Arc
+        @StateObject private var turning = Local(false)
+
+        var body: some View {
+            arc
+                .rotationEffect(.degrees(turning.value ? 360 : 0))
+                .animation(Motion.ring, value: turning.value)
+                .onAppear { turning.value = true }
+        }
     }
 }
 

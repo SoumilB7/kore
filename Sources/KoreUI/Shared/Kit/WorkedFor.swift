@@ -18,8 +18,6 @@ struct WorkedFor: View {
     var now: ModeMark?
     let toggle: () -> Void
     @StateObject private var hovered = Local(false)
-    @StateObject private var dim = Local(false)
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Outcome: Equatable { case interrupted, failed }
 
@@ -30,9 +28,7 @@ struct WorkedFor: View {
                     Text(label)
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
-                        .opacity(dim.value ? Motion.livePulseLow : 1)
-                        .animation(reduceMotion ? nil : Motion.livePulse, value: dim.value)
-                        .onAppear { if !reduceMotion { dim.value = true } }
+                        .pulse(low: Motion.livePulseLow, Motion.livePulse)
                     if let count {
                         Text(count).font(TextStyle.toolName).foregroundStyle(Theme.liveCount).lineLimit(1)
                             .padding(.leading, Space.sm - Space.xs)

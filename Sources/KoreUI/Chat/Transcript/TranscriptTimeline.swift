@@ -13,6 +13,9 @@ struct TranscriptTimeline: View, Equatable {
     var actions: TranscriptActions
     @Environment(\.chatColumn) private var column
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.hiddenTab) private var hidden
+    /// The sections and the end as they were when the chat's tab hid.
+    @StateObject private var frozen = Frozen<(sections: [TranscriptStore.SectionModel], tail: Int)>()
     @StateObject private var following = Local(true)
     /// Written by the scroll view as the reader scrolls; held without re-rendering. `nudge`
     /// re-renders once, when the position has to be pushed back (after a fold).
@@ -53,7 +56,8 @@ struct TranscriptTimeline: View, Equatable {
     private static let glide: TimeInterval = 2
 
     var body: some View {
-        ScrollViewReader { proxy in
+        let (sections, tail) = frozen(hidden) { (store.sections, store.tail) }
+        return ScrollViewReader { proxy in
             let rowActions = rowActions(proxy)
             let reveal = reveal(proxy)
             ScrollView {
@@ -71,7 +75,7 @@ struct TranscriptTimeline: View, Equatable {
                             .storyID(StoryID.Transcript.earlier)
                             .id(Self.loadRow)
                     }
-                    ForEach(store.sections) { section in
+                    ForEach(sections) { section in
                         TimelineSection(section: section, actions: rowActions, reveal: reveal, sticky: sticky)
                             .id(section.id)
                     }
@@ -168,7 +172,7 @@ struct TranscriptTimeline: View, Equatable {
                 geometry.value = (height, offset)
             }
             .onChange(of: store.folded?.seq) { pendingFold.value = true }
-            .onChange(of: store.tail, initial: true) { follow(proxy) }
+            .onChange(of: tail, initial: true) { follow(proxy) }
             .onAppear {
                 if StoryHost.installed {
                     store.storyScroll = { id in
@@ -318,15 +322,19 @@ private struct TimelineSection: View {
     let actions: TranscriptActions
     let reveal: TranscriptActions
     let sticky: StickyTracker
+    @Environment(\.hiddenTab) private var hidden
+    /// Its rows as they were when the chat's tab hid.
+    @StateObject private var frozen = Frozen<(items: [TranscriptStore.Item], header: TranscriptStore.Entry?, open: Bool)>()
 
     var body: some View {
-        Section {
-            ForEach(section.items) { item in
+        let (items, header, open) = frozen(hidden) { (section.items, section.header, section.headerOpen) }
+        return Section {
+            ForEach(items) { item in
                 TimelineRow(item: item, actions: actions).equatable()
             }
         } header: {
-            if let header = section.header {
-                StickyMessage(entry: header, open: section.headerOpen, actions: reveal, tracker: sticky).equatable()
+            if let header {
+                StickyMessage(entry: header, open: open, actions: reveal, tracker: sticky).equatable()
             }
         }
     }
