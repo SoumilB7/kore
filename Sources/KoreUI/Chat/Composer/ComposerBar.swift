@@ -68,10 +68,8 @@ struct ComposerBar: View {
     private func controls(_ density: Density) -> some View {
         HStack(spacing: Space.xxl) {
             if !chat.controls.models.isEmpty && density != .minimal {
-                // Pressed by a storyline, the menu's opening as far as the other popups go: the
-                // system menu's own tracking would hold the storyline.
                 ModelMenu(chat: chat, showEffort: density == .full)
-                    .storyID(StoryID.Composer.model, press: { chat.closePopups(keeping: .menu) })
+                    .storyID(StoryID.Composer.model, press: { chat.togglePicker(.model) })
             }
             Spacer(minLength: 0)
             if let plan = chat.provider.planToggle, chat.controls.planMode {
@@ -102,41 +100,15 @@ struct ComposerBar: View {
     }
 }
 
-/// Model and effort, from the CLI's own list.
+/// The model and effort pill: opens the model picker over the composer, from the CLI's own list.
 struct ModelMenu: View {
     let chat: Chat
     var showEffort = true
 
     var body: some View {
-        Menu {
-            Section("Model") {
-                ForEach(chat.controls.models) { option in
-                    Button {
-                        chat.setModel(option)
-                    } label: {
-                        if option.id == chat.controls.modelId {
-                            Label(option.name, systemImage: "checkmark")
-                        } else {
-                            Text(option.name)
-                        }
-                    }
-                }
-            }
-            if let efforts = chat.controls.currentModel?.efforts, !efforts.isEmpty {
-                Section("Effort") {
-                    ForEach(efforts, id: \.self) { level in
-                        Button {
-                            chat.setEffort(level)
-                        } label: {
-                            if level == chat.controls.effort {
-                                Label(Self.effortName(level), systemImage: "checkmark")
-                            } else {
-                                Text(Self.effortName(level))
-                            }
-                        }
-                    }
-                }
-            }
+        let open = chat.picker.open == .model
+        Button {
+            chat.togglePicker(.model)
         } label: {
             HStack(spacing: Space.sm) {
                 Text(chat.controls.modelLabel)
@@ -152,18 +124,14 @@ struct ModelMenu: View {
             }
             .padding(.horizontal, Space.lg)
             .padding(.vertical, Space.xs)
-            .background(Theme.surfaceHover, in: Capsule())
+            .background(open ? Theme.surfaceRaised : Theme.surfaceHover, in: Capsule())
+            .contentShape(Capsule())
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { chat.picker.chips[.model] = $0 }
         // The pill says it, unless a narrow bar has hidden the effort.
         .help(showEffort ? "" : chat.controls.effortLabel.map { "\(chat.controls.modelLabel) · \($0)" } ?? "")
-    }
-
-    static func effortName(_ level: String) -> String {
-        level == "xhigh" ? "Extra high" : level.capitalized
     }
 }
 

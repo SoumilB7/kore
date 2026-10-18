@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// A popup from the / menu (Usage, Account), in the menu's place over the chat: a card at most
-/// `usagePopupMax` wide at the composer's leading edge, opaque, no shadow. `room`: the most it
-/// may be tall, scrolling past it; nil, its content's height.
+/// A popup over the composer (the / menu's Usage and Account, the model and mode pickers), in
+/// the menu's place over the chat: a card at most `usagePopupMax` wide at the composer's leading
+/// edge, opaque, no shadow. `room`: the most it may be tall, scrolling past it; nil, its
+/// content's height.
 ///
 /// Esc steps back (`stepBack`) and, with nothing to step back from, closes it and goes no
 /// further; Return closes it and never sends nor confirms; any other key closes it and goes on
@@ -14,7 +15,8 @@ import SwiftUI
 /// or form in it is open (`editing`), every key is the field's and never closes it, Return
 /// included; Esc still steps back, and a click outside still closes it. Otherwise ⇥ and ⇧⇥ ring
 /// its buttons in turn (`tabStop`), and Return or Space presses the ringed one; `keys` takes the
-/// keys a list in it moves by (↑ ↓) before any of that.
+/// keys a list in it moves by (↑ ↓, a picker's ←→) before any of that. A click on `spare` (the
+/// chip that opened it) isn't outside: the chip's own action closes it.
 struct ComposerPopup<Content: View>: View {
     let chat: Chat
     let id: StoryID
@@ -26,6 +28,7 @@ struct ComposerPopup<Content: View>: View {
     var editing: @MainActor () -> Bool = { false }
     /// A key the content takes first (a list's ↑ ↓ and Return): true when taken.
     var keys: @MainActor (NSEvent) -> Bool = { _ in false }
+    var spare: @MainActor () -> CGRect? = { nil }
     @ViewBuilder let content: () -> Content
     @StateObject private var frame = Held(CGRect.zero)
     @StateObject private var window = Held<NSWindow?>(nil)
@@ -87,7 +90,7 @@ struct ComposerPopup<Content: View>: View {
         guard let content = window.contentView else { return event }
         stops.value.clear()
         let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
-        if !frame.value.contains(point) { close() }
+        if !frame.value.contains(point), spare()?.contains(point) != true { close() }
         return event
     }
 }

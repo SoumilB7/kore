@@ -73,10 +73,14 @@ final class ControlsStore {
 
     var modelLabel: String { currentModel?.name ?? modelId ?? provider.name }
 
+    /// Nil for a model without efforts: the pill shows the model alone.
     var effortLabel: String? {
-        guard let effort else { return nil }
-        return effort == "xhigh" ? "Extra high" : effort.capitalized
+        guard let effort, currentModel?.efforts.isEmpty != true else { return nil }
+        return EffortScale.name(effort)
     }
+
+    /// Every level the CLI's models offer, lowest first: the picker's slider.
+    var effortScale: [String] { EffortScale.levels(models) }
 }
 
 /// The mode the user last picked for each provider, which new chats start in: one small key

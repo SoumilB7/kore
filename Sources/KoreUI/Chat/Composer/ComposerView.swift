@@ -85,6 +85,10 @@ struct ComposerView: View {
                     AccountPopup(chat: chat, state: chat.account)
                         .padding(.bottom, Space.lg)
                         .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
+                } else if chat.picker.open == .model {
+                    ModelPicker(chat: chat, state: chat.picker)
+                    .padding(.bottom, Space.lg)
+                    .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 } else if chat.importer.isOpen {
                     ImportPopup(chat: chat, state: chat.importer) {
                         ImportFilePanel.choose(for: chat.provider, in: window.value) { chat.importer.add(file: $0) }
@@ -109,6 +113,7 @@ struct ComposerView: View {
             chat.usage.close()
             chat.account.close()
             chat.importer.close()
+            chat.picker.close()
         }
         // A field or form in the Account popup had the keys: when it goes, the composer has them
         // again, as it has throughout everything else in the popup.
@@ -120,6 +125,7 @@ struct ComposerView: View {
             pasteChat.value?.usage.close()
             pasteChat.value?.account.close()
             pasteChat.value?.importer.close()
+            pasteChat.value?.picker.close()
             pasteChat.value = chat
             // The caret goes to the end of this chat's draft, ready to go on typing.
             place()
@@ -400,7 +406,9 @@ struct ComposerView: View {
         let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
         guard let chat = pasteChat.value else { return event }
         if barFrame.value.contains(point) {
-            chat.closePopups(keeping: slashFrame.value.contains(point) ? .slash : nil)
+            // A picker's own chip leaves it to the chip, which closes it.
+            let chip = chat.picker.chips.first { $0.value.contains(point) }?.key
+            chat.closePopups(keeping: slashFrame.value.contains(point) ? .slash : chip?.popup)
         } else if let menu = menuFrame.value, !menu.contains(point), !boxFrame.value.contains(point) {
             chat.slashClosed = true
         }

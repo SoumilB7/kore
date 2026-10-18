@@ -43,6 +43,8 @@ enum Theme {
     static let toolDone = text.opacity(0.7)
     /// Opacity for a secondary line under an option.
     static let dimmed: Double = 0.7
+    /// Opacity for a control with nothing to set (a model without efforts: the slider's track).
+    static let off: Double = 0.4
 
     /// The hue's saturated steps (logo, accent, mode outlines).
     enum Blue {

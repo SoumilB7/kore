@@ -76,6 +76,8 @@ package final class Chat: Identifiable {
     let account = AccountState()
     /// The import picker, in the same place, while the chat is empty.
     let importer = ImportState()
+    /// The model and mode pickers, over the composer from their chips.
+    let picker = PickerState()
     /// The CLI's account changed since its CLI started: it starts again (with resume) at the
     /// next turn boundary, so it runs as the new account.
     @ObservationIgnored private var relaunchDue = false
@@ -332,6 +334,13 @@ package final class Chat: Identifiable {
     func openAccount() {
         closePopups(keeping: .account)
         account.open(provider: provider.id, folder: folder)
+    }
+
+    /// The model chip or the mode pill: its picker opens in the popups' place, or closes when
+    /// it's the one open.
+    func togglePicker(_ kind: PickerState.Kind) {
+        if picker.open != kind { closePopups(keeping: kind.popup) }
+        picker.toggle(kind)
     }
 
     /// The auth-failure notice's Sign in: Account opens, and the sign-in starts with the last
@@ -784,11 +793,12 @@ package final class Chat: Identifiable {
         approvals.offerImplementPlan = false
     }
 
+    /// A model without the current effort takes its nearest level below (the picker's thumb
+    /// slides down to it).
     func setModel(_ option: ModelOption) {
         controls.modelId = option.id
-        if let current = controls.effort, !option.efforts.isEmpty, !option.efforts.contains(current) {
-            setEffort(option.efforts.contains("high") ? "high" : option.efforts[0])
-        }
+        let level = EffortScale.fallback(controls.effort, offered: option.efforts, scale: controls.effortScale)
+        if let level, level != controls.effort { setEffort(level) }
         let backend = backend
         Task {
             do {

@@ -53,6 +53,33 @@ extension Chat {
 
     /// The mode menu.
     package func storySetMode(_ id: String) { setMode(id) }
+    /// Whether the model picker is open.
+    package var isModelPickerOpen: Bool { picker.open == .model }
+    /// The chat's model (its id) and effort, and the pill as it reads ("Lyra 3 · High").
+    package var storyModel: String? { controls.modelId }
+    package var storyEffort: String? { controls.effort }
+    package var storyModelPill: String { [controls.modelLabel, controls.effortLabel].compactMap { $0 }.joined(separator: " · ") }
+    /// The picker's rows as they read: "Lyra: [3] 2.5 *2", the current chip in brackets and the
+    /// lit one (pointer or keys) starred; a family without versions is its own chip ("[Nova]").
+    package var storyModelRows: [String] {
+        ModelFamily.group(controls.models).enumerated().map { row, family in
+            let chips = family.members.enumerated().map { column, member in
+                let label = member.version ?? member.model.name
+                let lit = picker.lit == .chip(row: row, column: column) ? "*" : ""
+                return lit + (member.model.id == controls.modelId ? "[\(label)]" : label)
+            }
+            return family.versionless ? chips[0] : family.name + ": " + chips.joined(separator: " ")
+        }
+    }
+    /// The effort slider's stops, lowest first: the level, "(level)" for one this model lacks
+    /// (hollow), "[level]" for the thumb's; with "*" first when the keys are on the slider.
+    package var storyEffortStops: [String] {
+        let offered = controls.currentModel?.efforts ?? []
+        let stops = controls.effortScale.map { level in
+            !offered.contains(level) ? "(\(level))" : level == controls.effort ? "[\(level)]" : level
+        }
+        return (picker.lit == .effort ? ["*"] : []) + stops
+    }
 
     /// The `/` menu's names, and the command chip's.
     package var storyCommands: [String] { controls.commands.map(\.name) }

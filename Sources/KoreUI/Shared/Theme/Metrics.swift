@@ -185,3 +185,24 @@ extension EnvironmentValues {
         set { self[ChatColumnKey.self] = newValue }
     }
 }
+
+/// The model and mode pickers, and the Account card's in-card lists (model-picker.html's tokens).
+extension Size {
+    enum Picker {
+        /// A family row; a mode row.
+        static let row: CGFloat = 28
+        /// A version chip.
+        static let chip: CGFloat = 24
+        /// A sign-in method with its hint under it; a form picker's choice.
+        static let method: CGFloat = 36
+        /// A group's rows, under it.
+        static let indent: CGFloat = 16
+        /// The effort slider: its track, stops and thumb (ringed in the surface).
+        static let track: CGFloat = 2
+        static let stop: CGFloat = 5
+        static let thumb: CGFloat = 14
+        static let thumbRing: CGFloat = 2
+        /// Narrower than this, the slider names the current level alone.
+        static let labelsMin: CGFloat = 260
+    }
+}
