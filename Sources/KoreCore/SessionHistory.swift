@@ -55,8 +55,9 @@ public enum ClaudeHistory {
         var leaf: String?
         // Only entries with a uuid (user, assistant, attachment, system) can be on the branch. The
         // rest, such as api-request bodies (a third of a long session's bytes), are skipped
-        // unparsed: a line without this key can't have it at the top level.
-        let uuidKey = Data("\"uuid\":\"".utf8)
+        // unparsed: a line without this key can't have it at the top level. Only the key is
+        // matched, so JSON written with spaces after its colons is read too.
+        let uuidKey = Data("\"uuid\"".utf8)
         for line in data.jsonLines() where line.range(of: uuidKey) != nil {
             guard let entry = try? JSONValue.parse(line), let uuid = entry["uuid"]?.string else { continue }
             byId[uuid] = entry

@@ -190,3 +190,31 @@ extension Motion {
     static let livePulse = Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true)
     static let livePulseLow: Double = 0.55
 }
+
+// MARK: Long messages (look.md §15)
+
+extension Layout.Timeline {
+    /// A user or peer message from `collapseFrom` laid-out lines up shows `collapsedLines`, so a
+    /// clip always hides at least three; pinned at the top it shows `stickyLines`.
+    static let collapsedLines = 8
+    static let collapseFrom = 11
+    static let stickyLines = 3
+    /// About this many characters fill a line at the window column (the estimate before measuring).
+    static let charsPerLine = 100
+}
+
+extension Size {
+    /// The fade over a clipped message's last lines (times the zoom): T3's 1.75em of 13, snapped.
+    static let collapseFade: CGFloat = 24
+    /// A section's pinned header takes no room: the message row below it holds the place.
+    static let stickyAnchor: CGFloat = 0
+}
+
+extension Space {
+    /// Above "Show full message", inside the box.
+    static let messageToggle: CGFloat = 6
+}
+
+extension Inset {
+    static let messageToggle = EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6)
+}

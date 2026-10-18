@@ -26,6 +26,8 @@ struct TranscriptTimeline: View {
     /// the section under it sits, so it stays there once earlier turns are added above.
     @StateObject private var loadRow = Held(CGRect.zero)
     @StateObject private var visibleHeight = Held(CGFloat(0))
+    /// Which sections' messages have scrolled past their pinned header.
+    @StateObject private var sticky = StickyTracker()
 
     private static let end = "transcript-end"
     /// "At the bottom" within this, as in the extension.
@@ -44,11 +46,12 @@ struct TranscriptTimeline: View {
                     ForEach(store.sections) { section in
                         Section {
                             ForEach(section.items) { item in
-                                TimelineRow(item: item, actions: actions).equatable()
+                                TimelineRow(item: item, actions: rowActions(proxy)).equatable()
                             }
                         } header: {
                             if let header = section.header {
-                                MessageHeader(entry: header, open: section.headerOpen, actions: reveal(proxy))
+                                StickyMessage(
+                                    entry: header, open: section.headerOpen, actions: reveal(proxy), tracker: sticky)
                             }
                         }
                         .id(section.id)
@@ -154,6 +157,14 @@ struct TranscriptTimeline: View {
     private var binding: Binding<ScrollPosition> {
         _ = nudge.value
         return Binding(get: { position.value }, set: { position.value = $0 })
+    }
+
+    /// Rows' actions: scrolling back to a message, and reporting where messages are.
+    private func rowActions(_ proxy: ScrollViewProxy) -> TranscriptActions {
+        var actions = reveal(proxy)
+        let sticky = sticky
+        actions.messageMoved = { id, y in sticky.row(id, y) }
+        return actions
     }
 
     private func reveal(_ proxy: ScrollViewProxy) -> TranscriptActions {

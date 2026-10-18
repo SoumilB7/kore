@@ -13,6 +13,8 @@ struct TranscriptActions {
     var openAgent: (String) -> Void = { _ in }
     /// Scrolls back to a sticky user message.
     var reveal: (String) -> Void = { _ in }
+    /// A message row's top moved (for its pinned copy).
+    var messageMoved: (String, CGFloat) -> Void = { _, _ in }
     var folder: URL?
 }
 
@@ -24,7 +26,9 @@ struct TimelineRow: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item }
 
     var body: some View {
-        if case .spinner(_, let since, let claude) = item.row {
+        if case .message(let entry, let open, let expanded) = item.row {
+            MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
+        } else if case .spinner(_, let since, let claude) = item.row {
             // Not a timeline item: no dot, and the line doesn't run into it.
             SpinnerRow(since: since, claude: claude)
         } else if let dot = item.dot {
@@ -70,6 +74,8 @@ struct RowContent: View {
             ExploredItem(calls: calls.count, open: open) { actions.toggle("explored-\(calls[0].id.uuidString)") }
         case .spinner(_, let since, let claude):
             SpinnerRow(since: since, claude: claude)
+        case .message(let entry, let open, let expanded):
+            MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         case .rule:
             Rule()
         case .outcome(_, let text):
@@ -111,13 +117,46 @@ private struct EntryContent: View {
 
 // MARK: Messages (off the timeline)
 
-/// The user's message (or a peer's), at the head of its section. It sticks to the top while its
-/// turn scrolls by, over the background with a faded lower edge; a click scrolls back to it.
+/// The user's message (or a peer's), first in its section (look.md §15). A long one stops at
+/// `collapsedLines` laid-out lines with its text fading out, and "Show full message" opens it.
+/// While its turn scrolls by, `StickyMessage` keeps its first lines pinned at the top; a click
+/// there scrolls back to it.
 struct MessageHeader: View {
+    enum Place { case row, sticky }
+
     let entry: TranscriptStore.Entry
     /// A peer's message is one line until opened.
     var open = true
+    /// A long message shown whole.
+    var expanded = false
+    var place = Place.row
     let actions: TranscriptActions
+    /// The text's laid-out lines at the current width. It starts from an estimate, so a long
+    /// message is collapsed from its first layout: laid out whole first, it would shrink by many
+    /// screens and leave the view scrolled past the end.
+    @StateObject private var lines: Local<Int>
+    /// The row's top in the visible area (for "Show less"), held without re-rendering.
+    @StateObject private var top = Held(CGFloat(0))
+
+    init(
+        entry: TranscriptStore.Entry, open: Bool = true, expanded: Bool = false, place: Place = .row,
+        actions: TranscriptActions
+    ) {
+        self.entry = entry
+        self.open = open
+        self.expanded = expanded
+        self.place = place
+        self.actions = actions
+        _lines = StateObject(wrappedValue: Local(Self.estimatedLines(entry.text)))
+    }
+
+    /// The `toggle` key for showing a long message whole.
+    static func expandKey(_ entry: TranscriptStore.Entry) -> String { entry.id.uuidString + "/all" }
+
+    /// Lines before measuring: its line breaks, or its length over a typical line's characters.
+    private static func estimatedLines(_ text: String) -> Int {
+        max(text.utf8.reduce(1) { $1 == 10 ? $0 + 1 : $0 }, text.utf8.count / Layout.Timeline.charsPerLine)
+    }
 
     var body: some View {
         Group {
@@ -129,25 +168,57 @@ struct MessageHeader: View {
         }
         .padding(.vertical, Layout.Timeline.itemPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Solid behind the message, then a short fade just below it. The fade is an overlay so it
-        // doesn't change the header's size (the lazy stack places rows by real sizes), and a
-        // gradient fill rather than a mask (a mask costs an offscreen layer per header).
-        .background(Theme.background)
-        .overlay(alignment: .bottom) {
-            LinearGradient(colors: [Theme.background, Theme.background.opacity(0)], startPoint: .top, endPoint: .bottom)
-                .frame(height: Layout.Timeline.stickyFade)
-                .offset(y: Layout.Timeline.stickyFade)
-                .allowsHitTesting(false)
-        }
+        .modifier(StickyBackground(on: place == .sticky))
         .contentShape(Rectangle())
         .onTapGesture {
-            if entry.kind == .peer { actions.toggle(entry.id.uuidString) } else { actions.reveal(entry.id.uuidString) }
+            if entry.kind == .peer && place == .row {
+                actions.toggle(entry.id.uuidString)
+            } else {
+                actions.reveal(entry.id.uuidString)
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { y in
+            guard place == .row else { return }
+            top.value = y
+            actions.messageMoved(entry.id.uuidString, y)
+        }
+    }
+
+    /// Long enough to clip: from `collapseFrom` lines up, so a clip always hides a few.
+    private var collapsible: Bool { lines.value >= Layout.Timeline.collapseFrom }
+
+    /// The lines shown: three when pinned, `collapsedLines` when clipped, else all.
+    private var shown: Int? {
+        if place == .sticky { return Layout.Timeline.stickyLines }
+        return collapsible && !expanded ? Layout.Timeline.collapsedLines : nil
+    }
+
+    private var text: some View {
+        MessageText(
+            text: entry.text, lines: shown,
+            fade: place == .sticky ? MessageText.lineHeight : Size.collapseFade * Zoom.shared.scale
+        ) { lines.value = $0 }
+    }
+
+    /// Under the text, inside the box: "Show full message" / "Show less".
+    @ViewBuilder private var toggle: some View {
+        if collapsible && place == .row {
+            HStack {
+                Spacer(minLength: 0)
+                MessageToggle(expanded: expanded) {
+                    let above = top.value < 0
+                    actions.toggle(Self.expandKey(entry))
+                    // Closing a long message from below: bring its top back into view.
+                    if expanded && above { actions.reveal(entry.id.uuidString) }
+                }
+            }
+            .padding(.top, Space.messageToggle)
         }
     }
 
     private var user: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            if !entry.attachments.isEmpty {
+            if !entry.attachments.isEmpty && place == .row {
                 HStack(spacing: Space.md) {
                     ForEach(entry.attachments) { attachment in
                         AttachmentChip(attachment: attachment, open: { actions.openImage(attachment) })
@@ -155,12 +226,12 @@ struct MessageHeader: View {
                 }
             }
             if !entry.text.isEmpty {
-                Text(entry.text)
-                    .font(TextStyle.body)
-                    .foregroundStyle(Theme.text)
-                    .textSelection(.enabled)
-                    .padding(Inset.userBox)
-                    .panel(.userBox)
+                VStack(alignment: .leading, spacing: 0) {
+                    text
+                    toggle
+                }
+                .padding(Inset.userBox)
+                .panel(.userBox)
             }
         }
     }
@@ -184,10 +255,8 @@ struct MessageHeader: View {
                 Disclosure(isOpen: open).foregroundStyle(Theme.tertiary)
             }
             if open {
-                Text(entry.text)
-                    .font(TextStyle.body)
-                    .foregroundStyle(Theme.text)
-                    .textSelection(.enabled)
+                text
+                toggle
             }
         }
         .padding(open ? Inset.bubble : Inset.control)
@@ -198,6 +267,146 @@ struct MessageHeader: View {
 
     private static func firstLine(_ text: String) -> String {
         text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+    }
+}
+
+/// A pinned message is solid behind, then fades just below (an overlay, so it doesn't change
+/// the size the lazy stack places it by).
+private struct StickyBackground: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        if on {
+            content
+                .background(Theme.background)
+                .overlay(alignment: .bottom) {
+                    LinearGradient(colors: [Theme.background, Theme.background.opacity(0)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: Layout.Timeline.stickyFade)
+                        .offset(y: Layout.Timeline.stickyFade)
+                        .allowsHitTesting(false)
+                }
+        } else {
+            content
+        }
+    }
+}
+
+/// The section's pinned header: no height of its own, so its message row scrolls normally; once
+/// that row has gone above the top, the message's first three lines hang from here.
+struct StickyMessage: View {
+    let entry: TranscriptStore.Entry
+    var open: Bool
+    let actions: TranscriptActions
+    @ObservedObject var tracker: StickyTracker
+
+    var body: some View {
+        Color.clear
+            .frame(height: Size.stickyAnchor)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { y in
+                tracker.header(entry.id.uuidString, y)
+            }
+            .overlay(alignment: .top) {
+                if tracker.stuck.contains(entry.id.uuidString) {
+                    MessageHeader(entry: entry, open: open, place: .sticky, actions: actions)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+    }
+}
+
+/// Which sections' messages have scrolled above their pinned header. Rows and headers report
+/// their tops as they move; `stuck` changes only when one crosses.
+@MainActor
+final class StickyTracker: ObservableObject {
+    @Published private(set) var stuck: Set<String> = []
+    private var headers: [String: CGFloat] = [:]
+    private var rows: [String: CGFloat] = [:]
+
+    func header(_ id: String, _ y: CGFloat) {
+        headers[id] = y
+        update(id)
+    }
+
+    func row(_ id: String, _ y: CGFloat) {
+        rows[id] = y
+        update(id)
+    }
+
+    private func update(_ id: String) {
+        guard let header = headers[id] else { return }
+        // A header on screen whose row never laid out: the row is above (the chat opened below it).
+        let past = rows[id].map { $0 < header - 0.5 } ?? true
+        if past != stuck.contains(id) {
+            if past { stuck.insert(id) } else { stuck.remove(id) }
+        }
+    }
+}
+
+/// "Show full message" / "Show less": label text in secondary, filled on hover (look.md §15).
+private struct MessageToggle: View {
+    let expanded: Bool
+    let action: () -> Void
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        Button(action: action) {
+            Text(expanded ? "Show less" : "Show full message")
+                .font(TextStyle.label)
+                .foregroundStyle(hovered.value ? Theme.text : Theme.secondary)
+                .padding(Inset.messageToggle)
+                .background(
+                    hovered.value ? Theme.surfaceHover : Color.clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
+    }
+}
+
+/// A message's text, whole or stopped at `lines` laid-out lines, its last part fading out (an
+/// alpha mask on the text only; the box keeps its fill and border). Selection still takes the
+/// whole text. Reports how many lines it lays out to at this width.
+private struct MessageText: View {
+    let text: String
+    let lines: Int?
+    let fade: CGFloat
+    let measured: (Int) -> Void
+
+    /// The body font's line height at the current zoom.
+    static var lineHeight: CGFloat {
+        NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: 13 * Zoom.shared.scale))
+    }
+
+    var body: some View {
+        let line = Self.lineHeight
+        let height = lines.map { CGFloat($0) * line }
+        Text(text)
+            .font(TextStyle.body)
+            .foregroundStyle(Theme.text)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: Int.self) { Int(($0.size.height / line).rounded()) } action: { measured($0) }
+            .frame(height: height, alignment: .top)
+            .clipped()
+            .modifier(FadeMask(height: height, fade: fade))
+    }
+}
+
+private struct FadeMask: ViewModifier {
+    let height: CGFloat?
+    let fade: CGFloat
+
+    func body(content: Content) -> some View {
+        if let height, height > 0 {
+            content.mask(alignment: .top) {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0), .init(color: .black, location: max(0, 1 - fade / height)),
+                        .init(color: .clear, location: 1),
+                    ], startPoint: .top, endPoint: .bottom)
+            }
+        } else {
+            content
+        }
     }
 }
 

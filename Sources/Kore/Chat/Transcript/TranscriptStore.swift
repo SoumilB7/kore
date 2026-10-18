@@ -112,12 +112,15 @@ final class TranscriptStore {
         case changes(turn: String, files: Int, added: Int, removed: Int)
         /// Two or more consecutive read-only tool calls, as one "Explored N" item.
         case explored([Entry], open: Bool)
+        /// A user or peer message, first in its section; `expanded` shows a long one whole.
+        case message(Entry, open: Bool, expanded: Bool)
         /// The running turn's last row: glyph and verb (look.md §12).
         case spinner(turn: String, since: Date, claude: Bool)
 
         var id: String {
             switch self {
-            case .entry(let e), .tool(let e, _), .thinking(let e, _), .file(let e, _, _), .agent(let e, _, _):
+            case .entry(let e), .tool(let e, _), .thinking(let e, _), .file(let e, _, _), .agent(let e, _, _),
+                .message(let e, _, _):
                 e.id.uuidString
             case .fold(let f): "fold-\(f.turn)"
             case .rule(let t): "rule-\(t)"
@@ -766,7 +769,10 @@ final class TranscriptStore {
                 flush()
                 header = e
                 id = e.id.uuidString
-                run = []
+                // The message itself is the section's first row; the pinned header is only its
+                // first lines, once it has scrolled past.
+                let opened = e.kind == .user || open.contains(e.id.uuidString)
+                run = [.message(e, open: opened, expanded: open.contains(MessageHeader.expandKey(e)))]
             } else {
                 run.append(row)
             }
@@ -795,7 +801,7 @@ final class TranscriptStore {
         case .explored(let calls, _):
             if calls.contains(where: { !$0.done }) { return .running }
             return calls.contains(where: \.isError) ? .failure : .success
-        case .spinner: return nil
+        case .spinner, .message: return nil
         case .rule: return TimelineDot.none
         case .outcome(_, let text): return text == "Interrupted" ? .warning : .failure
         case .changes: return .plain
