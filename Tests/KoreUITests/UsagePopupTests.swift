@@ -100,6 +100,21 @@ struct UsagePopupTests {
         #expect(UsageText.extras(extras) == "Credits 47,161.94 · 2 full resets available")
     }
 
+    @Test func aFullResetSaysWhatItDoesAndWhatCameOfIt() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let locale = Locale(identifier: "en_US")
+        let help = { (resets: PlanResets?) in UsageText.resetHelp(resets, calendar: calendar, locale: locale) }
+        let nov3 = PlanReset(id: "a", expiresAt: Date(timeIntervalSince1970: 1_793_700_000))
+        #expect(help(PlanResets(available: 1, next: nov3)) == "Use a usage limit reset · expires Nov 3")
+        #expect(help(PlanResets(available: 2, next: nov3, differ: true)) == "Use a usage limit reset · the soonest expires Nov 3")
+        #expect(help(PlanResets(available: 2, next: nil)) == "Use a usage limit reset")
+        #expect(UsageText.said(.reset) == nil)
+        #expect(UsageText.said(.nothingToReset) == "Your usage does not need a reset right now.")
+        #expect(UsageText.said(.other("later")) == "Couldn't reset usage. Please try again.")
+        #expect(UsageText.resetFailed(UsageUnavailable()) == "Couldn't reset usage: this chat has no account to read")
+    }
+
     @Test func theWordingForEachCLI() {
         #expect(ProviderDescriptor.codex.usage.signedOut == "Codex isn't logged in. Run `codex login` in Terminal.")
         #expect(ProviderDescriptor.codex.usage.failed(nil) == "Couldn't read limits from Codex.")

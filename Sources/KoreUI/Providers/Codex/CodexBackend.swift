@@ -111,6 +111,15 @@ final class CodexBackend: ChatBackend {
         return try await PlanUsage.codex()
     }
 
+    /// Through the chat's app-server; once it has exited, or before it starts, a short-lived
+    /// one, with the same attempt key so the credit is used once whichever answers.
+    func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome {
+        if let session {
+            do { return try await session.useReset(credit: credit, attempt: attempt) } catch CodexAppServer.Failure.notRunning {}
+        }
+        return try await PlanUsage.useReset(credit: credit, attempt: attempt)
+    }
+
     /// A page of turns as events, with their settings from the rollout, parsed off the main
     /// thread on a translator of its own.
     private func replay(_ turns: [JSONValue], _ session: CodexSession) async -> CodexTranslator.Replayed {

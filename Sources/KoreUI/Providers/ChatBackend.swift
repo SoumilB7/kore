@@ -51,6 +51,9 @@ package protocol ChatBackend: AnyObject {
     /// The account and its plan's limits (the usage popup): read through the chat's CLI while it
     /// runs, else through a short-lived one. Nothing goes into the conversation.
     func usage() async throws -> PlanReading
+    /// Uses one of the account's full resets of its limits (`credit`, or the CLI's pick), as
+    /// the attempt `attempt`: irreversible, so only on the user's confirmed ask.
+    func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome
     func close() async
 }
 
@@ -129,6 +132,9 @@ extension ChatBackend {
 
     /// For a backend with no account to read.
     package func usage() async throws -> PlanReading { throw UsageUnavailable() }
+
+    /// For a backend whose CLI has no full resets.
+    package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome { throw UsageUnavailable() }
 }
 
 struct CompactUnavailable: Error, CustomStringConvertible {

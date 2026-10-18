@@ -15,8 +15,20 @@ final class UsageState {
         case unavailable(String?)
     }
 
+    /// Using a full reset (Codex): it never goes on one click.
+    enum ResetStep: Equatable {
+        case idle
+        /// The extras line asks first.
+        case confirming
+        case using
+        /// What came of it, in Codex's words, until the popup closes; "Usage reset." only until
+        /// the limits are read again.
+        case said(String)
+    }
+
     private(set) var isOpen = false
     private(set) var status = Status.loading
+    private(set) var resetStep = ResetStep.idle
     /// What shows: the reading just made, or the last one while it loads (or after it failed).
     private(set) var reading: PlanReading?
     /// When `reading`'s limits were read.
@@ -25,17 +37,25 @@ final class UsageState {
     /// only kept for next time.
     @ObservationIgnored private var serial = 0
     @ObservationIgnored private var patienceTimer: Task<Void, Never>?
+    @ObservationIgnored private var provider = ""
+    @ObservationIgnored private var read: (@MainActor () async throws -> PlanReading)?
+    @ObservationIgnored private var consume: (@MainActor (String?, UUID) async throws -> PlanResetOutcome)?
 
     /// Each provider's last reading, and when it was made.
     private static var kept: [String: (reading: PlanReading, at: Date)] = [:]
     /// A read the CLI never answers stops showing a spinner after this.
     private static let patience: Duration = .seconds(35)
 
-    func open(provider: String, read: @escaping @MainActor () async throws -> PlanReading) {
+    func open(
+        provider: String, read: @escaping @MainActor () async throws -> PlanReading,
+        useReset: @escaping @MainActor (String?, UUID) async throws -> PlanResetOutcome
+    ) {
         serial += 1
         let open = serial
         isOpen = true
         status = .loading
+        resetStep = .idle
+        (self.provider, self.read, self.consume) = (provider, read, useReset)
         let last = Self.kept[provider]
         (reading, readAt) = (last?.reading, last?.at)
         Task { [weak self] in
@@ -60,6 +80,34 @@ final class UsageState {
         serial += 1
         isOpen = false
         patienceTimer?.cancel()
+    }
+
+    /// The extras line's resets, clicked: it asks first.
+    func askReset() {
+        if resetStep == .idle { resetStep = .confirming }
+    }
+
+    func cancelReset() {
+        if resetStep == .confirming { resetStep = .idle }
+    }
+
+    /// Confirmed: uses the reset that expires soonest, then reads the limits again so the bars
+    /// and the count show it. Once sent it's done whether or not the popup stays open; a read
+    /// that lands after a close is only kept for next time.
+    func useReset() {
+        guard resetStep == .confirming, let consume, let read else { return }
+        resetStep = .using
+        let (open, provider, credit) = (serial, provider, reading?.limits?.resets?.next?.id)
+        Task { [weak self] in
+            let said: String?
+            do { said = UsageText.said(try await consume(credit, UUID())) } catch { said = UsageText.resetFailed(error) }
+            if let self, self.serial == open { self.resetStep = .said(said ?? "Usage reset.") }
+            let new = try? await read()
+            if let new, new.limits != nil { Self.kept[provider] = (new, Date()) }
+            guard let self, self.serial == open else { return }
+            if let new, new.limits != nil { (self.reading, self.readAt, self.status) = (new, Date(), .fresh) }
+            if said == nil { self.resetStep = .idle }
+        }
     }
 
     private func land(_ outcome: Result<PlanReading, any Error>, last: (reading: PlanReading, at: Date)?) {
@@ -173,6 +221,34 @@ enum UsageText {
             label.replaceSubrange(limit, with: " · ")
         }
         return label.isEmpty ? title : label
+    }
+
+    /// The full resets' tooltip: what a click does, and when the one it uses expires if that
+    /// differs from the others ("Use a usage limit reset · the soonest expires Nov 3").
+    static func resetHelp(_ resets: PlanResets?, calendar: Calendar = .autoupdatingCurrent, locale: Locale = .autoupdatingCurrent)
+        -> String
+    {
+        let action = "Use a usage limit reset"
+        guard let expires = resets?.next?.expiresAt else { return action }
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        let day = expires.formatted(style.month(.abbreviated).day())
+        return action + (resets?.differ == true ? " · the soonest expires \(day)" : " · expires \(day)")
+    }
+
+    /// A reset's outcome in Codex's own words; nil when the limits were reset.
+    static func said(_ outcome: PlanResetOutcome) -> String? {
+        switch outcome {
+        case .reset: nil
+        case .nothingToReset: "Your usage does not need a reset right now."
+        case .noCredit: "No usage limit resets are available."
+        case .alreadyRedeemed: "That reset is no longer available."
+        case .other: "Couldn't reset usage. Please try again."
+        }
+    }
+
+    /// A reset that failed: the CLI's reason in a line, never raw JSON.
+    static func resetFailed(_ error: any Error) -> String {
+        PlanReading.reason(of: error).map { "Couldn't reset usage: \($0)" } ?? "Couldn't reset usage. Please try again."
     }
 
     /// "Credits 47,161.94 · 2 full resets available".
@@ -302,15 +378,49 @@ struct UsagePopup: View {
         }
         let extras = state.reading?.limits?.extras ?? []
         if !extras.isEmpty {
-            let line = UsageText.extras(extras)
-            Text(line)
+            extrasLine(extras, live: unavailable == nil && state.status != .loading)
                 .font(TextStyle.caption)
                 .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .help(line)
                 .padding(.top, Space.md)
                 .opacity(unavailable == nil ? 1 : Theme.dimmed)
+        }
+    }
+
+    /// One caption. Its count of full resets is a quiet button while the reading is current: a
+    /// click turns the line into a question, then a spinner, then what came of it.
+    @ViewBuilder private func extrasLine(_ extras: [PlanExtra], live: Bool) -> some View {
+        let resets = extras.first(where: \.isResets)
+        switch state.resetStep {
+        case .confirming:
+            HStack(spacing: Space.md) {
+                Text("Use this reset?").lineLimit(1)
+                CaptionButton(title: "Yes, use reset", tint: Theme.accent, hover: Theme.accent) { state.useReset() }
+                    .storyID(StoryID.Composer.usage.part(.allow))
+                CaptionButton(title: "No, go back", tint: Theme.secondary, hover: Theme.text) { state.cancelReset() }
+                    .storyID(StoryID.Composer.usage.part(.cancel))
+            }
+        case .using:
+            HStack(spacing: Space.xs) {
+                SpinningArc().frame(width: Size.spinner, height: Size.spinner)
+                Text("Resetting your usage…").lineLimit(1)
+            }
+        case .said(let words):
+            Text(words).fixedSize(horizontal: false, vertical: true)
+        case .idle:
+            let line = UsageText.extras(extras)
+            if let resets, live {
+                let rest = UsageText.extras(extras.filter { !$0.isResets })
+                HStack(spacing: 0) {
+                    if !rest.isEmpty { Text(rest + " · ").lineLimit(1).truncationMode(.tail) }
+                    CaptionButton(
+                        title: resets.value, tint: Theme.secondary, hover: Theme.accent,
+                        help: UsageText.resetHelp(state.reading?.limits?.resets)
+                    ) { state.askReset() }
+                    .storyID(StoryID.Composer.usage.part(.reset))
+                }
+            } else {
+                Text(line).lineLimit(1).truncationMode(.tail).help(line)
+            }
         }
     }
 
@@ -359,6 +469,11 @@ struct UsagePopup: View {
     /// dictation) closes it from the composer, as the draft changes.
     private func handle(_ event: NSEvent) -> NSEvent? {
         guard let window = window.value, event.window === window else { return event }
+        if event.type == .keyDown, event.keyCode == 53, state.resetStep == .confirming {
+            // Esc takes back the reset's question first.
+            state.cancelReset()
+            return nil
+        }
         if event.type == .keyDown {
             state.close()
             // Esc, Return, keypad Enter.
@@ -368,6 +483,25 @@ struct UsagePopup: View {
         let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
         if !frame.value.contains(point) { state.close() }
         return event
+    }
+}
+
+/// A text button in the caption's line: `tint` at rest, `hover` under the pointer.
+private struct CaptionButton: View {
+    let title: String
+    let tint: Color
+    let hover: Color
+    var help: String?
+    let action: () -> Void
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        Button(action: action) {
+            Text(title).lineLimit(1).fixedSize().foregroundStyle(hovered.value ? hover : tint).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
+        .help(help ?? "")
     }
 }
 

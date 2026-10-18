@@ -44,8 +44,9 @@ package struct CLIScript: Sendable {
 package enum UsageAnswer: Sendable {
     /// `initialize`'s `account`, and the `get_usage` control request's answer.
     case claude(account: JSONValue, usage: JSONValue)
-    /// `account/read`'s and `account/rateLimits/read`'s results.
-    case codex(account: JSONValue, rateLimits: JSONValue)
+    /// `account/read`'s and `account/rateLimits/read`'s results; `account/rateLimitResetCredit/consume`'s
+    /// (nil: it fails), and the limits read after a reset.
+    case codex(account: JSONValue, rateLimits: JSONValue, consume: JSONValue? = nil, afterReset: JSONValue? = nil)
 }
 
 /// One step of a script.
@@ -114,6 +115,8 @@ package enum Call: Sendable, Equatable {
     case compact
     /// The usage popup read the account's limits.
     case usage
+    /// The usage popup used a full reset: the credit it named.
+    case useReset(credit: String?)
     case fork(message: String?)
     /// Not Kore's: a test's go-ahead (`ScriptedBackend.release()`), to hold a script mid-way.
     case release

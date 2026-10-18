@@ -8,7 +8,8 @@ import KoreUI
 /// nothing sent. The popup shows the plan's limits, their titles shortened, with their resets
 /// and the extras line. Esc closes it with the composer still focused; reopened from a typed
 /// "/lim" mid-text, typing closes it and the key lands in the field; a click outside closes it
-/// too, and so does a paste that reaches the draft without a key.
+/// too, and so does a paste that reaches the draft without a key. With Codex, its count of full
+/// resets uses one after asking.
 final class UsagePopup: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
 
@@ -33,7 +34,8 @@ final class UsagePopup: ChatStoryline {
         return CLIScript(start: [controls(commands)], usage: .claude(account: account, usage: usage))
     }
 
-    /// Codex's answers, trimmed from a real `account/rateLimits/read`, with a 5h window added.
+    /// Codex's answers, trimmed from a real `account/rateLimits/read`, with a 5h window added and
+    /// the reset credits listed latest first; a reset used, the 5h window is empty and one left.
     static var codex: CLIScript {
         let commands = [
             SlashCommand(name: "plan", description: "Plan mode", hint: "", kind: .command),
@@ -41,18 +43,36 @@ final class UsagePopup: ChatStoryline {
             SlashCommand(name: "pdf", description: "Read and fill PDF files", hint: "", kind: .skill),
         ]
         let account: JSONValue = ["account": ["type": "chatgpt", "email": "you@example.com", "planType": "prolite"]]
-        let snapshot: JSONValue = [
-            "limitId": "codex",
-            "primary": ["usedPercent": 84, "windowDurationMins": 300, "resetsAt": .number(epoch(hours: 2.2))],
-            "secondary": ["usedPercent": 6, "windowDurationMins": 10080, "resetsAt": .number(epoch(hours: 4 * 24 + 2))],
-            "credits": ["hasCredits": true, "unlimited": false, "balance": "47161.9384695000"],
-        ]
-        let limits: JSONValue = [
-            "rateLimits": snapshot, "rateLimitsByLimitId": ["codex": snapshot],
-            "rateLimitResetCredits": ["availableCount": 2, "credits": nil],
-        ]
-        return CLIScript(start: [controls(commands)], usage: .codex(account: account, rateLimits: limits))
+        let snapshot = { (used: Double) -> JSONValue in
+            [
+                "limitId": "codex",
+                "primary": ["usedPercent": .number(used), "windowDurationMins": 300, "resetsAt": .number(epoch(hours: 2.2))],
+                "secondary": ["usedPercent": 6, "windowDurationMins": 10080, "resetsAt": .number(epoch(hours: 4 * 24 + 2))],
+                "credits": ["hasCredits": true, "unlimited": false, "balance": "47161.9384695000"],
+            ]
+        }
+        let credit = { (id: String, days: Double) -> JSONValue in
+            [
+                "id": .string(id), "resetType": "codexRateLimits", "status": "available", "grantedAt": .number(epoch(hours: -24)),
+                "expiresAt": .number(epoch(hours: days * 24)), "title": "Full reset", "description": "A free rate limit reset.",
+            ]
+        }
+        let limits = { (used: Double, credits: [JSONValue]) -> JSONValue in
+            [
+                "rateLimits": snapshot(used), "rateLimitsByLimitId": ["codex": snapshot(used)],
+                "rateLimitResetCredits": ["availableCount": .number(Double(credits.count)), "credits": .array(credits)],
+            ]
+        }
+        let late = credit("RateLimitResetCredit_late", 20)
+        return CLIScript(
+            start: [controls(commands)],
+            usage: .codex(
+                account: account, rateLimits: limits(84, [late, credit(Self.soonest, 9)]), consume: ["outcome": "reset"],
+                afterReset: limits(0, [late])))
     }
+
+    /// The reset credit that expires first, which a reset uses.
+    static let soonest = "RateLimitResetCredit_soon"
 
     private static func controls(_ commands: [SlashCommand]) -> Beat {
         .event(.controlsLoaded(ChatControls(
@@ -129,6 +149,42 @@ final class UsagePopup: ChatStoryline {
                     : extras.hasPrefix("Extra usage On · ") && extras.contains("12.40 of ") && extras.hasSuffix(" this month")
             },
             ExpectElement(.id(StoryID.Composer.usage.part(.open))),
+        ]
+        if codex {
+            // A full reset asks first: No, go back and Esc take the question back; Yes uses the
+            // reset that expires soonest, once, and the limits are read again.
+            let reset = Locator.id(StoryID.Composer.usage.part(.reset))
+            let yes = Locator.id(StoryID.Composer.usage.part(.allow))
+            let resets = { (story: StoryContext) in try story.scriptedBackend().log.filter { if case .useReset = $0 { true } else { false } } }
+            steps += [
+                Click(reset),
+                WaitForElement(yes),
+                ExpectElement(.id(StoryID.Composer.usage.part(.cancel))),
+                Snapshot("usage-reset-confirm"),
+                Click(.id(StoryID.Composer.usage.part(.cancel))),
+                WaitForElement(reset),
+                ExpectElement(yes, .absent),
+                Click(reset),
+                WaitForElement(yes),
+                Key(.escape),
+                WaitForElement(reset),
+                ExpectElement(popup),
+                Expect("nothing used yet") { try resets($0).isEmpty },
+                Click(reset),
+                WaitForElement(yes),
+                Click(yes),
+                Expect("one reset used, the one that expires soonest", found: { story in (try? resets(story)).map { "\($0)" } }) {
+                    try resets($0) == [.useReset(credit: Self.soonest)]
+                },
+                Expect("the limits read again: the 5h window empty, one reset left", found: { $0.app.chat?.storyUsageExtras }) { story in
+                    story.app.chat?.storyUsage.first?.hasPrefix("5h limit · 0% · ") == true
+                        && story.app.chat?.storyUsageExtras.hasSuffix(" · 1 full reset available") == true
+                },
+                WaitForElement(reset),
+                Snapshot("usage-reset-done"),
+            ]
+        }
+        steps += [
             // Esc closes it and goes no further: the composer keeps focus.
             Key(.escape),
             ExpectElement(popup, .absent),
@@ -140,7 +196,7 @@ final class UsagePopup: ChatStoryline {
             Key(.tab),
             WaitForElement(popup),
             composer("the draft as it was before “/lim”", "fix the bug "),
-            Expect("the account read again") { try $0.scriptedBackend().log.filter { $0 == .usage }.count == 2 },
+            Expect("the account read again") { try $0.scriptedBackend().log.filter { $0 == .usage }.count == (codex ? 3 : 2) },
             // Reopened, the last reading shows at once, its bars full.
             Snapshot("usage-popup"),
             // Typing closes it, and the key lands in the field.

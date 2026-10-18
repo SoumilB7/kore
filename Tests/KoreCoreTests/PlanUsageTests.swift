@@ -121,7 +121,44 @@ struct PlanUsageTests {
         #expect(reading.account.organization == nil)
         #expect(reading.account.manage?.absoluteString == "https://chatgpt.com/codex/settings/usage")
         #expect(reading.limits?.bars == [PlanLimit(title: "Weekly limit", used: 6, resetsAt: Date(timeIntervalSince1970: 1_793_335_108))])
-        #expect(reading.limits?.extras == [PlanExtra("Credits", "47,161.94"), PlanExtra(nil, "2 full resets available")])
+        #expect(
+            reading.limits?.extras == [PlanExtra("Credits", "47,161.94"), PlanExtra(nil, "2 full resets available", isResets: true)])
+        #expect(
+            reading.limits?.resets
+                == PlanResets(
+                    available: 2, next: PlanReset(id: "RateLimitResetCredit_0", expiresAt: Date(timeIntervalSince1970: 1_793_301_078)),
+                    differ: true))
+    }
+
+    @Test func aResetUsesTheCreditThatExpiresSoonest() {
+        let credit = { (id: String, expires: Double?, status: String) -> JSONValue in
+            ["id": .string(id), "resetType": "codexRateLimits", "status": .string(status), "expiresAt": expires.map(JSONValue.number) ?? .null]
+        }
+        let resets = { (credits: [JSONValue]) in
+            PlanReading.codexResets(["availableCount": .number(Double(credits.count)), "credits": .array(credits)])
+        }
+        let soon = PlanReset(id: "soon", expiresAt: Date(timeIntervalSince1970: 100))
+        #expect(resets([credit("never", nil, "available"), credit("late", 200, "available"), credit("soon", 100, "available")])?.next == soon)
+        // A credit being redeemed elsewhere isn't offered.
+        #expect(resets([credit("used", 50, "redeeming"), credit("soon", 100, "available")])?.next == soon)
+        #expect(resets([credit("a", 100, "available"), credit("b", 100, "available")])?.differ == false)
+        // Counted without details: Codex picks.
+        #expect(PlanReading.codexResets(["availableCount": 1, "credits": nil]) == PlanResets(available: 1, next: nil))
+        #expect(PlanReading.codexResets(["availableCount": 0, "credits": []]) == nil)
+    }
+
+    @Test func aResetsRequestNamesItsAttemptAndCredit() {
+        let attempt = UUID(uuidString: "6F9619FF-8B86-D011-B42D-00C04FC964FF")!
+        #expect(
+            PlanUsage.resetParams(credit: "RateLimitResetCredit_0", attempt: attempt)
+                == ["idempotencyKey": "6f9619ff-8b86-d011-b42d-00c04fc964ff", "creditId": "RateLimitResetCredit_0"])
+        #expect(PlanUsage.resetParams(credit: nil, attempt: attempt) == ["idempotencyKey": "6f9619ff-8b86-d011-b42d-00c04fc964ff"])
+        #expect(PlanResetOutcome(["outcome": "reset"]) == .reset)
+        #expect(PlanResetOutcome(["outcome": "nothingToReset"]) == .nothingToReset)
+        #expect(PlanResetOutcome(["outcome": "noCredit"]) == .noCredit)
+        #expect(PlanResetOutcome(["outcome": "alreadyRedeemed"]) == .alreadyRedeemed)
+        #expect(PlanResetOutcome(["outcome": "later"]) == .other("later"))
+        #expect(PlanResetOutcome([:]) == .other(""))
     }
 
     @Test func eachLimitIdsWindowsCodexsFirst() {
@@ -138,7 +175,7 @@ struct PlanUsageTests {
             ], locale: Self.us)
         #expect(limits.bars.map(\.title) == ["5h limit", "Weekly limit", "5h limit · Spark"])
         #expect(limits.bars.map(\.used) == [84, 37, 40])
-        #expect(limits.extras == [PlanExtra(nil, "1 full reset available")])
+        #expect(limits.extras == [PlanExtra(nil, "1 full reset available", isResets: true)])
     }
 
     @Test func creditsShowOnlyWhenTheyAreCounted() {

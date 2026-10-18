@@ -50,10 +50,61 @@ public struct PlanLimits: Sendable, Equatable {
     public var bars: [PlanLimit]
     /// Information only, in order: extra usage, credits, resets.
     public var extras: [PlanExtra]
+    /// Full resets of the limits the account can use (Codex's reset credits); nil when it has none.
+    public var resets: PlanResets?
 
-    public init(bars: [PlanLimit], extras: [PlanExtra] = []) {
+    public init(bars: [PlanLimit], extras: [PlanExtra] = [], resets: PlanResets? = nil) {
         self.bars = bars
         self.extras = extras
+        self.resets = resets
+    }
+}
+
+/// The account's full resets (Codex's rate-limit reset credits): how many, and the one to use.
+public struct PlanResets: Sendable, Equatable {
+    public var available: Int
+    /// The one that expires soonest; nil when Codex counted them without details, and then picks.
+    public var next: PlanReset?
+    /// Whether they differ in when they expire or what they reset, so which goes first matters.
+    public var differ: Bool
+
+    public init(available: Int, next: PlanReset?, differ: Bool = false) {
+        self.available = available
+        self.next = next
+        self.differ = differ
+    }
+}
+
+public struct PlanReset: Sendable, Equatable {
+    /// Codex's opaque id for the credit.
+    public let id: String
+    public let expiresAt: Date?
+
+    public init(id: String, expiresAt: Date?) {
+        self.id = id
+        self.expiresAt = expiresAt
+    }
+}
+
+/// What using a full reset did, as Codex answers `account/rateLimitResetCredit/consume`.
+public enum PlanResetOutcome: Sendable, Equatable {
+    case reset
+    /// Nothing was near a limit: the credit stays.
+    case nothingToReset
+    case noCredit
+    /// The credit was used meanwhile (another client, an earlier try).
+    case alreadyRedeemed
+    /// An outcome newer than Kore.
+    case other(String)
+
+    public init(_ result: JSONValue) {
+        switch result["outcome"]?.string {
+        case "reset": self = .reset
+        case "nothingToReset": self = .nothingToReset
+        case "noCredit": self = .noCredit
+        case "alreadyRedeemed": self = .alreadyRedeemed
+        case let other: self = .other(other ?? "")
+        }
     }
 }
 
@@ -74,10 +125,13 @@ public struct PlanLimit: Sendable, Equatable {
 public struct PlanExtra: Sendable, Equatable {
     public let key: String?
     public let value: String
+    /// The count of full resets, which the popup offers to use.
+    public let isResets: Bool
 
-    public init(_ key: String?, _ value: String) {
+    public init(_ key: String?, _ value: String, isResets: Bool = false) {
         self.key = key
         self.value = value
+        self.isResets = isResets
     }
 }
 
@@ -238,10 +292,25 @@ extension PlanReading {
         {
             extras.append(PlanExtra("Credits", balance.formatted(.number.precision(.fractionLength(2)).locale(locale))))
         }
-        if let resets = result["rateLimitResetCredits"]?["availableCount"]?.int, resets > 0 {
-            extras.append(PlanExtra(nil, resets == 1 ? "1 full reset available" : "\(resets) full resets available"))
+        let resets = codexResets(result["rateLimitResetCredits"])
+        if let resets {
+            let count = resets.available
+            extras.append(PlanExtra(nil, count == 1 ? "1 full reset available" : "\(count) full resets available", isResets: true))
         }
-        return PlanLimits(bars: bars, extras: extras)
+        return PlanLimits(bars: bars, extras: extras, resets: resets)
+    }
+
+    /// The available count, and of the credits listed as available the one that expires
+    /// soonest (one that never expires goes last).
+    static func codexResets(_ summary: JSONValue?) -> PlanResets? {
+        guard let count = summary?["availableCount"]?.int, count > 0 else { return nil }
+        let credits = (summary?["credits"]?.array ?? []).compactMap { credit -> (reset: PlanReset, type: String?)? in
+            guard let id = nonEmpty(credit["id"]?.string), (credit["status"]?.string ?? "available") == "available" else { return nil }
+            return (PlanReset(id: id, expiresAt: date(credit["expiresAt"])), credit["resetType"]?.string)
+        }
+        let next = credits.min { ($0.reset.expiresAt ?? .distantFuture) < ($1.reset.expiresAt ?? .distantFuture) }
+        let kinds = Set(credits.map { "\($0.reset.expiresAt?.timeIntervalSince1970 ?? -1) \($0.type ?? "")" })
+        return PlanResets(available: count, next: next?.reset, differ: kinds.count > 1)
     }
 
     /// Codex's names for its windows; others from their length.
@@ -346,8 +415,9 @@ public enum PlanUsage {
     public static func codex(_ server: CodexAppServer) async throws -> PlanReading {
         let replies = await server.requests([
             ("account/read", [:]),
-            // The available count comes either way; the reset credits' details aren't shown.
-            ("account/rateLimits/read", ["excludeResetCreditDetails": true]),
+            // With the reset credits' details (a lookup of their own), so a reset can name the
+            // one to use.
+            ("account/rateLimits/read", [:]),
         ])
         guard replies.count == 2 else { throw CodexAppServer.Failure.notRunning }
         let account = try replies[0].get()
@@ -372,6 +442,34 @@ public enum PlanUsage {
             Task { await server.close() }
         }
         return try await codex(server)
+    }
+
+    /// `account/rateLimitResetCredit/consume`'s params: the attempt's key (the same on a retry of
+    /// that attempt, so a credit is never used twice), and the credit (nil: Codex picks).
+    public static func resetParams(credit: String?, attempt: UUID) -> JSONValue {
+        var params: [String: JSONValue] = ["idempotencyKey": .string(attempt.uuidString.lowercased())]
+        if let credit { params["creditId"] = .string(credit) }
+        return .object(params)
+    }
+
+    /// Uses one full reset of the account's limits, through a running Codex app-server. Not
+    /// read-only: it spends the credit.
+    public static func useReset(_ server: CodexAppServer, credit: String?, attempt: UUID) async throws -> PlanResetOutcome {
+        PlanResetOutcome(try await server.request("account/rateLimitResetCredit/consume", resetParams(credit: credit, attempt: attempt)))
+    }
+
+    /// The same through a short-lived `codex app-server`.
+    public static func useReset(credit: String?, attempt: UUID, executable: URL? = nil) async throws -> PlanResetOutcome {
+        let server = try await CodexAppServer.start(cwd: FileManager.default.homeDirectoryForCurrentUser, executable: executable)
+        let deadline = Task {
+            try await Task.sleep(for: Self.deadline)
+            await server.close()
+        }
+        defer {
+            deadline.cancel()
+            Task { await server.close() }
+        }
+        return try await useReset(server, credit: credit, attempt: attempt)
     }
 
     /// `initialize` names no account: logged out, or signed in another way (an API key).

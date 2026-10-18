@@ -33,7 +33,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
     package enum Part: String, Sendable, CaseIterable {
         case fork, copy, stop, close, chevron, open, cancel, allow, always, deny, approveplan, keepplanning, archive
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
-        case autoaccept, replaceall, ticks
+        case autoaccept, replaceall, ticks, reset
     }
 }
 
@@ -71,7 +71,8 @@ extension StoryID {
         package static let chip = StoryID(.composer, "chip")
         /// A row of the slash menu, by the command's name.
         package static func command(_ name: String) -> StoryID { StoryID(.composer, "command", key: name) }
-        /// The usage popup; `.part(.open)` is its "Manage usage" link.
+        /// The usage popup; `.part(.open)` is its "Manage usage" link, `.part(.reset)` its count of
+        /// full resets, and `.part(.allow)` / `.part(.cancel)` the reset's confirm.
         package static let usage = StoryID(.composer, "usage")
         /// One of its limits, by its title.
         package static func usageLimit(_ title: String) -> StoryID { StoryID(.composer, "usage.limit", key: title) }
@@ -199,6 +200,7 @@ extension StoryID {
             Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
             Composer.model, Composer.effort, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
+            Composer.usage.part(.reset), Composer.usage.part(.allow), Composer.usage.part(.cancel),
             Transcript.earlier,
             AgentMap.open, AgentMap.stop, AgentMap.close, History.search,
             Explorer.newfile, Explorer.newfolder, Explorer.refresh, Explorer.collapse, Explorer.namefield,

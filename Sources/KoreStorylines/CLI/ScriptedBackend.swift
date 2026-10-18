@@ -24,6 +24,8 @@ package final class ScriptedBackend: ChatBackend {
     /// Text deltas a second (`CLIScript.feed`); nil: one a run-loop pass.
     var rate: Double?
     private var started = false
+    /// A full reset used: the account reads as `afterReset` from then on.
+    private var reset = false
     private var closed = false
     private var sends = 0
     /// The turn being played, the last tool or text in it, and the tools still running.
@@ -165,9 +167,19 @@ package final class ScriptedBackend: ChatBackend {
         log.append(.usage)
         switch script.usage {
         case .claude(let account, let usage): return PlanReading.claude(account: account, usage: usage)
-        case .codex(let account, let rateLimits): return PlanReading.codex(account: account, rateLimits: rateLimits)
+        case .codex(let account, let rateLimits, _, let after):
+            return PlanReading.codex(account: account, rateLimits: reset ? after ?? rateLimits : rateLimits)
         case nil: throw ScriptedError.noUsage
         }
+    }
+
+    /// Never a real credit: the script's answer, as Codex sends it.
+    package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome {
+        log.append(.useReset(credit: credit))
+        guard case .codex(_, _, let consume?, _) = script.usage else { throw ScriptedError.noUsage }
+        let outcome = PlanResetOutcome(consume)
+        if outcome == .reset { reset = true }
+        return outcome
     }
 
     package func compact(instructions: String) async throws {

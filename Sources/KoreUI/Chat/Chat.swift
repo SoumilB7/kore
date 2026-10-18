@@ -203,10 +203,16 @@ package final class Chat: Identifiable {
 
     /// Opens the usage popup and reads the account's limits once, through this chat's CLI.
     func openUsage() {
-        usage.open(provider: provider.id) { [weak self] in
-            guard let self else { throw UsageUnavailable() }
-            return try await self.connect().usage()
-        }
+        usage.open(
+            provider: provider.id,
+            read: { [weak self] in
+                guard let self else { throw UsageUnavailable() }
+                return try await self.connect().usage()
+            },
+            useReset: { [weak self] credit, attempt in
+                guard let self else { throw UsageUnavailable() }
+                return try await self.connect().useReset(credit: credit, attempt: attempt)
+            })
     }
 
     func close() {
