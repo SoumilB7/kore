@@ -54,7 +54,10 @@ struct ChatView: View {
         let chat = chat
         var actions = TranscriptActions()
         actions.toggleTurn = { chat.transcript.toggle(turn: $0) }
-        actions.toggle = { chat.transcript.toggle($0) }
+        actions.toggle = { key in
+            chat.transcript.toggle(key)
+            if let agent = chat.transcript.agentID(forCard: key) { chat.loadAgentIfNeeded(agent) }
+        }
         actions.openImage = { view($0, pending: false) }
         actions.viewChanges = { turn in
             changesTurn.value = turn

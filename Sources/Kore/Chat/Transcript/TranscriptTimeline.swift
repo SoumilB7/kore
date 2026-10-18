@@ -30,9 +30,10 @@ struct TranscriptTimeline: View {
                             }
                         } header: {
                             if let header = section.header {
-                                MessageHeader(entry: header, actions: reveal(proxy)).id(section.id)
+                                MessageHeader(entry: header, open: section.headerOpen, actions: reveal(proxy))
                             }
                         }
+                        .id(section.id)
                     }
                     Color.clear.frame(height: Stroke.hairline).id(Self.end)
                 }
@@ -69,8 +70,6 @@ struct TranscriptTimeline: View {
             .onChange(of: store.tail, initial: true) {
                 guard following.value else { return }
                 proxy.scrollTo(Self.end, anchor: .bottom)
-                // A long replay lays out lazily; once its rows have real heights, land on the end again.
-                DispatchQueue.main.async { if following.value { proxy.scrollTo(Self.end, anchor: .bottom) } }
             }
         }
     }

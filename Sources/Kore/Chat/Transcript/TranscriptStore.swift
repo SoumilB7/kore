@@ -139,12 +139,17 @@ final class TranscriptStore {
     struct Section: Identifiable, Equatable {
         let id: String
         let header: Entry?
+        /// A peer's message starts as one line (owner, 2026-10-21); opened, it shows in full.
+        let headerOpen: Bool
         let items: [Item]
     }
 
     private(set) var sections: [Section] = []
     /// Changes whenever any row does, so the view can follow the end.
     private(set) var tail = 0
+    /// Changes whenever any agent's own work or details do (the map and agent tabs follow it;
+    /// a closed card's lane isn't in `sections`).
+    private(set) var agentsVersion = 0
     /// What the Agents button shows; changes only when an agent comes or goes or changes state.
     private(set) var agentSummary = AgentSummary()
 
@@ -201,6 +206,9 @@ final class TranscriptStore {
     @ObservationIgnored private var laneAgents: [String: (parent: String, entry: UUID)] = [:]
     /// Every agent id in spawn order.
     @ObservationIgnored private var agentOrder: [String] = []
+    /// Agents whose history has been loaded (once is enough).
+    @ObservationIgnored private var loadedAgents: Set<String> = []
+    @ObservationIgnored private var loadingHistory = false
     /// Pending approvals asked for by sub-agents: approval id → agent id.
     @ObservationIgnored private var askedBy: [String: String] = [:]
     /// When the chat's first turn began, and the time its finished turns took.
@@ -332,10 +340,46 @@ final class TranscriptStore {
         return workedBefore + running
     }
 
+    // MARK: Loading an agent's past
+
+    /// The agent a card key ("entry id") stands for, if it's an agent's card.
+    func agentID(forCard key: String) -> String? {
+        guard let id = UUID(uuidString: key) else { return nil }
+        if let i = position[id], let agent = entries[i].agent { return agent.id }
+        return laneAgents.first { $0.value.entry == id }?.key
+    }
+
+    /// An agent whose own work isn't here yet: from a replayed chat, or a Codex child.
+    func needsHistory(_ id: String) -> Bool {
+        guard let info = agent(id), info.status != .running, !loadedAgents.contains(id) else { return false }
+        return (lanes[id] ?? []).isEmpty
+    }
+
+    /// Replaces an agent's own work with its whole history (`ChatBackend.agentHistory`).
+    func replaceLane(of id: String, with events: [ChatEvent]) {
+        loadedAgents.insert(id)
+        lanes[id] = []
+        for (tool, ref) in laneTools where ref.agent == id { laneTools[tool] = nil }
+        // The card's counts came with the agent; its history doesn't add to them.
+        loadingHistory = true
+        batch { events.forEach(apply) }
+        loadingHistory = false
+    }
+
     /// Opens or closes a sub-agent's card.
     func toggle(agent id: String) {
         if let card = agentCards[id] ?? laneAgents[id]?.entry { toggle(card.uuidString) }
     }
+
+    /// An agent's result, unless its own last reply already says it (a loaded history ends with
+    /// the reply the result repeats).
+    static func distinctResult(_ info: AgentInfo, lane: [Entry]) -> String? {
+        guard let result = info.result?.trimmingCharacters(in: .whitespacesAndNewlines), !result.isEmpty else { return nil }
+        let last = lane.last { $0.kind == .answer }?.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return last == result ? nil : result
+    }
+
+    func lane(_ id: String) -> [Entry] { lanes[id] ?? [] }
 
     /// A sub-agent's card details, for an approval it asks for.
     func agent(_ id: String) -> AgentInfo? {
@@ -400,7 +444,7 @@ final class TranscriptStore {
         if let agent {
             laneAppend(agent: agent, entry)
             laneTools[id] = (agent, lanes[agent]!.count - 1)
-            if let card = agentCards[agent], let i = position[card], entries[i].agent != nil {
+            if !loadingHistory, let card = agentCards[agent], let i = position[card], entries[i].agent != nil {
                 entries[i].agent!.tools += 1
                 entries[i].agent!.lastTool = name
             }
@@ -494,7 +538,8 @@ final class TranscriptStore {
         updateAgent(id) {
             $0.status = status
             if let result { $0.result = result }
-            if $0.duration == nil || status != .running { $0.duration = $0.duration ?? date.timeIntervalSince($0.startedAt) }
+            // A replayed agent has no timing of its own unless the CLI gave one.
+            if $0.duration == nil, !self.batching { $0.duration = date.timeIntervalSince($0.startedAt) }
         }
     }
 
@@ -536,14 +581,14 @@ final class TranscriptStore {
         let summary = summarizeAgents()
         if summary != agentSummary { agentSummary = summary }
         // Sections are the one built form of the transcript; nothing else keeps the rows.
-        let sections = Self.sections(rows)
+        let sections = Self.sections(rows, open: openKeys)
         guard sections != self.sections else { return }
         self.sections = sections
         tail &+= 1
     }
 
     /// Splits rows at each user or peer message, and places them on the timeline.
-    private static func sections(_ rows: [Row]) -> [Section] {
+    private static func sections(_ rows: [Row], open: Set<String>) -> [Section] {
         var sections: [Section] = []
         var header: Entry?
         var id = "start"
@@ -557,7 +602,8 @@ final class TranscriptStore {
                     above: dots[i] != nil && i > 0 && dots[i - 1] != nil,
                     below: dots[i] != nil && i + 1 < dots.count && dots[i + 1] != nil)
             }
-            sections.append(Section(id: id, header: header, items: items))
+            let headerOpen = header.map { $0.kind == .user || open.contains($0.id.uuidString) } ?? false
+            sections.append(Section(id: id, header: header, headerOpen: headerOpen, items: items))
         }
         for row in rows {
             if case .entry(let e) = row, e.kind == .user || e.kind == .peer {
@@ -723,6 +769,7 @@ final class TranscriptStore {
     private func update(tool id: String, _ change: (inout Entry) -> Void) {
         if let (agent, index) = laneTools[id] {
             if lanes[agent]?.indices.contains(index) == true { change(&lanes[agent]![index]) }
+            agentsVersion &+= 1
         } else if let entry = tools[id], let i = position[entry] {
             change(&entries[i])
         } else {
@@ -732,6 +779,7 @@ final class TranscriptStore {
     }
 
     private func updateAgent(_ id: String, _ change: (inout AgentInfo) -> Void) {
+        agentsVersion &+= 1
         if let card = agentCards[id], let i = position[card], entries[i].agent != nil {
             change(&entries[i].agent!)
         } else if let (parent, card) = laneAgents[id], let i = lanes[parent]?.firstIndex(where: { $0.id == card }),
@@ -746,12 +794,14 @@ final class TranscriptStore {
 
     private func laneAppend(agent: String, _ entry: Entry) {
         lanes[agent, default: []].append(entry)
+        agentsVersion &+= 1
     }
 
     private func laneText(agent: String, block: String, kind: Entry.Kind, text: String) {
         let key = "\(agent)/\(block)"
         if let id = blocks[key], let i = lanes[agent]?.firstIndex(where: { $0.id == id }) {
             lanes[agent]![i].text += text
+            agentsVersion &+= 1
         } else {
             let entry = Entry(kind: kind, text: text)
             blocks[key] = entry.id

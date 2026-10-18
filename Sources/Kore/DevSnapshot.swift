@@ -17,6 +17,7 @@ import KoreCore
 ///                            delivered inside Kore; KORE_REAL_KEYS=1 posts them through the window server
 ///                            instead (they then go to whatever app is frontmost)
 ///   KORE_CLICK=<x>,<y>[;...] click those points (from the window's top-left), 1s apart, before the snapshot
+///   KORE_CLICK_AFTER=<s>     start those clicks that many seconds after launch (default 2.5; a replay needs ~8)
 ///   KORE_REAL_CLICK=1        post that click through the window server (moves the real cursor),
 ///                            to catch title-bar regions that swallow clicks
 ///   KORE_HISTORY=1           open the history panel at launch
@@ -186,8 +187,9 @@ enum DevSnapshot {
             }
         }
         let real = ProcessInfo.processInfo.environment["KORE_REAL_CLICK"] == "1"
+        let clickStart = Double(ProcessInfo.processInfo.environment["KORE_CLICK_AFTER"] ?? "") ?? 2.5
         for (index, point) in clicks.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5 + Double(index)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + clickStart + Double(index)) {
                 real ? post(click: point) : send(click: point)
             }
         }

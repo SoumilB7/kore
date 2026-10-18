@@ -90,7 +90,7 @@ private struct EntryContent: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .user, .peer:
-            MessageHeader(entry: entry, actions: actions)
+            MessageHeader(entry: entry, open: true, actions: actions)
         default:
             Text(planMarkdown(entry.text))
                 .font(TextStyle.body)
@@ -108,6 +108,8 @@ private struct EntryContent: View {
 /// turn scrolls by, over the background with a faded lower edge; a click scrolls back to it.
 struct MessageHeader: View {
     let entry: TranscriptStore.Entry
+    /// A peer's message is one line until opened.
+    var open = true
     let actions: TranscriptActions
 
     var body: some View {
@@ -118,21 +120,22 @@ struct MessageHeader: View {
                 user
             }
         }
-        .padding(.top, Layout.Timeline.itemPadding)
-        .padding(.bottom, Layout.Timeline.itemPadding + Layout.Timeline.stickyFade)
+        .padding(.vertical, Layout.Timeline.itemPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Solid behind the message, fading over its last points only. A gradient fill, not a
-        // mask: a mask costs an offscreen layer per header.
-        .background {
-            VStack(spacing: 0) {
-                Theme.background
-                LinearGradient(colors: [Theme.background, Theme.background.opacity(0)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: Layout.Timeline.stickyFade)
-            }
+        // Solid behind the message, then a short fade just below it. The fade is an overlay so it
+        // doesn't change the header's size (the lazy stack places rows by real sizes), and a
+        // gradient fill rather than a mask (a mask costs an offscreen layer per header).
+        .background(Theme.background)
+        .overlay(alignment: .bottom) {
+            LinearGradient(colors: [Theme.background, Theme.background.opacity(0)], startPoint: .top, endPoint: .bottom)
+                .frame(height: Layout.Timeline.stickyFade)
+                .offset(y: Layout.Timeline.stickyFade)
+                .allowsHitTesting(false)
         }
-        .padding(.bottom, -Layout.Timeline.stickyFade)
         .contentShape(Rectangle())
-        .onTapGesture { actions.reveal(entry.id.uuidString) }
+        .onTapGesture {
+            if entry.kind == .peer { actions.toggle(entry.id.uuidString) } else { actions.reveal(entry.id.uuidString) }
+        }
     }
 
     private var user: some View {
@@ -155,20 +158,39 @@ struct MessageHeader: View {
         }
     }
 
+    /// "From Kore-fe  The first line of it… ›"; opened, the whole message.
     private var peer: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            Label("From \(entry.from ?? "another session")", systemImage: "bubble.left")
-                .font(TextStyle.labelMedium)
-                .foregroundStyle(Theme.secondary)
-            Text(entry.text)
-                .font(TextStyle.body)
-                .foregroundStyle(Theme.text)
-                .textSelection(.enabled)
+            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                Label("From \(entry.from ?? "another session")", systemImage: "bubble.left")
+                    .font(TextStyle.labelMedium)
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize()
+                if !open {
+                    Text(Self.firstLine(entry.text))
+                        .font(TextStyle.body)
+                        .foregroundStyle(Theme.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: Space.sm)
+                Disclosure(isOpen: open).foregroundStyle(Theme.tertiary)
+            }
+            if open {
+                Text(entry.text)
+                    .font(TextStyle.body)
+                    .foregroundStyle(Theme.text)
+                    .textSelection(.enabled)
+            }
         }
-        .padding(Inset.bubble)
+        .padding(open ? Inset.bubble : Inset.control)
         .frame(maxWidth: .infinity, alignment: .leading)
         .panel(.outline)
-        .help("A message from another Claude session")
+        .help(open ? "A message from another Claude session" : "Show the whole message")
+    }
+
+    private static func firstLine(_ text: String) -> String {
+        text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
     }
 }
 
@@ -235,13 +257,10 @@ struct ToolHeader: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            // A file link opens through the default action (NSWorkspace), in the user's editor.
             Text(line)
                 .lineLimit(2)
                 .tint(Theme.secondary)
-                .environment(\.openURL, OpenURLAction { url in
-                    NSWorkspace.shared.open(url)
-                    return .handled
-                })
                 .help(path ?? "")
             if added > 0 || removed > 0 { ChangeCounts(added: added, removed: removed) }
         }
@@ -535,7 +554,11 @@ struct AgentItem: View {
     private func rail(_ info: TranscriptStore.AgentInfo) -> Color { Theme.agentRail(AgentAvatar.hue(info.index)) }
 
     private func result(_ info: TranscriptStore.AgentInfo) -> AnyView? {
-        guard let result = info.result, !result.isEmpty else { return nil }
+        let laneEntries = lane.compactMap { row -> TranscriptStore.Entry? in
+            if case .entry(let e) = row { return e }
+            return nil
+        }
+        guard let result = TranscriptStore.distinctResult(info, lane: laneEntries) else { return nil }
         return AnyView(VStack(alignment: .leading, spacing: Space.xs) {
             Text(planMarkdown(result))
                 .font(TextStyle.body)

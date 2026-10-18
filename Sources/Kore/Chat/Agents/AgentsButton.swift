@@ -24,7 +24,7 @@ struct AgentsButton: View {
                                 .opacity(running ? 1 : Theme.dimmed)
                         }
                     }
-                    Text(running ? "\(summary.running.count) running" : "\(summary.count) agents")
+                    Text(running ? "\(summary.running.count) running" : summary.count == 1 ? "1 agent" : "\(summary.count) agents")
                         .font(Chrome.labelDigits)
                         .foregroundStyle(running ? Theme.text : Theme.secondary)
                         .lineLimit(1)
@@ -62,6 +62,6 @@ struct AgentsButton: View {
     private func help(_ summary: TranscriptStore.AgentSummary) -> String {
         if summary.waiting { return "An agent is waiting for your permission" }
         if unseenFailure(summary) { return "An agent failed" }
-        return summary.running.isEmpty ? "\(summary.count) agents" : "Agents are working"
+        return summary.running.isEmpty ? (summary.count == 1 ? "1 agent" : "\(summary.count) agents") : "Agents are working"
     }
 }

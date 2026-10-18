@@ -9,7 +9,7 @@ struct AgentTabView: View {
     let workspace: Workspace
 
     var body: some View {
-        _ = chat.transcript.agentSummary
+        _ = chat.transcript.agentsVersion
         let info = chat.transcript.agent(id)
         return VStack(spacing: 0) {
             if let info {
@@ -40,6 +40,7 @@ struct AgentTabView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .defaultScrollAnchor(.bottom, for: .alignment)
+                .onAppear { chat.loadAgentIfNeeded(id) }
                 footer(info)
                     .padding(.horizontal, ChatColumn.window.padding)
                     .padding(.bottom, Space.xxxl)

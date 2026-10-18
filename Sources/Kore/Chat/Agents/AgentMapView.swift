@@ -14,7 +14,7 @@ struct AgentMapView: View {
 
     var body: some View {
         // Reading `tail` re-renders the map as agents and their work change.
-        _ = chat.transcript.tail
+        _ = chat.transcript.agentsVersion
         let nodes = visible(chat.transcript.agentTree())
         let selected = nodes.first { $0.id == map.selected } ?? nodes.first
         return GeometryReader { geometry in
@@ -289,6 +289,8 @@ struct AgentDetail: View {
             }
             .padding(.horizontal, Layout.Viewer.canvasSide)
         }
+        .onAppear { chat.loadAgentIfNeeded(info.id) }
+        .onChange(of: info.id) { _, id in chat.loadAgentIfNeeded(id) }
     }
 
     private var header: some View {
@@ -383,7 +385,7 @@ struct AgentTimeline: View {
     let id: String
 
     var body: some View {
-        _ = chat.transcript.tail
+        _ = chat.transcript.agentsVersion
         let items = chat.transcript.agentItems(id)
         let info = chat.transcript.agent(id)
         return VStack(alignment: .leading, spacing: 0) {
@@ -397,11 +399,11 @@ struct AgentTimeline: View {
             ForEach(items) { item in
                 TimelineRow(item: item, actions: actions).equatable()
             }
-            if let result = info?.result, !result.isEmpty {
-                TimelineItem(dot: info?.status == .failed ? .failure : .plain, above: !items.isEmpty) {
+            if let info, let result = TranscriptStore.distinctResult(info, lane: chat.transcript.lane(id)) {
+                TimelineItem(dot: info.status == .failed ? .failure : .plain, above: !items.isEmpty) {
                     Text(planMarkdown(result))
                         .font(TextStyle.body)
-                        .foregroundStyle(info?.status == .finished ? Theme.text : Theme.secondary)
+                        .foregroundStyle(info.status == .finished ? Theme.text : Theme.secondary)
                         .lineSpacing(TextStyle.leading)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)

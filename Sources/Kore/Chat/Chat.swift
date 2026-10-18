@@ -163,6 +163,18 @@ final class Chat: Identifiable {
         Task { await backend?.interrupt() }
     }
 
+    /// Loads a sub-agent's own transcript the first time it's opened, when the chat doesn't have
+    /// it (a replayed chat's agents, Codex children).
+    func loadAgentIfNeeded(_ id: String) {
+        guard transcript.needsHistory(id) else { return }
+        let backend = connect()
+        Task {
+            try? await backend.start()
+            let events = await backend.agentHistory(id)
+            if !events.isEmpty { transcript.replaceLane(of: id, with: events) }
+        }
+    }
+
     func stopAgent(_ id: String) {
         let backend = backend
         Task { await backend?.stopAgent(id) }
