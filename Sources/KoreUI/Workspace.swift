@@ -154,6 +154,7 @@ package final class Workspace {
         fork.controls.planMode = chat.controls.planMode
         fork.launchModel = chat.controls.modelId ?? chat.launchModel
         fork.launchEffort = chat.controls.effort
+        fork.inheritAutoCompact(from: chat)
         fork.original = chat
         fork.draft = text
         if let probe = DevSnapshot.forkSend {

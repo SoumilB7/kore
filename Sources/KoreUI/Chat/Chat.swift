@@ -50,6 +50,9 @@ package final class Chat: Identifiable {
     /// The chat has been shown, so its CLI was started once (`startOnce`).
     @ObservationIgnored private var shown = false
     @ObservationIgnored private let compactMemory: AutoCompactMemory
+    /// The auto-compact point is the chat's own (picked in it, kept for its session, or its
+    /// original's when it's a fork), not the provider's: kept under its session id once known.
+    @ObservationIgnored private var ownAutoCompact = false
     /// The user's turn may end in an auto-compact: set as it starts, cleared once a compaction
     /// starts or Kore asks for one. So a failed compaction, or one that leaves usage past the
     /// point, waits for the user's next turn.
@@ -71,7 +74,14 @@ package final class Chat: Identifiable {
         awaitingHistory = session != nil
         controls = ControlsStore(provider: provider, memory: modeMemory)
         self.compactMemory = compactMemory
-        context.autoCompactAt = compactMemory.point(for: provider)
+        // A reopened chat (a restored tab, or from history) has its own point back; a fork's
+        // session is its original's until its own comes (`inheritAutoCompact`).
+        if fork == nil, let id = session?.id, let own = compactMemory.point(chat: id) {
+            context.autoCompactAt = own
+            ownAutoCompact = true
+        } else {
+            context.autoCompactAt = compactMemory.point(for: provider)
+        }
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
         transcript.providerName = provider.name
@@ -116,6 +126,10 @@ package final class Chat: Identifiable {
         noteAgentModeChange(event)
         dropUnofferedMode(event)
         restoreQueued(event)
+        // A new chat's (or a fork's) session id comes with its first turn: its point is kept under it.
+        if case .sessionIdentified(let id) = event, ownAutoCompact, id != status.sessionId {
+            compactMemory.remember(context.autoCompactAt, chat: id)
+        }
         status.apply(event)
         context.apply(event)
         autoCompactIfDue(event)
@@ -288,11 +302,20 @@ package final class Chat: Identifiable {
         }
     }
 
-    /// The card's auto-compact point: this chat's, and the provider's for chats opened later.
+    /// The card's auto-compact point: this chat's, kept for when it's reopened, and the
+    /// provider's for new chats. Off is a point too.
     func setAutoCompact(_ point: Int?) {
-        guard context.autoCompactAt != point else { return }
+        guard context.autoCompactAt != point || !ownAutoCompact else { return }
         context.autoCompactAt = point
+        ownAutoCompact = true
         compactMemory.remember(point, for: provider)
+        if let id = sessionId { compactMemory.remember(point, chat: id) }
+    }
+
+    /// A fork starts at its original's point, and keeps it as its own when the original had one.
+    func inheritAutoCompact(from original: Chat) {
+        context.autoCompactAt = original.context.autoCompactAt
+        ownAutoCompact = original.ownAutoCompact
     }
 
     /// Auto-compact: Kore compacts between turns, when the user's turn ends at or past the

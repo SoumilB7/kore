@@ -156,6 +156,53 @@ final class CompactCommandTests {
         #expect(second.context.autoCompactAt == 80)
     }
 
+    private func reopened(_ id: String, _ memory: AutoCompactMemory, _ provider: ProviderDescriptor = .claude) -> Chat {
+        let session = SessionSummary(id: id, agent: provider.historyAgent, title: "Kept", updated: .now)
+        return Chat(provider: provider, folder: URL(fileURLWithPath: "/tmp"), resume: session, compactMemory: memory)
+    }
+
+    /// Each chat keeps its own point, Off included, by its session id; one with none takes the
+    /// provider's. A new chat's id comes with its first turn, and its point is kept then.
+    @Test func eachChatKeepsItsPoint() async throws {
+        let memory = AutoCompactMemory(defaults: ScratchDefaults())
+        memory.remember(70, for: .codex)
+        let codex = reopened("thread-1", memory, .codex)
+        #expect(codex.context.autoCompactAt == 70)
+        codex.setAutoCompact(nil)
+        #expect(reopened("thread-1", memory, .codex).context.autoCompactAt == nil)
+        codex.setAutoCompact(90)
+        #expect(reopened("thread-1", memory, .codex).context.autoCompactAt == 90)
+        // Never set in a chat: the provider's, whatever it is now.
+        memory.remember(60, for: .codex)
+        #expect(reopened("thread-2", memory, .codex).context.autoCompactAt == 60)
+        #expect(memory.point(chat: "thread-2") == nil)
+
+        // Set before the CLI has said the session's id.
+        let chat = autoCompactChat(memory, compaction: [.compacted(at: Date(), auto: false)])
+        chat.setAutoCompact(90)
+        #expect(chat.sessionId == nil)
+        try await turn(chat, "Hi")
+        let id = try #require(chat.sessionId)
+        #expect(memory.point(chat: id) == .some(90))
+        memory.remember(50, for: .claude)
+        #expect(reopened(id, memory).context.autoCompactAt == 90)
+
+        // A fork starts at its original's point, and keeps it under its own id.
+        let fork = Chat(
+            provider: .claude, folder: URL(fileURLWithPath: "/tmp"),
+            resume: SessionSummary(id: id, agent: .claude, title: "Fork", updated: .now),
+            fork: ForkPoint(from: id, at: "m1"), compactMemory: memory)
+        #expect(fork.context.autoCompactAt == 50)
+        fork.inheritAutoCompact(from: chat)
+        #expect(fork.context.autoCompactAt == 90)
+        try await turn(fork, "Hi again")
+        let forkId = try #require(fork.sessionId)
+        #expect(forkId != id)
+        #expect(memory.point(chat: forkId) == .some(90))
+        chat.close()
+        fork.close()
+    }
+
     @Test func aTurnPastThePointCompactsOnceAfterIt() async throws {
         let memory = AutoCompactMemory(defaults: ScratchDefaults())
         // Usage stays past the point after compacting: it isn't tried again until the next turn.
