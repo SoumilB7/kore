@@ -44,7 +44,7 @@ struct RendererHost<Fallback: View>: View {
         let document = document
         return RendererContext(
             reloadToken: document.revision, folder: workspace.folder,
-            openURL: { workspace.openFile($0, preview: true) }, zoom: Zoom.shared.scale,
+            openURL: { workspace.openFile($0, preview: true) }, zoom: Zoom.shared.scale, memory: rendering.memory,
             setFacts: { facts in if rendering.facts != facts { rendering.facts = facts } },
             failed: { reason, line in
                 rendering.showsRaw = true

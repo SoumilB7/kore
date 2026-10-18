@@ -205,3 +205,96 @@ struct RendererNotice: View {
         return String(format: "%.1f", value)
     }
 }
+
+/// Where a renderer's column of rows was left: the row at the top of the view and how far down
+/// it. Kept with the tab (`RendererMemory`), and gone back to by row, since the rows above are
+/// only estimated when the column is made again.
+@MainActor final class RowPlace {
+    fileprivate nonisolated static let space = "renderer.rows"
+    /// Built rows' tops in the content, as they report them: on layout, not as the view scrolls.
+    fileprivate var tops: [Int: CGFloat] = [:]
+    /// The visible top in the content.
+    fileprivate var offset: CGFloat = 0
+    /// Where it was left; nil at the top.
+    fileprivate var left: (row: Int, into: CGFloat)?
+    /// Going back there: taken to the row, then into it once it reports its top.
+    fileprivate var pending: (row: Int, into: CGFloat, sought: Bool)?
+    fileprivate var scroll: (CGFloat) -> Void = { _ in }
+
+    /// The row at the top of the view and how far down it the view is.
+    var current: (row: Int, into: CGFloat)? {
+        guard offset > 0.5, let top = tops.filter({ $0.value <= offset + 0.5 }).max(by: { $0.value < $1.value }) else { return nil }
+        return (top.key, offset - top.value)
+    }
+
+    fileprivate func reported(_ row: Int, top: CGFloat) {
+        tops[row] = top
+        guard let pending, pending.sought, pending.row == row else { return }
+        self.pending = nil
+        scroll(top + pending.into)
+    }
+}
+
+/// A renderer's kept state with a `RowPlace`, for storylines.
+@MainActor protocol PlacedRenderer: AnyObject {
+    var place: RowPlace { get }
+}
+
+/// A renderer's lazy column of rows in a scroll view, back where it was left (`RowPlace`) when
+/// its tab shows again. Each row marks itself with `placedRow`.
+struct PlacedRows<Content: View>: View {
+    let place: RowPlace
+    @ViewBuilder let content: () -> Content
+    @StateObject private var position = Held(ScrollPosition(edge: .top))
+    @StateObject private var nudge = Local(0)
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                content()
+                    .coordinateSpace(.named(RowPlace.space))
+                    .storyMark(StoryID.Editor.rows)
+            }
+            .scrollPosition(binding)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, new in
+                place.offset = new
+            }
+            .onAppear {
+                let (position, nudge) = (position, nudge)
+                place.scroll = { y in
+                    position.value.scrollTo(y: y)
+                    nudge.value &+= 1
+                }
+                guard let left = place.left else { return }
+                place.pending = (left.row, left.into, false)
+                // Once the column is laid out: to the row, which then reports where it is.
+                DispatchQueue.main.async {
+                    guard place.pending?.sought == false else { return }
+                    place.pending?.sought = true
+                    proxy.scrollTo(left.row, anchor: .top)
+                }
+            }
+            .onDisappear {
+                place.left = place.current
+                place.pending = nil
+                // What the next view reports is its own.
+                place.tops = [:]
+                place.offset = 0
+            }
+        }
+    }
+
+    private var binding: Binding<ScrollPosition> {
+        _ = nudge.value
+        return Binding(get: { position.value }, set: { position.value = $0 })
+    }
+}
+
+extension View {
+    /// A row of a `PlacedRows` column, reporting its top there.
+    func placedRow(_ row: Int, in place: RowPlace) -> some View {
+        id(row).onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(RowPlace.space)).minY } action: { top in
+            place.reported(row, top: top)
+        }
+    }
+}

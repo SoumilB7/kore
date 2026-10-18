@@ -31,7 +31,8 @@ private struct JSONTreeView: View {
             case .failed(let reason): RendererState.cantRender(file, reason: reason, context: context, hasRaw: true)
             case .ready(let index):
                 TreeRepresentable(
-                    index: index, zoom: context.zoom, filter: filter.value ?? "", setFacts: context.setFacts,
+                    index: index, zoom: context.zoom, filter: filter.value ?? "", place: context.memory.state { CanvasPlace() },
+                    setFacts: context.setFacts,
                     openFilter: { if filter.value == nil { filter.value = "" } })
                 .overlay(alignment: .topTrailing) {
                     if filter.value != nil {
@@ -101,15 +102,25 @@ private struct TreeRepresentable: NSViewRepresentable {
     let index: JSONIndex
     let zoom: CGFloat
     let filter: String
+    let place: CanvasPlace
     let setFacts: ([String]) -> Void
     let openFilter: () -> Void
+
+    func makeCoordinator() -> CanvasPlace { place }
 
     func makeNSView(context: Context) -> CanvasScrollView {
         let tree = TreeCanvas()
         let scroll = CanvasScrollView(canvas: tree)
         scroll.hasHorizontalScroller = false
         update(tree)
+        if let kept = place.tree { tree.reopen(kept) }
+        scroll.restore = place.origin
         return scroll
+    }
+
+    static func dismantleNSView(_ scroll: CanvasScrollView, coordinator: CanvasPlace) {
+        coordinator.origin = scroll.visible.origin
+        coordinator.tree = (scroll.canvas as? TreeCanvas)?.opened
     }
 
     func updateNSView(_ scroll: CanvasScrollView, context: Context) {
@@ -236,6 +247,18 @@ private final class TreeCanvas: CanvasView {
     }
 
     /// The roots open, and their children too while that stays a screenful or so.
+    /// The open and selected nodes, to open again in a tree made for the same file.
+    var opened: (nodes: Int, expanded: Set<Int>, selected: Int?)? {
+        index.map { ($0.nodes.count, expanded, selectedNode) }
+    }
+
+    func reopen(_ kept: (nodes: Int, expanded: Set<Int>, selected: Int?)) {
+        guard let index, index.nodes.count == kept.nodes else { return }
+        expanded = kept.expanded
+        selectedNode = kept.selected
+        rebuild()
+    }
+
     private func defaultExpanded(_ index: JSONIndex) -> Set<Int> {
         var open = Set<Int>()
         let roots = index.roots.map(Int.init)

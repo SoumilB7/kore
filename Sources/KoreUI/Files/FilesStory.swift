@@ -12,6 +12,12 @@ extension Workspace {
         FileManager.default.fileExists(atPath: folder.appendingPathComponent(relativePath).path)
     }
 
+    /// Shows the tab at `index` (0-based), as its click does. In a storyline's window (never key)
+    /// a click on another tab doesn't reach it while a file tab shows.
+    package func storySelect(tabAt index: Int) {
+        if tabs.indices.contains(index) { select(tabs[index]) }
+    }
+
     /// Opens the tree's folders down to the item and selects it, as Reveal in Explorer does.
     package func storyRevealInTree(_ relativePath: String) {
         let store = filesStore()
@@ -79,6 +85,24 @@ extension Workspace {
     package var storyActiveRenderer: String? {
         guard let rendering = activeFile?.rendering, rendering.showsRenderer else { return nil }
         return rendering.renderer?.id
+    }
+
+    /// A script's number answer from the active HTML tab's page; nil while no web view shows it.
+    package func storyPageNumber(_ script: String) async -> Double? {
+        guard let page = activeFile?.rendering.memory.current as? WebPageState else { return nil }
+        return await page.storyNumber(script)
+    }
+
+    /// The HTML page of the file tab at this path (the active tab's when nil) is in the window.
+    package func storyPageShown(_ path: String? = nil) -> Bool {
+        let file = path.map { path in tabs.lazy.compactMap(\.file).first { relativePath($0.path) == path } } ?? activeFile
+        return (file?.rendering.memory.current as? WebPageState)?.onScreen == true
+    }
+
+    /// Where the active renderer's column of rows is (Markdown, a notebook): the row at the top
+    /// and how far down it; nil at the top or with no such renderer.
+    package var storyRowPlace: (row: Int, into: CGFloat)? {
+        (activeFile?.rendering.memory.current as? PlacedRenderer)?.place.current
     }
 
     /// Quick open's file list is showing (⌘P).

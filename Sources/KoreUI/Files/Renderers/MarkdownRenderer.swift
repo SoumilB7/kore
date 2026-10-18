@@ -16,10 +16,27 @@ enum MarkdownRenderer: FileRenderer {
     }
 }
 
+/// A Markdown tab's file as last read, and where the reader was in it.
+@MainActor final class MarkdownState: PlacedRenderer {
+    var segments: (token: Int, value: [MarkdownSegment])?
+    let place = RowPlace()
+}
+
 private struct MarkdownFileView: View {
     let file: FileInfo
     let context: RendererContext
-    @StateObject private var loaded = Local<Loaded<[MarkdownSegment]>>(.loading)
+    private let state: MarkdownState
+    @StateObject private var loaded: Local<Loaded<[MarkdownSegment]>>
+
+    init(file: FileInfo, context: RendererContext) {
+        self.file = file
+        self.context = context
+        let state = context.memory.state { MarkdownState() }
+        self.state = state
+        // Read already for this revision: shown at once, at its place.
+        let kept = state.segments.flatMap { $0.token == context.reloadToken ? $0.value : nil }
+        _loaded = StateObject(wrappedValue: Local(kept.map { .ready($0) } ?? .loading))
+    }
 
     var body: some View {
         Group {
@@ -28,13 +45,16 @@ private struct MarkdownFileView: View {
             case .tooLarge: RendererState.tooLarge(file, context: context)
             case .failed(let reason): RendererState.cantRender(file, reason: reason, context: context, hasRaw: true)
             case .ready(let segments):
-                ScrollView {
+                PlacedRows(place: state.place) {
                     LazyVStack(alignment: .leading, spacing: Markdown.blockGap) {
                         ForEach(segments) { segment in
-                            switch segment.kind {
-                            case .text(let text): MarkdownView(text: text)
-                            case .image(let source, let alt): MarkdownImage(source: source, alt: alt, base: base)
+                            Group {
+                                switch segment.kind {
+                                case .text(let text): MarkdownView(text: text)
+                                case .image(let source, let alt): MarkdownImage(source: source, alt: alt, base: base)
+                                }
                             }
+                            .placedRow(segment.id, in: state.place)
                         }
                     }
                     .padding(.horizontal, ChatColumn.window.padding)
@@ -46,7 +66,9 @@ private struct MarkdownFileView: View {
                 .environment(\.openURL, OpenURLAction(handler: open))
             }
         }
-        .task(id: context.reloadToken) { await load() }
+        .task(id: context.reloadToken) {
+            if state.segments?.token != context.reloadToken { await load() }
+        }
     }
 
     private var base: URL { file.url.deletingLastPathComponent() }
@@ -59,6 +81,7 @@ private struct MarkdownFileView: View {
         do {
             let text = try await readText(file.url)
             let segments = await Task.detached { MarkdownSegment.split(text) }.value
+            state.segments = (context.reloadToken, segments)
             loaded.value = .ready(segments)
             RenderTiming.ready(MarkdownRenderer.id)
         } catch {

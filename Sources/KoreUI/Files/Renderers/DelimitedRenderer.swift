@@ -26,7 +26,9 @@ private struct DelimitedView: View {
             case .loading: RendererLoading()
             case .tooLarge: RendererState.tooLarge(file, context: context)
             case .failed(let reason): RendererState.cantRender(file, reason: reason, context: context, hasRaw: true)
-            case .ready(let table): GridRepresentable(table: table, zoom: context.zoom, setFacts: context.setFacts)
+            case .ready(let table):
+                GridRepresentable(
+                    table: table, zoom: context.zoom, place: context.memory.state { CanvasPlace() }, setFacts: context.setFacts)
             }
         }
         .task(id: context.reloadToken) { await load() }
@@ -57,14 +59,22 @@ private struct DelimitedView: View {
 private struct GridRepresentable: NSViewRepresentable {
     let table: DelimitedTable
     let zoom: CGFloat
+    let place: CanvasPlace
     let setFacts: ([String]) -> Void
+
+    func makeCoordinator() -> CanvasPlace { place }
 
     func makeNSView(context: Context) -> CanvasScrollView {
         let grid = GridCanvas()
         let scroll = CanvasScrollView(canvas: grid)
         grid.installParts(in: scroll)
         update(grid)
+        scroll.restore = place.origin
         return scroll
+    }
+
+    static func dismantleNSView(_ scroll: CanvasScrollView, coordinator: CanvasPlace) {
+        coordinator.origin = scroll.visible.origin
     }
 
     func updateNSView(_ scroll: CanvasScrollView, context: Context) {

@@ -52,6 +52,8 @@ final class ImageEditor: Identifiable {
 
     @ObservationIgnored weak var scrollView: ImageScrollView?
     @ObservationIgnored weak var canvas: ImageCanvasView?
+    /// The zoom and middle to show at first, instead of fitting (a tab shown again).
+    @ObservationIgnored var restore: ImageScrollView.Place?
 
     init?(_ attachment: Attachment, pending: Bool) {
         guard let image = attachment.url.flatMap(NSImage.init(contentsOf:)) ?? attachment.thumbnail,
@@ -348,7 +350,27 @@ final class ImageScrollView: NSScrollView {
 
     override func layout() {
         super.layout()
-        if fitting { fit() }
+        if let place = editor.restore, bounds.width > 0, bounds.height > 0 {
+            editor.restore = nil
+            setZoom(place.zoom)
+            let size = contentView.bounds.size
+            let origin = NSPoint(x: place.middle.x - size.width / 2, y: place.middle.y - size.height / 2)
+            contentView.scroll(to: contentView.constrainBoundsRect(NSRect(origin: origin, size: size)).origin)
+            reflectScrolledClipView(contentView)
+        } else if fitting {
+            fit()
+        }
+    }
+
+    struct Place {
+        let zoom: CGFloat
+        /// The point in the middle of the view, in the image.
+        let middle: NSPoint
+    }
+
+    /// The zoom and what's in the middle; nil while it fits the image.
+    var place: Place? {
+        fitting ? nil : Place(zoom: magnification, middle: NSPoint(x: contentView.bounds.midX, y: contentView.bounds.midY))
     }
 
     /// Whole image visible, never enlarged past actual size.

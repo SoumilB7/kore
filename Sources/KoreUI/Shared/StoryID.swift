@@ -203,6 +203,8 @@ extension StoryID {
         }
 
         package static let rendererToggle = StoryID(.editor, "renderer").part(.toggle)
+        /// A renderer's column of rows (Markdown, a notebook).
+        package static let rows = StoryID(.editor, "rows")
     }
 
     package enum QuickOpen {
@@ -248,7 +250,7 @@ extension StoryID {
             Editor.Find.field, Editor.Find.replaceField, Editor.Find.next, Editor.Find.previous, Editor.Find.close,
             Editor.Find.toggleReplace, Editor.Find.replace, Editor.Find.replaceAll, Editor.Find.ticks,
             Editor.Status.indent, Editor.Status.lineEndings, Editor.Status.language,
-            Editor.Notice.reload, Editor.Notice.keep, Editor.Notice.compare, Editor.rendererToggle,
+            Editor.Notice.reload, Editor.Notice.keep, Editor.Notice.compare, Editor.rendererToggle, Editor.rows,
             QuickOpen.field, Search.field, Search.include, Search.exclude, Changes.done, Viewer.close, Viewer.add,
         ]
         let keyed: [StoryID] = [

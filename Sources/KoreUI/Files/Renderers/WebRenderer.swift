@@ -5,7 +5,8 @@ import WebKit
 
 /// HTML files in a web view with no chrome (look §2): the page keeps its own colours, it may
 /// read files in the folder and nothing from the network, and links to other files open them
-/// in Kore. The web view exists only while its tab shows.
+/// in Kore. The web view stays with its tab while the tab hides (`KeptPages`), so the page comes
+/// back as it was left.
 enum HTMLRenderer: FileRenderer {
     static let id = "html"
     static let hasRaw = true
@@ -36,25 +37,26 @@ private struct HTMLView: View {
     let file: FileInfo
     let context: RendererContext
     @StateObject private var blocked = Local(false)
-    @StateObject private var rules = Local<WKContentRuleList?>(nil)
+    @StateObject private var rules = Local<WKContentRuleList?>(OfflineRules.compiled)
 
     var body: some View {
+        let page = context.memory.state { WebPageState() }
         VStack(spacing: 0) {
-            if blocked.value {
+            if blocked.value || page.blocked {
                 RendererNotice(message: "Remote content was blocked.", point: Theme.secondary)
             }
             if file.size > Limit.renderBytes {
                 RendererState.tooLarge(file, context: context)
             } else if let rules = rules.value {
                 WebPage(
-                    url: file.url, folder: context.folder, rules: rules, reloadToken: context.reloadToken,
+                    page: page, url: file.url, folder: context.folder, rules: rules, reloadToken: context.reloadToken,
                     openFile: context.openURL, blocked: { blocked.value = true })
             } else {
                 RendererLoading()
             }
         }
         .task {
-            rules.value = await OfflineRules.shared()
+            if rules.value == nil { rules.value = await OfflineRules.shared() }
             RenderTiming.ready(HTMLRenderer.id)
         }
     }
@@ -62,7 +64,7 @@ private struct HTMLView: View {
 
 /// Blocks every load that isn't a file: the page can't reach the network.
 @MainActor enum OfflineRules {
-    private static var compiled: WKContentRuleList?
+    private(set) static var compiled: WKContentRuleList?
 
     static func shared() async -> WKContentRuleList? {
         if let compiled { return compiled }
@@ -80,7 +82,130 @@ private struct HTMLView: View {
     }
 }
 
+/// The web views of the HTML tabs shown last, kept while their tabs hide, so a page comes back
+/// with its scroll, zoom, anchor, form and script state. Each holds a web content process (a
+/// plain page's is about 12 MB while hidden, 20 to 30 MB on screen), so past `limit` the one
+/// unseen longest is let go and keeps only where it was, to go back to when it loads again.
+@MainActor package enum KeptPages {
+    package static let limit = 4
+    private static var recent: [Weak] = []
+
+    private struct Weak {
+        weak var page: WebPageState?
+    }
+
+    /// The page shows: the most recent now.
+    static func use(_ page: WebPageState) {
+        if recent.last?.page === page { return }
+        recent.removeAll { $0.page == nil || $0.page === page }
+        recent.append(Weak(page: page))
+        // The oldest that isn't on screen (another window can show one).
+        while recent.count > limit, let index = recent.firstIndex(where: { $0.page?.onScreen == false }) {
+            recent.remove(at: index).page?.release()
+        }
+    }
+}
+
+/// An HTML tab's page, kept with the tab: its web view while it's among `KeptPages`, else where
+/// it was, so a new web view goes back there once the page loads.
+@MainActor final class WebPageState {
+    fileprivate private(set) var view: WKWebView?
+    fileprivate let delegate = WebPage.Delegate()
+    private var loaded: (url: URL, token: Int)?
+    /// Where to go once the page loads: the page as it was before a reload, or before its web
+    /// view was let go.
+    fileprivate var restore: Place?
+    /// The page asked for something remote (the notice).
+    var blocked = false
+
+    fileprivate struct Place {
+        var url: URL?
+        var scroll: CGPoint
+        var magnification: CGFloat
+    }
+
+    init() { delegate.state = self }
+
+    var onScreen: Bool { view?.window != nil }
+
+    /// The web view for the page, made or kept, and loaded when it's new or the file changed.
+    fileprivate func show(_ page: WebPage) -> WKWebView {
+        delegate.update(page)
+        let view = self.view ?? make(page)
+        KeptPages.use(self)
+        if loaded?.url != page.url || loaded?.token != page.reloadToken {
+            let changed = loaded?.url == page.url
+            loaded = (page.url, page.reloadToken)
+            if changed {
+                // The file changed on disk: the new page, at the same place.
+                let magnification = view.magnification
+                view.evaluateJavaScript(Self.whereScript) { [weak self, weak view] result, _ in
+                    guard let self, let view, self.view === view else { return }
+                    self.restore = Place(url: nil, scroll: Self.point(result), magnification: magnification)
+                    view.loadFileURL(page.url, allowingReadAccessTo: page.readable)
+                }
+            } else {
+                // The page's anchor too, when its web view was let go on it.
+                let url = restore?.url.flatMap { $0.path == page.url.path ? $0 : nil } ?? page.url
+                view.loadFileURL(url, allowingReadAccessTo: page.readable)
+            }
+        }
+        return view
+    }
+
+    private func make(_ page: WebPage) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        // A private store: nothing the page keeps outlives the tab.
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController.add(page.rules)
+        configuration.userContentController.add(delegate, name: "kore")
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: WebPage.remoteProbe, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.navigationDelegate = delegate
+        view.allowsMagnification = true
+        view.autoresizingMask = [.width, .height]
+        self.view = view
+        return view
+    }
+
+    /// The page loaded: back to where it was.
+    fileprivate func finished(_ view: WKWebView) {
+        guard let place = restore, view === self.view else { return }
+        restore = nil
+        if place.magnification != 1 { view.magnification = place.magnification }
+        view.evaluateJavaScript("window.scrollTo(\(place.scroll.x), \(place.scroll.y))")
+    }
+
+    /// Lets the web view go, keeping where its page was.
+    fileprivate func release() {
+        guard let view else { return }
+        self.view = nil
+        loaded = nil
+        let (url, magnification) = (view.url, view.magnification)
+        view.evaluateJavaScript(Self.whereScript) { [weak self] result, _ in
+            if let self, self.view == nil { self.restore = Place(url: url, scroll: Self.point(result), magnification: magnification) }
+            view.configuration.userContentController.removeAllScriptMessageHandlers()
+            view.stopLoading()
+        }
+    }
+
+    private static let whereScript = "[window.scrollX, window.scrollY]"
+
+    private static func point(_ result: Any?) -> CGPoint {
+        guard let numbers = result as? [NSNumber], numbers.count == 2 else { return .zero }
+        return CGPoint(x: numbers[0].doubleValue, y: numbers[1].doubleValue)
+    }
+
+    /// A script's number answer from the page while it shows, for storylines.
+    func storyNumber(_ script: String) async -> Double? {
+        guard let view, view.window != nil else { return nil }
+        return (try? await view.evaluateJavaScript(script) as? NSNumber)?.doubleValue
+    }
+}
+
 private struct WebPage: NSViewRepresentable {
+    let page: WebPageState
     let url: URL
     let folder: URL
     let rules: WKContentRuleList
@@ -88,47 +213,41 @@ private struct WebPage: NSViewRepresentable {
     let openFile: (URL) -> Void
     let blocked: () -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
     /// What the page may read: the window's folder, or the page's own when it's outside it (a
     /// page a chat linked to).
-    private var readable: URL {
+    var readable: URL {
         let root = realPath(folder.path), page = realPath(url.path)
         return page.hasPrefix(root + "/") ? folder : url.deletingLastPathComponent()
     }
 
-    func makeNSView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        // A private store: nothing the page keeps outlives the tab.
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.userContentController.add(rules)
-        configuration.userContentController.add(context.coordinator, name: "kore")
-        configuration.userContentController.addUserScript(WKUserScript(
-            source: Self.remoteProbe, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        let view = WKWebView(frame: .zero, configuration: configuration)
-        view.navigationDelegate = context.coordinator
-        view.allowsMagnification = true
-        context.coordinator.update(self)
-        view.loadFileURL(url, allowingReadAccessTo: readable)
-        context.coordinator.loaded = (url, reloadToken)
-        return view
+    /// The kept web view goes into a container of the tab's own, as the editor's text does.
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView()
+        place(in: container)
+        return container
     }
 
-    func updateNSView(_ view: WKWebView, context: Context) {
-        context.coordinator.update(self)
-        if context.coordinator.loaded?.url != url || context.coordinator.loaded?.token != reloadToken {
-            view.loadFileURL(url, allowingReadAccessTo: readable)
-            context.coordinator.loaded = (url, reloadToken)
+    func updateNSView(_ container: NSView, context: Context) { place(in: container) }
+
+    /// The tab hid: its web view comes out of the window and stays with the tab, holding
+    /// nothing of the window's (its actions hold the workspace, which holds the tab).
+    static func dismantleNSView(_ container: NSView, coordinator: ()) {
+        for view in container.subviews {
+            (view as? WKWebView).flatMap { $0.navigationDelegate as? Delegate }?.detach()
+            view.removeFromSuperview()
         }
     }
 
-    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
-        view.configuration.userContentController.removeAllScriptMessageHandlers()
-        view.stopLoading()
+    private func place(in container: NSView) {
+        let view = page.show(self)
+        guard view.superview !== container else { return }
+        view.removeFromSuperview()
+        view.frame = container.bounds
+        container.addSubview(view)
     }
 
     /// Tells Kore when the page asked for anything remote (the rules already blocked it).
-    private static let remoteProbe = """
+    static let remoteProbe = """
         (() => {
           const remote = /^(https?:)?\\/\\//i;
           const asked = [...document.querySelectorAll('[src],[srcset],link[href],[poster],object[data]')].some(e =>
@@ -140,8 +259,8 @@ private struct WebPage: NSViewRepresentable {
         })();
         """
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-        var loaded: (url: URL, token: Int)?
+    final class Delegate: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        weak var state: WebPageState?
         private var page: URL?
         private var folder: URL?
         private var openFile: (URL) -> Void = { _ in }
@@ -154,9 +273,15 @@ private struct WebPage: NSViewRepresentable {
             blocked = view.blocked
         }
 
+        func detach() {
+            openFile = { _ in }
+            blocked = {}
+        }
+
         /// KORE_WEB_SNAPSHOT=<png>: the page as WebKit drew it, once loaded (the window snapshot
         /// can't see into the web view's process).
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            MainActor.assumeIsolated { state?.finished(webView) }
             guard let path = ProcessInfo.processInfo.environment["KORE_WEB_SNAPSHOT"] else { return }
             MainActor.assumeIsolated {
                 webView.takeSnapshot(with: nil) { image, _ in
@@ -167,7 +292,10 @@ private struct WebPage: NSViewRepresentable {
         }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-            MainActor.assumeIsolated { blocked() }
+            MainActor.assumeIsolated {
+                state?.blocked = true
+                blocked()
+            }
         }
 
         /// The page itself loads; a link to another file in the folder opens in Kore, a web link

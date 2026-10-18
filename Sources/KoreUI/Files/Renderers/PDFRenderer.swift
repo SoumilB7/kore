@@ -44,8 +44,8 @@ struct PDFFileView: View {
     }
 }
 
-/// Where a PDF was left, so its tab comes back to the same page and zoom.
-@MainActor private var places: [URL: (page: Int, scale: CGFloat?, thumbnails: Bool)] = [:]
+/// Where a PDF was left, so its tab comes back to the same page, the same place on it, and zoom.
+@MainActor private var places: [URL: (page: Int, point: CGPoint?, scale: CGFloat?, thumbnails: Bool)] = [:]
 
 @MainActor @Observable
 final class PDFModel {
@@ -57,7 +57,7 @@ final class PDFModel {
     private(set) var scale: CGFloat = 1
     var thumbnails = false
     var find = PDFFind()
-    @ObservationIgnored let view = PDFView()
+    @ObservationIgnored let view = PlacedPDFView()
     @ObservationIgnored nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
 
     init(url: URL) {
@@ -103,7 +103,8 @@ final class PDFModel {
             return
         }
         let place = places[url]
-        let page = document === self.document ? self.page : (place?.page ?? 0)
+        // A reload stays where the view is; a tab shown again goes back to where it was left.
+        let (page, point) = self.document == nil ? (place?.page ?? 0, place?.point) : (self.page, destination)
         failed = false
         self.document = document
         pageCount = document.pageCount
@@ -115,7 +116,10 @@ final class PDFModel {
         } else {
             view.autoScales = true
         }
-        if let target = document.page(at: min(page, max(document.pageCount - 1, 0))) { view.go(to: target) }
+        if let target = document.page(at: min(page, max(document.pageCount - 1, 0))) {
+            view.go(to: target)
+            if let point { view.place(PDFDestination(page: target, at: point)) }
+        }
         track()
         find.search()
     }
@@ -123,7 +127,12 @@ final class PDFModel {
     /// Leaving the screen: stop any find, remember the place.
     func leave() {
         find.cancel()
-        places[url] = (page, view.autoScales ? nil : view.scaleFactor, thumbnails)
+        places[url] = (page, destination, view.autoScales ? nil : view.scaleFactor, thumbnails)
+    }
+
+    /// The point at the top of the view on the current page.
+    private var destination: CGPoint? {
+        view.currentDestination.flatMap { $0.page === view.currentPage ? $0.point : nil }
     }
 
     private func track() {
@@ -150,6 +159,24 @@ final class PDFModel {
     func actualSize() { view.scaleFactor = 1 }
 
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+}
+
+/// Goes to a place on a page once it's laid out in the window: before, PDFKit can only show
+/// the page from its top.
+final class PlacedPDFView: PDFView {
+    private var pending: PDFDestination?
+
+    func place(_ destination: PDFDestination) {
+        pending = destination
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        guard let pending, window != nil, bounds.height > 0 else { return }
+        self.pending = nil
+        go(to: pending)
+    }
 }
 
 /// PDFDocument isn't Sendable; it's made on a background thread and handed over once.

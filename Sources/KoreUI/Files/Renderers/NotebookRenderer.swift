@@ -106,10 +106,17 @@ struct Notebook: Sendable {
     }
 }
 
+/// Where the reader was in a notebook tab. The notebook itself is read again (its outputs can
+/// hold megabytes of images).
+@MainActor final class NotebookState: PlacedRenderer {
+    let place = RowPlace()
+}
+
 private struct NotebookView: View {
     let file: FileInfo
     let context: RendererContext
     @StateObject private var loaded = Local<Loaded<Notebook>>(.loading)
+    private var state: NotebookState { context.memory.state { NotebookState() } }
 
     var body: some View {
         Group {
@@ -118,10 +125,11 @@ private struct NotebookView: View {
             case .tooLarge: RendererState.tooLarge(file, context: context)
             case .failed(let reason): RendererState.cantRender(file, reason: reason, context: context, hasRaw: true)
             case .ready(let notebook):
-                ScrollView {
+                PlacedRows(place: state.place) {
                     LazyVStack(alignment: .leading, spacing: Layout.Renderer.cellGap) {
                         ForEach(notebook.cells) { cell in
                             NotebookCellView(cell: cell, language: notebook.language)
+                                .placedRow(cell.id, in: state.place)
                         }
                     }
                     .padding(.horizontal, ChatColumn.window.padding)

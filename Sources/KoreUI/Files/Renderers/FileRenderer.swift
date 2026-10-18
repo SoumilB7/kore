@@ -66,6 +66,8 @@ struct RendererContext {
     /// Links to other files open them in Kore tabs (a preview tab).
     var openURL: (URL) -> Void
     var zoom: CGFloat
+    /// What the renderer keeps with its tab while the tab hides.
+    var memory: RendererMemory
     /// The rendered file's facts for the status row ("1,204 rows · 12 columns · Comma").
     var setFacts: ([String]) -> Void = { _ in }
     /// The file couldn't be parsed: a renderer with a raw form opens the source with a notice
@@ -75,6 +77,23 @@ struct RendererContext {
     var showSource: () -> Void = {}
     /// Switches to the editor with the file as plain text, past the editor's size limit.
     var openAsText: () -> Void = {}
+}
+
+/// What a renderer keeps with its tab, since its view is made again each time the tab shows:
+/// where the reader was, and whatever makes coming back quick. One renderer's at a time.
+@MainActor final class RendererMemory {
+    private var kept: AnyObject?
+
+    /// The renderer's own state, made the first time; another renderer's is let go.
+    func state<State: AnyObject>(_ make: () -> State) -> State {
+        if let kept = kept as? State { return kept }
+        let made = make()
+        kept = made
+        return made
+    }
+
+    /// The kept state, as a storyline reads it.
+    var current: AnyObject? { kept }
 }
 
 /// The renderers, in priority order: the first match owns the file.
@@ -114,6 +133,7 @@ final class FileRendering {
     var facts: [String] = []
     /// Why the renderer gave the file to the editor, shown over it.
     var failure: Failure?
+    @ObservationIgnored let memory = RendererMemory()
 
     struct Failure: Equatable {
         let reason: String

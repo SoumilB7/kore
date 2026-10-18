@@ -10,6 +10,7 @@ struct ImageFileView: View {
     @StateObject private var editor = Local<ImageEditor?>(nil)
     @StateObject private var failed = Local(false)
     @FocusedValue(\.workspace) private var workspace
+    private var state: ImageState { context.memory.state { ImageState() } }
 
     var body: some View {
         ZStack {
@@ -39,6 +40,7 @@ struct ImageFileView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
+        .onDisappear { if let editor = editor.value { state.leave(editor, token: context.reloadToken) } }
         .task(id: context.reloadToken) {
             let url = url
             let loaded = await Task.detached(priority: .userInitiated) { LoadedImage(ImageEditor.load(url)) }.value
@@ -48,7 +50,9 @@ struct ImageFileView: View {
             }
             failed.value = false
             // A reload drops markup: it was drawn on the old picture.
-            editor.value = ImageEditor(image: image, file: url)
+            let made = ImageEditor(image: image, file: url)
+            state.back(made, token: context.reloadToken)
+            editor.value = made
             RenderTiming.ready(ImageRenderer.id)
             context.setFacts(Self.facts(image, url: url, size: file.size))
         }
@@ -110,6 +114,24 @@ struct ImageFileView: View {
             return true
         }
         return false
+    }
+}
+
+/// An image tab's markup, pen and zoom while the tab hides; the picture is read again.
+@MainActor final class ImageState {
+    private var left: (token: Int, strokes: [ImageEditor.Stroke], pen: Bool, color: ImageEditor.PenColor, place: ImageScrollView.Place?)?
+
+    func leave(_ editor: ImageEditor, token: Int) {
+        left = (token, editor.strokes, editor.penOn, editor.color, editor.scrollView?.place)
+    }
+
+    /// The editor made for the tab shown again: as it was left, unless the file changed since.
+    func back(_ editor: ImageEditor, token: Int) {
+        guard let left, left.token == token else { return }
+        editor.strokes = left.strokes
+        editor.penOn = left.pen
+        editor.color = left.color
+        editor.restore = left.place
     }
 }
 

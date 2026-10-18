@@ -30,10 +30,17 @@ final class CanvasScrollView: NSScrollView {
         didSet { fit() }
     }
 
+    /// Where to scroll once laid out (a tab shown again).
+    var restore: NSPoint?
+
     override func tile() {
         super.tile()
         fit()
         canvas.documentResized(canvas.frame.size)
+        if let point = restore, contentView.bounds.height > 0 {
+            restore = nil
+            scroll(to: point)
+        }
     }
 
     private func fit() {
@@ -67,6 +74,14 @@ final class CanvasScrollView: NSScrollView {
         if rect.maxY > origin.y + size.height { origin.y = rect.maxY - size.height }
         if origin != visible.origin { scroll(to: origin) }
     }
+}
+
+/// Where a grid, tree or hex tab was left, while the tab hides: the scroll, and a tree's open
+/// rows. The file is read again.
+@MainActor final class CanvasPlace {
+    var origin: NSPoint?
+    /// The tree's open and selected nodes, for a file of this many nodes.
+    var tree: (nodes: Int, expanded: Set<Int>, selected: Int?)?
 }
 
 /// A `CanvasScrollView`'s document: points are document points. It draws no ground of its own

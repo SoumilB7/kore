@@ -9,7 +9,9 @@ struct HexView: View {
     let context: RendererContext
 
     var body: some View {
-        HexCanvas(url: file.url, reloadToken: context.reloadToken, zoom: context.zoom) { context.setFacts($0.items) }
+        HexCanvas(url: file.url, reloadToken: context.reloadToken, zoom: context.zoom, place: context.memory.state { CanvasPlace() }) {
+            context.setFacts($0.items)
+        }
             .background(Theme.background)
     }
 }
@@ -31,6 +33,7 @@ private struct HexCanvas: NSViewRepresentable {
     let url: URL
     let reloadToken: Int
     let zoom: CGFloat
+    let place: CanvasPlace
     let report: (HexStatus) -> Void
 
     /// The scroll view scrolls an empty spacer as tall as the rows; the drawing view sits over
@@ -51,6 +54,8 @@ private struct HexCanvas: NSViewRepresentable {
         view.attach(to: scroll)
         context.coordinator.view = view
         context.coordinator.token = reloadToken
+        context.coordinator.place = place
+        scroll.restore = place.origin
         return scroll
     }
 
@@ -64,6 +69,7 @@ private struct HexCanvas: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        coordinator.place?.origin = scroll.contentView.bounds.origin
         coordinator.view?.close()
     }
 
@@ -72,6 +78,7 @@ private struct HexCanvas: NSViewRepresentable {
     final class Coordinator {
         var token = 0
         var view: HexDocumentView?
+        var place: CanvasPlace?
     }
 }
 
@@ -166,10 +173,18 @@ private final class HexPages {
 /// Lays the drawing view over the clip view (an NSScrollView sizes only its own parts).
 private final class HexScrollView: NSScrollView {
     weak var viewport: HexDocumentView?
+    /// Where to scroll once laid out (a tab shown again).
+    var restore: NSPoint?
 
     override func tile() {
         super.tile()
         viewport?.fit(contentView.frame)
+        if let point = restore, contentView.bounds.height > 0, let document = documentView {
+            restore = nil
+            let y = min(max(point.y, 0), max(0, document.frame.height - contentView.bounds.height))
+            contentView.scroll(to: NSPoint(x: 0, y: y))
+            reflectScrolledClipView(contentView)
+        }
     }
 }
 
