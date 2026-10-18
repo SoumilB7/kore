@@ -3,7 +3,7 @@ import Foundation
 /// What a run of source text is, for colouring.
 public enum TokenKind: UInt8, Sendable, CaseIterable {
     case keyword, string, number, comment, type, function, property, attribute, constant
-    case heading, link, emphasis, code, tag
+    case heading, link, emphasis, code, tag, punctuation
 }
 
 /// A language as the editor colours it: a small scanner per family (code, markdown, markup,
@@ -209,10 +209,16 @@ extension Language {
                 i = end
                 continue
             }
+            if Self.punctuation.contains(c) { emit(i, i + 1, .punctuation) }
             i += 1
         }
         return .normal
     }
+
+    /// Brackets, commas, dots, colons and semicolons.
+    private static let punctuation: Set<UInt16> = [
+        .parenOpen, .parenClose, .bracketOpen, .bracketClose, .braceOpen, .braceClose, .comma, .dot, .colon, .semicolon,
+    ]
 
     private func wordKind(_ s: [UInt16], _ a: Int, _ b: Int) -> TokenKind? {
         var word = String(utf16CodeUnits: Array(s[a..<b]), count: b - a)
@@ -254,18 +260,18 @@ extension Language {
             }
         }
         if i < n, s[i] == .greater {
-            emit(0, n, .comment)
+            emit(i, i + 1, .punctuation)
             return .normal
         }
         // List markers.
         if i + 1 < n, s[i] == .dash || s[i] == .star || s[i] == .plus, s[i + 1] == .space {
-            emit(i, i + 1, .keyword)
+            emit(i, i + 1, .punctuation)
             i += 2
         } else {
             var digits = i
             while digits < n, isDigit(s[digits]) { digits += 1 }
             if digits > i, digits + 1 < n, s[digits] == .dot, s[digits + 1] == .space {
-                emit(i, digits + 1, .keyword)
+                emit(i, digits + 1, .punctuation)
                 i = digits + 2
             }
         }

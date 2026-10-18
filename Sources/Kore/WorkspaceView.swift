@@ -8,7 +8,9 @@ struct WorkspaceView: View {
 
     var body: some View {
         let tab = workspace.activeTab
-        if let chat = tab.chat, let agent = tab.agent {
+        if let file = tab.file {
+            FileEditorView(document: file, tab: tab, workspace: workspace).id(file.id)
+        } else if let chat = tab.chat, let agent = tab.agent {
             AgentTabView(chat: chat, id: agent, workspace: workspace).id(tab.id)
         } else if let chat = tab.chat {
             ChatView(chat: chat) { workspace.openAgent($0, of: chat) }.id(chat.id)
@@ -27,6 +29,8 @@ struct TabBar: View {
     let height: CGFloat
     /// Room for the traffic lights; little in full screen, where they're hidden.
     let leadingInset: CGFloat
+    /// The docked explorer's width: tabs start past it, over the content they switch.
+    let explorerDock: CGFloat?
     @Binding var historyOpen: Bool
     @Binding var clockFrame: CGRect
     private let tabHeight: CGFloat = 30
@@ -40,6 +44,10 @@ struct TabBar: View {
 
     var body: some View {
         HStack(spacing: Size.tabGap) {
+            ExplorerButton(workspace: workspace, size: tabHeight)
+            if let explorerDock {
+                Color.clear.frame(width: max(0, explorerDock + Space.md - leadingInset - tabHeight - 2 * Size.tabGap), height: 0)
+            }
             ScrollViewReader { scroller in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Size.tabGap) {
@@ -90,7 +98,31 @@ private struct TabItem: View {
     @StateObject private var renaming = Local(false)
     @StateObject private var newName = Local("")
 
+    @StateObject private var closeHovered = Local(false)
+
     private var isActive: Bool { workspace.activeID == tab.id }
+    private var dirty: Bool { tab.file?.isDirty == true }
+
+    private var help: String {
+        if let file = tab.file { return file.notice == .deleted ? "Deleted on disk" : file.path }
+        return tab.agent != nil ? "Sub-agent of “\(tab.chat?.title ?? "")”" : tab.title
+    }
+
+    /// When file tabs share a name, each shows the nearest folder that tells it apart from
+    /// the others: "phase-08-work-view", or "…/phase-08" when the folders between are shared.
+    private var duplicateParent: String? {
+        guard let file = tab.file else { return nil }
+        let others = workspace.tabs.compactMap { other -> [String]? in
+            guard other.id != tab.id, let path = other.file?.path, other.file?.name == file.name, path != file.path else { return nil }
+            return Array((path as NSString).deletingLastPathComponent.split(separator: "/").map(String.init).reversed())
+        }
+        guard !others.isEmpty else { return nil }
+        let mine = Array((file.path as NSString).deletingLastPathComponent.split(separator: "/").map(String.init).reversed())
+        for (depth, folder) in mine.enumerated() where others.allSatisfy({ depth >= $0.count || $0[depth] != folder }) {
+            return depth == 0 ? folder : "…/" + folder
+        }
+        return mine.first
+    }
 
     var body: some View {
         // Two sibling buttons (select, close) rather than tap gestures: plain clicks, nothing
@@ -100,7 +132,9 @@ private struct TabItem: View {
                 workspace.select(tab)
             } label: {
                 HStack(spacing: Space.md) {
-                    if let chat = tab.chat, let agent = tab.agent, let info = chat.transcript.agent(agent) {
+                    if let file = tab.file {
+                        FileIconView(name: file.name, color: isActive ? Theme.text : Theme.secondary)
+                    } else if let chat = tab.chat, let agent = tab.agent, let info = chat.transcript.agent(agent) {
                         AgentAvatar(index: info.index, name: info.name, status: info.status, place: .tab)
                     } else if let chat = tab.chat {
                         if chat.status.isRunning {
@@ -110,9 +144,13 @@ private struct TabItem: View {
                         }
                     }
                     Text(tab.title)
-                        .font(Chrome.body)
+                        .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
                         .foregroundStyle(isActive ? Theme.text : Theme.secondary)
+                        .strikethrough(tab.file?.notice == .deleted)
                         .lineLimit(1)
+                    if let parent = duplicateParent {
+                        Text(parent).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
+                    }
                     Spacer(minLength: 0)
                 }
                 .padding(.leading, Space.xl)
@@ -120,17 +158,28 @@ private struct TabItem: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture(count: 2).onEnded { workspace.keep(tab) })
             Button {
                 workspace.close(tab)
             } label: {
-                Image(systemName: "xmark")
-                    .font(Chrome.glyphClose)
-                    .foregroundStyle(Theme.secondary)
-                    .frame(width: Size.closeGlyph, height: Size.closeGlyph)
-                    .contentShape(Rectangle())
+                Group {
+                    if dirty && !closeHovered.value {
+                        // VS Code's dirty dot, turning back into the × under the pointer.
+                        Circle()
+                            .fill(isActive ? Theme.text : Theme.secondary)
+                            .frame(width: Size.Editor.tabDirty, height: Size.Editor.tabDirty)
+                    } else {
+                        Image(systemName: "xmark")
+                            .font(Chrome.glyphClose)
+                            .foregroundStyle(Theme.secondary)
+                    }
+                }
+                .frame(width: Size.closeGlyph, height: Size.closeGlyph)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .opacity(hovered.value || isActive ? 1 : 0)
+            .onHover { closeHovered.value = $0 }
+            .opacity(hovered.value || isActive || dirty ? 1 : 0)
             .help("Close tab")
             .padding(.trailing, Space.sm)
         }
@@ -141,7 +190,7 @@ private struct TabItem: View {
             in: RoundedRectangle(cornerRadius: Radius.control)
         )
         .onHover { hovered.value = $0 }
-        .help(tab.agent != nil ? "Sub-agent of “\(tab.chat?.title ?? "")”" : tab.title)
+        .help(help)
         .contextMenu {
             Button("Rename…") { startRename() }.disabled(tab.chat == nil || tab.agent != nil)
             Button("Close Tab") { workspace.close(tab) }

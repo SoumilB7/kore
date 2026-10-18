@@ -29,6 +29,11 @@ struct KoreApp: App {
         .defaultPosition(.center)
         .commands {
             CommandGroup(replacing: .newItem) { FileCommands(app: app) }
+            // SwiftUI has no save slot outside document apps.
+            CommandGroup(after: .newItem) { SaveCommands() }
+            // ⌘P is quick open.
+            CommandGroup(replacing: .printItem) {}
+            CommandGroup(before: .toolbar) { ExplorerCommands() }
             CommandGroup(after: .toolbar) {
                 Button("Zoom In") { Zoom.shared.zoomIn() }.keyboardShortcut("=")
                 Button("Zoom Out") { Zoom.shared.zoomOut() }.keyboardShortcut("-")
@@ -94,5 +99,37 @@ private struct FileCommands: View {
 
         Button("Welcome Window") { openWindow(id: KoreApp.welcomeID) }
             .keyboardShortcut("1", modifiers: [.command, .shift])
+    }
+}
+
+/// Save and go-to for the focused window's file tabs (VS Code's keys).
+private struct SaveCommands: View {
+    @FocusedValue(\.workspace) private var workspace
+
+    var body: some View {
+        Button("Save") { workspace?.activeFile?.save() }
+            .keyboardShortcut("s")
+            .disabled(workspace?.activeFile?.isText != true)
+        Button("Save All") { workspace?.saveAll() }
+            .keyboardShortcut("s", modifiers: [.command, .option])
+            .disabled(workspace?.hasUnsavedFiles != true)
+        Divider()
+        Button("Go to File…") { workspace?.quickOpen = .files }
+            .keyboardShortcut("p")
+            .disabled(workspace == nil)
+        Button("Go to Line…") { workspace?.quickOpen = .line }
+            .keyboardShortcut("g", modifiers: .control)
+            .disabled(workspace?.activeFile?.isText != true)
+    }
+}
+
+private struct ExplorerCommands: View {
+    @FocusedValue(\.workspace) private var workspace
+
+    var body: some View {
+        Button(workspace?.explorerOpen == true ? "Hide Explorer" : "Show Explorer") { workspace?.explorerOpen.toggle() }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(workspace == nil)
+        Divider()
     }
 }

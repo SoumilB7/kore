@@ -1,8 +1,9 @@
+import AppKit
 import Foundation
 import KoreCore
 import Observation
 
-/// A tab: empty (provider picker), showing a chat, or showing one of a chat's sub-agents.
+/// A tab: empty (provider picker), showing a chat, one of a chat's sub-agents, or a file.
 /// An agent tab holds its parent's chat and reads its stores, so it can't drift from it.
 @MainActor @Observable
 final class ChatTab: Identifiable {
@@ -10,8 +11,15 @@ final class ChatTab: Identifiable {
     var chat: Chat?
     /// Set for an agent tab: the sub-agent of `chat` it shows.
     var agent: String?
+    /// Set for a file tab.
+    var file: FileDocument?
+    /// A file opened by a single click in the tree: the next one replaces it (italic title).
+    var isPreview = false
+
+    var isEmpty: Bool { chat == nil && file == nil }
 
     var title: String {
+        if let file { return file.name }
         if let agent, let name = chat?.transcript.agent(agent)?.name { return name }
         return chat?.title ?? "New tab"
     }
@@ -29,19 +37,51 @@ final class Workspace {
     private(set) var chats: [SessionSummary] = []
     private(set) var loaded = false
     private var refreshing: Task<Void, Never>?
+    /// The explorer's files; made when the explorer first opens or a file first shows.
+    private(set) var files: FilesStore?
+    var explorerOpen = false {
+        didSet {
+            if explorerOpen { _ = filesStore() }
+            saveExplorer()
+        }
+    }
+    var explorerWidth = Layout.Explorer.width {
+        didSet { saveExplorer() }
+    }
+    /// ⌘P: files, or go to line (⌃G).
+    var quickOpen: QuickOpenMode?
+    /// Files opened, most recent first (quick open's empty state).
+    private(set) var recentFiles: [String] = []
 
     init(folder: URL, restore: Bool = true) {
         self.folder = folder
         let saved = restore ? Self.saved(for: folder) : nil
         var restored = saved?.tabs.map { Self.tab($0, in: folder) } ?? []
+        // A file open twice (saved under two spellings of its path) comes back once.
+        var seen: Set<String> = []
+        restored.removeAll { tab in
+            guard let path = tab.file?.path else { return false }
+            return !seen.insert(path).inserted
+        }
         if restored.isEmpty { restored = [ChatTab()] }
         tabs = restored
         activeID = restored[min(max(saved?.active ?? 0, 0), restored.count - 1)].id
+        if restore, let explorer = Self.savedExplorer(for: folder) {
+            explorerWidth = explorer.width
+            explorerOpen = explorer.open
+        }
+        // Restored file tabs follow the disk too.
+        if tabs.contains(where: { $0.file != nil }) { _ = filesStore() }
     }
 
     var activeTab: ChatTab { tabs.first { $0.id == activeID } ?? tabs[0] }
 
-    func select(_ tab: ChatTab) { activeID = tab.id }
+    func select(_ tab: ChatTab) {
+        activeID = tab.id
+        if let file = tab.file, explorerOpen, let files {
+            Task { await files.reveal(file.path) }
+        }
+    }
 
     func newTab() {
         let tab = ChatTab()
@@ -59,7 +99,7 @@ final class Workspace {
             select(tab)
             return
         }
-        if activeTab.chat != nil { newTab() }
+        if !activeTab.isEmpty { newTab() }
         activeTab.chat = chat(session)
     }
 
@@ -87,6 +127,7 @@ final class Workspace {
     /// closes the view. Closing the last tab leaves a fresh empty one.
     func close(_ tab: ChatTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        if let file = tab.file, file.isDirty, !Self.confirmClose(file) { return }
         if tab.agent == nil, let chat = tab.chat {
             for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
         }
@@ -95,14 +136,134 @@ final class Workspace {
 
     private func remove(_ tab: ChatTab, at index: Int? = nil) {
         guard let index = index ?? tabs.firstIndex(where: { $0.id == tab.id }) else { return }
-        if tab.agent == nil { tab.chat?.close() }
+        if tab.agent == nil, tab.file == nil { tab.chat?.close() }
         tabs.remove(at: index)
         if tabs.isEmpty { tabs = [ChatTab()] }
         if activeID == tab.id { activeID = tabs[min(index, tabs.count - 1)].id }
     }
 
     func closeAll() {
-        for tab in tabs where tab.agent == nil { tab.chat?.close() }
+        for tab in tabs where tab.agent == nil && tab.file == nil { tab.chat?.close() }
+        files?.stop()
+    }
+
+    // MARK: - Files
+
+    func filesStore() -> FilesStore {
+        if let files { return files }
+        let store = FilesStore(folder: folder)
+        store.onChange = { [weak self] paths in self?.diskChanged(paths) }
+        files = store
+        return store
+    }
+
+    /// Shows a file: its tab if open, else the preview tab (single click in the tree) or a
+    /// new tab after the active one.
+    func openFile(_ url: URL, preview: Bool = false) {
+        _ = filesStore()
+        // The real path, as the watcher and the tree see it.
+        let path = realPath(url.path)
+        remember(path)
+        if let tab = tabs.first(where: { $0.file?.path == path }) {
+            if !preview { tab.isPreview = false }
+            select(tab)
+            return
+        }
+        let document = FileDocument(url: URL(fileURLWithPath: path))
+        if preview, let tab = tabs.first(where: { $0.isPreview && $0.file?.isDirty != true }) {
+            tab.file = document
+            select(tab)
+            return
+        }
+        let tab = ChatTab()
+        tab.file = document
+        tab.isPreview = preview
+        if tabs.count == 1, activeTab.isEmpty {
+            // A lone empty tab gives its place to the file.
+            tabs = [tab]
+        } else {
+            let index = tabs.firstIndex { $0.id == activeID } ?? tabs.count - 1
+            tabs.insert(tab, at: index + 1)
+        }
+        select(tab)
+    }
+
+    func keep(_ tab: ChatTab) { tab.isPreview = false }
+
+    /// A file or folder was renamed in the explorer: open files under it follow.
+    func renamed(_ old: String, to new: String) {
+        for tab in tabs {
+            guard let file = tab.file else { continue }
+            if file.path == old {
+                file.moved(to: URL(fileURLWithPath: new))
+            } else if file.path.hasPrefix(old + "/") {
+                file.moved(to: URL(fileURLWithPath: new + file.path.dropFirst(old.count)))
+            }
+        }
+    }
+
+    var activeFile: FileDocument? { activeTab.file }
+
+    /// A path inside the folder, relative to it (resolving /tmp-style links).
+    func relativePath(_ path: String) -> String {
+        for root in [realPath(folder.path), folder.standardizedFileURL.path]
+        where path.hasPrefix(root + "/") {
+            return String(path.dropFirst(root.count + 1))
+        }
+        return path
+    }
+
+    func saveAll() {
+        for tab in tabs { if let file = tab.file, file.isDirty { file.save() } }
+    }
+
+    var hasUnsavedFiles: Bool { tabs.contains { $0.file?.isDirty == true } }
+
+    private func remember(_ path: String) {
+        recentFiles.removeAll { $0 == path }
+        recentFiles.insert(path, at: 0)
+        if recentFiles.count > 20 { recentFiles.removeLast() }
+    }
+
+    private func diskChanged(_ paths: [String]) {
+        let changed = Set(paths)
+        for tab in tabs {
+            guard let file = tab.file else { continue }
+            if changed.contains(file.path) { file.diskChanged() }
+        }
+    }
+
+    /// Save, don't save, or cancel; true when the tab may close.
+    private static func confirmClose(_ file: FileDocument) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Do you want to save the changes you made to \(file.name)?"
+        alert.informativeText = "Your changes will be lost if you don't save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don't Save")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return file.save()
+        case .alertThirdButtonReturn: return true
+        default: return false
+        }
+    }
+
+    private struct ExplorerState: Codable {
+        var open: Bool
+        var width: CGFloat
+    }
+
+    private static let explorerKey = "explorer"
+
+    private func saveExplorer() {
+        var all = UserDefaults.standard.dictionary(forKey: Self.explorerKey) ?? [:]
+        all[folder.standardizedFileURL.path] = try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth))
+        UserDefaults.standard.set(all, forKey: Self.explorerKey)
+    }
+
+    private static func savedExplorer(for folder: URL) -> ExplorerState? {
+        let data = UserDefaults.standard.dictionary(forKey: explorerKey)?[folder.standardizedFileURL.path] as? Data
+        return data.flatMap { try? JSONDecoder().decode(ExplorerState.self, from: $0) }
     }
 
     // MARK: - The folder's chats
@@ -210,17 +371,20 @@ final class Workspace {
             /// nil for a chat with nothing in it yet: it comes back as a fresh chat.
             var session: String?
             var title: String?
+            /// A file tab's path.
+            var file: String?
         }
 
         var tabs: [Tab]
         var active: Int
     }
 
-    /// Agent tabs aren't saved: they come back by opening the agent again.
+    /// Agent tabs and preview tabs aren't saved: they come back by opening them again.
     var saved: Saved {
-        let kept = tabs.filter { $0.agent == nil }
+        let kept = tabs.filter { $0.agent == nil && !$0.isPreview }
         return Saved(
             tabs: kept.map { tab in
+                if let file = tab.file { return Saved.Tab(file: file.path) }
                 guard let chat = tab.chat else { return Saved.Tab() }
                 let resumable = chat.hasConversation ? chat.sessionId : nil
                 return Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title })
@@ -243,6 +407,10 @@ final class Workspace {
 
     private static func tab(_ saved: Saved.Tab, in folder: URL) -> ChatTab {
         let tab = ChatTab()
+        if let file = saved.file {
+            tab.file = FileDocument(url: URL(fileURLWithPath: file))
+            return tab
+        }
         guard let provider = saved.provider.flatMap(Provider.init(rawValue:)) else { return tab }
         let session = saved.session.map {
             SessionSummary(

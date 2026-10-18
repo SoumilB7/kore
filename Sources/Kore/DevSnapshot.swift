@@ -13,7 +13,7 @@ import KoreCore
 ///   KORE_THEN_SEND=<text>    after that, send this text with whatever got attached
 ///   KORE_FULLSCREEN=1        enter full screen before the snapshot
 ///   KORE_DRAG=<x>,<y>,<dx>,<dy> real drag from that point (after any clicks); logs the window's move to stderr
-///   KORE_KEYS=<code>[;cmd+<code>...] key presses (virtual key codes) after the clicks and drag, 0.5s apart,
+///   KORE_KEYS=<code>[;cmd+shift+<code>...] key presses (cmd, shift, opt, ctrl) (virtual key codes) after the clicks and drag, 0.5s apart,
 ///                            delivered inside Kore; KORE_REAL_KEYS=1 posts them through the window server
 ///                            instead (they then go to whatever app is frontmost)
 ///   KORE_CLICK=<x>,<y>[;...] click those points (from the window's top-left), 1s apart, before the snapshot
@@ -32,6 +32,10 @@ import KoreCore
 ///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
 ///   KORE_EARLIER=top|load    after KORE_EARLIER_AFTER seconds (default 4), scroll the transcript to its
 ///                            top; with load, then press "Load earlier turns"
+///   KORE_EXPLORER=1          open the explorer at launch
+///   KORE_FILE=<path>[:...]   open those files in tabs (the last one shown)
+///   KORE_QUICK_OPEN=files|line  open quick open at launch
+///   KORE_LINE=<n>            put the caret on that line of the shown file
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
     static let startProvider = ProcessInfo.processInfo.environment["KORE_START"].flatMap(Provider.init(rawValue:))
@@ -48,6 +52,12 @@ enum DevSnapshot {
     /// composer attachment in the image viewer. (Deterministic snapshots without real clicks.)
     static let openHistory = ProcessInfo.processInfo.environment["KORE_HISTORY"] == "1"
     static let viewImage = ProcessInfo.processInfo.environment["KORE_VIEW_IMAGE"] == "1"
+    static let explorer = ProcessInfo.processInfo.environment["KORE_EXPLORER"] == "1"
+    static let files = (ProcessInfo.processInfo.environment["KORE_FILE"] ?? "").split(separator: ":").map {
+        URL(fileURLWithPath: String($0))
+    }
+    static let quickOpen = ProcessInfo.processInfo.environment["KORE_QUICK_OPEN"]
+    static let line = ProcessInfo.processInfo.environment["KORE_LINE"].flatMap { Int($0) }
     static let attach = ProcessInfo.processInfo.environment["KORE_ATTACH"].map {
         $0.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
     }
@@ -159,19 +169,32 @@ enum DevSnapshot {
         }
         let keys = (ProcessInfo.processInfo.environment["KORE_KEYS"] ?? "").split(separator: ";")
         for (index, key) in keys.enumerated() {
-            let command = key.hasPrefix("cmd+")
-            guard let code = CGKeyCode(key.dropFirst(command ? 4 : 0)) else { continue }
+            // "cmd+shift+25": modifiers, then the virtual key code.
+            var parts = key.split(separator: "+")
+            guard let last = parts.popLast(), let code = CGKeyCode(last) else { continue }
+            var flags: NSEvent.ModifierFlags = []
+            for part in parts {
+                switch part {
+                case "cmd": flags.insert(.command)
+                case "shift": flags.insert(.shift)
+                case "opt": flags.insert(.option)
+                case "ctrl": flags.insert(.control)
+                default: break
+                }
+            }
             let start = 2.5 + Double(clicks.count) + (ProcessInfo.processInfo.environment["KORE_DRAG"] == nil ? 0 : 1.5)
+            let modifiers = flags
             DispatchQueue.main.asyncAfter(deadline: .now() + start + Double(index) * 0.5) {
+                let flags = modifiers
                 if ProcessInfo.processInfo.environment["KORE_REAL_KEYS"] == "1" {
                     // Through the window server: goes to whichever app is frontmost.
                     for down in [true, false] {
                         let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
-                        if command { event?.flags = .maskCommand }
+                        event?.flags = CGEventFlags(rawValue: UInt64(flags.rawValue))
                         event?.post(tap: .cghidEventTap)
                     }
                 } else {
-                    send(key: code, command: command)
+                    send(key: code, flags: flags)
                 }
             }
         }
@@ -275,13 +298,16 @@ enum DevSnapshot {
 
     /// A key press delivered inside Kore (NSApp.sendEvent, so event monitors see it), aimed at
     /// the folder window. It can't reach another app, even if the user brings one to the front.
-    @MainActor private static func send(key code: CGKeyCode, command: Bool) {
+    @MainActor private static func send(key code: CGKeyCode, flags: NSEvent.ModifierFlags) {
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }) else { return }
         if !window.isKeyWindow { window.makeKey() }
-        let probe = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true).flatMap(NSEvent.init(cgEvent:))
+        let cgEvent = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)
+        // The shifted character for ⇧ (the others leave characters as typed).
+        cgEvent?.flags = flags.contains(.shift) ? .maskShift : []
+        let probe = cgEvent.flatMap(NSEvent.init(cgEvent:))
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             if let event = NSEvent.keyEvent(
-                with: type, location: .zero, modifierFlags: command ? .command : [], timestamp: ProcessInfo.processInfo.systemUptime,
+                with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, characters: probe?.characters ?? "",
                 charactersIgnoringModifiers: probe?.charactersIgnoringModifiers ?? "", isARepeat: false, keyCode: code)
             {
