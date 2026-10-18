@@ -18,6 +18,9 @@ final class AgentMapState {
 
     func close() { isOpen = false }
 
+    /// The Agents button.
+    func toggle() { isOpen ? close() : open() }
+
     func markSeen(_ failed: [String]) {
         let new = seenFailures.union(failed)
         if new != seenFailures { seenFailures = new }

@@ -8,8 +8,9 @@ import SwiftUI
 struct AgentMapView: View {
     let chat: Chat
     let openAgent: (String) -> Void
-    @StateObject private var keyMonitor = Local<Any?>(nil)
-    @StateObject private var window = Local<NSWindow?>(nil)
+    /// Kept, never shown: setting them as the map appears doesn't build it again.
+    @StateObject private var keyMonitor = Held<Any?>(nil)
+    @StateObject private var window = Held<NSWindow?>(nil)
 
     private var map: AgentMapState { chat.agentMap }
 
@@ -35,14 +36,13 @@ struct AgentMapView: View {
                         }
                     }
                 }
-                IconButton(symbol: "xmark", help: "Close (Esc)") { map.close() }.storyID(StoryID.AgentMap.close)
+                IconButton(symbol: "xmark", help: "Close (Esc)") { map.close() }.storyID(StoryID.AgentMap.close, press: map.close)
                     .padding(Layout.Viewer.closeInset)
             }
         }
         .background(WindowReader { window.value = $0 })
         .transition(.opacity)
         .onAppear {
-            if map.selected == nil { map.selected = nodes.first?.id }
             map.markSeen(chat.transcript.agentSummary.failed)
             keyMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { handleKey($0) }
         }
@@ -136,14 +136,16 @@ struct AgentMapView: View {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.command) { return event }
         let nodes = visible(chat.transcript.agentTree())
-        let index = nodes.firstIndex { $0.id == map.selected } ?? 0
+        // Nothing picked yet shows the first agent.
+        let selected = nodes.first { $0.id == map.selected }?.id ?? nodes.first?.id
+        let index = nodes.firstIndex { $0.id == selected } ?? 0
         switch event.keyCode {
         case 53: map.close()
-        case 36, 76: if let id = map.selected { openAgent(id) }
+        case 36, 76: if let selected { openAgent(selected) }
         case 126: if index > 0 { map.selected = nodes[index - 1].id }
         case 125: if index + 1 < nodes.count { map.selected = nodes[index + 1].id }
-        case 123: if let id = map.selected { map.folded.insert(id) }
-        case 124: if let id = map.selected { map.folded.remove(id) }
+        case 123: if let selected { map.folded.insert(selected) }
+        case 124: if let selected { map.folded.remove(selected) }
         default: return event
         }
         return nil
@@ -193,8 +195,8 @@ private struct GraphRootRow: View {
         }
         .padding(.leading, m.leading - m.rootRadius)
         .frame(height: m.row * Zoom.shared.scale)
-        .background(alignment: .leading) {
-            if hasChildren { GraphWires(depth: -1, rails: [], isLast: true, hasChildren: true).spine.stroke(Theme.agentWire, lineWidth: Stroke.emphasis) }
+        .background {
+            if hasChildren { GraphWires(depth: -1, rails: [], isLast: true, hasChildren: true).canvas(elbow: nil) }
         }
     }
 }
@@ -230,12 +232,7 @@ private struct AgentGraphRow: View {
             }
             .padding(.leading, wires.centre(node.depth) - m.nodeRadius)
             .frame(height: m.row * Zoom.shared.scale)
-            .background(alignment: .leading) {
-                ZStack(alignment: .leading) {
-                    wires.spine.stroke(Theme.agentWire, lineWidth: Stroke.emphasis)
-                    wires.elbow.stroke(elbowColour, style: StrokeStyle(lineWidth: Stroke.emphasis, lineCap: .round))
-                }
-            }
+            .background { wires.canvas(elbow: elbowColour).storyMark(StoryID.AgentMap.wires(info.id)) }
             .hoverFill(selected || hovered.value, selected ? Theme.surfaceHover : Theme.toolHover)
             .contentShape(Rectangle())
         }
@@ -302,46 +299,50 @@ struct GraphWires {
 
     func centre(_ level: Int) -> CGFloat { m.leading + CGFloat(level + 1) * m.step }
 
-    var spine: GraphShape {
-        GraphShape { rect in
-            var path = Path()
-            let mid = rect.midY
-            for (level, continues) in rails.enumerated() where continues {
-                let x = centre(level - 1)
-                path.move(to: CGPoint(x: x, y: rect.minY))
-                path.addLine(to: CGPoint(x: x, y: rect.maxY))
-            }
-            if depth >= 0 {
-                let x = centre(depth - 1)
-                path.move(to: CGPoint(x: x, y: rect.minY))
-                path.addLine(to: CGPoint(x: x, y: isLast ? mid - m.bend : rect.maxY))
-            }
-            if hasChildren {
-                let x = centre(depth)
-                let radius = depth < 0 ? m.rootRadius : m.nodeRadius
-                path.move(to: CGPoint(x: x, y: mid + radius + m.gap))
-                path.addLine(to: CGPoint(x: x, y: rect.maxY))
-            }
-            return path
+    func spine(in rect: CGRect) -> Path {
+        var path = Path()
+        let mid = rect.midY
+        for (level, continues) in rails.enumerated() where continues {
+            let x = centre(level - 1)
+            path.move(to: CGPoint(x: x, y: rect.minY))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY))
         }
+        if depth >= 0 {
+            let x = centre(depth - 1)
+            path.move(to: CGPoint(x: x, y: rect.minY))
+            path.addLine(to: CGPoint(x: x, y: isLast ? mid - m.bend : rect.maxY))
+        }
+        if hasChildren {
+            let x = centre(depth)
+            let radius = depth < 0 ? m.rootRadius : m.nodeRadius
+            path.move(to: CGPoint(x: x, y: mid + radius + m.gap))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY))
+        }
+        return path
     }
 
-    var elbow: GraphShape {
-        GraphShape { rect in
-            var path = Path()
-            guard depth >= 0 else { return path }
-            let x = centre(depth - 1), mid = rect.midY
-            path.move(to: CGPoint(x: x, y: mid - m.bend))
-            path.addQuadCurve(to: CGPoint(x: x + m.bend, y: mid), control: CGPoint(x: x, y: mid))
-            path.addLine(to: CGPoint(x: centre(depth) - m.nodeRadius - m.gap, y: mid))
-            return path
+    func elbow(in rect: CGRect) -> Path {
+        var path = Path()
+        guard depth >= 0 else { return path }
+        let x = centre(depth - 1), mid = rect.midY
+        path.move(to: CGPoint(x: x, y: mid - m.bend))
+        path.addQuadCurve(to: CGPoint(x: x + m.bend, y: mid), control: CGPoint(x: x, y: mid))
+        path.addLine(to: CGPoint(x: centre(depth) - m.nodeRadius - m.gap, y: mid))
+        return path
+    }
+
+    /// The spine and the elbow (in `elbow`'s colour, when there's one) as one drawn view the
+    /// size of the row: a view per line made each row several views to build.
+    func canvas(elbow colour: Color?) -> some View {
+        Canvas { context, size in
+            let rect = CGRect(origin: .zero, size: size)
+            context.stroke(spine(in: rect), with: .color(Theme.agentWire), lineWidth: Stroke.emphasis)
+            if let colour {
+                context.stroke(
+                    elbow(in: rect), with: .color(colour), style: StrokeStyle(lineWidth: Stroke.emphasis, lineCap: .round))
+            }
         }
     }
-}
-
-struct GraphShape: Shape {
-    let draw: @Sendable (CGRect) -> Path
-    func path(in rect: CGRect) -> Path { draw(rect) }
 }
 
 /// "0:41", ticking while the agent runs.
@@ -373,24 +374,33 @@ struct AgentDetail: View {
     let chat: Chat
     let info: TranscriptStore.AgentInfo
     let openAgent: (String) -> Void
+    /// The prompt and the timeline come a frame after the rest of the map, which shows as the
+    /// map's fade begins: the map's first frame has the graph and this header to build alone.
+    @StateObject private var filled = Local(false)
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                // Each of the timeline's rows is a row of this stack, so only those in view are
+                // built: an agent's work can run to hundreds of rows.
                 Section {
-                    VStack(alignment: .leading, spacing: Space.xl) {
-                        if let prompt = info.prompt, !prompt.isEmpty { AgentPrompt(prompt: prompt) }
-                        AgentTimeline(chat: chat, id: info.id)
+                    if filled.value {
+                        Color.clear.frame(height: Space.xl)
+                        if let prompt = info.prompt, !prompt.isEmpty { AgentPrompt(prompt: prompt).padding(.bottom, Space.xl) }
+                        AgentTimelineRows(chat: chat, id: info.id)
+                        Color.clear.frame(height: Layout.Transcript.bottom)
                     }
-                    .padding(.top, Space.xl)
-                    .padding(.bottom, Layout.Transcript.bottom)
                 } header: {
                     header
                 }
             }
             .padding(.horizontal, Layout.Viewer.canvasSide)
         }
-        .onAppear { chat.loadAgentIfNeeded(info.id) }
+        .onAppear {
+            chat.loadAgentIfNeeded(info.id)
+            let filled = filled
+            afterThisFrame { filled.value = true }
+        }
         .onChange(of: info.id) { _, id in chat.loadAgentIfNeeded(id) }
     }
 
@@ -507,29 +517,37 @@ struct AgentTimeline: View {
     let id: String
 
     var body: some View {
-        _ = chat.transcript.agentsVersion
+        VStack(alignment: .leading, spacing: 0) { AgentTimelineRows(chat: chat, id: id) }
+    }
+}
+
+/// The timeline's rows, unwrapped: in a lazy stack, each is a row of it.
+struct AgentTimelineRows: View {
+    let chat: Chat
+    let id: String
+
+    var body: some View {
+        let _ = chat.transcript.agentsVersion
         let items = chat.transcript.agentItems(id)
         let info = chat.transcript.agent(id)
-        return VStack(alignment: .leading, spacing: 0) {
-            if items.isEmpty, let info {
-                Text(info.background && info.status == .running
-                    ? "Commands appear when this agent finishes"
-                    : info.status == .running ? "No commands yet" : "No commands recorded")
+        if items.isEmpty, let info {
+            Text(info.background && info.status == .running
+                ? "Commands appear when this agent finishes"
+                : info.status == .running ? "No commands yet" : "No commands recorded")
+                .font(TextStyle.body)
+                .foregroundStyle(Theme.tertiary)
+        }
+        ForEach(items) { item in
+            TimelineRow(item: item, actions: actions).equatable()
+        }
+        if let info, let result = TranscriptStore.distinctResult(info, lane: chat.transcript.lane(id)) {
+            TimelineItem(dot: info.status == .failed ? .failure : .plain, above: !items.isEmpty) {
+                Text(planMarkdown(result))
                     .font(TextStyle.body)
-                    .foregroundStyle(Theme.tertiary)
-            }
-            ForEach(items) { item in
-                TimelineRow(item: item, actions: actions).equatable()
-            }
-            if let info, let result = TranscriptStore.distinctResult(info, lane: chat.transcript.lane(id)) {
-                TimelineItem(dot: info.status == .failed ? .failure : .plain, above: !items.isEmpty) {
-                    Text(planMarkdown(result))
-                        .font(TextStyle.body)
-                        .foregroundStyle(info.status == .finished ? Theme.text : Theme.secondary)
-                        .lineSpacing(TextStyle.leading)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                    .foregroundStyle(info.status == .finished ? Theme.text : Theme.secondary)
+                    .lineSpacing(TextStyle.leading)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }

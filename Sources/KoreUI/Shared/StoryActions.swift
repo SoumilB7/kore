@@ -52,6 +52,9 @@ extension Chat {
 
     /// The mode menu.
     package func storySetMode(_ id: String) { setMode(id) }
+
+    /// Whether the agent map shows over the chat (the Agents button, ⇧⌘A).
+    package var isAgentMapOpen: Bool { agentMap.isOpen }
 }
 
 extension Workspace {

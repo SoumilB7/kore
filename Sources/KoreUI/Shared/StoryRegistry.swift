@@ -54,8 +54,10 @@ package enum StoryRegistry {
     private static var entries: [String: [Entry]] = [:]
     private static var next: Token = 0
 
+    /// Only a shown window's: a window an earlier storyline closed keeps its views until it's
+    /// freed, and its element of the same name would answer for this one's.
     package static func entry(_ id: String) -> Entry? {
-        entries[id]?.last { $0.window != nil }
+        entries[id]?.last { $0.window?.isVisible == true }
     }
 
     /// Every id with an entry in a window, sorted.

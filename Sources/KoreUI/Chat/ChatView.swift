@@ -57,18 +57,23 @@ struct ChatView: View {
         .environment(\.hiddenTab, active == nil)
         .overlay {
             // None while hidden: the agent map's keys would reach it from under a file.
-            if active != nil { overlay(chat) }
+            if active != nil {
+                MapLayer(chat: chat, focused: $composerFocused) { id in
+                    chat.agentMap.close()
+                    workspace.openAgent(id, of: chat)
+                } under: {
+                    overlay(chat)
+                }
+            }
         }
         .animation(Motion.fade, value: viewer.value?.editor.id)
         .animation(Motion.fade, value: changesTurn.value?.turn)
-        .animation(Motion.fade, value: chat.agentMap.isOpen)
         // A switch shows the other chat as it is: its mode's outline, its context, its overlays
         // appear at once, not animated from the last chat's.
         .transaction(value: chat.id) { transaction in
             transaction.animation = nil
             transaction.disablesAnimations = true
         }
-        .onChange(of: chat.agentMap.isOpen) { _, open in composerFocused = !open }
         .onChange(of: active?.id, initial: true) {
             // The viewer and the changes modal belonged to the last chat.
             if viewer.value != nil { viewer.value = nil }
@@ -80,14 +85,9 @@ struct ChatView: View {
         .task(id: chat.id) { await chat.startOnce() }
     }
 
-    /// The agent map, the changes modal or the image viewer, over the active chat.
+    /// The changes modal or the image viewer, over the active chat (under the agent map).
     @ViewBuilder private func overlay(_ chat: Chat) -> some View {
-        if chat.agentMap.isOpen {
-            AgentMapView(chat: chat) { id in
-                chat.agentMap.close()
-                workspace.openAgent(id, of: chat)
-            }
-        } else if let open = changesTurn.value, open.chat == chat.id {
+        if let open = changesTurn.value, open.chat == chat.id {
             ChangesView(changes: chat.transcript.changes(ofTurn: open.turn), folder: chat.folder, close: closeChanges)
         } else if let open = viewer.value, open.chat == chat.id {
             let editor = open.editor
@@ -195,6 +195,34 @@ struct ChatView: View {
                     }
                     try? await Task.sleep(for: .milliseconds(500))
                 }
+            }
+        }
+    }
+}
+
+/// The agent map over the chat, in place of the changes modal or the image viewer. Its own view,
+/// so opening or closing the map renders this layer alone: the transcripts and the composer
+/// under it aren't asked again.
+private struct MapLayer<Under: View>: View {
+    let chat: Chat
+    var focused: FocusState<Bool>.Binding
+    let openAgent: (String) -> Void
+    @ViewBuilder let under: () -> Under
+
+    var body: some View {
+        let open = chat.agentMap.isOpen
+        ZStack {
+            if open { AgentMapView(chat: chat, openAgent: openAgent) } else { under() }
+        }
+        .animation(Motion.fade, value: open)
+        .onChange(of: open) { _, open in
+            if open {
+                // The composer gives up focus under the map once the map's first frame is out:
+                // the field resigning is work that frame doesn't need.
+                let chat = chat, focused = focused
+                afterThisFrame { if chat.agentMap.isOpen { focused.wrappedValue = false } }
+            } else {
+                focused.wrappedValue = true
             }
         }
     }

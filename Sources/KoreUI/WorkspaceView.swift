@@ -142,7 +142,7 @@ struct TabBar: View {
                 .layoutPriority(-1)
                 .help(workspace.folder.path)
             if let chat = workspace.activeTab.chat {
-                AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents)
+                AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents, press: chat.agentMap.toggle)
             }
             HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight).storyID(StoryID.Titlebar.history)
         }

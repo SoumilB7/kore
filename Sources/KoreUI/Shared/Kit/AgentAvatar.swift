@@ -161,6 +161,31 @@ struct AgentShapeView: View {
         }
     }
 
+    /// The shape as the paths to fill in `rect`, drawn as `body` draws it, for a view that draws
+    /// it itself (`AgentNodeMark`).
+    static func paths(_ shape: AgentShape, in rect: CGRect) -> [Path] {
+        let k = rect.width / 16
+        func centred(_ side: CGFloat) -> CGRect {
+            CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
+        }
+        switch shape {
+        case .circle:
+            let line = 1.8 * k
+            return [
+                Circle().path(in: centred(12 * k).insetBy(dx: line / 2, dy: line / 2)).strokedPath(StrokeStyle(lineWidth: line)),
+                Circle().path(in: centred(4.4 * k)),
+            ]
+        case .square:
+            return [RoundedRectangle(cornerRadius: 1.6 * k)
+                .path(in: CGRect(x: rect.minX + 2.4 * k, y: rect.minY + 2.4 * k, width: 11.2 * k, height: 11.2 * k))]
+        case .half:
+            let disc = centred(10.6 * k)
+            return [Circle().path(in: disc).strokedPath(StrokeStyle(lineWidth: 1.4 * k)), HalfDisc().path(in: disc)]
+        default:
+            return [PolygonShape(points: points[shape] ?? []).path(in: rect)]
+        }
+    }
+
     /// Vertices in the 16 × 16 box.
     static let points: [AgentShape: [CGPoint]] = [
         .diamond: [(8, 1), (15, 8), (8, 15), (1, 8)].map(CGPoint.init),

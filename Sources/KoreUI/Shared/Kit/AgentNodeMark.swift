@@ -15,16 +15,32 @@ struct AgentNodeMark: View {
 
     var body: some View {
         let d = 2 * radius
-        ZStack {
-            Circle().fill(fill)
-            Circle().strokeBorder(stroke, lineWidth: Stroke.emphasis)
-            inside
+        // The O and its shape drawn as one view: the graph has one per agent.
+        Canvas { context, size in draw(in: &context, CGRect(origin: .zero, size: size)) }
+            .frame(width: d, height: d)
+            .opacity(status == .stopped ? 0.35 : 1)
+            .overlay { if status == .running { ring } }
+            .overlay(alignment: .topTrailing) { if waiting { point(Theme.warning) } }
+    }
+
+    /// A filled O with its border inside it, and the agent's shape (the root's dot) in the middle.
+    private func draw(in context: inout GraphicsContext, _ box: CGRect) {
+        let border = Stroke.emphasis
+        context.fill(Circle().path(in: box), with: .color(fill))
+        context.stroke(
+            Circle().path(in: box.insetBy(dx: border / 2, dy: border / 2)), with: .color(stroke), lineWidth: border)
+        switch kind {
+        case .root:
+            let dot = radius * 0.64
+            context.fill(
+                Circle().path(in: CGRect(x: box.midX - dot / 2, y: box.midY - dot / 2, width: dot, height: dot)),
+                with: .color(Theme.secondary))
+        case let .agent(index, status, _):
+            let colour = status == .finished ? Theme.background : status == .failed ? Theme.danger : Theme.agentMark
+            let shape = AgentShape(rawValue: index % AgentShape.allCases.count)!
+            let inner = CGRect(x: box.midX - radius / 2, y: box.midY - radius / 2, width: radius, height: radius)
+            for path in AgentShapeView.paths(shape, in: inner) { context.fill(path, with: .color(colour)) }
         }
-        .frame(width: d, height: d)
-        .opacity(status == .stopped ? 0.35 : 1)
-        .overlay { if status == .running { ring } }
-        .overlay(alignment: .topTrailing) { if waiting { point(Theme.warning) } }
-        .frame(width: d, height: d)
     }
 
     private var status: AgentAvatar.Status? {
@@ -42,17 +58,6 @@ struct AgentNodeMark: View {
         case nil: Theme.secondary
         case .failed: Theme.danger
         default: Theme.agentMark
-        }
-    }
-
-    @ViewBuilder private var inside: some View {
-        switch kind {
-        case .root:
-            Circle().fill(Theme.secondary).frame(width: radius * 0.64, height: radius * 0.64)
-        case let .agent(index, status, _):
-            AgentShapeView(shape: AgentShape(rawValue: index % AgentShape.allCases.count)!)
-                .frame(width: radius, height: radius)
-                .foregroundStyle(status == .finished ? Theme.background : status == .failed ? Theme.danger : Theme.agentMark)
         }
     }
 

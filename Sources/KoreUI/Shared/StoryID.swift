@@ -94,6 +94,8 @@ extension StoryID {
 
     package enum AgentMap {
         package static func row(_ agent: String) -> StoryID { StoryID(.agentmap, "row", key: agent) }
+        /// The wires drawn behind an agent's row: its elbow and the spines passing it.
+        package static func wires(_ agent: String) -> StoryID { StoryID(.agentmap, "wires", key: agent) }
         package static let open = StoryID(.agentmap, "open")
         package static let stop = StoryID(.agentmap, "stop")
         package static let close = StoryID(.agentmap, "close")
@@ -207,7 +209,7 @@ extension StoryID {
             StoryID(.approval, key: k).part(.allow), StoryID(.approval, key: k).part(.always),
             StoryID(.approval, key: k).part(.deny), StoryID(.approval, key: k).part(.approveplan),
             StoryID(.approval, key: k).part(.keepplanning), StoryID(.approval, key: k).part(.autoaccept),
-            StoryID(.agentmap, "row", key: k), StoryID(.history, "row", key: k),
+            StoryID(.agentmap, "row", key: k), StoryID(.agentmap, "wires", key: k), StoryID(.history, "row", key: k),
             StoryID(.history, "row", key: k).part(.archive), StoryID(.explorer, "row", key: k),
             StoryID(.editor, key: k), StoryID(.editor, "gutter.fold", key: k), StoryID(.editor, "foldchip", key: k),
             StoryID(.quickopen, "row", key: k), StoryID(.search, "result", key: k), StoryID(.changes, "file", key: k),
@@ -239,6 +241,12 @@ extension View {
     package func storyAction(_ id: StoryID, press: @escaping @MainActor () -> Void) -> some View {
         modifier(StoryPart(id: id.raw, press: press))
     }
+
+    /// A drawn part with nothing to press (the agent map's wires): registered for storylines
+    /// only, so they can find it. In the owner's app it adds nothing.
+    package func storyMark(_ id: StoryID) -> some View {
+        modifier(StoryPart(id: id.raw, press: nil))
+    }
 }
 
 /// The identifier and the registration, as one modifier: its body is compiled once rather than
@@ -255,7 +263,7 @@ private struct StoryTag: ViewModifier {
 /// A hidden part's registration: no identifier, which would replace its row's.
 private struct StoryPart: ViewModifier {
     let id: String
-    let press: @MainActor () -> Void
+    let press: (@MainActor () -> Void)?
 
     func body(content: Content) -> some View {
         content.background(StoryAnchor(id: id, press: press))

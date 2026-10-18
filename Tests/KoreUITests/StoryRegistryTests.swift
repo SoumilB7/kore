@@ -8,8 +8,10 @@ import Testing
 struct StoryRegistryTests {
     private let window: NSWindow = {
         _ = NSApplication.shared
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: true)
+        let window = NSWindow(contentRect: CGRect(x: -10000, y: -10000, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        // Ordered in, off every screen: only a shown window's elements answer.
+        window.orderFront(nil)
         return window
     }()
 
@@ -40,6 +42,21 @@ struct StoryRegistryTests {
         #expect(StoryRegistry.entry("t.loose") == nil)
         #expect(!StoryRegistry.ids.contains("t.loose"))
         StoryRegistry.unregister(token)
+    }
+
+    @Test func aClosedWindowsEntryDoesNotAnswer() {
+        let closed = NSWindow(contentRect: CGRect(x: -10000, y: -10000, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        closed.isReleasedWhenClosed = false
+        closed.orderFront(nil)
+        let stale = NSView(frame: CGRect(x: 0, y: 0, width: 10, height: 10))
+        closed.contentView?.addSubview(stale)
+        let old = StoryRegistry.register("t.agents", in: stale)
+        closed.close()
+        #expect(StoryRegistry.entry("t.agents") == nil)
+        let live = StoryRegistry.register("t.agents", in: view(CGRect(x: 0, y: 0, width: 10, height: 10)))
+        #expect(StoryRegistry.entry("t.agents")?.token == live)
+        StoryRegistry.unregister(old)
+        StoryRegistry.unregister(live)
     }
 
     @Test func framesAreInWindowCoordinatesAndPartsUseTheirRect() {

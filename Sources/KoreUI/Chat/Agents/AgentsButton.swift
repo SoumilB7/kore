@@ -14,7 +14,7 @@ struct AgentsButton: View {
             let running = !summary.running.isEmpty
             let stack = Array((running ? summary.running : summary.first).prefix(3))
             Button {
-                chat.agentMap.isOpen ? chat.agentMap.close() : chat.agentMap.open()
+                chat.agentMap.toggle()
             } label: {
                 HStack(spacing: Space.sm) {
                     HStack(spacing: -Size.avatarOverlap) {
