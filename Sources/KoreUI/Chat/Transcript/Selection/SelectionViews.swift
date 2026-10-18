@@ -113,17 +113,21 @@ struct SelectionResponder: NSViewRepresentable {
     let selection: TranscriptSelection
     /// The chat's tab is hidden under the active one: it takes no presses.
     let hidden: Bool
+    /// Where its links open (the chat's window).
+    var openLink: ((URL) -> Void)?
 
     func makeNSView(context: Context) -> SelectionResponderView {
         let view = SelectionResponderView()
         view.selection = selection
         view.hiddenTab = hidden
+        selection.openLink = openLink
         return view
     }
 
     func updateNSView(_ view: SelectionResponderView, context: Context) {
         view.selection = selection
         view.hiddenTab = hidden
+        selection.openLink = openLink
     }
 }
 

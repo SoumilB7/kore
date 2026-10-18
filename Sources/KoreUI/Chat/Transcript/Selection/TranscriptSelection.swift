@@ -311,17 +311,25 @@ package final class TranscriptSelection: ObservableObject {
 
     // MARK: Links and copy
 
-    /// Opens a link clicked in a text. Under storylines it's only noted, never opened.
+    /// Where the chat's window opens a link (`Workspace.openLink`: a file in a Kore tab); nil
+    /// for a transcript outside one, whose links go to the system.
+    var openLink: ((URL) -> Void)?
+
+    /// Opens a link clicked in a text. Under storylines the system never gets one: it's noted.
     func open(_ url: URL) {
-        if StoryHost.installed {
+        if let openLink {
+            openLink(url)
+        } else if StoryHost.installed {
             Self.opened.append(url)
         } else {
             NSWorkspace.shared.open(url)
         }
     }
 
-    /// Links a storyline's clicks would have opened.
+    /// Links a storyline's clicks opened, or would have opened in the system.
     package static var opened: [URL] = []
+    /// Those of them Kore opened itself (a file in a tab, a folder in the explorer).
+    package static var openedInKore: [URL] = []
 
     /// Where copies go: the general pasteboard, or under storylines a named one, so a run never
     /// touches the owner's clipboard.

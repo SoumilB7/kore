@@ -11,6 +11,8 @@ struct ChangesView: View {
     @StateObject private var selected = Local(0)
     @StateObject private var keyMonitor = Local<Any?>(nil)
     @StateObject private var window = Local<NSWindow?>(nil)
+    /// The chat's: a file opens in a Kore tab.
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         GeometryReader { geometry in
@@ -124,7 +126,7 @@ struct ChangesView: View {
                 ChangeCounts(added: change.added, removed: change.removed)
                 Spacer(minLength: Space.md)
                 IconButton(symbol: "arrow.up.forward.app", kind: .small, help: "Open in editor") {
-                    NSWorkspace.shared.open(OpenInEditor.url(change.path, in: folder))
+                    openURL(OpenInEditor.url(change.path, in: folder))
                 }
             }
             .padding(.horizontal, Layout.Viewer.canvasSide)

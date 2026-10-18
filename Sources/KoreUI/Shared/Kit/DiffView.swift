@@ -190,14 +190,16 @@ struct ChangeCounts: View {
 }
 
 /// "Open in editor": an accent text button that opens a path (absolute, or relative to the
-/// chat's folder) in the user's default app for it.
+/// chat's folder) through the openURL around it: in a Kore tab from a chat, else the user's
+/// default app for it.
 struct OpenInEditor: View {
     let path: String
     var folder: URL?
     var title = "Open in editor"
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
-        TextButton(title) { NSWorkspace.shared.open(Self.url(path, in: folder)) }
+        TextButton(title) { openURL(Self.url(path, in: folder)) }
             .help("Open in editor")
     }
 

@@ -261,6 +261,56 @@ final class PressesOutsideText: ChatStoryline {
     }
 }
 
+/// Links in an answer: a file's opens it in a Kore tab (an HTML page in the web renderer) and
+/// the system gets nothing; a web link is the system's (noted, never opened, under storylines).
+final class ChatFileLink: ChatStoryline {
+    static let page = "site/index.html"
+    static let shown = "Open the page or the docs."
+    static let docs = "https://example.com/docs"
+
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        [
+            WriteFiles([(Self.page, "<!doctype html><title>Page</title><p>Hello from the page.</p>")]),
+            // The link names the run's own folder, so the script is made once it's known.
+            UseFolderScript { folder in
+                let file = folder.appendingPathComponent(Self.page).absoluteString
+                return CLIScript(turns: [CLIScript.reply("Open [the page](\(file)) or [the docs](\(Self.docs)).")])
+            },
+            OpenFolder(),
+            StartChat(),
+            Send("Where is the page?"),
+            TurnFinished(1),
+            ClickText(.answer(1, [0], at: Self.shown, "docs")),
+            Expect("the web link noted for the system, not opened in Kore") { _ in
+                StoryTranscript.openedLinks.last?.absoluteString == Self.docs
+                    && !StoryTranscript.linksOpenedInKore.contains { $0.absoluteString == Self.docs }
+            },
+            Expect.fileTabs("no file tab for it") { $0.isEmpty },
+            ClickText(.answer(1, [0], at: Self.shown, "page")),
+            Expect.fileTabs("the page in a preview tab") { $0 == [StoryFileTab(path: Self.page, preview: true, active: true)] },
+            Expect("the page in the web renderer", found: { $0.app.workspace?.storyActiveRenderer ?? "no renderer" }) {
+                $0.app.workspace?.storyActiveRenderer == "html"
+            },
+            Expect("the click opened in Kore, with nothing for the system") { _ in
+                guard let link = StoryTranscript.openedLinks.last, link.isFileURL else { return false }
+                return StoryTranscript.linksOpenedInKore.last == link && link.path(percentEncoded: false).hasSuffix(Self.page)
+            },
+        ]
+    }
+}
+
+/// Sets the scripted CLI's script from the storyline's folder (a reply that names a file in it).
+struct UseFolderScript: Step {
+    let make: @MainActor (URL) -> CLIScript
+    var label: String { "Use a script for the folder" }
+
+    func run(_ story: StoryContext) async throws {
+        try await UseScript(make(story.folder)).run(story)
+    }
+}
+
 // MARK: Places and steps
 
 /// A place in a text of the active chat: which row, which of its texts, and the offset of

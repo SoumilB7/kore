@@ -17,6 +17,11 @@ struct AgentTabView: View {
                 crumb(info)
                 AgentTabTimeline(chat: chat, id: id, prompt: info.prompt)
                     .onAppear { chat.loadAgentIfNeeded(id) }
+                    // Its tools' files open in Kore, as the chat's do.
+                    .environment(\.openURL, OpenURLAction { [workspace, chat] url in
+                        workspace.openLink(url, from: chat.folder)
+                        return .handled
+                    })
                 footer(info)
                     .padding(.horizontal, column.composerPadding)
                     .padding(.bottom, Space.xxxl)

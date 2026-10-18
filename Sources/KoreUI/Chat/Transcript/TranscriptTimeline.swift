@@ -108,11 +108,17 @@ struct TranscriptTimeline: View, Equatable {
                 // One text selection over every row: rows report their texts in this space, and
                 // the responder at its corner follows the pointer in it.
                 .background(alignment: .topLeading) {
-                    SelectionResponder(selection: store.selection, hidden: hidden).frame(width: Stroke.hairline, height: Stroke.hairline)
+                    SelectionResponder(selection: store.selection, hidden: hidden, openLink: actions.openLink)
+                        .frame(width: Stroke.hairline, height: Stroke.hairline)
                     ScrollShift.Finder(shift).frame(width: Stroke.hairline, height: Stroke.hairline)
                 }
                 .coordinateSpace(.named(TranscriptSelection.space))
                 .environment(\.transcriptSelection, store.selection)
+                // Links outside the selection's texts (a tool's file) open as its own do.
+                .environment(\.openURL, OpenURLAction { [selection = store.selection] url in
+                    selection.open(url)
+                    return .handled
+                })
             }
             .accessibilityAction(named: Text("Copy Selection")) { store.selection.copy() }
             .scrollPosition(binding)

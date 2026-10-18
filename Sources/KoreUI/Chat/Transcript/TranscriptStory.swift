@@ -136,4 +136,5 @@ extension StoryTranscript {
     package static var copied: String? { TranscriptSelection.pasteboard.string(forType: .string) }
     package static func clearCopied() { TranscriptSelection.pasteboard.clearContents() }
     package static var openedLinks: [URL] { TranscriptSelection.opened }
+    package static var linksOpenedInKore: [URL] { TranscriptSelection.openedInKore }
 }

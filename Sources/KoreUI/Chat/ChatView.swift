@@ -55,6 +55,11 @@ struct ChatView: View {
         }
         .contextCard(chat)
         .environment(\.hiddenTab, active == nil)
+        // The approvals' and the changes modal's files open in Kore, as the transcript's do.
+        .environment(\.openURL, OpenURLAction { [workspace] url in
+            workspace.openLink(url, from: chat.folder)
+            return .handled
+        })
         .overlay {
             // None while hidden: the agent map's keys would reach it from under a file.
             if active != nil {
@@ -126,6 +131,9 @@ struct ChatView: View {
         }
         actions.loadEarlierConversation = { chat.loadEarlierConversation() }
         actions.openOriginal = workspace.openOriginal(of: chat)
+        // Held by the chat's selection: neither the chat nor the window is kept by it.
+        let folder = chat.folder
+        actions.openLink = { [weak workspace] in workspace?.openLink($0, from: folder) }
         actions.folder = chat.folder
         actions.provider = chat.provider
         actions.signIn = { chat.signInAgain() }

@@ -75,6 +75,12 @@ extension Workspace {
         }
     }
 
+    /// The renderer showing the active file ("html", "markdown"…); nil for the editor.
+    package var storyActiveRenderer: String? {
+        guard let rendering = activeFile?.rendering, rendering.showsRenderer else { return nil }
+        return rendering.renderer?.id
+    }
+
     /// Quick open's file list is showing (⌘P).
     package var storyQuickOpenShown: Bool { quickOpen == .files }
 

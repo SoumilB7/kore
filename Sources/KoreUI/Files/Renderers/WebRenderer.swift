@@ -1,4 +1,5 @@
 import AppKit
+import KoreCore
 import SwiftUI
 import WebKit
 
@@ -89,6 +90,13 @@ private struct WebPage: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    /// What the page may read: the window's folder, or the page's own when it's outside it (a
+    /// page a chat linked to).
+    private var readable: URL {
+        let root = realPath(folder.path), page = realPath(url.path)
+        return page.hasPrefix(root + "/") ? folder : url.deletingLastPathComponent()
+    }
+
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         // A private store: nothing the page keeps outlives the tab.
@@ -101,7 +109,7 @@ private struct WebPage: NSViewRepresentable {
         view.navigationDelegate = context.coordinator
         view.allowsMagnification = true
         context.coordinator.update(self)
-        view.loadFileURL(url, allowingReadAccessTo: folder)
+        view.loadFileURL(url, allowingReadAccessTo: readable)
         context.coordinator.loaded = (url, reloadToken)
         return view
     }
@@ -109,7 +117,7 @@ private struct WebPage: NSViewRepresentable {
     func updateNSView(_ view: WKWebView, context: Context) {
         context.coordinator.update(self)
         if context.coordinator.loaded?.url != url || context.coordinator.loaded?.token != reloadToken {
-            view.loadFileURL(url, allowingReadAccessTo: folder)
+            view.loadFileURL(url, allowingReadAccessTo: readable)
             context.coordinator.loaded = (url, reloadToken)
         }
     }
@@ -141,7 +149,7 @@ private struct WebPage: NSViewRepresentable {
 
         @MainActor func update(_ view: WebPage) {
             page = view.url
-            folder = view.folder
+            folder = view.readable
             openFile = view.openFile
             blocked = view.blocked
         }
@@ -175,7 +183,8 @@ private struct WebPage: NSViewRepresentable {
                 if target.isFileURL {
                     let same = target.path == page?.path
                     if same { return decisionHandler(.allow) }  // an anchor on this page
-                    if let folder, target.standardizedFileURL.path.hasPrefix(folder.standardizedFileURL.path) {
+                    // Real paths: the page is loaded from its real path, the folder may not be one.
+                    if let folder, realPath(target.path).hasPrefix(realPath(folder.path) + "/") {
                         openFile(target.standardizedFileURL)
                     }
                 } else if ["http", "https", "mailto"].contains(target.scheme ?? "") {

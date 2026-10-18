@@ -29,6 +29,8 @@ struct TranscriptActions {
     /// An answer row's top moved, or it left the built rows (nil): a long answer marks the
     /// reader's place where no message is near.
     var answerMoved: (String, CGFloat?) -> Void = { _, _ in }
+    /// Opens a link clicked in the transcript: a file in a Kore tab (`Workspace.openLink`).
+    var openLink: ((URL) -> Void)?
     var folder: URL?
     /// The chat's CLI, for its notices' words.
     var provider: ProviderDescriptor?
@@ -714,7 +716,7 @@ struct ToolHeader: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-            // A file link opens through the default action (NSWorkspace), in the user's editor.
+            // A file link opens in a Kore tab, through the transcript's openURL.
             Text(line)
                 .lineLimit(2)
                 .tint(Theme.secondary)
