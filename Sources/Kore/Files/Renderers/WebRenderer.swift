@@ -16,8 +16,8 @@ enum HTMLRenderer: FileRenderer {
     }
 }
 
-/// SVG files as an image, centred on the background, fitted and never scaled past 100%; a web
-/// view only when the system can't draw the file itself.
+/// SVG files as an image, centred on the background and fitted inside the margin, up or down;
+/// a web view only when the system can't draw the file itself.
 enum SVGRenderer: FileRenderer {
     static let id = "svg"
     static let hasRaw = true
@@ -274,7 +274,8 @@ private struct SVGView: View {
                     let room = CGSize(
                         width: max(geometry.size.width - 2 * Layout.Viewer.canvasSide, 1),
                         height: max(geometry.size.height - 2 * Layout.Viewer.canvasSide, 1))
-                    let scale = min(1, room.width / svg.size.width, room.height / svg.size.height)
+                    // A vector: fitted up as well as down (a 16 × 16 icon at its own size is a speck).
+                    let scale = min(room.width / svg.size.width, room.height / svg.size.height)
                     SVGBitmap(svg: svg, size: CGSize(width: svg.size.width * scale, height: svg.size.height * scale))
                         .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
                 }
