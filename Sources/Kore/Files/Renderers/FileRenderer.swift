@@ -86,6 +86,12 @@ struct RendererContext {
         NotebookRenderer.self,
         HTMLRenderer.self,
         SVGRenderer.self,
+        PDFRenderer.self,
+        QuickLookRenderer.self,
+        ImageRenderer.self,
+        MediaRenderer.self,
+        // Last: whatever doesn't decode as text.
+        HexRenderer.self,
     ]
 
     static func renderer(for file: FileInfo) -> (any FileRenderer.Type)? {
