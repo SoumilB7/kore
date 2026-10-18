@@ -44,6 +44,9 @@ final class UsageState {
     private(set) var reading: PlanReading?
     /// When `reading`'s limits were read.
     private(set) var readAt: Date?
+    /// Kore's part of each limit, worked out from this Mac's files once a reading lands (the
+    /// last one meanwhile); nil until then, and the bars show plain.
+    private(set) var shares: KoreShares?
     /// Each open's own number: a read that lands after a close, or after the next open, is
     /// only kept for next time.
     @ObservationIgnored private var serial = 0
@@ -54,24 +57,30 @@ final class UsageState {
     @ObservationIgnored private var provider = ""
     @ObservationIgnored private var read: (@MainActor () async throws -> PlanReading)?
     @ObservationIgnored private var consume: (@MainActor (String?, UUID) async throws -> PlanResetOutcome)?
+    @ObservationIgnored private var attribute: (@MainActor (PlanReading) async -> KoreShares?)?
 
     /// Each provider's last reading, and when it was made.
     private static var kept: [String: (reading: PlanReading, at: Date)] = [:]
+    /// Each provider's last shares.
+    private static var keptShares: [String: KoreShares] = [:]
     /// A read the CLI never answers stops showing a spinner after this.
     private static let patience: Duration = .seconds(35)
 
+    /// `shares`: Kore's part of each limit in a reading, worked out off the main thread.
     func open(
         provider: String, read: @escaping @MainActor () async throws -> PlanReading,
-        useReset: @escaping @MainActor (String?, UUID) async throws -> PlanResetOutcome
+        useReset: @escaping @MainActor (String?, UUID) async throws -> PlanResetOutcome,
+        shares: @escaping @MainActor (PlanReading) async -> KoreShares? = { _ in nil }
     ) {
         serial += 1
         let open = serial
         isOpen = true
         status = .loading
         (resetsOpen, resetSteps, rereading, held) = (false, [:], false, [])
-        (self.provider, self.read, self.consume) = (provider, read, useReset)
+        (self.provider, self.read, self.consume, attribute) = (provider, read, useReset, shares)
         let last = Self.kept[provider]
         (reading, readAt) = (last?.reading, last?.at)
+        self.shares = Self.keptShares[provider]
         Task { [weak self] in
             let outcome: Result<PlanReading, any Error>
             do { outcome = .success(try await read()) } catch { outcome = .failure(error) }
@@ -80,6 +89,7 @@ final class UsageState {
             }
             guard let self, self.serial == open else { return }
             self.land(outcome, last: last)
+            if case .success(let new) = outcome, new.limits != nil { self.attribute(new, open: open) }
         }
         patienceTimer?.cancel()
         patienceTimer = Task { [weak self] in
@@ -87,6 +97,33 @@ final class UsageState {
             guard let self, !Task.isCancelled, self.serial == open, self.status == .loading else { return }
             self.status = .unavailable(nil)
         }
+    }
+
+    /// Kore's share of `reading`'s limits; it shows when it lands, unless the popup closed.
+    private func attribute(_ reading: PlanReading, open: Int) {
+        guard let attribute else { return }
+        let provider = provider
+        Task { [weak self] in
+            guard let shares = await attribute(reading) else { return }
+            Self.keptShares[provider] = shares
+            guard let self, self.serial == open else { return }
+            self.shares = shares
+        }
+    }
+
+    /// A limit's share of Kore, while a reading of it shows; nil while it's worked out.
+    func share(_ limit: PlanLimit) -> KoreShare? {
+        guard var share = shares?.limits[limit.title] else { return nil }
+        // Never more than the plan says now (the share may be from the reading before).
+        let cut = UsageAttribution.clamp(share.kore, chats: share.chats, used: limit.used)
+        if cut.clamped { (share.used, share.kore, share.chats, share.clamped) = (limit.used, cut.kore, cut.chats, true) }
+        return share
+    }
+
+    /// A bar's tooltip: Kore's share of it, else (none, or not worked out yet) when it resets.
+    func barHelp(_ limit: PlanLimit, now: Date) -> String {
+        guard let kore = share(limit)?.kore, kore > 0 else { return UsageText.resetsAt(limit.resetsAt, now: now) }
+        return UsageText.inKore(kore)
     }
 
     func close() {
@@ -165,7 +202,10 @@ final class UsageState {
             let new = try? await read()
             if let new, new.limits != nil { Self.kept[provider] = (new, Date()) }
             guard self.serial == open else { return }
-            if let new, new.limits != nil { (self.reading, self.readAt, self.status) = (new, Date(), .fresh) }
+            if let new, new.limits != nil {
+                (self.reading, self.readAt, self.status) = (new, Date(), .fresh)
+                self.attribute(new, open: open)
+            }
             self.rereading = false
         }
     }
@@ -197,7 +237,9 @@ final class UsageState {
     var lines: [String] {
         let now = Date()
         let bars = (reading?.limits?.bars ?? []).map { bar in
-            [bar.title, UsageText.percent(bar.used), UsageText.resets(bar.resetsAt, now: now)].joined(separator: " · ")
+            let kore = share(bar).flatMap { $0.kore > 0 ? UsageText.inKore($0.kore) : nil }
+            return [bar.title, UsageText.percent(bar.used), UsageText.resets(bar.resetsAt, now: now), kore].compactMap { $0 }
+                .joined(separator: " · ")
         }
         guard resetsOpen else { return bars }
         return bars + resetRows.map { row in [row.title, resetDetail(row, now: now)].joined(separator: " · ") }
@@ -242,6 +284,15 @@ enum UsageText {
 
     /// How much of the bar fills.
     static func fraction(_ used: Double) -> Double { min(max(used / 100, 0), 1) }
+
+    /// One of Kore's figures, which are estimates: whole percents rounded to nearest with "~",
+    /// "<1%" under one.
+    static func kore(_ points: Double) -> String {
+        points <= 0 ? "~0%" : points < 1 ? "<1%" : "~\(Int(points.rounded()))%"
+    }
+
+    /// The bar's tooltip with a share of Kore: "~12% in Kore".
+    static func inKore(_ points: Double) -> String { kore(points) + " in Kore" }
 
     /// "Resets in 3h", "Resets in 12m", "Resets in 6d", "Resets soon"; nothing without a time.
     static func resets(_ date: Date?, now: Date) -> String {
@@ -550,10 +601,12 @@ struct UsagePopup: View {
     }
 
     /// One limit: its shortened title, the bar, the percent and the ↻ reset, the reset's clock
-    /// time on hover. Nil while loading: the title it usually has, an empty track and "—".
+    /// time on hover. Nil while loading: the title it usually has, an empty track and "—". Kore's
+    /// share starts the bar's fill, hatched, and is the bar's tooltip ("~12% in Kore").
     private func row(_ limit: PlanLimit?, placeholder: String, now: Date) -> some View {
         let reset = limit.map { UsageText.resetsShort($0.resetsAt, now: now) } ?? ""
         let help = limit.map { UsageText.resetsAt($0.resetsAt, now: now) } ?? ""
+        let kore = limit.flatMap { state.share($0)?.kore } ?? 0
         return GridRow {
             CappedWidth(cap: Size.usageTitleMax) {
                 Text(UsageText.label(limit?.title ?? placeholder))
@@ -565,9 +618,13 @@ struct UsagePopup: View {
             .frame(minHeight: Size.contextCardLine)
             .help(help)
                 .storyID(limit.map { StoryID.Composer.usageLimit($0.title) })
-            LimitBar(fraction: limit.map { UsageText.fraction($0.used) } ?? 0)
+            LimitBar(
+                fraction: limit.map { UsageText.fraction($0.used) } ?? 0, kore: UsageText.fraction(kore),
+                share: limit.map { StoryID.Composer.usageLimit($0.title).part(.share) })
                 .frame(minWidth: Size.usageBarMin, maxWidth: .infinity)
-                .help(help)
+                .storyID(limit.map { StoryID.Composer.usageLimit($0.title).part(.track) })
+                .help(limit.map { state.barHelp($0, now: now) } ?? "")
+                .accessibilityLabel(kore > 0 ? "about \(UsageText.kore(kore).dropFirst()) in Kore" : "")
             Text(limit.map { UsageText.percent($0.used) } ?? "—")
                 .font(TextStyle.label.monospacedDigit())
                 .foregroundStyle(Theme.secondary)
@@ -747,45 +804,120 @@ private struct CappedWidth: SwiftUI.Layout {
 }
 
 /// A limit's bar, its fill as drawn: it moves to a new value on its own, so a reading landing
-/// fills the bars in place.
+/// fills the bars in place. Kore's share (`kore`, of the whole bar) moves with it; arriving, or
+/// leaving, it fades rather than slides.
 private struct LimitBar: View {
     let fraction: Double
+    let kore: Double
+    /// Its hatched stretch's name, for storylines.
+    let share: StoryID?
     @StateObject private var shown: Local<Double>
+    @StateObject private var koreShown: Local<Double>
+    @StateObject private var hatch: Local<Double>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(fraction: Double) {
+    init(fraction: Double, kore: Double, share: StoryID?) {
         self.fraction = fraction
+        self.kore = kore
+        self.share = share
         _shown = StateObject(wrappedValue: Local(fraction))
+        _koreShown = StateObject(wrappedValue: Local(kore))
+        _hatch = StateObject(wrappedValue: Local(kore > 0 ? 1 : 0))
     }
 
     var body: some View {
-        UsageBar(fraction: shown.value)
+        UsageBar(fraction: shown.value, kore: koreShown.value, hatch: hatch.value)
+            .overlay(alignment: .leading) {
+                if kore > 0, fraction > 0, let share {
+                    GeometryReader { geometry in
+                        Color.clear
+                            .frame(width: UsageHatch.width(fill: UsageHatch.fill(fraction, in: geometry.size), kore: kore, used: fraction))
+                            .storyID(share)
+                    }
+                }
+            }
             .onChange(of: fraction) { _, now in
                 if reduceMotion { shown.value = now } else { withAnimation(Motion.contextArc) { shown.value = now } }
+            }
+            .onChange(of: kore) { before, now in
+                if reduceMotion {
+                    (koreShown.value, hatch.value) = (now, now > 0 ? 1 : 0)
+                } else if before <= 0 || now <= 0 {
+                    if now > 0 { koreShown.value = now }
+                    withAnimation(Motion.fade) { hatch.value = now > 0 ? 1 : 0 }
+                } else {
+                    withAnimation(Motion.contextArc) { koreShown.value = now }
+                }
             }
     }
 }
 
+/// Kore's stretch of a bar's fill: from its leading end, in bands of the fill's colour at 45°
+/// ("/") with the track showing between them.
+enum UsageHatch {
+    /// The used fill's width: at least as wide as the bar is tall, so a sliver still shows.
+    static func fill(_ fraction: Double, in size: CGSize) -> CGFloat { max(size.width * fraction, size.height) }
+
+    /// Kore's part of `fill`: its share of what's used, at least two bands, never past the fill.
+    static func width(fill: CGFloat, kore: Double, used: Double) -> CGFloat {
+        guard kore > 0, used > 0 else { return 0 }
+        return min(max(fill * min(kore / used, 1), Size.usageHatchMin), fill)
+    }
+
+    /// The bands over `rect`, as one path: lines rising to the right, `Size.usageHatch.period`
+    /// apart across them, laid from x = 0 so they stay put as the stretch grows.
+    static func bands(_ rect: CGRect) -> Path {
+        let step = Size.usageHatch.period * 2.squareRoot()
+        var path = Path()
+        var x = -rect.height
+        while x < rect.maxX {
+            path.move(to: CGPoint(x: x, y: rect.maxY))
+            path.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
+            x += step
+        }
+        return path
+    }
+}
+
 /// The context card's track at its intent height: the used part from the left, coloured by how
-/// near the limit it is, at least as wide as it is tall so a sliver still shows. Drawn in one
-/// canvas; animatable, so a new value moves it as the ring moves.
+/// near the limit it is, at least as wide as it is tall so a sliver still shows; Kore's share
+/// hatched at its start (`hatch`: how far it has faded in). Drawn in one canvas; animatable, so a
+/// new value moves it as the ring moves.
 private struct UsageBar: View, @preconcurrency Animatable {
     var fraction: Double
+    var kore: Double
+    var hatch: Double
 
-    var animatableData: Double {
-        get { fraction }
-        set { fraction = newValue }
+    var animatableData: AnimatablePair<Double, AnimatablePair<Double, Double>> {
+        get { AnimatablePair(fraction, AnimatablePair(kore, hatch)) }
+        set { (fraction, kore, hatch) = (newValue.first, newValue.second.first, newValue.second.second) }
     }
 
     var body: some View {
-        let fraction = fraction
+        let (fraction, kore, hatch) = (fraction, kore, hatch)
         Canvas { canvas, size in
             let line = size.height
             func bar(_ width: CGFloat) -> Path {
                 Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: line), cornerRadius: line / 2)
             }
             canvas.fill(bar(size.width), with: .color(Theme.contextTrack))
-            if fraction > 0 { canvas.fill(bar(max(size.width * fraction, line)), with: .color(Theme.usageFill(fraction))) }
+            guard fraction > 0 else { return }
+            let width = UsageHatch.fill(fraction, in: size)
+            let color = Theme.usageFill(fraction)
+            let stretch = hatch > 0 ? UsageHatch.width(fill: width, kore: kore, used: fraction) : 0
+            guard stretch > 0 else {
+                canvas.fill(bar(width), with: .color(color))
+                return
+            }
+            canvas.drawLayer { layer in
+                layer.clip(to: bar(width))
+                layer.fill(Path(CGRect(x: stretch, y: 0, width: width - stretch, height: line)), with: .color(color))
+                let hatched = CGRect(x: 0, y: 0, width: stretch, height: line)
+                // Fading in, the gaps go from the fill to the track.
+                if hatch < 1 { layer.fill(Path(hatched), with: .color(color.opacity(1 - hatch))) }
+                layer.clip(to: Path(hatched))
+                layer.stroke(UsageHatch.bands(hatched), with: .color(color), lineWidth: Size.usageHatch.band)
+            }
         }
         .frame(height: Size.contextTrack.intent)
     }

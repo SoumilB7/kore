@@ -47,6 +47,10 @@ package final class CLIModes {
         try files.createDirectory(at: codexHome, withIntermediateDirectories: true)
         try files.createDirectory(at: claudeStore, withIntermediateDirectories: true)
         TurnChangeLog.root.value = run.appendingPathComponent("turn-changes")
+        // Usage attribution reads and keeps the run's files only.
+        UsagePaths.host.value = UsagePaths(
+            support: run.appendingPathComponent("usage"), caches: run.appendingPathComponent("usage-index"),
+            claudeProjects: claudeStore.appendingPathComponent("projects"), codexSessions: codexHome.appendingPathComponent("sessions"))
         switch mode {
         case .scripted:
             ScriptedWorld.shared.install()
@@ -118,6 +122,7 @@ package final class CLIModes {
         StdioProcess.recorder.value = nil
         CLIExecutable.standIns.value = [:]
         TurnChangeLog.root.value = nil
+        UsagePaths.host.value = nil
     }
 }
 

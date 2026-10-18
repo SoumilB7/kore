@@ -273,6 +273,10 @@ package final class Chat: Identifiable {
             useReset: { [weak self] credit, attempt in
                 guard let self else { throw UsageUnavailable() }
                 return try await self.connect().useReset(credit: credit, attempt: attempt)
+            },
+            shares: { [weak self] reading in
+                guard let self else { return nil }
+                return await self.connect().koreShares(for: reading)
             })
     }
 

@@ -10,7 +10,9 @@ import KoreUI
 /// "/lim" mid-text, typing closes it and the key lands in the field; a click outside closes it
 /// too, and so does a paste that reaches the draft without a key. With Codex, its count of full
 /// resets unfolds one row each, and a row's "Use reset" uses that one after asking; Codex's count
-/// alone is one row where Codex picks, and a long list scrolls.
+/// alone is one row where Codex picks, and a long list scrolls. Kore's share of each limit,
+/// worked out from the run's own transcripts or rollouts (Kore's chat and another app's), starts
+/// each bar hatched and is the bar's tooltip; a limit nothing used has none.
 final class UsagePopup: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
     override class var variants: [Variant] { [.claude, .codex, countOnly, many] }
@@ -106,6 +108,30 @@ final class UsagePopup: ChatStoryline {
 
     private static func epoch(hours: Double) -> Double { Date().addingTimeInterval(hours * 3600).timeIntervalSince1970.rounded() }
 
+    /// Each hatch from its bar's leading edge, as wide as Kore's part of the fill (two bands at
+    /// least), and the bar's tooltip saying it.
+    private static func hatches(_ limits: [(title: String, used: Double, kore: Double)]) -> [any Step] {
+        limits.flatMap { limit -> [any Step] in
+            let id = StoryID.Composer.usageLimit(limit.title)
+            let words = limit.kore < 1 ? "<1% in Kore" : "~\(Int(limit.kore.rounded()))% in Kore"
+            return [
+                WaitForElement(.id(id.part(.share))),
+                Expect(
+                    "\(limit.title)'s hatch at Kore's part of its fill",
+                    found: { _ in "\(frame(id.part(.track)).map { "\($0)" } ?? "no bar"), \(frame(id.part(.share)).map { "\($0)" } ?? "no hatch")" }
+                ) { _ in
+                    guard let bar = frame(id.part(.track)), let hatch = frame(id.part(.share)) else { return false }
+                    let fill = max(bar.width * limit.used / 100, bar.height)
+                    let width = min(max(fill * limit.kore / limit.used, 6), fill)
+                    return abs(hatch.minX - bar.minX) < 0.5 && abs(hatch.width - width) < 1
+                },
+                Expect("\(limit.title)'s tooltip “\(words)”", found: { $0.app.chat?.storyUsageBarHelp(limit.title) }) {
+                    $0.app.chat?.storyUsageBarHelp(limit.title) == words
+                },
+            ]
+        }
+    }
+
     /// The usage row's top edge is above every other row's.
     @MainActor private static func usageFirst() -> Bool {
         guard let usage = StoryRegistry.entry(StoryID.Composer.command("usage").raw)?.frame,
@@ -130,8 +156,11 @@ final class UsagePopup: ChatStoryline {
         }
         let bars =
             codex
-            ? ["5h limit · 84% · Resets in 2h", "Weekly limit · 6% · Resets in 4d"]
-            : ["Session (5hr) · 30% · Resets in 3h", "Weekly (7 day) · 44% · Resets in 6d", "Weekly Fable · 0% · Resets in 6d"]
+            ? ["5h limit · 84% · Resets in 2h · ~25% in Kore", "Weekly limit · 6% · Resets in 4d · ~2% in Kore"]
+            : [
+                "Session (5hr) · 30% · Resets in 3h · ~12% in Kore", "Weekly (7 day) · 44% · Resets in 6d · ~18% in Kore",
+                "Weekly Fable · 0% · Resets in 6d",
+            ]
         let titles = bars.compactMap { $0.components(separatedBy: " · ").first }
         let shown = codex ? ["5h", "Weekly"] : ["Session", "Weekly", "Weekly Fable"]
         let header = codex ? "ChatGPT Pro Lite · you@example.com" : "Claude Max · you@example.com · Example Org"
@@ -142,7 +171,7 @@ final class UsagePopup: ChatStoryline {
             }
         }
         var steps: [any Step] = [
-            UseScript(Self.claude, for: "claude"), UseScript(Self.codex(variant), for: "codex"), OpenFolder(), StartChat(),
+            UseScript(Self.claude, for: "claude"), UseScript(Self.codex(variant), for: "codex"), KoreUsageRecords(), OpenFolder(), StartChat(),
             WaitForFocus(.id(StoryID.Composer.field)),
             // A bare "/": Usage first, the CLI's own usage command not listed beside it.
             Press(.id(StoryID.Composer.slash)),
@@ -167,6 +196,18 @@ final class UsagePopup: ChatStoryline {
             },
         ]
         steps += titles.map { ExpectElement(.id(StoryID.Composer.usageLimit($0))) }
+        steps += Self.hatches(codex ? [("5h limit", 84, 84 * 0.3), ("Weekly limit", 6, 6 * 0.3)] : [
+            ("Session (5hr)", 30.7, 30.7 * 0.4), ("Weekly (7 day)", 44, 44 * 0.4),
+        ])
+        if !codex {
+            // Nothing used: no hatch, and the bar's tooltip stays its reset.
+            steps += [
+                ExpectElement(.id(StoryID.Composer.usageLimit("Weekly Fable").part(.share)), .absent),
+                Expect("Weekly Fable's tooltip its reset", found: { $0.app.chat?.storyUsageBarHelp("Weekly Fable") }) {
+                    $0.app.chat?.storyUsageBarHelp("Weekly Fable")?.hasPrefix("Resets ") == true
+                },
+            ]
+        }
         steps.append(
             Expect("the rows' titles shortened", found: { $0.app.chat?.storyUsageTitles.joined(separator: " | ") }) {
                 $0.app.chat?.storyUsageTitles == shown
@@ -397,6 +438,43 @@ final class UsagePopup: ChatStoryline {
             ExpectElement(popup, .absent),
             WaitForFocus(.id(StoryID.Composer.field)),
         ]
+    }
+}
+
+/// The run's records of what each request used, as the CLIs write them, half an hour ago in
+/// "/work/app": Kore's chat (Claude's stream-json lines in a session Kore ran; Codex's thread
+/// that Kore started) and another app's, Kore's with 40% of the units on Claude and 30% on Codex.
+private struct KoreUsageRecords: Step {
+    var label: String { "Write the run's usage records" }
+
+    func run(_ story: StoryContext) async throws {
+        let paths = UsagePaths.current
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let stamp = formatter.string(from: Date().addingTimeInterval(-30 * 60))
+        func claude(_ id: String, _ entry: String, _ session: String, _ output: Int) -> String {
+            #"{"type":"assistant","timestamp":"\#(stamp)","entrypoint":"\#(entry)","cwd":"/work/app","sessionId":"\#(session)","message":{"id":"\#(id)","model":"test-model","usage":{"input_tokens":0,"output_tokens":\#(output),"cache_read_input_tokens":0}}}"#
+        }
+        func codex(_ thread: String, _ originator: String, _ input: Int) -> [String] {
+            [
+                #"{"timestamp":"\#(stamp)","type":"session_meta","payload":{"id":"\#(thread)","originator":"\#(originator)","cwd":"/work/app","source":"vscode"}}"#,
+                #"{"timestamp":"\#(stamp)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":\#(input)},"last_token_usage":{"input_tokens":\#(input),"cached_input_tokens":0,"output_tokens":0}},"rate_limits":null}}"#,
+            ]
+        }
+        let day = Calendar(identifier: .gregorian).dateComponents(in: .current, from: Date())
+        let dayPath = String(format: "%04d/%02d/%02d", day.year ?? 2026, day.month ?? 1, day.day ?? 1)
+        let files: [(URL, [String])] = [
+            (paths.claudeProjects.appendingPathComponent("-work-app/kore-session.jsonl"), [claude("m1", "sdk-cli", "kore-session", 40)]),
+            (paths.claudeProjects.appendingPathComponent("-work-app/ide-session.jsonl"), [claude("m2", "claude-vscode", "ide-session", 60)]),
+            (paths.codexSessions.appendingPathComponent("\(dayPath)/rollout-kore.jsonl"), codex("kore-thread", "kore", 30)),
+            (paths.codexSessions.appendingPathComponent("\(dayPath)/rollout-ide.jsonl"), codex("ide-thread", "codex_vscode", 70)),
+        ]
+        for (url, lines) in files {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+        }
+        KoreSessions.shared.record(cli: "claude", session: "kore-session", folder: URL(fileURLWithPath: "/work/app"), launch: "new")
+        await Task.detached { KoreSessions.shared.sync() }.value
     }
 }
 

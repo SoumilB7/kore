@@ -173,6 +173,12 @@ package final class ScriptedBackend: ChatBackend {
         }
     }
 
+    /// From the run's own files (a storyline writes them), as Kore works it out.
+    package func koreShares(for reading: PlanReading) async -> KoreShares? {
+        let cli = provider
+        return await Task.detached(priority: .utility) { await KoreUsage.shared.shares(for: reading, cli: cli) }.value
+    }
+
     /// Never a real credit: the script's answer, as Codex sends it.
     package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome {
         log.append(.useReset(credit: credit))

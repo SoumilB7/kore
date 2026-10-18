@@ -157,6 +157,10 @@ final class CodexBackend: ChatBackend {
         return try await PlanUsage.codex()
     }
 
+    func koreShares(for reading: PlanReading) async -> KoreShares? {
+        await Task.detached(priority: .utility) { await KoreUsage.shared.shares(for: reading, cli: "codex") }.value
+    }
+
     /// Through the chat's app-server; once it has exited, or before it starts, a short-lived
     /// one, with the same attempt key so the credit is used once whichever answers.
     func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome {
@@ -293,6 +297,7 @@ final class CodexBackend: ChatBackend {
         translator.translate(event)
         flush()
         if case .turnCompleted(let result) = event {
+            KoreUsageRefresh.soon("codex")
             // A turn that failed may have left no rollout: the next launch looks for it.
             if result.status == "completed" { unwritten = false }
             saveTitle()

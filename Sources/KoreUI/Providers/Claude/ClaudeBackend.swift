@@ -208,6 +208,10 @@ final class ClaudeBackend: ChatBackend {
         return try await PlanUsage.claude()
     }
 
+    func koreShares(for reading: PlanReading) async -> KoreShares? {
+        await Task.detached(priority: .utility) { await KoreUsage.shared.shares(for: reading, cli: "claude") }.value
+    }
+
     private func controls(_ session: ClaudeSession) async -> ChatControls {
         let models = (await session.capabilities["models"]?.array ?? []).compactMap { json -> ModelOption? in
             guard let value = json["value"]?.string, value != "default" else { return nil }
@@ -242,6 +246,8 @@ final class ClaudeBackend: ChatBackend {
         case .raw(let json) where json["type"]?.string == "rate_limit_event":
             // The plan's windows as this turn began: kept for usage attribution.
             PlanSnapshotLog.shared.append(PlanSnapshot.claude(rateLimitEvent: json, account: planAccount))
+        case .turnCompleted:
+            KoreUsageRefresh.soon("claude")
         default: break
         }
         translator.translate(event)

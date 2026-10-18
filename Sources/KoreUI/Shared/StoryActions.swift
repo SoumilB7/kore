@@ -80,6 +80,10 @@ extension Chat {
     package var storyUsage: [String] { usage.lines }
     /// The bars' titles as their rows show them ("Session", "5h").
     package var storyUsageTitles: [String] { (usage.reading?.limits?.bars ?? []).map { UsageText.label($0.title) } }
+    /// A bar's tooltip, by its limit's title: Kore's share ("~12% in Kore"), else its reset.
+    package func storyUsageBarHelp(_ title: String) -> String? {
+        usage.reading?.limits?.bars.first { $0.title == title }.map { usage.barHelp($0, now: Date()) }
+    }
     package var storyUsageExtras: String { UsageText.extras(usage.reading?.limits?.extras ?? []) }
     /// Whether the full resets are unfolded, and whether a row's "Yes" would go yet (a
     /// double-click's time after its "Use").

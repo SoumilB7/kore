@@ -21,6 +21,58 @@ struct UsagePopupTests {
         #expect(UsageText.fraction(-3) == 0)
     }
 
+    @Test func koresFiguresAreEstimates() {
+        #expect(UsageText.kore(12.4) == "~12%")
+        #expect(UsageText.kore(12.5) == "~13%")
+        #expect(UsageText.kore(1) == "~1%")
+        #expect(UsageText.kore(0.7) == "<1%")
+        #expect(UsageText.kore(0) == "~0%")
+        #expect(UsageText.inKore(0.2) == "<1% in Kore")
+    }
+
+    @Test func theHatchIsKoresPartOfTheFillTwoBandsAtLeast() {
+        // A 200pt fill, Kore a quarter of what's used.
+        #expect(UsageHatch.width(fill: 200, kore: 0.1, used: 0.4) == 50)
+        // A sliver still shows two bands, never past the fill.
+        #expect(UsageHatch.width(fill: 200, kore: 0.001, used: 0.4) == Size.usageHatchMin)
+        #expect(UsageHatch.width(fill: 4, kore: 0.01, used: 0.02) == 4)
+        // All of it, or none.
+        #expect(UsageHatch.width(fill: 200, kore: 0.5, used: 0.4) == 200)
+        #expect(UsageHatch.width(fill: 200, kore: 0, used: 0.4) == 0)
+        #expect(UsageHatch.fill(0, in: CGSize(width: 100, height: 4)) == 4)
+    }
+
+    @Test func aBarsTooltipIsKoresShareOnceThereIsOne() async throws {
+        let state = UsageState()
+        let reset = Self.now.addingTimeInterval(3600)
+        let reading = PlanReading(
+            account: PlanAccount(access: .plan),
+            limits: PlanLimits(bars: [
+                PlanLimit(title: "Session (5hr)", used: 9, resetsAt: reset, window: 5 * 3600),
+                PlanLimit(title: "Weekly (7 day)", used: 2, resetsAt: reset, window: 7 * 86400),
+            ]))
+        let shares = KoreShares(
+            at: Self.now,
+            limits: [
+                // Worked out from a reading before: more than the plan says now, so cut to it.
+                "Session (5hr)": KoreShare(used: 12, kore: 11, chats: [ChatShare(id: "a", points: 11)]),
+                "Weekly (7 day)": KoreShare(used: 2, kore: 0),
+            ])
+        state.open(provider: "test-\(UUID())", read: { reading }, useReset: { _, _ in .reset }, shares: { _ in shares })
+        for _ in 0..<100 where state.shares == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let session = try #require(reading.limits?.bars.first)
+        #expect(state.share(session)?.kore == 9)
+        #expect(state.share(session)?.clamped == true)
+        #expect(state.share(session)?.chats.first?.points == 9)
+        #expect(state.barHelp(session, now: Self.now) == "~9% in Kore")
+        // Nothing from Kore: the reset, as before.
+        let week = try #require(reading.limits?.bars.last)
+        #expect(state.barHelp(week, now: Self.now).hasPrefix("Resets "))
+        #expect(state.lines.first?.hasSuffix(" · ~9% in Kore") == true)
+        #expect(state.lines.last?.contains("in Kore") == false)
+        state.close()
+    }
+
     @Test func resetsReadInTheLargestUnit() {
         let later = { (seconds: Double) in UsageText.resets(Self.now.addingTimeInterval(seconds), now: Self.now) }
         #expect(later(3 * 3600 - 300) == "Resets in 3h")

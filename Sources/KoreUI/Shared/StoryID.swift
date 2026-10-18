@@ -33,7 +33,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
     package enum Part: String, Sendable, CaseIterable {
         case fork, copy, stop, close, chevron, open, cancel, allow, always, deny, approveplan, keepplanning, archive
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
-        case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save
+        case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track
         case signIn = "signin", signOut = "signout"
         case `continue`
     }
@@ -88,7 +88,8 @@ extension StoryID {
         /// form's Credentials picker is `account.part(.credentials)`, the key file's Choose…
         /// `.part(.choose)`, Save `.part(.save)`.
         package static func accountField(_ name: String) -> StoryID { StoryID(.composer, "account.field", key: name) }
-        /// One of its limits, by its title.
+        /// One of its limits, by its title; `.part(.track)` is its bar, `.part(.share)` Kore's
+        /// hatched stretch of it.
         package static func usageLimit(_ title: String) -> StoryID { StoryID(.composer, "usage.limit", key: title) }
         /// One of its full resets, by the credit's id (empty for the one row of a count alone);
         /// `.part(.use)` asks, then `.part(.allow)` / `.part(.cancel)` answer.

@@ -82,4 +82,9 @@ extension Size {
     /// The full resets' list at its tallest before it scrolls: four and a half rows, so the half
     /// row shows there's more.
     static let usageResetsMax: CGFloat = 117
+    /// Kore's stretch of a usage bar: bands of the fill at 45°, measured across them, a band and
+    /// a gap per period (the track shows through the gap).
+    static let usageHatch = (band: CGFloat(2), period: CGFloat(3))
+    /// The least width of a share of Kore that isn't zero: two bands, so a sliver still reads hatched.
+    static let usageHatchMin: CGFloat = 6
 }

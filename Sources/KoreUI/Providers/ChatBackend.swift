@@ -51,6 +51,9 @@ package protocol ChatBackend: AnyObject {
     /// The account and its plan's limits (the usage popup): read through the chat's CLI while it
     /// runs, else through a short-lived one. Nothing goes into the conversation.
     func usage() async throws -> PlanReading
+    /// Kore's share of each limit in `reading`, from this Mac's files (`KoreUsage`); nil for a
+    /// backend with no plan.
+    func koreShares(for reading: PlanReading) async -> KoreShares?
     /// Uses one of the account's full resets of its limits (`credit`, or the CLI's pick), as
     /// the attempt `attempt`: irreversible, so only on the user's confirmed ask.
     func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome
@@ -135,6 +138,9 @@ extension ChatBackend {
 
     /// For a backend with no account to read.
     package func usage() async throws -> PlanReading { throw UsageUnavailable() }
+
+    /// For a backend with no plan.
+    package func koreShares(for reading: PlanReading) async -> KoreShares? { nil }
 
     /// For a backend with no process of its own.
     package func relaunch() async {}
