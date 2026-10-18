@@ -126,6 +126,29 @@ extension StoryTranscript {
     package var selectionMarkdown: String { store.selection.markdown() }
     /// The rects a built row draws for the selection now.
     package func highlightRects(_ entry: UUID) -> Int { store.selection.rects(entry).count }
+    /// What a built row draws for the selection outside every selected text's frame (a line
+    /// the drawn text doesn't have).
+    package func strayHighlights(_ entry: UUID) -> [CGRect] {
+        let selection = store.selection
+        guard let row = selection.rows[entry], let texts = selection.slots[entry] else { return [] }
+        let frames = texts.compactMap { path, slot in
+            selection.selected(entry, path) == nil ? nil : slot.frame.offsetBy(dx: -row.minX, dy: -row.minY).insetBy(dx: -1, dy: -1)
+        }
+        return selection.rects(entry).filter { rect in !frames.contains { $0.contains(rect) } }
+    }
+
+    /// The selection's rects in a built row and its texts' frames (row coordinates), for a failure.
+    package func highlightDescription(_ entry: UUID) -> String {
+        let selection = store.selection
+        guard let row = selection.rows[entry] else { return "row not built" }
+        let rects = selection.rects(entry).map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))×\(Int($0.height))" }
+        let texts = (selection.slots[entry] ?? [:]).sorted { $0.key.lexicographicallyPrecedes($1.key) }.map { path, slot in
+            let f = slot.frame.offsetBy(dx: -row.minX, dy: -row.minY)
+            return "\(path) \(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))×\(Int(f.height)) sel \(selection.selected(entry, path).map { "\($0.lowerBound)..<\($0.upperBound == .max ? "max" : "\($0.upperBound)")" } ?? "-")"
+        }
+        return "rects [\(rects.joined(separator: "; "))] texts [\(texts.joined(separator: "; "))]"
+    }
+
     /// Hit-tests made and texts laid out again, so far.
     package var selectionWork: (hitTests: Int, laidOut: Int) { (store.selection.hitTests, store.selection.laidOut) }
     package var selectionActive: Bool { store.selection.active }

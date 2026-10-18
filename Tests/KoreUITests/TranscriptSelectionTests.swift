@@ -51,8 +51,12 @@ struct TranscriptSelectionTests {
 
     /// SwiftUI's own layout of the text as the transcript sets it.
     private static func swiftUILines(_ text: AttributedString, _ style: SelectionStyle, width: CGFloat) throws -> (lines: [CGPoint], size: CGSize) {
+        try swiftUILines(styled(Text(text), style), width: width)
+    }
+
+    private static func swiftUILines(_ text: some View, width: CGFloat) throws -> (lines: [CGPoint], size: CGSize) {
         let box = LayoutBox()
-        let view = styled(Text(text), style)
+        let view = text
             .fixedSize(horizontal: false, vertical: true)
             .frame(width: width, alignment: .topLeading)
             .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
@@ -96,6 +100,36 @@ struct TranscriptSelectionTests {
                 width = max(width, line.typographicBounds.width)
             }
             result = (lines, CGSize(width: width, height: geometry.size.height))
+        }
+    }
+
+    /// A bullet whose second line, after a break, is a long file path in inline code, at zooms
+    /// where Menlo's size isn't a whole point: the code wraps as SwiftUI drew it, and selecting
+    /// the path fills its glyphs on its lines and nothing past them (a stray rect once sat on an
+    /// empty line under it).
+    @Test(arguments: [0.8, 0.9, 1.1, 1.2])
+    func codeLineInABulletSelectsOnItsGlyphs(_ zoom: Double) throws {
+        let zoom = CGFloat(zoom)
+        let path = "file:///Users/soumil/Code/Projects/kore/z-docs/design/chat-handoff.html"
+        for (lead, end) in [("  \n", "hard break"), ("\n", "soft break")] {
+            let md = "- The design doc is here: [chat-handoff.html](\(path))\(lead)  `\(path)`"
+            let blocks = MarkdownParser.parse(md[...], base: 0, zoom: zoom)
+            guard case .list(let list) = blocks.first?.kind, case .paragraph(let text) = list.items.first?.blocks.first?.kind else {
+                Issue.record("not a bullet paragraph")
+                return
+            }
+            let start = (String(text.characters) as NSString).range(of: "file:").location
+            for width in [360, 480, 600, 760, 1000] as [CGFloat] {
+                let drawn = try Self.swiftUILines(Text(text).font(.system(size: 13 * zoom)).lineSpacing(TextStyle.leading), width: width)
+                let layout = SlotLayout(SelectionStyle.running.attributed(text, zoom: zoom), size: drawn.size)
+                let again = layout.lineOrigins()
+                let shape = "zoom \(zoom), \(end), \(Int(width)) pt"
+                #expect(drawn.lines.count == again.count, "\(shape): \(drawn.lines.count) lines drawn, \(again.count) laid out")
+                let rects = layout.rects(start..<layout.length)
+                #expect(rects.allSatisfy { $0.maxY <= drawn.size.height + 1 }, "\(shape): \(rects) past \(drawn.size.height) pt")
+                let right = rects.map(\.maxX).max() ?? 0
+                #expect(abs(right - drawn.size.width) < 1, "\(shape): the selection ends at \(right), the text at \(drawn.size.width)")
+            }
         }
     }
 

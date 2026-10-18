@@ -301,6 +301,73 @@ final class ChatFileLink: ChatStoryline {
     }
 }
 
+/// A bullet whose second line, after a line break, is a long file path in inline code, at 110%
+/// zoom (Menlo at 13.2 pt, which once wrapped the selection's copy of it): a drag over that line and past its end, a
+/// double- and a triple-click on it, and a drag across both lines highlight their glyphs and
+/// nothing under them, in a wide window and a narrow one, and copy what they cover.
+final class SelectCodeLineInBullet: ChatStoryline {
+    static let path = "file:///Users/soumil/Code/Projects/kore/z-docs/design/chat-handoff.html"
+    static let reply = "- The design doc is here: [chat-handoff.html](\(path))  \n  `\(path)`"
+    static let shown = "The design doc is here: chat-handoff.html\n" + path
+    static let item = [0, 0, 0]
+
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(reply)]) }
+
+    override func steps() -> [any Step] {
+        let code = Spot.answer(1, Self.item, at: Self.shown, "file:")
+        let last = code.shifted(Self.path.utf16.count - 1)
+        let line = { (name: String) -> [any Step] in
+            [
+                DragSelect(from: code, to: last, past: CGVector(dx: 60, dy: 0)),
+                Snapshot(name),
+                Self.onlyGlyphs("the code line's highlight on its glyphs only"),
+                CopySelection("- `\(Self.path)`"),
+            ]
+        }
+        return super.steps() + [
+            Send("Where is the design doc?"), TurnFinished(1),
+            Key(KeyChord(.character("="), .command)), WaitIdle(),
+        ] + line("code-line-wide") + [
+            ClickText(.answer(1, Self.item, at: Self.shown, "soumil"), count: 2),
+            Self.onlyGlyphs("a double-click's word highlighted on its glyphs only"),
+            CopySelection("- `soumil`"),
+            ClickText(.answer(1, Self.item, at: Self.shown, "Projects"), count: 3),
+            Self.onlyGlyphs("a triple-click's line highlighted on its glyphs only"),
+            CopySelection("- `\(Self.path)`"),
+            DragSelect(from: .answer(1, Self.item, at: Self.shown, "design doc"), to: last, past: CGVector(dx: 60, dy: 0)),
+            Snapshot("both-lines-wide"),
+            Self.onlyGlyphs("both lines highlighted on their glyphs only"),
+            CopySelection("- design doc is here: [chat-handoff.html](\(Self.path))\n  `\(Self.path)`"),
+            SizeWindow(width: 620), WaitIdle(),
+        ] + line("code-line-narrow") + [
+            Key(KeyChord(.character("0"), .command)), WaitIdle(),
+        ]
+    }
+
+    static func onlyGlyphs(_ what: String) -> Expect {
+        Expect(what, found: { story in
+            guard let t = try? story.activeChat().storyTranscript, let id = try? Spot.answer(1).entry(story) else { return nil }
+            return t.highlightDescription(id)
+        }) { story in
+            let t = try story.activeChat().storyTranscript
+            let id = try Spot.answer(1).entry(story)
+            return t.highlightRects(id) > 0 && t.strayHighlights(id).isEmpty
+        }
+    }
+}
+
+/// Gives the window's content a new width, its height kept.
+struct SizeWindow: Step {
+    let width: CGFloat
+    var label: String { "Size the window \(Int(width)) pt wide" }
+
+    func run(_ story: StoryContext) async throws {
+        guard let window = story.window, let content = window.contentView else { throw StoryFailure.other("no window") }
+        window.setContentSize(CGSize(width: width, height: content.bounds.height))
+    }
+}
+
 /// Sets the scripted CLI's script from the storyline's folder (a reply that names a file in it).
 struct UseFolderScript: Step {
     let make: @MainActor (URL) -> CLIScript
@@ -341,6 +408,9 @@ struct Spot: CustomStringConvertible {
     }
 
     var description: String { "\(row)\(path)@\(offset)" }
+
+    /// The same text, `by` UTF-16 units on.
+    func shifted(_ by: Int) -> Spot { Spot(row: row, path: path, offset: offset + by) }
 
     @MainActor func entry(_ story: StoryContext) throws -> UUID { try entry(story: story) }
 
@@ -418,11 +488,14 @@ struct DragSelect: Step {
     let from: Spot
     let to: Spot
     var clicks = 1
-    var label: String { "Drag-select from \(from) to \(to)" }
+    /// Where the drag ends past `to` (window points, y up): off the line's end, say.
+    var past = CGVector.zero
+    var label: String { "Drag-select from \(from) to \(to)" + (past == .zero ? "" : " and \(Int(past.dx)), \(Int(past.dy)) pt on") }
 
     func run(_ story: StoryContext) async throws {
         let (window, a) = try await from.point(story)
-        let (_, b) = try await to.point(story)
+        let (_, end) = try await to.point(story)
+        let b = CGPoint(x: end.x + past.dx, y: end.y + past.dy)
         if clicks > 1 {
             await story.input.click(at: a, in: window, count: clicks - 1)
         }

@@ -38,8 +38,10 @@ extension Font {
         koreMono(size, zoom: Zoom.shared.scale)
     }
 
-    /// The editor font at a given zoom (off the main thread).
+    /// The editor font at a given zoom (off the main thread), at that exact size: `custom(_:size:)`
+    /// rounds to a whole point (13.2 draws at 13), and the transcript's selection, laid out with
+    /// AppKit's Menlo at 13.2, then wraps a long code span where the drawn text doesn't.
     static func koreMono(_ size: CGFloat, zoom: CGFloat) -> Font {
-        .custom("Menlo", size: size * zoom)
+        .custom("Menlo", fixedSize: size * zoom)
     }
 }
