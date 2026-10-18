@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The conversation as a timeline (look.md §2). Sections start at each user message, whose box
 /// sticks to the top while its section scrolls by. Rows are built lazily and compare by value,
-/// and only the last turns are built: "Load earlier turns" adds more above, keeping the view
+/// and only the last turns are built: scrolling up near the top adds more above, keeping the view
 /// still. Following the end works as in the Claude Code extension (live-streaming.md): within
 /// 50pt of the bottom new content is pinned at once, for 2s after a send it glides, and once the
 /// reader scrolls up nothing moves. A turn folding above the answer keeps the answer where it was.
@@ -34,10 +34,25 @@ struct TranscriptTimeline: View, Equatable {
     /// Built message and answer rows' tops from the top of the visible area (below the title
     /// bar), as they report them, for saving the place.
     @StateObject private var rowTops = Held([String: CGFloat]())
-    /// While turns are added above (Load earlier): the message row that was first and its top
-    /// on screen. When it reports where it moved, the view follows it by as much, so what's on
-    /// screen stays put.
-    @StateObject private var anchor = Held((id: String, y: CGFloat)?.none)
+    /// The built answers' tops among them. Not messages: a message sticks to the top, so where
+    /// it is on screen isn't where it is in the content.
+    @StateObject private var answerTops = Held([String: CGFloat]())
+    /// The content's height just before turns went in above: the view moves down by what they
+    /// added, at once (`ScrollShift`).
+    @StateObject private var paged = Held(CGFloat?.none)
+    /// And the first answer on screen then, with its top. The turns that went in are only
+    /// estimated, so that move can be off: once it's `placed`, the answer's next report (it's
+    /// back on screen) moves the view by what's left. When none comes by the next scroll update
+    /// (the estimate was off by more than a screen, so the answer isn't built), the view is
+    /// taken to the answer (`sought`), and its report then puts it back; one that doesn't come
+    /// within half a second lets it go.
+    @StateObject private var anchor = Held((id: String, top: CGFloat, placed: Bool, waited: Bool, sought: Date?)?.none)
+    /// How far the reader scrolled while the answer was kept, so putting it back doesn't undo
+    /// that; `skip`: the next move is the one taking the view to the answer.
+    @StateObject private var readerMoved = Held((by: CGFloat(0), skip: false))
+    /// The earlier conversation was asked for by scrolling up here, and hasn't come yet.
+    @StateObject private var fetching = Held(false)
+    @StateObject private var shift = ScrollShift()
     @StateObject private var visibleHeight = Held(CGFloat(0))
     /// The scroll view's top inset (under the title bar): its offset reads -inset at the top,
     /// while `ScrollPosition.scrollTo(y:)` counts from the content's top, so offsets are
@@ -90,6 +105,7 @@ struct TranscriptTimeline: View, Equatable {
                 // the responder at its corner follows the pointer in it.
                 .background(alignment: .topLeading) {
                     SelectionResponder(selection: store.selection, hidden: hidden).frame(width: Stroke.hairline, height: Stroke.hairline)
+                    ScrollShift.Finder(shift).frame(width: Stroke.hairline, height: Stroke.hairline)
                 }
                 .coordinateSpace(.named(TranscriptSelection.space))
                 .environment(\.transcriptSelection, store.selection)
@@ -105,6 +121,7 @@ struct TranscriptTimeline: View, Equatable {
                     restore.value = nil
                     restoreInRow.value = nil
                     anchor.value = nil
+                    paged.value = nil
                 } else if new == .idle, old == .interacting || old == .decelerating {
                     let g = context.geometry
                     following.value = g.contentOffset.y + g.containerSize.height >= g.contentSize.height - Self.atBottom
@@ -142,6 +159,36 @@ struct TranscriptTimeline: View, Equatable {
                         return
                     }
                 }
+                if anchor.value != nil {
+                    if readerMoved.value.skip {
+                        readerMoved.value.skip = false
+                    } else {
+                        readerMoved.value.by += offset - geometry.value.offset
+                    }
+                }
+                if let before = paged.value, height > before {
+                    // Turns went in above: down by what they added, so what's on screen stays put.
+                    paged.value = nil
+                    anchor.value?.placed = true
+                    let target = offset + (height - before)
+                    if !shift(height - before) {
+                        scroll(position, to: target)
+                        nudge.value &+= 1
+                    }
+                    geometry.value = (height, target)
+                    return
+                }
+                if let kept = anchor.value, kept.placed {
+                    if !kept.waited {
+                        anchor.value?.waited = true
+                    } else if let sought = kept.sought {
+                        if Date().timeIntervalSince(sought) > 0.5 { anchor.value = nil }
+                    } else {
+                        anchor.value?.sought = Date()
+                        readerMoved.value.skip = true
+                        proxy.scrollTo(kept.id, anchor: .top)
+                    }
+                }
                 if pendingFold.value, !following.value, height < geometry.value.height {
                     // The fold took height from above the answer: scroll up by as much.
                     pendingFold.value = false
@@ -177,9 +224,28 @@ struct TranscriptTimeline: View, Equatable {
                 if following.value, height != geometry.value.height, store.sentAt.map({ Date().timeIntervalSince($0) >= Self.glide }) ?? true {
                     proxy.scrollTo(Self.end, anchor: .bottom)
                 }
+                // Within a screen of the top on the way up: earlier turns go in above, as the top
+                // row's press does, with what's on screen kept where it is. Only the reader's own
+                // scroll in a shown tab: never a place being restored (a tab coming back).
+                if !hidden, !following.value, restore.value == nil, restoreInRow.value == nil, anchor.value == nil, paged.value == nil,
+                    !fetching.value, offset < geometry.value.offset - 1, offset + insetTop.value < new[2]
+                {
+                    if store.hiddenTurns > 0 {
+                        loadEarlier()
+                    } else if store.earlierAvailable, !store.loadingEarlier {
+                        loadEarlierConversation()
+                    }
+                }
                 geometry.value = (height, offset)
             }
             .onChange(of: store.folded?.seq) { pendingFold.value = true }
+            .onChange(of: store.loadingEarlier) { _, loading in
+                // The earlier conversation is in (and laid out next): what's on screen stays.
+                if !loading, fetching.value {
+                    fetching.value = false
+                    paged.value = geometry.value.height
+                }
+            }
             .onChange(of: tail, initial: true) { follow(proxy) }
             .onAppear {
                 if StoryHost.installed {
@@ -257,21 +323,23 @@ struct TranscriptTimeline: View, Equatable {
 
     /// Twenty more turns above; what's on screen stays where it was (`anchor`).
     private func loadEarlier() {
-        keepFirstMessage()
+        keepPlace()
+        paged.value = geometry.value.height
         store.loadEarlier()
     }
 
     /// The conversation before a compaction; it arrives later (read from disk), and what's on
     /// screen then stays where it was.
     private func loadEarlierConversation() {
-        keepFirstMessage()
+        keepPlace()
+        fetching.value = true
         actions.loadEarlierConversation()
     }
 
-    private func keepFirstMessage() {
+    private func keepPlace() {
         following.value = false
-        guard let id = store.sections.first?.header?.id.uuidString, let y = rowTops.value[id] else { return }
-        anchor.value = (id, y)
+        anchor.value = answerTops.value.filter { $0.value >= 0 }.min { $0.value < $1.value }.map { ($0.key, $0.value, false, false, nil) }
+        readerMoved.value = (0, false)
     }
 
     private var binding: Binding<ScrollPosition> {
@@ -283,8 +351,8 @@ struct TranscriptTimeline: View, Equatable {
     private func rowActions(_ proxy: ScrollViewProxy) -> TranscriptActions {
         var actions = reveal(proxy)
         let sticky = sticky
-        let tops = rowTops
-        let (anchor, geometry, position, nudge) = (anchor, geometry, position, nudge)
+        let (tops, answerTops) = (rowTops, answerTops)
+        let (anchor, readerMoved, geometry, position, nudge, shift, visible) = (anchor, readerMoved, geometry, position, nudge, shift, visibleHeight)
         let scroll = scroll
         actions.messageMoved = { id, frame in
             guard let frame else {
@@ -292,18 +360,21 @@ struct TranscriptTimeline: View, Equatable {
                 return
             }
             sticky.row(id, frame.maxY)
-            let y = frame.minY
-            tops.value[id] = y
-            if let kept = anchor.value, kept.id == id, abs(y - kept.y) > 0.5 {
-                // Turns arrived above it: follow it down by as far as it moved.
-                anchor.value = nil
-                let target = geometry.value.offset + (y - kept.y)
-                scroll(position, target)
-                geometry.value.offset = target
+            tops.value[id] = frame.minY
+        }
+        actions.answerMoved = { id, top in
+            tops.value[id] = top
+            answerTops.value[id] = top
+            // Back on screen after turns went in above: on by what the move missed.
+            guard let top, let kept = anchor.value, kept.id == id, kept.placed, abs(top) < visible.value else { return }
+            anchor.value = nil
+            let dy = top - (kept.top - readerMoved.value.by)
+            geometry.value.offset += dy
+            if abs(dy) > 0.5, !shift(dy) {
+                scroll(position, geometry.value.offset)
                 nudge.value &+= 1
             }
         }
-        actions.answerMoved = { id, top in tops.value[id] = top }
         return actions
     }
 

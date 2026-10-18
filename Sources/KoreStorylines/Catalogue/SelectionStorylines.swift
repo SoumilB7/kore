@@ -121,8 +121,8 @@ final class ShiftClickExtends: ChatStoryline {
 }
 
 /// A resumed chat shows only its last ten turns: ⌘A takes those, as quotes and answers, without
-/// laying out the texts it covers (a text selected whole fills its frame); after "Load earlier
-/// turns" it takes them all. A selection kept while its rows scroll away and back comes back.
+/// laying out the texts it covers (a text selected whole fills its frame); once scrolling up has
+/// loaded the earlier turns it takes them all. A selection kept while its rows scroll away and back comes back.
 final class SelectAllLongChat: ChatStoryline {
     static let turns = 13
     static func answer(_ n: Int) -> String { "Answer \(n): a paragraph with **bold** and `code`.\n\n- point one of \(n)\n- point two of \(n)" }
@@ -155,8 +155,8 @@ final class SelectAllLongChat: ChatStoryline {
                 try story.activeChat().storyTranscript.selectionWork.laidOut == Remember.value(story, "work before ⌘A")
             },
             CopySelection(Self.whole((Self.turns - 9)...Self.turns)),
+            // Up near the top, the earlier turns go in above by themselves.
             Scroll(.answer(turn: Self.turns), to: .top),
-            Press(.id(StoryID.Transcript.earlier)),
             Expect("the earlier turns loaded") { story in try story.activeChat().storyTranscript.isBuilt(try Spot.answer(1).entry(story)) },
             ClickText(.answer(1, [0], at: Self.paragraph(1), "paragraph")),
             Key(KeyChord(.character("a"), .command)),
