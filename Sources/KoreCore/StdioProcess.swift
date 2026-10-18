@@ -2,7 +2,7 @@ import Foundation
 
 /// A child process speaking newline-delimited JSON over stdin/stdout. Shared transport
 /// for both CLIs; the protocol on top differs (Claude stream-json vs Codex JSON-RPC).
-final class StdioProcess: @unchecked Sendable {
+package final class StdioProcess: @unchecked Sendable {
     enum Output: Sendable {
         case line(Data)
         case stderr(String)

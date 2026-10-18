@@ -111,7 +111,7 @@ package struct CassettePaths: Sendable {
     }
 
     /// Claude's project-dir name for a folder: every character but ASCII letters and digits as "-".
-    static func encoded(_ path: String) -> String {
+    package static func encoded(_ path: String) -> String {
         String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
     }
 
