@@ -22,6 +22,15 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     /// Each file keeps its own undo history, as in VS Code (not the window's).
     let undo = UndoManager()
     let find = FindModel()
+    /// The text against git `HEAD`, for the gutter's bars. Worked out off the main thread at
+    /// load, save and a reload from disk, and once typing stops; between those, edits move the
+    /// marks by the lines they add or remove.
+    private(set) var changes = LineChanges()
+    private var diffing: Task<Void, Never>?
+    /// Bumped by each edit: a diff started before one is stale.
+    private var editCount = 0
+    /// The peek of one change's old text, under its line.
+    private var peek: (line: Int, view: NSView)?
 
     init(document: FileDocument) {
         self.document = document
@@ -157,6 +166,8 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
 
     /// The document replaced all its text (load).
     func textReplaced() {
+        closePeek()
+        refreshChanges()
         lines.rebuild(document.storage.string as NSString)
         undo.removeAllActions()
         colorer.invalidate(from: 0)
@@ -182,6 +193,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         textView.setSelectedRange(NSRange(location: min(caret, storage.length), length: 0))
         flashLines(NSRange(location: range.location, length: (text as NSString).length))
         recolor(force: true)
+        refreshChanges()
     }
 
     private func flashLines(_ range: NSRange) {
@@ -215,12 +227,19 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         changeInLength delta: Int
     ) {
         guard editedMask.contains(.editedCharacters) else { return }
+        let before = lines.count
         lines.update(textStorage.string as NSString, edited: editedRange, delta: delta)
+        editCount &+= 1
+        if !changes.marks.isEmpty || !changes.deletions.isEmpty {
+            changes.shift(from: lines.line(at: editedRange.location), by: lines.count - before)
+        }
         colorer.invalidate(from: lines.line(at: editedRange.location))
         colored = nil
     }
 
     func textDidChange(_ notification: Notification) {
+        closePeek()
+        refreshChanges(after: .seconds(1))
         document.edited()
         find.textChanged()
         recolor()
@@ -312,6 +331,93 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     }
 
     func focus() { textView.window?.makeFirstResponder(textView) }
+
+    // MARK: - Changes against git HEAD
+
+    /// Diffs the text against `HEAD` once `delay` passes with no newer call (typing).
+    func refreshChanges(after delay: Duration = .zero) {
+        diffing?.cancel()
+        guard document.isText, !document.readOnly else { return }
+        let url = document.url
+        diffing = Task { [weak self] in
+            if delay > .zero {
+                try? await Task.sleep(for: delay)
+                if Task.isCancelled { return }
+            }
+            guard let self else { return }
+            let edits = editCount
+            let text = document.storage.string
+            let result: LineChanges
+            if let base = await GitBaseline.head(of: url) {
+                result = await GitBaseline.changes(from: base, to: text)
+            } else {
+                result = LineChanges()
+            }
+            // Typed over meanwhile: the next pause diffs again.
+            guard !Task.isCancelled, edits == editCount else { return }
+            if result != changes {
+                changes = result
+                gutter.needsDisplay = true
+            }
+        }
+    }
+
+    /// Opens (or, on the same line, closes) the old text of the change at 0-based `line`, under
+    /// that line, as VS Code's peek does.
+    func togglePeek(at line: Int) {
+        if peek?.line == line {
+            closePeek()
+            return
+        }
+        closePeek()
+        guard let hunk = changes.hunk(at: line), let layout = textView.layoutManager else { return }
+        let change = FileChange(path: document.url.path, kind: .update, hunks: [hunk])
+        let string = document.storage.string as NSString
+        // Under the change's last line (a deletion: under the line above where it was).
+        let lastNew = hunk.lines.compactMap { $0.kind == .add ? $0.new : nil }.last.map { $0 - 1 } ?? max(line - 1, 0)
+        let anchor = min(lastNew, lines.count - 1)
+        let start = min(lines.start(of: anchor), max(string.length - 1, 0))
+        let glyph = layout.glyphIndexForCharacter(at: start)
+        let fragment = string.length == 0 ? .zero : layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let visible = textView.visibleRect
+        let width = max(visible.width - 2 * Size.Editor.peekInset, 200)
+        let host = NSHostingView(rootView: ChangePeek(change: change, folder: document.url.deletingLastPathComponent()) { [weak self] in
+            self?.closePeek()
+        })
+        host.frame.size.width = width
+        let height = host.fittingSize.height
+        host.frame = NSRect(
+            x: visible.minX + Size.Editor.peekInset, y: fragment.maxY + textView.textContainerOrigin.y, width: width,
+            height: height)
+        textView.addSubview(host)
+        peek = (line, host)
+    }
+
+    /// Closes the peek; whether one was open.
+    @discardableResult
+    func closePeek() -> Bool {
+        guard let open = peek else { return false }
+        open.view.removeFromSuperview()
+        peek = nil
+        return true
+    }
+}
+
+/// One change's old and new lines (the phase 08 DiffView) in a bordered box, with a close ×.
+struct ChangePeek: View {
+    let change: FileChange
+    let folder: URL
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: Space.xs) {
+            IconButton(symbol: "xmark", kind: .small, font: Chrome.label, help: "Close (Esc)", action: close)
+            DiffView(change: change, folder: folder)
+        }
+        .padding(Space.sm)
+        .background(Theme.background, in: RoundedRectangle(cornerRadius: Radius.chip))
+        .overlay(RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.border, lineWidth: Stroke.hairline))
+    }
 }
 
 // MARK: - The view
@@ -536,7 +642,8 @@ final class SyntaxColorer {
 
 // MARK: - The gutter
 
-/// Line numbers, right-aligned, the caret's line brighter.
+/// Line numbers, right-aligned, the caret's line brighter, and git change bars at the right
+/// edge (look §4); a click on a bar opens its peek.
 final class GutterView: NSRulerView {
     weak var controller: CodeEditorController?
 
@@ -604,6 +711,10 @@ final class GutterView: NSRulerView {
             }
             let y = convert(NSPoint(x: 0, y: fragment.minY + origin.y), from: text).y
             if y > rect.maxY { break }
+            drawChange(line, controller.changes, top: y, layout: layout, string: string)
+            if line == lines.count - 1, controller.changes.deletions.contains(lines.count) {
+                drawDeletion(at: y + controller.lineHeight)
+            }
             let label = String(line + 1) as NSString
             let attributes = line == caretLine ? current : plain
             let size = label.size(withAttributes: attributes)
@@ -611,6 +722,81 @@ final class GutterView: NSRulerView {
             label.draw(at: NSPoint(x: right - size.width, y: y + baseline), withAttributes: attributes)
             line += 1
         }
+    }
+
+    /// The line's bar (all its wrapped rows), and a deletion's triangle on its top edge.
+    @MainActor private func drawChange(_ line: Int, _ changes: LineChanges, top: CGFloat, layout: NSLayoutManager, string: NSString) {
+        guard let controller else { return }
+        if let mark = changes.marks[line] {
+            var height = controller.lineHeight
+            let range = controller.lines.range(of: line, in: string)
+            if range.length > 0, let container = controller.textView.textContainer {
+                let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                height = max(height, layout.boundingRect(forGlyphRange: glyphs, in: container).height)
+            }
+            NSColor(mark == .added ? Theme.Git.added : Theme.Git.modified).setFill()
+            NSRect(x: ruleThickness - Size.Editor.changeBar, y: top, width: Size.Editor.changeBar, height: height).fill()
+        }
+        if changes.deletions.contains(line) { drawDeletion(at: top) }
+    }
+
+    private func drawDeletion(at y: CGFloat) {
+        let size = Size.Editor.deletionMark
+        let x = ruleThickness - size
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: x, y: y - size))
+        path.line(to: NSPoint(x: x + size, y: y))
+        path.line(to: NSPoint(x: x, y: y + size))
+        path.close()
+        NSColor(Theme.Git.deleted).setFill()
+        path.fill()
+    }
+
+    /// A bar answers the first click, as the text beside it does.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// A click near the right edge on a changed line, or a deletion's triangle, opens its peek.
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let opened = MainActor.assumeIsolated { () -> Bool in
+            guard let controller, point.x >= ruleThickness - Size.Editor.changeBar - Size.Editor.changeBarGap,
+                let line = line(at: point.y)
+            else { return false }
+            let changes = controller.changes
+            let top = lineTop(line) ?? point.y
+            // Near a line's top edge, a deletion above it wins.
+            let target: Int? =
+                changes.deletions.contains(line) && point.y - top < Size.Editor.deletionMark * 2 ? line
+                : changes.marks[line] != nil ? line
+                : changes.deletions.contains(line + 1) ? line + 1
+                : nil
+            guard let target else { return false }
+            controller.togglePeek(at: target)
+            return true
+        }
+        if !opened { super.mouseDown(with: event) }
+    }
+
+    /// The 0-based line at a height in the gutter.
+    @MainActor private func line(at y: CGFloat) -> Int? {
+        guard let controller, let layout = controller.textView.layoutManager, let container = controller.textView.textContainer
+        else { return nil }
+        let text = controller.textView
+        let point = convert(NSPoint(x: 0, y: y), to: text)
+        let inContainer = NSPoint(x: 0, y: point.y - text.textContainerOrigin.y)
+        let glyph = layout.glyphIndex(for: inContainer, in: container)
+        return controller.lines.line(at: layout.characterIndexForGlyph(at: glyph))
+    }
+
+    /// A line's top in the gutter.
+    @MainActor private func lineTop(_ line: Int) -> CGFloat? {
+        guard let controller, let layout = controller.textView.layoutManager else { return nil }
+        let text = controller.textView
+        let start = controller.lines.start(of: line)
+        guard start < (text.string as NSString).length else { return nil }
+        let glyph = layout.glyphIndexForCharacter(at: start)
+        let fragment = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+        return convert(NSPoint(x: 0, y: fragment.minY + text.textContainerOrigin.y), from: text).y
     }
 }
 
@@ -620,6 +806,12 @@ final class GutterView: NSRulerView {
 /// comment toggling, moving and copying lines, and the caret's line drawn behind the text.
 final class EditorTextView: NSTextView {
     weak var controller: CodeEditorController?
+
+    /// Esc closes an open change peek first.
+    override func cancelOperation(_ sender: Any?) {
+        if MainActor.assumeIsolated({ controller?.closePeek() }) == true { return }
+        super.cancelOperation(sender)
+    }
 
     private var indentUnit: String { MainActor.assumeIsolated { controller?.document.indent.unit ?? "    " } }
     private var language: Language { MainActor.assumeIsolated { controller?.document.language ?? .plain } }

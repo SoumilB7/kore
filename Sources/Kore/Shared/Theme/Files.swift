@@ -161,6 +161,10 @@ extension Size {
         static let gutterDigits = 3
         static let changeBar: CGFloat = 3
         static let changeBarGap: CGFloat = 4
+        /// The deleted-lines triangle: this long, pointing right.
+        static let deletionMark: CGFloat = 4
+        /// The change peek's distance from the editor's sides.
+        static let peekInset: CGFloat = 12
         static let textInsetTop: CGFloat = 6
         static let textInsetLeading: CGFloat = 4
         static let caret: CGFloat = 2

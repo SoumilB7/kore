@@ -149,6 +149,7 @@ final class FileDocument: Identifiable {
         saved = text
         isDirty = false
         notice = nil
+        editor.refreshChanges()
         return true
     }
 
