@@ -291,11 +291,12 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
                 .offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
             let clip = scrollView.contentView
             let visible = clip.bounds
-            let inset = -clip.contentInsets.left
+            let left = gutter.textLeft
             let y = max(0, box.midY - visible.height / 2)
-            var x = min(visible.origin.x, inset)
-            if box.maxX > x + visible.width { x = box.maxX - visible.width * 0.7 }
-            clip.scroll(to: NSPoint(x: max(x, inset == 0 ? visible.origin.x : inset), y: y))
+            // Back to the left edge unless the match is past the right one.
+            var x = left
+            if box.maxX > left + visible.width { x = box.maxX - visible.width * 0.7 }
+            clip.scroll(to: NSPoint(x: x, y: y))
             scrollView.reflectScrolledClipView(clip)
         }
         recolor(force: true)
@@ -510,8 +511,23 @@ final class GutterView: NSRulerView {
         let digits = max(Size.Editor.gutterDigits, String(controller.lines.count).count)
         let width = ("8" as NSString).size(withAttributes: [.font: controller.font]).width
         let thickness = ceil(Size.Editor.gutterLeading + CGFloat(digits) * width + Size.Editor.gutterTrailing)
-        if ruleThickness != thickness { ruleThickness = thickness }
+        guard ruleThickness != thickness, let scrollView else { return }
+        // The clip view runs under the gutter, its bounds shifted left by the gutter's width.
+        // A change after the scroll view is on screen doesn't move them, so text would sit
+        // under the gutter: retile, and keep a view that was at the left edge at the new edge.
+        let clip = scrollView.contentView
+        let atLeft = clip.bounds.origin.x <= -ruleThickness + 0.5
+        ruleThickness = thickness
+        scrollView.tile()
+        if atLeft {
+            clip.scroll(to: NSPoint(x: -thickness, y: clip.bounds.origin.y))
+            scrollView.reflectScrolledClipView(clip)
+        }
+        controller.recolor(force: true)
     }
+
+    /// Where the text starts in the clip view: left of it is under the gutter.
+    var textLeft: CGFloat { -ruleThickness }
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor(Theme.background).setFill()
