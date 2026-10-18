@@ -73,7 +73,7 @@ struct InterruptedAgentsTests {
     // MARK: The foreground agent
 
     /// (a) The Agent call's result is the CLI's rejection, as an error: its agent is stopped, not
-    /// done, and leaves the tree for the Stopped group.
+    /// done, and folds into the Stopped group; the background one runs on under the chat.
     @Test func aRejectedAgentCallStopsItsAgent() throws {
         let translator = translator()
         let events = live(translator, rejected: true)
@@ -85,8 +85,12 @@ struct InterruptedAgentsTests {
         events.forEach(script.store.apply)
         _ = script.sections
         #expect(script.store.agent("toolu_fg")?.status == .stopped)
-        #expect(script.store.agentTree().stopped.map(\.id) == ["toolu_fg"])
-        #expect(script.store.agentTree().background.map(\.id) == ["toolu_bg"])
+        let map = script.store.agentTree()
+        #expect(map.stopped.map(\.id) == ["toolu_fg"])
+        #expect(map.stopped.map(\.background) == [false])
+        #expect(map.running.map(\.id) == ["toolu_bg"])
+        #expect(map.running.map(\.background) == [true])
+        #expect(AgentMapRows.label(.stopped, map.stopped) == "Stopped 1 · 1 foreground")
 
         let lines = try logLines().filter { $0.contains("agent=toolu_fg") && $0.contains("\tstatus ") }
         #expect(lines.count == 1)

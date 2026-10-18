@@ -2,11 +2,11 @@ import SwiftUI
 
 /// Every agent the chat has spawned, over the chat area (phase 10 §6): a graph on the left with
 /// the chat as its root O and each agent an O whose wire drops from the bottom of its parent's,
-/// and the selected agent on the right with its prompt and its own timeline, live. The chat's
-/// background agents hang below the tree under their own label while they run; those that have
-/// finished, and the stopped agents, wait apart in closed groups below them. ↑ ↓ select, Return
-/// opens the agent in a tab, ← → fold and unfold, Esc closes. In a narrow tile the graph becomes a
-/// menu.
+/// and the selected agent on the right with its prompt and its own timeline, live. Grouped by
+/// state: every running agent, of both kinds, hangs off the chat; below a hairline, the ended
+/// ones wait in two closed groups, Done and Stopped, each naming its split. ↑ ↓ select (a group's
+/// row is a stop), Return opens the agent in a tab or toggles the group, ← → fold and unfold, Esc
+/// closes. In a narrow tile the graph becomes a menu.
 struct AgentMapView: View {
     let chat: Chat
     let openAgent: (String) -> Void
@@ -17,35 +17,31 @@ struct AgentMapView: View {
     private var map: AgentMapState { chat.agentMap }
 
     var body: some View {
-        // Reading `tail` re-renders the map as agents and their work change.
+        // Reading `agentsVersion` re-renders the map as agents and their work change.
         _ = chat.transcript.agentsVersion
-        let all = chat.transcript.agentTree()
-        let nodes = shown(all)
-        // A grouped agent stays selected while its group is closed.
-        let selected = nodes.first { $0.id == map.selected } ?? (all.done + all.stopped).first { $0.id == map.selected }
-            ?? nodes.first
+        let rows = layout()
+        let selected = rows.selection(map.selected)
+        let highlight = rows.highlight(selected: selected?.id, cursor: map.foldCursor)
         return GeometryReader { geometry in
             let narrow = geometry.size.width < Size.changesListMinWindow
             ZStack(alignment: .topTrailing) {
                 Theme.background
                 HStack(spacing: 0) {
                     if !narrow {
-                        // The closed groups' rows count whether they're open or not: opening one
-                        // doesn't move the divider.
-                        tree(all, selected: selected?.id)
-                            .frame(width: paneWidth(
-                                visible(all.tree) + visible(all.background) + all.done + all.stopped, in: geometry.size.width))
+                        // Every row counts, its group open or closed: opening one, or an agent
+                        // ending, doesn't move the divider.
+                        tree(rows, highlight: highlight)
+                            .frame(width: paneWidth(rows.all, in: geometry.size.width))
                         Rectangle().fill(Theme.border).frame(width: Stroke.hairline)
                     }
                     VStack(alignment: .leading, spacing: 0) {
-                        if narrow { treeMenu(all, selected: selected).padding(Layout.Viewer.closeInset) }
+                        if narrow { treeMenu(rows, selected: selected).padding(Layout.Viewer.closeInset) }
                         if let selected {
                             AgentDetail(chat: chat, info: selected.info, openAgent: openAgent)
                         }
                     }
                 }
-                // The tree keeps its place at the left with nothing selected (every agent
-                // grouped, the groups closed), rather than sliding over to the close button.
+                // The tree keeps its place at the left whatever is selected.
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 IconButton(symbol: "xmark", help: "Close (Esc)") { map.close() }.storyID(StoryID.AgentMap.close, press: map.close)
                     .padding(Layout.Viewer.closeInset)
@@ -56,82 +52,74 @@ struct AgentMapView: View {
         .onAppear {
             map.markSeen(chat.transcript.agentSummary.failed)
             keyMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { handleKey($0) }
+            reveal()
         }
         .onDisappear {
             if let monitor = keyMonitor.value { NSEvent.removeMonitor(monitor) }
             keyMonitor.value = nil
         }
         .onChange(of: chat.transcript.agentSummary.failed) { _, failed in map.markSeen(failed) }
+        .onChange(of: map.reveal) { _, _ in reveal() }
     }
 
-    typealias Trees = (
-        tree: [TranscriptStore.AgentNode], background: [TranscriptStore.AgentNode], done: [TranscriptStore.AgentNode],
-        stopped: [TranscriptStore.AgentNode]
-    )
-
-    /// The rows ↑ ↓ move through: the tree's, the background group's, then the done and the
-    /// stopped groups' while they're open.
-    private func shown(_ all: Trees) -> [TranscriptStore.AgentNode] {
-        visible(all.tree) + visible(all.background) + (map.doneOpen ? visible(all.done) : [])
-            + (map.stoppedOpen ? visible(all.stopped) : [])
+    private func layout() -> AgentMapRows {
+        AgentMapRows(chat.transcript.agentTree(), folded: map.folded, open: map.openEnded)
     }
 
-    /// The tree without the descendants of folded branches.
-    private func visible(_ nodes: [TranscriptStore.AgentNode]) -> [TranscriptStore.AgentNode] {
-        var hiddenBelow: Int?
-        return nodes.filter { node in
-            if let depth = hiddenBelow {
-                if node.depth > depth { return false }
-                hiddenBelow = nil
-            }
-            if map.folded.contains(node.id) { hiddenBelow = node.depth }
-            return true
-        }
+    /// `map.open(selecting:)`: the group holding the agent opens.
+    private func reveal() {
+        guard let id = map.reveal else { return }
+        map.revealed(in: layout().fold(of: id))
     }
 
     // MARK: Tree
 
-    private func tree(_ all: Trees, selected: String?) -> some View {
+    private func tree(_ rows: AgentMapRows, highlight: AgentMapRows.Stop?) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 MapHeader(summary: chat.transcript.agentSummary)
-                GraphRootRow(chat: chat, hasChildren: !all.tree.isEmpty)
-                rows(all.tree, selected: selected, dimmed: false)
-                if !all.background.isEmpty {
-                    BackgroundGroupRow(count: all.background.count).padding(.top, Layout.AgentMap.groupTop)
-                    rows(all.background, selected: selected, dimmed: false, grouped: true)
+                GraphRootRow(chat: chat, hasChildren: !rows.running.isEmpty).storyMark(StoryID.AgentMap.chat)
+                agentRows(rows.shownRunning, in: rows.running, highlight: highlight, dimmed: false)
+                if !rows.done.isEmpty || !rows.stopped.isEmpty {
+                    Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.top, Layout.AgentMap.groupTop)
                 }
-                if !all.done.isEmpty {
-                    ClosedGroupRow(
-                        title: "Done in background", count: all.done.count, open: map.doneOpen, id: StoryID.AgentMap.done
-                    ) { map.doneOpen.toggle() }
-                    .padding(.top, Layout.AgentMap.groupTop)
-                    if map.doneOpen { rows(all.done, selected: selected, dimmed: true, grouped: true) }
-                }
-                if !all.stopped.isEmpty {
-                    ClosedGroupRow(
-                        title: "Stopped", count: all.stopped.count, open: map.stoppedOpen, id: StoryID.AgentMap.stopped
-                    ) { map.stoppedOpen.toggle() }
-                    .padding(.top, Layout.AgentMap.groupTop)
-                    if map.stoppedOpen { rows(all.stopped, selected: selected, dimmed: true) }
-                }
+                group(.done, rows, highlight: highlight)
+                group(.stopped, rows, highlight: highlight)
             }
             .padding(.bottom, Space.xl)
             .padding(.horizontal, Space.sm)
         }
     }
 
-    /// One tree's rows, without its folded branches' descendants.
-    /// `grouped`: under a background label, which says what their meters would.
-    private func rows(_ all: [TranscriptStore.AgentNode], selected: String?, dimmed: Bool, grouped: Bool = false) -> some View {
+    /// A group's closed row, and its agents while it's open.
+    @ViewBuilder
+    private func group(_ fold: AgentMapState.Fold, _ rows: AgentMapRows, highlight: AgentMapRows.Stop?) -> some View {
+        let nodes = rows.nodes(fold)
+        if !nodes.isEmpty {
+            ClosedGroupRow(
+                fold: fold, nodes: nodes, open: map.openEnded.contains(fold), selected: highlight == .fold(fold)
+            ) {
+                map.toggle(fold)
+                map.foldCursor = nil
+            }
+            if map.openEnded.contains(fold) { agentRows(rows.shown(fold), in: nodes, highlight: highlight, dimmed: true) }
+        }
+    }
+
+    /// One group's rows shown (`shown`, of `all`), without its folded branches' descendants.
+    private func agentRows(
+        _ shown: [TranscriptStore.AgentNode], in all: [TranscriptStore.AgentNode], highlight: AgentMapRows.Stop?,
+        dimmed: Bool
+    ) -> some View {
         let parents = Set(zip(all, all.dropFirst()).filter { $1.depth > $0.depth }.map(\.0.id))
-        return ForEach(visible(all)) { node in
-            let hidden = map.folded.contains(node.id) ? descendants(of: node.id, in: all) : 0
+        return ForEach(shown) { node in
+            let hidden = map.folded.contains(node.id) ? AgentMapRows.descendants(of: node.id, in: all) : 0
             AgentGraphRow(
-                node: node, selected: node.id == selected, waiting: waiting(node.id),
-                hasChildren: parents.contains(node.id) && hidden == 0, hidden: hidden, dimmed: dimmed, grouped: grouped
+                node: node, selected: highlight == .agent(node.id), waiting: waiting(node.id),
+                hasChildren: parents.contains(node.id) && hidden == 0, hidden: hidden, dimmed: dimmed
             ) {
                 map.selected = node.id
+                map.foldCursor = nil
             }
         }
     }
@@ -144,22 +132,15 @@ struct AgentMapView: View {
         return min(max(needed, m.paneMin), max(m.paneMin, width * m.paneShare))
     }
 
-    private func descendants(of id: String, in all: [TranscriptStore.AgentNode]) -> Int {
-        guard let i = all.firstIndex(where: { $0.id == id }) else { return 0 }
-        return all[(i + 1)...].prefix { $0.depth > all[i].depth }.count
-    }
-
-    private func treeMenu(_ all: Trees, selected: TranscriptStore.AgentNode?) -> some View {
+    /// The running agents, then a submenu per group: "Done 20 · 2 foreground · 18 background".
+    private func treeMenu(_ rows: AgentMapRows, selected: TranscriptStore.AgentNode?) -> some View {
         Menu {
-            menuItems(all.tree)
-            if !all.background.isEmpty {
-                Section("Background") { menuItems(all.background) }
-            }
-            if !all.done.isEmpty {
-                Section("Done in background") { menuItems(all.done) }
-            }
-            if !all.stopped.isEmpty {
-                Section("Stopped") { menuItems(all.stopped) }
+            menuItems(rows.running, ended: false)
+            ForEach(AgentMapState.Fold.allCases, id: \.self) { fold in
+                let nodes = rows.nodes(fold)
+                if !nodes.isEmpty {
+                    Menu(AgentMapRows.label(fold, nodes)) { menuItems(nodes, ended: true) }
+                }
             }
         } label: {
             if let selected {
@@ -175,9 +156,14 @@ struct AgentMapView: View {
         .fixedSize()
     }
 
-    private func menuItems(_ nodes: [TranscriptStore.AgentNode]) -> some View {
+    /// `ended`: each says how it ended after its name ("Watch the build — stopped").
+    private func menuItems(_ nodes: [TranscriptStore.AgentNode], ended: Bool) -> some View {
         ForEach(nodes) { node in
-            Button(String(repeating: "    ", count: node.depth) + node.info.name) { map.selected = node.id }
+            let state = ended ? AgentNodeMeter.state(node.info.status).map { " — \($0)" } ?? "" : ""
+            Button(String(repeating: "    ", count: node.depth) + node.info.name + state) {
+                map.selected = node.id
+                map.foldCursor = nil
+            }
         }
     }
 
@@ -191,31 +177,184 @@ struct AgentMapView: View {
         guard let window = window.value, event.window === window else { return event }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.command) { return event }
-        let nodes = shown(chat.transcript.agentTree())
-        // Nothing picked yet shows the first agent.
-        let selected = nodes.first { $0.id == map.selected }?.id ?? nodes.first?.id
-        let index = nodes.firstIndex { $0.id == selected } ?? 0
+        let rows = layout()
+        let selected = rows.selection(map.selected)?.id
+        let highlight = rows.highlight(selected: selected, cursor: map.foldCursor)
+        let index = highlight.flatMap { rows.stops.firstIndex(of: $0) }
+        func go(_ i: Int) {
+            guard rows.stops.indices.contains(i) else { return }
+            switch rows.stops[i] {
+            case .agent(let id):
+                map.selected = id
+                map.foldCursor = nil
+            case .fold(let fold):
+                // The agent stays selected; the group's row takes the highlight.
+                if map.selected == nil { map.selected = selected }
+                map.foldCursor = fold
+            }
+        }
         switch event.keyCode {
         case 53: map.close()
-        case 36, 76: if let selected { openAgent(selected) }
-        case 126: if index > 0 { map.selected = nodes[index - 1].id }
-        case 125: if index + 1 < nodes.count { map.selected = nodes[index + 1].id }
-        case 123: if let selected { map.folded.insert(selected) }
-        case 124: if let selected { map.folded.remove(selected) }
+        case 36, 76:
+            if case .fold(let fold) = highlight {
+                map.toggle(fold)
+                map.foldCursor = fold
+            } else if let selected {
+                openAgent(selected)
+            }
+        case 126: go(index.map { max($0 - 1, 0) } ?? 0)
+        case 125: go(index.map { min($0 + 1, rows.stops.count - 1) } ?? 0)
+        case 123:
+            switch highlight {
+            case .fold(let fold):
+                map.openEnded.remove(fold)
+                map.foldCursor = fold
+            case .agent(let id):
+                if rows.hasShownChildren(id) {
+                    map.folded.insert(id)
+                } else if let fold = rows.fold(of: id) {
+                    // Up a level, to its group's row.
+                    map.foldCursor = fold
+                }
+            case nil: break
+            }
+        case 124:
+            switch highlight {
+            case .fold(let fold):
+                map.openEnded.insert(fold)
+                map.foldCursor = fold
+            case .agent(let id): map.folded.remove(id)
+            case nil: break
+            }
         default: return event
         }
         return nil
     }
 }
 
-/// "Agents  4 · 2 running · 1 failed" over the graph.
+/// The map's rows as ↑ ↓ meet them, grouped by state: the running agents, the Done row and its
+/// agents while it's open, then the Stopped row and its. A group's row is a stop; the chat isn't.
+struct AgentMapRows {
+    typealias Node = TranscriptStore.AgentNode
+    typealias Fold = AgentMapState.Fold
+    enum Stop: Equatable { case agent(String), fold(Fold) }
+
+    let running: [Node]
+    let done: [Node]
+    let stopped: [Node]
+    /// Without folded branches' descendants; a closed group shows none.
+    let shownRunning: [Node]
+    private let shownDone: [Node]
+    private let shownStopped: [Node]
+    let stops: [Stop]
+
+    init(_ trees: (running: [Node], done: [Node], stopped: [Node]), folded: Set<String>, open: Set<Fold>) {
+        running = trees.running
+        done = trees.done
+        stopped = trees.stopped
+        shownRunning = Self.visible(running, folded: folded)
+        shownDone = open.contains(.done) ? Self.visible(done, folded: folded) : []
+        shownStopped = open.contains(.stopped) ? Self.visible(stopped, folded: folded) : []
+        var stops = shownRunning.map { Stop.agent($0.id) }
+        for (fold, nodes, shown) in [(Fold.done, done, shownDone), (.stopped, stopped, shownStopped)] where !nodes.isEmpty {
+            stops.append(.fold(fold))
+            stops += shown.map { .agent($0.id) }
+        }
+        self.stops = stops
+    }
+
+    var all: [Node] { running + done + stopped }
+
+    func nodes(_ fold: Fold) -> [Node] { fold == .done ? done : stopped }
+    func shown(_ fold: Fold) -> [Node] { fold == .done ? shownDone : shownStopped }
+
+    /// The group an ended agent waits in.
+    func fold(of id: String) -> Fold? {
+        if done.contains(where: { $0.id == id }) { return .done }
+        if stopped.contains(where: { $0.id == id }) { return .stopped }
+        return nil
+    }
+
+    /// The agent the detail pane shows: the selected one wherever it is, else the first row
+    /// shown, else the newest agent (its group's row takes the highlight), so the pane is never
+    /// empty while the chat has agents.
+    func selection(_ id: String?) -> Node? {
+        if let id, let node = running.first(where: { $0.id == id }) ?? done.first(where: { $0.id == id })
+            ?? stopped.first(where: { $0.id == id }) {
+            return node
+        }
+        for stop in stops {
+            if case .agent(let first) = stop, let node = shownRunning.first(where: { $0.id == first })
+                ?? shownDone.first(where: { $0.id == first }) ?? shownStopped.first(where: { $0.id == first }) {
+                return node
+            }
+        }
+        return all.max { $0.info.index < $1.info.index }
+    }
+
+    /// What has the selection fill: a group's row reached by keys, else the selected agent's
+    /// row, else, while its group is closed, the group's row.
+    func highlight(selected: String?, cursor: Fold?) -> Stop? {
+        if let cursor, stops.contains(.fold(cursor)) { return .fold(cursor) }
+        guard let selected else { return nil }
+        if stops.contains(.agent(selected)) { return .agent(selected) }
+        return fold(of: selected).map { .fold($0) }
+    }
+
+    /// Whether ← would fold the agent's branch: it has children shown.
+    func hasShownChildren(_ id: String) -> Bool {
+        for shown in [shownRunning, shownDone, shownStopped] {
+            if let i = shown.firstIndex(where: { $0.id == id }) {
+                return i + 1 < shown.count && shown[i + 1].depth > shown[i].depth
+            }
+        }
+        return false
+    }
+
+    /// The tree without the descendants of folded branches.
+    static func visible(_ nodes: [Node], folded: Set<String>) -> [Node] {
+        guard !folded.isEmpty else { return nodes }
+        var hiddenBelow: Int?
+        return nodes.filter { node in
+            if let depth = hiddenBelow {
+                if node.depth > depth { return false }
+                hiddenBelow = nil
+            }
+            if folded.contains(node.id) { hiddenBelow = node.depth }
+            return true
+        }
+    }
+
+    static func descendants(of id: String, in all: [Node]) -> Int {
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return 0 }
+        return all[(i + 1)...].prefix { $0.depth > all[i].depth }.count
+    }
+
+    static func title(_ fold: Fold) -> String { fold == .done ? "Done" : "Stopped" }
+
+    /// "2 foreground · 18 background", a part with none left out.
+    static func split(_ nodes: [Node]) -> String {
+        let background = nodes.filter(\.background).count
+        let foreground = nodes.count - background
+        return [foreground > 0 ? "\(foreground) foreground" : nil, background > 0 ? "\(background) background" : nil]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// "Done 20 · 2 foreground · 18 background": the group's row as it reads.
+    static func label(_ fold: Fold, _ nodes: [Node]) -> String {
+        let split = split(nodes)
+        return "\(title(fold)) \(nodes.count)" + (split.isEmpty ? "" : " · \(split)")
+    }
+}
+
+/// "Agents  24 · 2 running · 1 failed" over the graph: every agent, the stopped ones included.
 private struct MapHeader: View {
     let summary: TranscriptStore.AgentSummary
 
     var body: some View {
         HStack(spacing: Space.md) {
             Text("Agents").font(TextStyle.labelStrong).foregroundStyle(Theme.text)
-            (Text("\(summary.count)")
+            (Text("\(summary.count + summary.stopped)")
                 + Text(summary.running.isEmpty ? "" : " · \(summary.running.count) running")
                 + Text(summary.failed.isEmpty ? "" : " · \(summary.failed.count) failed").foregroundColor(Theme.danger))
                 .font(TextStyle.caption.monospacedDigit())
@@ -257,23 +396,27 @@ private struct GraphRootRow: View {
     }
 }
 
-/// "Done in background  12" or "Stopped  3" below the tree, its chevron where the chat's O is: it
-/// opens and closes the group, whose rows hang off it as the tree's hang off the chat.
+/// "Done  20  ·  2 foreground · 18 background" below the running agents, its chevron where the
+/// chat's O is: it opens and closes the group, whose rows hang off it as the running ones hang
+/// off the chat. It has the selection's fill while the selected agent waits closed inside it.
 private struct ClosedGroupRow: View {
-    let title: String
-    let count: Int
+    let fold: AgentMapState.Fold
+    let nodes: [TranscriptStore.AgentNode]
     let open: Bool
-    let id: StoryID
+    let selected: Bool
     let toggle: () -> Void
     @StateObject private var hovered = Local(false)
 
     var body: some View {
         let m = Layout.AgentMap.self
+        let split = AgentMapRows.split(nodes)
         Button(action: toggle) {
             HStack(spacing: m.labelGap) {
                 Disclosure(isOpen: open).foregroundStyle(Theme.tertiary)
-                (Text(title).font(TextStyle.labelMedium).foregroundColor(Theme.secondary)
-                    + Text("  \(count)").font(TextStyle.caption.monospacedDigit()).foregroundColor(Theme.tertiary))
+                (Text(AgentMapRows.title(fold)).font(TextStyle.labelMedium).foregroundColor(Theme.secondary)
+                    + Text("  \(nodes.count)").font(TextStyle.caption.monospacedDigit()).foregroundColor(Theme.tertiary)
+                    + Text(split.isEmpty ? "" : "  ·  \(split)").font(TextStyle.caption.monospacedDigit())
+                    .foregroundColor(Theme.tertiary))
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -284,31 +427,15 @@ private struct ClosedGroupRow: View {
                     GraphWires(depth: -1, rails: [], isLast: true, hasChildren: true, mark: Size.disclosure / 2).canvas(elbow: nil)
                 }
             }
-            .hoverFill(hovered.value, Theme.toolHover)
+            .hoverFill(selected || hovered.value, selected ? Theme.surfaceHover : Theme.toolHover)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .storyID(id)
-    }
-}
-
-/// "Background  2" under a hairline, below the tree: the chat's background agents hang below it
-/// as the tree's hang off the chat.
-private struct BackgroundGroupRow: View {
-    let count: Int
-
-    var body: some View {
-        let m = Layout.AgentMap.self
-        VStack(alignment: .leading, spacing: 0) {
-            Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
-            (Text("Background").font(TextStyle.labelMedium).foregroundColor(Theme.secondary)
-                + Text("  \(count)").font(TextStyle.caption.monospacedDigit()).foregroundColor(Theme.tertiary))
-                .lineLimit(1)
-                .padding(.leading, m.leading - Size.disclosure / 2)
-                .frame(maxWidth: .infinity, minHeight: m.groupRow * Zoom.shared.scale, alignment: .leading)
-        }
-        .storyMark(StoryID.AgentMap.background)
+        .accessibilityLabel(
+            ([AgentMapRows.title(fold), "\(nodes.count)"] + (split.isEmpty ? [] : split.components(separatedBy: " · ")))
+                .joined(separator: ", "))
+        .storyID(StoryID.AgentMap.ended(fold.rawValue), press: { toggle() })
     }
 }
 
@@ -321,10 +448,8 @@ private struct AgentGraphRow: View {
     let hasChildren: Bool
     /// Descendants folded away under it.
     let hidden: Int
-    /// In a closed group: the done or the stopped.
+    /// In an open group: the done or the stopped.
     let dimmed: Bool
-    /// Under a background label: the running or the done.
-    let grouped: Bool
     let select: () -> Void
     @StateObject private var hovered = Local(false)
 
@@ -341,7 +466,7 @@ private struct AgentGraphRow: View {
                         .font(TextStyle.labelMedium)
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
-                    AgentNodeMeter(info: info, waiting: waiting, hidden: hidden, background: info.background && !grouped)
+                    AgentNodeMeter(info: info, waiting: waiting, hidden: hidden, background: node.background)
                 }
                 Spacer(minLength: 0)
             }
@@ -354,8 +479,8 @@ private struct AgentGraphRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(info.background ? "\(info.name) · Background" : info.name)
-        .storyID(StoryID.AgentMap.row(info.id))
+        .help(node.background ? "\(info.name) · Background" : info.name)
+        .storyID(StoryID.AgentMap.row(info.id), press: { select() })
     }
 
     private var elbowColour: Color {
@@ -367,9 +492,10 @@ private struct AgentGraphRow: View {
     }
 }
 
-/// "0:41 · 12.8k", ticking while the agent runs; "failed · 0:27"; "waiting · 0:31";
-/// "background · 12:04 · 295k"; "~239k" when read from its transcript.
-private struct AgentNodeMeter: View {
+/// "1:12 · 18.4k", ticking while the agent runs; "background · waiting · 8:15 · 64k"; once it
+/// has ended, how: "done · 2:44 · 15.4k", "failed · 0:27", "stopped · 0:15 · 3.2k", or just
+/// "stopped" with nothing known. Never empty.
+struct AgentNodeMeter: View {
     let info: TranscriptStore.AgentInfo
     let waiting: Bool
     let hidden: Int
@@ -390,14 +516,31 @@ private struct AgentNodeMeter: View {
     }
 
     private func line(_ duration: TimeInterval?) -> some View {
+        let colour = info.status == .failed ? Theme.danger : info.status == .running ? Theme.secondary : Theme.tertiary
+        return Text(Self.text(info, duration: duration, waiting: waiting, hidden: hidden, background: background))
+            .foregroundStyle(colour)
+    }
+
+    /// An ended agent's first word: "done", "failed" or "stopped"; nil while it runs.
+    static func state(_ status: TranscriptStore.AgentInfo.Status) -> String? {
+        switch status {
+        case .running: nil
+        case .finished: "done"
+        case .failed: "failed"
+        case .stopped: "stopped"
+        }
+    }
+
+    static func text(
+        _ info: TranscriptStore.AgentInfo, duration: TimeInterval?, waiting: Bool, hidden: Int = 0, background: Bool
+    ) -> String {
         var parts: [String] = background ? ["background"] : []
-        if info.status == .failed { parts.append("failed") } else if info.status == .stopped { parts.append("stopped") }
+        if let state = state(info.status) { parts.append(state) }
         if waiting { parts.append("waiting") }
         if let duration { parts.append(AgentMeter.clock(duration)) }
         if let tokens = AgentMeter.tokens(of: info), info.status != .failed { parts.append(tokens) }
         if hidden > 0 { parts.append("+\(hidden) folded") }
-        let colour = info.status == .failed ? Theme.danger : info.status == .running ? Theme.secondary : Theme.tertiary
-        return Text(parts.joined(separator: " · ")).foregroundStyle(colour)
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -583,7 +726,8 @@ private struct AnyLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View { make(configuration) }
 }
 
-/// "Explore · haiku · 0:41 · 18.2k tokens · 6 tools", live.
+/// "Explore · haiku · 0:41 · 18.2k tokens · 6 tools", live; an ended agent's says how it ended
+/// before its time ("general-purpose · stopped · 0:15 · 3.2k tokens").
 struct AgentMeta: View {
     let info: TranscriptStore.AgentInfo
 
@@ -599,6 +743,7 @@ struct AgentMeta: View {
 
     private func line(_ duration: TimeInterval?) -> some View {
         var parts = [info.type, info.model].compactMap { $0 }
+        if let state = AgentNodeMeter.state(info.status) { parts.append(state) }
         if let duration { parts.append(AgentMeter.clock(duration)) }
         if let tokens = AgentMeter.tokens(of: info) { parts.append("\(tokens) tokens") }
         if info.tools > 0 { parts.append(info.tools == 1 ? "1 tool" : "\(info.tools) tools") }

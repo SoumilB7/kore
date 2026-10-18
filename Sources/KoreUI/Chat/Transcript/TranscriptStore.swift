@@ -320,6 +320,8 @@ final class TranscriptStore {
         let isLast: Bool
         /// For each ancestor level, whether a line continues below (│).
         let rails: [Bool]
+        /// It runs behind the chat: it, or an agent above it, is a background agent.
+        var background = false
         var id: String { info.id }
     }
     /// Bumped when a turn folds by itself, so the view can keep the answer where it was.
@@ -628,7 +630,11 @@ final class TranscriptStore {
                 entries[i].stopped = true
             case .agent where interrupted && entries[i].agent?.status == .running:
                 entries[i].agent?.status = .stopped
-                if let agent = entries[i].agent?.id { stopLane(agent) }
+                // Live, it ran until now; a replayed one has no true end, so its meter says "stopped".
+                if !batching, entries[i].agent?.duration == nil, let start = entries[i].agent?.startedAt {
+                    entries[i].agent?.duration = date.timeIntervalSince(start)
+                }
+                if let agent = entries[i].agent?.id { stopLane(agent, at: batching ? nil : date) }
             default:
                 break
             }
@@ -737,56 +743,59 @@ final class TranscriptStore {
 
     // MARK: The agent map
 
-    /// The agent map's four trees, parents before children, in spawn order: the agents, the
-    /// chat's own background agents still running with theirs (one that finishes leaves the
-    /// section, so it's what's still going on), those that have finished, and the stopped ones
-    /// apart. A finished or stopped agent takes its own agents with it, except those running: they
-    /// stay in the tree, where it was. One that runs again goes back to its place.
-    func agentTree() -> (tree: [AgentNode], background: [AgentNode], done: [AgentNode], stopped: [AgentNode]) {
-        let infos = agentOrder.compactMap(agent)
+    /// The agent map's three groups (by state), parents before children. Running: every running
+    /// agent of both kinds, in spawn order, under its nearest running ancestor or the chat. Done
+    /// (finished or failed) and stopped: each agent under its nearest ancestor in the same group
+    /// or the group's row, the group's top level newest first. An agent leaves running the moment
+    /// it ends, and one that runs again goes back to its place.
+    func agentTree() -> (running: [AgentNode], done: [AgentNode], stopped: [AgentNode]) {
+        var seen: Set<String> = []
+        let infos = agentOrder.compactMap(agent).filter { seen.insert($0.id).inserted }
         let byId = Dictionary(infos.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        // Parents spawn before their children, so each parent is settled before its children.
-        var grouped: Set<String> = []
-        // The chat's own background agents that ended other than stopped, with their children.
-        var done: Set<String> = []
-        // The nearest ancestor still in the tree ("" for the chat).
-        var treeParent: [String: String] = [:]
-        // Under the chat's own background agents, with their children.
-        var behind: Set<String> = []
-        for info in infos {
-            let parent = info.parent.flatMap { byId[$0] == nil ? nil : $0 }
-            let up = parent.map { grouped.contains($0) || done.contains($0) ? treeParent[$0] ?? "" : $0 } ?? ""
-            treeParent[info.id] = up
-            let running = info.status == .running
-            if info.status == .stopped || (!running && parent.map(grouped.contains) == true) {
-                grouped.insert(info.id)
-            } else if !running, parent.map(done.contains) == true || (up.isEmpty && info.background) {
-                done.insert(info.id)
-            } else if up.isEmpty ? info.background && running : behind.contains(up) {
-                behind.insert(info.id)
+        enum Group { case running, done, stopped }
+        func group(_ info: AgentInfo) -> Group {
+            switch info.status {
+            case .running: .running
+            case .stopped: .stopped
+            case .finished, .failed: .done
             }
         }
-        let tree = Self.walk(infos.filter { !grouped.contains($0.id) && !done.contains($0.id) && !behind.contains($0.id) }) {
-            treeParent[$0.id] ?? ""
+        // Runs behind the chat: it, or an agent above it, is a background agent. Parents spawn
+        // before their children, so each parent is settled first.
+        var behind: Set<String> = []
+        // The nearest ancestor in the same group ("" for the chat or the group's row).
+        var up: [String: String] = [:]
+        for info in infos {
+            let own = group(info)
+            var parent = info.parent.flatMap { byId[$0] == nil ? nil : $0 }
+            if info.background || parent.map(behind.contains) == true { behind.insert(info.id) }
+            // Bounded, so a malformed chain can't loop.
+            var steps = 0
+            while let p = parent, let above = byId[p], group(above) != own, steps < infos.count {
+                parent = above.parent.flatMap { byId[$0] == nil ? nil : $0 }
+                steps += 1
+            }
+            up[info.id] = parent.flatMap { byId[$0].map(group) == own ? $0 : nil } ?? ""
         }
-        let background = Self.walk(infos.filter { behind.contains($0.id) }) { treeParent[$0.id] ?? "" }
-        let finished = Self.walk(infos.filter { done.contains($0.id) }) { info in
-            info.parent.flatMap { done.contains($0) ? $0 : nil } ?? ""
+        func walk(_ own: Group, newestFirst: Bool) -> [AgentNode] {
+            Self.walk(infos.filter { group($0) == own }, newestFirst: newestFirst, behind: behind) { up[$0.id] ?? "" }
         }
-        let stopped = Self.walk(infos.filter { grouped.contains($0.id) }) { info in
-            info.parent.flatMap { grouped.contains($0) ? $0 : nil } ?? ""
-        }
-        return (tree, background, finished, stopped)
+        return (walk(.running, newestFirst: false), walk(.done, newestFirst: true), walk(.stopped, newestFirst: true))
     }
 
-    private static func walk(_ infos: [AgentInfo], parent: (AgentInfo) -> String) -> [AgentNode] {
+    /// `newestFirst`: the top level in reverse spawn order; children always in spawn order.
+    private static func walk(
+        _ infos: [AgentInfo], newestFirst: Bool, behind: Set<String>, parent: (AgentInfo) -> String
+    ) -> [AgentNode] {
         let children = Dictionary(grouping: infos, by: parent)
         var nodes: [AgentNode] = []
+        nodes.reserveCapacity(infos.count)
         func walk(_ parent: String, depth: Int, rails: [Bool]) {
-            let kids = children[parent] ?? []
+            var kids = children[parent] ?? []
+            if parent.isEmpty, newestFirst { kids.reverse() }
             for (i, info) in kids.enumerated() {
                 let last = i == kids.count - 1
-                nodes.append(AgentNode(info: info, depth: depth, isLast: last, rails: rails))
+                nodes.append(AgentNode(info: info, depth: depth, isLast: last, rails: rails, background: behind.contains(info.id)))
                 walk(info.id, depth: depth + 1, rails: rails + [!last])
             }
         }
@@ -999,8 +1008,9 @@ final class TranscriptStore {
         }
     }
 
-    /// An agent's open calls end as stopped, and its own agents with them.
-    private func stopLane(_ agent: String) {
+    /// An agent's open calls end as stopped, and its own agents with them. `date`: when, for the
+    /// stopped agents' time (nil leaves it unknown, as for a replayed session).
+    private func stopLane(_ agent: String, at date: Date? = nil) {
         guard var lane = lanes[agent] else { return }
         for i in lane.indices {
             if lane[i].kind == .tool, !lane[i].done {
@@ -1009,7 +1019,10 @@ final class TranscriptStore {
             }
             if lane[i].agent?.status == .running {
                 lane[i].agent?.status = .stopped
-                if let child = lane[i].agent?.id { stopLane(child) }
+                if let date, lane[i].agent?.duration == nil, let start = lane[i].agent?.startedAt {
+                    lane[i].agent?.duration = date.timeIntervalSince(start)
+                }
+                if let child = lane[i].agent?.id { stopLane(child, at: date) }
             }
         }
         lanes[agent] = lane

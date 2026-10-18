@@ -119,12 +119,10 @@ extension StoryID {
         package static func row(_ agent: String) -> StoryID { StoryID(.agentmap, "row", key: agent) }
         /// The wires drawn behind an agent's row: its elbow and the spines passing it.
         package static func wires(_ agent: String) -> StoryID { StoryID(.agentmap, "wires", key: agent) }
-        /// The stopped agents' group: its row opens and closes it.
-        package static let stopped = StoryID(.agentmap, "stopped")
-        /// The group of the background agents that have finished: its row opens and closes it.
-        package static let done = StoryID(.agentmap, "done")
-        /// The background agents' group's label, over its rows.
-        package static let background = StoryID(.agentmap, "background")
+        /// A closed group of ended agents, "done" or "stopped": its row opens and closes it.
+        package static func ended(_ group: String) -> StoryID { StoryID(.agentmap, "ended", key: group) }
+        /// The chat's own row, the root the running agents hang off.
+        package static let chat = StoryID(.agentmap, "chat")
         package static let open = StoryID(.agentmap, "open")
         package static let stop = StoryID(.agentmap, "stop")
         package static let close = StoryID(.agentmap, "close")
@@ -219,7 +217,7 @@ extension StoryID {
             Composer.account.part(.cancel), Composer.account.part(.copy), Composer.account.part(.credentials),
             Composer.account.part(.choose), Composer.account.part(.save),
             Transcript.earlier,
-            AgentMap.open, AgentMap.stop, AgentMap.close, History.search,
+            AgentMap.open, AgentMap.stop, AgentMap.close, AgentMap.chat, History.search,
             Explorer.newfile, Explorer.newfolder, Explorer.refresh, Explorer.collapse, Explorer.namefield,
             Explorer.filesTab, Explorer.searchTab,
             Editor.Find.field, Editor.Find.replaceField, Editor.Find.next, Editor.Find.previous, Editor.Find.close,
@@ -247,7 +245,8 @@ extension StoryID {
             StoryID(.approval, key: k).part(.allow), StoryID(.approval, key: k).part(.always),
             StoryID(.approval, key: k).part(.deny), StoryID(.approval, key: k).part(.approveplan),
             StoryID(.approval, key: k).part(.keepplanning), StoryID(.approval, key: k).part(.autoaccept),
-            StoryID(.agentmap, "row", key: k), StoryID(.agentmap, "wires", key: k), StoryID(.history, "row", key: k),
+            StoryID(.agentmap, "row", key: k), StoryID(.agentmap, "wires", key: k), StoryID(.agentmap, "ended", key: k),
+            StoryID(.history, "row", key: k),
             StoryID(.history, "row", key: k).part(.archive), StoryID(.explorer, "row", key: k),
             StoryID(.editor, key: k), StoryID(.editor, "gutter.fold", key: k), StoryID(.editor, "foldchip", key: k),
             StoryID(.quickopen, "row", key: k), StoryID(.search, "result", key: k), StoryID(.changes, "file", key: k),

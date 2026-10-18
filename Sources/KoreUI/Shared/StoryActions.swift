@@ -59,6 +59,15 @@ extension Chat {
 
     /// Whether the agent map shows over the chat (the Agents button, ⇧⌘A).
     package var isAgentMapOpen: Bool { agentMap.isOpen }
+    /// The agent map's selected agent, and its closed groups' rows as they read ("Done 2 · 1
+    /// foreground · 1 background").
+    package var storyAgentMapSelected: String? { agentMap.selected }
+    package var storyAgentMapGroups: [String] {
+        let rows = AgentMapRows(transcript.agentTree(), folded: [], open: [])
+        return AgentMapState.Fold.allCases.compactMap { fold in
+            rows.nodes(fold).isEmpty ? nil : AgentMapRows.label(fold, rows.nodes(fold))
+        }
+    }
 
     /// Whether the usage popup is open, its account ("Claude Max · you@example.com · Example Org",
     /// the plan name and its tooltip), its bars as they read ("Weekly limit · 6% · Resets in 4d")

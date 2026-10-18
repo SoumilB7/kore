@@ -4,8 +4,9 @@ import Testing
 
 @testable import KoreUI
 
-/// Stopped agents wait apart from the agent map's tree, and come back to their place when they
-/// run again; each CLI's way of running one again reaches the transcript as `agentResumed`.
+/// Stopped agents wait in the agent map's Stopped group, and come back to the running rows when
+/// they run again; each CLI's way of running one again reaches the transcript as `agentResumed`.
+/// Every ended agent's meter says how it ended.
 @MainActor
 @Suite("Stopped agents")
 struct StoppedAgentsTests {
@@ -30,25 +31,28 @@ struct StoppedAgentsTests {
         return script
     }
 
-    @Test func aStoppedAgentLeavesTheTreeWithItsOwn() {
+    @Test func aStoppedAgentFoldsIntoStoppedWithItsOwn() {
         let store = stoppedTurn().store
         let map = store.agentTree()
-        #expect(names(map.tree) == ["writer"])
-        #expect(map.tree.first?.isLast == true)
+        #expect(map.running.isEmpty)
+        #expect(names(map.done) == ["writer"])
         #expect(names(map.stopped) == ["scout", ".reader"])
         #expect(store.agentSummary.count == 1)
         #expect(store.agentSummary.stopped == 2)
         #expect(store.agentSummary.first.map(\.id) == ["writer"])
+        // Stopped live, each has the time it ran.
+        #expect(store.agent("scout")?.duration != nil)
+        #expect(store.agent("reader")?.duration != nil)
     }
 
-    @Test func aResumedAgentGoesBackToItsPlace() {
+    @Test func aResumedAgentGoesBackToTheRunningRows() {
         let script = stoppedTurn()
         script.on(.agentResumed(id: "scout"))
         _ = script.sections
         let map = script.store.agentTree()
-        // Before writer, as it spawned; its stopped reader stays in the group.
-        #expect(names(map.tree) == ["scout", "writer"])
-        #expect(map.tree.map(\.isLast) == [false, true])
+        // Its stopped reader stays in the group.
+        #expect(names(map.running) == ["scout"])
+        #expect(map.running.map(\.isLast) == [true])
         #expect(script.store.agent("scout")?.status == .running)
         #expect(names(map.stopped) == ["reader"])
         #expect(script.store.agentSummary.count == 2)
@@ -56,17 +60,19 @@ struct StoppedAgentsTests {
 
         script.on(.agentFinished(id: "scout", .completed, result: "Scouted"))
         _ = script.sections
-        #expect(names(script.store.agentTree().tree) == ["scout", "writer"])
+        // Newest first: writer spawned after scout.
+        #expect(names(script.store.agentTree().done) == ["writer", "scout"])
+        #expect(script.store.agentTree().running.isEmpty)
         #expect(script.store.agent("scout")?.duration != nil)
     }
 
-    /// A running agent under a stopped one stays in the tree, where its parent was.
-    @Test func aLiveChildOfAStoppedAgentStaysInTheTree() {
+    /// A running agent under a stopped one hangs off the chat.
+    @Test func aLiveChildOfAStoppedAgentRunsUnderTheChat() {
         let script = stoppedTurn()
         script.on(.agentResumed(id: "reader"))
         _ = script.sections
         let map = script.store.agentTree()
-        #expect(names(map.tree) == ["reader", "writer"])
+        #expect(names(map.running) == ["reader"])
         #expect(names(map.stopped) == ["scout"])
     }
 
@@ -81,6 +87,80 @@ struct StoppedAgentsTests {
         #expect(summary.count == 0)
         #expect(summary.stopped == 1)
         #expect(summary.first.map(\.id) == ["scout"])
+    }
+
+    // MARK: Meters
+
+    private func info(
+        _ status: TranscriptStore.AgentInfo.Status, duration: TimeInterval? = nil, tokens: Int? = nil
+    ) -> TranscriptStore.AgentInfo {
+        var info = TranscriptStore.AgentInfo(id: "a", index: 0, name: "Audit tests", startedAt: Date())
+        info.status = status
+        info.duration = duration
+        info.tokens = tokens
+        return info
+    }
+
+    private func meter(_ info: TranscriptStore.AgentInfo, waiting: Bool = false, hidden: Int = 0, background: Bool = false) -> String {
+        AgentNodeMeter.text(info, duration: info.duration, waiting: waiting, hidden: hidden, background: background)
+    }
+
+    /// Every ended agent's meter starts with how it ended; a running background one says so.
+    @Test func theMeterSaysHowAnAgentEnded() {
+        #expect(meter(info(.running, duration: 72, tokens: 18_400)) == "1:12 · 18.4k")
+        #expect(meter(info(.running, duration: 495, tokens: 64_000), waiting: true, background: true) == "background · waiting · 8:15 · 64k")
+        #expect(meter(info(.running, duration: 134, tokens: 31_000), background: true) == "background · 2:14 · 31k")
+        #expect(meter(info(.finished, duration: 164, tokens: 15_400)) == "done · 2:44 · 15.4k")
+        #expect(meter(info(.finished, duration: 242, tokens: 40_200), background: true) == "background · done · 4:02 · 40.2k")
+        #expect(meter(info(.failed, duration: 27, tokens: 9_000)) == "failed · 0:27")
+        #expect(meter(info(.stopped, duration: 15, tokens: 3_200)) == "stopped · 0:15 · 3.2k")
+        #expect(meter(info(.stopped, duration: 15, tokens: 3_200), background: true) == "background · stopped · 0:15 · 3.2k")
+        #expect(meter(info(.running, duration: 72, tokens: 18_400), hidden: 3) == "1:12 · 18.4k · +3 folded")
+    }
+
+    /// Read back, a stopped turn's agent has no true end: no time, no tokens, and its meter
+    /// says just "stopped", never nothing.
+    @Test func aStoppedAgentWithNoDataReadsStopped() {
+        let script = Script()
+        script.on(.replayed([
+            .turnStarted("t1", origin: .user, at: Date()), spawn("scout"), .turnFinished("t1", .interrupted, duration: nil),
+        ]))
+        _ = script.sections
+        let scout = script.store.agent("scout")
+        #expect(scout?.status == .stopped)
+        #expect(scout?.duration == nil)
+        #expect(scout.map { meter($0) } == "stopped")
+        #expect(scout.map { meter($0, background: true) } == "background · stopped")
+    }
+
+    // MARK: Keys and selection
+
+    /// ↑ ↓ meet the running rows, the Done row and its agents while it's open, then the Stopped
+    /// row; an agent selected inside a closed group stays selected, the group's row highlighted.
+    @Test func theKeysMeetTheRowsInOrder() {
+        let script = stoppedTurn()
+        script.on(.agentResumed(id: "reader"))
+        _ = script.sections
+        let trees = script.store.agentTree()
+        let closed = AgentMapRows(trees, folded: [], open: [])
+        #expect(closed.stops == [.agent("reader"), .fold(.done), .fold(.stopped)])
+        let open = AgentMapRows(trees, folded: [], open: [.done, .stopped])
+        #expect(open.stops == [.agent("reader"), .fold(.done), .agent("writer"), .fold(.stopped), .agent("scout")])
+        // Selected, then its group closed: the group's row has the highlight, the agent stays.
+        #expect(closed.selection("scout")?.id == "scout")
+        #expect(closed.highlight(selected: "scout", cursor: nil) == .fold(.stopped))
+        #expect(open.highlight(selected: "scout", cursor: nil) == .agent("scout"))
+        // A group's row reached by keys holds the highlight.
+        #expect(open.highlight(selected: "reader", cursor: .done) == .fold(.done))
+        // Nothing picked: the first row shown.
+        #expect(closed.selection(nil)?.id == "reader")
+        #expect(closed.fold(of: "writer") == .done)
+
+        // Nothing shown at all: the newest agent, its group's row highlighted.
+        let ended = AgentMapRows(stoppedTurn().store.agentTree(), folded: [], open: [])
+        #expect(ended.stops == [.fold(.done), .fold(.stopped)])
+        #expect(ended.selection(nil)?.id == "writer")
+        #expect(ended.highlight(selected: "writer", cursor: nil) == .fold(.done))
     }
 
     // MARK: Claude
@@ -139,6 +219,7 @@ struct StoppedAgentsTests {
         #expect(store.agent("toolu_A")?.status == .finished)
         #expect(store.agent("toolu_A")?.result == "Done")
         #expect(store.agentTree().stopped.isEmpty)
+        #expect(store.agentTree().done.map(\.id) == ["toolu_A"])
     }
 
     // MARK: Codex

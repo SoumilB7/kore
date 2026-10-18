@@ -105,11 +105,10 @@ struct BackgroundAgentsTests {
         #expect(script.store.agentSummary.first.allSatisfy { $0.background })
     }
 
-    /// The map lists the chat's background agents still running apart, below the tree, each
-    /// with its own agents; those that finished (done or failed) wait in a group of their own
-    /// with theirs, a stopped one with the stopped, and one another agent runs in the background
-    /// stays under it.
-    @Test func theMapListsBackgroundAgentsApart() {
+    /// The map groups agents by state: every running one, of both kinds, under its nearest
+    /// running ancestor or the chat; the done (or failed) and the stopped in their groups, each
+    /// under its nearest ancestor there, newest first; each group counts its kinds.
+    @Test func theMapGroupsAgentsByState() {
         let script = Script()
         script.send("Go")
         script.start("t1")
@@ -123,20 +122,28 @@ struct BackgroundAgentsTests {
             .agentFinished(id: "gone", .stopped, result: nil))
         _ = script.sections
         let map = script.store.agentTree()
-        #expect(names(map.tree) == ["writer", ".helper", "left"])
-        #expect(names(map.background) == ["scout", ".reader"])
-        #expect(names(map.done) == ["done", ".note", "broke"])
+        #expect(names(map.running) == ["helper", "scout", ".reader", "left"])
+        // Each runs behind the chat: it, or an agent above it, is a background one.
+        #expect(map.running.allSatisfy { $0.background })
+        #expect(names(map.done) == ["broke", "writer", "done", ".note"])
+        #expect(map.done.map(\.background) == [true, false, true, true])
         #expect(names(map.stopped) == ["gone"])
+        // The split counts.
+        #expect(AgentMapRows.label(.done, map.done) == "Done 4 · 1 foreground · 3 background")
+        #expect(AgentMapRows.label(.stopped, map.stopped) == "Stopped 1 · 1 background")
+        #expect(AgentMapRows.split(map.done.filter { !$0.background }) == "1 foreground")
+        #expect(AgentMapRows.split([]) == "")
         // Counted as the agents that did work, as before.
         #expect(script.store.agentSummary.count == 8)
         #expect(script.store.agentSummary.stopped == 1)
 
-        // Run again, it's back in the Background section with its own.
+        // Run again, it's back among the running in its place; its done agent stays in Done.
         script.on(.agentResumed(id: "done"))
         _ = script.sections
         let resumed = script.store.agentTree()
-        #expect(names(resumed.background) == ["done", ".note", "scout", ".reader"])
-        #expect(names(resumed.done) == ["broke"])
+        #expect(names(resumed.running) == ["done", "helper", "scout", ".reader", "left"])
+        #expect(names(resumed.done) == ["broke", "writer", "note"])
+        #expect(AgentMapRows.label(.done, resumed.done) == "Done 3 · 1 foreground · 2 background")
     }
 
     private func spawn(_ id: String, under parent: AgentID = .main, background: Bool = false) -> ChatEvent {
@@ -161,7 +168,7 @@ struct BackgroundAgentsTests {
         _ = script.sections
         #expect(script.store.agent("toolu_bgA")?.duration == 4175)
         #expect(script.store.agent("toolu_bgA")?.tokens == nil)
-        #expect(names(script.store.agentTree().done) == ["toolu_bgA", "toolu_bgB"])
+        #expect(names(script.store.agentTree().done) == ["toolu_bgB", "toolu_bgA"])
     }
 
     /// Its tokens, read from its transcript's last model call, are marked approximate; a
@@ -200,8 +207,8 @@ struct BackgroundAgentsTests {
     }
 
     /// A Codex child thread that finished within its parent's turn (its end an item of that
-    /// turn) is no background agent: it keeps its place in the tree with its totals.
-    @Test func aCodexChildThatFinishedInItsTurnStaysInTheTree() {
+    /// turn) is no background agent: it folds into Done as a foreground one, with its totals.
+    @Test func aCodexChildThatFinishedInItsTurnIsDoneInTheForeground() {
         let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
         let script = Script()
         script.send("Go")
@@ -218,15 +225,16 @@ struct BackgroundAgentsTests {
         events.forEach(script.store.apply)
         _ = script.sections
         let map = script.store.agentTree()
-        #expect(names(map.tree) == ["child"])
-        #expect(map.done.isEmpty && map.background.isEmpty)
+        #expect(map.running.isEmpty && map.stopped.isEmpty)
+        #expect(names(map.done) == ["child"])
+        #expect(AgentMapRows.label(.done, map.done) == "Done 1 · 1 foreground")
         #expect(script.store.agent("child")?.background == false)
         #expect(script.store.agent("child")?.tokens == 900)
     }
 
     /// One still running when its parent's turn ends runs on in the background, as a Claude agent
-    /// run in the background does: the Background section while it runs, ended by its own turn,
-    /// then the done group.
+    /// run in the background does: running under the chat, a background one, ended by its own
+    /// turn, then in Done.
     @Test func aCodexChildRunningAtItsTurnsEndRunsInTheBackground() {
         let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
         let script = Script()
@@ -242,8 +250,9 @@ struct BackgroundAgentsTests {
         on(turnCompleted("t1"))
         _ = script.sections
         var map = script.store.agentTree()
-        #expect(names(map.tree) == ["quick"])
-        #expect(names(map.background) == ["child"])
+        #expect(names(map.done) == ["quick"])
+        #expect(names(map.running) == ["child"])
+        #expect(map.running.map(\.background) == [true])
         #expect(script.store.agent("child")?.background == true)
         #expect(script.store.agent("child")?.status == .running)
 
@@ -254,8 +263,9 @@ struct BackgroundAgentsTests {
         on(.subThread(threadId: "child", method: "turn/completed", params: turnParams("c1")))
         _ = script.sections
         map = script.store.agentTree()
-        #expect(map.background.isEmpty)
-        #expect(names(map.done) == ["child"])
+        #expect(map.running.isEmpty)
+        #expect(names(map.done) == ["quick", "child"])
+        #expect(AgentMapRows.label(.done, map.done) == "Done 2 · 1 foreground · 1 background")
         #expect(script.store.agent("child")?.status == .finished)
         #expect(script.store.agent("child")?.result == "Found it.")
     }
@@ -283,8 +293,8 @@ struct BackgroundAgentsTests {
         script.on(.replayed(events))
         _ = script.sections
         let map = script.store.agentTree()
-        #expect(names(map.done) == ["long"])
-        #expect(map.tree.map(\.id).contains("quick"))
+        #expect(map.done.filter(\.background).map(\.id) == ["long"])
+        #expect(map.done.map(\.id).contains("quick"))
     }
 
     /// A child thread another client runs outlives its parent's turn: its rollout says it still

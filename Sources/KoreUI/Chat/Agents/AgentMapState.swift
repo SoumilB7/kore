@@ -4,19 +4,28 @@ import Observation
 /// has been seen there (the Agents button's red point lasts until then).
 @MainActor @Observable
 final class AgentMapState {
+    /// The map's closed groups of ended agents, below the running ones.
+    enum Fold: String, CaseIterable { case done, stopped }
+
     var isOpen = false
     var selected: String?
     /// Agents whose failure the map has shown.
     private(set) var seenFailures: Set<String> = []
     /// Branches folded in the tree.
     var folded: Set<String> = []
-    /// The stopped agents' group is open (it starts closed).
-    var stoppedOpen = false
-    /// The group of the background agents that have finished is open (it starts closed).
-    var doneOpen = false
+    /// The groups opened (they start closed).
+    var openEnded: Set<Fold> = []
+    /// A group's row reached by keys: it has the highlight, and the selected agent stays.
+    var foldCursor: Fold?
+    /// An agent to bring into view: the map opens the group that holds it.
+    private(set) var reveal: String?
 
     func open(selecting id: String? = nil) {
-        if let id { selected = id }
+        if let id {
+            selected = id
+            foldCursor = nil
+            reveal = id
+        }
         isOpen = true
     }
 
@@ -24,6 +33,16 @@ final class AgentMapState {
 
     /// The Agents button.
     func toggle() { isOpen ? close() : open() }
+
+    func toggle(_ fold: Fold) {
+        if openEnded.contains(fold) { openEnded.remove(fold) } else { openEnded.insert(fold) }
+    }
+
+    /// `reveal` is handled: `fold`, the group holding the agent, opens.
+    func revealed(in fold: Fold?) {
+        if let fold { openEnded.insert(fold) }
+        reveal = nil
+    }
 
     func markSeen(_ failed: [String]) {
         let new = seenFailures.union(failed)
