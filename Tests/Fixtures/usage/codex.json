@@ -1,0 +1,80 @@
+{
+ "account": {
+  "account": {
+   "type": "chatgpt",
+   "email": "you@example.com",
+   "planType": "prolite"
+  },
+  "requiresOpenaiAuth": true
+ },
+ "rateLimits": {
+  "ordinaryUsageAllowed": true,
+  "rateLimits": {
+   "limitId": "codex",
+   "limitName": null,
+   "normalModelSlug": null,
+   "primary": {
+    "usedPercent": 6,
+    "windowDurationMins": 10080,
+    "resetsAt": 1793335108
+   },
+   "secondary": null,
+   "credits": {
+    "hasCredits": true,
+    "unlimited": false,
+    "balance": "47161.9384695000"
+   },
+   "individualLimit": null,
+   "spendControlReached": false,
+   "planType": "prolite",
+   "rateLimitReachedType": null
+  },
+  "rateLimitsByLimitId": {
+   "codex": {
+    "limitId": "codex",
+    "limitName": null,
+    "normalModelSlug": null,
+    "primary": {
+     "usedPercent": 6,
+     "windowDurationMins": 10080,
+     "resetsAt": 1793335108
+    },
+    "secondary": null,
+    "credits": {
+     "hasCredits": true,
+     "unlimited": false,
+     "balance": "47161.9384695000"
+    },
+    "individualLimit": null,
+    "spendControlReached": false,
+    "planType": "prolite",
+    "rateLimitReachedType": null
+   }
+  },
+  "rateLimitResetCredits": {
+   "availableCount": 2,
+   "credits": [
+    {
+     "id": "RateLimitResetCredit_0",
+     "resetType": "codexRateLimits",
+     "status": "available",
+     "grantedAt": 1790709078,
+     "expiresAt": 1793301078,
+     "title": "Full reset",
+     "description": "A free rate limit reset."
+    },
+    {
+     "id": "RateLimitResetCredit_1",
+     "resetType": "codexRateLimits",
+     "status": "available",
+     "grantedAt": 1791416227,
+     "expiresAt": 1794008227,
+     "title": "Full reset",
+     "description": "A free rate limit reset."
+    }
+   ]
+  },
+  "accountId": "00000000-0000-0000-0000-000000000000",
+  "rateLimitUpsell": null
+ }
+}

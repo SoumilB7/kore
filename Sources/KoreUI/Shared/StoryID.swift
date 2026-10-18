@@ -71,6 +71,10 @@ extension StoryID {
         package static let chip = StoryID(.composer, "chip")
         /// A row of the slash menu, by the command's name.
         package static func command(_ name: String) -> StoryID { StoryID(.composer, "command", key: name) }
+        /// The usage popup; `.part(.open)` is its "Manage usage" link.
+        package static let usage = StoryID(.composer, "usage")
+        /// One of its limits, by its title.
+        package static func usageLimit(_ title: String) -> StoryID { StoryID(.composer, "usage.limit", key: title) }
         /// A message waiting for the turn to end; `.part(.cancel)` takes it back.
         package static func queued(_ id: UUID) -> StoryID { StoryID(.composer, "queued", key: id.uuidString) }
     }
@@ -194,7 +198,8 @@ extension StoryID {
         let fixed: [StoryID] = [
             Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
-            Composer.model, Composer.effort, Composer.context, Composer.chip, Transcript.earlier,
+            Composer.model, Composer.effort, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
+            Transcript.earlier,
             AgentMap.open, AgentMap.stop, AgentMap.close, History.search,
             Explorer.newfile, Explorer.newfolder, Explorer.refresh, Explorer.collapse, Explorer.namefield,
             Explorer.filesTab, Explorer.searchTab,
@@ -208,7 +213,7 @@ extension StoryID {
             StoryID(.tabs, "tab", key: k), StoryID(.tabs, "tab", key: k).part(.close), StoryID(.tabs, "file", key: k),
             StoryID(.newtab, "provider", key: k), StoryID(.composer, "queued", key: k),
             StoryID(.composer, "queued", key: k).part(.cancel),
-            StoryID(.composer, "command", key: k),
+            StoryID(.composer, "command", key: k), StoryID(.composer, "usage.limit", key: k),
             StoryID(.transcript, "user", key: k), StoryID(.transcript, "user", key: k).part(.copy),
             StoryID(.transcript, "user", key: k).part(.fork), StoryID(.transcript, "answer", key: k),
             StoryID(.transcript, "answer", key: k).part(.copy), StoryID(.transcript, "answer", key: k).part(.fork),

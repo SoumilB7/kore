@@ -161,6 +161,15 @@ package final class ScriptedBackend: ChatBackend {
 
     package func earlier() async -> (events: [ChatEvent], more: Bool)? { nil }
 
+    package func usage() async throws -> PlanReading {
+        log.append(.usage)
+        switch script.usage {
+        case .claude(let account, let usage): return PlanReading.claude(account: account, usage: usage)
+        case .codex(let account, let rateLimits): return PlanReading.codex(account: account, rateLimits: rateLimits)
+        case nil: throw ScriptedError.noUsage
+        }
+    }
+
     package func compact(instructions: String) async throws {
         log.append(.compact)
         let beats = script.compact
@@ -370,10 +379,12 @@ package final class ScriptedBackend: ChatBackend {
 
 package enum ScriptedError: LocalizedError {
     case noSuchMessage(String)
+    case noUsage
 
     package var errorDescription: String? {
         switch self {
         case .noSuchMessage(let message): "the scripted session has no message \(message)"
+        case .noUsage: "the script has no usage to answer with"
         }
     }
 }

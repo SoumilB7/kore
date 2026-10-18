@@ -58,6 +58,16 @@ extension Chat {
 
     /// Whether the agent map shows over the chat (the Agents button, ⇧⌘A).
     package var isAgentMapOpen: Bool { agentMap.isOpen }
+
+    /// Whether the usage popup is open, its header, its bars as they read ("Weekly limit · 6% ·
+    /// Resets in 4d") and its extras line.
+    package var isUsageOpen: Bool { usage.isOpen }
+    package var storyUsageHeader: String {
+        guard let account = usage.reading?.account else { return "" }
+        return [account.plan, UsageText.who(account)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+    package var storyUsage: [String] { usage.lines }
+    package var storyUsageExtras: String { UsageText.extras(usage.reading?.limits?.extras ?? []) }
 }
 
 extension Workspace {

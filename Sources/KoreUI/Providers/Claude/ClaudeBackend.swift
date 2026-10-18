@@ -141,6 +141,12 @@ final class ClaudeBackend: ChatBackend {
         refreshContext()
     }
 
+    /// Through the running CLI; once it has exited, or before it starts, a short-lived one.
+    func usage() async throws -> PlanReading {
+        if let session, let reading = try? await PlanUsage.claude(session) { return reading }
+        return try await PlanUsage.claude()
+    }
+
     private func controls(_ session: ClaudeSession) async -> ChatControls {
         let models = (await session.capabilities["models"]?.array ?? []).compactMap { json -> ModelOption? in
             guard let value = json["value"]?.string, value != "default" else { return nil }

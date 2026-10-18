@@ -62,6 +62,8 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var autoCompactDue = false
     /// The context card's presence: the wheel and the card share it.
     let contextCard = ContextCardPresence()
+    /// The usage popup over the composer (the / menu's Usage).
+    let usage = UsageState()
 
     /// `fork` makes this chat a fork of `session` that its CLI creates; it has no session of its
     /// own until then. `forkedFrom` names the original chat.
@@ -197,6 +199,14 @@ package final class Chat: Identifiable {
             for await event in backend.events { self.dispatch(event) }
         }
         return backend
+    }
+
+    /// Opens the usage popup and reads the account's limits once, through this chat's CLI.
+    func openUsage() {
+        usage.open(provider: provider.id) { [weak self] in
+            guard let self else { throw UsageUnavailable() }
+            return try await self.connect().usage()
+        }
     }
 
     func close() {

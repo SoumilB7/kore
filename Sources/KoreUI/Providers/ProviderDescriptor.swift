@@ -24,6 +24,25 @@ struct ProviderDescriptor: Identifiable, Sendable {
     /// The folder's chats; nil when the CLI couldn't be asked.
     let sessions: @Sendable (_ folder: URL) async -> [SessionSummary]?
     let setArchived: @Sendable (_ id: String, _ archived: Bool, _ folder: URL) async -> Void
+    /// What the usage popup says of this CLI without a reading.
+    let usage: UsageWording
+}
+
+/// The usage popup's words for one CLI.
+struct UsageWording: Sendable {
+    /// What it's called and how it's signed in to, in Kore's logged-out line.
+    let product: String
+    let login: String
+    /// The limits it usually has, drawn empty while the first reading loads.
+    let rows: [String]
+
+    /// Kore's wording for a CLI that isn't logged in.
+    var signedOut: String { "\(product) isn't logged in. Run `\(login)` in Terminal." }
+
+    /// The reason line when the limits couldn't be read: the CLI's own words after it, if any.
+    func failed(_ detail: String?) -> String {
+        "Couldn't read limits from \(product)" + (detail.map { ": " + $0 } ?? ".")
+    }
 }
 
 enum ModeStep {

@@ -18,7 +18,8 @@ extension ProviderDescriptor {
             } else {
                 try? await CodexHistory.unarchive(id, in: folder)
             }
-        })
+        },
+        usage: UsageWording(product: "Codex", login: "codex login", rows: ["5h limit", "Weekly limit"]))
 }
 
 /// Codex's permission presets as its VS Code extension shows them, and its separate Plan toggle.

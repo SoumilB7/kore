@@ -68,6 +68,15 @@ struct ComposerView: View {
                         // Its bottom a gap above the box's top, its height its own.
                         .padding(.bottom, Space.lg)
                         .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
+                } else if chat.usage.isOpen {
+                    // In the menu's place, its height at most the room above the box.
+                    let box = boxFrame.value
+                    UsagePopup(
+                        state: chat.usage, wording: chat.provider.usage, width: box.width,
+                        room: max(box.minY - Size.titleRow - Space.lg - Space.xxxl, Size.usageMinRoom)
+                    )
+                    .padding(.bottom, Space.lg)
+                    .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 }
             }
         .background(WindowReader { window.value = $0 })
@@ -83,8 +92,11 @@ struct ComposerView: View {
             for monitor in [pasteMonitor.value, clickMonitor.value].compactMap({ $0 }) { NSEvent.removeMonitor(monitor) }
             pasteMonitor.value = nil
             clickMonitor.value = nil
+            chat.usage.close()
         }
         .onChange(of: chat.id) {
+            // The usage popup is the chat the box showed; it closes with the switch.
+            pasteChat.value?.usage.close()
             pasteChat.value = chat
             // The caret goes to the end of this chat's draft, ready to go on typing.
             place()
@@ -279,12 +291,7 @@ struct ComposerView: View {
 
     private var slashMatches: [SlashCommand] {
         guard !slashDismissed.value, let token = slashToken else { return [] }
-        let commands = token.sigil == "$" ? chat.controls.commands.filter { $0.kind == .skill } : chat.controls.commands
-        let query = token.query
-        // Foundation's `contains("")` is false, so a bare "/" must list everything explicitly.
-        if query.isEmpty { return commands }
-        let hits = commands.filter { $0.name.lowercased().contains(query) }
-        return hits.filter { $0.name.lowercased().hasPrefix(query) } + hits.filter { !$0.name.lowercased().hasPrefix(query) }
+        return SlashCommand.matches(chat.controls.commands, sigil: token.sigil, query: token.query)
     }
 
     /// An input method is composing (marked text): its keys are its own.
@@ -321,17 +328,19 @@ struct ComposerView: View {
     }
 
     /// A pick replaces the "/word" it was filtered by: a command goes to the chip (one per
-    /// message, so it replaces any there), a Codex skill in the text as "$name ". The caret
-    /// stays where the word was, and the field's undo starts over, as its text was set.
+    /// message, so it replaces any there), a Codex skill in the text as "$name ". Usage only
+    /// takes the word out, and opens its popup where the menu was. The caret stays where the
+    /// word was, and the field's undo starts over, as its text was set.
     private func accept(_ command: SlashCommand) {
         let insertion = command.kind == .skill ? command.insertion : ""
         let (draft, caret) = slashToken.map { $0.replacing(in: chat.draft, with: insertion) } ?? (chat.draft, chat.draft.count)
-        if command.kind != .skill { chat.command = command }
+        if command.kind == .command { chat.command = command }
         chat.draft = draft
         place(at: caret)
         slashDismissed.value = false
         focused.wrappedValue = true
         forgetUndo()
+        if command.kind == .kore { chat.openUsage() }
     }
 
     /// A click outside the menu and the box closes the menu; the click goes on as it was.

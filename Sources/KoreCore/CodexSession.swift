@@ -269,6 +269,11 @@ public actor CodexSession {
         return entry?["skills"]?.array ?? data.flatMap { $0["skills"]?.array ?? [] }
     }
 
+    /// The account and its plan's limits, read from this app-server (`PlanUsage.codex`).
+    public func planUsage() async throws -> PlanReading {
+        try await PlanUsage.codex(server)
+    }
+
     /// Summarizes the thread to free context. Runs as a turn (turn/started → turn/completed).
     /// Codex compacts with the model the thread is loaded on, which only a turn changes: a model
     /// picked since (or the fallback for one the account can't use) is put on the thread first.

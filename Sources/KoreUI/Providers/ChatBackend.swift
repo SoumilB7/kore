@@ -48,6 +48,9 @@ package protocol ChatBackend: AnyObject {
     /// `thread/compact/start`): `.compactionStarted`, then `.compacted` or `.compactionFailed`.
     /// `instructions` say what the summary should keep, where the CLI takes them (Claude).
     func compact(instructions: String) async throws
+    /// The account and its plan's limits (the usage popup): read through the chat's CLI while it
+    /// runs, else through a short-lived one. Nothing goes into the conversation.
+    func usage() async throws -> PlanReading
     func close() async
 }
 
@@ -123,10 +126,17 @@ extension ChatBackend {
 
     /// For a backend that can't compact.
     package func compact(instructions: String) async throws { throw CompactUnavailable() }
+
+    /// For a backend with no account to read.
+    package func usage() async throws -> PlanReading { throw UsageUnavailable() }
 }
 
 struct CompactUnavailable: Error, CustomStringConvertible {
     var description: String { "This chat can't be compacted" }
+}
+
+struct UsageUnavailable: LocalizedError {
+    var errorDescription: String? { "this chat has no account to read" }
 }
 
 /// Not tied to an actor, so a translator can replay history off the main thread; the lock

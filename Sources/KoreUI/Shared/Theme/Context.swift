@@ -58,3 +58,23 @@ extension Motion {
     /// Out of the wheel and card before it goes.
     static let cardGrace: Double = 0.25
 }
+
+// The usage popup (the / menu's Usage): the plan's limits as bars like the context card's track.
+
+extension Theme {
+    /// A limit's bar: the accent, amber from 80%, red once it's reached.
+    static func usageFill(_ fraction: Double) -> Color {
+        fraction >= 1 ? danger : fraction >= 0.8 ? warning : accent
+    }
+}
+
+extension Size {
+    /// The narrowest a limit's column gets before the grid drops one.
+    static let usageColumnMin: CGFloat = 180
+    /// Below a limit's bar, before its reset line.
+    static let usageBarBelow: CGFloat = 3
+    /// Narrower than this, "Manage usage ↗" is the arrow alone.
+    static let usageLinkFull: CGFloat = 380
+    /// The least height the popup keeps however little room the window has above the composer.
+    static let usageMinRoom: CGFloat = 72
+}

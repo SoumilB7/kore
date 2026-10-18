@@ -105,6 +105,12 @@ final class CodexBackend: ChatBackend {
         yield(.controlsLoaded(await controls(session)))
     }
 
+    /// Through the chat's app-server; once it has exited, or before it starts, a short-lived one.
+    func usage() async throws -> PlanReading {
+        if let session, let reading = try? await session.planUsage() { return reading }
+        return try await PlanUsage.codex()
+    }
+
     /// A page of turns as events, with their settings from the rollout, parsed off the main
     /// thread on a translator of its own.
     private func replay(_ turns: [JSONValue], _ session: CodexSession) async -> CodexTranslator.Replayed {

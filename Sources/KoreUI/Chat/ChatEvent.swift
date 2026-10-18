@@ -283,7 +283,8 @@ package struct ModelOption: Identifiable, Hashable, Sendable {
 
 /// An entry in the `/` menu. Picking it inserts `insertion` into the draft.
 package struct SlashCommand: Identifiable, Hashable, Sendable {
-    package enum Kind: Sendable { case command, skill }
+    /// `kore`: Kore's own entry (Usage), which opens a popup and sends the CLI nothing.
+    package enum Kind: Sendable { case command, skill, kore }
     package let name: String
     package let description: String
     package let hint: String

@@ -16,14 +16,18 @@ package struct CLIScript: Sendable {
     package var compact: [Beat]
     /// A sub-agent's card, by agent id (`ChatBackend.agentHistory`).
     package var agents: [String: [ChatEvent]]
+    /// What the CLI answers when Kore reads the account's limits (the usage popup); nil: it fails.
+    package var usage: UsageAnswer?
 
     package init(
-        start: [Beat] = [.controls()], turns: [[Beat]] = [], compact: [Beat] = CLIScript.compaction(), agents: [String: [ChatEvent]] = [:]
+        start: [Beat] = [.controls()], turns: [[Beat]] = [], compact: [Beat] = CLIScript.compaction(), agents: [String: [ChatEvent]] = [:],
+        usage: UsageAnswer? = nil
     ) {
         self.start = start
         self.turns = turns
         self.compact = compact
         self.agents = agents
+        self.usage = usage
     }
 
     /// Every send answered with one line of text.
@@ -33,6 +37,15 @@ package struct CLIScript: Sendable {
     package static func compaction(summary: String = "The conversation so far, in brief.") -> [Beat] {
         [.event(.compactionStarted(auto: false)), .event(.compacted(at: Date(), auto: false)), .event(.compactionSummary(summary))]
     }
+}
+
+/// The replies a CLI sends when Kore reads the account and its limits, as it sends them: Kore
+/// parses them with its own code.
+package enum UsageAnswer: Sendable {
+    /// `initialize`'s `account`, and the `get_usage` control request's answer.
+    case claude(account: JSONValue, usage: JSONValue)
+    /// `account/read`'s and `account/rateLimits/read`'s results.
+    case codex(account: JSONValue, rateLimits: JSONValue)
 }
 
 /// One step of a script.
@@ -99,6 +112,8 @@ package enum Call: Sendable, Equatable {
     case rename(String)
     case stopAgent(String)
     case compact
+    /// The usage popup read the account's limits.
+    case usage
     case fork(message: String?)
     /// Not Kore's: a test's go-ahead (`ScriptedBackend.release()`), to hold a script mid-way.
     case release

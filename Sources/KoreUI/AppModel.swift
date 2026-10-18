@@ -71,7 +71,7 @@ package final class AppModel {
     func checkCLI() async {
         do {
             let status = try await ClaudeAuth.status()
-            cliProblem = status.loggedIn ? nil : "Claude Code isn't logged in. Run `claude auth login` in Terminal."
+            cliProblem = status.loggedIn ? nil : ProviderDescriptor.claude.usage.signedOut
         } catch {
             cliProblem = String(describing: error)
         }

@@ -191,6 +191,12 @@ public actor ClaudeSession {
         try await control("get_settings")
     }
 
+    /// The plan's limits (`rate_limits`, `subscription_type`, `rate_limits_available`), without
+    /// the behaviour breakdown, which takes seconds more. Experimental in the CLI.
+    public func usage() async throws -> JSONValue {
+        try await control("get_usage", ["skip_behaviors": true])
+    }
+
     /// Ends the process.
     public func close() {
         guard running else { return }
