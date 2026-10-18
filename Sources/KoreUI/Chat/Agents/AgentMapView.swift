@@ -27,8 +27,10 @@ struct AgentMapView: View {
                 Theme.background
                 HStack(spacing: 0) {
                     if !narrow {
+                        // The stopped group's rows count whether it's open or not: opening it
+                        // doesn't move the divider.
                         tree(all, selected: selected?.id)
-                            .frame(width: paneWidth(nodes, in: geometry.size.width))
+                            .frame(width: paneWidth(visible(all.tree) + all.stopped, in: geometry.size.width))
                         Rectangle().fill(Theme.border).frame(width: Stroke.hairline)
                     }
                     VStack(alignment: .leading, spacing: 0) {
