@@ -299,6 +299,8 @@ final class TranscriptStore {
         /// Agents that did or are doing work: the stopped ones are counted apart.
         var count = 0
         var stopped = 0
+        /// Every agent, the stopped ones too: what the Agents button and the map's header count.
+        var total: Int { count + stopped }
         /// Running agents' mark indexes and ids, in spawn order.
         var running: [AgentRef] = []
         /// Some agent is waiting for the user.
@@ -778,10 +780,11 @@ final class TranscriptStore {
     // MARK: The agent map
 
     /// The agent map's three groups (by state), parents before children. Running: every running
-    /// agent of both kinds, in spawn order, under its nearest running ancestor or the chat. Done
-    /// (finished or failed) and stopped: each agent under its nearest ancestor in the same group
-    /// or the group's row, the group's top level newest first. An agent leaves running the moment
-    /// it ends, and one that runs again goes back to its place.
+    /// agent of both kinds, and every failed one, which is never folded away, in spawn order,
+    /// under its nearest ancestor in the group or the chat. Done (finished) and stopped: each agent
+    /// under its nearest ancestor in the same group or the group's row, the group's top level
+    /// newest first. An agent leaves running the moment it finishes or stops, and one that runs
+    /// again goes back to its place.
     func agentTree() -> (running: [AgentNode], done: [AgentNode], stopped: [AgentNode]) {
         var seen: Set<String> = []
         let infos = agentOrder.compactMap(agent).filter { seen.insert($0.id).inserted }
@@ -789,9 +792,9 @@ final class TranscriptStore {
         enum Group { case running, done, stopped }
         func group(_ info: AgentInfo) -> Group {
             switch info.status {
-            case .running: .running
+            case .running, .failed: .running
             case .stopped: .stopped
-            case .finished, .failed: .done
+            case .finished: .done
             }
         }
         // Runs behind the chat: it, or an agent above it, is a background agent. Parents spawn
@@ -1527,7 +1530,9 @@ final class TranscriptStore {
         case .spinner, .message, .summary, .queued: return nil
         case .rule: return TimelineDot.none
         case .outcome(_, let text, _): return text == "Interrupted" ? .warning : .failure
-        case .signIn, .slept: return .failure
+        case .signIn: return .failure
+        // The Mac slept: the turn was cut short, as an interrupted one is, not failed.
+        case .slept: return .warning
         case .changes: return .plain
         case .tool(let e, _): return state(e)
         case .file(let e, _, _): return state(e)
@@ -1720,8 +1725,8 @@ final class TranscriptStore {
     private func foldOutcome(_ turn: Turn) -> WorkedFor.Outcome? {
         switch turn.outcome {
         case .completed: nil
-        case .interrupted: .interrupted
-        case .failed, .authFailed, .slept: .failed
+        case .interrupted, .slept: .interrupted
+        case .failed, .authFailed: .failed
         }
     }
 

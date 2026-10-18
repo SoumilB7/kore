@@ -127,7 +127,8 @@ enum ContinueText {
 }
 
 /// A turn that failed while the Mac slept, in Kore's words with the CLI's own line on hover,
-/// then one Continue: the Sign in notice's pattern.
+/// then one Continue: the Sign in notice's pattern. Not a failure: it's in secondary, as
+/// "Interrupted" is.
 private struct SleptNotice: View {
     let turn: String
     let said: String
@@ -137,7 +138,7 @@ private struct SleptNotice: View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
             Text("Stopped while the Mac slept")
                 .font(TextStyle.body)
-                .foregroundStyle(Theme.danger)
+                .foregroundStyle(Theme.secondary)
                 .help(said)
                 .selectableOnHover()
             Button("Continue", action: resume)

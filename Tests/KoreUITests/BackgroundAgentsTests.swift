@@ -105,9 +105,9 @@ struct BackgroundAgentsTests {
         #expect(script.store.agentSummary.first.allSatisfy { $0.background })
     }
 
-    /// The map groups agents by state: every running one, of both kinds, under its nearest
-    /// running ancestor or the chat; the done (or failed) and the stopped in their groups, each
-    /// under its nearest ancestor there, newest first; each group counts its kinds.
+    /// The map groups agents by state: every running one, of both kinds, and every failed one,
+    /// under its nearest ancestor among them or the chat; the done and the stopped in their
+    /// groups, each under its nearest ancestor there, newest first; each group counts its kinds.
     @Test func theMapGroupsAgentsByState() {
         let script = Script()
         script.send("Go")
@@ -122,14 +122,15 @@ struct BackgroundAgentsTests {
             .agentFinished(id: "gone", .stopped, result: nil))
         _ = script.sections
         let map = script.store.agentTree()
-        #expect(names(map.running) == ["helper", "scout", ".reader", "left"])
+        // The failed one stays out with its running child.
+        #expect(names(map.running) == ["helper", "scout", ".reader", "broke", ".left"])
         // Each runs behind the chat: it, or an agent above it, is a background one.
         #expect(map.running.allSatisfy { $0.background })
-        #expect(names(map.done) == ["broke", "writer", "done", ".note"])
-        #expect(map.done.map(\.background) == [true, false, true, true])
+        #expect(names(map.done) == ["writer", "done", ".note"])
+        #expect(map.done.map(\.background) == [false, true, true])
         #expect(names(map.stopped) == ["gone"])
         // The split counts.
-        #expect(AgentMapRows.label(.done, map.done) == "Done 4 · 1 foreground · 3 background")
+        #expect(AgentMapRows.label(.done, map.done) == "Done 3 · 1 foreground · 2 background")
         #expect(AgentMapRows.label(.stopped, map.stopped) == "Stopped 1 · 1 background")
         #expect(AgentMapRows.split(map.done.filter { !$0.background }) == "1 foreground")
         #expect(AgentMapRows.split([]) == "")
@@ -141,9 +142,9 @@ struct BackgroundAgentsTests {
         script.on(.agentResumed(id: "done"))
         _ = script.sections
         let resumed = script.store.agentTree()
-        #expect(names(resumed.running) == ["done", "helper", "scout", ".reader", "left"])
-        #expect(names(resumed.done) == ["broke", "writer", "note"])
-        #expect(AgentMapRows.label(.done, resumed.done) == "Done 3 · 1 foreground · 2 background")
+        #expect(names(resumed.running) == ["done", "helper", "scout", ".reader", "broke", ".left"])
+        #expect(names(resumed.done) == ["writer", "note"])
+        #expect(AgentMapRows.label(.done, resumed.done) == "Done 2 · 1 foreground · 1 background")
     }
 
     private func spawn(_ id: String, under parent: AgentID = .main, background: Bool = false) -> ChatEvent {

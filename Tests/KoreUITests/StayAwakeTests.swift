@@ -347,6 +347,18 @@ struct StayAwakeTests {
         script.store.continues(turn: nil, at: nil)
         #expect(script.items.map(\.row).contains(.outcome(turn: "t2", text: "You've hit your session limit")))
     }
+    /// The Mac sleeping isn't a failure: the turn is cut short as an interrupted one is.
+    @Test func aSleptTurnIsCalm() {
+        let script = Script()
+        script.send("Go on")
+        script.start("t1")
+        script.tool("t1-tool")
+        script.done("t1-tool")
+        script.finish("t1", .slept("API Error: Connection error."))
+        let slept = script.items.first { if case .slept = $0.row { true } else { false } }
+        #expect(slept?.dot == .warning)
+        #expect(script.lines.contains("fold interrupted"))
+    }
 }
 
 /// A clock moved by hand: due actions run in order as it passes them.

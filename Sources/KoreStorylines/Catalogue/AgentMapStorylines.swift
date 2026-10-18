@@ -300,7 +300,8 @@ final class AgentMapAllStopped: ChatStoryline {
 /// as the turn ends). The running one hangs off the chat; below the hairline, Done and Stopped
 /// name their splits. Opening and closing the groups moves nothing sideways; an agent selected in
 /// a group stays selected while the group is closed, and the keys go on from its row. The next
-/// turn ends the running one, which folds into Done at once.
+/// turn ends the running one, which folds into Done at once. The Agents button and the map's
+/// header count all four agents, the stopped ones too.
 final class AgentMapByState: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .agents] }
     private static let second: [Beat] = [
@@ -354,6 +355,7 @@ final class AgentMapByState: ChatStoryline {
             ExpectElement(.id(cut), .absent),
             ExpectElement(.id(gone), .absent),
             AgentMapStories.groups(["Done 1 · 1 foreground", "Stopped 2 · 1 foreground · 1 background"]),
+            AgentMapStories.counts(button: "1 running", header: "4 · 1 running"),
             Expect("the chat, its running agent, then Done and Stopped") { _ in AgentMapStories.order([chat, watch, done, stopped]) },
             Expect("the rows noted") { _ in frames.note(fixed) },
             Press(.id(done)),
@@ -386,8 +388,79 @@ final class AgentMapByState: ChatStoryline {
             Send("Go on"), TurnFinished(2),
             ExpectElement(.id(watch), .absent),
             AgentMapStories.groups(["Done 2 · 1 foreground · 1 background", "Stopped 2 · 1 foreground · 1 background"]),
+            AgentMapStories.counts(button: "4 agents", header: "4"),
             Expect("nothing moved sideways as the agent ended") { _ in frames.same([chat, done, stopped]) },
         ]
+    }
+}
+
+/// Failures are never folded away, for both CLIs: one turn spawns a foreground agent that
+/// finishes, one that stops, one that fails, and a background one that fails (Codex: a child
+/// thread backgrounded as the turn ends, failing after). The failed ones hang off the chat in red,
+/// above the closed Done and Stopped groups, and stay there after the next turn. The Agents
+/// button and the map's header count the same four agents, the stopped one included.
+final class FailedAgentVisible: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents] }
+
+    override class var script: CLIScript {
+        CLIScript(turns: [
+            [
+                .startTurn, AgentMapStories.spawn("notes", "Read the notes"), AgentMapStories.spawn("cut", "Draft the copy"),
+                AgentMapStories.spawn("scan", "Scan the logs"), AgentMapStories.spawn("watch", "Watch the build", background: true),
+                .event(.agentFinished(id: "notes", .completed, result: "Read")),
+                .event(.agentFinished(id: "cut", .stopped, result: nil)),
+                .event(.agentFinished(id: "scan", .failed, result: "The log is missing")),
+                .event(.agentFinished(id: "watch", .failed, result: "The build broke")),
+                .stream(.answer, "Two failed."), .finishTurn(.completed),
+            ],
+            CLIScript.reply("Noted."),
+        ])
+    }
+
+    static var codexScript: CLIScript {
+        CLIScript(turns: [
+            [
+                .startTurn, AgentMapStories.spawn("notes", "Read the notes"), AgentMapStories.spawn("cut", "Draft the copy"),
+                AgentMapStories.spawn("scan", "Scan the logs"), AgentMapStories.spawn("watch", "Watch the build"),
+                .event(.agentFinished(id: "notes", .completed, result: "Read")),
+                .event(.agentFinished(id: "cut", .stopped, result: nil)),
+                .event(.agentFinished(id: "scan", .failed, result: "The log is missing")),
+                .stream(.answer, "Two failed."), .event(.agentBackgrounded(id: "watch")), .finishTurn(.completed),
+                .event(.agentFinished(id: "watch", .failed, result: "The build broke")),
+            ],
+            CLIScript.reply("Noted."),
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        let chat = StoryID.AgentMap.chat, scan = StoryID.AgentMap.row("scan"), watch = StoryID.AgentMap.row("watch")
+        let done = StoryID.AgentMap.ended("done"), stopped = StoryID.AgentMap.ended("stopped")
+        let failed: [any Step] = [
+            ExpectElement(.id(scan), .visible),
+            ExpectElement(.id(watch), .visible),
+            ExpectElement(.id(StoryID.AgentMap.row("notes")), .absent),
+            ExpectElement(.id(StoryID.AgentMap.row("cut")), .absent),
+            AgentMapStories.groups(["Done 1 · 1 foreground", "Stopped 1 · 1 foreground"]),
+            Expect("the failed agents under the chat, above the closed groups") { _ in
+                AgentMapStories.order([chat, scan, watch, done, stopped])
+            },
+            AgentMapStories.counts(button: "4 agents", header: "4 · 2 failed"),
+        ]
+        return [UseScript(Self.codexScript, for: "codex"), PutClaudeChat()] + super.steps() + [
+            Send("Use some helpers"), TurnFinished(1), WaitIdle(),
+            // The title row with the Agents button's red point, then History over it.
+            Snapshot("title-row"),
+            Press(.id(StoryID.Titlebar.history)),
+            AgentMapStories.faded(),
+            Snapshot("history"),
+            Press(.id(StoryID.Titlebar.history)),
+            Press(.id(StoryID.Titlebar.agents)),
+            AgentMapStories.faded(),
+            Snapshot("agent-map-failed"),
+        ]
+            + failed
+            + [Press(.id(StoryID.AgentMap.close)), Send("Go on"), TurnFinished(2), Press(.id(StoryID.Titlebar.agents))]
+            + failed
     }
 }
 
@@ -583,6 +656,16 @@ enum AgentMapStories {
             let start = start ?? Date()
             self.start = start
             return Date().timeIntervalSince(start)
+        }
+    }
+
+    /// The Agents button and the map's header count so.
+    static func counts(button: String, header: String) -> Expect {
+        Expect("the Agents button “\(button)” and the header “\(header)”", found: { story in
+            (try? story.activeChat().storyAgentCounts).map { "“\($0.button)”, “\($0.header)”" }
+        }) { story in
+            let counts = try story.activeChat().storyAgentCounts
+            return counts.button == button && counts.header == header
         }
     }
 

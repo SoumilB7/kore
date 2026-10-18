@@ -3,8 +3,9 @@ import SwiftUI
 /// Every agent the chat has spawned, over the chat area (phase 10 §6): a graph on the left with
 /// the chat as its root O and each agent an O whose wire drops from the bottom of its parent's,
 /// and the selected agent on the right with its prompt and its own timeline, live. Grouped by
-/// state: every running agent, of both kinds, hangs off the chat; below a hairline, the ended
-/// ones wait in two closed groups, Done and Stopped, each naming its split. ↑ ↓ select (a group's
+/// state: every running agent, of both kinds, hangs off the chat, and so does every failed one,
+/// red, never folded away; below a hairline, the finished and the stopped wait in two closed
+/// groups, Done and Stopped, each naming its split. ↑ ↓ select (a group's
 /// row is a stop), Return opens the agent in a tab or toggles the group, ← → fold and unfold, Esc
 /// closes. In a narrow tile the graph becomes a menu.
 struct AgentMapView: View {
@@ -132,14 +133,15 @@ struct AgentMapView: View {
         return min(max(needed, m.paneMin), max(m.paneMin, width * m.paneShare))
     }
 
-    /// The running agents, then a submenu per group: "Done 20 · 2 foreground · 18 background".
+    /// The running and the failed agents, then a submenu per group: "Done 20 · 2 foreground ·
+    /// 18 background".
     private func treeMenu(_ rows: AgentMapRows, selected: TranscriptStore.AgentNode?) -> some View {
         Menu {
-            menuItems(rows.running, ended: false)
+            menuItems(rows.running)
             ForEach(AgentMapState.Fold.allCases, id: \.self) { fold in
                 let nodes = rows.nodes(fold)
                 if !nodes.isEmpty {
-                    Menu(AgentMapRows.label(fold, nodes)) { menuItems(nodes, ended: true) }
+                    Menu(AgentMapRows.label(fold, nodes)) { menuItems(nodes) }
                 }
             }
         } label: {
@@ -156,10 +158,10 @@ struct AgentMapView: View {
         .fixedSize()
     }
 
-    /// `ended`: each says how it ended after its name ("Watch the build — stopped").
-    private func menuItems(_ nodes: [TranscriptStore.AgentNode], ended: Bool) -> some View {
+    /// An ended agent says how it ended after its name ("Watch the build — stopped").
+    private func menuItems(_ nodes: [TranscriptStore.AgentNode]) -> some View {
         ForEach(nodes) { node in
-            let state = ended ? AgentNodeMeter.state(node.info.status).map { " — \($0)" } ?? "" : ""
+            let state = AgentNodeMeter.state(node.info.status).map { " — \($0)" } ?? ""
             Button(String(repeating: "    ", count: node.depth) + node.info.name + state) {
                 map.selected = node.id
                 map.foldCursor = nil
@@ -232,8 +234,9 @@ struct AgentMapView: View {
     }
 }
 
-/// The map's rows as ↑ ↓ meet them, grouped by state: the running agents, the Done row and its
-/// agents while it's open, then the Stopped row and its. A group's row is a stop; the chat isn't.
+/// The map's rows as ↑ ↓ meet them, grouped by state: the running and the failed agents, the
+/// Done row and its agents while it's open, then the Stopped row and its. A group's row is a
+/// stop; the chat isn't.
 struct AgentMapRows {
     typealias Node = TranscriptStore.AgentNode
     typealias Fold = AgentMapState.Fold
@@ -347,16 +350,22 @@ struct AgentMapRows {
     }
 }
 
-/// "Agents  24 · 2 running · 1 failed" over the graph: every agent, the stopped ones included.
-private struct MapHeader: View {
+/// "Agents  24 · 2 running · 1 failed" over the graph: every agent, the stopped ones included,
+/// as the Agents button counts them.
+struct MapHeader: View {
     let summary: TranscriptStore.AgentSummary
 
+    /// "24 · 2 running", then the failed part, in red.
+    static func counts(_ summary: TranscriptStore.AgentSummary) -> (counts: String, failed: String) {
+        ("\(summary.total)" + (summary.running.isEmpty ? "" : " · \(summary.running.count) running"),
+         summary.failed.isEmpty ? "" : " · \(summary.failed.count) failed")
+    }
+
     var body: some View {
+        let (counts, failed) = Self.counts(summary)
         HStack(spacing: Space.md) {
             Text("Agents").font(TextStyle.labelStrong).foregroundStyle(Theme.text)
-            (Text("\(summary.count + summary.stopped)")
-                + Text(summary.running.isEmpty ? "" : " · \(summary.running.count) running")
-                + Text(summary.failed.isEmpty ? "" : " · \(summary.failed.count) failed").foregroundColor(Theme.danger))
+            (Text(counts) + Text(failed).foregroundColor(Theme.danger))
                 .font(TextStyle.caption.monospacedDigit())
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)

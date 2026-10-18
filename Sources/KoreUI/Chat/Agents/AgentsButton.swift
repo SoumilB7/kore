@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The title row's Agents button (look.md §10, §11): the chat's agents as a stack of avatars, or
 /// one track round the running ones, a count, and a point when one waits for the user (amber) or
-/// has failed unseen (red). Stopped agents aren't counted, unless they're all there is. Hidden
-/// until the chat has spawned an agent. Opens and closes the agent map (⇧⌘A).
+/// has failed unseen (red). It counts every agent, the stopped ones too, as the map's header
+/// does. Hidden until the chat has spawned an agent. Opens and closes the agent map (⇧⌘A).
 struct AgentsButton: View {
     let chat: Chat
     let height: CGFloat
@@ -11,7 +11,7 @@ struct AgentsButton: View {
 
     var body: some View {
         let summary = chat.transcript.agentSummary
-        if summary.count + summary.stopped > 0 {
+        if summary.total > 0 {
             let running = !summary.running.isEmpty
             let stack = Array((running ? summary.running : summary.first).prefix(3))
             Button {
@@ -30,7 +30,7 @@ struct AgentsButton: View {
                             }
                         }
                     }
-                    Text(running ? "\(summary.running.count) running" : idle(summary))
+                    Text(Self.label(summary))
                         .font(Chrome.labelDigits)
                         .foregroundStyle(running ? Theme.text : Theme.secondary)
                         .lineLimit(1)
@@ -70,12 +70,13 @@ struct AgentsButton: View {
     private func help(_ summary: TranscriptStore.AgentSummary) -> String {
         if summary.waiting { return "An agent is waiting for your permission" }
         if unseenFailure(summary) { return "An agent failed" }
-        return summary.running.isEmpty ? idle(summary) : "Agents are working"
+        return summary.running.isEmpty ? Self.label(summary) : "Agents are working"
     }
 
-    /// "3 agents"; "2 stopped" when every agent stopped.
-    private func idle(_ summary: TranscriptStore.AgentSummary) -> String {
+    /// "2 running"; else "3 agents", every one, or "2 stopped" when every agent stopped.
+    static func label(_ summary: TranscriptStore.AgentSummary) -> String {
+        if !summary.running.isEmpty { return "\(summary.running.count) running" }
         if summary.count == 0 { return "\(summary.stopped) stopped" }
-        return summary.count == 1 ? "1 agent" : "\(summary.count) agents"
+        return summary.total == 1 ? "1 agent" : "\(summary.total) agents"
     }
 }
