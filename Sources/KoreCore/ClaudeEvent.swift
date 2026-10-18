@@ -18,6 +18,11 @@ public enum ClaudeEvent: Sendable {
     case permissionCancelled(requestId: String)
     /// The CLI switched permission mode on its own, e.g. to "default" after a plan is approved.
     case permissionModeChanged(String)
+    /// `command_lifecycle`: the CLI runs a queued command on its own, such as a message from
+    /// another Claude session (`PeerMessage`). Stdout doesn't carry its text; `id` is the uuid
+    /// of its user entry in the transcript (`ClaudeHistory.entry`).
+    case commandStarted(id: String)
+    case commandCompleted(id: String)
     /// End of a turn. The process stays alive for the next `send`.
     case turnCompleted(TurnResult)
     case raw(JSONValue)
@@ -194,8 +199,41 @@ extension ClaudeEvent {
             self = .user(content: ContentBlock.list(json["message"]?["content"]), parentToolUseId: parent)
         case "result":
             self = .turnCompleted(TurnResult(json))
+        case "command_lifecycle" where json["command_uuid"]?.string != nil:
+            let id = json["command_uuid"]?.string ?? ""
+            switch json["state"]?.string {
+            case "started": self = .commandStarted(id: id)
+            case "completed": self = .commandCompleted(id: id)
+            default: self = .raw(json)
+            }
         default:
             self = .raw(json)
+        }
+    }
+}
+
+/// A message from another Claude session (the CLI's cross-session messaging). The CLI turns it
+/// into a user turn of its own: the prompt wraps the text in `<cross-session-message>` plus
+/// guidance for the model; the transcript entry's `origin` keeps the sender and the plain text.
+public struct PeerMessage: Sendable {
+    /// The sender's session name (e.g. "Kore-fe"), else its address.
+    public let from: String
+    public let text: String
+
+    /// A transcript `user` entry whose origin is a peer; nil for anything else.
+    public init?(entry: JSONValue) {
+        guard let origin = entry["origin"], origin["kind"]?.string == "peer" else { return nil }
+        from = origin["name"]?.string ?? origin["from"]?.string ?? "Another session"
+        if let body = origin["body"]?.string {
+            text = body
+        } else {
+            // No body: the text between the wrapper tags of the prompt.
+            let prompt = entry["message"]?["content"]?.string ?? ""
+            guard let open = prompt.range(of: "<cross-session-message"),
+                let start = prompt[open.upperBound...].firstIndex(of: ">"),
+                let close = prompt.range(of: "</cross-session-message>", range: start..<prompt.endIndex)
+            else { return nil }
+            text = prompt[prompt.index(after: start)..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 }

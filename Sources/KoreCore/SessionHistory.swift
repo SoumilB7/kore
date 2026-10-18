@@ -61,8 +61,26 @@ public enum ClaudeHistory {
         }
         return chain.reversed().filter { entry in
             let type = entry["type"]?.string
-            return (type == "user" || type == "assistant") && entry["isMeta"]?.bool != true
+            // Peer messages are meta entries, but part of the conversation.
+            return (type == "user" || type == "assistant")
+                && (entry["isMeta"]?.bool != true || PeerMessage(entry: entry) != nil)
         }
+    }
+
+    /// One transcript entry by uuid, searched from the end (where a just-started command is).
+    public static func entry(uuid: String, sessionId: String, in folder: URL) -> JSONValue? {
+        let file = projectDirectory(for: folder).appendingPathComponent("\(sessionId).jsonl")
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+        defer { try? handle.close() }
+        let chunk: UInt64 = 512 * 1024
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: size > chunk ? size - chunk : 0)
+        let tail = (try? handle.readToEnd()) ?? Data()
+        let needle = Data(uuid.utf8)
+        for line in tail.split(separator: 0x0A).reversed() where line.range(of: needle) != nil {
+            if let entry = try? JSONValue.parse(Data(line)), entry["uuid"]?.string == uuid { return entry }
+        }
+        return nil
     }
 
     static func projectDirectory(for folder: URL) -> URL {
@@ -90,7 +108,7 @@ public enum ClaudeHistory {
             tail = (try? handle.read(upToCount: chunk)) ?? Data()
         }
 
-        var custom: String?, ai: String?, firstPrompt: String?, lastMessage: Date?
+        var custom: String?, ai: String?, firstPrompt: String?, firstPeer: String?, lastMessage: Date?
         for line in (head + tail).split(separator: 0x0A) {
             guard let entry = try? JSONValue.parse(Data(line)) else { continue }
             let type = entry["type"]?.string
@@ -100,13 +118,18 @@ public enum ClaudeHistory {
             switch type {
             case "custom-title": custom = entry["customTitle"]?.string ?? custom
             case "ai-title": ai = entry["aiTitle"]?.string ?? ai
-            case "user" where firstPrompt == nil && entry["isMeta"]?.bool != true && entry["isSidechain"]?.bool != true:
-                firstPrompt = promptText(entry["message"]?["content"])
+            case "user" where entry["isSidechain"]?.bool != true:
+                // A peer's message never titles the chat, unless it's all there is.
+                if let peer = PeerMessage(entry: entry) {
+                    firstPeer = firstPeer ?? "Message from \(peer.from)"
+                } else if firstPrompt == nil && entry["isMeta"]?.bool != true {
+                    firstPrompt = promptText(entry["message"]?["content"])
+                }
             default: break
             }
         }
         // No prompt means nothing was ever said (e.g. a session opened and closed).
-        guard let title = custom ?? ai ?? firstPrompt else { return nil }
+        guard let title = custom ?? ai ?? firstPrompt ?? firstPeer else { return nil }
         return (title, lastMessage)
     }
 
