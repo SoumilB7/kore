@@ -218,3 +218,40 @@ extension Space {
 extension Inset {
     static let messageToggle = EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6)
 }
+
+// The agent map's tree (phase 10 §6): every agent is an O, and each wire drops from the bottom
+// of its parent's O, runs down the parent's spine and curves right into the child's.
+
+extension Theme {
+    /// The shared spine: neutral, since several children use it.
+    static let agentWire = timelineLine
+    /// A child's elbow, by its state.
+    static let agentWireLive = agentRail(accent)
+    static let agentWireFailed = danger.opacity(0.35)
+}
+
+extension Layout {
+    enum AgentMap {
+        /// One row per agent, before zoom.
+        static let row: CGFloat = 46
+        /// Each level's step to the right, and the elbow's curve.
+        static let step: CGFloat = 36
+        static let bend: CGFloat = 12
+        static let rootRadius: CGFloat = 14
+        /// The selected agent's O in the detail header.
+        static let detailRadius: CGFloat = 16
+        /// The detail header's name keeps this much before its buttons drop their words.
+        static let detailNameMin: CGFloat = 160
+        static let nodeRadius: CGFloat = 12
+        /// Between an O and its wire or its running ring.
+        static let gap: CGFloat = 4
+        static let labelGap: CGFloat = 10
+        /// The root O's centre from the pane's leading edge.
+        static let leading: CGFloat = 30
+        /// The tree pane fits its deepest label, within these, and takes at most this share of
+        /// the map's width.
+        static let paneMin: CGFloat = 280
+        static let paneShare: CGFloat = 0.45
+        static let labelRoom: CGFloat = 200
+    }
+}

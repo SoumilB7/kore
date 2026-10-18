@@ -6,18 +6,20 @@ import SwiftUI
 /// kind (folded and open turns, tools with IN / OUT, edits with diffs, agents running and done,
 /// an interrupted turn), so its look can be snapshotted without a live CLI.
 /// KORE_GALLERY=changes: the changes modal over the same sample's changed files.
+/// KORE_GALLERY=agent-map-many: the map at scale; KORE_AGENTS=<n> gives it exactly n generated
+/// agents instead of the sample's twelve, and KORE_GALLERY_SIZE=<w>,<h> sizes its window.
 @MainActor
 enum DevTimelineGallery {
     /// True when it showed (the other gallery then stays closed).
     static func showIfRequested() -> Bool {
         let mode = ProcessInfo.processInfo.environment["KORE_GALLERY"]
-        guard ["timeline", "changes", "timeline-agents", "agent-map", "agent-tab"].contains(mode) else { return false }
+        guard ["timeline", "changes", "timeline-agents", "agent-map", "agent-map-many", "agent-tab"].contains(mode) else { return false }
         if mode == "timeline-agents" {
             showAgents()
             return true
         }
-        if mode == "agent-map" || mode == "agent-tab" {
-            showMap(tab: mode == "agent-tab")
+        if mode == "agent-map" || mode == "agent-map-many" || mode == "agent-tab" {
+            showMap(tab: mode == "agent-tab", many: mode == "agent-map-many")
             return true
         }
         let store = sample()
@@ -183,21 +185,25 @@ enum DevTimelineGallery {
         """
 
     /// KORE_GALLERY=agent-map / agent-tab: the agents sample in the map, or one agent's tab.
-    private static func showMap(tab: Bool) {
+    /// agent-map-many: a dozen agents, three of them nested, for the map at scale.
+    private static func showMap(tab: Bool, many: Bool = false) {
         let chat = Chat(provider: Registry.all[0], folder: folder)
         chat.status.apply(.userMessage(text: "Audit the transcript", attachments: []))
-        fill(chat.transcript)
+        let count = ProcessInfo.processInfo.environment["KORE_AGENTS"].flatMap { Int($0) }
+        if many, let count { fillGenerated(chat.transcript, count: count) } else { fill(chat.transcript) }
+        if many && count == nil { fillMany(chat.transcript) }
         let ask = Approval(
             id: "ap", title: "wants to run Bash", detail: nil, body: "swift test --filter Scroll", canAlwaysAllow: true,
             questions: [], agent: .sub("a2"))
         chat.transcript.apply(.approvalRequested(ask))
         chat.approvals.apply(.approvalRequested(ask))
         let workspace = Workspace(folder: folder, restore: false)
+        let size = (ProcessInfo.processInfo.environment["KORE_GALLERY_SIZE"] ?? "").split(separator: ",").compactMap { Double($0) }
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 760), styleMask: [.titled], backing: .buffered,
-            defer: false)
+            contentRect: NSRect(x: 0, y: 0, width: size.count == 2 ? size[0] : 1000, height: size.count == 2 ? size[1] : 760),
+            styleMask: [.titled], backing: .buffered, defer: false)
         window.title = tab ? "Agent tab" : "Agent map"
-        chat.agentMap.selected = "a1"
+        chat.agentMap.selected = count == nil ? "a1" : "g0"
         let root: AnyView = tab
             ? AnyView(AgentTabView(chat: chat, id: "a1", workspace: workspace))
             : AnyView(AgentMapView(chat: chat) { _ in })
@@ -214,6 +220,47 @@ enum DevTimelineGallery {
             .environment(\.colorScheme, .dark))
         window.orderFront(nil)
         DevSnapshot.captureIfRequested()
+    }
+
+    /// Seven more agents after `fill`'s five: finished, running, stopped and nested ones.
+    private static func fillMany(_ store: TranscriptStore) {
+        let now = Date()
+        let more: [(id: String, name: String, parent: String?, start: Double, end: Double?, status: TranscriptStore.AgentInfo.Status)] = [
+            ("b1", "Scan Typography roles", nil, -50, -38, .finished),
+            ("b2", "Rename Metrics tokens", nil, -46, nil, .running),
+            ("b3", "Find dead colours", "b2", -30, -21, .finished),
+            ("b4", "Update tokens.md", nil, -40, -12, .stopped),
+            ("b5", "Lint the views", nil, -36, -20, .finished),
+            ("b6", "Port the gallery", nil, -26, nil, .running),
+            ("b7", "Check zoom steps", "b6", -14, nil, .running),
+        ]
+        for a in more {
+            store.agentSpawned(id: a.id, name: a.name, type: "general-purpose", model: "haiku", tool: nil, parent: a.parent,
+                               at: now.addingTimeInterval(a.start))
+            store.agentProgress(id: a.id, tokens: Int(-a.start) * 310, tools: 3, lastTool: "Read", duration: nil)
+            if let end = a.end { store.agentFinished(id: a.id, status: a.status, result: "Done.", at: now.addingTimeInterval(end)) }
+        }
+    }
+
+    /// n agents in a pattern: every third nested under the agent before it, and a mix of
+    /// running, finished, failed and stopped.
+    private static func fillGenerated(_ store: TranscriptStore, count: Int) {
+        let now = Date()
+        store.user("Fan out across the codebase.", attachments: [])
+        store.turnStarted("t", at: now.addingTimeInterval(-600))
+        let statuses: [TranscriptStore.AgentInfo.Status?] = [nil, .finished, .finished, .failed, nil, .finished, .stopped]
+        var lastTop: String?
+        for i in 0..<count {
+            let id = "g\(i)"
+            let parent = i % 3 == 2 ? lastTop : nil
+            if parent == nil { lastTop = id }
+            store.agentSpawned(id: id, name: "Agent \(i + 1): check part \(i + 1) of the tree", type: "general-purpose",
+                               model: "haiku", tool: nil, parent: parent, at: now.addingTimeInterval(Double(-590 + i * 9)))
+            store.agentProgress(id: id, tokens: 1_200 + i * 830, tools: i % 7, lastTool: "Read", duration: nil)
+            if let status = statuses[i % statuses.count] {
+                store.agentFinished(id: id, status: status, result: "Done.", at: now.addingTimeInterval(Double(-560 + i * 9)))
+            }
+        }
     }
 
     private static func agentsSample() -> TranscriptStore {

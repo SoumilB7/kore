@@ -95,7 +95,7 @@ struct AgentAvatar: View {
 }
 
 /// The running arc: a quarter of a ring, turning.
-private struct SpinningArc: View {
+struct SpinningArc: View {
     @StateObject private var turning = Local(false)
 
     var body: some View {
