@@ -298,7 +298,7 @@ final class SlashMenuCaret: ChatStoryline {
         }
         let row = { (name: String) in Locator.id(StoryID.Composer.command(name)) }
         let text = codex ? "fix the bug $pdf " : "fix the bug "
-        let sent = "/review " + text.trimmingCharacters(in: .whitespaces)
+        let sent = "/review café → “ok” 🙂" + text.trimmingCharacters(in: .whitespaces)
         var steps: [any Step] = super.steps() + [
             Send("Hello"),
             TurnFinished(1),
@@ -346,6 +346,10 @@ final class SlashMenuCaret: ChatStoryline {
             Press(.id(StoryID.Composer.slash)),
             Press(row("review")),
             Self.expectComposer("/review in the chip again", chip: "review", text, at: 0),
+            // Text whose UTF-8 and UTF-16 lengths differ, typed after the chip's text: each
+            // keystroke redraws the composer between the field's text and the draft catching up.
+            TypeText("café → “ok” 🙂"),
+            Self.expectComposer("the typed text after it", chip: "review", "café → “ok” 🙂" + text, at: 14),
             Press(.id(StoryID.Composer.send)),
             TurnFinished(2),
             Expect("“\(sent)” sent to the CLI") { try $0.scriptedBackend().log.contains(.send(sent)) },
@@ -372,7 +376,7 @@ final class SlashMenuCaret: ChatStoryline {
                 "chip \(story.app.chat?.command?.name ?? "none"), draft “\(story.app.chat?.draft ?? "?")”"
             }) { story in
                 story.app.chat?.storyTitle.hasSuffix("(fork)") == true && story.app.chat?.command?.name == "review"
-                    && story.app.chat?.draft == text.trimmingCharacters(in: .whitespaces)
+                    && story.app.chat?.draft == "café → “ok” 🙂" + text.trimmingCharacters(in: .whitespaces)
             },
         ]
         return steps

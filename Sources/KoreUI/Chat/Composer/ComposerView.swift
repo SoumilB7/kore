@@ -26,18 +26,30 @@ struct ComposerView: View {
     @StateObject private var boxFrame = Held<CGRect>(.zero)
     @StateObject private var clickMonitor = Held<Any?>(nil)
     /// Where the caret is, so Shift+Return can put a line break there: in that chat's draft.
-    @StateObject private var caret = Local(Caret(chat: nil, selection: nil))
+    @StateObject private var caret = Local(Caret(chat: nil, selection: nil, text: nil, placed: false))
 
+    /// A selection's indices are only good in the text they were made for: `text` is the draft
+    /// when it was set. `placed`: Kore put it there, with the draft it had just set, so it's that
+    /// text's for sure; the field's own can come a keystroke apart from its text.
     private struct Caret: Equatable {
         let chat: UUID?
         var selection: TextSelection?
+        var text: String?
+        var placed: Bool
     }
 
     /// The caret in this chat's draft; nil when it was placed in another chat's.
     private var selection: Binding<TextSelection?> {
         Binding(
             get: { caret.value.chat == chat.id ? caret.value.selection : nil },
-            set: { caret.value = Caret(chat: chat.id, selection: $0) })
+            set: { caret.value = Caret(chat: chat.id, selection: $0, text: chat.draft, placed: false) })
+    }
+
+    /// Puts the caret at `offset` characters into the draft just set.
+    private func place(at offset: Int) {
+        let draft = chat.draft
+        let index = draft.index(draft.startIndex, offsetBy: min(max(offset, 0), draft.count))
+        caret.value = Caret(chat: chat.id, selection: TextSelection(insertionPoint: index), text: draft, placed: true)
     }
 
     /// Empty, except while a turn runs (look.md §10): a message sent then waits for it, or joins
@@ -85,7 +97,7 @@ struct ComposerView: View {
         .onChange(of: chat.id) {
             pasteChat.value = chat
             // The caret goes to the end of this chat's draft, ready to go on typing.
-            caret.value = Caret(chat: chat.id, selection: TextSelection(insertionPoint: chat.draft.endIndex))
+            place(at: chat.draft.count)
             slashSelection.value = 0
             slashDismissed.value = false
             forgetUndo()
@@ -214,16 +226,11 @@ struct ComposerView: View {
     /// Replaces the selection (or inserts at the caret) with a line break, the caret after it.
     private func insertLineBreak() {
         var draft = chat.draft
-        var range = draft.endIndex..<draft.endIndex
-        if case .selection(let selected) = selection.wrappedValue?.indices,
-            selected.lowerBound >= draft.startIndex, selected.upperBound <= draft.endIndex
-        {
-            range = selected
-        }
+        let range = selectedRange ?? draft.endIndex..<draft.endIndex
         let offset = draft.distance(from: draft.startIndex, to: range.lowerBound)
         draft.replaceSubrange(range, with: "\n")
         chat.draft = draft
-        selection.wrappedValue = TextSelection(insertionPoint: draft.index(draft.startIndex, offsetBy: offset + 1))
+        place(at: offset + 1)
     }
 
     // MARK: Paste and +
@@ -270,11 +277,16 @@ struct ComposerView: View {
 
     /// What's selected in this chat's draft (empty: the caret), read from the editor while it
     /// shows this draft (moving the caret alone, by ⌘← or a click, doesn't reach the selection
-    /// binding), else from the binding; nil when not known.
+    /// binding), else a caret Kore placed in this very text; nil when not known. The field's own
+    /// selection is never carried into the draft: it can belong to the text a keystroke ahead,
+    /// and an index of one string used in another traps.
     private var selectedRange: Range<String.Index>? {
         let draft = chat.draft
-        if let editor = fieldEditor, editor.string == draft { return Range(editor.selectedRange(), in: draft) }
-        guard case .selection(let range) = selection.wrappedValue?.indices,
+        let editor = fieldEditor
+        if let editor, editor.string == draft { return Range(editor.selectedRange(), in: draft) }
+        let kept = caret.value
+        guard kept.chat == chat.id, kept.placed, kept.text == draft,
+            case .selection(let range) = kept.selection?.indices,
             let lower = String.Index(range.lowerBound, within: draft), let upper = String.Index(range.upperBound, within: draft)
         else { return nil }
         return lower..<upper
@@ -339,7 +351,7 @@ struct ComposerView: View {
         let offset = draft.distance(from: draft.startIndex, to: range.lowerBound) + (spaced ? 2 : 1)
         draft.replaceSubrange(range, with: spaced ? " /" : "/")
         chat.draft = draft
-        selection.wrappedValue = TextSelection(insertionPoint: draft.index(draft.startIndex, offsetBy: offset))
+        place(at: offset)
     }
 
     /// A pick replaces the "/word" it was filtered by: a command goes to the chip (one per
@@ -350,7 +362,7 @@ struct ComposerView: View {
         let (draft, caret) = slashToken.map { $0.replacing(in: chat.draft, with: insertion) } ?? (chat.draft, chat.draft.count)
         if command.kind != .skill { chat.command = command }
         chat.draft = draft
-        selection.wrappedValue = TextSelection(insertionPoint: draft.index(draft.startIndex, offsetBy: caret))
+        place(at: caret)
         slashDismissed.value = false
         focused.wrappedValue = true
         forgetUndo()
