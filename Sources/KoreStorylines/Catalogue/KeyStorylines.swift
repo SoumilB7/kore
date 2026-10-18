@@ -114,6 +114,83 @@ final class TabKeys: ChatStoryline {
     }
 }
 
+/// Esc stops a turn only once there's nothing else for it to do: with the / menu open it closes
+/// the menu, with Usage open it closes Usage, with words selected in the transcript it lets them
+/// go, and the turn runs on through all of it; the next Esc stops it. ⌘. stops a turn from the
+/// transcript too.
+final class EscStops: ChatStoryline {
+    static let answer = "A short answer, with a sentence to select."
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(answer), holdTurn]) }
+
+    static func interrupts(_ story: StoryContext) throws -> Int {
+        try story.scriptedBackend().log.filter { $0 == .interrupt }.count
+    }
+
+    static func running(_ what: String) -> Expect {
+        Expect("the turn still running, " + what, found: { story in (try? interrupts(story)).map { "\($0) interrupts" } }) { story in
+            try story.activeChat().isRunning && interrupts(story) == 0
+        }
+    }
+
+    static func started(_ n: Int) -> Expect {
+        Expect("command \(n) running") { story in
+            let started = story.chatEvents().filter { if case .toolStarted = $0 { true } else { false } }.count
+            return try started == n && story.activeChat().isRunning
+        }
+    }
+
+    static func stopped(_ n: Int) -> Expect {
+        Expect("turn \(n) stopped", found: { story in (try? interrupts(story)).map { "\($0) interrupts" } }) { story in
+            let stopped = story.chatEvents().filter { if case .turnFinished(_, .interrupted, _) = $0 { true } else { false } }.count
+            return try stopped == n - 1 && !story.activeChat().isRunning && interrupts(story) == n - 1
+        }
+    }
+
+    override func steps() -> [any Step] {
+        let field = Locator.id(StoryID.Composer.field)
+        let usage = Locator.id(StoryID.Composer.command("usage"))
+        return super.steps() + [
+            Send("Write a sentence"), TurnFinished(1),
+            Send("Run the long job"), Self.started(1),
+            WaitForFocus(field),
+
+            // The / menu first.
+            TypeText("/"), WaitForElement(usage),
+            Key(.escape),
+            ExpectElement(usage, .absent), Self.running("the menu closed"),
+            Key(KeyChord(.backspace)),
+            Expect("the draft empty again") { try $0.activeChat().draft.isEmpty },
+
+            // Then Usage.
+            Press(.id(StoryID.Composer.slash)), Press(usage),
+            Expect("Usage open") { try $0.activeChat().isUsageOpen },
+            Key(.escape),
+            Expect("Usage closed") { try !$0.activeChat().isUsageOpen }, Self.running("Usage closed"),
+
+            // Then a selection, with the keys back in the composer.
+            ClickText(.answer(1, [0], at: Self.answer, "sentence"), count: 2),
+            Expect("a word selected") { try $0.activeChat().storyTranscript.hasSelection },
+            Click(field), WaitForFocus(field),
+            Expect("the word still selected") { try $0.activeChat().storyTranscript.hasSelection },
+            Key(.escape),
+            Expect("the selection gone") { try !$0.activeChat().storyTranscript.hasSelection },
+            Self.running("the selection let go"),
+
+            // Nothing left: Esc stops.
+            Key(.escape),
+            TurnFinished(2), Self.stopped(2),
+
+            // ⌘. from the transcript.
+            Send("Run it again"), Self.started(2),
+            ClickText(.answer(1, [0], at: Self.answer, "short")),
+            Expect("the keys in the transcript") { try $0.activeChat().storyTranscript.selectionFocused },
+            Key(.cmd(".")),
+            TurnFinished(3), Self.stopped(3),
+        ]
+    }
+}
+
 /// Lets a fade finish before a snapshot.
 private struct Settle: Step {
     var label: String { "Let the fade finish" }

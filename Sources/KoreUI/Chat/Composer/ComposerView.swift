@@ -9,6 +9,8 @@ import SwiftUI
 /// over with another chat.
 struct ComposerView: View {
     let chat: Chat
+    /// The window's tabs: what's open over them closes on Esc before anything in the chat.
+    let workspace: Workspace
     var focused: FocusState<Bool>.Binding
     let openImage: (Attachment) -> Void
     @StateObject private var slashSelection = Local(0)
@@ -239,7 +241,7 @@ struct ComposerView: View {
             return true
         case #selector(NSResponder.cancelOperation(_:)):
             // Taken either way: the text view's own Esc would open a completion list.
-            if !slashMatches.isEmpty { slashDismissed.value = true }
+            escape(view)
             return true
         case #selector(NSResponder.moveUp(_:)):
             return moveSlash(-1) == .handled
@@ -249,6 +251,31 @@ struct ComposerView: View {
             return removeCommand(view)
         default:
             return false
+        }
+    }
+
+    /// Esc, a step at a time (`EscStep`). The popups' own monitors take it before the field
+    /// does; they're closed here too, so no Esc gets past one to the turn.
+    private func escape(_ view: NSTextView) {
+        let selection = chat.transcript.selection
+        let popup = chat.usage.isOpen || chat.usage.extended || chat.account.isOpen || chat.importer.isOpen
+            || chat.contextCard.shown || chat.agentMap.isOpen
+        switch EscStep.next(
+            overlay: workspace.hasOverlay, slashMenu: !slashMatches.isEmpty, popup: popup, selection: selection.hasSelection,
+            running: chat.status.isRunning, sheet: view.window?.attachedSheet != nil || NSApp.modalWindow != nil)
+        {
+        case .closeOverlay: workspace.closeOverlay()
+        case .closeSlashMenu: slashDismissed.value = true
+        case .closePopup:
+            chat.usage.closeExtended()
+            chat.usage.close()
+            chat.account.close()
+            chat.importer.close()
+            chat.contextCard.close()
+            chat.agentMap.close()
+        case .clearSelection: selection.clear()
+        case .stop: chat.stop()
+        case .nothing: break
         }
     }
 

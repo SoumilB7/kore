@@ -88,6 +88,8 @@ struct ComposerBar: View {
         .buttonStyle(.plain)
         .disabled(!chat.status.isRunning && !chat.canSend)
         .opacity(!chat.status.isRunning && !chat.canSend ? 0.3 : 1)
+        .help(chat.status.isRunning ? "Stop (Esc)" : "")
+        .accessibilityLabel(Text(chat.status.isRunning ? "Stop" : "Send"))
         // One button: Stop while a turn runs, else Send.
         .storyID(chat.status.isRunning ? StoryID.Composer.stop : StoryID.Composer.send)
     }

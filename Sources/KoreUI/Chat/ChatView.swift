@@ -20,6 +20,9 @@ struct ChatView: View {
     /// active chat's, by its id, so a switch never shows them over another chat.
     @StateObject private var viewer = Local<(chat: UUID, editor: ImageEditor)?>(nil)
     @StateObject private var changesTurn = Local<(chat: UUID, turn: String)?>(nil)
+    /// ⌘. stops the shown chat's turn from anywhere in it: the monitor, and the chat it reads.
+    @StateObject private var stopKey = Held<Any?>(nil)
+    @StateObject private var shown = Held<Chat?>(nil)
 
     var body: some View {
         let chats = kept.update(active, tabs: workspace.tabs)
@@ -51,7 +54,7 @@ struct ChatView: View {
                 if Self.offersImport(chat) {
                     ImportLine(state: chat.importer) { openImport(chat) }
                 }
-                ComposerView(chat: chat, focused: $composerFocused) { view($0, of: chat, pending: true) }
+                ComposerView(chat: chat, workspace: workspace, focused: $composerFocused) { view($0, of: chat, pending: true) }
                     // Hidden under another tab, it takes no focus.
                     .disabled(active == nil)
             }
@@ -93,11 +96,32 @@ struct ChatView: View {
             if viewer.value != nil { viewer.value = nil }
             if changesTurn.value != nil { changesTurn.value = nil }
             if let last, last != active?.id { kept.chats.first { $0.id == last }?.usage.closeExtended() }
+            shown.value = active
             guard let active else { return }
             composerFocused = true
             devHooks(active)
         }
         .task(id: chat.id) { await chat.startOnce() }
+        .onAppear { watchStopKey() }
+        .onDisappear {
+            if let monitor = stopKey.value { NSEvent.removeMonitor(monitor) }
+            stopKey.value = nil
+        }
+    }
+
+    /// ⌘. stops the turn, wherever the keys are in the window (the composer, the transcript, a
+    /// popup), as Stop does: Claude's interrupt, Codex's turn interrupt.
+    private func watchStopKey() {
+        guard stopKey.value == nil else { return }
+        let workspace = workspace, shown = shown
+        stopKey.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard let window = workspace.window, event.window === window,
+                event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+                event.charactersIgnoringModifiers == ".", let chat = shown.value, chat.status.isRunning
+            else { return event }
+            chat.stop()
+            return nil
+        }
     }
 
     /// The changes modal, the image viewer or the usage card, over the active chat (under the
