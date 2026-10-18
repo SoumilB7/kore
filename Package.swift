@@ -19,5 +19,8 @@ let package = Package(
         .target(name: "KoreUI", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
+        // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
+        .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore"]),
+        .testTarget(name: "KoreUITests", dependencies: ["KoreUI"]),
     ]
 )
