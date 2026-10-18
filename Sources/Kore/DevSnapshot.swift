@@ -29,6 +29,7 @@ import KoreCore
 ///   KORE_SNAPSHOT=<png path> once a folder window is up, save an image of it and quit
 ///   KORE_DUMP=<path>         write the chat's transcript entries as text and quit (KORE_DUMP_AFTER=<s>, default 6)
 ///   KORE_EVENT_LOG=<path>    append every ChatEvent the backend emits, one per line
+///   KORE_EVENT_TIMES=1       start each of those lines with the time since the process started
 ///   KORE_TIME_REPLAY=1       print how long applying a resumed session's past took (main thread)
 ///   KORE_STOP_AFTER=<s>      press Stop that many seconds after launch
 ///   KORE_STOP_AGENT_AFTER=<s> stop the first running sub-agent (its card's Stop) that many seconds after launch

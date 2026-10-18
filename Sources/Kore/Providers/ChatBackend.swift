@@ -209,8 +209,20 @@ enum EventLog {
     }
 
     private static func write(line: String) {
-        handle?.write(Data((line.replacingOccurrences(of: "\n", with: "⏎") + "\n").utf8))
+        let time = times.map { String(format: "+%.0fms ", (Date().timeIntervalSince1970 - $0) * 1000) } ?? ""
+        handle?.write(Data((time + line.replacingOccurrences(of: "\n", with: "⏎") + "\n").utf8))
     }
+
+    /// KORE_EVENT_TIMES=1: each line starts with the time since the process started.
+    private static let times: TimeInterval? = {
+        guard ProcessInfo.processInfo.environment["KORE_EVENT_TIMES"] == "1" else { return nil }
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        var mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return nil }
+        let start = info.kp_proc.p_un.__p_starttime
+        return TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000
+    }()
 }
 
 extension JSONValue {
