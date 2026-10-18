@@ -16,19 +16,30 @@ final class UsageState {
     }
 
     /// Using a full reset (Codex): it never goes on one click.
-    enum ResetStep: Equatable {
-        case idle
-        /// The extras line asks first.
-        case confirming
+    enum ResetStep: Hashable {
+        /// Its row asks first.
+        case asking
         case using
-        /// What came of it, in Codex's words, until the popup closes; "Usage reset." only until
-        /// the limits are read again.
-        case said(String)
+        /// Used; the row says so until the popup closes.
+        case reset
+        /// What came of it otherwise, in Codex's words; `spent` when the reset is gone.
+        case said(String, spent: Bool)
+        /// The request failed: a plain line, and it can be tried again.
+        case failed(String)
     }
 
     private(set) var isOpen = false
     private(set) var status = Status.loading
-    private(set) var resetStep = ResetStep.idle
+    /// Whether the full resets' section is unfolded; every open starts folded.
+    private(set) var resetsOpen = false
+    /// Each reset row's step, by credit id (nil: the row of a count alone, where Codex picks).
+    /// One row asks at a time; a row's outcome stays until the popup closes.
+    private(set) var resetSteps: [String?: ResetStep] = [:]
+    /// The limits are being read again after a reset.
+    private(set) var rereading = false
+    /// The rows as they were when a reset was sent: a used row keeps its place until the popup
+    /// closes, though the reading after it no longer lists it, so no row moves under the pointer.
+    private var held: [ResetRow] = []
     /// What shows: the reading just made, or the last one while it loads (or after it failed).
     private(set) var reading: PlanReading?
     /// When `reading`'s limits were read.
@@ -36,6 +47,9 @@ final class UsageState {
     /// Each open's own number: a read that lands after a close, or after the next open, is
     /// only kept for next time.
     @ObservationIgnored private var serial = 0
+    /// When a row last asked (system uptime): a "Yes" within a double-click of it is the
+    /// "Use" click's second half, and is ignored.
+    @ObservationIgnored private var askedAt: TimeInterval = 0
     @ObservationIgnored private var patienceTimer: Task<Void, Never>?
     @ObservationIgnored private var provider = ""
     @ObservationIgnored private var read: (@MainActor () async throws -> PlanReading)?
@@ -54,7 +68,7 @@ final class UsageState {
         let open = serial
         isOpen = true
         status = .loading
-        resetStep = .idle
+        (resetsOpen, resetSteps, rereading, held) = (false, [:], false, [])
         (self.provider, self.read, self.consume) = (provider, read, useReset)
         let last = Self.kept[provider]
         (reading, readAt) = (last?.reading, last?.at)
@@ -82,32 +96,87 @@ final class UsageState {
         patienceTimer?.cancel()
     }
 
-    /// The extras line's resets, clicked: it asks first.
-    func askReset() {
-        if resetStep == .idle { resetStep = .confirming }
+    /// The count of full resets, clicked: unfolds the list, or folds it and drops a question.
+    /// A reset being sent goes on; its outcome waits in its row.
+    func toggleResets() {
+        resetsOpen.toggle()
+        if !resetsOpen { cancelReset() }
+    }
+
+    /// Esc, one step back: a row's question, then the section. False when there's neither, and
+    /// the popup closes.
+    func stepBack() -> Bool {
+        if resetSteps.values.contains(.asking) {
+            cancelReset()
+        } else if resetsOpen {
+            resetsOpen = false
+        } else {
+            return false
+        }
+        return true
+    }
+
+    /// A row's "Use": that row asks first, and any other row's question is dropped.
+    func askReset(_ id: String?) {
+        guard !resetsBusy else { return }
+        cancelReset()
+        resetSteps[id] = .asking
+        askedAt = ProcessInfo.processInfo.systemUptime
     }
 
     func cancelReset() {
-        if resetStep == .confirming { resetStep = .idle }
+        resetSteps = resetSteps.filter { $0.value != .asking }
     }
 
-    /// Confirmed: uses the reset that expires soonest, then reads the limits again so the bars
-    /// and the count show it. Once sent it's done whether or not the popup stays open; a read
-    /// that lands after a close is only kept for next time.
+    /// Whether "Yes" would go: a double-click's time has passed since the row asked.
+    var confirmable: Bool { ProcessInfo.processInfo.systemUptime - askedAt >= NSEvent.doubleClickInterval }
+
+    /// A reset is being sent, or the limits read again after one: no other "Use" goes.
+    var resetsBusy: Bool { rereading || resetSteps.values.contains(.using) }
+
+    /// Confirmed: uses the asking row's reset (Codex picks for a count alone), then reads the
+    /// limits again so the bars and the count show it. Once sent it's done whether or not the
+    /// popup stays open; a read that lands after a close is only kept for next time.
     func useReset() {
-        guard resetStep == .confirming, let consume, let read else { return }
-        resetStep = .using
-        let (open, provider, credit) = (serial, provider, reading?.limits?.resets?.next?.id)
+        // The asking row's credit; nil (the row of a count alone) lets Codex pick.
+        guard let asking = resetSteps.first(where: { $0.value == .asking }), confirmable, !resetsBusy, let consume, let read else { return }
+        let credit = asking.key
+        if held.isEmpty { held = resetRows }
+        resetSteps[credit] = .using
+        let (open, provider) = (serial, provider)
         Task { [weak self] in
-            let said: String?
-            do { said = UsageText.said(try await consume(credit, UUID())) } catch { said = UsageText.resetFailed(error) }
-            if let self, self.serial == open { self.resetStep = .said(said ?? "Usage reset.") }
+            let step: ResetStep
+            do {
+                let outcome = try await consume(credit, UUID())
+                let said = UsageText.said(outcome) ?? ""
+                switch outcome {
+                case .reset: step = .reset
+                case .noCredit, .alreadyRedeemed: step = .said(said, spent: true)
+                case .nothingToReset, .other: step = .said(said, spent: false)
+                }
+            } catch {
+                step = .failed(UsageText.resetFailed(error))
+            }
+            guard let self, self.serial == open else {
+                if let new = try? await read(), new.limits != nil { Self.kept[provider] = (new, Date()) }
+                return
+            }
+            (self.resetSteps[credit], self.rereading) = (step, true)
             let new = try? await read()
             if let new, new.limits != nil { Self.kept[provider] = (new, Date()) }
-            guard let self, self.serial == open else { return }
+            guard self.serial == open else { return }
             if let new, new.limits != nil { (self.reading, self.readAt, self.status) = (new, Date(), .fresh) }
-            if said == nil { self.resetStep = .idle }
+            self.rereading = false
         }
+    }
+
+    /// The section's rows: each listed credit, or one row for a count alone. Once a reset is
+    /// sent, the rows keep their order and a used one its place.
+    var resetRows: [ResetRow] {
+        let listed = reading?.limits?.resets.map { resets in resets.credits?.map(ResetRow.init) ?? [ResetRow(credit: nil)] } ?? []
+        guard !held.isEmpty else { return listed }
+        let kept = held.compactMap { row in listed.first { $0.id == row.id } ?? (resetSteps[row.id] == nil ? nil : row) }
+        return kept + listed.filter { row in !held.contains { $0.id == row.id } }
     }
 
     private func land(_ outcome: Result<PlanReading, any Error>, last: (reading: PlanReading, at: Date)?) {
@@ -123,13 +192,36 @@ final class UsageState {
         }
     }
 
-    /// The popup's bars, each as one line, for a storyline's checks ("Weekly limit · 6% · Resets in 4d").
+    /// The popup's bars, each as one line, then the unfolded resets' rows, for a storyline's
+    /// checks ("Weekly limit · 6% · Resets in 4d", "Full reset · Expires in 6d").
     var lines: [String] {
         let now = Date()
-        return (reading?.limits?.bars ?? []).map { bar in
+        let bars = (reading?.limits?.bars ?? []).map { bar in
             [bar.title, UsageText.percent(bar.used), UsageText.resets(bar.resetsAt, now: now)].joined(separator: " · ")
         }
+        guard resetsOpen else { return bars }
+        return bars + resetRows.map { row in [row.title, resetDetail(row, now: now)].joined(separator: " · ") }
     }
+
+    /// What a row says after its title.
+    private func resetDetail(_ row: ResetRow, now: Date) -> String {
+        switch resetSteps[row.id] {
+        case .asking: "Use this reset?"
+        case .using: UsageText.resetting
+        case .reset: UsageText.didReset
+        case .said(let words, _), .failed(let words): words
+        case nil where row.credit?.redeeming == true: UsageText.resetting
+        case nil: row.credit.map { UsageText.expires($0.expiresAt, now: now) } ?? "\(reading?.limits?.resets?.available ?? 0) available"
+        }
+    }
+}
+
+/// One row of the full resets: a listed credit, or (nil) the one Codex picks from a count alone.
+struct ResetRow: Equatable {
+    let credit: PlanReset?
+
+    var id: String? { credit?.id }
+    var title: String { credit?.title ?? "Full reset" }
 }
 
 extension PlanReading {
@@ -223,17 +315,42 @@ enum UsageText {
         return label.isEmpty ? title : label
     }
 
-    /// The full resets' tooltip: what a click does, and when the one it uses expires if that
-    /// differs from the others ("Use a usage limit reset · the soonest expires Nov 3").
-    static func resetHelp(_ resets: PlanResets?, calendar: Calendar = .autoupdatingCurrent, locale: Locale = .autoupdatingCurrent)
+    /// A full reset's expiry: "Expires in 6d" within the week (rounded as `resetsShort` rounds),
+    /// "Expires Nov 7, 5:07 AM" past it (with the year when it isn't this one); Codex's words
+    /// for one that never expires and for one Kore can't read.
+    static func expires(_ date: Date?, now: Date, calendar: Calendar = .autoupdatingCurrent, locale: Locale = .autoupdatingCurrent)
         -> String
     {
-        let action = "Use a usage limit reset"
-        guard let expires = resets?.next?.expiresAt else { return action }
-        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
-        let day = expires.formatted(style.month(.abbreviated).day())
-        return action + (resets?.differ == true ? " · the soonest expires \(day)" : " · expires \(day)")
+        guard let date else { return "Does not expire" }
+        guard date != PlanReset.unreadable else { return "Expiration unavailable" }
+        if date.timeIntervalSince(now) < 7 * 86400 {
+            let short = resetsShort(date, now: now)
+            return short == "now" ? "Expires soon" : "Expires in \(short)"
+        }
+        return "Expires " + day(date, now: now, calendar: calendar, locale: locale, weekday: false)
     }
+
+    /// A full reset's row tooltip, the exact time in local time: "Expires Fri, Oct 30, 12:41 AM".
+    static func expiresAt(_ date: Date?, now: Date, calendar: Calendar = .autoupdatingCurrent, locale: Locale = .autoupdatingCurrent)
+        -> String
+    {
+        guard let date, date != PlanReset.unreadable else { return expires(date, now: now) }
+        return "Expires " + day(date, now: now, calendar: calendar, locale: locale, weekday: true)
+    }
+
+    /// "Nov 7, 5:07 AM", "Sat, Nov 7, 5:07 AM", "Nov 7, 2027, 5:07 AM".
+    private static func day(_ date: Date, now: Date, calendar: Calendar, locale: Locale, weekday: Bool) -> String {
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        var day = style.month(.abbreviated).day()
+        if !calendar.isDate(date, equalTo: now, toGranularity: .year) { day = day.year() }
+        return [weekday ? date.formatted(style.weekday(.abbreviated)) : nil, date.formatted(day), date.formatted(style.hour().minute())]
+            .compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// A reset's row while it's sent.
+    static let resetting = "Resetting your usage…"
+    /// A reset's row once the limits were reset.
+    static let didReset = "Usage reset."
 
     /// A reset's outcome in Codex's own words; nil when the limits were reset.
     static func said(_ outcome: PlanResetOutcome) -> String? {
@@ -251,7 +368,7 @@ enum UsageText {
         PlanReading.reason(of: error).map { "Couldn't reset usage: \($0)" } ?? "Couldn't reset usage. Please try again."
     }
 
-    /// "Credits 47,161.94 · 2 full resets available".
+    /// "Credits 47,162 · 2 full resets available".
     static func extras(_ extras: [PlanExtra]) -> String {
         extras.map { [$0.key, $0.value].compactMap { $0 }.joined(separator: " ") }.joined(separator: " · ")
     }
@@ -384,43 +501,73 @@ struct UsagePopup: View {
                 .padding(.top, Space.md)
                 .opacity(unavailable == nil ? 1 : Theme.dimmed)
         }
+        if state.resetsOpen, let caption = wording.resetsCaption {
+            let rows = state.resetRows
+            if !rows.isEmpty {
+                resets(rows, caption: caption).transition(.opacity.animation(Motion.fade))
+            }
+        }
     }
 
-    /// One caption. Its count of full resets is a quiet button while the reading is current: a
-    /// click turns the line into a question, then a spinner, then what came of it.
+    /// One caption. Its count of full resets is a quiet button with a ⌄ while the reading is
+    /// current, for a CLI that lists them: a click unfolds them below.
     @ViewBuilder private func extrasLine(_ extras: [PlanExtra], live: Bool) -> some View {
-        let resets = extras.first(where: \.isResets)
-        switch state.resetStep {
-        case .confirming:
-            HStack(spacing: Space.md) {
-                Text("Use this reset?").lineLimit(1)
-                CaptionButton(title: "Yes, use reset", tint: Theme.accent, hover: Theme.accent) { state.useReset() }
-                    .storyID(StoryID.Composer.usage.part(.allow))
-                CaptionButton(title: "No, go back", tint: Theme.secondary, hover: Theme.text) { state.cancelReset() }
-                    .storyID(StoryID.Composer.usage.part(.cancel))
-            }
-        case .using:
-            HStack(spacing: Space.xs) {
-                SpinningArc().frame(width: Size.spinner, height: Size.spinner)
-                Text("Resetting your usage…").lineLimit(1)
-            }
-        case .said(let words):
-            Text(words).fixedSize(horizontal: false, vertical: true)
-        case .idle:
-            let line = UsageText.extras(extras)
-            if let resets, live {
-                let rest = UsageText.extras(extras.filter { !$0.isResets })
-                HStack(spacing: 0) {
-                    if !rest.isEmpty { Text(rest + " · ").lineLimit(1).truncationMode(.tail) }
-                    CaptionButton(
-                        title: resets.value, tint: Theme.secondary, hover: Theme.accent,
-                        help: UsageText.resetHelp(state.reading?.limits?.resets)
-                    ) { state.askReset() }
-                    .storyID(StoryID.Composer.usage.part(.reset))
+        let line = UsageText.extras(extras)
+        if let resets = extras.first(where: \.isResets), live, wording.resetsCaption != nil {
+            let rest = UsageText.extras(extras.filter { !$0.isResets })
+            HStack(spacing: 0) {
+                if !rest.isEmpty { Text(rest + " · ").lineLimit(1).truncationMode(.tail) }
+                CaptionButton(title: resets.value, tint: Theme.secondary, hover: Theme.accent, unfolds: state.resetsOpen) {
+                    state.toggleResets()
                 }
-            } else {
-                Text(line).lineLimit(1).truncationMode(.tail).help(line)
+                .storyID(StoryID.Composer.usage.part(.reset))
             }
+        } else {
+            Text(line).lineLimit(1).truncationMode(.tail).help(line)
+        }
+    }
+
+    /// The unfolded full resets, under a hairline: the CLI's caption (a spinner while the limits
+    /// are read again after a reset), then one row each, soonest to expire first; past five
+    /// lines the list scrolls on its own.
+    private func resets(_ rows: [ResetRow], caption: String) -> some View {
+        let now = Date()
+        let unlisted = state.reading?.limits?.resets?.unlisted ?? 0
+        let list = VStack(spacing: 0) {
+            ForEach(rows, id: \.id) { row in
+                ResetRowView(
+                    row: row, step: state.resetSteps[row.id], available: state.reading?.limits?.resets?.available ?? 0,
+                    busy: state.resetsBusy, now: now, state: state)
+            }
+            if unlisted > 0 {
+                Text("\(unlisted) more")
+                    .font(TextStyle.caption)
+                    .foregroundStyle(Theme.tertiary)
+                    .lineLimit(1)
+                    .padding(.horizontal, Space.sm)
+                    .frame(maxWidth: .infinity, minHeight: Size.usageResetRow, alignment: .leading)
+            }
+        }
+        return VStack(alignment: .leading, spacing: 0) {
+            Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.md)
+            HStack(spacing: Space.xs) {
+                Text(caption).lineLimit(1).truncationMode(.tail).help(caption)
+                Spacer(minLength: 0)
+                if state.rereading { SpinningArc().frame(width: Size.spinner, height: Size.spinner) }
+            }
+            .font(TextStyle.caption)
+            .foregroundStyle(Theme.tertiary)
+            .frame(height: Size.spinner)
+            .padding(.bottom, Space.xs)
+            Group {
+                if rows.count + (unlisted > 0 ? 1 : 0) > 5 {
+                    ScrollView { list }.scrollIndicators(.automatic).frame(height: Size.usageResetsMax)
+                } else {
+                    list
+                }
+            }
+            // The rows' text on the limits' edge, their hover fill past it (as the ↗ is).
+            .padding(.horizontal, -Space.sm)
         }
     }
 
@@ -463,15 +610,14 @@ struct UsagePopup: View {
 
     // MARK: Dismissal
 
-    /// Esc and Return close it and go no further (Return never sends from under it); any other
+    /// Esc and Return close it and go no further (Return never sends nor confirms); any other
     /// key closes it and goes on to the field; a click outside it closes it and goes on. What
     /// reaches the draft without a key here (a paste the composer takes first, a menu's Paste,
     /// dictation) closes it from the composer, as the draft changes.
     private func handle(_ event: NSEvent) -> NSEvent? {
         guard let window = window.value, event.window === window else { return event }
-        if event.type == .keyDown, event.keyCode == 53, state.resetStep == .confirming {
-            // Esc takes back the reset's question first.
-            state.cancelReset()
+        if event.type == .keyDown, event.keyCode == 53, state.stepBack() {
+            // Esc steps back one at a time: a reset's question, then the resets, then the popup.
             return nil
         }
         if event.type == .keyDown {
@@ -486,22 +632,146 @@ struct UsagePopup: View {
     }
 }
 
-/// A text button in the caption's line: `tint` at rest, `hover` under the pointer.
+/// A text button in the caption's line: `tint` at rest, `hover` under the pointer. With
+/// `unfolds`, a ⌄ after it (tertiary at rest) turned over while what it unfolds is open; `tall`,
+/// it takes clicks over its row's height and a little before the word.
 private struct CaptionButton: View {
     let title: String
     let tint: Color
     let hover: Color
-    var help: String?
+    var unfolds: Bool?
+    var tall = false
     let action: () -> Void
     @StateObject private var hovered = Local(false)
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let lit = hovered.value && isEnabled
         Button(action: action) {
-            Text(title).lineLimit(1).fixedSize().foregroundStyle(hovered.value ? hover : tint).contentShape(Rectangle())
+            HStack(spacing: Space.xxs) {
+                Text(title).lineLimit(1).fixedSize()
+                if let unfolds {
+                    Image(systemName: "chevron.down")
+                        .font(Glyph.chevron)
+                        .foregroundStyle(lit ? hover : Theme.tertiary)
+                        .rotationEffect(.degrees(unfolds ? 180 : 0))
+                        .animation(reduceMotion ? nil : Motion.fade, value: unfolds)
+                }
+            }
+            .foregroundStyle(isEnabled ? (lit ? hover : tint) : Theme.tertiary)
+            .padding(.leading, tall ? Space.sm : 0)
+            .frame(maxHeight: tall ? .infinity : nil)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(help ?? "")
+    }
+}
+
+/// One full reset: its title, when it expires (the exact time on hover) and a quiet "Use"; "Use"
+/// turns the row into the question, with "Yes" at its leading end so a double click's second
+/// half lands on nothing; then a spinner, then what came of it, in place until the popup closes.
+private struct ResetRowView: View {
+    let row: ResetRow
+    let step: UsageState.ResetStep?
+    /// The count, for a row that stands for it.
+    let available: Int
+    /// Another reset is being sent or read after: "Use" is off.
+    let busy: Bool
+    let now: Date
+    let state: UsageState
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        let id = StoryID.Composer.usageReset(row.id)
+        HStack(spacing: step == .asking ? Space.md : Space.lg) {
+            switch step {
+            case .asking:
+                Text("Use this reset?").foregroundStyle(Theme.text).lineLimit(1)
+                CaptionButton(title: "Yes, use reset", tint: Theme.accent, hover: Theme.accent) { state.useReset() }
+                    .storyID(id.part(.allow))
+                CaptionButton(title: "No, go back", tint: Theme.secondary, hover: Theme.text) { state.cancelReset() }
+                    .storyID(id.part(.cancel))
+                Spacer(minLength: 0)
+            case .using:
+                title(Theme.text)
+                sending
+            case .reset:
+                title(Theme.text)
+                HStack(spacing: Space.xs) {
+                    Image(systemName: "checkmark").font(Glyph.chevron)
+                    said(UsageText.didReset, Theme.secondary)
+                }
+                Spacer(minLength: 0)
+            case .said(let words, let spent):
+                title(spent ? Theme.secondary : Theme.text)
+                said(words, Theme.secondary)
+                Spacer(minLength: 0)
+            case .failed(let words):
+                title(Theme.text)
+                said(words, Theme.danger)
+                Spacer(minLength: 0)
+                use(id)
+            case nil:
+                title(Theme.text)
+                if row.credit?.redeeming == true {
+                    sending
+                } else {
+                    Text(expiry)
+                        .font(TextStyle.caption.monospacedDigit())
+                        .foregroundStyle(Theme.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    use(id)
+                }
+            }
+        }
+        .font(TextStyle.caption)
+        .foregroundStyle(Theme.secondary)
+        .id(step)
+        .transition(.opacity.animation(Motion.fade))
+        .padding(.horizontal, Space.sm)
+        .frame(maxWidth: .infinity, minHeight: Size.usageResetRow, maxHeight: Size.usageResetRow, alignment: .leading)
+        .hoverFill(step == .asking || (hovered.value && step == nil), step == .asking ? Theme.surfaceHover : Theme.toolHover)
+        .contentShape(Rectangle())
+        .onHover { hovered.value = $0 }
+        .help(step == nil ? row.credit.map { UsageText.expiresAt($0.expiresAt, now: now) } ?? "" : "")
+        // One element to VoiceOver, its "Use" a button on it.
+        .accessibilityElement(children: .combine)
+        .storyID(id)
+    }
+
+    /// "Expires in 6d"; for a count alone, how many.
+    private var expiry: String {
+        row.credit.map { UsageText.expires($0.expiresAt, now: now) } ?? "\(available) available"
+    }
+
+    private func title(_ color: Color) -> some View {
+        CappedWidth(cap: Size.usageTitleMax) {
+            Text(row.title).font(TextStyle.label).foregroundStyle(color).lineLimit(1).truncationMode(.tail)
+        }
+    }
+
+    private var sending: some View {
+        HStack(spacing: Space.xs) {
+            SpinningArc().frame(width: Size.spinner, height: Size.spinner)
+            Text(UsageText.resetting).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func said(_ words: String, _ color: Color) -> some View {
+        Text(words).foregroundStyle(color).lineLimit(1).truncationMode(.tail).help(words)
+    }
+
+    /// Never truncated; it takes the row's height and a little before the word.
+    private func use(_ id: StoryID) -> some View {
+        CaptionButton(title: "Use", tint: Theme.secondary, hover: Theme.accent, tall: true) { state.askReset(row.id) }
+            .disabled(busy)
+            .accessibilityLabel("Use \(row.title.lowercased()), \(expiry.prefix(1).lowercased() + expiry.dropFirst())")
+            .storyID(id.part(.use))
     }
 }
 

@@ -96,19 +96,36 @@ struct UsagePopupTests {
     }
 
     @Test func theExtrasLine() {
-        let extras = [PlanExtra("Credits", "47,161.94"), PlanExtra(nil, "2 full resets available")]
-        #expect(UsageText.extras(extras) == "Credits 47,161.94 · 2 full resets available")
+        let extras = [PlanExtra("Credits", "47,162"), PlanExtra(nil, "2 full resets available")]
+        #expect(UsageText.extras(extras) == "Credits 47,162 · 2 full resets available")
     }
 
-    @Test func aFullResetSaysWhatItDoesAndWhatCameOfIt() {
+    @Test func aFullResetSaysWhenItExpires() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
         let locale = Locale(identifier: "en_US")
-        let help = { (resets: PlanResets?) in UsageText.resetHelp(resets, calendar: calendar, locale: locale) }
-        let nov3 = PlanReset(id: "a", expiresAt: Date(timeIntervalSince1970: 1_793_700_000))
-        #expect(help(PlanResets(available: 1, next: nov3)) == "Use a usage limit reset · expires Nov 3")
-        #expect(help(PlanResets(available: 2, next: nov3, differ: true)) == "Use a usage limit reset · the soonest expires Nov 3")
-        #expect(help(PlanResets(available: 2, next: nil)) == "Use a usage limit reset")
+        // 2027-01-15 08:00 UTC, a Friday.
+        let plain = { (text: String) in text.replacingOccurrences(of: "\u{202F}", with: " ") }
+        let expires = { (seconds: Double) in
+            plain(UsageText.expires(Self.now.addingTimeInterval(seconds), now: Self.now, calendar: calendar, locale: locale))
+        }
+        let at = { (seconds: Double) in
+            plain(UsageText.expiresAt(Self.now.addingTimeInterval(seconds), now: Self.now, calendar: calendar, locale: locale))
+        }
+        #expect(expires(45 * 60) == "Expires in 45m")
+        #expect(expires(20 * 3600) == "Expires in 20h")
+        #expect(expires(6 * 86400 + 3600) == "Expires in 6d")
+        #expect(expires(30) == "Expires soon")
+        #expect(expires(8 * 86400 + 3600) == "Expires Jan 23, 9:00 AM")
+        #expect(expires(400 * 86400) == "Expires Feb 19, 2028, 8:00 AM")
+        #expect(at(6 * 86400 + 3600) == "Expires Thu, Jan 21, 9:00 AM")
+        #expect(UsageText.expires(nil, now: Self.now) == "Does not expire")
+        #expect(UsageText.expires(PlanReset.unreadable, now: Self.now) == "Expiration unavailable")
+        #expect(UsageText.expiresAt(nil, now: Self.now) == "Does not expire")
+        #expect(UsageText.expiresAt(PlanReset.unreadable, now: Self.now) == "Expiration unavailable")
+    }
+
+    @Test func aFullResetSaysWhatCameOfIt() {
         #expect(UsageText.said(.reset) == nil)
         #expect(UsageText.said(.nothingToReset) == "Your usage does not need a reset right now.")
         #expect(UsageText.said(.other("later")) == "Couldn't reset usage. Please try again.")
@@ -122,6 +139,8 @@ struct UsagePopupTests {
             ProviderDescriptor.codex.usage.failed("Rate limits are unavailable")
                 == "Couldn't read limits from Codex: Rate limits are unavailable")
         #expect(PlanReading.reason(of: UsageUnavailable()) == "this chat has no account to read")
+        #expect(ProviderDescriptor.codex.usage.resetsCaption == "Reset your current usage limits")
+        #expect(ProviderDescriptor.claude.usage.resetsCaption == nil)
     }
 
     // MARK: The / menu entry

@@ -31,7 +31,8 @@ extension ProviderDescriptor {
             }
         },
         setArchived: { id, archived, _ in ClaudeArchive.set(id, archived: archived) },
-        usage: UsageWording(product: "Claude Code", login: "claude auth login", rows: ["Session (5hr)", "Weekly (7 day)"]))
+        usage: UsageWording(
+            product: "Claude Code", login: "claude auth login", rows: ["Session (5hr)", "Weekly (7 day)"], resetsCaption: nil))
 }
 
 /// Claude Code's permission modes as its VS Code extension's picker shows them (labels, icons,

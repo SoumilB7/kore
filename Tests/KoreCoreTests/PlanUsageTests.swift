@@ -121,30 +121,56 @@ struct PlanUsageTests {
         #expect(reading.account.organization == nil)
         #expect(reading.account.manage?.absoluteString == "https://chatgpt.com/codex/settings/usage")
         #expect(reading.limits?.bars == [PlanLimit(title: "Weekly limit", used: 6, resetsAt: Date(timeIntervalSince1970: 1_793_335_108))])
-        #expect(
-            reading.limits?.extras == [PlanExtra("Credits", "47,161.94"), PlanExtra(nil, "2 full resets available", isResets: true)])
+        #expect(reading.limits?.extras == [PlanExtra("Credits", "47,162"), PlanExtra(nil, "2 full resets available", isResets: true)])
+        let credit = { (id: String, granted: Double, expires: Double) in
+            PlanReset(
+                id: id, title: "Full reset", grantedAt: Date(timeIntervalSince1970: granted),
+                expiresAt: Date(timeIntervalSince1970: expires))
+        }
         #expect(
             reading.limits?.resets
                 == PlanResets(
-                    available: 2, next: PlanReset(id: "RateLimitResetCredit_0", expiresAt: Date(timeIntervalSince1970: 1_793_301_078)),
-                    differ: true))
+                    available: 2,
+                    credits: [
+                        credit("RateLimitResetCredit_0", 1_790_709_078, 1_793_301_078),
+                        credit("RateLimitResetCredit_1", 1_791_416_227, 1_794_008_227),
+                    ]))
     }
 
-    @Test func aResetUsesTheCreditThatExpiresSoonest() {
-        let credit = { (id: String, expires: Double?, status: String) -> JSONValue in
-            ["id": .string(id), "resetType": "codexRateLimits", "status": .string(status), "expiresAt": expires.map(JSONValue.number) ?? .null]
+    @Test func theResetsAreListedSoonestFirst() {
+        let credit = { (id: String, expires: JSONValue, status: String) -> JSONValue in
+            ["id": .string(id), "resetType": "codexRateLimits", "status": .string(status), "expiresAt": expires]
         }
-        let resets = { (credits: [JSONValue]) in
-            PlanReading.codexResets(["availableCount": .number(Double(credits.count)), "credits": .array(credits)])
+        let resets = { (count: Int, credits: [JSONValue]) in
+            PlanReading.codexResets(["availableCount": .number(Double(count)), "credits": .array(credits)])
         }
-        let soon = PlanReset(id: "soon", expiresAt: Date(timeIntervalSince1970: 100))
-        #expect(resets([credit("never", nil, "available"), credit("late", 200, "available"), credit("soon", 100, "available")])?.next == soon)
-        // A credit being redeemed elsewhere isn't offered.
-        #expect(resets([credit("used", 50, "redeeming"), credit("soon", 100, "available")])?.next == soon)
-        #expect(resets([credit("a", 100, "available"), credit("b", 100, "available")])?.differ == false)
-        // Counted without details: Codex picks.
-        #expect(PlanReading.codexResets(["availableCount": 1, "credits": nil]) == PlanResets(available: 1, next: nil))
+        let ids = { (count: Int, credits: [JSONValue]) in resets(count, credits)?.credits?.map(\.id) }
+        #expect(
+            ids(4, [credit("never", .null, "available"), credit("late", 200, "available"), credit("soon", 100, "available"),
+                credit("tie", 100, "available")]) == ["soon", "tie", "late", "never"])
+        #expect(resets(1, [credit("late", 200, "available"), credit("soon", 100, "available")])?.next?.id == "soon")
+        // One being used elsewhere is listed as such; a used one isn't listed.
+        let listed = resets(1, [credit("used", 40, "redeemed"), credit("going", 50, "redeeming"), credit("soon", 100, "available")])
+        #expect(listed?.credits?.map(\.id) == ["going", "soon"])
+        #expect(listed?.credits?.map(\.redeeming) == [true, false])
+        #expect(listed?.unlisted == 0)
+        // A list shorter than the count.
+        #expect(resets(8, [credit("a", 100, "available"), credit("b", 200, "available")])?.unlisted == 6)
+        // An expiry Kore can't read sorts with those that never expire.
+        #expect(resets(2, [credit("odd", "soon", "available"), credit("a", 100, "available")])?.credits?.map(\.expiresAt)
+            == [Date(timeIntervalSince1970: 100), PlanReset.unreadable])
+        // Counted without details, or with none it can offer: Codex picks.
+        #expect(PlanReading.codexResets(["availableCount": 1, "credits": nil]) == PlanResets(available: 1, credits: nil))
+        #expect(PlanReading.codexResets(["availableCount": 2, "credits": []]) == PlanResets(available: 2, credits: nil))
         #expect(PlanReading.codexResets(["availableCount": 0, "credits": []]) == nil)
+    }
+
+    @Test func aResetsTitleIsOptional() {
+        let reset = PlanReading.codexResets([
+            "availableCount": 1, "credits": [["id": "a", "status": "available", "title": "", "grantedAt": 10, "expiresAt": 20]],
+        ])
+        #expect(
+            reset?.credits == [PlanReset(id: "a", grantedAt: Date(timeIntervalSince1970: 10), expiresAt: Date(timeIntervalSince1970: 20))])
     }
 
     @Test func aResetsRequestNamesItsAttemptAndCredit() {
@@ -184,7 +210,7 @@ struct PlanUsageTests {
         #expect(PlanReading.codexLimits(snapshot(["hasCredits": false, "unlimited": false, "balance": "0"]), locale: Self.us).extras == [])
         #expect(
             PlanReading.codexLimits(snapshot(["hasCredits": true, "unlimited": false, "balance": "12"]), locale: Self.us).extras
-                == [PlanExtra("Credits", "12.00")])
+                == [PlanExtra("Credits", "12")])
         #expect(PlanReading.codexLimits(["rateLimitResetCredits": ["availableCount": 0]], locale: Self.us).extras == [])
     }
 

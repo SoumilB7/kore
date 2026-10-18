@@ -35,6 +35,9 @@ struct UsageWording: Sendable {
     let login: String
     /// The limits it usually has, drawn empty while the first reading loads.
     let rows: [String]
+    /// What a full reset does, in the CLI's own words, over the list of them; nil for a CLI
+    /// without full resets.
+    let resetsCaption: String?
 
     /// Kore's wording for a CLI that isn't logged in.
     var signedOut: String { "\(product) isn't logged in. Run `\(login)` in Terminal." }

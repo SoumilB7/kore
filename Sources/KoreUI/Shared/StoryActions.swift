@@ -71,6 +71,10 @@ extension Chat {
     /// The bars' titles as their rows show them ("Session", "5h").
     package var storyUsageTitles: [String] { (usage.reading?.limits?.bars ?? []).map { UsageText.label($0.title) } }
     package var storyUsageExtras: String { UsageText.extras(usage.reading?.limits?.extras ?? []) }
+    /// Whether the full resets are unfolded, and whether a row's "Yes" would go yet (a
+    /// double-click's time after its "Use").
+    package var isUsageResetsOpen: Bool { usage.resetsOpen }
+    package var storyUsageConfirmable: Bool { usage.confirmable }
 }
 
 extension Workspace {

@@ -33,7 +33,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
     package enum Part: String, Sendable, CaseIterable {
         case fork, copy, stop, close, chevron, open, cancel, allow, always, deny, approveplan, keepplanning, archive
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
-        case autoaccept, replaceall, ticks, reset
+        case autoaccept, replaceall, ticks, reset, use
     }
 }
 
@@ -72,10 +72,13 @@ extension StoryID {
         /// A row of the slash menu, by the command's name.
         package static func command(_ name: String) -> StoryID { StoryID(.composer, "command", key: name) }
         /// The usage popup; `.part(.open)` is its "Manage usage" link, `.part(.reset)` its count of
-        /// full resets, and `.part(.allow)` / `.part(.cancel)` the reset's confirm.
+        /// full resets, which unfolds them.
         package static let usage = StoryID(.composer, "usage")
         /// One of its limits, by its title.
         package static func usageLimit(_ title: String) -> StoryID { StoryID(.composer, "usage.limit", key: title) }
+        /// One of its full resets, by the credit's id (empty for the one row of a count alone);
+        /// `.part(.use)` asks, then `.part(.allow)` / `.part(.cancel)` answer.
+        package static func usageReset(_ id: String?) -> StoryID { StoryID(.composer, "usage.reset", key: id ?? "") }
         /// A message waiting for the turn to end; `.part(.cancel)` takes it back.
         package static func queued(_ id: UUID) -> StoryID { StoryID(.composer, "queued", key: id.uuidString) }
     }
@@ -200,7 +203,7 @@ extension StoryID {
             Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
             Composer.model, Composer.effort, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
-            Composer.usage.part(.reset), Composer.usage.part(.allow), Composer.usage.part(.cancel),
+            Composer.usage.part(.reset),
             Transcript.earlier,
             AgentMap.open, AgentMap.stop, AgentMap.close, History.search,
             Explorer.newfile, Explorer.newfolder, Explorer.refresh, Explorer.collapse, Explorer.namefield,
@@ -216,6 +219,8 @@ extension StoryID {
             StoryID(.newtab, "provider", key: k), StoryID(.composer, "queued", key: k),
             StoryID(.composer, "queued", key: k).part(.cancel),
             StoryID(.composer, "command", key: k), StoryID(.composer, "usage.limit", key: k),
+            StoryID(.composer, "usage.reset", key: k), StoryID(.composer, "usage.reset", key: k).part(.use),
+            StoryID(.composer, "usage.reset", key: k).part(.allow), StoryID(.composer, "usage.reset", key: k).part(.cancel),
             StoryID(.transcript, "user", key: k), StoryID(.transcript, "user", key: k).part(.copy),
             StoryID(.transcript, "user", key: k).part(.fork), StoryID(.transcript, "answer", key: k),
             StoryID(.transcript, "answer", key: k).part(.copy), StoryID(.transcript, "answer", key: k).part(.fork),

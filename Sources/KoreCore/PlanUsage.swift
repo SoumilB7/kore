@@ -60,30 +60,50 @@ public struct PlanLimits: Sendable, Equatable {
     }
 }
 
-/// The account's full resets (Codex's rate-limit reset credits): how many, and the one to use.
+/// The account's full resets (Codex's rate-limit reset credits): how many, and each one listed.
 public struct PlanResets: Sendable, Equatable {
     public var available: Int
-    /// The one that expires soonest; nil when Codex counted them without details, and then picks.
-    public var next: PlanReset?
-    /// Whether they differ in when they expire or what they reset, so which goes first matters.
-    public var differ: Bool
+    /// Those listed as available or being used, the soonest to expire first and those that never
+    /// expire last; nil when Codex counted them without listing them, and then picks. The list
+    /// may stop short of `available`.
+    public var credits: [PlanReset]?
 
-    public init(available: Int, next: PlanReset?, differ: Bool = false) {
+    public init(available: Int, credits: [PlanReset]?) {
         self.available = available
-        self.next = next
-        self.differ = differ
+        self.credits = credits
+    }
+
+    /// The one that expires soonest.
+    public var next: PlanReset? { credits?.first }
+
+    /// How many are available beyond those listed.
+    public var unlisted: Int {
+        guard let credits else { return 0 }
+        return max(available - credits.filter { !$0.redeeming }.count, 0)
     }
 }
 
 public struct PlanReset: Sendable, Equatable {
     /// Codex's opaque id for the credit.
     public let id: String
+    /// Its name ("Full reset"); nil when it has none.
+    public let title: String?
+    public let grantedAt: Date?
+    /// Nil: it never expires; `unreadable` when Codex sent a value Kore can't read.
     public let expiresAt: Date?
+    /// Being used (from another client): listed, but not offered.
+    public let redeeming: Bool
 
-    public init(id: String, expiresAt: Date?) {
+    public init(id: String, title: String? = nil, grantedAt: Date? = nil, expiresAt: Date?, redeeming: Bool = false) {
         self.id = id
+        self.title = title
+        self.grantedAt = grantedAt
         self.expiresAt = expiresAt
+        self.redeeming = redeeming
     }
+
+    /// An expiry Kore couldn't read: it sorts with those that never expire.
+    public static let unreadable = Date.distantFuture
 }
 
 /// What using a full reset did, as Codex answers `account/rateLimitResetCredit/consume`.
@@ -121,7 +141,7 @@ public struct PlanLimit: Sendable, Equatable {
     }
 }
 
-/// "Credits 47,161.94"; a nil key for a value that reads alone ("2 full resets available").
+/// "Credits 47,162"; a nil key for a value that reads alone ("2 full resets available").
 public struct PlanExtra: Sendable, Equatable {
     public let key: String?
     public let value: String
@@ -290,7 +310,7 @@ extension PlanReading {
         if credits?["hasCredits"]?.bool == true, credits?["unlimited"]?.bool != true,
             let balance = credits?["balance"]?.string.flatMap(Double.init)
         {
-            extras.append(PlanExtra("Credits", balance.formatted(.number.precision(.fractionLength(2)).locale(locale))))
+            extras.append(PlanExtra("Credits", balance.formatted(.number.precision(.fractionLength(0)).locale(locale))))
         }
         let resets = codexResets(result["rateLimitResetCredits"])
         if let resets {
@@ -300,17 +320,29 @@ extension PlanReading {
         return PlanLimits(bars: bars, extras: extras, resets: resets)
     }
 
-    /// The available count, and of the credits listed as available the one that expires
-    /// soonest (one that never expires goes last).
+    /// The available count, and the credits listed as available or being used, the soonest to
+    /// expire first (one that never expires goes last). None listed reads as a count alone.
     static func codexResets(_ summary: JSONValue?) -> PlanResets? {
         guard let count = summary?["availableCount"]?.int, count > 0 else { return nil }
-        let credits = (summary?["credits"]?.array ?? []).compactMap { credit -> (reset: PlanReset, type: String?)? in
-            guard let id = nonEmpty(credit["id"]?.string), (credit["status"]?.string ?? "available") == "available" else { return nil }
-            return (PlanReset(id: id, expiresAt: date(credit["expiresAt"])), credit["resetType"]?.string)
+        let credits = (summary?["credits"]?.array ?? []).compactMap { credit -> PlanReset? in
+            let status = credit["status"]?.string ?? "available"
+            guard let id = nonEmpty(credit["id"]?.string), status == "available" || status == "redeeming" else { return nil }
+            let expires = credit["expiresAt"] ?? .null
+            return PlanReset(
+                id: id, title: nonEmpty(credit["title"]?.string), grantedAt: date(credit["grantedAt"]),
+                expiresAt: expires == .null ? nil : date(expires) ?? PlanReset.unreadable, redeeming: status == "redeeming")
         }
-        let next = credits.min { ($0.reset.expiresAt ?? .distantFuture) < ($1.reset.expiresAt ?? .distantFuture) }
-        let kinds = Set(credits.map { "\($0.reset.expiresAt?.timeIntervalSince1970 ?? -1) \($0.type ?? "")" })
-        return PlanResets(available: count, next: next?.reset, differ: kinds.count > 1)
+        return PlanResets(available: count, credits: credits.isEmpty ? nil : soonestFirst(credits))
+    }
+
+    /// By expiry, those that never expire last; in Codex's order where they tie.
+    static func soonestFirst(_ credits: [PlanReset]) -> [PlanReset] {
+        credits.enumerated()
+            .sorted { a, b in
+                let (x, y) = (a.element.expiresAt ?? .distantFuture, b.element.expiresAt ?? .distantFuture)
+                return x == y ? a.offset < b.offset : x < y
+            }
+            .map(\.element)
     }
 
     /// Codex's names for its windows; others from their length.
