@@ -1,5 +1,20 @@
 import Foundation
 
+/// How a CLI's process ended: its exit code, or the signal that ended it (`code` is then the
+/// signal's number), as Foundation's `terminationReason` tells them apart.
+public struct ProcessEnd: Sendable, Equatable {
+    public let code: Int32
+    public let signal: Bool
+
+    public init(code: Int32, signal: Bool) {
+        self.code = code
+        self.signal = signal
+    }
+
+    /// "status=0", "signal=15": for logs.
+    public var field: (key: String, value: String) { (signal ? "signal" : "status", String(code)) }
+}
+
 /// A child process speaking newline-delimited JSON over stdin/stdout. Shared transport
 /// for both CLIs; the protocol on top differs (Claude stream-json vs Codex JSON-RPC).
 package final class StdioProcess: @unchecked Sendable {
@@ -66,7 +81,10 @@ package final class StdioProcess: @unchecked Sendable {
         }
         let (exits, exitSink) = AsyncStream<Int32>.makeStream()
         let key = ObjectIdentifier(self)
+        let ending = ending
         process.terminationHandler = { process in
+            // `terminationStatus` is the exit code, or the signal's number when one ended it.
+            ending.set(ProcessEnd(code: process.terminationStatus, signal: process.terminationReason == .uncaughtSignal))
             Self.running.remove(key)
             ChildReaper.shared.forget(process.processIdentifier)
             exitSink.yield(process.terminationStatus)
@@ -119,6 +137,16 @@ package final class StdioProcess: @unchecked Sendable {
 
     var isRunning: Bool { process.isRunning }
     var pid: pid_t { process.processIdentifier }
+    /// How it ended, once it has.
+    var end: ProcessEnd? { ending.value }
+    private let ending = Ending()
+
+    private final class Ending: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: ProcessEnd?
+        var value: ProcessEnd? { lock.withLock { stored } }
+        func set(_ end: ProcessEnd) { lock.withLock { stored = end } }
+    }
 
     /// Closes stdin and sends SIGTERM to the child and its process group. Both CLIs exit within
     /// a second or two of SIGTERM, ending their tool processes and keeping their transcripts

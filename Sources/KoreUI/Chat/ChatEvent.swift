@@ -102,6 +102,10 @@ package enum ChatEvent: Sendable {
 
     /// A resumed session's past, in order, as one event so it lands as one change.
     case replayed([ChatEvent])
+    /// The history `replayed` showed, read again whole and found different (a long transcript's
+    /// newest page is read from its end first): the transcript is built again from it, keeping
+    /// what came after the replay.
+    case historyReplaced([ChatEvent])
 }
 
 /// Who changed a mode.

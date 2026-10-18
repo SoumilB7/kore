@@ -89,6 +89,24 @@ public enum ClaudeHistory {
         byId: [String: Link], order: [String], index: [String: Int], leaf: String?, before: String?, userTurns: Int?,
         load: ([String]) -> [String: Data]
     ) -> Page {
+        let found = walk(byId: byId, order: order, index: index, leaf: leaf, before: before, userTurns: userTurns)
+        return messages(found.ids, earlier: found.earlier, load: load)
+    }
+
+    /// The entries a page holds, in file order, before their lines are read.
+    struct Walk: Equatable {
+        var ids: [String]
+        var earlier: String?
+        /// The walk back from the leaf reached an entry with no parent (a compaction's boundary,
+        /// or the session's first entry), not one whose parent isn't indexed.
+        var reachedRoot: Bool
+        /// That entry is a compaction's boundary.
+        var rootIsBoundary: Bool
+    }
+
+    static func walk(
+        byId: [String: Link], order: [String], index: [String: Int], leaf: String?, before: String?, userTurns: Int?
+    ) -> Walk {
         /// Where history goes on before a compaction: its logical parent, or, when that entry
         /// isn't in the file (the compaction kept it under a new id), the last message before
         /// the boundary.
@@ -101,6 +119,8 @@ public enum ClaudeHistory {
         var earlier: String?
         var prompts = 0
         var cursor = before ?? leaf
+        var reachedRoot = false
+        var rootIsBoundary = false
         while let id = cursor, let link = byId[id], included.insert(id).inserted {
             if let limit = userTurns, link.isPrompt {
                 prompts += 1
@@ -113,6 +133,8 @@ public enum ClaudeHistory {
                 cursor = parent
             } else {
                 // A compaction: the current branch stops here; a page of earlier turns goes on.
+                reachedRoot = true
+                rootIsBoundary = link.isBoundary
                 let logical = link.isBoundary ? continuation(of: link) : nil
                 if userTurns == nil {
                     earlier = logical
@@ -122,7 +144,9 @@ public enum ClaudeHistory {
             }
         }
         let span = included.compactMap { index[$0] }
-        guard let first = span.min(), let last = span.max() else { return Page(messages: [], earlier: nil) }
+        guard let first = span.min(), let last = span.max() else {
+            return Walk(ids: [], earlier: nil, reachedRoot: reachedRoot, rootIsBoundary: rootIsBoundary)
+        }
         let window = order[first...last]
         let messageIds = Set(included.compactMap { byId[$0].flatMap { $0.type == "assistant" ? $0.messageId : nil } })
         for id in window where byId[id]?.type == "assistant" {
@@ -136,15 +160,53 @@ public enum ClaudeHistory {
         for id in window where byId[id]?.isQueuedCommand == true {
             if let parent = byId[id]?.parentUuid, included.contains(parent) { included.insert(id) }
         }
-        let ids = window.filter(included.contains)
+        return Walk(ids: window.filter(included.contains), earlier: earlier, reachedRoot: reachedRoot, rootIsBoundary: rootIsBoundary)
+    }
+
+    /// A walk's entries read and parsed: the conversation's, without other meta entries.
+    static func messages(_ ids: [String], earlier: String?, load: ([String]) -> [String: Data]) -> Page {
         let lines = load(ids)
-        let messages = ids.compactMap { lines[$0].flatMap { try? JSONValue.parse($0) } }.filter { entry in
+        let messages = parseAll(ids.compactMap { lines[$0] }).compactMap { $0 }.filter { entry in
             // Peer messages, cron firings and finished-agent notices are meta entries, but they
             // start turns of the conversation.
             isBoundary(entry) || entry["isMeta"]?.bool != true || PeerMessage(entry: entry) != nil
                 || cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? "")
         }
         return Page(messages: messages, earlier: earlier)
+    }
+
+    /// Lines parsed in order, nil for one that isn't JSON; a long page's on every core (a page
+    /// back to a compaction can be thousands of entries and many MB).
+    static func parseAll(_ lines: [Data]) -> [JSONValue?] {
+        guard lines.count > 64 else { return lines.map { try? JSONValue.parse($0) } }
+        let parsed = Parsed(count: lines.count)
+        let slices = min(lines.count, ProcessInfo.processInfo.activeProcessorCount * 4)
+        DispatchQueue.concurrentPerform(iterations: slices) { slice in
+            var i = slice
+            while i < lines.count {
+                parsed.set(i, try? JSONValue.parse(lines[i]))
+                i += slices
+            }
+        }
+        return parsed.values
+    }
+
+    /// Slots written by index from several threads, each slot by one.
+    private final class Parsed: @unchecked Sendable {
+        private let slots: UnsafeMutableBufferPointer<JSONValue?>
+
+        init(count: Int) {
+            slots = .allocate(capacity: count)
+            slots.initialize(repeating: nil)
+        }
+
+        deinit {
+            slots.deinitialize()
+            slots.deallocate()
+        }
+
+        func set(_ index: Int, _ value: JSONValue?) { slots[index] = value }
+        var values: [JSONValue?] { Array(slots) }
     }
 
     /// A compaction's boundary: earlier history goes on from its `logicalParentUuid`.
@@ -357,7 +419,7 @@ public enum ClaudeHistory {
         private static let usageKey = Data(#""usage""#.utf8)
 
         private static func timestamp(_ json: JSONValue) -> Date? {
-            json["timestamp"]?.string.flatMap { iso.date(from: $0) }
+            json["timestamp"]?.string.flatMap { Timestamp.parse($0) ?? iso.date(from: $0) }
         }
 
         /// An assistant entry's input, cache and output tokens.

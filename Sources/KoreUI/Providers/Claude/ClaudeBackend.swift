@@ -40,15 +40,33 @@ final class ClaudeBackend: ChatBackend {
 
     /// History pages for `id`, read off the main thread.
     private func page(_ id: String, before: String? = nil, userTurns: Int? = nil) async -> ClaudeHistory.Page {
-        let reader: ClaudeTranscript
-        if let transcript, transcript.id == id {
-            reader = transcript.reader
-        } else {
-            reader = ClaudeTranscript(sessionId: id, in: options.folder)
-            transcript = (id, reader)
-        }
+        let reader = reader(id)
         return await Task.detached(priority: .userInitiated) { reader.page(before: before, userTurns: userTurns) }.value
     }
+
+    private func reader(_ id: String) -> ClaudeTranscript {
+        if let transcript, transcript.id == id { return transcript.reader }
+        let reader = ClaudeTranscript(sessionId: id, in: options.folder)
+        transcript = (id, reader)
+        return reader
+    }
+
+    /// The page a resumed chat opens on. A long transcript's is read from its end
+    /// (`ClaudeTranscript.latest`), before the rest of the file, which `launch` then confirms
+    /// it by; a short one's, and a fork's (up to its fork point), whole.
+    private func firstPage(_ id: String, before: String?) async -> (page: ClaudeHistory.Page, latest: ClaudeTranscript.Latest?) {
+        let reader = reader(id)
+        if before == nil, let latest = await Task.detached(priority: .userInitiated, operation: { reader.latest() }).value {
+            return (latest.page, latest)
+        }
+        return (await page(id, before: before), nil)
+    }
+
+    /// How many times the CLI was started (a relaunch, or a send after it exited, starts it again).
+    private var launches = 0
+    /// Why the next launch happens, when Kore ended the last one.
+    private var relaunchReason: String?
+    private let log = SessionLog.shared
 
     init(_ options: BackendOptions) {
         self.options = options
@@ -76,14 +94,14 @@ final class ClaudeBackend: ChatBackend {
         // makes the new session (`--fork-session`) on the first message.
         let fork = sessionId == nil ? options.fork : nil
         // Only a first launch reads history: a relaunch (the CLI exited, the next send starts it
-        // again) shows what's already there.
-        let past: Task<ClaudeHistory.Page, Never>? =
+        // again) shows what's already there, and the transcript keeps its rows.
+        let past: Task<(page: ClaudeHistory.Page, latest: ClaudeTranscript.Latest?), Never>? =
             if !replayPending {
                 nil
             } else if let history = fork?.history {
-                Task { history }
+                Task { (page: history, latest: ClaudeTranscript.Latest?.none) }
             } else {
-                source.map { id in Task { await page(id, before: fork?.at) } }
+                source.map { id in Task { await firstPage(id, before: fork?.at) } }
             }
         // Only needed once: the transcript holds it from here.
         options.fork?.history = nil
@@ -93,26 +111,57 @@ final class ClaudeBackend: ChatBackend {
             resume: fork?.from ?? sessionId)
         if let fork { launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at] }
         let starting = Task { try await ClaudeSession.start(launch) }
+        launches += 1
+        let kind = launches > 1 ? "again" : fork != nil ? "fork" : sessionId != nil ? "resume" : "new"
         var pastMode: String?
         if let past {
             replayPending = false
-            let first = await past.value
+            let began = ContinuousClock.now
+            log.replayStart("claude", chat: source, read: fork?.history != nil ? "fork" : "file")
+            let (first, latest) = await past.value
             earlierFrom = first.earlier
             // Parsed into events off the main thread, on a translator of its own.
             let replayed = await ClaudeTranslator.replayed(first.messages, folder: folder, sessionId: translator.sessionId)
-            translator.adopt(replayed.carried)
-            pastMode = replayed.carried.mode
+            var carried = replayed.carried
+            yield(.replayed(replayed.events))
+            let shown = Self.ms(ContinuousClock.now - began)
+            var corrected = false
+            // A long transcript's page came from its end: the rest of the file is indexed now,
+            // behind the rows on screen, for what's before the page and to confirm the page (it
+            // differs only when the CLI wrote history twice; then it's replaced). Agents' files
+            // are looked up meanwhile.
+            var confirming: Task<(earlier: String?, page: ClaudeHistory.Page?), Never>?
+            if let latest, let reader = transcript?.reader {
+                confirming = Task.detached(priority: .userInitiated) { reader.confirm(latest) }
+            }
+            var lookup = await lookUpUnfinished(carried)
+            if let confirming {
+                let confirmed = await confirming.value
+                earlierFrom = confirmed.earlier
+                if let exact = confirmed.page {
+                    corrected = true
+                    let again = await ClaudeTranslator.replayed(exact.messages, folder: folder, sessionId: translator.sessionId)
+                    carried = again.carried
+                    yield(.historyReplaced(again.events))
+                    lookup = await lookUpUnfinished(carried)
+                }
+            }
+            translator.adopt(carried)
+            pastMode = carried.mode
             // Notifications are read from where the page was (a fork's page is another file's).
             if let transcript, transcript.id == sessionId {
                 noticesFrom = transcript.reader.length
             } else if let session = sessionId {
                 noticesFrom = ClaudeHistory.size(of: ClaudeHistory.transcript(sessionId: session, in: folder))
             }
-            yield(.replayed(replayed.events))
             yield(.earlierHistory(earlierFrom != nil))
+            log.replayEnd(
+                "claude", chat: source, read: latest == nil ? "whole" : "tail", lines: first.messages.count,
+                bytes: latest.map { $0.end - $0.from } ?? transcript.map { $0.reader.length },
+                ms: Self.ms(ContinuousClock.now - began), shown: shown, corrected: corrected)
             // Agents it never saw end: their own files say which ended and which still run.
             // Looked up after the page shows, so a chat with such agents opens no later.
-            let running = await settleUnfinished()
+            let running = settleUnfinished(lookup)
             translator.take().events.forEach(yield)
             for (id, ran) in running {
                 // Its clock goes on from when it began, not from when the chat opened.
@@ -122,7 +171,15 @@ final class ClaudeBackend: ChatBackend {
                 tail(id)
             }
         }
-        let session = try await starting.value
+        let session: ClaudeSession
+        do {
+            session = try await starting.value
+        } catch {
+            log.startFailed("claude", chat: sessionId ?? fork?.from, launch: kind)
+            throw error
+        }
+        log.started("claude", chat: sessionId ?? fork?.from, pid: await session.processId, launch: kind)
+        relaunchReason = nil
         self.session = session
         // A resumed chat carries on in the mode its history ended in (the pill shows it), not
         // the one it launched in. One the CLI refuses (Bypass) it reports at the first turn.
@@ -177,10 +234,30 @@ final class ClaudeBackend: ChatBackend {
     private func handle(_ event: ClaudeEvent) {
         translator.translate(event)
         flush()
-        if case .exited = event {
+        if case .exited(let status) = event {
+            if let ended = session { logExit(ended, reported: status) }
             session = nil
             pump = nil
         }
+    }
+
+    /// How the process ended, once it has (one Kore ended takes up to its close grace).
+    private func logExit(_ session: ClaudeSession, reported: Int32? = nil) {
+        let chat = sessionId
+        let log = log
+        Task.detached(priority: .utility) {
+            let pid = await session.processId
+            var end = await session.processEnd
+            for _ in 0..<40 where end == nil {
+                try? await Task.sleep(for: .milliseconds(200))
+                end = await session.processEnd
+            }
+            log.exited("claude", chat: chat, pid: pid, end: end, reported: reported ?? -1, asked: await session.closeAsked)
+        }
+    }
+
+    static func ms(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
     }
 
     private func flush() {
@@ -417,15 +494,19 @@ final class ClaudeBackend: ChatBackend {
         flush()
     }
 
-    /// After a replay: what became of the agents it never saw end, from their own files (see
-    /// `ClaudeHistory.Subagent.outcome`). Those marked ended end (their events wait in the
-    /// translator), with the time their transcripts span and their tokens; the background ones
-    /// still running are returned, to follow, with how long they've run.
-    private func settleUnfinished() async -> [(id: String, ran: TimeInterval?)] {
-        let open = translator.unfinishedAgents()
-        guard let session = sessionId, !open.isEmpty else { return [] }
-        let ids = Set(open.map(\.id))
-        let agentIds = translator.agentFiles
+    /// A replay's agents it never saw end, and what their own files say (read off the main
+    /// thread).
+    private struct UnfinishedLookup {
+        var open: [(id: String, background: Bool)] = []
+        var found: [String: ClaudeHistory.Subagent] = [:]
+        var spans: [String: ClaudeHistory.Subagent.Span] = [:]
+    }
+
+    private func lookUpUnfinished(_ carried: ClaudeTranslator.Carried) async -> UnfinishedLookup {
+        let open = carried.spawned.filter { carried.finished[$0] == nil }.map { ($0, carried.background.contains($0)) }
+        guard let session = sessionId, !open.isEmpty else { return UnfinishedLookup(open: open) }
+        let ids = Set(open.map(\.0))
+        let agentIds = carried.agentFiles
         let folder = options.folder
         let (found, spans) = await Task.detached(priority: .userInitiated) {
             let found = ClaudeHistory.subagents(toolUseIds: ids, agentIds: agentIds, sessionId: session, in: folder)
@@ -433,6 +514,16 @@ final class ClaudeBackend: ChatBackend {
                 .compactMapValues { ClaudeHistory.Subagent.span($0.transcript) }
             return (found, spans)
         }.value
+        return UnfinishedLookup(open: open, found: found, spans: spans)
+    }
+
+    /// After a replay: what became of the agents it never saw end, from their own files (see
+    /// `ClaudeHistory.Subagent.outcome`). Those marked ended end (their events wait in the
+    /// translator), with the time their transcripts span and their tokens; the background ones
+    /// still running are returned, to follow, with how long they've run.
+    private func settleUnfinished(_ lookup: UnfinishedLookup) -> [(id: String, ran: TimeInterval?)] {
+        let (open, found, spans) = (lookup.open, lookup.found, lookup.spans)
+        guard let session = sessionId, !open.isEmpty else { return [] }
         var running: [(id: String, ran: TimeInterval?)] = []
         let log = translator.log
         for (id, background) in open.sorted(by: { $0.id < $1.id }) {
@@ -637,11 +728,13 @@ final class ClaudeBackend: ChatBackend {
 
     func relaunch() async {
         guard let session else { return }
+        log.relaunch("claude", chat: sessionId, reason: "account changed")
         // Its exit isn't the chat's news: the pump goes first.
         pump?.cancel()
         pump = nil
         self.session = nil
         await session.close()
+        logExit(session)
     }
 
     func close() async {
@@ -657,6 +750,7 @@ final class ClaudeBackend: ChatBackend {
         let session = session
         self.session = nil
         await session?.close()
+        if let session { logExit(session) }
         sink.finish()
     }
 }

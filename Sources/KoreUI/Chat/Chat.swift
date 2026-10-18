@@ -14,7 +14,8 @@ package final class Chat: Identifiable {
     package let id = UUID()
     let provider: ProviderDescriptor
     package let folder: URL
-    let transcript = TranscriptStore()
+    /// Replaced only when a replayed history is corrected (`.historyReplaced`).
+    private(set) var transcript = TranscriptStore()
     let approvals = ApprovalsStore()
     let controls: ControlsStore
     let status: ChatStatus
@@ -124,8 +125,14 @@ package final class Chat: Identifiable {
 
     /// Every event goes to every store; each takes what it shows.
     private func dispatch(_ event: ChatEvent) {
+        if case .historyReplaced(let events) = event {
+            replaceHistory(events)
+            StorylineSeams.events?(self, event)
+            return
+        }
         let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
         transcript.apply(event)
+        noteSinceReplay(event)
         if case .replayed = event, let original = forkedFrom {
             // A fork's history ends with where it came from.
             forkedFrom = nil
@@ -147,6 +154,41 @@ package final class Chat: Identifiable {
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
         StorylineSeams.events?(self, event)
+    }
+
+    /// What the transcript took after a replay, until the backend has confirmed it
+    /// (`.earlierHistory` follows that): a corrected history takes them again.
+    @ObservationIgnored private var sinceReplay: [ChatEvent]?
+
+    private func noteSinceReplay(_ event: ChatEvent) {
+        switch event {
+        case .replayed: sinceReplay = []
+        case .earlierHistory: sinceReplay = nil
+        default:
+            guard sinceReplay != nil else { return }
+            sinceReplay?.append(event)
+            // A backend that never confirms (only Claude's long transcripts need it) stops it here.
+            if (sinceReplay?.count ?? 0) > 200 { sinceReplay = nil }
+        }
+    }
+
+    /// The history built again in a store of its own, then shown in place of the first one,
+    /// with what came after the replay. The other stores take the history again too (each keeps
+    /// what its latest events say).
+    private func replaceHistory(_ events: [ChatEvent]) {
+        let store = TranscriptStore()
+        store.providerName = transcript.providerName
+        store.provider = transcript.provider
+        store.apply(.replayed(events))
+        for event in sinceReplay ?? [] { store.apply(event) }
+        transcript = store
+        let replay = ChatEvent.replayed(events)
+        approvals.apply(replay)
+        controls.apply(replay)
+        let running = status.isRunning
+        status.apply(replay)
+        status.setRunning(running)
+        context.apply(replay)
     }
 
     /// The user's messages that waited for the history.

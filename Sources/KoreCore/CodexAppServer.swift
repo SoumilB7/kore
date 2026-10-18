@@ -117,9 +117,17 @@ public actor CodexAppServer {
     }
 
     public func close() {
+        closeAsked = true
         guard running else { return }
         io?.close()
     }
+
+    /// The process's id, for the session log.
+    public var processId: Int32? { io?.pid }
+    /// How the process ended, once it has.
+    public var processEnd: ProcessEnd? { io?.end }
+    /// Kore asked it to end (`close()`), so its exit was expected.
+    public private(set) var closeAsked = false
 
     // MARK: - Process lifecycle
 

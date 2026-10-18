@@ -1029,7 +1029,7 @@ package final class ClaudeTranslator {
         return f
     }()
 
-    static func date(_ json: JSONValue?) -> Date? { json?.string.flatMap { iso.date(from: $0) } }
+    static func date(_ json: JSONValue?) -> Date? { json?.string.flatMap { Timestamp.parse($0) ?? iso.date(from: $0) } }
 
     // MARK: - Wording
 

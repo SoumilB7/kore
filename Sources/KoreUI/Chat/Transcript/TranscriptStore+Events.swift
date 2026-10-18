@@ -96,6 +96,8 @@ extension TranscriptStore {
             queuedMessage(id: id, delivery)
         case .earlierHistory(let available):
             earlierHistory(available)
+        case .historyReplaced:
+            break  // Chat builds a new store from it
 
         case .modeChanged(let change):
             modeChanged(change)

@@ -29,6 +29,9 @@ final class CodexBackend: ChatBackend {
     private var follows: [String: Task<Void, Never>] = [:]
     /// Turns per page: the newest when a chat opens, then each `earlier()`.
     private static let pageTurns = 10
+    /// How many times the app-server was started (a relaunch, or a send after it exited, starts it again).
+    private var launches = 0
+    private let log = SessionLog.shared
     private static let log = Logger(subsystem: "Kore", category: "codex")
 
     var sessionId: String? { translator.threadId ?? resumeId }
@@ -54,11 +57,23 @@ final class CodexBackend: ChatBackend {
     }
 
     private func launch() async throws {
-        let session = try await CodexSession.launch(
-            .init(
-                cwd: options.folder, model: options.model, effort: options.effort,
-                permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
-                plan: options.planMode, resume: sessionId, forkAt: forkAt))
+        launches += 1
+        let kind = launches > 1 ? "again" : forkAt != nil ? "fork" : sessionId != nil ? "resume" : "new"
+        let session: CodexSession
+        do {
+            session = try await CodexSession.launch(
+                .init(
+                    cwd: options.folder, model: options.model, effort: options.effort,
+                    permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
+                    plan: options.planMode, resume: sessionId, forkAt: forkAt))
+        } catch {
+            log.startFailed("codex", chat: sessionId, launch: kind)
+            throw error
+        }
+        let thread = await session.threadId
+        log.started("codex", chat: sessionId ?? (thread.isEmpty ? nil : thread), pid: await session.process.id, launch: kind)
+        let began = ContinuousClock.now
+        if replayPending { log.replayStart("codex", chat: sessionId, read: "thread") }
         // A resumed or forked thread's newest turns, read while Codex resumes it.
         let newest: (turns: [JSONValue], earlier: String?)?
         do {
@@ -91,6 +106,9 @@ final class CodexBackend: ChatBackend {
             }
             yield(.replayed(replayed.events))
             yield(.earlierHistory(earlierFrom != nil))
+            log.replayEnd(
+                "codex", chat: sessionId, read: "thread", lines: newest?.turns.count ?? 0, bytes: nil,
+                ms: ClaudeBackend.ms(ContinuousClock.now - began))
             settleUnfinished()
         }
         self.session = session
@@ -243,10 +261,25 @@ final class CodexBackend: ChatBackend {
         translator.translate(event)
         flush()
         if case .turnCompleted = event { saveTitle() }
-        if case .exited = event {
+        if case .exited(let status) = event {
+            if let ended = session { logExit(ended, reported: status) }
             resumeId = sessionId
             session = nil
             pump = nil
+        }
+    }
+
+    /// How the app-server ended, once it has (one Kore ended takes up to its close grace).
+    private func logExit(_ session: CodexSession, reported: Int32? = nil) {
+        let chat = sessionId
+        let log = log
+        Task.detached(priority: .utility) {
+            var process = await session.process
+            for _ in 0..<40 where process.end == nil {
+                try? await Task.sleep(for: .milliseconds(200))
+                process = await session.process
+            }
+            log.exited("codex", chat: chat, pid: process.id, end: process.end, reported: reported ?? -1, asked: process.closeAsked)
         }
     }
 
@@ -466,12 +499,14 @@ final class CodexBackend: ChatBackend {
 
     func relaunch() async {
         guard let session else { return }
+        log.relaunch("codex", chat: sessionId, reason: "account changed")
         // Its exit isn't the chat's news: the pump goes first.
         pump?.cancel()
         pump = nil
         resumeId = sessionId
         self.session = nil
         await session.close()
+        logExit(session)
     }
 
     func close() async {
@@ -482,6 +517,7 @@ final class CodexBackend: ChatBackend {
         let session = session
         self.session = nil
         await session?.close()
+        if let session { logExit(session) }
         sink.finish()
     }
 }

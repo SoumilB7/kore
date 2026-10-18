@@ -48,6 +48,7 @@ func tag(_ event: ChatEvent) -> String {
     case .contextUsage: "context"
     case .earlierHistory: "earlier"
     case .replayed: "replayed"
+    case .historyReplaced: "historyReplaced"
     }
 }
 

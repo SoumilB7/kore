@@ -345,6 +345,11 @@ public actor CodexSession {
         await server.close()
     }
 
+    /// The app-server's process id, how it ended and whether Kore asked it to, for the session log.
+    public var process: (id: Int32?, end: ProcessEnd?, closeAsked: Bool) {
+        get async { (await server.processId, await server.processEnd, await server.closeAsked) }
+    }
+
     // MARK: - Wiring
 
     private func openThread(page limit: Int?) async throws -> (turns: [JSONValue], earlier: String?)? {
