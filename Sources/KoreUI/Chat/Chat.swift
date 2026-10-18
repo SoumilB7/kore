@@ -419,3 +419,17 @@ extension SentAttachment {
         self.init(name: attachment.name, kind: attachment.kind, url: attachment.url, image: image)
     }
 }
+
+extension Chat {
+    /// The transcript's entries as text, one per line: what `KORE_DUMP` and storyline
+    /// `DumpRows` write, so replays compare across builds.
+    package func dumpLines() -> [String] {
+        transcript.entries.map { e in
+            let files = e.attachments.map { "\($0.name):\($0.kind):\($0.thumbnail != nil)" }.joined(separator: ",")
+            // Kinds keep their earlier names, so dumps compare across builds.
+            let kind = e.kind == .answer ? "assistant" : "\(e.kind)"
+            return [kind, e.toolName ?? "", e.text, e.result ?? "", "\(e.done)", "\(e.isError)", files, e.from ?? ""]
+                .joined(separator: " | ").replacingOccurrences(of: "\n", with: "⏎")
+        }
+    }
+}

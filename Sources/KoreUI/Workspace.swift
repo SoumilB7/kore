@@ -32,6 +32,8 @@ package final class ChatTab: Identifiable {
 package final class Workspace {
     package let folder: URL
     package private(set) var tabs: [ChatTab]
+    /// The folder's window, once it's on screen (a storyline host sizes and snapshots it).
+    @ObservationIgnored package weak var window: NSWindow?
     private(set) var activeID: UUID
     /// Every chat the CLIs have for this folder, newest first, archived ones flagged.
     private(set) var chats: [SessionSummary] = []
@@ -99,8 +101,17 @@ package final class Workspace {
         tab.chat = Chat(provider: provider, folder: folder)
     }
 
+    /// Starts a chat of the provider with that id ("claude", "codex") in the active tab, or a new
+    /// tab when the active one has a chat. False for an unknown id.
+    package func start(provider id: String) -> Bool {
+        guard let provider = Registry.provider(id) else { return false }
+        if !activeTab.isEmpty { newTab() }
+        start(provider, in: activeTab)
+        return true
+    }
+
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.
-    func open(_ session: SessionSummary) {
+    package func open(_ session: SessionSummary) {
         if let tab = tab(for: session.id) {
             select(tab)
             return

@@ -6,7 +6,9 @@ import SwiftUI
 /// App-wide state: recent folders and whether the CLI is usable. Each window owns one
 /// folder; there is no multi-folder workspace.
 @MainActor @Observable
-final class AppModel {
+package final class AppModel {
+    /// The app's one model, for a storyline host to open folders through (phase 12).
+    package private(set) static weak var shared: AppModel?
     private static let recentsKey = "recentFolders"
     private static let recentsLimit = 8
 
@@ -22,7 +24,11 @@ final class AppModel {
     init() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.recentsKey) ?? []
         recents = paths.map { URL(fileURLWithPath: $0) }.filter(Self.isDirectory)
+        Self.shared = self
     }
+
+    /// Opens (or focuses) a folder's window, the way a folder from outside the app is.
+    package func openFolder(_ folder: URL) { openFromOutside([folder]) }
 
     func chooseFolder() -> URL? {
         let panel = NSOpenPanel()

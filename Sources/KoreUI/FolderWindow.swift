@@ -94,7 +94,10 @@ struct FolderWindow: View {
         }
         .background(TitleBar { fullScreen.value = $0 })
         .background(WindowReader { window in
-            if let window { UnsavedGuard.install(on: window, for: workspace.value) }
+            if let window {
+                UnsavedGuard.install(on: window, for: workspace.value)
+                workspace.value.window = window
+            }
         })
         // Small minimum: every part has to work as a tile, not just as a full window.
         .frame(minWidth: Layout.Window.minWidth, minHeight: Layout.Window.minHeight)

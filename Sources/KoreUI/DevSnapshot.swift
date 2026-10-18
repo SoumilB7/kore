@@ -163,13 +163,7 @@ enum DevSnapshot {
         let env = ProcessInfo.processInfo.environment
         guard let path = env["KORE_DUMP"] else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + (Double(env["KORE_DUMP_AFTER"] ?? "") ?? 6)) {
-            let lines = (chat()?.transcript.entries ?? []).map { e in
-                let files = e.attachments.map { "\($0.name):\($0.kind):\($0.thumbnail != nil)" }.joined(separator: ",")
-                // Kinds keep their earlier names, so dumps compare across builds.
-                let kind = e.kind == .answer ? "assistant" : "\(e.kind)"
-                return [kind, e.toolName ?? "", e.text, e.result ?? "", "\(e.done)", "\(e.isError)", files, e.from ?? ""]
-                    .joined(separator: " | ").replacingOccurrences(of: "\n", with: "⏎")
-            }
+            let lines = chat()?.dumpLines() ?? []
             try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
             NSApp.terminate(nil)
         }
