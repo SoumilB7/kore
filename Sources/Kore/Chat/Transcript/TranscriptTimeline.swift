@@ -44,12 +44,6 @@ struct TranscriptTimeline: View, Equatable {
 
     private static let end = "transcript-end"
     private static let loadRow = "transcript-load-row"
-    /// The timeline's own coordinate space: where the message menu is placed.
-    nonisolated static let space = "transcript"
-    /// A user message's open action menu, and its button's frame.
-    @StateObject private var menu = Local<(entry: TranscriptStore.Entry, frame: CGRect)?>(nil)
-    /// The menu's laid-out height (one row's until it's measured).
-    @StateObject private var menuHeight = Local(Size.forkMenuRow)
     /// "At the bottom" within this, as in the extension.
     private static let atBottom: CGFloat = 50
     /// This far from the end, a move up without a phase is the reader's, not a pin landing short.
@@ -86,16 +80,12 @@ struct TranscriptTimeline: View, Equatable {
                 .frame(maxWidth: column.maxWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            .overlay(alignment: .topLeading) { messageMenu }
-            .environment(\.messageMenuOpen, menu.value?.entry.id)
-            .coordinateSpace(.named(Self.space))
             .scrollPosition(binding)
             .defaultScrollAnchor(.bottom, for: .alignment)
             .onScrollPhaseChange { old, new, context in
                 gesturing.value = new != .idle
                 if new == .interacting {
                     following.value = false
-                    menu.value = nil
                     // The reader took over: a place still being restored or kept is dropped.
                     restore.value = nil
                     restoreInRow.value = nil
@@ -260,31 +250,6 @@ struct TranscriptTimeline: View, Equatable {
         anchor.value = (id, y)
     }
 
-    /// A message's action menu over the rows: under its button, or above it when it would pass
-    /// the bottom of what's visible and fits above.
-    @ViewBuilder private var messageMenu: some View {
-        if let open = menu.value {
-            ZStack(alignment: .topLeading) {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { menu.value = nil }
-                let height = menuHeight.value
-                let below = open.frame.maxY + Space.menuGap
-                let above = open.frame.minY - Space.menuGap - height
-                let room = visibleHeight.value
-                let y = room > 0 && below + height > room && above >= 0 ? above : below
-                MessageMenu {
-                    menu.value = nil
-                    actions.fork(open.entry)
-                }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { menuHeight.value = $0 }
-                .offset(x: max(0, open.frame.maxX - Size.forkMenu), y: y)
-                .transition(.opacity)
-            }
-            .animation(Motion.menuFade, value: open.entry.id)
-        }
-    }
-
     private var binding: Binding<ScrollPosition> {
         _ = nudge.value
         return Binding(get: { position.value }, set: { position.value = $0 })
@@ -309,8 +274,6 @@ struct TranscriptTimeline: View, Equatable {
                 nudge.value &+= 1
             }
         }
-        let menu = menu
-        actions.messageMenu = { entry, frame in menu.value = (entry, frame) }
         return actions
     }
 

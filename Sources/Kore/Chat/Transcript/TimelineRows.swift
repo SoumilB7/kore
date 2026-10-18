@@ -15,12 +15,12 @@ struct TranscriptActions {
     var reveal: (String) -> Void = { _ in }
     /// Forks the conversation from a user message (its action menu).
     var fork: (TranscriptStore.Entry) -> Void = { _ in }
+    /// Forks the conversation through an answer's turn (its actions), into a new tab.
+    var forkAfter: (TranscriptStore.Entry) -> Void = { _ in }
     /// Loads the conversation before a compaction.
     var loadEarlierConversation: () -> Void = {}
     /// A fork's "Forked from" line: switches to the original chat's tab; nil when there's none.
     var openOriginal: (() -> Void)?
-    /// A user message's action button was pressed: its menu opens under this frame.
-    var messageMenu: (TranscriptStore.Entry, CGRect) -> Void = { _, _ in }
     /// A message row's bottom moved (for its pinned copy).
     var messageMoved: (String, CGFloat) -> Void = { _, _ in }
     var folder: URL?
@@ -39,7 +39,7 @@ struct TimelineRow: View, Equatable {
         } else if case .entry(let entry) = item.row, entry.kind == .mode, entry.modeLead == nil, let mode = entry.mode {
             ModeDivider(mode: mode)
         } else if case .message(let entry, let open, let expanded) = item.row {
-            MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
+            MessageHeader(entry: entry, open: open, expanded: expanded, messageActions: item.actions, actions: actions)
         } else if case .summary(let entry, let expanded) = item.row {
             CompactionSummary(entry: entry, expanded: expanded, actions: actions)
         } else if case .spinner(_, let since, let claude, let word) = item.row {
@@ -51,7 +51,11 @@ struct TimelineRow: View, Equatable {
                 dot: dot, above: item.above, below: item.below,
                 top: rule ? Space.xs : Layout.Timeline.itemPadding, bottom: rule ? 0 : Layout.Timeline.itemPadding
             ) {
-                RowContent(row: item.row, actions: actions)
+                if case .entry(let entry) = item.row, let messageActions = item.actions {
+                    AnswerWithActions(entry: entry, messageActions: messageActions, actions: actions)
+                } else {
+                    RowContent(row: item.row, actions: actions)
+                }
             }
         } else {
             RowContent(row: item.row, actions: actions)
@@ -150,6 +154,8 @@ struct MessageHeader: View {
     /// A long message shown whole.
     var expanded = false
     var place = Place.row
+    /// Its Copy / Fork row (look §11); nil for none (a pinned copy, a queued message).
+    var messageActions: TranscriptStore.MessageActions?
     let actions: TranscriptActions
     /// The text's laid-out lines at the current width. It starts from an estimate, so a long
     /// message is collapsed from its first layout: laid out whole first, it would shrink by many
@@ -159,16 +165,16 @@ struct MessageHeader: View {
     @StateObject private var top = Held(CGFloat(0))
     /// Under the pointer: its action button shows.
     @StateObject private var hovered = Local(false)
-    @Environment(\.messageMenuOpen) private var menuOpen
 
     init(
         entry: TranscriptStore.Entry, open: Bool = true, expanded: Bool = false, place: Place = .row,
-        actions: TranscriptActions
+        messageActions: TranscriptStore.MessageActions? = nil, actions: TranscriptActions
     ) {
         self.entry = entry
         self.open = open
         self.expanded = expanded
         self.place = place
+        self.messageActions = messageActions
         self.actions = actions
         _lines = StateObject(wrappedValue: Local(Self.estimatedLines(entry.text)))
     }
@@ -182,11 +188,16 @@ struct MessageHeader: View {
     }
 
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 0) {
             if entry.kind == .peer {
                 peer
             } else {
                 user
+            }
+            if place == .row, let messageActions {
+                MessageActionsRow(
+                    text: entry.text, shown: messageActions.always || hovered.value, canFork: messageActions.canFork
+                ) { actions.fork(entry) }
             }
         }
         .padding(.vertical, Layout.Timeline.itemPadding)
@@ -258,15 +269,6 @@ struct MessageHeader: View {
                 }
                 .padding(Inset.userBox)
                 .panel(.userBox)
-                .overlay(alignment: .topTrailing) {
-                    // Centred on the box's top-right corner (phase 10 look.md §4).
-                    if place == .row {
-                        MessageActionButton(messageHovered: hovered.value, open: menuOpen == entry.id) { frame in
-                            actions.messageMenu(entry, frame)
-                        }
-                        .offset(x: Size.messageAction / 2, y: -Size.messageAction / 2)
-                    }
-                }
             }
         }
     }
@@ -452,6 +454,58 @@ struct MessageText: View {
                         .allowsHitTesting(false)
                 }
             }
+    }
+}
+
+// MARK: Message actions
+
+/// A turn's final answer with its Copy / Fork row under it (look §11). The hover is its own,
+/// so the pointer crossing an answer redraws this, not the answer's text.
+private struct AnswerWithActions: View {
+    let entry: TranscriptStore.Entry
+    let messageActions: TranscriptStore.MessageActions
+    let actions: TranscriptActions
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RowContent(row: .entry(entry), actions: actions)
+            MessageActionsRow(text: entry.text, shown: messageActions.always || hovered.value, canFork: messageActions.canFork) {
+                actions.forkAfter(entry)
+            }
+        }
+        .onHover { if hovered.value != $0 { hovered.value = $0 } }
+    }
+}
+
+/// Copy and Fork under a message (look §11): a reserved 22pt row, so showing it never moves
+/// anything. Hidden but kept in place until the message is under the pointer (always shown
+/// under the chat's last answer). Nothing here measures or animates while it's hidden.
+struct MessageActionsRow: View {
+    let text: String
+    let shown: Bool
+    let canFork: Bool
+    let fork: () -> Void
+    @StateObject private var copied = Local(false)
+
+    var body: some View {
+        HStack(spacing: Size.MessageActions.gap) {
+            if shown {
+                IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    copied.value = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(Motion.copied))
+                        copied.value = false
+                    }
+                }
+                IconButton(symbol: "arrow.triangle.branch", kind: .mini, font: Chrome.label, help: "Fork", action: fork)
+                    .disabled(!canFork)
+            }
+        }
+        .frame(height: Size.MessageActions.row, alignment: .leading)
+        .padding(.top, Size.MessageActions.top)
     }
 }
 

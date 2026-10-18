@@ -55,6 +55,23 @@ struct ChatView: View {
         .onAppear {
             composerFocused = true
             if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, pending: true) }
+            // KORE_FORK_ANSWER=<n>: fork through the nth answer's turn, the same way.
+            if let n = ProcessInfo.processInfo.environment["KORE_FORK_ANSWER"].flatMap(Int.init), !Self.forkedOnce,
+                !chat.title.hasSuffix(" (fork)")
+            {
+                Self.forkedOnce = true
+                let actions = actions
+                Task { @MainActor in
+                    for _ in 0..<40 {
+                        let answers = chat.transcript.entries.filter { $0.kind == .answer && $0.done }
+                        if answers.indices.contains(n - 1), !chat.controls.models.isEmpty {
+                            actions.forkAfter(answers[n - 1])
+                            return
+                        }
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                }
+            }
             if let n = DevSnapshot.forkMessage, !Self.forkedOnce, !chat.title.hasSuffix(" (fork)") {
                 Self.forkedOnce = true
                 // Test hook: fork from the nth user message once the history and the CLI's
@@ -96,6 +113,11 @@ struct ChatView: View {
         actions.fork = { entry in
             Task {
                 if let start = await chat.forkStart(entry) { openFork(start, entry.text) }
+            }
+        }
+        actions.forkAfter = { entry in
+            Task {
+                if let start = await chat.forkStart(after: entry) { openFork(start, "") }
             }
         }
         actions.loadEarlierConversation = { chat.loadEarlierConversation() }

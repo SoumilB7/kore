@@ -8,8 +8,16 @@ struct IconButton: View {
         case regular
         /// History row actions.
         case small
+        /// A message's Copy / Fork row.
+        case mini
 
-        var size: CGFloat { self == .regular ? Size.iconButton : Size.iconButtonSmall }
+        var size: CGFloat {
+            switch self {
+            case .regular: Size.iconButton
+            case .small: Size.iconButtonSmall
+            case .mini: Size.MessageActions.button
+            }
+        }
     }
 
     let symbol: String
