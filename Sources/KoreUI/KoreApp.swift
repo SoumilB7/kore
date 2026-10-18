@@ -118,17 +118,17 @@ private struct FileCommands: View {
     @FocusedValue(\.workspace) private var workspace
 
     var body: some View {
-        Button("New Tab") { workspace?.newTab() }
+        Button("New Tab") { workspace?.perform(.newTab) }
             .keyboardShortcut("t")
-            .disabled(workspace == nil)
+            .disabled(workspace?.can(.newTab) != true)
 
         // VS Code's keys for moving the active tab.
-        Button("Move Tab Right") { workspace?.moveActive(by: 1) }
+        Button("Move Tab Right") { workspace?.perform(.moveTabRight) }
             .keyboardShortcut(.pageDown, modifiers: [.control, .shift])
-            .disabled(workspace == nil)
-        Button("Move Tab Left") { workspace?.moveActive(by: -1) }
+            .disabled(workspace?.can(.moveTabRight) != true)
+        Button("Move Tab Left") { workspace?.perform(.moveTabLeft) }
             .keyboardShortcut(.pageUp, modifiers: [.control, .shift])
-            .disabled(workspace == nil)
+            .disabled(workspace?.can(.moveTabLeft) != true)
 
         Button("Open Folder…") {
             if let folder = app.chooseFolder() {
@@ -147,19 +147,19 @@ private struct SaveCommands: View {
     @FocusedValue(\.workspace) private var workspace
 
     var body: some View {
-        Button("Save") { workspace?.activeFile?.save() }
+        Button("Save") { workspace?.perform(.save) }
             .keyboardShortcut("s")
-            .disabled(workspace?.activeFile?.isText != true)
-        Button("Save All") { workspace?.saveAll() }
+            .disabled(workspace?.can(.save) != true)
+        Button("Save All") { workspace?.perform(.saveAll) }
             .keyboardShortcut("s", modifiers: [.command, .option])
-            .disabled(workspace?.hasUnsavedFiles != true)
+            .disabled(workspace?.can(.saveAll) != true)
         Divider()
-        Button("Go to File…") { workspace?.quickOpen = .files }
+        Button("Go to File…") { workspace?.perform(.goToFile) }
             .keyboardShortcut("p")
-            .disabled(workspace == nil)
-        Button("Go to Line…") { workspace?.quickOpen = .line }
+            .disabled(workspace?.can(.goToFile) != true)
+        Button("Go to Line…") { workspace?.perform(.goToLine) }
             .keyboardShortcut("g", modifiers: .control)
-            .disabled(workspace?.activeFile?.isText != true)
+            .disabled(workspace?.can(.goToLine) != true)
     }
 }
 
@@ -167,20 +167,12 @@ private struct ExplorerCommands: View {
     @FocusedValue(\.workspace) private var workspace
 
     var body: some View {
-        Button(workspace?.explorerOpen == true && workspace?.sidebar == .explorer ? "Hide Explorer" : "Show Explorer") {
-            guard let workspace else { return }
-            if workspace.explorerOpen, workspace.sidebar == .explorer {
-                workspace.explorerOpen = false
-            } else {
-                workspace.explorerOpen = true
-                workspace.sidebar = .explorer
-            }
-        }
-        .keyboardShortcut("e", modifiers: [.command, .shift])
-        .disabled(workspace == nil)
-        Button("Search") { workspace?.showSearch() }
+        Button(workspace?.showsExplorer == true ? "Hide Explorer" : "Show Explorer") { workspace?.perform(.toggleExplorer) }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(workspace?.can(.toggleExplorer) != true)
+        Button("Search") { workspace?.perform(.search) }
             .keyboardShortcut("f", modifiers: [.command, .shift])
-            .disabled(workspace == nil)
+            .disabled(workspace?.can(.search) != true)
         Divider()
     }
 }
