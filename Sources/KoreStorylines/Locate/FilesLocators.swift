@@ -60,4 +60,32 @@ extension Locator {
             },
             reveal: { app in app.workspace?.storyScrollEditor(toLine: line - 1) })
     }
+
+    /// Quick open's row for a file (⌘P's list, as filtered by what's typed).
+    package static func quickOpenRow(_ path: String) -> Locator {
+        Locator("the quick open row “\(path)”") { app in
+            guard let workspace = app.workspace else { return .failure(LocatorMiss("no workspace")) }
+            guard workspace.storyQuickOpenShown else { return .failure(LocatorMiss("the quick open row “\(path)”: quick open is closed")) }
+            return .success(StoryID.QuickOpen.row(path))
+        }
+    }
+
+    /// Search's result row for a line (1-based) of a file. Waits while the search runs; once it's
+    /// done, a missing hit fails with the hits there are.
+    package static func searchResult(_ path: String, line: Int) -> Locator {
+        let description = "the search result “\(path):\(line)”"
+        return Locator(
+            description,
+            key: { app in
+                guard let workspace = app.workspace else { return .failure(LocatorMiss("no workspace")) }
+                guard workspace.storySearchShown, let search = workspace.storySearch else {
+                    return .failure(LocatorMiss("\(description): Search isn't showing"))
+                }
+                if search.hits.contains(StorySearch.Hit(path: path, line: line)) { return .success(StoryID.Search.result(path, line: line - 1)) }
+                let hits = search.hits.isEmpty ? "none" : search.hits.map(\.description).joined(separator: ", ")
+                return .failure(LocatorMiss("\(description): the results are \(hits)", pending: !search.finished))
+            },
+            reveal: { app in app.workspace?.storyRevealSearchHit(path, line: line) })
+    }
 }
+

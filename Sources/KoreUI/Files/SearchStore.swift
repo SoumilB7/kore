@@ -40,6 +40,8 @@ final class SearchStore {
     var selection: Row?
     /// Bumped to put the caret in the query field (⇧⌘F).
     private(set) var focusRequest = 0
+    /// The query the results are for, once its search has started.
+    @ObservationIgnored private(set) var searched: String?
 
     enum Row: Hashable {
         case file(String)
@@ -84,6 +86,7 @@ final class SearchStore {
         collapsed = []
         selection = nil
         let text = self.text
+        searched = text
         guard !text.isEmpty else {
             outcome = .idle
             return

@@ -210,6 +210,7 @@ struct FindBar: View {
         HStack(alignment: .top, spacing: Space.xs) {
             IconButton(symbol: find.showReplace ? "chevron.down" : "chevron.right", kind: .small, font: Chrome.glyphTreeChevron,
                        help: "Replace") { find.showReplace.toggle() }
+                .storyID(StoryID.Editor.Find.toggleReplace)
             VStack(spacing: Space.xs) {
                 HStack(spacing: Space.xs) {
                     HStack(spacing: Space.xxs) {
@@ -257,11 +258,13 @@ struct FindBar: View {
                         IconButton(symbol: "arrow.turn.down.right", kind: .small, font: Chrome.label, help: "Replace (⇧⌘1)") {
                             find.replaceOne()
                         }
+                        .storyID(StoryID.Editor.Find.replace)
                         .keyboardShortcut("1", modifiers: [.command, .shift])
                         .disabled(find.current == nil)
                         IconButton(symbol: "text.badge.checkmark", kind: .small, font: Chrome.label, help: "Replace All (⌥⌘↩)") {
                             find.replaceAll()
                         }
+                        .storyID(StoryID.Editor.Find.replaceAll)
                         .keyboardShortcut(.return, modifiers: [.command, .option])
                         .disabled(find.matches.isEmpty)
                         Spacer(minLength: 0)
@@ -345,5 +348,6 @@ struct FindTicks: View {
         .frame(width: Size.Editor.findTick.width)
         .padding(.trailing, Size.Editor.findTickInset)
         .allowsHitTesting(false)
+        .storyID(StoryID.Editor.Find.ticks)
     }
 }

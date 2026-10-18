@@ -95,12 +95,18 @@ package struct WaitIdle: Step {
 package struct Expect: Step {
     let what: String
     let check: @MainActor (StoryContext) throws -> Bool
+    /// What the model holds instead, for the failure's message.
+    let found: (@MainActor (StoryContext) -> String?)?
     package var label: String { "Expect \(what)" }
     package let timeout: Duration?
 
-    package init(_ what: String, timeout: Duration? = nil, _ check: @escaping @MainActor (StoryContext) throws -> Bool) {
+    package init(
+        _ what: String, timeout: Duration? = nil, found: (@MainActor (StoryContext) -> String?)? = nil,
+        _ check: @escaping @MainActor (StoryContext) throws -> Bool
+    ) {
         self.what = what
         self.timeout = timeout
+        self.found = found
         self.check = check
     }
 
@@ -108,7 +114,7 @@ package struct Expect: Step {
         do {
             try await story.until(what) { try check(story) }
         } catch StoryFailure.timedOut {
-            throw StoryFailure.expectation(what)
+            throw StoryFailure.expectation(what + (found?(story).map { " (found \($0))" } ?? ""))
         }
     }
 }

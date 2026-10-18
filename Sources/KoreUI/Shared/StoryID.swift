@@ -33,7 +33,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
     package enum Part: String, Sendable, CaseIterable {
         case fork, copy, stop, close, chevron, open, cancel, allow, always, deny, approveplan, keepplanning, archive
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
-        case autoaccept
+        case autoaccept, replaceall, ticks
     }
 }
 
@@ -128,6 +128,12 @@ extension StoryID {
             package static let next = StoryID(.editor, "find").part(.next)
             package static let previous = StoryID(.editor, "find").part(.previous)
             package static let close = StoryID(.editor, "find").part(.close)
+            /// The chevron that shows or hides the replace row.
+            package static let toggleReplace = StoryID(.editor, "find").part(.toggle)
+            package static let replace = StoryID(.editor, "find").part(.replace)
+            package static let replaceAll = StoryID(.editor, "find").part(.replaceall)
+            /// The matches' ticks beside the scroller.
+            package static let ticks = StoryID(.editor, "find").part(.ticks)
         }
 
         package enum Status {
@@ -181,6 +187,7 @@ extension StoryID {
             Explorer.newfile, Explorer.newfolder, Explorer.refresh, Explorer.collapse, Explorer.namefield,
             Explorer.filesTab, Explorer.searchTab,
             Editor.Find.field, Editor.Find.replaceField, Editor.Find.next, Editor.Find.previous, Editor.Find.close,
+            Editor.Find.toggleReplace, Editor.Find.replace, Editor.Find.replaceAll, Editor.Find.ticks,
             Editor.Status.indent, Editor.Status.lineEndings, Editor.Status.language,
             Editor.Notice.reload, Editor.Notice.keep, Editor.Notice.compare, Editor.rendererToggle,
             QuickOpen.field, Search.field, Search.include, Search.exclude, Changes.done, Viewer.close, Viewer.add,
