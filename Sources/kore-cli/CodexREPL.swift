@@ -95,7 +95,10 @@ func runCodex(_ options: CodexSession.Options, debug: Bool) async {
                 out("\(dim)\(line == "/plan" ? "plan mode on" : "plan mode off") (from next turn)\(reset)\n> ")
             } else if line.hasPrefix("/model ") {
                 await session.setModel(String(line.dropFirst(7)))
-                out("\(dim)model → \(line.dropFirst(7)) (from next turn)\(reset)\n> ")
+                out("\(dim)model → \(line.dropFirst(7)) (from next turn or /compact)\(reset)\n> ")
+            } else if line == "/compact" {
+                try await session.compact()
+                out("\(dim)compacting on \(await session.threadModel ?? "?")\(reset)\n")
             } else if !line.isEmpty {
                 try await session.send(line)
             }

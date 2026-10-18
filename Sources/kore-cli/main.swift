@@ -7,7 +7,7 @@
 // Claude modes: default, acceptEdits, plan, auto, dontAsk, bypassPermissions
 // Codex modes:  readOnly, askForApproval, approveForMe, fullAccess (+ /plan, /default)
 //
-// Type a message to send it. /interrupt, /mode <mode>, /model <name>, /models (codex), /quit.
+// Type a message to send it. /interrupt, /mode <mode>, /model <name>, /models (codex), /compact (codex), /quit.
 // While a permission prompt is open, the next line answers it.
 
 import Foundation
