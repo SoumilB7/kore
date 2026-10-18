@@ -18,6 +18,8 @@ struct TranscriptTimeline: View, Equatable {
     /// re-renders once, when the position has to be pushed back (after a fold).
     @StateObject private var position = Held(ScrollPosition(edge: .bottom))
     @StateObject private var nudge = Local(0)
+    /// A scroll gesture is under way (from its phase): the geometry rules leave following to it.
+    @StateObject private var gesturing = Held(false)
     /// The last content height and offset, to undo a fold's shrink above the reader.
     @StateObject private var geometry = Held((height: CGFloat(0), offset: CGFloat(0)))
     @StateObject private var pendingFold = Held(false)
@@ -50,6 +52,8 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var menuHeight = Local(Size.forkMenuRow)
     /// "At the bottom" within this, as in the extension.
     private static let atBottom: CGFloat = 50
+    /// This far from the end, a move up without a phase is the reader's, not a pin landing short.
+    private static let leftEnd: CGFloat = 150
     /// After a send, new content glides into view for this long.
     private static let glide: TimeInterval = 2
 
@@ -88,6 +92,7 @@ struct TranscriptTimeline: View, Equatable {
             .scrollPosition(binding)
             .defaultScrollAnchor(.bottom, for: .alignment)
             .onScrollPhaseChange { old, new, context in
+                gesturing.value = new != .idle
                 if new == .interacting {
                     following.value = false
                     menu.value = nil
@@ -143,11 +148,23 @@ struct TranscriptTimeline: View, Equatable {
                 // Moved up, away from the end, with no new content: the scroll bar, Page Up or a
                 // programmatic scroll, none of which has a scroll phase. Stop following, or each
                 // row measured on the way would pull the view back to the end. Only once there's
-                // more than a screen: a shorter chat sits at the bottom and moves as it grows.
+                // more than a screen (a shorter chat sits at the bottom and moves as it grows), and
+                // only well clear of the end: our own pin aims at estimated row heights and can
+                // land a little above it.
                 if following.value, height == geometry.value.height, height > new[2] + Self.atBottom,
-                    offset < geometry.value.offset - 1, offset + new[2] < height - Self.atBottom
+                    offset < geometry.value.offset - 1, offset + new[2] < height - Self.leftEnd
                 {
                     following.value = false
+                }
+                // And back: moved down to within the slack of the end the same way (the scroll bar,
+                // Page Down, End) starts following again, as a phased scroll ending there does,
+                // even while a reply streams in. Only between gestures, and only on a move down:
+                // content arriving under a reader held just above the end doesn't move them, so
+                // it doesn't pull them along.
+                if !following.value, !gesturing.value, offset > geometry.value.offset + 1,
+                    offset + new[2] >= height - Self.atBottom
+                {
+                    following.value = true
                 }
                 // Rows measured after they were placed change the height: while following, stay
                 // pinned to the end through layout as well as new content (T3 Code does both).
