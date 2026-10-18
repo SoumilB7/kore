@@ -496,11 +496,27 @@ final class TranscriptStore {
         endThinking()
         settleAll()
         pendingApprovals.removeAll()
-        // Its text has stopped streaming.
-        for i in entries.indices.reversed() where entries[i].turn == id && entries[i].kind == .answer { entries[i].done = true }
+        // Its text has stopped streaming; after a stop, calls and agents the CLI never closed
+        // (Codex sends nothing more for them) end as stopped. Replayed turns too.
+        let interrupted = outcome == .interrupted
+        for i in (turnIndex(id) ?? entries.count)..<entries.count where entries[i].turn == id {
+            switch entries[i].kind {
+            case .answer:
+                entries[i].done = true
+            case .tool where interrupted && !entries[i].done:
+                entries[i].done = true
+                entries[i].stopped = true
+            case .agent where interrupted && entries[i].agent?.status == .running:
+                entries[i].agent?.status = .stopped
+                if let agent = entries[i].agent?.id { stopLane(agent) }
+            default:
+                break
+            }
+        }
         turn.finished = true
-        // A replayed turn's outcome isn't announced again (replay never showed it).
-        turn.outcome = batching ? .completed : outcome
+        // A replayed turn's outcome isn't announced again (replay never showed it), except a
+        // stop, so a stopped turn reads the same as it did live ("· Interrupted").
+        turn.outcome = batching && outcome != .interrupted ? .completed : outcome
         // A replayed turn without the CLI's own measure has none: it reads "N previous messages".
         turn.duration = duration ?? (batching ? nil : date.timeIntervalSince(turn.startedAt))
         let hadAnswer = turn.answerFrom != nil
@@ -809,10 +825,26 @@ final class TranscriptStore {
         }
     }
 
-    /// The turn was stopped while the call ran.
+    /// An agent's open calls end as stopped, and its own agents with them.
+    private func stopLane(_ agent: String) {
+        guard var lane = lanes[agent] else { return }
+        for i in lane.indices {
+            if lane[i].kind == .tool, !lane[i].done {
+                lane[i].done = true
+                lane[i].stopped = true
+            }
+            if lane[i].agent?.status == .running {
+                lane[i].agent?.status = .stopped
+                if let child = lane[i].agent?.id { stopLane(child) }
+            }
+        }
+        lanes[agent] = lane
+        agentsVersion &+= 1
+    }
+
+    /// The turn was stopped while the call ran; what it printed before stays.
     func toolStopped(id: String) {
         update(tool: id) {
-            $0.result = nil
             $0.done = true
             $0.isError = false
             $0.stopped = true

@@ -683,10 +683,15 @@ final class ClaudeTranslator {
             }
         }
         var lastAnswer: Date?
+        // The turn was stopped: the CLI wrote its marker after the cut-off call.
+        var stopped = false
         func close() {
             guard turn != nil else { return }
-            finishTurn(.completed, duration: lastAnswer.map { .seconds(max(0, $0.timeIntervalSince(turnStart))) })
+            finishTurn(
+                stopped ? .interrupted : .completed,
+                duration: lastAnswer.map { .seconds(max(0, $0.timeIntervalSince(turnStart))) })
             lastAnswer = nil
+            stopped = false
         }
         for (index, message) in messages.enumerated() {
             let time = Self.date(message["timestamp"]) ?? .now
@@ -726,6 +731,11 @@ final class ClaudeTranslator {
                 }
                 let content = message["message"]?["content"]
                 let prompt = Self.promptText(content)
+                if let prompt, Self.stopMarkers.contains(prompt) {
+                    // Not something the user wrote: the turn ends as stopped, as it did live.
+                    stopped = true
+                    continue
+                }
                 let attachments = Self.attachments(content)
                 if prompt != nil || !attachments.isEmpty {
                     close()
@@ -743,6 +753,9 @@ final class ClaudeTranslator {
         if let used = contextUsed { reportContext(used, at: replayTime) }
         return take().events
     }
+
+    /// What the CLI writes into a transcript, as a user message, when a turn is stopped.
+    static let stopMarkers: Set<String> = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"]
 
     static func origin(_ turnOrigin: String?) -> TurnOrigin? {
         switch turnOrigin {

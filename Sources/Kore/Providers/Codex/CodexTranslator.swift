@@ -237,6 +237,15 @@ final class CodexTranslator {
             }
         case "commandExecution":
             let aggregated = item.raw["aggregatedOutput"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if failed, item.exitCode == -1 {
+                // Killed by Stop (a thread read back gives these; live, nothing comes): stopped,
+                // with what it printed before.
+                if !streamedOutput.contains(item.id), !aggregated.isEmpty {
+                    out.append(.toolOutput(id: item.id, aggregated, agent: agent))
+                }
+                out.append(.toolStopped(id: item.id, agent: agent))
+                break
+            }
             let output = streamedOutput.contains(item.id) ? nil : (!aggregated.isEmpty ? aggregated : "exit \(item.exitCode ?? 0)")
             let isError = (item.exitCode != nil && item.exitCode != 0) || failed
             out.append(.toolFinished(id: item.id, output: output, isError: isError, agent: agent))
