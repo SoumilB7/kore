@@ -51,6 +51,13 @@ struct FolderWindow: View {
             if let session = DevSnapshot.resume { workspace.value.open(session) }
             DevSnapshot.captureIfRequested()
         }
+        // The folder's chats come from the CLIs; re-read them when coming back to Kore, so chats
+        // made elsewhere (VS Code, a terminal) show up. Dev runs that start or resume a chat
+        // keep their single tab.
+        .task { if !DevSnapshot.singleTab { await workspace.value.refresh() } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if !DevSnapshot.singleTab { Task { await workspace.value.refresh() } }
+        }
         .onDisappear { workspace.value.closeAll() }
     }
 }

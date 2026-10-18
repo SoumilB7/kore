@@ -31,6 +31,8 @@ enum DevSnapshot {
     static let attach = ProcessInfo.processInfo.environment["KORE_ATTACH"].map {
         $0.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
     }
+    /// Runs that start or resume a chat keep one tab instead of loading the folder's chats.
+    static var singleTab: Bool { startProvider != nil || resume != nil }
     private static let output = ProcessInfo.processInfo.environment["KORE_SNAPSHOT"]
     private static let clicks: [NSPoint] = (ProcessInfo.processInfo.environment["KORE_CLICK"] ?? "")
         .split(separator: ";").compactMap { pair in
@@ -95,6 +97,10 @@ enum DevSnapshot {
                 frame.cacheDisplay(in: frame.bounds, to: rep)
                 let path = index == 0 ? output : output.replacingOccurrences(of: ".png", with: "-\(index).png")
                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                // Where it sits in KORE_CLICK coordinates (from the folder window's top-left).
+                let origin = windows[0].frame
+                FileHandle.standardError.write(Data(
+                    "WINDOW \(index): x \(window.frame.minX - origin.minX) y \(origin.maxY - window.frame.maxY) size \(window.frame.size)\n".utf8))
             }
             exit(0)
         }
@@ -105,8 +111,11 @@ enum DevSnapshot {
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }),
             let screenHeight = NSScreen.screens.first?.frame.height
         else { return }
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        // Only when needed: re-keying the window would close an open popover.
+        if !NSApp.isActive {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             let target = CGPoint(x: window.frame.minX + point.x, y: screenHeight - (window.frame.maxY - point.y))
             let original = CGEvent(source: nil)?.location

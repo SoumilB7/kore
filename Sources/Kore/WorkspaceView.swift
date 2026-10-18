@@ -26,11 +26,31 @@ struct TabBar: View {
     /// Room for the traffic lights; little in full screen, where they're hidden.
     let leadingInset: CGFloat
     private let tabHeight: CGFloat = 30
+    /// Width the tab strip got; tabs share it (180 down to 90 each), then the strip scrolls.
+    @StateObject private var stripWidth = Local<CGFloat>(0)
+
+    private var tabWidth: CGFloat {
+        let count = CGFloat(workspace.tabs.count)
+        return min(180, max(90, (stripWidth.value - 4 * (count - 1)) / count))
+    }
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(workspace.tabs) { tab in
-                TabItem(tab: tab, workspace: workspace, height: tabHeight)
+            ScrollViewReader { scroller in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(workspace.tabs) { tab in
+                            TabItem(tab: tab, workspace: workspace, height: tabHeight).frame(width: tabWidth)
+                        }
+                    }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                // Never wider than the tabs at full size, so the rest of the row still drags the window.
+                .frame(maxWidth: CGFloat(workspace.tabs.count) * 184)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stripWidth.value = $0 }
+                .onChange(of: workspace.activeID) { _, id in
+                    withAnimation(.easeOut(duration: 0.15)) { scroller.scrollTo(id) }
+                }
             }
             NewTabButton(size: tabHeight) { workspace.newTab() }
             Spacer(minLength: 12)
@@ -103,8 +123,7 @@ private struct TabItem: View {
             .help("Close tab")
             .padding(.trailing, 6)
         }
-        // Up to 180 like browser tabs, shrinking when many are open; titles truncate.
-        .frame(minWidth: 90, maxWidth: 180)
+        // Width set by the tab bar (180 down to 90, like browser tabs); titles truncate.
         .frame(height: height)
         .background(
             isActive ? Theme.surface : (hovered.value ? Theme.surface.opacity(0.5) : .clear),
@@ -152,7 +171,8 @@ private struct NewTabButton: View {
 
 // MARK: - History
 
-/// The clock at the end of the tab bar: this folder's past chats from both CLIs.
+/// The clock at the end of the tab bar: every chat the CLIs have for this folder, where chats
+/// are opened, archived and brought back.
 private struct HistoryButton: View {
     let workspace: Workspace
     let size: CGFloat
@@ -174,38 +194,25 @@ private struct HistoryButton: View {
         .onHover { hovered.value = $0 }
         .help("Chats in this folder")
         .popover(isPresented: $showing.value, arrowEdge: .bottom) {
-            HistoryPanel(folder: workspace.folder) { session in
-                showing.value = false
-                workspace.open(session)
-            }
+            HistoryPanel(workspace: workspace) { showing.value = false }
         }
     }
 }
 
-@MainActor @Observable
-private final class HistoryModel {
-    var sessions: [SessionSummary] = []
-    var loadingCodex = true
-
-    func load(_ folder: URL) async {
-        let claude = await Task.detached { ClaudeHistory.sessions(in: folder) }.value
-        sessions = claude.sorted { $0.updated > $1.updated }
-        let codex = (try? await CodexHistory.threads(in: folder)) ?? []
-        sessions = (claude + codex).sorted { $0.updated > $1.updated }
-        loadingCodex = false
-    }
-}
-
 private struct HistoryPanel: View {
-    let folder: URL
-    let open: (SessionSummary) -> Void
-    @StateObject private var model = Local(HistoryModel())
+    let workspace: Workspace
+    let dismiss: () -> Void
     @StateObject private var query = Local("")
+    @StateObject private var showArchived = Local(false)
 
     private var matches: [SessionSummary] {
         let q = query.value.trimmingCharacters(in: .whitespaces).lowercased()
-        return q.isEmpty ? model.value.sessions : model.value.sessions.filter { $0.title.lowercased().contains(q) }
+        return workspace.chats.filter { chat in
+            chat.archived == showArchived.value && (q.isEmpty || chat.title.lowercased().contains(q))
+        }
     }
+
+    private var archivedCount: Int { workspace.chats.count { $0.archived } }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -213,9 +220,25 @@ private struct HistoryPanel: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.tertiary)
-                TextField("Search chats…", text: $query.value)
+                TextField(showArchived.value ? "Search archived…" : "Search chats…", text: $query.value)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
+                Button {
+                    showArchived.value.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "archivebox")
+                        if archivedCount > 0 { Text("\(archivedCount)") }
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(showArchived.value ? Theme.text : Theme.tertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(showArchived.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: 6))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(showArchived.value ? "Show chats" : "Show archived chats")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -223,8 +246,17 @@ private struct HistoryPanel: View {
 
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    ForEach(matches) { session in
-                        HistoryRow(session: session) { open(session) }
+                    ForEach(matches) { chat in
+                        HistoryRow(session: chat) {
+                            dismiss()
+                            if chat.archived {
+                                Task { await workspace.unarchive(chat) }
+                            } else {
+                                workspace.open(chat)
+                            }
+                        } toggleArchive: {
+                            Task { chat.archived ? await workspace.unarchive(chat) : await workspace.archive(chat) }
+                        }
                     }
                 }
             }
@@ -232,7 +264,7 @@ private struct HistoryPanel: View {
             .fixedSize(horizontal: false, vertical: true)
 
             if matches.isEmpty {
-                Text(model.value.loadingCodex ? "Loading…" : "No chats yet")
+                Text(!workspace.loaded ? "Loading…" : showArchived.value ? "No archived chats" : "No chats yet")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.tertiary)
                     .padding(.vertical, 12)
@@ -241,34 +273,52 @@ private struct HistoryPanel: View {
         .padding(10)
         .frame(width: 380)
         .presentationBackground(Theme.surface)
-        .task { await model.value.load(folder) }
+        .task { await workspace.refresh() }
     }
 }
 
 private struct HistoryRow: View {
     let session: SessionSummary
     let action: () -> Void
+    let toggleArchive: () -> Void
     @StateObject private var hovered = Local(false)
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                ProviderLogo(provider: session.agent == .claude ? .claude : .codex, size: 13)
-                Text(session.title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                Spacer(minLength: 12)
-                Text(Self.age(of: session.updated))
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.tertiary)
+        HStack(spacing: 0) {
+            Button(action: action) {
+                HStack(spacing: 8) {
+                    ProviderLogo(provider: session.agent == .claude ? .claude : .codex, size: 13)
+                    Text(session.title)
+                        .font(.system(size: 13))
+                        .foregroundStyle(session.archived ? Theme.secondary : Theme.text)
+                        .lineLimit(1)
+                    Spacer(minLength: 12)
+                    if !hovered.value {
+                        Text(Self.age(of: session.updated))
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.tertiary)
+                    }
+                }
+                .padding(.leading, 10)
+                .padding(.trailing, hovered.value ? 4 : 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(hovered.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(RoundedRectangle(cornerRadius: 7))
+            .buttonStyle(.plain)
+            if hovered.value {
+                Button(action: toggleArchive) {
+                    Image(systemName: session.archived ? "tray.and.arrow.up" : "archivebox")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondary)
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(session.archived ? "Unarchive" : "Archive")
+                .padding(.trailing, 4)
+            }
         }
-        .buttonStyle(.plain)
+        .background(hovered.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: 7))
         .onHover { hovered.value = $0 }
     }
 
