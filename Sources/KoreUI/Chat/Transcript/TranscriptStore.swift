@@ -976,6 +976,11 @@ final class TranscriptStore {
             if let asked = change.previous { refused(asked: asked, kept: change.mode) }
             return
         }
+        // A new chat's first turn opens before the CLI reports its mode: that's the mode the
+        // turn started in.
+        if change.previous == nil || change.source == .session, let current, turns[current]?.startMode == nil {
+            turns[current]?.startMode = effectiveMode
+        }
         // The first mode a chat learns isn't a change.
         guard change.previous != nil else { return }
         marked(change.source, from: before ?? change.previous, to: effectiveMode)
