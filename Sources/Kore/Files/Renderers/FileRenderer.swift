@@ -82,6 +82,7 @@ struct RendererContext {
     static let all: [any FileRenderer.Type] = [
         MarkdownRenderer.self,
         DelimitedRenderer.self,
+        JSONRenderer.self,
     ]
 
     static func renderer(for file: FileInfo) -> (any FileRenderer.Type)? {
