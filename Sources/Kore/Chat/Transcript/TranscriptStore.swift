@@ -308,6 +308,8 @@ final class TranscriptStore {
     static let drawInterval: TimeInterval = 1.0 / 30
     /// Pending approvals of this chat: id → it's a question (AskUserQuestion, Codex user input).
     @ObservationIgnored private var pendingApprovals: [String: Bool] = [:]
+    /// A compaction is running (the live row says "Compacting…").
+    @ObservationIgnored private var compactingNow = false
     /// The most recently started turn, for `turnChanges()`.
     @ObservationIgnored private var latestTurn: String?
 
@@ -387,7 +389,6 @@ final class TranscriptStore {
         if hidden != hiddenTurns { hiddenTurns = hidden }
     }
 
-    @ObservationIgnored private var compactingNow = false
     /// The conversation before a compaction is being read.
     func startLoadingEarlier() {
         loadingEarlier = true
@@ -424,7 +425,6 @@ final class TranscriptStore {
         earlierAvailable = available
     }
 
-    /// "Conversation compacted · 14:32" above the summary that follows.
     /// A compaction is running: the live row says "Compacting…" (look §9).
     func compacting(_ on: Bool) {
         guard compactingNow != on else { return }
@@ -432,6 +432,7 @@ final class TranscriptStore {
         rebuild()
     }
 
+    /// "Conversation compacted · 14:32" above the summary that follows.
     func compacted(at date: Date) {
         append(Entry(kind: .divider, text: "Conversation compacted · " + Self.time.string(from: date)))
     }
