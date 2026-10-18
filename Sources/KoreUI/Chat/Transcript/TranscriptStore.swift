@@ -355,6 +355,9 @@ final class TranscriptStore {
     @ObservationIgnored private var latestTurn: String?
 
     @ObservationIgnored private(set) var entries: [Entry] = []
+    /// Scrolls the timeline to a row by its id: set by the timeline for storylines only
+    /// (`StoryTranscript.show`).
+    @ObservationIgnored var storyScroll: ((String) -> Void)?
     @ObservationIgnored private var position: [UUID: Int] = [:]
     @ObservationIgnored private var turns: [String: Turn] = [:]
     @ObservationIgnored private var current: String?

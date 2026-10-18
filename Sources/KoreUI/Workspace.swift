@@ -41,7 +41,7 @@ package final class Workspace {
     private var refreshing: Task<Void, Never>?
     /// The explorer's files; made when the explorer first opens or a file first shows.
     private(set) var files: FilesStore?
-    var explorerOpen = false {
+    package var explorerOpen = false {
         didSet {
             if explorerOpen { _ = filesStore() }
             saveExplorer()

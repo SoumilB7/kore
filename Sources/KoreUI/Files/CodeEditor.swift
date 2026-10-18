@@ -710,6 +710,48 @@ final class GutterView: NSRulerView {
         NSColor(Theme.background).setFill()
         dirtyRect.fill()
         drawHashMarksAndLabels(in: dirtyRect)
+        if StoryHost.installed { MainActor.assumeIsolated { registerChevrons() } }
+    }
+
+    /// Storylines: each foldable line on screen, registered by line (`editor.gutter.fold[n]`)
+    /// with its chevron's box and the fold it toggles, whether or not the chevron is drawn.
+    private var storyChevrons: [Int: StoryRegistry.Token] = [:]
+
+    @MainActor private func registerChevrons() {
+        guard let controller, let layout = controller.textView.layoutManager, let container = controller.textView.textContainer
+        else { return }
+        let text = controller.textView
+        let glyphs = layout.glyphRange(forBoundingRect: text.visibleRect, in: container)
+        let chars = layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let lines = controller.lines
+        var shown = Set<Int>()
+        var line = lines.line(at: chars.location)
+        let last = lines.line(at: NSMaxRange(chars))
+        while line <= last {
+            if let fold = controller.hiddenFold(line: line) {
+                line = lines.line(at: NSMaxRange(fold)) + 1
+                continue
+            }
+            if controller.regions.end(of: line) != nil || controller.fold(startingOn: line) != nil { shown.insert(line) }
+            line += 1
+        }
+        for (line, token) in storyChevrons where !shown.contains(line) {
+            StoryRegistry.unregister(token)
+            storyChevrons[line] = nil
+        }
+        for line in shown where storyChevrons[line] == nil {
+            storyChevrons[line] = StoryRegistry.register(
+                StoryID.Editor.gutterFold(line).raw, in: self,
+                rect: { [weak self] in MainActor.assumeIsolated { self?.chevronBox(line) } },
+                press: { [weak self] in self?.controller?.toggleFold(line: line) })
+        }
+    }
+
+    /// The chevron's box on a line: the trailing space left of the change bars.
+    @MainActor private func chevronBox(_ line: Int) -> NSRect? {
+        guard let controller, let top = lineTop(line) else { return nil }
+        let box = Size.Editor.gutterTrailing - Size.Editor.changeBar
+        return NSRect(x: ruleThickness - Size.Editor.gutterTrailing, y: top, width: box, height: controller.lineHeight)
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
@@ -908,6 +950,8 @@ final class EditorTextView: NSTextView {
     /// The " ⋯ " chips after folded lines, and where they are (a click opens the fold).
     private let foldLayer = CALayer()
     private var foldChips: [(rect: NSRect, fold: NSRange)] = []
+    /// Storylines: the chips' registrations (`editor.foldchip[n]`), placed again with them.
+    private var storyChips: [StoryRegistry.Token] = []
 
     private func installDecorations(in host: CALayer) {
         guard lineLayer.superlayer !== host else { return }
@@ -972,6 +1016,19 @@ final class EditorTextView: NSTextView {
             chip.contentsScale = window?.backingScaleFactor ?? 2
             foldLayer.addSublayer(chip)
             foldChips.append((frame, fold))
+        }
+        if StoryHost.installed { MainActor.assumeIsolated { registerChips() } }
+    }
+
+    @MainActor private func registerChips() {
+        storyChips.forEach(StoryRegistry.unregister)
+        storyChips = foldChips.compactMap { chip in
+            guard let controller else { return nil }
+            let line = controller.lines.line(at: chip.fold.location)
+            let fold = chip.fold
+            return StoryRegistry.register(
+                StoryID.Editor.foldChip(line).raw, in: self, rect: { chip.rect },
+                press: { [weak self] in self?.controller?.unfold(fold) })
         }
     }
 

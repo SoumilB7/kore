@@ -268,5 +268,8 @@ package struct StoryAnchor: View {
 
 extension NSView {
     /// The AppKit side: the editor's text view, and the gutter's and fold chips' elements.
-    package func setStoryID(_ id: StoryID) { setAccessibilityIdentifier(id.raw) }
+    package func setStoryID(_ id: StoryID) {
+        setAccessibilityIdentifier(id.raw)
+        if StoryHost.installed { registerStory(id.raw) }
+    }
 }

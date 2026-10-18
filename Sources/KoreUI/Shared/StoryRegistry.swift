@@ -37,6 +37,9 @@ package enum StoryRegistry {
         }
 
         package var window: NSWindow? { view?.window }
+        /// The view that registered: the registrar behind a SwiftUI element, or the AppKit view
+        /// that draws the part.
+        package var registeredView: NSView? { view }
 
         /// Where it is, in its window's base coordinates (what `NSEvent.locationInWindow` uses);
         /// nil once the view has left its window or the part isn't drawn.
@@ -87,10 +90,26 @@ package enum StoryRegistry {
         }
     }
 
+    /// What each AppKit view registered as a whole, so a new name replaces the old one.
+    private static var wholeViews: [ObjectIdentifier: Token] = [:]
+
+    fileprivate static func registerWhole(_ view: NSView, _ id: String, press: (@MainActor () -> Void)?) {
+        if let old = wholeViews[ObjectIdentifier(view)] { unregister(old) }
+        wholeViews[ObjectIdentifier(view)] = register(id, in: view, press: press)
+    }
+
     fileprivate static func update(_ token: Token, press: (@MainActor () -> Void)?) {
         for list in entries.values {
             if let entry = list.first(where: { $0.token == token }) { entry.press = press; return }
         }
+    }
+}
+
+extension NSView {
+    /// Registers this AppKit view as a whole (the editor's text view) under `raw`, replacing
+    /// what it registered before. Storyline hosts only: callers check `StoryHost.installed`.
+    @MainActor package func registerStory(_ raw: String, press: (@MainActor () -> Void)? = nil) {
+        StoryRegistry.registerWhole(self, raw, press: press)
     }
 }
 

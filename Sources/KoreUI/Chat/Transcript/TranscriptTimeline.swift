@@ -168,6 +168,12 @@ struct TranscriptTimeline: View, Equatable {
             .onChange(of: store.folded?.seq) { pendingFold.value = true }
             .onChange(of: store.tail, initial: true) { follow(proxy) }
             .onAppear {
+                if StoryHost.installed {
+                    store.storyScroll = { id in
+                        following.value = false
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                }
                 restore.value = store.savedScroll
                 lastSend.value = store.sentAt
                 DevSnapshot.earlier { load in
