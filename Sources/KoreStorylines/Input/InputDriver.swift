@@ -361,6 +361,9 @@ package final class InputDriver {
     }
 }
 
+/// Finished with its storyline, pass or fail: the cursor and the front app go back.
+extension InputDriver: StoryFinishing {}
+
 extension StoryContext {
     /// This storyline's input driver, made on first use (real input only with `--real-input`).
     package var input: InputDriver {

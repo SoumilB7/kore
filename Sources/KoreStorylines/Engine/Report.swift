@@ -18,6 +18,8 @@ package struct RunReport: Codable {
         /// Files written for this storyline: the failure snapshot, the event log, the rows.
         package var files: [String] = []
         package var passed: Bool { steps.allSatisfy { $0.outcome != .fail } }
+        /// Not run at all (a `realinput` storyline without `--real-input`).
+        package var skipped: Bool { steps.allSatisfy { $0.outcome == .skip } }
     }
 
     package var started = Date()
@@ -28,7 +30,7 @@ package struct RunReport: Codable {
         var lines: [String] = []
         for story in stories {
             let name = story.variant.isEmpty ? story.name : "\(story.name) [\(story.variant)]"
-            lines.append("\(story.passed ? "PASS" : "FAIL") \(name)  \(story.ms) ms")
+            lines.append("\(story.skipped ? "SKIP" : story.passed ? "PASS" : "FAIL") \(name)  \(story.ms) ms")
             for step in story.steps {
                 let mark = switch step.outcome { case .pass: "  ✓"; case .fail: "  ✗"; case .skip: "  ·" }
                 lines.append("\(mark) \(step.label)  \(step.ms) ms" + (step.error.map { "\n      \($0)" } ?? ""))
@@ -36,7 +38,8 @@ package struct RunReport: Codable {
             for file in story.files { lines.append("    → \(file)") }
         }
         let failed = stories.filter { !$0.passed }.count
-        lines.append("\(stories.count - failed) passed, \(failed) failed")
+        let skipped = stories.filter(\.skipped).count
+        lines.append("\(stories.count - failed - skipped) passed, \(failed) failed" + (skipped > 0 ? ", \(skipped) skipped" : ""))
         return lines.joined(separator: "\n")
     }
 

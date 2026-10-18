@@ -3,7 +3,7 @@ class ResumeStoryline: Storyline {
     override class var isFamily: Bool { self == ResumeStoryline.self }
     /// The `--replay` name of the session.
     class var fixture: String { "" }
-    override class var needs: Needs { Needs(folder: .replay(fixture)) }
+    override class var needs: Needs { Needs(folder: .replay(fixture), cli: .real) }
 
     override func steps() -> [any Step] {
         [

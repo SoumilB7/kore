@@ -58,6 +58,12 @@ package final class StoryContext {
     }
 
     private var stashed: [ObjectIdentifier: AnyObject] = [:]
+
+    /// Lets stashed objects put back what they changed (the cursor, the front app), pass or fail.
+    func finish() {
+        for object in stashed.values { (object as? StoryFinishing)?.finish() }
+        stashed = [:]
+    }
     private let waits: Waits
     private let started = ContinuousClock.now
 
@@ -108,4 +114,10 @@ package final class StoryContext {
     package func idle(timeout: Duration? = nil) async throws {
         try await until("the app to settle", timeout: timeout) { [unowned self] in waits.passes - lastEventPass >= 3 }
     }
+}
+
+/// A stashed object with something to undo when its storyline ends: called after the last step
+/// (or the failure), before the window closes.
+package protocol StoryFinishing: AnyObject {
+    @MainActor func finish()
 }

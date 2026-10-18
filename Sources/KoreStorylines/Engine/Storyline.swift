@@ -50,6 +50,9 @@ package struct Tag: Hashable, Sendable, ExpressibleByStringLiteral, CustomString
     package static let approvals: Tag = "approvals"
     /// Needs a live model (`--live`).
     package static let live: Tag = "live"
+    /// Presses real shortcuts through the window server: runs only with `--real-input` (the
+    /// owner OKs each such run in chat), and reports as skipped otherwise.
+    package static let realInput: Tag = "realinput"
 }
 
 /// One telling of a storyline.
@@ -74,12 +77,22 @@ package struct Needs: Sendable {
         case replay(String)
     }
 
+    /// Which CLI its chats talk to.
+    package enum CLI: Sendable {
+        /// The scripted CLI (`ScriptedBackend`), the default.
+        case scripted
+        /// The real `claude` / `codex`: recorded sessions, live models.
+        case real
+    }
+
     package var folder: Folder = .empty
+    package var cli: CLI = .scripted
     /// The window's content size; the runner's `--size` overrides it.
     package var window = CGSize(width: 1000, height: 760)
 
-    package init(folder: Folder = .empty, window: CGSize = CGSize(width: 1000, height: 760)) {
+    package init(folder: Folder = .empty, cli: CLI = .scripted, window: CGSize = CGSize(width: 1000, height: 760)) {
         self.folder = folder
+        self.cli = cli
         self.window = window
     }
 }

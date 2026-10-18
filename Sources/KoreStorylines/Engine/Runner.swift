@@ -75,6 +75,17 @@ final class Runner {
         let started = ContinuousClock.now
         let story = type.init()
         story.variant = variant
+        if type.tags.contains(.realInput), !flags.realInput {
+            result.steps = [.init(label: "Needs --real-input", outcome: .skip)]
+            return result
+        }
+        // The CLI its chats get: the scripted one, fresh for each storyline, or the real ones.
+        if type.needs.cli == .scripted {
+            ScriptedWorld.shared.reset()
+            ScriptedWorld.shared.install()
+        } else {
+            StorylineSeams.backend = nil
+        }
 
         let folder: URL
         switch type.needs.folder {
@@ -114,6 +125,7 @@ final class Runner {
         if (try? (context.eventLog + "\n").write(to: log, atomically: true, encoding: .utf8)) != nil {
             result.files.append(log.lastPathComponent)
         }
+        context.finish()
         Self.current = nil
         context.window?.close()
         result.ms = ms(since: started)
