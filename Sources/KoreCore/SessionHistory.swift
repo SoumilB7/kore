@@ -9,12 +9,15 @@ public struct SessionSummary: Sendable, Identifiable, Hashable {
     public let agent: Agent
     public let title: String
     public let updated: Date
+    /// Archived chats stay on disk but are left out of the folder's tabs.
+    public var archived: Bool
 
-    public init(id: String, agent: Agent, title: String, updated: Date) {
+    public init(id: String, agent: Agent, title: String, updated: Date, archived: Bool = false) {
         self.id = id
         self.agent = agent
         self.title = title
         self.updated = updated
+        self.archived = archived
     }
 }
 
@@ -26,11 +29,13 @@ public enum ClaudeHistory {
         let files = (try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         return files.filter { $0.pathExtension == "jsonl" }.compactMap { file in
-            guard let title = title(of: file) else { return nil }
-            let updated = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            guard let (title, lastMessage) = summary(of: file) else { return nil }
+            // The last message's time: resuming a session appends bookkeeping entries (mode,
+            // cost) that bump the file's modification date without any conversation.
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             return SessionSummary(
                 id: file.deletingPathExtension().lastPathComponent, agent: .claude, title: title,
-                updated: updated ?? .distantPast)
+                updated: lastMessage ?? modified ?? .distantPast)
         }
     }
 
@@ -69,9 +74,10 @@ public enum ClaudeHistory {
         return root.appendingPathComponent("projects").appendingPathComponent(name)
     }
 
-    /// Rename > AI title > first prompt. Transcripts can be many MB, so only the head and
-    /// tail are read; the CLI re-appends its title entries as the session goes.
-    private static func title(of file: URL) -> String? {
+    /// Title (rename > AI title > first prompt) and the last message's time. Transcripts can be
+    /// many MB, so only the head and tail are read; the CLI re-appends its title entries as the
+    /// session goes.
+    private static func summary(of file: URL) -> (title: String, lastMessage: Date?)? {
         guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
         defer { try? handle.close() }
         let chunk = 128 * 1024
@@ -84,10 +90,14 @@ public enum ClaudeHistory {
             tail = (try? handle.read(upToCount: chunk)) ?? Data()
         }
 
-        var custom: String?, ai: String?, firstPrompt: String?
+        var custom: String?, ai: String?, firstPrompt: String?, lastMessage: Date?
         for line in (head + tail).split(separator: 0x0A) {
             guard let entry = try? JSONValue.parse(Data(line)) else { continue }
-            switch entry["type"]?.string {
+            let type = entry["type"]?.string
+            if type == "user" || type == "assistant", let time = entry["timestamp"]?.string.flatMap(parseDate) {
+                lastMessage = max(lastMessage ?? time, time)
+            }
+            switch type {
             case "custom-title": custom = entry["customTitle"]?.string ?? custom
             case "ai-title": ai = entry["aiTitle"]?.string ?? ai
             case "user" where firstPrompt == nil && entry["isMeta"]?.bool != true && entry["isSidechain"]?.bool != true:
@@ -96,8 +106,13 @@ public enum ClaudeHistory {
             }
         }
         // No prompt means nothing was ever said (e.g. a session opened and closed).
-        guard firstPrompt != nil || custom != nil || ai != nil else { return nil }
-        return custom ?? ai ?? firstPrompt
+        guard let title = custom ?? ai ?? firstPrompt else { return nil }
+        return (title, lastMessage)
+    }
+
+    private static func parseDate(_ string: String) -> Date? {
+        (try? Date(string, strategy: .iso8601.year().month().day().time(includingFractionalSeconds: true)))
+            ?? (try? Date(string, strategy: .iso8601))
     }
 
     private static func promptText(_ content: JSONValue?) -> String? {
@@ -108,20 +123,49 @@ public enum ClaudeHistory {
     }
 }
 
-/// Codex threads, from `thread/list` on a short-lived app-server.
+/// Codex threads, from `thread/list` on a short-lived app-server. Archiving is Codex's own
+/// (`thread/archive` moves the rollout to `archived_sessions`), shared with its other clients.
 public enum CodexHistory {
+    /// The folder's threads, archived ones included (flagged). Interactive sources only, as the
+    /// Codex clients list them (no `exec` runs or subagents).
     public static func threads(in folder: URL, executable: URL? = nil) async throws -> [SessionSummary] {
         let server = try await CodexAppServer.start(cwd: folder, executable: executable)
         defer { Task { await server.close() } }
-        let result = try await server.request(
-            "thread/list", ["cwd": .string(folder.path), "limit": 100, "sortKey": "updated_at"])
-        return (result["data"]?.array ?? []).compactMap { thread in
-            guard let id = thread["id"]?.string else { return nil }
-            let title = thread["name"]?.string ?? thread["preview"]?.string ?? "Untitled"
-            let line = title.split(whereSeparator: \.isNewline).first.map(String.init) ?? title
-            return SessionSummary(
-                id: id, agent: .codex, title: line,
-                updated: Date(timeIntervalSince1970: thread["updatedAt"]?.double ?? 0))
+        var threads: [SessionSummary] = []
+        for archived in [false, true] {
+            var cursor: JSONValue = .null
+            repeat {
+                let result = try await server.request("thread/list", [
+                    "cwd": .string(folder.path), "archived": .bool(archived), "limit": 100,
+                    "sortKey": "updated_at", "cursor": cursor,
+                ])
+                threads += (result["data"]?.array ?? []).compactMap { summary($0, archived: archived) }
+                cursor = result["nextCursor"]?.string.map(JSONValue.string) ?? .null
+            } while cursor != .null && threads.count < 1000
         }
+        return threads
+    }
+
+    public static func archive(_ id: String, in folder: URL, executable: URL? = nil) async throws {
+        try await call("thread/archive", id, in: folder, executable: executable)
+    }
+
+    public static func unarchive(_ id: String, in folder: URL, executable: URL? = nil) async throws {
+        try await call("thread/unarchive", id, in: folder, executable: executable)
+    }
+
+    private static func call(_ method: String, _ id: String, in folder: URL, executable: URL?) async throws {
+        let server = try await CodexAppServer.start(cwd: folder, executable: executable)
+        defer { Task { await server.close() } }
+        _ = try await server.request(method, ["threadId": .string(id)])
+    }
+
+    private static func summary(_ thread: JSONValue, archived: Bool) -> SessionSummary? {
+        guard let id = thread["id"]?.string else { return nil }
+        let title = thread["name"]?.string ?? thread["preview"]?.string ?? "Untitled"
+        let line = title.split(whereSeparator: \.isNewline).first.map(String.init) ?? title
+        return SessionSummary(
+            id: id, agent: .codex, title: line,
+            updated: Date(timeIntervalSince1970: thread["updatedAt"]?.double ?? 0), archived: archived)
     }
 }
