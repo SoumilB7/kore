@@ -132,6 +132,78 @@ package enum DevNavProbe {
         return result
     }
 
+    // MARK: Opening history
+
+    /// Runs `open` (resuming a long chat, opening an agent's tab) and times it to the first of
+    /// three still frames of the largest scroll view once `ready` holds; `worst` is the longest
+    /// frame on the way, the main thread's longest stall.
+    package static func open(_ workspace: Workspace, ready: @escaping () -> Bool, _ open: () -> Void) async -> (ms: Double, worst: Double)? {
+        guard let window = workspace.window else { return nil }
+        let pacer = DevFramePacer()
+        pacer.start(on: window.contentView ?? NSView()) {
+            guard let view = DevScroller.transcript(in: window), let document = view.documentView else { return nil }
+            return DevFramePacer.Probe(height: document.frame.height, offset: DevScroller.offset(view), ready: ready())
+        }
+        defer { pacer.stop() }
+        pacer.beginRecording()
+        let began = CACurrentMediaTime()
+        open()
+        guard let settled = await pacer.waitSettled(timeout: 20) else { return nil }
+        return ((settled - began) * 1000, pacer.endRecording().worstMS)
+    }
+
+    /// The folder's chats have been listed (resumed tabs are checked against the list then).
+    package static func chatsListed(_ workspace: Workspace) -> Bool { workspace.loaded }
+
+    /// Opens a chat's sub-agent in its tab, as the agent map's "Open in tab" does.
+    package static func openAgent(_ id: String, of chat: Chat, in workspace: Workspace) { workspace.openAgent(id, of: chat) }
+
+    /// The rows the chat's transcript has built models for (its window's), of all its entries.
+    package static func modelRows(_ chat: Chat) -> (rows: Int, entries: Int) {
+        (chat.transcript.sections.reduce(0) { $0 + $1.items.count }, chat.transcript.entries.count)
+    }
+
+    /// The active tab's scroll view, scrolled up to its top (or by `limit` px) at `speed` px/s.
+    package static func scrollToTop(_ workspace: Workspace, speed: Double = 3000, limit: Double = 30_000) async -> Frames {
+        guard let window = workspace.window, let view = DevScroller.transcript(in: window) else { return Frames() }
+        let pacer = DevFramePacer()
+        pacer.start(on: window.contentView ?? NSView()) { nil }
+        defer { pacer.stop() }
+        var result = Frames()
+        pacer.beginRecording()
+        let up = await DevScroller.run(view, toTop: true, speed: speed, mode: .clip, limit: limit)
+        fill(&result, pacer.endRecording())
+        result.px = up.movedPX
+        return result
+    }
+
+    /// The active tab's scroll view: how far down it is, and its content's and its own height.
+    package static func scrollPlace(_ workspace: Workspace) -> (offset: Double, height: Double, visible: Double)? {
+        guard let window = workspace.window, let view = DevScroller.transcript(in: window) else { return nil }
+        return (DevScroller.offset(view), Double(view.documentView?.frame.height ?? 0), view.contentView.bounds.height)
+    }
+
+    /// The registered row nearest a quarter of the way down the active tab's scroll view (it stays
+    /// on screen while the view scrolls up a little): its id and its top in window coordinates.
+    package static func rowOnScreen(_ workspace: Workspace, prefix: String) -> (id: String, y: Double)? {
+        guard let window = workspace.window, let view = DevScroller.transcript(in: window) else { return nil }
+        let shown = view.convert(view.bounds, to: nil)
+        let mark = shown.maxY - shown.height / 4
+        return StoryRegistry.ids.lazy.filter { $0.hasPrefix(prefix) }
+            .compactMap { id in StoryRegistry.entry(id)?.frame.flatMap { shown.contains($0) ? (id, Double($0.maxY)) : nil } }
+            .min { abs($0.1 - mark) < abs($1.1 - mark) }
+    }
+
+    /// A registered row's top in window coordinates, while it's built.
+    package static func rowY(_ id: String) -> Double? { StoryRegistry.entry(id)?.frame.map { Double($0.maxY) } }
+
+    /// Scrolls the active tab's scroll view up by `px`, a frame at a time: the distance the content
+    /// was moved by, whatever went in above on the way.
+    package static func scrollUp(_ workspace: Workspace, by px: Double, speed: Double = 1500) async -> Double {
+        guard let window = workspace.window, let view = DevScroller.transcript(in: window) else { return 0 }
+        return await DevScroller.run(view, toTop: true, speed: speed, mode: .clip, limit: px).requestedPX
+    }
+
     private static func start(_ window: NSWindow, _ workspace: Workspace) -> (DevFramePacer, Held<NSScrollView?>) {
         let pacer = DevFramePacer()
         let scroll = Held<NSScrollView?>(nil)

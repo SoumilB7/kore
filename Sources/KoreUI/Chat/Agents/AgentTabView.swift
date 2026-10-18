@@ -15,33 +15,8 @@ struct AgentTabView: View {
         return VStack(spacing: 0) {
             if let info {
                 crumb(info)
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        Section {
-                            AgentTimeline(chat: chat, id: id)
-                                .padding(.top, Layout.Timeline.itemPadding)
-                        } header: {
-                            if let prompt = info.prompt, !prompt.isEmpty {
-                                Text(prompt)
-                                    .font(TextStyle.body)
-                                    .foregroundStyle(Theme.text)
-                                    .textSelection(.enabled)
-                                    .padding(Inset.userBox)
-                                    .panel(.userBox)
-                                    .padding(.vertical, Layout.Timeline.itemPadding)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Theme.background)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, column.padding)
-                    .padding(.top, Layout.Transcript.top)
-                    .padding(.bottom, Layout.Transcript.bottom)
-                    .frame(maxWidth: column.maxWidth, alignment: .leading)
-                    .frame(maxWidth: .infinity)
-                }
-                .defaultScrollAnchor(.bottom, for: .alignment)
-                .onAppear { chat.loadAgentIfNeeded(id) }
+                AgentTabTimeline(chat: chat, id: id, prompt: info.prompt)
+                    .onAppear { chat.loadAgentIfNeeded(id) }
                 footer(info)
                     .padding(.horizontal, column.composerPadding)
                     .padding(.bottom, Space.xxxl)
@@ -147,6 +122,93 @@ struct AgentTabView: View {
 
     private func backToChat() {
         if let tab = workspace.tab(of: chat) { workspace.select(tab) }
+    }
+}
+
+/// The agent's own timeline, shown as the chat's transcript is: it opens at the end on the latest
+/// commands and follows the end while new ones come in, until the reader scrolls up. Each command
+/// is a row of the lazy stack, so only those in view are built: an agent's work can run to
+/// hundreds of commands.
+private struct AgentTabTimeline: View {
+    let chat: Chat
+    let id: String
+    let prompt: String?
+    @Environment(\.chatColumn) private var column
+    @StateObject private var following = Held(true)
+    /// A scroll gesture is under way (from its phase): the geometry rules leave following to it.
+    @StateObject private var gesturing = Held(false)
+    /// The last content height and offset.
+    @StateObject private var geometry = Held((height: CGFloat(0), offset: CGFloat(0)))
+
+    private static let end = "agent-end"
+    /// "At the bottom" within this, as in the chat.
+    private static let atBottom: CGFloat = 50
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        Color.clear.frame(height: Layout.Timeline.itemPadding)
+                        AgentTimelineRows(chat: chat, id: id)
+                    } header: {
+                        if let prompt, !prompt.isEmpty {
+                            Text(prompt)
+                                .font(TextStyle.body)
+                                .foregroundStyle(Theme.text)
+                                .textSelection(.enabled)
+                                .padding(Inset.userBox)
+                                .panel(.userBox)
+                                .padding(.vertical, Layout.Timeline.itemPadding)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Theme.background)
+                        }
+                    }
+                    Color.clear.frame(height: Stroke.hairline).id(Self.end)
+                }
+                .padding(.horizontal, column.padding)
+                .padding(.top, Layout.Transcript.top)
+                .padding(.bottom, Layout.Transcript.bottom)
+                .frame(maxWidth: column.maxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity)
+            }
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.bottom, for: .alignment)
+            .onScrollPhaseChange { old, new, context in
+                gesturing.value = new != .idle
+                if new == .interacting {
+                    following.value = false
+                } else if new == .idle, old == .interacting || old == .decelerating {
+                    let g = context.geometry
+                    following.value = g.contentOffset.y + g.containerSize.height >= g.contentSize.height - Self.atBottom
+                }
+            }
+            .onScrollGeometryChange(for: [CGFloat].self) {
+                [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height]
+            } action: { _, new in
+                scrolled(new, proxy)
+            }
+        }
+    }
+
+    /// The chat transcript's rules, for a timeline that only grows: follow the end while at it,
+    /// stop once the reader moves up.
+    private func scrolled(_ new: [CGFloat], _ proxy: ScrollViewProxy) {
+        let (height, offset, visible) = (new[0], new[1], new[2])
+        // Moved up, away from the end, with no new content (the scroll bar, Page Up): stop
+        // following. And back down to the end the same way: follow again.
+        if following.value, height == geometry.value.height, height > visible + Self.atBottom,
+            offset < geometry.value.offset - 1, offset + visible < height - 3 * Self.atBottom
+        {
+            following.value = false
+        }
+        if !following.value, !gesturing.value, offset > geometry.value.offset + 1, offset + visible >= height - Self.atBottom {
+            following.value = true
+        }
+        // New rows (a loaded history, a running agent's), or rows measured after they were
+        // placed: stay at the end while following.
+        if following.value, height != geometry.value.height { proxy.scrollTo(Self.end, anchor: .bottom) }
+        geometry.value = (height, offset)
     }
 }
 

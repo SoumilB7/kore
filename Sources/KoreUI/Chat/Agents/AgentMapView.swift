@@ -511,17 +511,7 @@ struct AgentPrompt: View {
     }
 }
 
-/// An agent's own items as a top-level timeline.
-struct AgentTimeline: View {
-    let chat: Chat
-    let id: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) { AgentTimelineRows(chat: chat, id: id) }
-    }
-}
-
-/// The timeline's rows, unwrapped: in a lazy stack, each is a row of it.
+/// An agent's own items as its timeline's rows, unwrapped: in a lazy stack, each is a row of it.
 struct AgentTimelineRows: View {
     let chat: Chat
     let id: String
