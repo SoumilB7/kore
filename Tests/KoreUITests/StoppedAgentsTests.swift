@@ -1,0 +1,193 @@
+import Foundation
+import KoreCore
+import Testing
+
+@testable import KoreUI
+
+/// Stopped agents wait apart from the agent map's tree, and come back to their place when they
+/// run again; each CLI's way of running one again reaches the transcript as `agentResumed`.
+@MainActor
+@Suite("Stopped agents")
+struct StoppedAgentsTests {
+    private func spawn(_ id: String, under parent: AgentID = .main) -> ChatEvent {
+        .agentSpawned(AgentInfo(id: id, parent: parent, toolId: nil, name: id, type: nil, model: nil, prompt: nil, background: false))
+    }
+
+    private func names(_ nodes: [TranscriptStore.AgentNode]) -> [String] {
+        nodes.map { String(repeating: ".", count: $0.depth) + $0.id }
+    }
+
+    /// scout (with reader under it) and writer; the turn is stopped while scout and reader run.
+    private func stoppedTurn() -> Script {
+        let script = Script()
+        script.send("Use some helpers")
+        script.start("t1")
+        script.on(
+            spawn("scout"), spawn("reader", under: .sub("scout")), spawn("writer"),
+            .agentFinished(id: "writer", .completed, result: "Written"))
+        script.finish("t1", .interrupted)
+        _ = script.sections
+        return script
+    }
+
+    @Test func aStoppedAgentLeavesTheTreeWithItsOwn() {
+        let store = stoppedTurn().store
+        let map = store.agentTree()
+        #expect(names(map.tree) == ["writer"])
+        #expect(map.tree.first?.isLast == true)
+        #expect(names(map.stopped) == ["scout", ".reader"])
+        #expect(store.agentSummary.count == 1)
+        #expect(store.agentSummary.stopped == 2)
+        #expect(store.agentSummary.first.map(\.id) == ["writer"])
+    }
+
+    @Test func aResumedAgentGoesBackToItsPlace() {
+        let script = stoppedTurn()
+        script.on(.agentResumed(id: "scout"))
+        _ = script.sections
+        let map = script.store.agentTree()
+        // Before writer, as it spawned; its stopped reader stays in the group.
+        #expect(names(map.tree) == ["scout", "writer"])
+        #expect(map.tree.map(\.isLast) == [false, true])
+        #expect(script.store.agent("scout")?.status == .running)
+        #expect(names(map.stopped) == ["reader"])
+        #expect(script.store.agentSummary.count == 2)
+        #expect(script.store.agentSummary.running.map(\.id) == ["scout"])
+
+        script.on(.agentFinished(id: "scout", .completed, result: "Scouted"))
+        _ = script.sections
+        #expect(names(script.store.agentTree().tree) == ["scout", "writer"])
+        #expect(script.store.agent("scout")?.duration != nil)
+    }
+
+    /// A running agent under a stopped one stays in the tree, where its parent was.
+    @Test func aLiveChildOfAStoppedAgentStaysInTheTree() {
+        let script = stoppedTurn()
+        script.on(.agentResumed(id: "reader"))
+        _ = script.sections
+        let map = script.store.agentTree()
+        #expect(names(map.tree) == ["reader", "writer"])
+        #expect(names(map.stopped) == ["scout"])
+    }
+
+    @Test func onlyStoppedAgentsStillShowTheButton() {
+        let script = Script()
+        script.send("Go")
+        script.start("t1")
+        script.on(spawn("scout"))
+        script.finish("t1", .interrupted)
+        _ = script.sections
+        let summary = script.store.agentSummary
+        #expect(summary.count == 0)
+        #expect(summary.stopped == 1)
+        #expect(summary.first.map(\.id) == ["scout"])
+    }
+
+    // MARK: Claude
+
+    private func line(_ json: String) -> ClaudeEvent {
+        ClaudeEvent(message: (try? JSONValue.parse(Data(json.utf8))) ?? .null)
+    }
+
+    /// Claude runs an agent again with SendMessage: "Resuming agent …", then the agent's task
+    /// starts again under its own id from the SendMessage call, and reports under that call.
+    @Test func claudeSendMessageResumesTheAgent() {
+        let translator = ClaudeTranslator(folder: URL(fileURLWithPath: "/tmp"), sessionId: nil)
+        let lines = [
+            #"{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Scout","prompt":"Look"}}]}}"#,
+            #"{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_A","description":"Scout","task_type":"local_agent"}"#,
+            #"{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_A","status":"killed"}"#,
+            #"{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":"toolu_S","name":"SendMessage","input":{"to":"a1","message":"Go on"}}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Resuming agent a1"}]},"tool_use_result":{"success":true,"message":"Resuming agent a1","resumedAgentId":"a1"}}"#,
+            #"{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_S","description":"Scout","task_type":"local_agent"}"#,
+            #"{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_S","status":"completed"}"#,
+        ]
+        var events: [ChatEvent] = []
+        for json in lines {
+            translator.translate(line(json))
+            events += translator.take().events
+        }
+        let agents = events.compactMap { event -> String? in
+            switch event {
+            case .agentSpawned(let info): "spawned \(info.id)"
+            case .agentFinished(let id, let status, _): "finished \(id) \(status)"
+            case .agentResumed(let id): "resumed \(id)"
+            default: nil
+            }
+        }
+        // The Resuming answer and the task's start both say it; the transcript takes it once.
+        #expect(agents == [
+            "spawned toolu_A", "finished toolu_A stopped", "resumed toolu_A", "resumed toolu_A", "finished toolu_A completed",
+        ])
+    }
+
+    /// The same read back from a transcript: the run's report names the SendMessage call.
+    @Test func claudeReadBackFinishesTheResumedRun() {
+        let translator = ClaudeTranslator(folder: URL(fileURLWithPath: "/tmp"), sessionId: nil)
+        let messages = [
+            #"{"type":"user","timestamp":"2026-10-01T10:00:00.000Z","message":{"content":"Use a helper"}}"#,
+            #"{"type":"assistant","timestamp":"2026-10-01T10:00:01.000Z","message":{"id":"m1","content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Scout","prompt":"Look","run_in_background":true}}]}}"#,
+            #"{"type":"user","timestamp":"2026-10-01T10:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"Launched"}]},"toolUseResult":{"status":"async_launched","agentId":"a1"}}"#,
+            #"{"type":"user","timestamp":"2026-10-01T10:01:00.000Z","message":{"content":"Go on with it"}}"#,
+            #"{"type":"assistant","timestamp":"2026-10-01T10:01:01.000Z","message":{"id":"m2","content":[{"type":"tool_use","id":"toolu_S","name":"SendMessage","input":{"to":"a1","message":"Go on"}}]}}"#,
+            #"{"type":"user","timestamp":"2026-10-01T10:01:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"ok"}]},"toolUseResult":{"success":true,"message":"Agent \"a1\" had no active task; resumed from transcript in the background with your message."}}"#,
+            #"{"type":"user","timestamp":"2026-10-01T10:02:00.000Z","turnOrigin":"task_notification","message":{"content":"<task-notification><task-id>a1</task-id><tool-use-id>toolu_S</tool-use-id><status>completed</status><result>Done</result></task-notification>"}}"#,
+        ].compactMap { try? JSONValue.parse(Data($0.utf8)) }
+        let events = translator.replay(messages)
+        let store = TranscriptStore()
+        store.apply(.replayed(events))
+        #expect(store.agent("toolu_A")?.status == .finished)
+        #expect(store.agent("toolu_A")?.result == "Done")
+        #expect(store.agentTree().stopped.isEmpty)
+    }
+
+    // MARK: Codex
+
+    /// Codex runs a child again with followup_task: the child thread starts another turn.
+    @Test func codexFollowUpResumesTheChild() {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
+        func item(_ kind: String, _ id: String) -> CodexEvent {
+            .itemCompleted(CodexItem(.object([
+                "id": .string(id), "type": .string("subAgentActivity"), "kind": .string(kind),
+                "agentThreadId": .string("child"), "agentPath": .string("/root/scout"),
+            ])))
+        }
+        let turn = CodexEvent(notification: "turn/started", params: .object(["turn": .object(["id": .string("c1")])]))
+        var events: [ChatEvent] = []
+        func on(_ event: CodexEvent, agent: AgentID = .main) {
+            translator.translate(event, agent: agent)
+            events += translator.take().events
+        }
+        on(item("started", "call_1"))
+        on(turn, agent: .sub("child"))
+        on(item("interrupted", "call_2"))
+        on(CodexEvent(notification: "turn/started", params: .object(["turn": .object(["id": .string("c2")])])), agent: .sub("child"))
+        on(item("completed", "subagent-completed-c2"))
+        let agents = events.compactMap { event -> String? in
+            switch event {
+            case .agentSpawned(let info): "spawned \(info.id)"
+            case .agentFinished(let id, let status, _): "finished \(id) \(status)"
+            case .agentResumed(let id): "resumed \(id)"
+            default: nil
+            }
+        }
+        #expect(agents == ["spawned child", "finished child stopped", "resumed child", "finished child completed"])
+    }
+
+    /// Read back, a rollout has no child turns: a later run's end is a report of its own.
+    @Test func codexReadBackTakesALaterRunsEnd() {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
+        var events: [ChatEvent] = []
+        for (kind, id) in [("started", "call_1"), ("interrupted", "call_2"), ("interacted", "call_3"), ("completed", "subagent-completed-c2")] {
+            let item = CodexItem(.object([
+                "id": .string(id), "type": .string("subAgentActivity"), "kind": .string(kind),
+                "agentThreadId": .string("child"), "agentPath": .string("/root/scout"),
+            ]))
+            translator.translate(.itemStarted(item))
+            translator.translate(.itemCompleted(item))
+            events += translator.take().events
+        }
+        let finished = events.compactMap { if case .agentFinished(_, let status, _) = $0 { status } else { nil } }
+        #expect(finished == [.stopped, .completed])
+    }
+}
