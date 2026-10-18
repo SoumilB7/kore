@@ -209,7 +209,7 @@ struct FindBar: View {
         @Bindable var find = find
         HStack(alignment: .top, spacing: Space.xs) {
             IconButton(symbol: find.showReplace ? "chevron.down" : "chevron.right", kind: .small, font: Chrome.glyphTreeChevron,
-                       help: "Toggle Replace") { find.showReplace.toggle() }
+                       help: "Replace") { find.showReplace.toggle() }
             VStack(spacing: Space.xs) {
                 HStack(spacing: Space.xs) {
                     HStack(spacing: Space.xxs) {

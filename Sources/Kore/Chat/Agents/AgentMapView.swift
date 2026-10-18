@@ -428,7 +428,7 @@ struct AgentDetail: View {
                 }
                 .buttonStyle(SubtleButtonStyle())
                 .fixedSize()
-                .help("Stop this agent")
+                .help("Stop agent")
             }
             Button {
                 openAgent(info.id)
@@ -438,7 +438,7 @@ struct AgentDetail: View {
             }
             .buttonStyle(SubtleButtonStyle())
             .fixedSize()
-            .help("Open this agent in its own tab (Return)")
+            .help("Open in tab (Return)")
         }
     }
 }

@@ -178,7 +178,7 @@ private struct TurnMark: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("\(touch.help) · View changes")
+        .help("View changes")
     }
 }
 
@@ -261,18 +261,18 @@ private struct StatusRow: View {
             ) {
                 Button("Go to Line…") { workspace.quickOpen = .line }
             }
-            StatusItem(title: document.indent.label, help: "Select Indentation") {
+            StatusItem(title: document.indent.label, help: "Indentation") {
                 Button("Indent Using Spaces: 2") { document.setIndent(.spaces(2)) }
                 Button("Indent Using Spaces: 4") { document.setIndent(.spaces(4)) }
                 Button("Indent Using Spaces: 8") { document.setIndent(.spaces(8)) }
                 Button("Indent Using Tabs") { document.setIndent(.tabs) }
             }
             StatusText(document.encodingName)
-            StatusItem(title: document.lineEnding.rawValue, help: "Select End of Line Sequence") {
+            StatusItem(title: document.lineEnding.rawValue, help: "Line endings") {
                 Button("LF") { document.setLineEnding(.lf) }
                 Button("CRLF") { document.setLineEnding(.crlf) }
             }
-            StatusItem(title: document.language.name, help: "Select Language Mode") {
+            StatusItem(title: document.language.name, help: "Language") {
                 ForEach(Language.all, id: \.id) { language in
                     Button(language.name) {
                         document.language = language

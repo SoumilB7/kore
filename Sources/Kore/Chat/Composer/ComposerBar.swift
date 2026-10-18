@@ -18,7 +18,8 @@ struct ComposerBar: View {
             }
             .buttonStyle(.plain)
             .onHover { plusHovered.value = $0 }
-            .help("Attach files and images")
+            .help("Attach")
+            .accessibilityLabel(Text("Attach files"))
 
             Button(action: slash) {
                 Text("/")
@@ -140,7 +141,8 @@ struct ModelMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(chat.controls.effortLabel.map { "\(chat.controls.modelLabel) · \($0)" } ?? chat.controls.modelLabel)
+        // The pill says it, unless a narrow bar has hidden the effort.
+        .help(showEffort ? "" : chat.controls.effortLabel.map { "\(chat.controls.modelLabel) · \($0)" } ?? "")
     }
 
     static func effortName(_ level: String) -> String {
@@ -177,7 +179,7 @@ struct ModeMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Shift+Tab to switch")
+        .help("Mode (⇧Tab)")
     }
 
     private func toggle(_ mode: ModeOption, isOn: Bool, action: @escaping () -> Void) -> some View {

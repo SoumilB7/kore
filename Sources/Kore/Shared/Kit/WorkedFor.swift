@@ -56,7 +56,7 @@ struct WorkedFor: View {
                             .lineLimit(1)
                     }
                     .foregroundStyle(Theme.secondary)
-                    .help("Actions you denied during this turn")
+                    .help("Denied this turn")
                 }
             }
             .font(TextStyle.body)
@@ -64,7 +64,7 @@ struct WorkedFor: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(isOpen ? "Hide the work" : "Show the work")
+        .accessibilityHint(Text(isOpen ? "Hides the work" : "Shows the work"))
     }
 
     /// "Worked for 1m 12s"; without a duration, "N previous messages".

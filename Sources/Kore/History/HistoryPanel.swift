@@ -26,7 +26,7 @@ struct HistoryButton: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
-        .help("Chats in this folder")
+        .help("History")
     }
 }
 

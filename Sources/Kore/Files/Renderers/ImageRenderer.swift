@@ -25,7 +25,7 @@ struct ImageFileView: View {
                         editor: editor, actionTitle: "Add to chat",
                         actionHelp: chat == nil ? "Open a chat in this window first" : "Add to chat (Return)",
                         actionEnabled: chat != nil,
-                        secondary: ("Copy", "Copy with markup (⌘C)", { copy(editor) })
+                        secondary: ("Copy", "Copy (⌘C)", { copy(editor) })
                     ) { addToChat(editor) }
                     .padding(.horizontal, Space.xl)
                     .padding(.bottom, Layout.Media.toolbarBottom)

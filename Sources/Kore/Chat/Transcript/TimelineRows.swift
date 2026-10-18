@@ -287,7 +287,7 @@ struct MessageHeader: View {
         .padding(open ? Inset.bubble : Inset.control)
         .frame(maxWidth: .infinity, alignment: .leading)
         .panel(.outline)
-        .help(open ? "A message from another Claude session" : "Show the whole message")
+        .help(open ? "" : "Show all")
     }
 
     private static func firstLine(_ text: String) -> String {
@@ -778,7 +778,7 @@ private struct AgentHeader: View {
                                 .fixedSize()
                         }
                         .buttonStyle(.plain)
-                        .help("Open this agent in its own tab (⌘-click)")
+                        .help("Open in tab (⌘-click)")
                     }
                     AgentMeter(info: info)
                 }
@@ -786,7 +786,7 @@ private struct AgentHeader: View {
             }
             .buttonStyle(.plain)
             .onHover { hovered.value = $0 }
-            .help(open ? "Hide this agent's work" : "Show this agent's work")
+            .accessibilityHint(Text(open ? "Hides the agent's work" : "Shows the agent's work"))
             if info.status == .running {
                 IconButton(symbol: "stop.fill", kind: .small, font: Glyph.stop, help: "Stop agent") {
                     actions.stopAgent(info.id)

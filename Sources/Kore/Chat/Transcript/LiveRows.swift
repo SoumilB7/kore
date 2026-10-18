@@ -186,7 +186,7 @@ struct ExploredItem: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(open ? "Hide these reads" : "Show these reads")
+        .accessibilityHint(Text(open ? "Hides the reads" : "Shows the reads"))
     }
 }
 
@@ -234,7 +234,7 @@ struct DividerRow: View {
                 Button(action: open) { label(hovered.value ? Theme.text : Theme.secondary) }
                     .buttonStyle(.plain)
                     .onHover { hovered.value = $0 }
-                    .help("Show the original chat")
+                    .help("Open original")
             } else {
                 label(Theme.tertiary)
             }

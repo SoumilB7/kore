@@ -144,7 +144,7 @@ private struct TabItem: View {
     private var help: String {
         if let file = tab.file {
             if file.notice == .deleted { return "Deleted on disk" }
-            return tab.isPreview ? "\(file.name) · Preview, double-click to keep open" : file.path
+            return file.path
         }
         return tab.agent != nil ? "Sub-agent of “\(tab.chat?.title ?? "")”" : tab.title
     }

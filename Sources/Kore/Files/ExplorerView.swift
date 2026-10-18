@@ -76,7 +76,7 @@ struct ExplorerSidebar: View {
                 let search = workspace.searchStore()
                 Group {
                     HeaderButton(symbol: "arrow.clockwise", help: "Refresh") { search.rerun() }
-                    HeaderButton(symbol: "xmark.circle", help: "Clear Search Results") { search.clear() }
+                    HeaderButton(symbol: "xmark.circle", help: "Clear") { search.clear() }
                     HeaderButton(
                         symbol: search.allCollapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical",
                         help: search.allCollapsed ? "Expand All" : "Collapse All"
@@ -87,8 +87,8 @@ struct ExplorerSidebar: View {
                 Group {
                     HeaderButton(symbol: "doc.badge.plus", help: "New File") { store.startNew(folder: false) }
                     HeaderButton(symbol: "folder.badge.plus", help: "New Folder") { store.startNew(folder: true) }
-                    HeaderButton(symbol: "arrow.clockwise", help: "Refresh Explorer") { store.refresh() }
-                    HeaderButton(symbol: "rectangle.compress.vertical", help: "Collapse Folders in Explorer") { store.collapseAll() }
+                    HeaderButton(symbol: "arrow.clockwise", help: "Refresh") { store.refresh() }
+                    HeaderButton(symbol: "rectangle.compress.vertical", help: "Collapse all") { store.collapseAll() }
                 }
                 .opacity(hovered.value || focused ? 1 : 0)
             }
@@ -240,6 +240,7 @@ private struct HeaderButton: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .help(help)
+        .accessibilityLabel(Text(help))
     }
 }
 
@@ -383,7 +384,7 @@ private struct TreeRow: View {
                 }
                 ChangeCounts(added: touch.added, removed: touch.removed, font: Chrome.captionDigits)
             }
-            .help("Changed this turn · \(touch.help)")
+            .help("Changed by \(touch.help)")
         } else if row.isFolder, folderTouched || (state != nil && state != .ignored) {
             Circle()
                 .fill(state == .conflicted ? Theme.danger : Theme.accent)

@@ -58,7 +58,7 @@ struct SearchView: View {
                 }
                 .modifier(SearchField(height: Size.searchField, failed: failed, focused: field == .query))
                 // Stays lit while a filter is set, so hidden filters aren't forgotten.
-                IconButton(symbol: "ellipsis", kind: .small, font: Chrome.label, isOn: store.hasFilters, help: "Toggle Search Details") {
+                IconButton(symbol: "ellipsis", kind: .small, font: Chrome.label, isOn: store.hasFilters, help: "Include and exclude") {
                     store.showsDetails.toggle()
                 }
             }

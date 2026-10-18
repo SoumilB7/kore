@@ -44,7 +44,9 @@ struct AgentsButton: View {
             .buttonStyle(.plain)
             .onHover { hovered.value = $0 }
             .keyboardShortcut("a", modifiers: [.command, .shift])
-            .help(help(summary) + " · Click to open the agent map (⇧⌘A)")
+            .help("Agent map (⇧⌘A)")
+            .accessibilityLabel(Text("Agent map"))
+            .accessibilityValue(Text(help(summary)))
         }
     }
 

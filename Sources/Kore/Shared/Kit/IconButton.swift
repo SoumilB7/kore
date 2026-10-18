@@ -35,5 +35,6 @@ struct IconButton: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .help(help)
+        .accessibilityLabel(Text(help))
     }
 }
