@@ -271,6 +271,18 @@ final class Chat: Identifiable {
         }
     }
 
+    /// Dev hook (`KORE_QUEUE`): sends `text` the way a message sent mid-turn goes, with an id
+    /// for `.queuedMessage`, until the composer queues (look.md §10).
+    func devQueue(_ text: String) {
+        let backend = connect()
+        let id = UUID().uuidString
+        let previous = sending
+        sending = Task {
+            await previous?.value
+            _ = try? await backend.send(text, files: [], queued: id)
+        }
+    }
+
     func stopAgent(_ id: String) {
         let backend = backend
         Task { await backend?.stopAgent(id) }

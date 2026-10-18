@@ -34,6 +34,8 @@ import KoreCore
 ///   KORE_STOP_AFTER=<s>      press Stop that many seconds after launch
 ///   KORE_STOP_AGENT_AFTER=<s> stop the first running sub-agent (its card's Stop) that many seconds after launch
 ///   KORE_SEND_AFTER_STOP=<text> send that 3s after either stop
+///   KORE_QUEUE=<text>@<s>    send that text as a message queued mid-turn, that many seconds after
+///                            the chat starts running (so slow CLI startup doesn't shift it)
 ///   KORE_SET_MODE=<id>@<s>[;…] switch the chat's mode that many seconds after launch, as the mode
 ///                            menu does (plan-on / plan-off toggle Codex's Plan)
 ///   KORE_UNFOLD=<s>          open every turn's "Worked for" fold that many seconds after launch
@@ -250,6 +252,15 @@ enum DevSnapshot {
                     return nil
                 }
                 for turn in folds { chat.transcript.toggle(turn: turn) }
+            }
+        }
+        // A message sent mid-turn, as the composer will queue it: "<text>@<seconds>".
+        if let spec = env["KORE_QUEUE"], let at = spec.lastIndex(of: "@"), let after = Double(spec[spec.index(after: at)...]) {
+            let text = String(spec[..<at])
+            Task { @MainActor in
+                while !chat.status.isRunning { try? await Task.sleep(for: .milliseconds(200)) }
+                try? await Task.sleep(for: .seconds(after))
+                chat.devQueue(text)
             }
         }
         // As the mode menu does, mid-session: "<id>@<seconds>[;<id>@<seconds>…]".
