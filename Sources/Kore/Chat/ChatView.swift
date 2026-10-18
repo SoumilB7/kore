@@ -32,6 +32,7 @@ struct ChatView: View {
             .padding(.bottom, Space.xxxl)
             .frame(maxWidth: column.composerMaxWidth)
         }
+        .contextCard(chat)
         .overlay {
             if chat.agentMap.isOpen {
                 AgentMapView(chat: chat) { id in

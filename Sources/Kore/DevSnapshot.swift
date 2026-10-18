@@ -49,6 +49,8 @@ import KoreCore
 ///                            relayouts without the pointer); pair with KORE_HANGS=1; logs frames
 ///   KORE_TAB_SWITCH=<n>      after 4s, select the next tab n times, 0.25s apart (prints the CPU time it took)
 ///   KORE_CLOSE_AFTER=<s>     ask the folder window to close (as ⌘W does) that many seconds after launch
+///   KORE_CONTEXT=<used>,<window>[,compacting]  give the chat that context usage (the wheel) after
+///                            KORE_CONTEXT_AFTER seconds (default 6); KORE_CONTEXT_CARD=1 holds its hover card open
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
     static let startProvider = ProcessInfo.processInfo.environment["KORE_START"].flatMap(Provider.init(rawValue:))
@@ -202,8 +204,19 @@ enum DevSnapshot {
     }
 
     /// KORE_STOP_AFTER / KORE_ANSWER: drive a started chat without clicking.
+    /// KORE_CONTEXT_CARD=1: the context wheel's card stays open.
+    static let contextCard = ProcessInfo.processInfo.environment["KORE_CONTEXT_CARD"] == "1"
+
     @MainActor static func drive(_ chat: Chat) {
         let env = ProcessInfo.processInfo.environment
+        if let parts = env["KORE_CONTEXT"]?.split(separator: ","), let used = parts.first.flatMap({ Int($0) }) {
+            let window = parts.count > 1 ? Int(parts[1]) : nil
+            let after = env["KORE_CONTEXT_AFTER"].flatMap(Double.init) ?? 6
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) {
+                chat.context.apply(.contextUsage(ContextUsage(used: used, window: window, autoCompacts: true, at: .now)))
+                if parts.count > 2 { chat.context.apply(.compactionStarted(auto: false)) }
+            }
+        }
         if let after = env["KORE_STOP_AFTER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + after) { chat.stop() }
         }

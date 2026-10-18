@@ -96,12 +96,13 @@ struct AgentAvatar: View {
 
 /// The running arc: a quarter of a ring, turning.
 struct SpinningArc: View {
+    var lineWidth = Stroke.emphasis
     @StateObject private var turning = Local(false)
 
     var body: some View {
         Circle()
             .trim(from: 0, to: 0.28)
-            .stroke(Theme.agentArc, style: StrokeStyle(lineWidth: Stroke.emphasis, lineCap: .round))
+            .stroke(Theme.agentArc, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
             .rotationEffect(.degrees(turning.value ? 360 : 0))
             .animation(Motion.ring, value: turning.value)
             .onAppear { turning.value = true }
