@@ -231,7 +231,10 @@ final class CodexTranslator {
         switch item.type {
         case "commandExecution":
             let command = Self.command(item.raw) ?? item.command ?? ""
-            return ToolCall(id: item.id, name: "Run", detail: command, input: command)
+            // Codex parses each command: reads, searches and listings only count as exploring.
+            let actions = item.raw["commandActions"]?.array ?? []
+            let readOnly = !actions.isEmpty && actions.allSatisfy { ["read", "search", "listFiles"].contains($0["type"]?.string ?? "") }
+            return ToolCall(id: item.id, name: "Run", detail: command, input: command, readOnly: readOnly)
         case "fileChange":
             let paths = (item.raw["changes"]?.array ?? []).compactMap { $0["path"]?.string }
             return ToolCall(

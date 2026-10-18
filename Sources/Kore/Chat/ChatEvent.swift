@@ -108,6 +108,8 @@ struct ToolCall: Sendable {
     var description: String? = nil
     /// The file a file tool works on (absolute).
     var path: String? = nil
+    /// Only reads, searches or lists: consecutive ones group into "Explored N".
+    var readOnly = false
 }
 
 /// An attachment as a transcript shows it. Images travel as bytes; views make thumbnails lazily.

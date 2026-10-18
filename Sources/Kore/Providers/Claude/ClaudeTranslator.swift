@@ -522,6 +522,9 @@ final class ClaudeTranslator {
 
     // MARK: - Wording
 
+    /// Tools that only read (the extension's "Explored" group).
+    static let readOnlyTools: Set<String> = ["Read", "Grep", "Glob", "LS"]
+
     static func toolCall(_ id: String, _ name: String, _ input: JSONValue, in folder: URL) -> ToolCall {
         let path = input["file_path"]?.string ?? input["notebook_path"]?.string
         let full: String? =
@@ -542,7 +545,7 @@ final class ClaudeTranslator {
             }
         return ToolCall(
             id: id, name: name, detail: summary(of: input, in: folder), input: full,
-            description: input["description"]?.string, path: path)
+            description: input["description"]?.string, path: path, readOnly: readOnlyTools.contains(name))
     }
 
     /// The one input field worth showing for a tool call.
