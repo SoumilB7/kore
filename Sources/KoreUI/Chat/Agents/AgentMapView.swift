@@ -40,6 +40,9 @@ struct AgentMapView: View {
                         }
                     }
                 }
+                // The tree keeps its place at the left with nothing selected (every agent
+                // stopped, the group closed), rather than sliding over to the close button.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 IconButton(symbol: "xmark", help: "Close (Esc)") { map.close() }.storyID(StoryID.AgentMap.close, press: map.close)
                     .padding(Layout.Viewer.closeInset)
             }

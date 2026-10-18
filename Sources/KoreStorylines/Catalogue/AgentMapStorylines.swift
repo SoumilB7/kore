@@ -108,6 +108,40 @@ final class AgentMapStopped: ChatStoryline {
     }
 }
 
+/// Every agent stopped and the group closed, nothing is selected: the tree keeps its place at
+/// the map's left, where it stays once a stopped agent is picked.
+final class AgentMapAllStopped: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents] }
+    override class var script: CLIScript {
+        CLIScript(turns: [[
+            .startTurn,
+            .event(.agentSpawned(AgentInfo(
+                id: "scout", parent: .main, toolId: nil, name: "Scout the code", type: nil, model: nil,
+                prompt: "Scout the code.", background: false))),
+            .event(.agentFinished(id: "scout", .stopped, result: nil)),
+            .stream(.answer, "The scout stopped."), .finishTurn(.completed),
+        ]])
+    }
+
+    override func steps() -> [any Step] {
+        let group = StoryID.AgentMap.stopped
+        return super.steps() + [
+            Send("Use a helper"), TurnFinished(1), WaitIdle(),
+            Press(.id(StoryID.Titlebar.agents)),
+            ExpectElement(.id(group), .visible),
+            Expect("the stopped group at the map's left, nothing selected") { _ in Self.atLeft(group) },
+            Press(.id(group)),
+            Press(.id(StoryID.AgentMap.row("scout"))),
+            Expect("the stopped group still at the map's left, the agent selected") { _ in Self.atLeft(group) },
+        ]
+    }
+
+    @MainActor static func atLeft(_ id: StoryID) -> Bool {
+        guard let element = StoryElement(id), let frame = element.frame, let width = element.window?.frame.width else { return false }
+        return frame.minX < width / 4
+    }
+}
+
 extension AgentMapOpen {
     /// Each folder window's chats and whether their maps are open, for a failure's report.
     @MainActor static func maps(_ story: StoryContext) -> String? {
