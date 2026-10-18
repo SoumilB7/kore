@@ -13,6 +13,8 @@ struct ComposerView: View {
     @StateObject private var window = Local<NSWindow?>(nil)
     @StateObject private var pasteMonitor = Local<Any?>(nil)
     @StateObject private var dropTargeted = Local(false)
+    /// Where the caret is, so Shift+Return can put a line break there.
+    @StateObject private var selection = Local<TextSelection?>(nil)
 
     var body: some View {
         VStack(spacing: Space.lg) {
@@ -77,7 +79,7 @@ struct ComposerView: View {
     }
 
     private var field: some View {
-        TextField("", text: Binding(get: { chat.draft }, set: { chat.draft = $0 }), axis: .vertical)
+        TextField("", text: Binding(get: { chat.draft }, set: { chat.draft = $0 }), selection: $selection.value, axis: .vertical)
             .textFieldStyle(.plain)
             .font(TextStyle.body)
             .foregroundStyle(Theme.text)
@@ -86,7 +88,14 @@ struct ComposerView: View {
             .onSubmit { chat.send() }
             .onKeyPress(.upArrow) { moveSlash(-1) }
             .onKeyPress(.downArrow) { moveSlash(1) }
-            .onKeyPress(.return) { acceptSlash() }
+            .onKeyPress(.return, phases: .down) { press in
+                // Shift+Return (and Option+Return) start a new line; Return sends.
+                if !press.modifiers.isDisjoint(with: [.shift, .option]) {
+                    insertLineBreak()
+                    return .handled
+                }
+                return acceptSlash()
+            }
             // Shift+Tab switches mode, as in both CLIs; plain Tab accepts a slash command.
             .onKeyPress(keys: [.tab, KeyEquivalent("\u{19}")]) { press in
                 if press.key == KeyEquivalent("\u{19}") || press.modifiers.contains(.shift) {
@@ -109,6 +118,21 @@ struct ComposerView: View {
             // at once rather than landing on padding.
             .contentShape(Rectangle())
             .onTapGesture { focused.wrappedValue = true }
+    }
+
+    /// Replaces the selection (or inserts at the caret) with a line break, the caret after it.
+    private func insertLineBreak() {
+        var draft = chat.draft
+        var range = draft.endIndex..<draft.endIndex
+        if case .selection(let selected) = selection.value?.indices,
+            selected.lowerBound >= draft.startIndex, selected.upperBound <= draft.endIndex
+        {
+            range = selected
+        }
+        let offset = draft.distance(from: draft.startIndex, to: range.lowerBound)
+        draft.replaceSubrange(range, with: "\n")
+        chat.draft = draft
+        selection.value = TextSelection(insertionPoint: draft.index(draft.startIndex, offsetBy: offset + 1))
     }
 
     // MARK: Paste and +
