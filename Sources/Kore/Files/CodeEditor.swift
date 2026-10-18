@@ -662,8 +662,26 @@ final class SyntaxColorer {
 /// edge (look §4); a click on a bar opens its peek.
 final class GutterView: NSRulerView {
     weak var controller: CodeEditorController?
+    /// Fold chevrons show while the pointer is over the gutter (a folded line's always).
+    private var hovering = false
 
     override var isFlipped: Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        needsDisplay = true
+    }
 
     @MainActor func updateThickness() {
         guard let controller else { return }
@@ -741,14 +759,38 @@ final class GutterView: NSRulerView {
             let size = label.size(withAttributes: attributes)
             let baseline = (controller.lineHeight - size.height) / 2
             label.draw(at: NSPoint(x: right - size.width, y: y + baseline), withAttributes: attributes)
+            drawChevron(line, top: y)
             line += 1
         }
     }
 
-    /// The line's bar (all its wrapped rows), and a deletion's triangle on its top edge.
+    /// A fold chevron in the trailing space, left of the bars: down where a region can fold,
+    /// right where it's folded.
+    @MainActor private func drawChevron(_ line: Int, top: CGFloat) {
+        guard let controller, controller.regions.end(of: line) != nil else { return }
+        let folded = controller.fold(startingOn: line) != nil
+        guard folded || hovering else { return }
+        let config = NSImage.SymbolConfiguration(pointSize: Size.Editor.foldChevron, weight: .semibold)
+            .applying(.init(paletteColors: [NSColor(Theme.secondary)]))
+        guard let image = NSImage(systemSymbolName: folded ? "chevron.right" : "chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        else { return }
+        let box = Size.Editor.gutterTrailing - Size.Editor.changeBar
+        let x = ruleThickness - Size.Editor.gutterTrailing + (box - image.size.width) / 2
+        image.draw(in: NSRect(
+            x: x, y: top + (controller.lineHeight - image.size.height) / 2, width: image.size.width, height: image.size.height))
+    }
+
+    /// The line's bar (all its wrapped rows), and a deletion's triangle on its top edge. A
+    /// folded line shows a bar when a line under it changed, as in VS Code.
     @MainActor private func drawChange(_ line: Int, _ changes: LineChanges, top: CGFloat, layout: NSLayoutManager, string: NSString) {
         guard let controller else { return }
-        if let mark = changes.marks[line] {
+        var mark = changes.marks[line]
+        if mark == nil, let fold = controller.fold(startingOn: line) {
+            let end = controller.lines.line(at: NSMaxRange(fold))
+            if changes.marks.keys.contains(where: { $0 > line && $0 <= end }) { mark = .modified }
+        }
+        if let mark {
             var height = controller.lineHeight
             let range = controller.lines.range(of: line, in: string)
             if range.length > 0, let container = controller.textView.textContainer {
@@ -795,7 +837,21 @@ final class GutterView: NSRulerView {
             controller.togglePeek(at: target)
             return true
         }
-        if !opened { super.mouseDown(with: event) }
+        if opened { return }
+        // Left of the bars, in the trailing space: a fold chevron.
+        let folded = MainActor.assumeIsolated { () -> Bool in
+            guard let controller, point.x >= ruleThickness - Size.Editor.gutterTrailing - Size.Editor.changeBarGap,
+                var line = line(at: point.y)
+            else { return false }
+            // A folded row's hidden lines are its first line's.
+            if let fold = controller.hiddenFold(line: line) ?? controller.fold(containing: controller.lines.start(of: line)) {
+                line = controller.lines.line(at: fold.location)
+            }
+            guard controller.regions.end(of: line) != nil || controller.fold(startingOn: line) != nil else { return false }
+            controller.toggleFold(line: line)
+            return true
+        }
+        if !folded { super.mouseDown(with: event) }
     }
 
     /// The 0-based line at a height in the gutter.
