@@ -60,18 +60,11 @@ final class StdioProcess: @unchecked Sendable {
         try process.run()
 
         Task {
-            // Split on \n ourselves: Foundation's `lines` also breaks on U+2028/U+2029,
-            // which JSON strings may legally contain unescaped.
-            var buffer = Data()
+            var lines = LineSplitter()
             for await chunk in chunks {
-                buffer.append(chunk)
-                while let newline = buffer.firstIndex(of: 0x0A) {
-                    let line = buffer[buffer.startIndex..<newline]
-                    buffer.removeSubrange(buffer.startIndex...newline)
-                    if !line.allSatisfy({ $0 == 0x20 || $0 == 0x0D }) { sink.yield(.line(Data(line))) }
-                }
+                for line in lines.feed(chunk) { sink.yield(.line(line)) }
             }
-            if !buffer.isEmpty { sink.yield(.line(buffer)) }
+            if let last = lines.finish() { sink.yield(.line(last)) }
             var status: Int32 = -1
             for await s in exits { status = s }
             sink.yield(.exited(status: status))
@@ -89,5 +82,50 @@ final class StdioProcess: @unchecked Sendable {
     func close() {
         try? stdin.close()
         process.terminate()
+    }
+}
+
+/// Splits a CLI's stdout into lines on \n. Not Foundation's `lines`, which also breaks on
+/// U+2028/U+2029 (JSON strings may hold them unescaped). Only a chunk's new bytes are searched
+/// and the buffer is trimmed once per chunk: a reply can be one line of tens of MB (a thread's
+/// history) arriving 64 KB at a time. A line keeps a \r before its \n (JSON reads it as space).
+public struct LineSplitter: Sendable {
+    private var buffer = Data()
+
+    public init() {}
+
+    /// The lines `chunk` completes, in order. Blank ones (spaces, \r) are dropped.
+    public mutating func feed(_ chunk: Data) -> [Data] {
+        var from = buffer.count
+        buffer.append(chunk)
+        var lines: [Data] = []
+        var start = 0
+        while let newline = Self.newline(in: buffer, from: from) {
+            let line = buffer[(buffer.startIndex + start)..<(buffer.startIndex + newline)]
+            if !Self.blank(line) { lines.append(Data(line)) }
+            start = newline + 1
+            from = start
+        }
+        if start > 0 { buffer.removeSubrange(buffer.startIndex..<(buffer.startIndex + start)) }
+        return lines
+    }
+
+    /// A last line the stream ended without a \n after, if any.
+    public mutating func finish() -> Data? {
+        defer { buffer = Data() }
+        return buffer.isEmpty || Self.blank(buffer[...]) ? nil : buffer
+    }
+
+    private static func blank(_ line: Data.SubSequence) -> Bool {
+        line.allSatisfy { $0 == 0x20 || $0 == 0x0D }
+    }
+
+    /// The offset of the first \n at or after `offset`.
+    private static func newline(in data: Data, from offset: Int) -> Int? {
+        guard offset < data.count else { return nil }
+        return data.withUnsafeBytes { bytes -> Int? in
+            guard let base = bytes.baseAddress, let found = memchr(base + offset, 0x0A, bytes.count - offset) else { return nil }
+            return base.distance(to: UnsafeRawPointer(found))
+        }
     }
 }
