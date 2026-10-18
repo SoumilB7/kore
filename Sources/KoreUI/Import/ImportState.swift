@@ -45,6 +45,9 @@ final class ImportState {
     var searching = false
     private(set) var rows: [Row] = []
     private(set) var picked: String?
+    /// The row the keys or the pointer are on: ↑ ↓ move it and Return picks it. One highlight,
+    /// apart from the pick's.
+    var cursor: String?
     private(set) var line = Line.empty
     /// A chat file is dragged over the empty chat: the line reads "Drop to import".
     var dropTarget = false
@@ -92,15 +95,34 @@ final class ImportState {
 
     func open() {
         isOpen = true
+        cursor = nil
         if let picked, !rows.contains(where: { $0.id == picked }) { pick(nil) }
     }
 
     func close() {
         isOpen = false
+        cursor = nil
         searching = false
         query = ""
         if case .importing = line { return }
         if case .failed = line { line = .empty }
+    }
+
+    /// ↑ ↓: the cursor to the next row shown or the one before, stopping at the ends; from the
+    /// pick when it hasn't moved yet, else from outside the list.
+    func moveCursor(_ step: Int) {
+        let rows = shown
+        guard !rows.isEmpty else { return }
+        let from = (cursor ?? picked).flatMap { id in rows.firstIndex { $0.id == id } }
+        let index = from.map { min(max($0 + step, 0), rows.count - 1) } ?? (step > 0 ? 0 : rows.count - 1)
+        cursor = rows[index].id
+    }
+
+    /// Return: picks the cursor's row (never imports); false with no cursor on a row shown.
+    func pickCursor() -> Bool {
+        guard let cursor, let row = shown.first(where: { $0.id == cursor }) else { return false }
+        if row.id != picked { pick(row) }
+        return true
     }
 
     /// A row picked: its preview fills the line (a refusal, its reason). One preview at a time.

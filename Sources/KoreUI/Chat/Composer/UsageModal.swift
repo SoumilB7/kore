@@ -7,13 +7,15 @@ import SwiftUI
 /// Kore's ~%), which pick the limit shown below; then that limit's distribution: In Kore, every
 /// chat that made it, largest first, Outside Kore, and on Claude's week the plan's own split.
 /// Esc, Return, the × or a click outside close it; ↑ ↓ (k j) step through the limits; a click
-/// on a chat closes it and goes to that chat.
+/// on a chat closes it and goes to that chat. ⇥ rings its buttons and chats in turn, and Return
+/// or Space presses the ringed one.
 struct UsageModal: View {
     let chat: Chat
     let state: UsageState
     let wording: UsageWording
     @StateObject private var keyMonitor = Local<Any?>(nil)
     @StateObject private var window = Local<NSWindow?>(nil)
+    @StateObject private var stops = Held(TabStops())
 
     private static let row = Size.usageResetRow
 
@@ -86,6 +88,7 @@ struct UsageModal: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(reading?.account.plan ?? "Usage")
         .accessibilityAddTraits(.isModal)
+        .tabStops(stops.value)
         .storyID(StoryID.UsageModal.card)
     }
 
@@ -123,9 +126,14 @@ struct UsageModal: View {
                         NSWorkspace.shared.open(url)
                         state.closeExtended()
                     }
+                    .tabStop(StoryID.UsageModal.card.part(.open)) {
+                        NSWorkspace.shared.open(url)
+                        state.closeExtended()
+                    }
                 }
                 IconButton(symbol: "xmark", kind: .small, help: "Close (Esc)") { state.closeExtended() }
                     .storyID(StoryID.UsageModal.card.part(.close))
+                    .tabStop(StoryID.UsageModal.card.part(.close)) { state.closeExtended() }
             }
         }
         .frame(height: Size.iconButtonSmall)
@@ -222,6 +230,7 @@ struct UsageModal: View {
                             used: limit.used, bar: bar, current: current, go: go
                         )
                         .storyID(StoryID.UsageModal.chat(chatShare.id), press: current ? nil : go)
+                        .tabStop(StoryID.UsageModal.chat(chatShare.id), skipped: current, action: go)
                     }
                 }
                 if let list {
@@ -308,6 +317,7 @@ struct UsageModal: View {
     private func handleKey(_ event: NSEvent) -> NSEvent? {
         guard let window = window.value, event.window === window else { return event }
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) { return event }
+        if stops.value.handle(event) { return nil }
         switch event.keyCode {
         case 53, 36, 76: state.closeExtended()
         case 126: state.step(-1)

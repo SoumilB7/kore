@@ -125,6 +125,11 @@ private struct MarkdownCodeBlock: View {
             }
         }
         .onHover { hovered.value = $0 }
+        // The copy button is built only on hover.
+        .accessibilityAction(named: "Copy") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
     }
 }
 

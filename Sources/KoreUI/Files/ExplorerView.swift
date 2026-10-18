@@ -373,7 +373,12 @@ private struct TreeRow: View {
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .onTapGesture { click() }
-        // A tap gesture, not a button: pressed through its action.
+        // A tap gesture, not a button: one element to VoiceOver and Full Keyboard Access, a click's
+        // action its own.
+        .accessibilityElement(children: editing ? .contain : .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { click(double: false) }
+        // Pressed through its action.
         .storyID(StoryID.Explorer.row(store.relative(row.id)), press: click)
         // The pointer's stand-in: no synthetic event reaches `.onHover`.
         .storyAction(StoryID.Explorer.row(store.relative(row.id)).part(.hover)) { hovered.value = true }
@@ -476,9 +481,10 @@ private struct TreeRow: View {
     /// One click selects (a folder opens or closes; a file opens in the preview tab); the
     /// second click of a double click keeps the file's tab and puts the caret in it. The count
     /// comes from the event, as AppKit sends both clicks.
-    private func click() {
+    private func click() { click(double: NSApp.mouseClickCount >= 2) }
+
+    private func click(double: Bool) {
         guard !editing else { return }
-        let double = NSApp.mouseClickCount >= 2
         focus()
         store.selection = row.id
         if row.isFolder {

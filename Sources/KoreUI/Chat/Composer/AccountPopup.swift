@@ -280,7 +280,7 @@ struct AccountPopup: View {
 
     var body: some View {
         ComposerPopup(
-            chat: chat, id: StoryID.Composer.account, stepBack: { state.stepBack() }, close: { state.close() },
+            chat: chat, id: StoryID.Composer.account, isOpen: { state.isOpen }, stepBack: { state.stepBack() }, close: { state.close() },
             editing: { state.isEditing }
         ) {
             if case .platform(let platform) = state.editor {
@@ -460,9 +460,12 @@ private struct AccountRow: View {
                 Button("Yes, sign out") { state.signOut() }
                     .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
                     .storyID(id.part(.allow))
+                    .tabStop(id.part(.allow)) { state.signOut() }
+                // Asked from the keys, the ring lands here: a second Return goes back.
                 Button("No, go back") { state.cancelSignOut() }
                     .buttonStyle(SubtleButtonStyle(small: true))
                     .storyID(id.part(.cancel))
+                    .tabStop(id.part(.cancel), after: id.part(.signOut)) { state.cancelSignOut() }
             } else if state.showsKeyField {
                 KeyField(state: state, provider: provider)
             } else if let step = flow?.step {
@@ -473,11 +476,13 @@ private struct AccountRow: View {
                     Button("Switch account") { state.signIn() }
                         .buttonStyle(SubtleButtonStyle(small: true))
                         .storyID(id.part(.switch))
+                        .tabStop(id.part(.switch)) { state.signIn() }
                     if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method), press: { state.showHostMenu() }) }
                 }
                 Button("Sign out") { state.askSignOut() }
                     .buttonStyle(SubtleButtonStyle(small: true))
                     .storyID(id.part(.signOut))
+                    .tabStop(id.part(.signOut), after: id.part(.cancel)) { state.askSignOut() }
             } else {
                 Text(AccountText.signedOut(product))
                     .font(TextStyle.label)
@@ -510,6 +515,7 @@ private struct AccountRow: View {
             Button(state.copied ? "Copied" : "Copy link") { state.copy(url.absoluteString) }
                 .buttonStyle(SubtleButtonStyle(small: true))
                 .storyID(id.part(.copy))
+                .tabStop(id.part(.copy)) { state.copy(url.absoluteString) }
             cancel(id)
         case .code(let code, _):
             HStack(spacing: Space.xs) {
@@ -522,6 +528,7 @@ private struct AccountRow: View {
             Button(state.copied ? "Copied" : "Copy code") { state.copy(code) }
                 .buttonStyle(SubtleButtonStyle(small: true))
                 .storyID(id.part(.copy))
+                .tabStop(id.part(.copy)) { state.copy(code) }
             cancel(id)
         case .signingIn, .signingOut:
             spinning(Self.words(step))
@@ -561,6 +568,7 @@ private struct AccountRow: View {
         Button("Cancel") { state.cancel() }
             .buttonStyle(SubtleButtonStyle(small: true))
             .storyID(id.part(.cancel))
+            .tabStop(id.part(.cancel)) { state.cancel() }
     }
 
     /// Sign in (or Try again) and, with more than one method, the ⌄ of methods.
@@ -569,6 +577,7 @@ private struct AccountRow: View {
             Button(title) { state.signIn() }
                 .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
                 .storyID(id.part(.signIn))
+                .tabStop(id.part(.signIn)) { state.signIn() }
             if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method), press: { state.showHostMenu() }) }
         }
     }
@@ -626,6 +635,7 @@ private struct MethodMenuButton: View {
 
     var body: some View {
         IconButton(symbol: "chevron.down", kind: .mini, font: Glyph.chevron, help: "Sign-in method") { show() }
+            .tabStop(StoryID.Composer.account.part(.method)) { show() }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
             .background(WindowReader { window.value = $0 })
     }

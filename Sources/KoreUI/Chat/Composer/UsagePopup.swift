@@ -502,7 +502,10 @@ struct UsagePopup: View {
     let room: CGFloat
 
     var body: some View {
-        ComposerPopup(chat: chat, id: StoryID.Composer.usage, room: room, stepBack: { state.stepBack() }, close: { state.close() }) {
+        ComposerPopup(
+            chat: chat, id: StoryID.Composer.usage, room: room, isOpen: { state.isOpen }, stepBack: { state.stepBack() },
+            close: { state.close() }
+        ) {
             content
         }
     }
@@ -546,6 +549,7 @@ struct UsagePopup: View {
                         state.openExtended()
                     }
                     .storyID(StoryID.Composer.usage.part(.extended))
+                    .tabStop(StoryID.Composer.usage.part(.extended)) { state.openExtended() }
                 }
                 if let url = account?.manage {
                     IconButton(
@@ -555,6 +559,10 @@ struct UsagePopup: View {
                         state.close()
                     }
                     .storyID(StoryID.Composer.usage.part(.open))
+                    .tabStop(StoryID.Composer.usage.part(.open)) {
+                        NSWorkspace.shared.open(url)
+                        state.close()
+                    }
                 }
             }
             // The glyph, not its box, on the rows' trailing edge.
@@ -624,6 +632,7 @@ struct UsagePopup: View {
                     state.toggleResets()
                 }
                 .storyID(StoryID.Composer.usage.part(.reset))
+                .tabStop(StoryID.Composer.usage.part(.reset)) { state.toggleResets() }
             }
         } else {
             Text(line).lineLimit(1).truncationMode(.tail).help(line)
@@ -776,9 +785,12 @@ private struct ResetRowView: View {
                 Button("Yes, use reset") { state.useReset() }
                     .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
                     .storyID(id.part(.allow))
+                    .tabStop(id.part(.allow)) { state.useReset() }
+                // Asked from the keys, the ring lands here: a second Return goes back.
                 Button("No, go back") { state.cancelReset() }
                     .buttonStyle(SubtleButtonStyle(small: true))
                     .storyID(id.part(.cancel))
+                    .tabStop(id.part(.cancel), after: id.part(.use)) { state.cancelReset() }
             case .using:
                 title(Theme.text)
                 sending
@@ -855,9 +867,10 @@ private struct ResetRowView: View {
     private func use(_ id: StoryID) -> some View {
         Button("Use reset") { state.askReset(row.id) }
             .buttonStyle(SubtleButtonStyle(small: true))
-            .disabled(busy)
             .accessibilityLabel("Use \(row.title.lowercased()), \(expiry.prefix(1).lowercased() + expiry.dropFirst())")
             .storyID(id.part(.use))
+            .tabStop(id.part(.use), after: id.part(.cancel)) { state.askReset(row.id) }
+            .disabled(busy)
     }
 }
 

@@ -143,6 +143,10 @@ struct ToolBody: View {
         .panel(.toolBody)
         .contentShape(Rectangle())
         .onTapGesture(perform: toggle)
+        // A tap gesture, not a button: one element VoiceOver and Full Keyboard Access can open.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { toggle() }
         .padding(.vertical, Space.bodyMargin)
     }
 }

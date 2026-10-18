@@ -259,7 +259,11 @@ package final class InputDriver {
     /// needs, then to the menu item it matches, and last to the focused view as typed. Any
     /// other key goes through the app as typed.
     package func key(_ chord: KeyChord) async throws {
-        let window = try keyWindow()
+        try await key(chord, in: try keyWindow())
+    }
+
+    /// The same, to another of the app's windows (Welcome).
+    package func key(_ chord: KeyChord, in window: NSWindow) async throws {
         guard let down = chord.event(.keyDown, in: window), let up = chord.event(.keyUp, in: window) else {
             throw StoryFailure.other("can't build the key \(chord)")
         }

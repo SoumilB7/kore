@@ -4,8 +4,8 @@ import SwiftUI
 /// The import picker (chat-handoff.html §2 A), in the composer popups' slot and frame: a quiet
 /// search past eight chats, the chats (logo, title, size, age; seven before it scrolls), then
 /// one footer line with Choose file… and Import. Picking a row fills the line; only the footer
-/// changes, and nothing moves. Esc, a click outside or typing in the composer closes it, and
-/// Return never imports.
+/// changes, and nothing moves. ↑ ↓ move a highlight over the chats and Return picks it. Esc, a
+/// click outside or typing in the composer closes it, and Return never imports.
 struct ImportPopup: View {
     let chat: Chat
     let state: ImportState
@@ -14,14 +14,27 @@ struct ImportPopup: View {
 
     var body: some View {
         ComposerPopup(
-            chat: chat, id: StoryID.Composer.importer, stepBack: { false }, close: { state.close() },
-            editing: { state.searching }
+            chat: chat, id: StoryID.Composer.importer, isOpen: { state.isOpen }, stepBack: { false }, close: { state.close() },
+            editing: { state.searching }, keys: listKey
         ) {
             VStack(alignment: .leading, spacing: Space.sm) {
                 if state.rows.count > ImportState.searchFrom { search }
                 list
                 footer
             }
+        }
+    }
+
+    /// ↑ ↓ and Return for the list, the search field focused or not.
+    private func listKey(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
+        switch event.keyCode {
+        case 125, 126:
+            state.moveCursor(event.keyCode == 125 ? 1 : -1)
+            PointerGate.keyed()
+            return true
+        case 36, 76: return state.pickCursor()
+        default: return false
         }
     }
 
@@ -56,7 +69,12 @@ struct ImportPopup: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(rows) { row in
-                        ImportRow(row: row, folder: chat.folder, selected: row.id == state.picked) { state.pick(row) }
+                        ImportRow(row: row, folder: chat.folder, selected: row.id == state.picked, lit: row.id == state.cursor) {
+                            state.pick(row)
+                        }
+                        .highlightRow(StoryID.Composer.importRow(row.id), lit: row.id == state.cursor, selects: false) {
+                            state.cursor = row.id
+                        }
                     }
                 }
             }
@@ -73,10 +91,12 @@ struct ImportPopup: View {
             Button("Choose file…", action: choose)
                 .buttonStyle(SubtleButtonStyle(small: true))
                 .storyID(StoryID.Composer.importer.part(.choose), press: choose)
+                .tabStop(StoryID.Composer.importer.part(.choose), action: choose)
             Button("Import") { state.importPicked() }
                 .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
-                .disabled(!state.canImport)
                 .storyID(StoryID.Composer.importer.part(.add), press: { [state] in if state.canImport { state.importPicked() } })
+                .tabStop(StoryID.Composer.importer.part(.add)) { state.importPicked() }
+                .disabled(!state.canImport)
         }
         .frame(height: Size.importRow)
     }
@@ -135,13 +155,14 @@ struct ImportPopup: View {
 }
 
 /// One chat in the picker: its source's logo, its title, then size and age in tertiary (a
-/// spinner in place of the age while it runs in another tab).
+/// spinner in place of the age while it runs in another tab). Picked, the row's selection;
+/// under the pointer or the keys, its hover.
 private struct ImportRow: View {
     let row: ImportState.Row
     let folder: URL
     let selected: Bool
+    let lit: Bool
     let pick: @MainActor @Sendable () -> Void
-    @StateObject private var hovered = Local(false)
 
     var body: some View {
         Button(action: pick) {
@@ -172,13 +193,13 @@ private struct ImportRow: View {
             .padding(.horizontal, Space.md)
             .frame(height: Size.importRow)
             .background(
-                selected ? Theme.Row.selected(.surface) : hovered.value ? Theme.Row.hover(.surface) : .clear,
+                selected ? Theme.Row.selected(.surface) : lit ? Theme.Row.hover(.surface) : .clear,
                 in: RoundedRectangle(cornerRadius: Radius.chip)
             )
             .contentShape(RoundedRectangle(cornerRadius: Radius.chip))
         }
         .buttonStyle(.plain)
-        .onHover { hovered.value = $0 }
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .help(row.folder.map { $0 == folder.path ? row.title : "\(row.title)\n\($0)" } ?? row.title)
         .storyID(StoryID.Composer.importRow(row.id), press: pick)
     }

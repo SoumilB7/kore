@@ -1,11 +1,15 @@
+import AppKit
 import SwiftUI
 
+/// Open Folder… and the recent folders: ↑ ↓ light one (as the pointer does) and Return opens it.
 struct WelcomeView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     /// The one lit recent folder: the pointer's, or the keys'.
     @StateObject private var lit = Local<Int?>(nil)
+    @StateObject private var window = Held<NSWindow?>(nil)
+    @StateObject private var monitor = Held<Any?>(nil)
 
     var body: some View {
         VStack(spacing: Layout.Welcome.sectionGap) {
@@ -64,6 +68,16 @@ struct WelcomeView: View {
         .frame(minHeight: Layout.Welcome.minHeight)
         // The window takes the content's full height (with .contentSize), so nothing is cut off.
         .fixedSize(horizontal: false, vertical: true)
+        .background(WindowReader { window.value = $0 })
+        .onAppear {
+            if monitor.value == nil { monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { key($0) } }
+            app.welcomeTakesKeys = true
+        }
+        .onDisappear {
+            if let m = monitor.value { NSEvent.removeMonitor(m) }
+            monitor.value = nil
+            app.welcomeTakesKeys = false
+        }
         .task {
             // A dev snapshot of this window when no folder is opened.
             if let folder = DevSnapshot.openFolder { open(folder) } else { DevSnapshot.captureIfRequested() }
@@ -73,6 +87,27 @@ struct WelcomeView: View {
 
     private func open(_ folder: URL) {
         app.open(folder, openWindow: openWindow, dismissWindow: dismissWindow)
+    }
+
+    /// ↑ ↓ through the recent folders, stopping at the ends (from none, the first or the last),
+    /// Return opens the lit one. This window's keys only.
+    private func key(_ event: NSEvent) -> NSEvent? {
+        let recents = app.recents
+        guard let window = window.value, event.window === window, !recents.isEmpty,
+            event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        else { return event }
+        switch event.keyCode {
+        case 125, 126:
+            let step = event.keyCode == 125 ? 1 : -1
+            lit.value = lit.value.map { min(max($0 + step, 0), recents.count - 1) } ?? (step > 0 ? 0 : recents.count - 1)
+            PointerGate.keyed()
+        case 36, 76:
+            guard let index = lit.value, recents.indices.contains(index) else { return event }
+            open(recents[index])
+        default:
+            return event
+        }
+        return nil
     }
 }
 

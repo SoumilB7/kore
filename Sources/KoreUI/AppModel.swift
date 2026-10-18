@@ -33,6 +33,15 @@ package final class AppModel {
     /// Opens (or focuses) a folder's window, the way a folder from outside the app is.
     package func openFolder(_ folder: URL) { openFromOutside([folder]) }
 
+    /// The Welcome window, as Window ▸ Welcome Window opens it (storylines).
+    package func storyShowWelcome() { windowActions?.0(id: KoreApp.welcomeID) }
+
+    /// The recent folders, newest first (storylines).
+    package var storyRecents: [URL] { recents }
+
+    /// Welcome's keys' monitor is in (storylines wait for it before a key).
+    @ObservationIgnored package internal(set) var welcomeTakesKeys = false
+
     func chooseFolder() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true

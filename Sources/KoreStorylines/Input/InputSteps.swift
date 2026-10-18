@@ -87,6 +87,24 @@ package struct Key: Step {
     package func run(_ story: StoryContext) async throws { try await story.input.key(chord) }
 }
 
+/// One key to another of the app's windows than the storyline's own (Welcome), found by title.
+package struct KeyIn: Step {
+    let title: String
+    let chord: KeyChord
+    package var label: String { "Key \(chord) in “\(title)”" }
+    package init(_ title: String, _ chord: KeyChord) {
+        self.title = title
+        self.chord = chord
+    }
+
+    package func run(_ story: StoryContext) async throws {
+        let window = try await story.wait("the “\(title)” window") { [title] in
+            NSApp.windows.first { $0.title == title && $0.isVisible }
+        }
+        try await story.input.key(chord, in: window)
+    }
+}
+
 /// Text typed into whatever has focus, a key at a time.
 package struct TypeText: Step {
     let text: String

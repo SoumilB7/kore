@@ -244,6 +244,9 @@ private struct SearchFileRow: View {
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .onTapGesture(perform: action)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { action() }
         .help(relative)
         .contextMenu {
             Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) }
@@ -284,6 +287,9 @@ private struct SearchHitRow: View {
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .onTapGesture { action(NSApp.mouseClickCount >= 2) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { action(false) }
         .help("Line \(hit.line)")
         // Keyed by the 0-based line, like every storyline line.
         .storyID(StoryID.Search.result(store.relative(hit.path), line: hit.line - 1), press: { action(false) })

@@ -415,6 +415,9 @@ struct MessageHeader: View {
                 actions.reveal(entry.id.uuidString)
             }
         }
+        .messageActions(text: place == .row && messageActions != nil ? entry.text : nil, canFork: messageActions?.canFork == true) {
+            actions.fork(entry)
+        }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
             guard place == .row else { return }
             top.value = frame.minY
@@ -689,6 +692,7 @@ private struct AnswerWithActions: View {
             }
         }
         .onHover { if hovered.value != $0 { hovered.value = $0 } }
+        .messageActions(text: entry.text, canFork: messageActions.canFork) { actions.forkAfter(entry) }
     }
 }
 
@@ -722,12 +726,31 @@ struct MessageActionsRow: View {
     }
 
     private func copy() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        Self.copy(text)
         copied.value = true
         Task {
             try? await Task.sleep(for: .seconds(Motion.copied))
             copied.value = false
+        }
+    }
+}
+
+extension MessageActionsRow {
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+extension View {
+    /// Copy and Fork as the message's accessibility actions: shown under it only on hover, they
+    /// reach VoiceOver and Full Keyboard Access from the message itself. Nil text: none.
+    func messageActions(text: String?, canFork: Bool, fork: @escaping () -> Void) -> some View {
+        accessibilityActions {
+            if let text {
+                Button("Copy") { MessageActionsRow.copy(text) }
+                if canFork { Button("Fork", action: fork) }
+            }
         }
     }
 }
@@ -1047,6 +1070,8 @@ private struct AgentHeader: View {
     let open: Bool
     let actions: TranscriptActions
     @StateObject private var hovered = Local(false)
+    /// Full Keyboard Access is on the card's line: "Open in tab" shows as on hover.
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
@@ -1062,7 +1087,7 @@ private struct AgentHeader: View {
                         name: info.name, nameColor: AgentAvatar.hue(info.index), text: subtitle,
                         status: statusSuffix)
                         .layoutPriority(1)
-                    if hovered.value {
+                    if hovered.value || focused {
                         // Built only on hover: a hidden view wouldn't take the click.
                         Button {
                             actions.openAgent(info.id)
@@ -1082,8 +1107,10 @@ private struct AgentHeader: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .focused($focused)
             .onHover { hovered.value = $0 }
             .accessibilityHint(Text(open ? "Hides the agent's work" : "Shows the agent's work"))
+            .accessibilityAction(named: "Open in tab") { actions.openAgent(info.id) }
             // "Open in tab" is built only on hover: pressed through its action meanwhile.
             .storyAction(StoryID.Transcript.agent(info.id).part(.open)) { actions.openAgent(info.id) }
             if info.status == .running {

@@ -238,6 +238,10 @@ extension Chat {
     /// (titles), its footer line, and whether Import is on.
     package var storyImportOpen: Bool { importer.isOpen }
     package var storyImportRows: [String] { importer.shown.map(\.title) }
+    /// The picked row's title.
+    package var storyImportPicked: String? { importer.shown.first { $0.id == importer.picked }?.title }
+    /// A row's id, by its title.
+    package func storyImportRowID(_ title: String) -> String? { importer.shown.first { $0.title == title }?.id }
     package var storyImportLine: String { importer.text(in: self) }
     package var storyImportReady: Bool { importer.canImport }
     /// The context ring's tokens as it words them ("~80k"), "" with no reading.

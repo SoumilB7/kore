@@ -31,8 +31,8 @@ struct HistoryButton: View {
 }
 
 /// Search, chats (newest first), rename, archive. Sizes itself to the space it's given, so it
-/// fits a small window or tile. Closes on Esc or a click anywhere else, and that click still
-/// does what it was aimed at. It stays mounted while closed (hidden): removing a view that
+/// fits a small window or tile. ↑ ↓ move the lit row and Return opens it. Closes on Esc or a
+/// click anywhere else, and that click still does what it was aimed at. It stays mounted while closed (hidden): removing a view that
 /// holds focus makes SwiftUI reset the window's focus, which undid the click's focus.
 struct HistoryPanel: View {
     let workspace: Workspace
@@ -47,6 +47,7 @@ struct HistoryPanel: View {
     /// The one lit row, by its place in `matches`: the pointer's or the keys'. Nil until either
     /// moves it, when the first row is lit and Return opens it.
     @StateObject private var lit = Local<Int?>(nil)
+    @StateObject private var window = Held<NSWindow?>(nil)
     @FocusState private var searchFocused: Bool
 
     private var matches: [SessionSummary] {
@@ -59,27 +60,33 @@ struct HistoryPanel: View {
     private var archivedCount: Int { workspace.chats.count { $0.archived } }
 
     var body: some View {
-        VStack(spacing: Space.md) {
+        let matches = matches
+        return VStack(spacing: Space.md) {
             searchBar
-            ScrollView {
-                LazyVStack(spacing: Space.xxs) {
-                    ForEach(Array(matches.enumerated()), id: \.element.id) { index, chat in
-                        HistoryRow(
-                            session: chat,
-                            lit: (lit.value ?? 0) == index,
-                            showsActions: lit.value == index,
-                            isRenaming: renaming.value == chat.id,
-                            open: { open(chat) },
-                            startRename: { renaming.value = chat.id },
-                            finishRename: { name in
-                                renaming.value = nil
-                                if let name, name != chat.title { Task { await workspace.rename(chat, to: name) } }
-                            },
-                            toggleArchive: {
-                                Task { chat.archived ? await workspace.unarchive(chat) : await workspace.archive(chat) }
-                            })
-                        .highlightRow(StoryID.History.row(chat.id), lit: (lit.value ?? 0) == index) { lit.value = index }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: Space.xxs) {
+                        ForEach(Array(matches.enumerated()), id: \.element.id) { index, chat in
+                            HistoryRow(
+                                session: chat,
+                                lit: (lit.value ?? 0) == index,
+                                showsActions: lit.value == index,
+                                isRenaming: renaming.value == chat.id,
+                                open: { open(chat) },
+                                startRename: { renaming.value = chat.id },
+                                finishRename: { name in
+                                    renaming.value = nil
+                                    if let name, name != chat.title { Task { await workspace.rename(chat, to: name) } }
+                                },
+                                toggleArchive: {
+                                    Task { chat.archived ? await workspace.unarchive(chat) : await workspace.archive(chat) }
+                                })
+                            .highlightRow(StoryID.History.row(chat.id), lit: (lit.value ?? 0) == index) { lit.value = index }
+                        }
                     }
+                }
+                .onChange(of: lit.value) { _, index in
+                    if let index, matches.indices.contains(index) { proxy.scrollTo(matches[index].id) }
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -95,6 +102,7 @@ struct HistoryPanel: View {
         .panel(.panel)
         .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
+        .background(WindowReader { window.value = $0 })
         .opacity(isOpen ? 1 : 0)
         .allowsHitTesting(isOpen)
         .onChange(of: query.value) { lit.value = nil }
@@ -132,7 +140,7 @@ struct HistoryPanel: View {
                 .focused($searchFocused)
                 // Hidden, it takes no keys (and focus is left alone: clearing it resets the window's).
                 .disabled(!isOpen)
-                .onSubmit { if let first = matches.first { open(first) } }
+                .onSubmit(openLit)
             Button {
                 showArchived.value.toggle()
             } label: {
@@ -154,6 +162,20 @@ struct HistoryPanel: View {
         .panel(.well)
     }
 
+    /// Return: the lit row, the first until the pointer or the keys move.
+    private func openLit() {
+        let list = matches
+        if list.indices.contains(lit.value ?? 0) { open(list[lit.value ?? 0]) }
+    }
+
+    /// ↑ ↓ from the lit row, stopping at the ends; from none, the first row is lit already.
+    private func move(_ step: Int) {
+        let count = matches.count
+        guard count > 0 else { return }
+        lit.value = min(max((lit.value ?? 0) + step, 0), count - 1)
+        PointerGate.keyed()
+    }
+
     private func open(_ chat: SessionSummary) {
         close()
         if chat.archived {
@@ -163,14 +185,23 @@ struct HistoryPanel: View {
         }
     }
 
-    /// Esc closes (or cancels a rename first). A click outside the panel and the clock closes
-    /// the panel and is passed on, so it lands on whatever it was aimed at.
+    /// Esc closes (or cancels a rename first); ↑ ↓ and Return go to the list, whatever has
+    /// focus in the panel. A click outside the panel and the clock closes the panel and is passed
+    /// on, so it lands on whatever it was aimed at.
     private func handle(_ event: NSEvent) -> NSEvent? {
         guard let window = event.window, let content = window.contentView else { return event }
         if event.type == .keyDown {
-            guard event.keyCode == 53 else { return event }
-            if renaming.value != nil { return event }  // the row's field cancels its rename
-            close()
+            // The row's field has the keys during a rename: it cancels on Esc.
+            guard renaming.value == nil, window === self.window.value,
+                event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+            else { return event }
+            switch event.keyCode {
+            case 53: close()
+            case 125: move(1)
+            case 126: move(-1)
+            case 36, 76: openLit()
+            default: return event
+            }
             return nil
         }
         let location = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
@@ -220,6 +251,9 @@ private struct HistoryRow: View {
             Button("Rename…", action: startRename)
             Button(session.archived ? "Unarchive" : "Archive", action: toggleArchive)
         }
+        // Built only on the lit row: VoiceOver and the keyboard reach them on any row.
+        .accessibilityAction(named: "Rename", startRename)
+        .accessibilityAction(named: session.archived ? "Unarchive" : "Archive", toggleArchive)
     }
 
     private var title: some View {
