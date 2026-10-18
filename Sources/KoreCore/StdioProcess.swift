@@ -68,6 +68,7 @@ package final class StdioProcess: @unchecked Sendable {
         let key = ObjectIdentifier(self)
         process.terminationHandler = { process in
             Self.running.remove(key)
+            ChildReaper.shared.forget(process.processIdentifier)
             exitSink.yield(process.terminationStatus)
             exitSink.finish()
         }
@@ -79,6 +80,7 @@ package final class StdioProcess: @unchecked Sendable {
             Self.running.remove(key)
             throw error
         }
+        ChildReaper.shared.watch(process.processIdentifier)
 
         Task {
             var lines = LineSplitter()
@@ -136,7 +138,7 @@ package final class StdioProcess: @unchecked Sendable {
     }
 
     /// Closes every child (quitting). Waits up to `limit` for them to exit, so their last output
-    /// still has a reader.
+    /// still has a reader; `ChildReaper` ends any left once Kore has gone.
     package static func closeAll(waiting limit: Duration = .milliseconds(500)) {
         close(running.all, waiting: limit)
     }

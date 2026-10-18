@@ -3,9 +3,9 @@ import Testing
 
 @testable import KoreCore
 
-/// The CLIs Kore starts end with it, on close and quit (`StdioProcess`). The children here are
-/// shells standing in for `claude -p` mid-turn: they ignore EOF on stdin and run a process of
-/// their own.
+/// The CLIs Kore starts end with it, on close and quit (`StdioProcess`) and once Kore has gone
+/// however it went (`ChildReaper`). The children here are shells standing in for `claude -p`
+/// mid-turn: they ignore EOF on stdin and run a process of their own.
 @Suite("children end with Kore")
 struct ChildShutdownTests {
     /// Runs a tool (`sleep`) in its process group, prints the tool's pid and waits on it.
@@ -71,5 +71,55 @@ struct ChildShutdownTests {
         #expect(!first.isRunning && !second.isRunning)
         #expect(await gone(firstTool))
         #expect(await gone(secondTool))
+    }
+
+    // MARK: - Kore gone
+
+    /// A child of this test process, as a CLI is of Kore's.
+    private func spawn(_ script: String) throws -> (Process, tool: pid_t) {
+        let process = Process()
+        let out = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", script]
+        process.standardInput = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        var line = Data()
+        while let byte = try out.fileHandleForReading.read(upToCount: 1), let b = byte.first, b != 0x0A { line.append(b) }
+        return (process, pid_t(String(decoding: line, as: UTF8.self)) ?? 0)
+    }
+
+    @Test func theReaperEndsChildrenWhenKoreIsGone() async throws {
+        let reaper = ChildReaper(grace: .milliseconds(400))
+        let (busy, busyTool) = try spawn(Self.busy)
+        let (stubborn, stubbornTool) = try spawn(Self.stubborn)
+        reaper.watch(busy.processIdentifier)
+        reaper.watch(stubborn.processIdentifier)
+        let reaperPid = try #require(reaper.pid)
+        // Kore exiting closes the reaper's pipe.
+        reaper.end()
+        // SIGTERM ends the first; the second, deaf to it, gets SIGKILL after the grace.
+        #expect(await gone(busy.processIdentifier))
+        #expect(await gone(busyTool))
+        #expect(await gone(stubborn.processIdentifier))
+        #expect(await gone(stubbornTool))
+        #expect(await gone(reaperPid))
+    }
+
+    @Test func theReaperLeavesWhatItWasToldEnded() async throws {
+        let reaper = ChildReaper(grace: .milliseconds(200))
+        let (child, tool) = try spawn(Self.busy)
+        let pid = child.processIdentifier
+        defer {
+            kill(-pid, SIGKILL)
+            child.waitUntilExit()
+        }
+        reaper.watch(pid)
+        reaper.forget(pid)
+        let reaperPid = try #require(reaper.pid)
+        reaper.end()
+        #expect(await gone(reaperPid))
+        #expect(child.isRunning && kill(tool, 0) == 0)
     }
 }
