@@ -267,6 +267,39 @@ struct StayAwakeTests {
         #expect(sent == 1)
     }
 
+    // MARK: From each CLI
+
+    private func limited(_ events: [ChatEvent]) -> (String, Date?)? {
+        events.lazy.compactMap { if case .turnFinished(_, .limited(let said, let at), _) = $0 { (said, at) } else { nil } }.first
+    }
+
+    @Test func claudesRefusedTurnEndsLimited() throws {
+        let translator = ClaudeTranslator(folder: Drive.folder, sessionId: nil)
+        translator.openTurn(.user)
+        let lines = [
+            #"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1793100000,"rateLimitType":"five_hour"}}"#,
+            #"{"type":"result","subtype":"success","is_error":true,"result":"You've hit your session limit · resets 3pm (Asia/Kolkata)","duration_ms":120}"#,
+        ]
+        for line in lines { translator.translate(ClaudeEvent(message: try JSONValue.parse(Data(line.utf8)))) }
+        let hit = limited(translator.take().events)
+        #expect(hit?.0 == "You've hit your session limit · resets 3pm (Asia/Kolkata)")
+        #expect(hit?.1 == Date(timeIntervalSince1970: 1_793_100_000))
+    }
+
+    @Test func codexsUsageLimitEndsLimited() throws {
+        let translator = CodexTranslator(folder: Drive.folder)
+        translator.translate(.threadStarted(threadId: "th1", model: nil, raw: .null))
+        let started: JSONValue = ["threadId": "th1", "turn": ["id": "t1", "status": "inProgress"]]
+        translator.translate(CodexEvent(notification: "turn/started", params: started))
+        let error: JSONValue = ["message": "You've hit your usage limit. Try again in 2 hours.", "codexErrorInfo": "usageLimitExceeded"]
+        let completed: JSONValue = ["threadId": "th1", "turn": ["id": "t1", "status": "failed", "error": error]]
+        let before = Date()
+        translator.translate(CodexEvent(notification: "turn/completed", params: completed))
+        let hit = limited(translator.take().events)
+        #expect(hit?.0 == "You've hit your usage limit. Try again in 2 hours.")
+        #expect(hit?.1.map { abs($0.timeIntervalSince(before) - 7200) < 5 } == true)
+    }
+
     // MARK: In the transcript
 
     @Test func aSleptTurnShowsItsNoticeAndALimitItsContinuation() {
