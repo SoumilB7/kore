@@ -185,3 +185,41 @@ extension Workspace {
         return true
     }
 }
+
+/// Stay awake, for a storyline host: what it shows and holds, in plain terms. Under a host its
+/// hold only records (`RecordedHold`), so no storyline keeps the Mac awake.
+@MainActor
+package enum StoryAwake {
+    package static var isOn: Bool { StayAwake.current?.isOn ?? false }
+    /// The mode's id ("agents", "always", "1h", "4h").
+    package static var mode: String? { StayAwake.current?.mode.rawValue }
+    /// "off", "holding", "waiting" or "paused".
+    package static var state: String {
+        switch StayAwake.current?.state {
+        case .holding: "holding"
+        case .waiting: "waiting"
+        case .paused: "paused"
+        case .off, nil: "off"
+        }
+    }
+    /// The cup's hover line.
+    package static var line: String? { StayAwake.current?.line }
+    /// The reason it holds for now; nil when it holds nothing.
+    package static var held: String? { (StayAwake.current?.hold as? RecordedHold)?.current }
+    /// Every reason it was asked to hold, nil for each let-go, since the host started.
+    package static var holds: [String?] { (StayAwake.current?.hold as? RecordedHold)?.reasons ?? [] }
+
+    /// Off, in While Agents Work, holding `grace` after the last agent ends.
+    package static func reset(grace: TimeInterval = 120) {
+        guard let awake = StayAwake.current else { return }
+        awake.choose(.whileAgentsWork)
+        awake.turnOff()
+        awake.grace = grace
+    }
+}
+
+extension Chat {
+    /// The turn whose limit notice says when the chat continues, and the words it says.
+    package var storyContinuesTurn: String? { transcript.continuation?.turn }
+    package var storyContinuesLine: String? { continuesAt.map { ContinueText.line($0, now: Date()) } }
+}

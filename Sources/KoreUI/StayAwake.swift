@@ -240,10 +240,11 @@ final class StayAwake {
 
     nonisolated static func agents(_ count: Int) -> String { count == 1 ? "1 agent" : "\(count) agents" }
 
-    /// "2h 14m left", "12m left", "1m left".
+    /// "2h 14m left", "1h left", "12m left", "1m left".
     nonisolated static func left(until end: Date, now: Date) -> String {
         let minutes = minutes(until: end, now: now)
-        return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m left" : "\(minutes)m left"
+        guard minutes >= 60 else { return "\(minutes)m left" }
+        return minutes % 60 == 0 ? "\(minutes / 60)h left" : "\(minutes / 60)h \(minutes % 60)m left"
     }
 
     /// Whole minutes left, rounded up, and at least 1.

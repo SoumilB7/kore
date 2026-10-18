@@ -108,6 +108,7 @@ struct StayAwakeTests {
         #expect(awake.line == "Awake · 12m left")
         // Picked again, it starts over.
         awake.choose(.hour)
+        #expect(awake.line == "Awake · 1h left")
         clock.advance(by: 59 * 60 + 30)
         #expect(awake.line == "Awake · 1m left")
         clock.advance(by: 31)
@@ -265,6 +266,35 @@ struct StayAwakeTests {
             await settle()
         }
         #expect(sent == 1)
+    }
+
+    /// The real hold, for a few seconds, when asked (`KORE_REAL_HOLD=1`): `pmset -g assertions`
+    /// lists its reason while it's held and not after. Never part of an ordinary run.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["KORE_REAL_HOLD"] == "1"))
+    func theRealHoldShowsInPmset() async throws {
+        let hold = ActivityHold()
+        hold.hold("Kore: 3 agents working")
+        try await Task.sleep(for: .seconds(2))
+        let held = try Self.pmset()
+        hold.hold(nil)
+        try await Task.sleep(for: .seconds(1))
+        let after = try Self.pmset()
+        print("held:\n" + held + "\nafter:\n" + after)
+        #expect(held.contains("Kore: 3 agents working"))
+        #expect(!after.contains("Kore: 3 agents working"))
+    }
+
+    /// `pmset -g assertions`' lines naming Kore.
+    private static func pmset() throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+        process.arguments = ["-g", "assertions"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self).split(separator: "\n").filter { $0.contains("Kore") }.joined(separator: "\n")
     }
 
     // MARK: From each CLI
