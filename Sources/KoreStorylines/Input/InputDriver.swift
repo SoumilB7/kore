@@ -355,7 +355,7 @@ package final class InputDriver {
     }
 
     /// The menu item a key equivalent matches. Items with a target are performed by the menu; an
-    /// item that goes up the responder chain (Copy, Paste, Select All) is sent to the storyline
+    /// item that goes up the responder chain (Undo, Copy, Paste, Select All) is sent to the storyline
     /// window's first responder when it takes it, since AppKit would send it to the key window's.
     private func menu(_ event: NSEvent, in window: NSWindow) -> Bool {
         guard let main = NSApp.mainMenu else { return false }

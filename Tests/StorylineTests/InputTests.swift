@@ -186,6 +186,39 @@ struct KeyOrderTests {
         #expect(monitor == 1)
         #expect(view == 1)
     }
+
+    /// A view that answers a menu item's action, around one that takes the caret and no actions.
+    private final class Answers: NSView {
+        var hits = 0
+        @objc func storyMenuAction(_ sender: Any?) { hits += 1 }
+    }
+
+    private final class Caret: NSView {
+        override var acceptsFirstResponder: Bool { true }
+    }
+
+    /// As ⌘Z with the caret in a text field: Undo is answered further up than the first
+    /// responder. Sent to the first responder itself, the action raised.
+    @Test func aMenuItemsActionGoesUpTheChainFromTheFirstResponder() async throws {
+        let outer = Answers(frame: CGRect(x: 10, y: 10, width: 100, height: 60))
+        let caret = Caret(frame: CGRect(x: 10, y: 10, width: 40, height: 20))
+        outer.addSubview(caret)
+        window.contentView?.addSubview(outer)
+        defer { outer.removeFromSuperview() }
+        #expect(window.makeFirstResponder(caret))
+
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(NSMenuItem(title: "Act", action: #selector(Answers.storyMenuAction(_:)), keyEquivalent: "j"))
+        let bar = NSMenu(title: "")
+        bar.addItem(NSMenuItem(title: "Edit", action: nil, keyEquivalent: ""))
+        bar.items.last?.submenu = edit
+        let saved = NSApp.mainMenu
+        NSApp.mainMenu = bar
+        defer { NSApp.mainMenu = saved }
+
+        try await InputDriver(window: { [window] in window }, real: nil).key(.cmd("j"))
+        #expect(outer.hits == 1)
+    }
 }
 
 @Suite("real input, dry", .serialized)
