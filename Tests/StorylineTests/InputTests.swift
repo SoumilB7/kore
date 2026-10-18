@@ -138,3 +138,52 @@ struct LocatorTests {
         await #expect(throws: StoryFailure.self) { try await driver.click(try #require(StoryElement(StoryID.Titlebar.agents))) }
     }
 }
+
+@Suite("keys in a real keypress's order", .serialized)
+@MainActor
+struct KeyOrderTests {
+    private let window: NSWindow = {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: CGRect(x: -10000, y: -10000, width: 300, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.orderFront(nil)
+        return window
+    }()
+
+    /// A view with a key equivalent of its own, as SwiftUI's `.keyboardShortcut` is.
+    private final class Shortcut: NSView {
+        var hits = 0
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            guard event.charactersIgnoringModifiers == "k" else { return false }
+            hits += 1
+            return true
+        }
+    }
+
+    private func run(_ chord: KeyChord, monitorTakes: Bool) async throws -> (monitor: Int, view: Int) {
+        let view = Shortcut(frame: CGRect(x: 10, y: 10, width: 40, height: 20))
+        window.contentView?.addSubview(view)
+        defer { view.removeFromSuperview() }
+        var seen = 0
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.charactersIgnoringModifiers == "k" else { return event }
+            seen += 1
+            return monitorTakes ? nil : event
+        }
+        defer { if let monitor { NSEvent.removeMonitor(monitor) } }
+        try await InputDriver(window: { [window] in window }, real: nil).key(chord)
+        return (seen, view.hits)
+    }
+
+    @Test func theAppsMonitorsTakeAKeyBeforeTheWindowsViews() async throws {
+        let (monitor, view) = try await run(.cmd("k"), monitorTakes: true)
+        #expect(monitor == 1)
+        #expect(view == 0)
+    }
+
+    @Test func aKeyTheMonitorsPassOnReachesTheViews() async throws {
+        let (monitor, view) = try await run(.cmd("k"), monitorTakes: false)
+        #expect(monitor == 1)
+        #expect(view == 1)
+    }
+}

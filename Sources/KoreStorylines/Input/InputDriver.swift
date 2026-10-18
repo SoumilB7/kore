@@ -35,7 +35,9 @@ package final class InputDriver {
 
     /// The element's registered action, with no pointer; without one, a click at its centre.
     package func press(_ element: StoryElement) async throws {
-        if let press = element.press { press() } else { try await click(element) }
+        guard let press = element.press else { return try await click(element) }
+        press()
+        await pass()
     }
 
     package func click(_ element: StoryElement, count: Int = 1, modifiers: NSEvent.ModifierFlags = []) async throws {
@@ -43,18 +45,21 @@ package final class InputDriver {
         for n in 1...max(count, 1) {
             click(.leftMouseDown, .leftMouseUp, at: point, in: window, clickCount: n, modifiers: modifiers)
         }
+        await pass()
     }
 
     package func rightClick(_ element: StoryElement) async throws {
         let (window, point) = try await aim(element)
         click(.rightMouseDown, .rightMouseUp, at: point, in: window)
+        await pass()
     }
 
     /// A press and release at a point. The release is queued first, so a view that tracks the
     /// mouse in its press (a text view selecting) finds it, and is sent after when nothing took it.
     /// A window that isn't key keeps a first click for itself unless the view under it accepts
     /// the first mouse; a storyline's window is never key, so an AppKit view's click (the
-    /// editor's text) goes to the view itself.
+    /// editor's text) goes to the view itself, which first becomes the window's first responder
+    /// when it takes one, as the key window makes the view a click lands on.
     private func click(
         _ downType: NSEvent.EventType, _ upType: NSEvent.EventType, at point: CGPoint, in window: NSWindow,
         clickCount: Int = 1, modifiers: NSEvent.ModifierFlags = []
@@ -66,6 +71,7 @@ package final class InputDriver {
         let mask: NSEvent.EventTypeMask = upType == .rightMouseUp ? .rightMouseUp : .leftMouseUp
         if let view = window.contentView?.hitTest(point), !window.isKeyWindow, !Self.isSwiftUI(view), !view.acceptsFirstMouse(for: down) {
             // Both halves to the view: the window, having kept no press, would drop the release.
+            if view.acceptsFirstResponder, window.firstResponder !== view { window.makeFirstResponder(view) }
             if downType == .rightMouseDown { view.rightMouseDown(with: down) } else { view.mouseDown(with: down) }
             if let queued = NSApp.nextEvent(matching: mask, until: .distantPast, inMode: .default, dequeue: true) {
                 if upType == .rightMouseUp { view.rightMouseUp(with: queued) } else { view.mouseUp(with: queued) }
@@ -108,6 +114,7 @@ package final class InputDriver {
         }
         await pass()
         mouse(.leftMouseUp, at: end, in: window)
+        await pass()
     }
 
     /// Scrolls the list the element sits in, wherever in it the element is, by moving its scroll
@@ -190,22 +197,30 @@ package final class InputDriver {
 
     // MARK: Keys
 
-    /// One key, sent to the first place that takes it (the input spike, 2026-10-21). A key
-    /// equivalent (⌘ or ⌃) goes to the window's view tree, which SwiftUI's `.keyboardShortcut`
-    /// needs, then to the menu item it matches; any other key, or an equivalent nobody took,
-    /// goes through the app as typed, so event monitors and the focused field see it.
+    /// One key, sent to the first place that takes it, in a real keypress's order (the input
+    /// spike, 2026-10-21). The app's local event monitors see it first, as AppKit runs them
+    /// before anything else (the editor's own keys, ⌘F ⌘S ⌘Z, are one). A key equivalent (⌘ or
+    /// ⌃) they pass on then goes to the window's view tree, which SwiftUI's `.keyboardShortcut`
+    /// needs, then to the menu item it matches, and last to the focused view as typed. Any
+    /// other key goes through the app as typed.
     package func key(_ chord: KeyChord) async throws {
         let window = try keyWindow()
         guard let down = chord.event(.keyDown, in: window), let up = chord.event(.keyUp, in: window) else {
             throw StoryFailure.other("can't build the key \(chord)")
         }
-        // A turn of the main queue after each key, as between a person's keystrokes: what one
-        // key set off (a selection, a binding's update) lands before the next.
-        if chord.isEquivalent {
-            if window.performKeyEquivalent(with: down) { return await pass() }
-            if menu(down, in: window) { return await pass() }
+        // The end of the event after each key, as between a person's keystrokes: what one key
+        // set off (a selection, a binding's update) lands before the next.
+        guard chord.isEquivalent else {
+            NSApp.sendEvent(down)
+            NSApp.sendEvent(up)
+            return await pass()
         }
-        NSApp.sendEvent(down)
+        if KeyGate.passesMonitors(down) {
+            if !window.performKeyEquivalent(with: down), !menu(down, in: window) {
+                // The monitors have seen it: straight to the window, not through the app again.
+                window.sendEvent(down)
+            }
+        }
         NSApp.sendEvent(up)
         await pass()
     }
@@ -353,12 +368,47 @@ package final class InputDriver {
 
     private static func describe(_ r: CGRect) -> String { "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))×\(Int(r.height))" }
 
-    /// One turn of the main queue, so what the last event set off can run before the next.
+    /// The end of an event, as between a person's events: one turn of the app's event loop, so
+    /// what the last event set off runs before the next, and AppKit closes the event as it does
+    /// after each one it dispatches (an undo group per event: two presses are two undo steps).
+    /// The driver hands its events to AppKit directly, so a marker event goes through the loop
+    /// instead (or, should a loop of someone else's hold it, the end comes after a second). A
+    /// host that isn't in the event loop (a test runner) gets a main-queue turn.
     private func pass() async {
+        guard NSApp.isRunning else {
+            return await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                DispatchQueue.main.async { done.resume() }
+            }
+        }
+        Self.marks += 1
+        let mark = Self.marks
+        guard let marker = NSEvent.otherEvent(
+            with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0, context: nil, subtype: Self.markerSubtype, data1: mark, data2: 0)
+        else { return }
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            DispatchQueue.main.async { done.resume() }
+            let monitor = Box()
+            let end = {
+                guard let value = monitor.value else { return }
+                NSEvent.removeMonitor(value)
+                monitor.value = nil
+                done.resume()
+            }
+            monitor.value = NSEvent.addLocalMonitorForEvents(matching: .applicationDefined) { event in
+                guard event.subtype.rawValue == Self.markerSubtype, event.data1 == mark else { return event }
+                end()
+                return nil
+            }
+            NSApp.postEvent(marker, atStart: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { end() }
         }
     }
+
+    private static var marks = 0
+    /// The driver's own application-defined events.
+    private static let markerSubtype: Int16 = 0x4B53
+
+    private final class Box { var value: Any? }
 }
 
 /// Finished with its storyline, pass or fail: the cursor and the front app go back.
@@ -370,5 +420,63 @@ extension StoryContext {
         stash(InputDriver.self) {
             InputDriver(window: { [unowned self] in window }, real: flags.realInput ? RealInput(keys: flags.realKeys) : nil)
         }
+    }
+}
+
+/// Runs a key down through the app's local event monitors alone. They're called inside
+/// `NSApp.sendEvent`, in no fixed order, before AppKit routes the key on, and there's no API for
+/// running them apart. So the key goes through the app with the routing after them stopped:
+/// AppKit offers a key equivalent to the main menu (set aside meanwhile for one that only takes
+/// note) or hands the key to its window (whose `sendEvent`, swapped in by the storyline driver
+/// only, holds it at the door). A key that gets that far wasn't taken by any monitor, and the
+/// driver then offers it to the window's views first, as AppKit does for the key window.
+@MainActor
+enum KeyGate {
+    // Read from AppKit's callbacks, which run on the main thread inside `passesMonitors`.
+    nonisolated(unsafe) private static var held: NSEvent?
+    nonisolated(unsafe) private static var passed = false
+
+    static func passesMonitors(_ event: NSEvent) -> Bool {
+        install()
+        held = event
+        passed = false
+        let menu = NSApp.mainMenu
+        NSApp.mainMenu = Door(title: "")
+        NSApp.sendEvent(event)
+        NSApp.mainMenu = menu
+        held = nil
+        return passed
+    }
+
+    /// Whether `event` is the held key, which stops wherever it got to.
+    nonisolated fileprivate static func stops(_ event: NSEvent) -> Bool {
+        guard let held, event.type == .keyDown, event.timestamp == held.timestamp, event.keyCode == held.keyCode else { return false }
+        passed = true
+        return true
+    }
+
+    /// The main menu while a key is held: it takes the key, and only notes that it came.
+    private final class Door: NSMenu {
+        override func performKeyEquivalent(with event: NSEvent) -> Bool { KeyGate.stops(event) }
+    }
+
+    private static var installed = false
+
+    private static func install() {
+        guard !installed else { return }
+        installed = true
+        guard let original = class_getInstanceMethod(NSWindow.self, #selector(NSWindow.sendEvent(_:))),
+            let gated = class_getInstanceMethod(NSWindow.self, #selector(NSWindow.storyGatedSendEvent(_:)))
+        else { return }
+        method_exchangeImplementations(original, gated)
+    }
+}
+
+extension NSWindow {
+    /// `sendEvent` once `KeyGate` swaps it in: the held key stops here; everything else goes to
+    /// the original (now under this selector).
+    @objc fileprivate func storyGatedSendEvent(_ event: NSEvent) {
+        if KeyGate.stops(event) { return }
+        storyGatedSendEvent(event)
     }
 }
