@@ -13,7 +13,7 @@ struct PlanText: View {
                 .font(TextStyle.body)
                 .foregroundStyle(Theme.text)
                 .lineSpacing(TextStyle.leading)
-                .textSelection(.enabled)
+                .selectableOnHover()
         }
         .padding(Inset.block)
         .frame(maxWidth: .infinity, alignment: .leading)

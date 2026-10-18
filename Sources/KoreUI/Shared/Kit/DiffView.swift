@@ -45,7 +45,6 @@ struct DiffView: View {
             // Rows as wide as the widest line, or the box when that's wider: sized by layout,
             // so a resize doesn't run this body again.
             .containerRelativeFrame(.horizontal, alignment: .leading) { length, _ in max(length, layout.width) }
-            .textSelection(.enabled)
         }
         .scrollIndicators(.automatic)
         .frame(height: maxHeight.map { min(height, $0) } ?? height)
@@ -140,6 +139,8 @@ private struct DiffRowView: View {
         }
         .font(TextStyle.codeSmall)
         .lineLimit(1)
+        // Row by row: the whole diff at once would build every line's selection under the pointer.
+        .selectableOnHover()
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
         .background(fill)
     }

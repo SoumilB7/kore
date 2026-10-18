@@ -161,7 +161,7 @@ struct RowContent: View {
             Text(text)
                 .font(TextStyle.body)
                 .foregroundStyle(text == "Interrupted" ? Theme.secondary : Theme.danger)
-                .textSelection(.enabled)
+                .selectableOnHover()
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .changes(let turn, let files, let added, let removed):
             ChangesLine(files: files, added: added, removed: removed) { actions.viewChanges(turn) }
@@ -182,7 +182,7 @@ private struct EntryContent: View {
             Text(entry.text)
                 .font(TextStyle.body)
                 .foregroundStyle(entry.isError ? Theme.danger : Theme.secondary)
-                .textSelection(.enabled)
+                .selectableOnHover()
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .user, .peer:
             MessageHeader(entry: entry, open: true, actions: actions)
@@ -501,7 +501,7 @@ struct MessageText: View {
         Text(shown)
             .font(TextStyle.body)
             .foregroundStyle(color)
-            .textSelection(.enabled)
+            .selectableOnHover()
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: Int.self) { Int(($0.size.height / line).rounded()) } action: { measured($0) }
             .frame(height: height, alignment: .top)
@@ -707,7 +707,7 @@ struct ThoughtItem: View {
                     .font(TextStyle.body)
                     .foregroundStyle(Theme.secondary)
                     .lineSpacing(TextStyle.leading)
-                    .textSelection(.enabled)
+                    .selectableOnHover()
                     .transition(.opacity)
             }
         }
@@ -975,7 +975,7 @@ private struct AgentResult: View {
                 .foregroundStyle(finished ? Theme.text : Theme.secondary)
                 .lineSpacing(TextStyle.leading)
                 .lineLimit(showAll.value ? nil : 4)
-                .textSelection(.enabled)
+                .selectableOnHover()
             if !showAll.value, Self.long(text) {
                 TextButton("Show all") { showAll.value = true }
             }

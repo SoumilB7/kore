@@ -161,7 +161,7 @@ private struct ClippedText: View {
             .font(TextStyle.codeSmall)
             .foregroundStyle(Theme.text)
             .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
+            .selectableOnHover()
             .frame(maxHeight: clip ? Size.clip : nil, alignment: .top)
             .clipped()
             // The fade is the box's own fill drawn over the last lines, not a mask: a mask costs
