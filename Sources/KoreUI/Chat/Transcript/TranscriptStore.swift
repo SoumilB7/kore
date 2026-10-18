@@ -311,9 +311,9 @@ final class TranscriptStore {
     /// When the user last sent a message (live, not replayed): the view glides to the end for
     /// 2s after it, as the extension does.
     @ObservationIgnored private(set) var sentAt: Date?
-    /// Where the reader was when the chat's view went away (another tab), to come back to: the
-    /// message row at or above the top and how far into it, or the end. Opened folds and rows
-    /// stay in this store, so they need no saving.
+    /// Where the reader was when the chat's view went away (a tab switch past the kept chats),
+    /// to come back to: the message or answer row nearest the top and how far below its top the
+    /// top is, or the end. Opened folds and rows stay in this store, so they need no saving.
     @ObservationIgnored var savedScroll: SavedScroll?
 
     struct SavedScroll {

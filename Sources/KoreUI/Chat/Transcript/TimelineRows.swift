@@ -21,8 +21,12 @@ struct TranscriptActions {
     var loadEarlierConversation: () -> Void = {}
     /// A fork's "Forked from" line: switches to the original chat's tab; nil when there's none.
     var openOriginal: (() -> Void)?
-    /// A message row's bottom moved (for its pinned copy).
-    var messageMoved: (String, CGFloat) -> Void = { _, _ in }
+    /// A message row moved (its frame in the scroll view: the bottom for its pinned copy, the
+    /// top for keeping the reader's place), or left the built rows (nil).
+    var messageMoved: (String, CGRect?) -> Void = { _, _ in }
+    /// An answer row's top moved, or it left the built rows (nil): a long answer marks the
+    /// reader's place where no message is near.
+    var answerMoved: (String, CGFloat?) -> Void = { _, _ in }
     var folder: URL?
 }
 
@@ -34,8 +38,17 @@ struct TimelineRow: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item }
 
     var body: some View {
-        content.storyID(Self.story(item.row), press: press)
+        if case .entry(let entry) = item.row, entry.kind == .answer {
+            let (id, actions) = (item.id, actions)
+            row
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { actions.answerMoved(id, $0) }
+                .onDisappear { actions.answerMoved(id, nil) }
+        } else {
+            row
+        }
     }
+
+    private var row: some View { content.storyID(Self.story(item.row), press: press) }
 
     /// What pressing the row does, where its name and a click on its middle could differ:
     /// open or close it.
@@ -260,8 +273,9 @@ struct MessageHeader: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
             guard place == .row else { return }
             top.value = frame.minY
-            actions.messageMoved(entry.id.uuidString, frame.maxY)
+            actions.messageMoved(entry.id.uuidString, frame)
         }
+        .onDisappear { if place == .row { actions.messageMoved(entry.id.uuidString, nil) } }
     }
 
     /// Long enough to clip: from `collapseFrom` lines up, so a clip always hides a few.

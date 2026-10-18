@@ -28,8 +28,9 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var restore = Held(TranscriptStore.SavedScroll?.none)
     /// After scrolling a saved row to the top: how far into it to go.
     @StateObject private var restoreInRow = Held(CGFloat?.none)
-    /// Message rows' tops in the visible area, as they report them, for saving the place.
-    @StateObject private var messageTops = Held([String: CGFloat]())
+    /// Built message and answer rows' tops from the top of the visible area (below the title
+    /// bar), as they report them, for saving the place.
+    @StateObject private var rowTops = Held([String: CGFloat]())
     /// While turns are added above (Load earlier): the message row that was first and its top
     /// on screen. When it reports where it moved, the view follows it by as much, so what's on
     /// screen stays put.
@@ -104,9 +105,10 @@ struct TranscriptTimeline: View, Equatable {
                 let (height, offset) = (new[0], new[1])
                 visibleHeight.value = new[2]
                 if let inRow = restoreInRow.value, height > 0 {
-                    // The saved row is at the top now: on into it.
+                    // The saved row's top is at the top of the visible area now: on into it (or
+                    // back above it).
                     restoreInRow.value = nil
-                    let target = min(offset + inRow, max(0, height - new[2]))
+                    let target = min(max(offset + inRow, -insetTop.value), max(0, height - new[2]))
                     scroll(position, to: target)
                     geometry.value = (height, target)
                     nudge.value &+= 1
@@ -210,10 +212,12 @@ struct TranscriptTimeline: View, Equatable {
                 }
             }
             .onDisappear {
-                // The last message row at or above the top, and how far the top is into it.
-                let above = messageTops.value.filter { $0.value <= 0.5 }.max { $0.value < $1.value }
+                // The row nearest the top of the visible area, and how far below its top that is
+                // (negative: above it). It comes back exactly, however the rows above it measure
+                // when they're built again.
+                let place = rowTops.value.min { abs($0.value) < abs($1.value) }.map { (key: $0.key, value: -$0.value) }
                 store.savedScroll = TranscriptStore.SavedScroll(
-                    row: above?.key, inRow: -(above?.value ?? 0), offset: geometry.value.offset, atEnd: following.value)
+                    row: place?.key, inRow: place?.value ?? 0, offset: geometry.value.offset, atEnd: following.value)
             }
         }
     }
@@ -254,7 +258,7 @@ struct TranscriptTimeline: View, Equatable {
 
     private func keepFirstMessage() {
         following.value = false
-        guard let id = store.sections.first?.header?.id.uuidString, let y = messageTops.value[id] else { return }
+        guard let id = store.sections.first?.header?.id.uuidString, let y = rowTops.value[id] else { return }
         anchor.value = (id, y)
     }
 
@@ -267,11 +271,16 @@ struct TranscriptTimeline: View, Equatable {
     private func rowActions(_ proxy: ScrollViewProxy) -> TranscriptActions {
         var actions = reveal(proxy)
         let sticky = sticky
-        let tops = messageTops
+        let tops = rowTops
         let (anchor, geometry, position, nudge) = (anchor, geometry, position, nudge)
         let scroll = scroll
-        actions.messageMoved = { id, y in
-            sticky.row(id, y)
+        actions.messageMoved = { id, frame in
+            guard let frame else {
+                tops.value[id] = nil
+                return
+            }
+            sticky.row(id, frame.maxY)
+            let y = frame.minY
             tops.value[id] = y
             if let kept = anchor.value, kept.id == id, abs(y - kept.y) > 0.5 {
                 // Turns arrived above it: follow it down by as far as it moved.
@@ -282,6 +291,7 @@ struct TranscriptTimeline: View, Equatable {
                 nudge.value &+= 1
             }
         }
+        actions.answerMoved = { id, top in tops.value[id] = top }
         return actions
     }
 
