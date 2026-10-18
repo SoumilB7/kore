@@ -30,5 +30,6 @@ let package = Package(
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI"]),
+        .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines"]),
     ]
 )
