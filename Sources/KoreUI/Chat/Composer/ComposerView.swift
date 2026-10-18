@@ -10,8 +10,10 @@ struct ComposerView: View {
     let openImage: (Attachment) -> Void
     @StateObject private var slashSelection = Local(0)
     @StateObject private var slashDismissed = Local(false)
-    @StateObject private var window = Local<NSWindow?>(nil)
-    @StateObject private var pasteMonitor = Local<Any?>(nil)
+    /// The window and the ⌘V monitor: kept for the monitor, never shown, so setting them as the
+    /// composer appears doesn't draw it again.
+    @StateObject private var window = Held<NSWindow?>(nil)
+    @StateObject private var pasteMonitor = Held<Any?>(nil)
     @StateObject private var dropTargeted = Local(false)
     /// Where the caret is, so Shift+Return can put a line break there.
     @StateObject private var selection = Local<TextSelection?>(nil)
