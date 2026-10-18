@@ -36,6 +36,7 @@ import KoreCore
 ///   KORE_FILE=<path>[:...]   open those files in tabs (the last one shown)
 ///   KORE_QUICK_OPEN=files|line  open quick open at launch
 ///   KORE_LINE=<n>            put the caret on that line of the shown file
+///   KORE_SEARCH=<query>      open the sidebar on Search with that query
 ///   KORE_CLOSE_AFTER=<s>     ask the folder window to close (as ⌘W does) that many seconds after launch
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
@@ -59,6 +60,7 @@ enum DevSnapshot {
     }
     static let quickOpen = ProcessInfo.processInfo.environment["KORE_QUICK_OPEN"]
     static let line = ProcessInfo.processInfo.environment["KORE_LINE"].flatMap { Int($0) }
+    static let search = ProcessInfo.processInfo.environment["KORE_SEARCH"]
     static let attach = ProcessInfo.processInfo.environment["KORE_ATTACH"].map {
         $0.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
     }

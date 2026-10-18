@@ -121,6 +121,10 @@ struct FolderWindow: View {
             if let line = DevSnapshot.line, let file = workspace.value.activeFile {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { file.editor.goTo(line: line) }
             }
+            if let query = DevSnapshot.search {
+                workspace.value.showSearch()
+                workspace.value.searchStore().text = query
+            }
             if let mode = DevSnapshot.quickOpen { workspace.value.quickOpen = mode == "line" ? .line : .files }
             if let session = DevSnapshot.resume {
                 workspace.value.open(session)

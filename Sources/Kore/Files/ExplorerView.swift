@@ -63,28 +63,48 @@ struct ExplorerSidebar: View {
     }
 
     private var header: some View {
-        HStack(spacing: Space.xs) {
-            Text(workspace.folder.lastPathComponent)
+        let searching = workspace.sidebar == .search
+        return HStack(spacing: Space.xs) {
+            Text(searching ? "Search" : workspace.folder.lastPathComponent)
                 .font(Chrome.bodyMedium)
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(workspace.folder.path)
+                .help(searching ? "Search in \(workspace.folder.lastPathComponent)" : workspace.folder.path)
             Spacer(minLength: Space.md)
-            Group {
-                HeaderButton(symbol: "doc.badge.plus", help: "New File") { store.startNew(folder: false) }
-                HeaderButton(symbol: "folder.badge.plus", help: "New Folder") { store.startNew(folder: true) }
-                HeaderButton(symbol: "arrow.clockwise", help: "Refresh Explorer") { store.refresh() }
-                HeaderButton(symbol: "rectangle.compress.vertical", help: "Collapse Folders in Explorer") { store.collapseAll() }
+            if searching {
+                let search = workspace.searchStore()
+                Group {
+                    HeaderButton(symbol: "arrow.clockwise", help: "Refresh") { search.rerun() }
+                    HeaderButton(symbol: "xmark.circle", help: "Clear Search Results") { search.clear() }
+                    HeaderButton(
+                        symbol: search.allCollapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical",
+                        help: search.allCollapsed ? "Expand All" : "Collapse All"
+                    ) { search.collapseOrExpandAll() }
+                }
+                .opacity(hovered.value ? 1 : 0)
+            } else {
+                Group {
+                    HeaderButton(symbol: "doc.badge.plus", help: "New File") { store.startNew(folder: false) }
+                    HeaderButton(symbol: "folder.badge.plus", help: "New Folder") { store.startNew(folder: true) }
+                    HeaderButton(symbol: "arrow.clockwise", help: "Refresh Explorer") { store.refresh() }
+                    HeaderButton(symbol: "rectangle.compress.vertical", help: "Collapse Folders in Explorer") { store.collapseAll() }
+                }
+                .opacity(hovered.value || focused ? 1 : 0)
             }
-            .opacity(hovered.value || focused ? 1 : 0)
+            // Search: the fifth icon, shown always; it swaps the tree for the Search view.
+            HeaderButton(symbol: "magnifyingglass", isOn: searching, help: searching ? "Explorer (⇧⌘E)" : "Search (⇧⌘F)") {
+                if searching { workspace.sidebar = .explorer } else { workspace.showSearch() }
+            }
         }
         .padding(.horizontal, Layout.Explorer.headerInset)
         .frame(height: Layout.Explorer.header)
     }
 
     @ViewBuilder private var content: some View {
-        if !store.rootLoaded {
+        if workspace.sidebar == .search {
+            SearchView(workspace: workspace, store: workspace.searchStore())
+        } else if !store.rootLoaded {
             DelayedSpinner().padding(.top, Layout.Explorer.stateTop)
         } else if store.rootError {
             ExplorerState(message: "Kore can't read this folder.", color: Theme.secondary, button: "Try Again") { store.refresh() }
@@ -203,6 +223,7 @@ struct ExplorerSidebar: View {
 
 private struct HeaderButton: View {
     let symbol: String
+    var isOn = false
     let help: String
     let action: () -> Void
     @StateObject private var hovered = Local(false)
@@ -211,9 +232,9 @@ private struct HeaderButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(Chrome.label)
-                .foregroundStyle(hovered.value ? Theme.text : Theme.secondary)
+                .foregroundStyle(hovered.value || isOn ? Theme.text : Theme.secondary)
                 .frame(width: Size.Tree.headerButton, height: Size.Tree.headerButton)
-                .hoverFill(hovered.value, Theme.toolHover)
+                .hoverFill(hovered.value || isOn, isOn ? Theme.surfaceHover : Theme.toolHover)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -32,6 +32,23 @@ final class FileDocument: Identifiable {
         var selected = 0
     }
 
+    /// A place in the file: a 1-based line and a UTF-16 column range in it.
+    struct Place: Equatable {
+        let line: Int
+        let columns: Range<Int>
+    }
+
+    /// Selected once the editor shows the text (a search hit opened before the file loaded).
+    @ObservationIgnored var pendingPlace: Place?
+
+    /// Selects `place` in the editor, now if it's showing, else when it does.
+    func reveal(_ place: Place) {
+        pendingPlace = place
+        // A match is shown in the text, not a renderer's view of it.
+        showsRaw = true
+        if loaded, isText { editor.applyPendingPlace() }
+    }
+
     /// Lines the last reload from disk changed (UTF-16 ranges), for the editor's flash.
     @ObservationIgnored var reloadedRanges: [NSRange] = []
     /// Bumped when the text is replaced from disk, so the editor recolours, and on any other

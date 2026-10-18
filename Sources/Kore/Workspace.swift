@@ -50,6 +50,10 @@ final class Workspace {
     }
     /// ⌘P: files, or go to line (⌃G).
     var quickOpen: QuickOpenMode?
+    /// What the sidebar shows: the tree, or Search (⇧⌘F).
+    var sidebar = SidebarMode.explorer
+    /// The Search view's state; made when Search first shows.
+    private(set) var search: SearchStore?
     /// Files opened, most recent first (quick open's empty state).
     private(set) var recentFiles: [String] = []
 
@@ -150,6 +154,28 @@ final class Workspace {
 
     // MARK: - Files
 
+    enum SidebarMode { case explorer, search }
+
+    func searchStore() -> SearchStore {
+        if let search { return search }
+        let store = SearchStore(folder: folder)
+        search = store
+        return store
+    }
+
+    /// ⇧⌘F: the sidebar on Search, with the caret in its field and any one-line editor
+    /// selection as the query.
+    func showSearch() {
+        explorerOpen = true
+        sidebar = .search
+        let store = searchStore()
+        if let text = activeFile?.editor.textView, text.selectedRange().length > 0, text.selectedRange().length < 200 {
+            let selected = (text.string as NSString).substring(with: text.selectedRange())
+            if !selected.contains("\n") { store.text = selected }
+        }
+        store.focus()
+    }
+
     func filesStore() -> FilesStore {
         if let files { return files }
         let store = FilesStore(folder: folder)
@@ -160,17 +186,20 @@ final class Workspace {
 
     /// Shows a file: its tab if open, else the preview tab (single click in the tree) or a
     /// new tab after the active one.
-    func openFile(_ url: URL, preview: Bool = false) {
+    /// `select`: a place to select once the editor shows (a search hit).
+    func openFile(_ url: URL, preview: Bool = false, select place: FileDocument.Place? = nil) {
         _ = filesStore()
         // The real path, as the watcher and the tree see it.
         let path = realPath(url.path)
         remember(path)
         if let tab = tabs.first(where: { $0.file?.path == path }) {
             if !preview { tab.isPreview = false }
+            if let place, let file = tab.file { file.reveal(place) }
             select(tab)
             return
         }
         let document = FileDocument(url: URL(fileURLWithPath: path))
+        if let place { document.reveal(place) }
         if preview, let tab = tabs.first(where: { $0.isPreview && $0.file?.isDirty != true }) {
             tab.file = document
             select(tab)

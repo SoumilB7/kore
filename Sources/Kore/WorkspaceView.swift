@@ -104,7 +104,10 @@ private struct TabItem: View {
     private var dirty: Bool { tab.file?.isDirty == true }
 
     private var help: String {
-        if let file = tab.file { return file.notice == .deleted ? "Deleted on disk" : file.path }
+        if let file = tab.file {
+            if file.notice == .deleted { return "Deleted on disk" }
+            return tab.isPreview ? "\(file.name) · Preview, double-click to keep open" : file.path
+        }
         return tab.agent != nil ? "Sub-agent of “\(tab.chat?.title ?? "")”" : tab.title
     }
 
@@ -194,6 +197,9 @@ private struct TabItem: View {
         .onHover { hovered.value = $0 }
         .help(help)
         .contextMenu {
+            if tab.isPreview {
+                Button("Keep Open") { workspace.keep(tab) }
+            }
             Button("Rename…") { startRename() }.disabled(tab.chat == nil || tab.agent != nil)
             Button("Close Tab") { workspace.close(tab) }
         }

@@ -273,6 +273,35 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
 
     // MARK: - Moving around
 
+    /// Selects the document's pending place (a search hit) and scrolls it to the middle.
+    func applyPendingPlace() {
+        guard let place = document.pendingPlace, document.storage.length > 0 || place.line == 1 else { return }
+        document.pendingPlace = nil
+        let index = min(max(place.line - 1, 0), lines.count - 1)
+        let range = lines.range(of: index, in: document.storage.string as NSString)
+        let start = range.location + min(place.columns.lowerBound, range.length)
+        let length = min(place.columns.count, NSMaxRange(range) - start)
+        let selection = NSRange(location: start, length: max(length, 0))
+        textView.setSelectedRange(selection)
+        if let layout = textView.layoutManager, let container = textView.textContainer {
+            // Centred vertically, as VS Code reveals a match; sideways only when the match is
+            // past the right edge (the clip's own left inset, under the gutter, stays).
+            let glyphs = layout.glyphRange(forCharacterRange: selection, actualCharacterRange: nil)
+            let box = layout.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+            let clip = scrollView.contentView
+            let visible = clip.bounds
+            let inset = -clip.contentInsets.left
+            let y = max(0, box.midY - visible.height / 2)
+            var x = min(visible.origin.x, inset)
+            if box.maxX > x + visible.width { x = box.maxX - visible.width * 0.7 }
+            clip.scroll(to: NSPoint(x: max(x, inset == 0 ? visible.origin.x : inset), y: y))
+            scrollView.reflectScrolledClipView(clip)
+        }
+        recolor(force: true)
+        textView.updateDecorations()
+    }
+
     func goTo(line: Int) {
         let index = min(max(line - 1, 0), lines.count - 1)
         let location = lines.start(of: index)
@@ -308,6 +337,10 @@ struct CodeEditorView: NSViewRepresentable {
         editor.onGoToLine = goToLine
         editor.setZoom(zoom)
         editor.setWrap(wrap)
+        if document.pendingPlace != nil {
+            // After this layout pass, so the text is laid out to scroll to.
+            DispatchQueue.main.async { editor.applyPendingPlace() }
+        }
     }
 
     private func attach(_ scrollView: NSScrollView, to container: NSView) {

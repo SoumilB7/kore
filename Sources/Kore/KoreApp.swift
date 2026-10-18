@@ -134,8 +134,19 @@ private struct ExplorerCommands: View {
     @FocusedValue(\.workspace) private var workspace
 
     var body: some View {
-        Button(workspace?.explorerOpen == true ? "Hide Explorer" : "Show Explorer") { workspace?.explorerOpen.toggle() }
-            .keyboardShortcut("e", modifiers: [.command, .shift])
+        Button(workspace?.explorerOpen == true && workspace?.sidebar == .explorer ? "Hide Explorer" : "Show Explorer") {
+            guard let workspace else { return }
+            if workspace.explorerOpen, workspace.sidebar == .explorer {
+                workspace.explorerOpen = false
+            } else {
+                workspace.explorerOpen = true
+                workspace.sidebar = .explorer
+            }
+        }
+        .keyboardShortcut("e", modifiers: [.command, .shift])
+        .disabled(workspace == nil)
+        Button("Search") { workspace?.showSearch() }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
             .disabled(workspace == nil)
         Divider()
     }
