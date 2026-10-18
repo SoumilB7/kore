@@ -3,8 +3,8 @@ import SwiftUI
 
 /// One block of a markdown reply. Inline text is parsed into styled `AttributedString`s once, here,
 /// so a render only lays them out.
-struct MarkdownBlock: Identifiable {
-    enum Kind {
+struct MarkdownBlock: Identifiable, Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
         case heading(level: Int, text: AttributedString)
         case paragraph(AttributedString)
         case code(language: String, text: String)
@@ -22,8 +22,8 @@ struct MarkdownBlock: Identifiable {
     let isOpen: Bool
 }
 
-struct MarkdownList {
-    struct Item {
+struct MarkdownList: Equatable, Sendable {
+    struct Item: Equatable, Sendable {
         /// nil: not a task item; otherwise whether it's checked.
         let task: Bool?
         let blocks: [MarkdownBlock]
@@ -34,7 +34,7 @@ struct MarkdownList {
     let items: [Item]
 }
 
-struct MarkdownTable {
+struct MarkdownTable: Equatable, Sendable {
     let header: [AttributedString]
     let rows: [[AttributedString]]
 }
@@ -60,10 +60,17 @@ final class MarkdownDocument {
         if extends, let last = blocks.last {
             let from = text.utf8.index(text.startIndex, offsetBy: last.id)
             blocks.removeLast()
-            blocks += MarkdownParser.parse(text[from...], base: last.id)
+            blocks += MarkdownParser.parse(text[from...], base: last.id, zoom: zoom)
         } else {
-            blocks = MarkdownParser.parse(text, base: 0)
+            blocks = MarkdownParser.parse(text, base: 0, zoom: zoom)
         }
+    }
+
+    /// Blocks parsed ahead for `text` at `zoom` (`MarkdownCache.prepare`).
+    func adopt(_ ready: MarkdownCache.Ready) {
+        blocks = ready.blocks
+        source = ready.text[...]
+        scale = ready.zoom
     }
 
     /// A byte comparison of the shared prefix (no per-character work on a long reply).
@@ -80,8 +87,7 @@ final class MarkdownDocument {
 
 /// Block markdown as Claude and Codex write it (CommonMark blocks plus GFM tables and task lists),
 /// line by line, with no regular expressions. Inline syntax goes through Foundation's parser one
-/// block at a time.
-@MainActor
+/// block at a time. It touches nothing shared, so replies can be parsed off the main thread.
 enum MarkdownParser {
     struct Line {
         let text: Substring
@@ -111,7 +117,8 @@ enum MarkdownParser {
         return text[text.startIndex..<text.startIndex]
     }
 
-    static func parse(_ text: Substring, base: Int) -> [MarkdownBlock] {
+    /// `zoom`: the text zoom the styles are for (inline code's font follows it).
+    static func parse(_ text: Substring, base: Int, zoom: CGFloat) -> [MarkdownBlock] {
         var lines: [Line] = []
         var offset = base
         for part in text.utf8.split(separator: 0x0A, omittingEmptySubsequences: false) {
@@ -120,12 +127,12 @@ enum MarkdownParser {
             lines.append(Line(text: line, offset: offset))
             offset += part.count + 1
         }
-        return parse(lines[...])
+        return parse(lines[...], TextStyle.code(zoom: zoom))
     }
 
     // MARK: - Blocks
 
-    private static func parse(_ lines: ArraySlice<Line>) -> [MarkdownBlock] {
+    private static func parse(_ lines: ArraySlice<Line>, _ code: Font) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         var i = lines.startIndex
         let end = lines.endIndex
@@ -155,7 +162,7 @@ enum MarkdownParser {
                 continue
             }
             if let (level, text) = heading(s) {
-                blocks.append(MarkdownBlock(id: id, kind: .heading(level: level, text: inline(text)), isOpen: false))
+                blocks.append(MarkdownBlock(id: id, kind: .heading(level: level, text: inline(text, code)), isOpen: false))
                 i += 1
                 continue
             }
@@ -177,23 +184,23 @@ enum MarkdownParser {
                     }
                     i += 1
                 }
-                let children = parse(numbered(inner))
+                let children = parse(numbered(inner), code)
                 blocks.append(MarkdownBlock(id: id, kind: .quote(children), isOpen: children.contains(where: \.isOpen)))
                 continue
             }
             if isTableStart(lines, i) {
-                let header = cells(s).map(inline)
+                let header = cells(s).map { inline($0, code) }
                 var rows: [[AttributedString]] = []
                 i += 2
                 while i < end, !isBlank(lines[i].text), lines[i].text.contains("|") {
-                    rows.append(cells(lines[i].text).map(inline))
+                    rows.append(cells(lines[i].text).map { inline($0, code) })
                     i += 1
                 }
                 blocks.append(MarkdownBlock(id: id, kind: .table(MarkdownTable(header: header, rows: rows)), isOpen: false))
                 continue
             }
             if let marker = listMarker(s) {
-                let (list, next) = parseList(lines, from: i, marker)
+                let (list, next) = parseList(lines, from: i, marker, code)
                 let open = list.items.contains { $0.blocks.contains(where: \.isOpen) }
                 blocks.append(MarkdownBlock(id: id, kind: .list(list), isOpen: open))
                 i = next
@@ -211,12 +218,14 @@ enum MarkdownParser {
                 paragraph += line
                 i += 1
             }
-            blocks.append(MarkdownBlock(id: id, kind: .paragraph(inline(paragraph[...])), isOpen: false))
+            blocks.append(MarkdownBlock(id: id, kind: .paragraph(inline(paragraph[...], code)), isOpen: false))
         }
         return blocks
     }
 
-    private static func parseList(_ lines: ArraySlice<Line>, from start: Int, _ first: Marker) -> (MarkdownList, Int) {
+    private static func parseList(
+        _ lines: ArraySlice<Line>, from start: Int, _ first: Marker, _ code: Font
+    ) -> (MarkdownList, Int) {
         var items: [MarkdownList.Item] = []
         var i = start
         let end = lines.endIndex
@@ -255,7 +264,7 @@ enum MarkdownParser {
                 task = checked
                 body[0] = trimLeading(rest)
             }
-            items.append(MarkdownList.Item(task: task, blocks: parse(numbered(body))))
+            items.append(MarkdownList.Item(task: task, blocks: parse(numbered(body), code)))
 
             var j = i
             while j < end, isBlank(lines[j].text) { j += 1 }
@@ -270,8 +279,8 @@ enum MarkdownParser {
     // MARK: - Inline
 
     /// Inline markdown (emphasis, code spans, links, strikethrough) styled for Kore: code on its
-    /// fill in Menlo, links in the link colour and underlined.
-    private static func inline(_ text: Substring) -> AttributedString {
+    /// fill in Menlo (`code`), links in the link colour and underlined.
+    private static func inline(_ text: Substring, _ code: Font) -> AttributedString {
         // Plain text (most cells, items and many paragraphs) skips Foundation's parser.
         let markup: Set<UInt8> = [0x2A, 0x5F, 0x60, 0x5B, 0x7E, 0x5C, 0x3C, 0x26, 0x21]  // * _ ` [ ~ \ < & !
         if !text.utf8.contains(where: markup.contains) { return AttributedString(text) }
@@ -279,14 +288,14 @@ enum MarkdownParser {
             allowsExtendedAttributes: false, interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible)
         var string = (try? AttributedString(markdown: String(text), options: options)) ?? AttributedString(text)
-        var code: [Range<AttributedString.Index>] = []
+        var spans: [Range<AttributedString.Index>] = []
         var links: [Range<AttributedString.Index>] = []
         for run in string.runs {
-            if run.inlinePresentationIntent?.contains(.code) == true { code.append(run.range) }
+            if run.inlinePresentationIntent?.contains(.code) == true { spans.append(run.range) }
             if run.link != nil { links.append(run.range) }
         }
-        for range in code {
-            string[range].font = TextStyle.code
+        for range in spans {
+            string[range].font = code
             string[range].backgroundColor = Theme.inlineCode
         }
         for range in links {
@@ -295,8 +304,6 @@ enum MarkdownParser {
         }
         return string
     }
-
-    private static func inline(_ text: String) -> AttributedString { inline(text[...]) }
 
     // MARK: - Line tests
 
@@ -493,6 +500,10 @@ final class MarkdownCache {
 
     private var documents: [String: MarkdownDocument] = [:]
     private var inline: [String: AttributedString] = [:]
+    /// Replies parsed off the main thread and not yet taken by a document.
+    private let ready = ReadyBox()
+    /// Keys being parsed off the main thread.
+    private var preparing: Set<String> = []
     /// Least recently used first.
     private var order: [String] = []
     private var inlineOrder: [String] = []
@@ -504,10 +515,55 @@ final class MarkdownCache {
             return document
         }
         let document = MarkdownDocument()
+        if let parsed = ready.take(key) {
+            preparing.remove(key)
+            document.adopt(parsed)
+        }
         documents[key] = document
         order.append(key)
         if order.count > limit { documents[order.removeFirst()] = nil }
         return document
+    }
+
+    /// A reply parsed ahead of its view.
+    struct Ready: Sendable {
+        let text: String
+        let zoom: CGFloat
+        let blocks: [MarkdownBlock]
+    }
+
+    /// Parses finished replies (by key) off the main thread, so building their rows only lays
+    /// them out: the ones a reader scrolls to, and on opening a chat, any that are ready before
+    /// their rows are built. Nearest the reader first. A row built sooner parses its reply
+    /// itself, as it always did, and the result made here is dropped.
+    func prepare(_ replies: [(key: String, text: String)]) {
+        let todo = replies.filter { documents[$0.key] == nil && !preparing.contains($0.key) }
+        guard !todo.isEmpty else { return }
+        preparing.formUnion(todo.map(\.key))
+        let zoom = Zoom.shared.scale
+        let ready = ready
+        Task.detached(priority: .userInitiated) {
+            await withTaskGroup(of: Void.self) { group in
+                for reply in todo {
+                    group.addTask {
+                        let blocks = MarkdownParser.parse(reply.text[...], base: 0, zoom: zoom)
+                        ready.put(reply.key, Ready(text: reply.text, zoom: zoom, blocks: blocks))
+                    }
+                }
+            }
+            await MarkdownCache.shared.adoptReady()
+        }
+    }
+
+    /// A reply still being parsed off the main thread.
+    func isPreparing(_ key: String) -> Bool { preparing.contains(key) }
+
+    /// What's left in the box goes into documents (it's kept like any parse).
+    private func adoptReady() {
+        for (key, parsed) in ready.takeAll() {
+            preparing.remove(key)
+            if documents[key] == nil { document(key).adopt(parsed) }
+        }
     }
 
     /// A one-paragraph markdown string (a plan, an agent's result), parsed once.
@@ -529,5 +585,26 @@ final class MarkdownCache {
         guard order.suffix(16).contains(key) == false, let index = order.lastIndex(of: key) else { return }
         order.remove(at: index)
         order.append(key)
+    }
+}
+
+/// Replies parsed off the main thread, handed to the main thread's documents.
+private final class ReadyBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var parsed: [String: MarkdownCache.Ready] = [:]
+
+    func put(_ key: String, _ ready: MarkdownCache.Ready) {
+        lock.withLock { parsed[key] = ready }
+    }
+
+    func take(_ key: String) -> MarkdownCache.Ready? {
+        lock.withLock { parsed.removeValue(forKey: key) }
+    }
+
+    func takeAll() -> [String: MarkdownCache.Ready] {
+        lock.withLock {
+            defer { parsed = [:] }
+            return parsed
+        }
     }
 }

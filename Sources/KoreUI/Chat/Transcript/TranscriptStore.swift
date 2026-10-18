@@ -1212,6 +1212,19 @@ final class TranscriptStore {
             changed = true
         }
         if changed { tail &+= 1 }
+        if whole { prepareAnswers() }
+    }
+
+    /// The window's finished answers, parsed off the main thread ahead of their rows: newest
+    /// first, as the reader starts at the end.
+    private func prepareAnswers() {
+        var replies: [(key: String, text: String)] = []
+        for section in sections.reversed() {
+            for item in section.items.reversed() {
+                if case .entry(let e) = item.row, e.kind == .answer, e.done { replies.append((e.id.uuidString, e.text)) }
+            }
+        }
+        MarkdownCache.shared.prepare(replies)
     }
 
     /// The rows of the entries from `begin` (a section's start) to the end, then the messages

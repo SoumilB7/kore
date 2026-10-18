@@ -35,6 +35,11 @@ extension Font {
 
     /// The editor font (Menlo), times the zoom.
     @MainActor static func koreMono(_ size: CGFloat = 12) -> Font {
-        .custom("Menlo", size: size * Zoom.shared.scale)
+        koreMono(size, zoom: Zoom.shared.scale)
+    }
+
+    /// The editor font at a given zoom (off the main thread).
+    static func koreMono(_ size: CGFloat, zoom: CGFloat) -> Font {
+        .custom("Menlo", size: size * zoom)
     }
 }

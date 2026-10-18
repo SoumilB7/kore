@@ -13,7 +13,9 @@ enum TextStyle {
     static var labelStrong: Font { .kore(12, .semibold) }
     static var caption: Font { .kore(11) }
     static var eyebrow: Font { .kore(11, .semibold) }
-    static var code: Font { .koreMono(12) }
+    static var code: Font { code(zoom: Zoom.shared.scale) }
+    /// `code` at a given zoom, for text styled off the main thread.
+    nonisolated static func code(zoom: CGFloat) -> Font { .koreMono(12, zoom: zoom) }
     /// Extra line spacing for running text.
     static let leading: CGFloat = 3
 }
