@@ -369,7 +369,18 @@ final class TranscriptStore {
     func replay(_ events: [ChatEvent]) {
         batch {
             events.forEach(apply)
+            endUnfinishedAgents()
             placeWindow()
+        }
+    }
+
+    /// A past session's agents ended with its CLI. One the transcript never saw finish (a
+    /// background agent whose turn completed without it) shows as stopped, not running, and so
+    /// do its open calls and child agents. A stopped turn's agents are closed by `turnFinished`.
+    private func endUnfinishedAgents() {
+        for id in agentOrder where agent(id)?.status == .running {
+            updateAgent(id) { $0.status = .stopped }
+            stopLane(id)
         }
     }
 
