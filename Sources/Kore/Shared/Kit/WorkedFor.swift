@@ -14,6 +14,8 @@ struct WorkedFor: View {
     var live = false
     /// "3 tool calls · 1 failed", after a live label.
     var count: String?
+    /// The agent left the turn in another mode: " · now {mode}", the mode in its rung's colour.
+    var now: ModeMark?
     let toggle: () -> Void
     @StateObject private var hovered = Local(false)
     @StateObject private var dim = Local(false)
@@ -45,6 +47,10 @@ struct WorkedFor: View {
                 if let outcome {
                     Text(outcome == .interrupted ? "· Interrupted" : "· Failed")
                         .foregroundStyle(outcome == .interrupted ? Theme.tertiary : Theme.danger)
+                        .lineLimit(1)
+                }
+                if let now {
+                    (Text("· now ").foregroundStyle(Theme.tertiary) + Text(now.label).foregroundStyle(now.tint ?? Theme.secondary))
                         .lineLimit(1)
                 }
                 Spacer(minLength: Space.xs)

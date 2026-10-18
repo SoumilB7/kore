@@ -36,6 +36,8 @@ struct TimelineRow: View, Equatable {
     var body: some View {
         if case .entry(let entry) = item.row, entry.kind == .divider {
             DividerRow(text: entry.text, open: entry.source == TranscriptStore.forkSource ? actions.openOriginal : nil)
+        } else if case .entry(let entry) = item.row, entry.kind == .mode, entry.modeLead == nil, let mode = entry.mode {
+            ModeDivider(mode: mode)
         } else if case .message(let entry, let open, let expanded) = item.row {
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         } else if case .spinner(_, let since, let claude, let word) = item.row {
@@ -76,7 +78,7 @@ struct RowContent: View {
         case .fold(let fold):
             WorkedFor(
                 label: fold.label, outcome: fold.outcome, denied: fold.denied, isOpen: fold.open, live: fold.live,
-                count: fold.count
+                count: fold.count, now: fold.now
             ) {
                 actions.toggleTurn(fold.turn)
             }
@@ -117,6 +119,8 @@ private struct EntryContent: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .user, .peer:
             MessageHeader(entry: entry, open: true, actions: actions)
+        case .mode:
+            if let mode = entry.mode { ModeItemText(lead: entry.modeLead ?? "", mode: mode) }
         default:
             // While it streams, whole blocks only (the row's text already stops at the last one).
             MarkdownView(text: entry.text, streaming: !entry.done, key: entry.id.uuidString)

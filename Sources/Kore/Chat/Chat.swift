@@ -59,6 +59,7 @@ final class Chat: Identifiable {
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
         transcript.providerName = provider.name
+        transcript.provider = provider
     }
 
     var sessionId: String? { status.sessionId }
@@ -96,6 +97,7 @@ final class Chat: Identifiable {
         }
         approvals.apply(event)
         controls.apply(event)
+        noteAgentModeChange(event)
         status.apply(event)
         context.apply(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
@@ -269,7 +271,21 @@ final class Chat: Identifiable {
         Task { await backend?.stopAgent(id) }
     }
 
+    /// A live mode change by the agent: the pill says who, and flashes (look.md §8).
+    private func noteAgentModeChange(_ event: ChatEvent) {
+        let source: ModeSource
+        switch event {
+        case .modeChanged(let change): source = change.source
+        case .planModeChanged(let change): source = change.source
+        default: return
+        }
+        guard case .agent(_, let agent) = source else { return }
+        controls.changedBy = agent.sub.flatMap { transcript.agent($0)?.name } ?? provider.name
+        controls.agentChangeSeq &+= 1
+    }
+
     func setMode(_ id: String) {
+        controls.changedBy = nil
         let previous = controls.mode
         controls.mode = id
         let backend = backend
@@ -284,6 +300,7 @@ final class Chat: Identifiable {
     }
 
     func setPlanMode(_ on: Bool) {
+        controls.changedBy = nil
         controls.planMode = on
         let backend = backend
         Task { await backend?.setPlanMode(on) }

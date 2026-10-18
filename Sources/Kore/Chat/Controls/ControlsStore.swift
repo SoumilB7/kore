@@ -14,6 +14,11 @@ final class ControlsStore {
     var modelId: String?
     var effort: String?
     private(set) var commands: [SlashCommand] = []
+    /// Who changed the mode last, when it was the agent ("Claude", a sub-agent's name); nil
+    /// once the user sets it. The pill's help says so.
+    var changedBy: String?
+    /// Bumped by each agent change: the pill flashes once.
+    var agentChangeSeq = 0
 
     init(provider: ProviderDescriptor) {
         self.provider = provider

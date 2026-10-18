@@ -288,3 +288,23 @@ extension Motion {
     /// The action button while its message is under the pointer (1 on the button itself).
     static let actionHint: Double = 0.7
 }
+
+// MARK: Mode changes (phase 10 look.md §8)
+
+extension Theme {
+    /// The mode pill's fill when the agent changes the mode, fading to its own: the new rung's
+    /// colour at 14%, or the hover fill for a neutral mode.
+    static func modeFlash(_ rung: Rung?) -> Color { rung.map { $0.color.opacity(0.14) } ?? surfaceHover }
+}
+
+extension Motion {
+    /// The pill's one flash after an agent's change.
+    static let modeFlash = Animation.easeOut(duration: 1.2)
+}
+
+extension Size {
+    /// A mode's icon in a user's divider, and in place of an agent's timeline dot (the glyph's
+    /// size; Claude's icons sit in a larger box, so the box scales with `ModeOption.iconSize`).
+    static let modeMarkIcon: CGFloat = 14
+    static let modeItemIcon: CGFloat = 12
+}

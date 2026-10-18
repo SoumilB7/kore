@@ -5,6 +5,8 @@ import SwiftUI
 enum TimelineDot: Equatable {
     case plain, success, failure, warning, running
     case agent(index: Int, name: String, status: AgentAvatar.Status, waiting: Bool)
+    /// A mode's icon in place of the dot (an agent's mode change, look.md §8).
+    case mode(ModeMark)
     case none
 }
 
@@ -77,6 +79,8 @@ struct TimelineDotView: View {
             AgentAvatar(index: index, name: name, status: status, waiting: waiting, place: .timeline)
         case .running:
             BlinkingDot()
+        case .mode(let mark):
+            mark.icon(Size.modeItemIcon).foregroundStyle(mark.tint ?? Theme.dot)
         default:
             Circle().fill(color).frame(width: Layout.Timeline.dot, height: Layout.Timeline.dot)
         }
@@ -180,5 +184,30 @@ private struct ClippedText: View {
     /// the clip saves.)
     static func mayOverflow(_ prefix: TextPrefix) -> Bool {
         prefix.truncated || prefix.lines >= 4 || prefix.text.utf8.count > 320
+    }
+}
+
+/// A permission mode as the transcript marks it (look.md §8): its label, icon and rung colour,
+/// copied from the provider's `ModeOption` when the change happened.
+struct ModeMark: Equatable, Sendable {
+    let id: String
+    let label: String
+    let svg: String
+    let iconSize: CGFloat
+    /// nil for a neutral mode.
+    let tint: Color?
+
+    init(_ option: ModeOption) {
+        id = option.id
+        label = option.label
+        svg = option.icon
+        iconSize = option.iconSize
+        tint = option.tint
+    }
+
+    @MainActor func icon(_ glyph: CGFloat) -> some View {
+        let size = glyph * iconSize / 16 * Zoom.shared.scale
+        return Image(nsImage: ModeIcons.image(svg)).resizable().aspectRatio(contentMode: .fit)
+            .frame(width: size, height: size)
     }
 }

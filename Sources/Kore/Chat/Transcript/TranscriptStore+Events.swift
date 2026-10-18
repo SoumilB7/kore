@@ -85,7 +85,11 @@ extension TranscriptStore {
         case .earlierHistory(let available):
             earlierHistory(available)
 
-        case .sessionIdentified, .titleChanged, .controlsLoaded, .modeChanged, .planModeChanged, .turnOrigin,
+        case .modeChanged(let change):
+            modeChanged(change)
+        case .planModeChanged(let change):
+            planModeChanged(change)
+        case .sessionIdentified, .titleChanged, .controlsLoaded, .turnOrigin,
             .planReady, .contextUsage, .compactionSummary:
             break
         }

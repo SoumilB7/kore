@@ -327,3 +327,37 @@ extension EnvironmentValues {
         set { self[MessageMenuOpenKey.self] = newValue }
     }
 }
+
+/// The user changed the mode between turns (look.md §8): the divider's geometry, with the mode's
+/// icon and name in its rung's colour (`tertiary` for a neutral mode). Not a button.
+struct ModeDivider: View {
+    let mode: ModeMark
+
+    var body: some View {
+        HStack(spacing: Space.xl) {
+            Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
+            HStack(spacing: Space.xs) {
+                mode.icon(Size.modeMarkIcon)
+                Text(mode.label).font(TextStyle.label).lineLimit(1)
+            }
+            .foregroundStyle(mode.tint ?? Theme.tertiary)
+            .fixedSize()
+            Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
+        }
+        .padding(.vertical, Space.sm)
+    }
+}
+
+/// The agent changed the mode: "Entered Plan", "Plan approved · Edit automatically", "Left
+/// Plan", the mode's name in its rung's colour. Its dot is the mode's icon (`TimelineDot.mode`).
+struct ModeItemText: View {
+    let lead: String
+    let mode: ModeMark
+
+    var body: some View {
+        (Text(lead + " ").foregroundStyle(Theme.secondary) + Text(mode.label).foregroundStyle(mode.tint ?? Theme.secondary))
+            .font(TextStyle.body)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}

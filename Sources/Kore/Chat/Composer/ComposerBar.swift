@@ -154,6 +154,9 @@ struct ModelMenu: View {
 struct ModeMenu: View {
     let chat: Chat
     var showLabel = true
+    /// The agent's change, fading out of the pill's fill.
+    @StateObject private var flash = Local(0.0)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Menu {
@@ -174,12 +177,19 @@ struct ModeMenu: View {
                 }
             }
             .foregroundStyle(mode.tint ?? Theme.secondary)
+            .background(Theme.modeFlash(mode.rung).opacity(flash.value), in: RoundedRectangle(cornerRadius: Radius.chip))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Mode (⇧Tab)")
+        .help(chat.controls.changedBy.map { "Changed by \($0)" } ?? "Mode (⇧Tab)")
+        .onChange(of: chat.controls.agentChangeSeq) {
+            guard !reduceMotion else { return }
+            flash.value = 1
+            // From the next pass, so the fade starts from the full flash.
+            DispatchQueue.main.async { withAnimation(Motion.modeFlash) { flash.value = 0 } }
+        }
     }
 
     private func toggle(_ mode: ModeOption, isOn: Bool, action: @escaping () -> Void) -> some View {

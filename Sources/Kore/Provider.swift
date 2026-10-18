@@ -39,9 +39,12 @@ struct ModeOption: Identifiable {
 
 struct ModeIcon: View {
     let mode: ModeOption
+    /// The glyph's size; nil: the mode's own (the pill's).
+    var glyph: CGFloat?
 
     var body: some View {
-        let size = mode.iconSize * Zoom.shared.scale
+        // Icons are drawn at their own box size for a 16pt glyph (Claude's SVGs pad the glyph).
+        let size = (glyph.map { $0 * mode.iconSize / 16 } ?? mode.iconSize) * Zoom.shared.scale
         Image(nsImage: ModeIcons.image(mode.icon))
             .resizable()
             .aspectRatio(contentMode: .fit)

@@ -11,7 +11,9 @@ final class TranscriptStore {
     struct Entry: Identifiable, Equatable {
         /// `divider`: a quiet line across the transcript ("Conversation compacted · 14:32",
         /// "Forked from …"), off the timeline.
-        enum Kind: Equatable { case user, answer, thinking, plan, tool, agent, notice, peer, divider }
+        /// `mode`: a permission mode change (look.md §8): the user's is a divider between turns,
+        /// the agent's (with `modeLead`) an item on its turn's timeline.
+        enum Kind: Equatable { case user, answer, thinking, plan, tool, agent, notice, peer, divider, mode }
 
         let id = UUID()
         var kind: Kind
@@ -41,6 +43,14 @@ final class TranscriptStore {
         var readOnly = false
         /// A tool call cut off by Stop: no output, a muted dot.
         var stopped = false
+        /// `.mode`: the mode it became (or, for "Left", the one left), and the agent's words
+        /// before it ("Entered", "Plan approved ·", "Left"); nil words: the user's divider.
+        var mode: ModeMark?
+        var modeLead: String?
+        /// A user's divider: the mode before this run of changes (back on it, the divider goes).
+        var modeFrom: String?
+        /// A notice with a warning dot (a mode the CLI refused).
+        var warning = false
         /// A user message's id in its CLI's history (where a fork from it starts); nil for one
         /// sent in this run. `forkSource` on a fork's "Forked from" line.
         var source: String?
@@ -48,6 +58,7 @@ final class TranscriptStore {
         static func == (a: Self, b: Self) -> Bool {
             a.id == b.id && a.kind == b.kind && a.text == b.text && a.result == b.result && a.done == b.done
                 && a.isError == b.isError && a.stopped == b.stopped && a.toolName == b.toolName && a.from == b.from
+                && a.mode == b.mode && a.modeLead == b.modeLead && a.warning == b.warning
                 && a.changes == b.changes && a.agent == b.agent && a.input == b.input && a.summary == b.summary
                 && a.duration == b.duration && a.attachments.map(\.id) == b.attachments.map(\.id)
         }
@@ -99,6 +110,9 @@ final class TranscriptStore {
         var denied = 0
         /// What the live fold row last said ("Running Bash…"); it stays until the next state.
         var liveLabel: String?
+        /// The mode it started in, and the one the agent last switched to during it.
+        var startMode: String?
+        var endMode: String?
     }
 
     /// One drawn row.
@@ -153,6 +167,8 @@ final class TranscriptStore {
         var count: String?
         /// Some tool call failed (its dot turns red once the turn ends).
         var failed = false
+        /// The agent left the turn in another mode than it began in: " · now {mode}".
+        var now: ModeMark?
     }
 
     /// A file the latest turn changed, for the file explorer and editor (phase 09 §8).
@@ -485,7 +501,7 @@ final class TranscriptStore {
     // MARK: Turns
 
     func turnStarted(_ id: String, at date: Date = Date()) {
-        turns[id] = Turn(id: id, startedAt: date)
+        turns[id] = Turn(id: id, startedAt: date, startMode: effectiveMode)
         current = id
         latestTurn = id
         touchesDirty = true
@@ -533,6 +549,10 @@ final class TranscriptStore {
         let hadAnswer = turn.answerFrom != nil
         turns[id] = turn
         if current == id { current = nil }
+        if !turnIsOpen, let held = heldModeChange {
+            heldModeChange = nil
+            userChanged(from: held.from, to: held.to)
+        }
         workedBefore += turn.duration ?? 0
         if !hadAnswer { announceFold(id) }
         changed(turn: id)
@@ -866,6 +886,111 @@ final class TranscriptStore {
         update(tool: id) { $0.changes = changes }
     }
 
+    // MARK: Mode changes (look.md §8)
+
+    /// The provider, for its modes' names, icons and colours.
+    @ObservationIgnored var provider: ProviderDescriptor?
+    @ObservationIgnored private var permissionsMode: String?
+    @ObservationIgnored private var planOn = false
+    /// A change the user made while a turn ran: it shows when the turn ends, between turns.
+    @ObservationIgnored private var heldModeChange: (from: String, to: String)?
+
+    /// The mode shown: a plan toggle that's on (Codex), else the permissions mode.
+    private var effectiveMode: String? { planOn ? provider?.planToggle?.id ?? permissionsMode : permissionsMode }
+
+    private func option(_ id: String) -> ModeOption? {
+        provider?.modes.first { $0.id == id } ?? provider?.planToggle.flatMap { $0.id == id ? $0 : nil }
+    }
+
+    func modeChanged(_ change: ModeChange) {
+        let before = effectiveMode
+        permissionsMode = change.mode
+        if change.source == .refused {
+            if let asked = change.previous { refused(asked: asked, kept: change.mode) }
+            return
+        }
+        // The first mode a chat learns isn't a change.
+        guard change.previous != nil else { return }
+        marked(change.source, from: before ?? change.previous, to: effectiveMode)
+    }
+
+    /// Codex's plan toggle, beside its permissions modes.
+    func planModeChanged(_ change: PlanModeChange) {
+        let before = effectiveMode
+        planOn = change.on
+        guard change.source != .refused else { return }
+        marked(change.source, from: before, to: effectiveMode)
+    }
+
+    private func marked(_ source: ModeSource, from: String?, to: String?) {
+        guard let to, from != to else { return }
+        switch source {
+        case .session, .refused:
+            break
+        case .user:
+            if let from { userChanged(from: from, to: to) }
+        case .agent(let cause, let agent):
+            agentChanged(cause, from: from, to: to, agent: agent)
+        }
+    }
+
+    /// Between turns: one divider for a run of changes, gone when it comes back to where it was.
+    private func userChanged(from: String, to: String) {
+        if turnIsOpen {
+            let start = heldModeChange?.from ?? from
+            heldModeChange = start == to ? nil : (start, to)
+            return
+        }
+        guard let option = option(to) else { return }
+        if let last = entries.indices.last, entries[last].kind == .mode, entries[last].modeLead == nil {
+            if entries[last].modeFrom == to {
+                position[entries[last].id] = nil
+                entries.removeLast()
+                changed(at: entries.count)
+            } else {
+                entries[last].mode = ModeMark(option)
+                entries[last].text = option.label
+                changed(at: last)
+            }
+            return
+        }
+        var entry = Entry(kind: .mode, text: option.label)
+        entry.mode = ModeMark(option)
+        entry.modeFrom = from
+        append(entry)
+    }
+
+    /// One of the agent's steps, on its turn's line (or its card's, for a sub-agent).
+    private func agentChanged(_ cause: ModeCause, from: String?, to: String, agent: AgentID) {
+        let (lead, shown): (String, String) =
+            switch cause {
+            case .enteredPlanMode: ("Entered", to)
+            case .planApproved: ("Plan approved ·", to)
+            case .other: option(to)?.rung == nil && from != nil ? ("Left", from!) : ("Entered", to)
+            }
+        guard let option = option(shown) else { return }
+        var entry = Entry(kind: .mode, text: "\(lead) \(option.label)")
+        entry.mode = ModeMark(option)
+        entry.modeLead = lead
+        if let sub = agent.sub {
+            laneAppend(agent: sub, entry)
+            changed(at: cardIndex(sub))
+            return
+        }
+        entry.turn = current
+        if let current { turns[current]?.endMode = to }
+        append(entry)
+    }
+
+    /// "Couldn't switch to Auto · staying on Manual".
+    private func refused(asked: String, kept: String) {
+        guard let asked = option(asked), let kept = option(kept) else { return }
+        var entry = Entry(kind: .notice, text: "Couldn't switch to \(asked.label) · staying on \(kept.label)")
+        entry.warning = true
+        entry.turn = current
+        append(entry)
+    }
+
     func notice(_ text: String, isError: Bool) {
         var entry = Entry(kind: .notice, text: text, isError: isError)
         entry.turn = current
@@ -1076,7 +1201,8 @@ final class TranscriptStore {
         case .entry(let e):
             switch e.kind {
             case .answer, .plan: return .plain
-            case .notice: return e.isError ? .failure : .plain
+            case .notice: return e.isError ? .failure : e.warning ? .warning : .plain
+            case .mode: return e.modeLead == nil ? nil : e.mode.map { .mode($0) }
             default: return nil
             }
         case .thinking: return .plain
@@ -1166,9 +1292,10 @@ final class TranscriptStore {
             label = WorkedFor.label(duration: worked, items: foldable.count)
         }
         let open = Self.isOpen(turn)
+        let now = turn.finished ? turn.endMode.flatMap { $0 != turn.startMode ? option($0).map(ModeMark.init) : nil } : nil
         rows.append(.fold(Fold(
             turn: turn.id, label: label, outcome: foldOutcome(turn), denied: turn.denied, open: open, live: live,
-            count: live && !tools.isEmpty ? Self.count(tools.count, failed: failed) : nil, failed: failed > 0)))
+            count: live && !tools.isEmpty ? Self.count(tools.count, failed: failed) : nil, failed: failed > 0, now: now)))
         let rest = work.dropFirst(prompts.count)
         rows.append(contentsOf: open ? grouped(rest) : rest.filter(Self.pinned).compactMap(visibleRow))
         if let split {
