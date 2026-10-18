@@ -84,6 +84,10 @@ public enum ClaudeHistory {
         for line in data.jsonLines(containing: "\"uuid\"") {
             guard let link = try? decoder.decode(Link.self, from: line) else { continue }
             let uuid = link.uuid
+            // The CLI writes history again (same uuids, other metadata) when a session is resumed
+            // or forked: the first copy keeps its place. A repeat would also abort building
+            // `index` below (`Dictionary(uniqueKeysWithValues:)`).
+            guard byId[uuid] == nil else { continue }
             byId[uuid] = link
             lines[uuid] = line
             if link.isBoundary {
