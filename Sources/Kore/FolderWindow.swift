@@ -55,7 +55,10 @@ struct FolderWindow: View {
             if let provider = DevSnapshot.startProvider {
                 workspace.value.start(provider, in: workspace.value.activeTab)
                 workspace.value.activeTab.chat?.launchModel = DevSnapshot.model
-                if let mode = DevSnapshot.mode { workspace.value.activeTab.chat?.setMode(mode) }
+                if let mode = DevSnapshot.mode, let chat = workspace.value.activeTab.chat {
+                    // Codex's Plan is a toggle beside its permission modes.
+                    if chat.provider == .codex && mode == "plan" { chat.setPlanMode(true) } else { chat.setMode(mode) }
+                }
                 if let urls = DevSnapshot.attach { workspace.value.activeTab.chat?.attach(urls) }
                 if let text = DevSnapshot.thenSend, let chat = workspace.value.activeTab.chat {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
@@ -68,6 +71,7 @@ struct FolderWindow: View {
                     chat.send()
                 }
             }
+            if DevSnapshot.openHistory { historyOpen.value = true }
             if let session = DevSnapshot.resume {
                 workspace.value.open(session)
                 workspace.value.activeTab.chat?.launchModel = DevSnapshot.model

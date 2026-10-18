@@ -28,7 +28,10 @@ struct ChatView: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: viewer.value?.id)
-        .onAppear { composerFocused = true }
+        .onAppear {
+            composerFocused = true
+            if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, pending: true) }
+        }
         .task { await chat.start() }
     }
 

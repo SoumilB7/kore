@@ -19,6 +19,8 @@ import KoreCore
 ///   KORE_CLICK=<x>,<y>[;...] click those points (from the window's top-left), 1s apart, before the snapshot
 ///   KORE_REAL_CLICK=1        post that click through the window server (moves the real cursor),
 ///                            to catch title-bar regions that swallow clicks
+///   KORE_HISTORY=1           open the history panel at launch
+///   KORE_VIEW_IMAGE=1        open the first composer attachment in the image viewer
 ///   KORE_SIZE=<w>,<h>        resize the folder window's content first (tile-size checks)
 ///   KORE_HANGS=1             log main-thread stalls over 60ms and each click/key, with times, to stderr
 ///   KORE_SNAPSHOT=<png path> once a folder window is up, save an image of it and quit
@@ -34,6 +36,10 @@ enum DevSnapshot {
     static let mode = ProcessInfo.processInfo.environment["KORE_MODE"]
     static let thenSend = ProcessInfo.processInfo.environment["KORE_THEN_SEND"]
     static let model = ProcessInfo.processInfo.environment["KORE_MODEL"]
+    /// KORE_HISTORY=1: open the history panel at launch. KORE_VIEW_IMAGE=1: open the first
+    /// composer attachment in the image viewer. (Deterministic snapshots without real clicks.)
+    static let openHistory = ProcessInfo.processInfo.environment["KORE_HISTORY"] == "1"
+    static let viewImage = ProcessInfo.processInfo.environment["KORE_VIEW_IMAGE"] == "1"
     static let attach = ProcessInfo.processInfo.environment["KORE_ATTACH"].map {
         $0.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
     }
