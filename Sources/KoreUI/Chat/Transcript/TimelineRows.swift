@@ -228,7 +228,7 @@ struct TimelineRow: View, Equatable {
 
     @ViewBuilder private var content: some View {
         if case .entry(let entry) = item.row, entry.kind == .divider {
-            DividerRow(text: entry.text, open: entry.source == TranscriptStore.forkSource ? actions.openOriginal : nil)
+            DividerRow(text: entry.text, open: entry.source == TranscriptStore.forkSource ? actions.openOriginal : nil, help: entry.result)
         } else if case .entry(let entry) = item.row, entry.kind == .mode, entry.modeLead == nil, let mode = entry.mode {
             ModeDivider(mode: mode)
         } else if case .message(let entry, let open, let expanded) = item.row {

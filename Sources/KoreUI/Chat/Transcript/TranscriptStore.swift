@@ -571,8 +571,18 @@ final class TranscriptStore {
 
     /// After an imported chat's carried part: "Continued in Codex · gpt-6-luna · 24 Oct". The
     /// fork's line, so it reads and behaves as one.
-    func continued(_ text: String) {
-        append(Entry(kind: .divider, text: text, source: Self.forkSource))
+    func continued(_ text: String, help: String) {
+        var entry = Entry(kind: .divider, text: text, source: Self.forkSource)
+        entry.result = help
+        append(entry)
+    }
+
+    /// Above an imported chat's oldest carried turn, when older ones weren't carried and no
+    /// summary of theirs was: "Carried to Codex from here", what was left out in its help.
+    func carriedFrom(_ text: String, help: String) {
+        var entry = Entry(kind: .divider, text: text)
+        entry.result = help
+        append(entry)
     }
 
     static let forkSource = "fork"

@@ -24,6 +24,9 @@ public struct HandoffRecord: Codable, Sendable, Equatable {
         public var condensed: Int
         public var bare: Int
         public var notCarried: Int
+        /// The days the turns not carried span, when known.
+        public var notCarriedFrom: Date?
+        public var notCarriedTo: Date?
         public var unknown: Int
         public var summary: Bool
         public var tokens: Int
@@ -34,6 +37,8 @@ public struct HandoffRecord: Codable, Sendable, Equatable {
             condensed = plan.count(.condensed)
             bare = plan.count(.bare)
             notCarried = plan.notCarried
+            notCarriedFrom = plan.notCarriedFrom
+            notCarriedTo = plan.notCarriedTo
             unknown = plan.unknown
             summary = plan.summary != nil
             tokens = plan.tokens

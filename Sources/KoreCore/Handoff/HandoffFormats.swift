@@ -8,6 +8,8 @@ public protocol HandoffFormat: Sendable {
     var id: String { get }
     /// What the agent is called in what the target is told ("Claude Code").
     var product: String { get }
+    /// Where the agent keeps its histories, for a file picker to start in.
+    var store: URL { get }
     /// What the file is, from its first lines only; nil when it isn't this format. Strict: the
     /// format's own structure, not merely JSON lines.
     func identify(_ head: HandoffHead) -> HandoffIdentity?
@@ -96,13 +98,27 @@ public enum HandoffFormats {
     /// damaged part-way, or one with nothing to carry. Blocking file IO: call it off the main
     /// thread. The last file read is kept (a preview, then the import, read it once).
     public static func read(_ file: URL) -> HandoffSegment? {
+        try? check(file).get()
+    }
+
+    /// `read`, with why a file isn't importable, in a line (for a tooltip, never an alert).
+    public static func check(_ file: URL) -> Result<HandoffSegment, HandoffReadError> {
         let stamp = Self.stamp(file)
-        if let cached = lock.withLock({ last }), cached.file == file, cached.stamp == stamp { return cached.segment }
-        guard let identity = identify(file), let format = format(identity.format),
-            let segment = try? format.read(file, identity: identity), !segment.isEmpty
-        else { return nil }
+        if let cached = lock.withLock({ last }), cached.file == file, cached.stamp == stamp { return .success(cached.segment) }
+        guard let identity = identify(file), let format = format(identity.format) else {
+            return .failure(HandoffReadError("Not a chat format Kore knows"))
+        }
+        let segment: HandoffSegment
+        do {
+            segment = try format.read(file, identity: identity)
+        } catch let error as HandoffReadError {
+            return .failure(error)
+        } catch {
+            return .failure(HandoffReadError("Couldn't read the file"))
+        }
+        guard !segment.isEmpty else { return .failure(HandoffReadError("No turns in this file")) }
         lock.withLock { last = (file, stamp, segment) }
-        return segment
+        return .success(segment)
     }
 
     private static let lock = NSLock()

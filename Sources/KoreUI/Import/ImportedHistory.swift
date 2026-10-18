@@ -35,6 +35,17 @@ final class ImportedHistory {
         (["Continued in \(product)", record.targetModel, Self.day.string(from: record.at)].compactMap { $0 }).joined(separator: " · ")
     }
 
+    /// "Carried to Codex from here" over the oldest carried turn, with what was left out:
+    /// only when turns weren't carried and no summary of the source's covers them.
+    func cutMark(product: String) -> (text: String, help: String)? {
+        let carried = record.carried
+        guard carried.notCarried > 0, !carried.summary else { return nil }
+        var parts = ["\(carried.notCarried) earlier \(carried.notCarried == 1 ? "turn" : "turns") not carried" + ImportState.span(carried.notCarriedFrom, carried.notCarriedTo)]
+        if carried.condensed > 0 { parts.append("\(carried.condensed) condensed") }
+        if carried.bare > 0 { parts.append("\(carried.bare) as prompt and reply") }
+        return ("Carried to \(product) from here", parts.joined(separator: " · "))
+    }
+
     private static let day: DateFormatter = {
         let f = DateFormatter()
         f.setLocalizedDateFormatFromTemplate("d MMM")

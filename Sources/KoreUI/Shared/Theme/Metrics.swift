@@ -105,6 +105,12 @@ enum Size {
     static let logoRow: CGFloat = 13
     static let logoPicker: CGFloat = 16
     static let spinner: CGFloat = 14
+    /// The empty chat's "Import a chat" line, the picker's search line, and its rows (as high as
+    /// a usage reset's), seven of them before the list scrolls; a row's running spinner.
+    static let importLine: CGFloat = 22
+    static let importRow: CGFloat = 26
+    static let importRowsShown = 7
+    static let importSpinner: CGFloat = 10
     static let dot: CGFloat = 6
     static let swatch: CGFloat = 12
     static let swatchButton = CGSize(width: 24, height: 28)

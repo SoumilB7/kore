@@ -232,3 +232,12 @@ extension Chat {
     package var storyContinuesTurn: String? { transcript.continuation?.turn }
     package var storyContinuesLine: String? { continuesAt.map { ContinueText.line($0, now: Date()) } }
 }
+
+extension Chat {
+    /// The empty chat's import picker as a storyline checks it: open or not, the chats it lists
+    /// (titles), its footer line, and whether Import is on.
+    package var storyImportOpen: Bool { importer.isOpen }
+    package var storyImportRows: [String] { importer.shown.map(\.title) }
+    package var storyImportLine: String { importer.text(in: self) }
+    package var storyImportReady: Bool { importer.canImport }
+}

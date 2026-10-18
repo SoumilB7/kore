@@ -175,6 +175,12 @@ package final class Workspace {
 
     /// Switches to the tab of the chat `chat` was forked from; nil when that tab is closed.
     func openOriginal(of chat: Chat) -> (() -> Void)? {
+        // An imported chat's source, when it's one of this folder's chats.
+        if chat.original == nil, let source = chat.imported?.record.source.session,
+            let session = chats.first(where: { $0.id == source })
+        {
+            return { [weak self] in self?.open(session) }
+        }
         guard let original = chat.original, tab(of: original) != nil else { return nil }
         return { [weak self, weak original] in
             // Checked again on the click: the tab may have closed since.

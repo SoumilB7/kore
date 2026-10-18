@@ -81,6 +81,12 @@ struct ComposerView: View {
                     AccountPopup(chat: chat, state: chat.account)
                         .padding(.bottom, Space.lg)
                         .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
+                } else if chat.importer.isOpen {
+                    ImportPopup(chat: chat, state: chat.importer) {
+                        ImportFilePanel.choose(for: chat.provider, in: window.value) { chat.importer.add(file: $0) }
+                    }
+                    .padding(.bottom, Space.lg)
+                    .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 }
             }
         .background(WindowReader { window.value = $0 })
@@ -98,6 +104,7 @@ struct ComposerView: View {
             clickMonitor.value = nil
             chat.usage.close()
             chat.account.close()
+            chat.importer.close()
         }
         // A field or form in the Account popup had the keys: when it goes, the composer has them
         // again, as it has throughout everything else in the popup.
@@ -108,6 +115,7 @@ struct ComposerView: View {
             // The popups are the chat the box showed; they close with the switch.
             pasteChat.value?.usage.close()
             pasteChat.value?.account.close()
+            pasteChat.value?.importer.close()
             pasteChat.value = chat
             // The caret goes to the end of this chat's draft, ready to go on typing.
             place()

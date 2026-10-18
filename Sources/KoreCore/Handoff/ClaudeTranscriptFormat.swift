@@ -14,6 +14,7 @@ import Foundation
 public struct ClaudeTranscriptFormat: HandoffFormat {
     public let id = "claude"
     public let product = "Claude Code"
+    public var store: URL { ClaudeHistory.projectsDirectory }
 
     public init() {}
 
@@ -33,7 +34,9 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
     public func read(_ file: URL, identity: HandoffIdentity) throws -> HandoffSegment {
         let transcript = ClaudeTranscript(file: file)
         let page = transcript.latest()?.page ?? transcript.page()
-        guard transcript.malformed == 0 else { throw HandoffReadError("\(transcript.malformed) damaged lines") }
+        guard transcript.malformed == 0 else {
+            throw HandoffReadError(transcript.malformed == 1 ? "A line isn't valid JSON" : "\(transcript.malformed) lines aren't valid JSON")
+        }
         // Rows Kore wrote into a session it made by an earlier import are that import's, not this
         // agent's own history.
         let written = Set(HandoffRecords.record(target: identity.sessionId)?.written ?? [])

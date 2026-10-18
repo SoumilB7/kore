@@ -212,6 +212,7 @@ private struct TabItem: View {
             if file.notice == .deleted { return "Deleted on disk" }
             return file.path
         }
+        if tab.agent == nil, let imported = tab.chat?.imported { return "\(tab.title) · from \(imported.record.sourceProduct)" }
         return tab.agent != nil ? "Sub-agent of “\(tab.chat?.title ?? "")”" : tab.title
     }
 

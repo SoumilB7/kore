@@ -10,6 +10,11 @@ import Foundation
 public struct CodexRolloutFormat: HandoffFormat {
     public let id = "codex"
     public let product = "Codex"
+    public var store: URL {
+        ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+            .map { $0.appendingPathComponent("sessions") }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")
+    }
 
     public init() {}
 
@@ -38,7 +43,7 @@ public struct CodexRolloutFormat: HandoffFormat {
             guard let record = try? JSONValue.parse(line) else {
                 // A last line still being written isn't damage.
                 if index == lines.count - 1, data.last != 0x0A { break }
-                throw HandoffReadError("line \(index + 1) isn't JSON")
+                throw HandoffReadError("Line \(index + 1) isn't valid JSON")
             }
             reader.read(record)
         }

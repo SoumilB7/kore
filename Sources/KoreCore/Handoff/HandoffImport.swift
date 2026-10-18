@@ -26,13 +26,17 @@ public struct HandoffPreview: Sendable, Equatable {
     /// About this many tokens of the target's window, of a budget of `budget`.
     public let tokens: Int
     public let budget: Int
-    /// The times the source's turns span.
+    /// The times the source's turns span, and those of the turns not carried.
     public let from: Date?
     public let to: Date?
+    public let notCarriedFrom: Date?
+    public let notCarriedTo: Date?
     /// The model, mode and effort it last ran on, in the source's own names.
     public let model: String?
     public let mode: String?
     public let effort: String?
+
+    public var carried: Int { full + condensed + bare }
 
     init(_ segment: HandoffSegment, _ plan: HandoffPlan, file: URL) {
         self.file = file
@@ -50,6 +54,8 @@ public struct HandoffPreview: Sendable, Equatable {
         budget = plan.budget
         from = segment.turns.first?.at
         to = segment.turns.last?.at
+        notCarriedFrom = plan.notCarriedFrom
+        notCarriedTo = plan.notCarriedTo
         model = segment.model
         mode = segment.mode
         effort = segment.effort
@@ -71,7 +77,16 @@ public enum HandoffImport {
     }
 
     public static func preview(_ file: URL, for writer: any HandoffWriter, model: String?, window: Int? = nil) -> HandoffPreview? {
-        plan(file, for: writer, model: model, window: window).map { HandoffPreview($0.segment, $0.plan, file: file) }
+        try? inspect(file, for: writer, model: model, window: window).get()
+    }
+
+    /// `preview`, with why a file isn't importable (for the picker's tooltip).
+    public static func inspect(_ file: URL, for writer: any HandoffWriter, model: String?, window: Int? = nil)
+        -> Result<HandoffPreview, HandoffReadError>
+    {
+        HandoffFormats.check(file).map { segment in
+            HandoffPreview(segment, HandoffBudget.plan(segment, window: window ?? writer.window(model: model)), file: file)
+        }
     }
 
     /// Writes the planned history as the target's new session and keeps the record. Returns

@@ -549,13 +549,18 @@ public enum ClaudeHistory {
         return (entries, offset + UInt64(whole.count))
     }
 
-    static func projectDirectory(for folder: URL) -> URL {
+    /// `~/.claude/projects` (or under `CLAUDE_CONFIG_DIR`): every folder's transcripts.
+    public static var projectsDirectory: URL {
         let root = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+        return root.appendingPathComponent("projects")
+    }
+
+    static func projectDirectory(for folder: URL) -> URL {
         // realpath, like the CLI: Foundation's resolvingSymlinksInPath turns /private/tmp into /tmp.
         let path = realpath(folder.path, nil).map { defer { free($0) }; return String(cString: $0) } ?? folder.path
         let name = String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
-        return root.appendingPathComponent("projects").appendingPathComponent(name)
+        return projectsDirectory.appendingPathComponent(name)
     }
 
     /// Title (rename > AI title > first prompt) and the last message's time. Transcripts can be

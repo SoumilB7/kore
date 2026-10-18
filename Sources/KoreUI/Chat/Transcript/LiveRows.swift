@@ -229,6 +229,8 @@ struct LoadEarlierRow: View {
 struct DividerRow: View {
     let text: String
     var open: (() -> Void)?
+    /// The button's help; a plain line's, when it has one.
+    var help: String?
     @StateObject private var hovered = Local(false)
 
     var body: some View {
@@ -238,9 +240,9 @@ struct DividerRow: View {
                 Button(action: open) { label(hovered.value ? Theme.text : Theme.secondary) }
                     .buttonStyle(.plain)
                     .onHover { hovered.value = $0 }
-                    .help("Open original")
+                    .help(help ?? "Open original")
             } else {
-                label(Theme.tertiary)
+                label(Theme.tertiary).help(help ?? "")
             }
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
         }

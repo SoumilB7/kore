@@ -94,6 +94,13 @@ extension StoryID {
         /// One of its full resets, by the credit's id (empty for the one row of a count alone);
         /// `.part(.use)` asks, then `.part(.allow)` / `.part(.cancel)` answer.
         package static func usageReset(_ id: String?) -> StoryID { StoryID(.composer, "usage.reset", key: id ?? "") }
+        /// An empty chat's "Import a chat" line (also the drop target's).
+        package static let importLine = StoryID(.composer, "import")
+        /// The import picker; its search field `.part(.field)`, Choose file… `.part(.choose)`,
+        /// Import `.part(.add)`, Sign in `.part(.signIn)`, Try again `.part(.reload)`.
+        package static let importer = StoryID(.composer, "importer")
+        /// One of its chats, by session id (a file's by its path).
+        package static func importRow(_ id: String) -> StoryID { StoryID(.composer, "importer.row", key: id) }
         /// A message waiting for the turn to end; `.part(.cancel)` takes it back.
         package static func queued(_ id: UUID) -> StoryID { StoryID(.composer, "queued", key: id.uuidString) }
     }

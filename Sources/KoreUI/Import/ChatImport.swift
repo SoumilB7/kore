@@ -104,8 +104,16 @@ extension Workspace {
         }
     }
 
+    /// `importPreview`, with why a file isn't importable (the picker's tooltip, never a message).
+    func importInspect(_ source: HandoffSource, into chat: Chat) async -> Result<HandoffPreview, HandoffReadError> {
+        guard let writer = HandoffWriters.writer(chat.provider.id) else { return .failure(HandoffReadError("This chat's CLI can't import")) }
+        guard let file = await historyFile(source) else { return .failure(HandoffReadError("Its file wasn't found")) }
+        let model = chat.controls.modelId ?? chat.launchModel
+        return await Task.detached(priority: .userInitiated) { HandoffImport.inspect(file, for: writer, model: model) }.value
+    }
+
     /// A chat of that session open here is mid-turn, running agents, or waiting on the user.
-    private func busy(_ session: String) -> Bool {
+    func busy(_ session: String) -> Bool {
         tabs.contains { tab in
             guard tab.agent == nil, let chat = tab.chat, chat.sessionId == session else { return false }
             return chat.isWorking || !chat.approvals.pending.isEmpty

@@ -48,6 +48,120 @@ final class ImportRefusesUnknownFiles: ChatStoryline {
     }
 }
 
+/// The picker, as the owner uses it: "Import a chat" over the empty chat's composer, a chat
+/// picked (a new Codex chat lists this folder's Claude Code chat; a new Claude chat, with no
+/// other agent's chat here, goes straight to Choose file… and the file comes in picked), its
+/// one-line preview, Import. The chat fills in place: the source's turn, the divider, the
+/// source's title on the tab, the line gone, and the next send is the chat's own.
+final class ImportFromPicker: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    override func steps() -> [any Step] {
+        let codex = variant.provider == "codex"
+        let company = codex ? "OpenAI" : "Anthropic"
+        var steps: [any Step] = [
+            UseScript(CLIScript(turns: [CLIScript.reply("Carried on")])),
+            codex ? PutClaudeChat() : OfferFile("source.jsonl", lines: ImportFixtures.codex),
+            OpenFolder(), StartChat(),
+            ExpectElement(.id(StoryID.Composer.importLine)),
+            Press(.id(StoryID.Composer.importLine)),
+            WaitForElement(.id(StoryID.Composer.importer)),
+        ]
+        if codex {
+            steps += [
+                Expect("this folder's Claude Code chat listed", found: { $0.app.chat?.storyImportRows.description }) {
+                    try $0.activeChat().storyImportRows == ["Check the build number."]
+                },
+                Press(.id(StoryID.Composer.importRow(PutClaudeChat.session))),
+            ]
+        } else {
+            steps.append(Expect("the chosen file picked") { try $0.activeChat().storyImportRows.first == "source.jsonl" })
+        }
+        return steps + [
+            Expect("its preview in the footer", found: { $0.app.chat?.storyImportLine }) { story in
+                let chat = try story.activeChat()
+                return chat.storyImportLine.hasPrefix("1 turn · ~") && chat.storyImportLine.hasSuffix("tokens · sent to \(company)")
+                    && chat.storyImportReady
+            },
+            Press(.id(StoryID.Composer.importer.part(.add))),
+            Expect.rows("the source's turn above the divider") { rows in
+                rows.filter { $0.kind == "user" }.map(\.text) == ["Check the build number."]
+                    && rows.contains { $0.kind == "assistant" && $0.text == "The build is 7781." }
+                    && rows.last?.kind == "divider" && rows.last?.text.hasPrefix("Continued in \(codex ? "Codex" : "Claude Code")") == true
+            },
+            Expect("the tab named after the source") { try $0.activeChat().storyTitle == "Check the build number." },
+            ExpectElement(.id(StoryID.Composer.importLine), .absent),
+            ExpectElement(.id(StoryID.Composer.importer), .absent),
+            Send("And now?"), TurnFinished(1),
+            Expect.rows("the chat's own turn after the divider") { rows in
+                rows.filter { $0.kind == "user" }.map(\.text) == ["Check the build number.", "And now?"]
+                    && rows.last { $0.kind == "assistant" }?.text == "Carried on"
+            },
+        ]
+    }
+}
+
+/// Quiet rejection: a file no format knows opens nothing at all; one that looks like a chat but
+/// holds no turns stays as an inert row, "Not a chat Kore can import", Import off, and nothing
+/// reaches the CLI.
+final class ImportPickerRefusesQuietly: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            OfferFile("notes.jsonl", lines: [#"{"note":"not a chat"}"#]),
+            Press(.id(StoryID.Composer.importLine)),
+            Expect("no picker and an empty chat") { story in
+                try !story.activeChat().storyImportOpen && story.activeChat().rows.isEmpty
+            },
+            OfferFile("empty.jsonl", lines: [ImportFixtures.codex[0]]),
+            Press(.id(StoryID.Composer.importLine)),
+            WaitForElement(.id(StoryID.Composer.importer)),
+            Expect("the file's row, not importable", found: { $0.app.chat?.storyImportLine }) { story in
+                let chat = try story.activeChat()
+                return chat.storyImportRows == ["empty.jsonl"] && chat.storyImportLine == "Not a chat Kore can import" && !chat.storyImportReady
+            },
+            Press(.id(StoryID.Composer.importer.part(.add))),
+            Expect("nothing given to the CLI, the chat still empty") { story in
+                let empty = try story.activeChat().rows.isEmpty
+                return ScriptedWorld.shared.imports.isEmpty && empty
+            },
+        ]
+    }
+}
+
+/// A Claude Code chat in this folder's store (the run's own), for the picker to list.
+struct PutClaudeChat: Step {
+    static let session = "5e55-0001"
+    var label: String { "Put a Claude Code chat in the folder" }
+
+    func run(_ story: StoryContext) async throws {
+        let file = ClaudeHistory.transcript(sessionId: Self.session, in: story.folder)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let lines = ImportFixtures.claude.map { $0.replacingOccurrences(of: "/tmp/source", with: story.folder.path) }
+        try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    }
+}
+
+/// What Choose file… gives next: a file written where the storyline keeps its outputs.
+struct OfferFile: Step {
+    let name: String
+    let lines: [String]
+    var label: String { "Offer \(name) to Choose file…" }
+
+    init(_ name: String, lines: [String]) {
+        self.name = name
+        self.lines = lines
+    }
+
+    func run(_ story: StoryContext) async throws {
+        try FileManager.default.createDirectory(at: story.outputs, withIntermediateDirectories: true)
+        let file = story.outputs.appendingPathComponent(name)
+        try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        ScriptedAccounts.shared.chosenFile = file
+    }
+}
+
 /// One turn in each format: a prompt, a command and its output, the reply.
 enum ImportFixtures {
     /// The other CLI's file for a chat of `provider`.

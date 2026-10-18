@@ -219,9 +219,13 @@ private struct HistoryRow: View {
                     .foregroundStyle(session.archived ? Theme.secondary : Theme.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                // A chat Kore made by an import names where it came from.
+                if let source = HandoffRecords.record(target: session.id)?.sourceProduct {
+                    Text("from \(source)").font(Chrome.label).foregroundStyle(Theme.tertiary).fixedSize()
+                }
                 Spacer(minLength: Space.md)
                 if !hovered.value {
-                    Text(Self.age(of: session.updated))
+                    Text(session.updated.historyAge)
                         .font(Chrome.label)
                         .foregroundStyle(Theme.tertiary)
                         .fixedSize()
@@ -277,16 +281,18 @@ private struct HistoryRow: View {
         .buttonStyle(.plain)
         .help(help)
     }
+}
 
-    /// "now", "5m", "3h", "2d", then the date.
-    private static func age(of date: Date) -> String {
-        let seconds = Date().timeIntervalSince(date)
+extension Date {
+    /// "now", "5m", "3h", "2d", then the date: a history row's age.
+    var historyAge: String {
+        let seconds = Date().timeIntervalSince(self)
         switch seconds {
         case ..<60: return "now"
         case ..<3600: return "\(Int(seconds / 60))m"
         case ..<86400: return "\(Int(seconds / 3600))h"
         case ..<(7 * 86400): return "\(Int(seconds / 86400))d"
-        default: return date.formatted(.dateTime.month(.abbreviated).day())
+        default: return formatted(.dateTime.month(.abbreviated).day())
         }
     }
 }

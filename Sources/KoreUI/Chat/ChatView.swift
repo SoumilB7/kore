@@ -1,3 +1,4 @@
+import KoreCore
 import SwiftUI
 
 /// The chat tabs: the transcripts of the last chats shown, kept as they were, under one set of
@@ -44,8 +45,12 @@ struct ChatView: View {
                         .accessibilityHidden(!shown)
                 }
             }
+            .onDrop(of: [.fileURL], delegate: ImportDrop(state: chat.importer, offered: Self.offersImport(chat)) { openImport(chat, file: $0) })
             VStack(spacing: Space.lg) {
                 ApprovalsView(chat: chat)
+                if Self.offersImport(chat) {
+                    ImportLine(state: chat.importer) { openImport(chat) }
+                }
                 ComposerView(chat: chat, focused: $composerFocused) { view($0, of: chat, pending: true) }
                     // Hidden under another tab, it takes no focus.
                     .disabled(active == nil)
@@ -108,6 +113,37 @@ struct ChatView: View {
             )
         } else if chat.usage.extended {
             UsageModal(chat: chat, state: chat.usage, wording: chat.provider.usage)
+        }
+    }
+
+    // MARK: Import
+
+    /// An empty chat of a CLI Kore can import into, until its first message.
+    private static func offersImport(_ chat: Chat) -> Bool {
+        !chat.status.hasConversation && !chat.status.isRunning && HandoffWriters.writer(chat.provider.id) != nil
+    }
+
+    /// The picker over the composer, with `file` picked when one was dropped. With no other
+    /// agent's chat in this folder, Choose file… opens at once.
+    private func openImport(_ chat: Chat, file: URL? = nil) {
+        let workspace = workspace
+        Task {
+            await chat.importer.load(chat, in: workspace)
+            if file == nil, !chat.importer.hasOthers {
+                ImportFilePanel.choose(for: chat.provider, in: workspace.window) { picked in
+                    // The panel greys unknown files; one that isn't a chat opens nothing.
+                    guard HandoffFormats.identify(picked, quick: true) != nil else { return }
+                    chat.usage.close()
+                    chat.account.close()
+                    chat.importer.open()
+                    chat.importer.add(file: picked)
+                }
+                return
+            }
+            chat.usage.close()
+            chat.account.close()
+            chat.importer.open()
+            if let file { chat.importer.add(file: file) }
         }
     }
 

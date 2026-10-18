@@ -71,6 +71,8 @@ package final class Chat: Identifiable {
     let usage = UsageState()
     /// The Account popup, in the same place (the / menu's Account).
     let account = AccountState()
+    /// The import picker, in the same place, while the chat is empty.
+    let importer = ImportState()
     /// The CLI's account changed since its CLI started: it starts again (with resume) at the
     /// next turn boundary, so it runs as the new account.
     @ObservationIgnored private var relaunchDue = false
@@ -214,8 +216,10 @@ package final class Chat: Identifiable {
     /// An imported chat's carried part and its divider, before its own history.
     private func showImported(in store: TranscriptStore) {
         guard let imported, let events = importedEvents else { return }
+        let product = provider.usage.product
+        if let cut = imported.cutMark(product: product) { store.carriedFrom(cut.text, help: cut.help) }
         store.apply(.replayed(events))
-        store.continued(imported.divider(product: provider.usage.product))
+        store.continued(imported.divider(product: product), help: "Open the \(imported.record.sourceProduct) chat")
     }
 
     /// The user's messages that waited for the history.
@@ -295,6 +299,7 @@ package final class Chat: Identifiable {
     /// Opens the usage popup and reads the account's limits once, through this chat's CLI.
     func openUsage() {
         account.close()
+        importer.close()
         usage.open(
             provider: provider.id,
             read: { [weak self] in
@@ -314,6 +319,7 @@ package final class Chat: Identifiable {
     /// Opens the Account popup for this chat's CLI.
     func openAccount() {
         usage.close()
+        importer.close()
         account.open(provider: provider.id, folder: folder)
     }
 
