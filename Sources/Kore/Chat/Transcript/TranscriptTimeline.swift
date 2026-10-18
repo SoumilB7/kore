@@ -140,6 +140,15 @@ struct TranscriptTimeline: View, Equatable {
                     nudge.value &+= 1
                     return
                 }
+                // Moved up, away from the end, with no new content: the scroll bar, Page Up or a
+                // programmatic scroll, none of which has a scroll phase. Stop following, or each
+                // row measured on the way would pull the view back to the end. Only once there's
+                // more than a screen: a shorter chat sits at the bottom and moves as it grows.
+                if following.value, height == geometry.value.height, height > new[2] + Self.atBottom,
+                    offset < geometry.value.offset - 1, offset + new[2] < height - Self.atBottom
+                {
+                    following.value = false
+                }
                 // Rows measured after they were placed change the height: while following, stay
                 // pinned to the end through layout as well as new content (T3 Code does both).
                 if following.value, height != geometry.value.height, store.sentAt.map({ Date().timeIntervalSince($0) >= Self.glide }) ?? true {
