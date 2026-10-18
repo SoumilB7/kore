@@ -77,6 +77,9 @@ extension Workspace {
         let record: HandoffRecord
         do {
             record = try await HandoffImport.write(segment, plan, file: file, into: target, writer: writer)
+        } catch CodexAppServer.Failure.rpc(code: -32601, _) {
+            // A CLI older than the calls the import needs (`thread/inject_items`).
+            return .failed("\(chat.provider.usage.product) is too old to import into. Update it, then try again.")
         } catch {
             return .failed(Chat.reason(error))
         }

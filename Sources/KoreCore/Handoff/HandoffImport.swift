@@ -38,7 +38,7 @@ public struct HandoffPreview: Sendable, Equatable {
 
     public var carried: Int { full + condensed + bare }
 
-    init(_ segment: HandoffSegment, _ plan: HandoffPlan, file: URL) {
+    package init(_ segment: HandoffSegment, _ plan: HandoffPlan, file: URL) {
         self.file = file
         format = segment.source
         product = segment.product
