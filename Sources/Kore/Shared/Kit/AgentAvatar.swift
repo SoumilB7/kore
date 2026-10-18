@@ -1,64 +1,107 @@
 import SwiftUI
 
-/// A sub-agent's mark (look.md §6): a shape for who it is, given in spawn order, and a ring
-/// and colour for how it's doing. The shape never changes; the main agent keeps its logo.
-struct AgentMark: View {
+/// A sub-agent's identity: its shape (given in spawn order) in the accent blue, on a faint halo
+/// where there's room, the same wherever the agent appears. Status is drawn around it, never by
+/// its colour: a turning arc while running, an amber point while it waits for the user, a red
+/// point once failed, and a faded shape once stopped. The chat's own agent keeps its logo.
+struct AgentAvatar: View {
     enum Status: Equatable { case running, finished, failed, stopped }
 
-    /// 0-based spawn order in the chat.
+    /// Where it's drawn: shape size, halo (0 for none), box.
+    enum Place {
+        case timeline, mapRow, mapDetail, approval, crumb, tab, stack
+
+        var shape: CGFloat {
+            switch self {
+            case .timeline, .mapRow: 16
+            case .mapDetail: 20
+            case .approval: 14
+            case .crumb, .tab, .stack: 12
+            }
+        }
+
+        var halo: CGFloat {
+            switch self {
+            case .timeline: 24
+            case .mapRow: 26
+            case .mapDetail: 32
+            case .approval: 20
+            case .crumb, .tab, .stack: 0
+            }
+        }
+
+        /// The halo is the ring box: the running arc sits on its edge. Without a halo the ring
+        /// sits 1pt outside the shape.
+        var box: CGFloat { halo > 0 ? halo : shape + 4 }
+    }
+
+    /// 0-based spawn order in the chat: picks the shape.
     let index: Int
+    let name: String
     var status = Status.finished
-    var size = Size.markLarge
-    /// The ring's box; nil draws the shape alone (a row's lane).
-    var box: CGFloat? = Size.markBoxLarge
+    var waiting = false
+    var place = Place.timeline
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var shape: AgentShape { AgentShape(rawValue: index % AgentShape.allCases.count)! }
     private var round: Int { index / AgentShape.allCases.count }
 
     var body: some View {
-        HStack(spacing: Space.xxs) {
-            ZStack {
-                if let box, status == .running { ring.frame(width: box, height: box) }
-                AgentShapeView(shape: shape)
-                    .frame(width: size, height: size)
-                    .foregroundStyle(color)
+        ZStack {
+            if place.halo > 0 {
+                Circle().fill(Theme.agentHalo).frame(width: place.halo, height: place.halo)
             }
-            .frame(width: box ?? size, height: box ?? size)
+            AgentShapeView(shape: shape)
+                .frame(width: place.shape, height: place.shape)
+                .foregroundStyle(Theme.agentMark)
+                .opacity(status == .stopped ? 0.35 : 1)
+            if status == .running { arc }
+        }
+        .frame(width: place.box, height: place.box)
+        .overlay(alignment: .topTrailing) { if waiting { point(Theme.warning) } }
+        .overlay(alignment: .bottomTrailing) { if status == .failed { point(Theme.danger) } }
+        .overlay(alignment: .bottomLeading) {
+            // The ninth agent on reuses the shapes, numbered.
             if round > 0 {
-                Text("\(round + 1)").font(TextStyle.caption).foregroundStyle(color)
+                Text("\(round + 1)").font(TextStyle.caption).foregroundStyle(Theme.agentMark)
             }
         }
-        .accessibilityLabel("Agent \(index + 1)")
+        .help(name)
+        .accessibilityLabel(name)
     }
 
-    private var color: Color {
-        switch status {
-        case .running, .finished: Theme.agentMark
-        case .failed: Theme.danger
-        case .stopped: Theme.tertiary
+    @ViewBuilder private var arc: some View {
+        let size = place.halo > 0 ? place.halo - Stroke.emphasis : place.shape + 2 * (Stroke.emphasis + 1)
+        ZStack {
+            Circle().stroke(Theme.border, lineWidth: Stroke.emphasis)
+            if reduceMotion {
+                Circle().stroke(Theme.agentArc, lineWidth: Stroke.emphasis)
+            } else {
+                SpinningArc()
+            }
         }
+        .frame(width: size, height: size)
     }
 
-    @ViewBuilder private var ring: some View {
-        if reduceMotion {
-            Circle().strokeBorder(Theme.accent, lineWidth: Size.markRing)
-        } else {
-            Circle().strokeBorder(Theme.border, lineWidth: Size.markRing)
-                .overlay { SpinningArc() }
-        }
+    private func point(_ color: Color) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: Size.avatarPoint, height: Size.avatarPoint)
+            .overlay(Circle().strokeBorder(Theme.background, lineWidth: Size.avatarCutout).padding(-Size.avatarCutout))
     }
+
+    /// An agent's colour: one blue for every agent, so the shape carries who it is.
+    static func hue(_ index: Int) -> Color { Theme.agentMark }
 }
 
-/// The accent quarter-arc that turns around a running agent's ring.
+/// The running arc: a quarter of a ring, turning.
 private struct SpinningArc: View {
     @StateObject private var turning = Local(false)
 
     var body: some View {
         Circle()
-            .trim(from: 0, to: 0.25)
-            .stroke(Theme.accent, style: StrokeStyle(lineWidth: Size.markRing, lineCap: .round))
-            .padding(Size.markRing / 2)
+            .trim(from: 0, to: 0.28)
+            .stroke(Theme.agentArc, style: StrokeStyle(lineWidth: Stroke.emphasis, lineCap: .round))
             .rotationEffect(.degrees(turning.value ? 360 : 0))
             .animation(Motion.ring, value: turning.value)
             .onAppear { turning.value = true }

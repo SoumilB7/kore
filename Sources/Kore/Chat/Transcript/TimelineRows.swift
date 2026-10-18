@@ -9,6 +9,8 @@ struct TranscriptActions {
     var openImage: (Attachment) -> Void = { _ in }
     var viewChanges: (String) -> Void = { _ in }
     var stopAgent: (String) -> Void = { _ in }
+    /// Opens a sub-agent in its own tab.
+    var openAgent: (String) -> Void = { _ in }
     /// Scrolls back to a sticky user message.
     var reveal: (String) -> Void = { _ in }
     var folder: URL?
@@ -119,12 +121,13 @@ struct MessageHeader: View {
         .padding(.top, Layout.Timeline.itemPadding)
         .padding(.bottom, Layout.Timeline.itemPadding + Layout.Timeline.stickyFade)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Solid behind the message, fading over its last points only. A gradient fill, not a
+        // mask: a mask costs an offscreen layer per header.
         .background {
-            Theme.background.mask {
-                LinearGradient(
-                    stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.7),
-                            .init(color: .clear, location: 1)],
-                    startPoint: .top, endPoint: .bottom)
+            VStack(spacing: 0) {
+                Theme.background
+                LinearGradient(colors: [Theme.background, Theme.background.opacity(0)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Layout.Timeline.stickyFade)
             }
         }
         .padding(.bottom, -Layout.Timeline.stickyFade)
@@ -218,6 +221,8 @@ struct ToolItem: View {
 /// last part, as a link that opens it. Up to two lines.
 struct ToolHeader: View {
     let name: String
+    /// An agent's name is in its hue.
+    var nameColor = Theme.text
     /// `labelStrong` for a file inside a multi-file edit, a step quieter than its parent.
     var nameFont = TextStyle.toolName
     var path: String?
@@ -225,6 +230,8 @@ struct ToolHeader: View {
     var folder: URL?
     var added = 0
     var removed = 0
+    /// " · failed" after the secondary text, in its own colour.
+    var status: (text: String, color: Color)?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
@@ -244,7 +251,7 @@ struct ToolHeader: View {
     private var line: AttributedString {
         var name = AttributedString(name)
         name.font = nameFont
-        name.foregroundColor = Theme.text
+        name.foregroundColor = nameColor
         var rest = AttributedString("")
         if let path {
             var link = AttributedString((path as NSString).lastPathComponent)
@@ -254,8 +261,14 @@ struct ToolHeader: View {
         } else {
             rest = AttributedString(text)
         }
+        if let status {
+            var suffix = AttributedString(text.isEmpty && path == nil ? status.text : " · " + status.text)
+            suffix.foregroundColor = status.color
+            rest.foregroundColor = Theme.secondary
+            rest += suffix
+        }
         rest.font = TextStyle.codeSmall
-        rest.foregroundColor = Theme.secondary
+        if status == nil { rest.foregroundColor = Theme.secondary }
         guard !rest.characters.isEmpty else { return name }
         var gap = AttributedString(" ")
         gap.font = TextStyle.codeSmall
@@ -405,13 +418,15 @@ struct ChangesLine: View {
 
 // MARK: Sub-agents
 
-/// A sub-agent where it was spawned (look.md §7): its mark is the dot; the header shows who it
-/// is and its meter. Open, its own items form a nested timeline, ending with its result.
+/// A sub-agent where it was spawned (look.md §7, §11): its avatar is the dot and its name is in
+/// its hue. Open, its own items hang off a rail in that hue, ending with its result. On hover
+/// the header offers "Open in tab"; ⌘-click does the same.
 struct AgentItem: View {
     let entry: TranscriptStore.Entry
     let lane: [TranscriptStore.Row]
     let open: Bool
     let actions: TranscriptActions
+    @StateObject private var hovered = Local(false)
     @StateObject private var showEarlier = Local(false)
     @StateObject private var showAllResult = Local(false)
 
@@ -425,7 +440,7 @@ struct AgentItem: View {
                 if open {
                     nested(info)
                 } else if info.status == .running, let last = lane.last {
-                    NestedTimeline(rows: [last], actions: actions)
+                    NestedTimeline(rows: [last], actions: actions, rail: rail(info))
                 }
             }
         }
@@ -434,16 +449,37 @@ struct AgentItem: View {
     private func header(_ info: TranscriptStore.AgentInfo) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
             Button {
-                actions.toggle(entry.id.uuidString)
+                if NSEvent.modifierFlags.contains(.command) {
+                    actions.openAgent(info.id)
+                } else {
+                    actions.toggle(entry.id.uuidString)
+                }
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-                    ToolHeader(name: info.name, text: subtitle(info))
+                    ToolHeader(
+                        name: info.name, nameColor: AgentAvatar.hue(info.index), text: subtitle(info),
+                        status: statusSuffix(info))
                         .layoutPriority(1)
+                    if hovered.value {
+                        // Built only on hover: a hidden view wouldn't take the click.
+                        Button {
+                            actions.openAgent(info.id)
+                        } label: {
+                            Label("Open in tab", systemImage: "arrow.up.forward")
+                                .font(TextStyle.labelMedium)
+                                .foregroundStyle(Theme.accent)
+                                .labelStyle(.titleAndIcon)
+                                .fixedSize()
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open this agent in its own tab (⌘-click)")
+                    }
                     AgentMeter(info: info)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .onHover { hovered.value = $0 }
             .help(open ? "Hide this agent's work" : "Show this agent's work")
             if info.status == .running {
                 IconButton(symbol: "stop.fill", kind: .small, font: Glyph.stop, help: "Stop agent") {
@@ -461,15 +497,20 @@ struct AgentItem: View {
         }
     }
 
-    /// "Explore · haiku", "general-purpose · finished".
+    /// "Explore · haiku" while running; then the type, with its status after it.
     private func subtitle(_ info: TranscriptStore.AgentInfo) -> String {
-        let status: String? = switch info.status {
-        case .running: info.model
-        case .finished: "finished"
-        case .failed: "failed"
-        case .stopped: "stopped"
+        let model = info.status == .running && info.waiting == 0 ? info.model : nil
+        return [info.type, model].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// "waiting" in secondary, "failed" in red, "finished" / "stopped" in secondary.
+    private func statusSuffix(_ info: TranscriptStore.AgentInfo) -> (text: String, color: Color)? {
+        switch info.status {
+        case .running: info.waiting > 0 ? ("waiting", Theme.secondary) : nil
+        case .finished: ("finished", Theme.secondary)
+        case .failed: ("failed", Theme.danger)
+        case .stopped: ("stopped", Theme.secondary)
         }
-        return [info.type, status].compactMap { $0 }.joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -486,9 +527,12 @@ struct AgentItem: View {
                 NestedNote(
                     text: info.background ? "Commands appear when this agent finishes" : "No commands yet")
             }
-            NestedTimeline(rows: Array(lane.suffix(lane.count - hidden)), actions: actions, result: result(info))
+            NestedTimeline(
+                rows: Array(lane.suffix(lane.count - hidden)), actions: actions, result: result(info), rail: rail(info))
         }
     }
+
+    private func rail(_ info: TranscriptStore.AgentInfo) -> Color { Theme.agentRail(AgentAvatar.hue(info.index)) }
 
     private func result(_ info: TranscriptStore.AgentInfo) -> AnyView? {
         guard let result = info.result, !result.isEmpty else { return nil }
@@ -511,17 +555,18 @@ private struct NestedTimeline: View {
     let rows: [TranscriptStore.Row]
     let actions: TranscriptActions
     var result: AnyView?
+    var rail: Color?
 
     var body: some View {
         let dots = rows.map { TranscriptStore.dot($0) ?? .plain } + (result == nil ? [] : [.plain])
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
-                TimelineItem(dot: dots[i], above: i > 0, below: i + 1 < dots.count) {
+                TimelineItem(dot: dots[i], above: i > 0, below: i + 1 < dots.count, rail: rail) {
                     RowContent(row: row, actions: actions)
                 }
             }
             if let result {
-                TimelineItem(dot: .plain, above: !rows.isEmpty) { result }
+                TimelineItem(dot: .plain, above: !rows.isEmpty, rail: rail) { result }
             }
         }
     }

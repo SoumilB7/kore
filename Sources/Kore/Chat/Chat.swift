@@ -17,6 +17,8 @@ final class Chat: Identifiable {
     let approvals = ApprovalsStore()
     let controls: ControlsStore
     let status: ChatStatus
+    /// The agent map's own UI state (open, selection); not fed by events.
+    let agentMap = AgentMapState()
 
     /// Waiting in the composer, sent with the next message.
     private(set) var attachments: [Attachment] = []
@@ -63,10 +65,17 @@ final class Chat: Identifiable {
 
     /// Every event goes to every store; each takes what it shows.
     private func dispatch(_ event: ChatEvent) {
+        let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
         transcript.apply(event)
         approvals.apply(event)
         controls.apply(event)
         status.apply(event)
+        if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
+    }
+
+    private static func isReplay(_ event: ChatEvent) -> Bool {
+        if case .replayed = event { return true }
+        return false
     }
 
     private func fail(_ message: String) {
@@ -221,6 +230,7 @@ final class Chat: Identifiable {
 
     func answer(_ approval: Approval, _ decision: Decision) {
         approvals.remove(approval.id)
+        transcript.approvalSettled(approval.id)
         if case .deny = decision { transcript.actionDenied() }
         let backend = backend
         Task { await backend?.respond(to: approval.id, decision) }

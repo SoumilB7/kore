@@ -21,8 +21,14 @@ extension Theme {
     static let dot = secondary
     /// IN / OUT labels.
     static let toolLabel = secondary.opacity(0.5)
-    /// A sub-agent's mark: the accent blue, so agents stand out on the line (owner, 2026-10-21).
+    /// A sub-agent's shape, and the faint disc behind it (owner, 2026-10-21: shapes, one hue,
+    /// standing out from the line's state dots).
     static let agentMark = accent
+    static let agentHalo = accent.opacity(0.14)
+    /// A running agent's arc.
+    static let agentArc = accent
+    /// An open agent's nested line.
+    static func agentRail(_ hue: Color) -> Color { hue.opacity(0.35) }
     /// "Thought for 1s" at rest.
     static let thinkingSummary = secondary.opacity(0.8)
 }
@@ -89,6 +95,8 @@ extension Inset {
 extension Stroke {
     /// Tool body border and row rules, the diff's gutter rule.
     static let fine: CGFloat = 0.5
+    /// An open agent's rail.
+    static let rail: CGFloat = 1.5
 }
 
 extension Size {
@@ -108,13 +116,13 @@ extension Size {
     /// The changes modal's file list, and the width under which it becomes a menu.
     static let changesList: CGFloat = 240
     static let changesListMinWindow: CGFloat = 560
-    /// An agent mark and its status ring: in the timeline, and in the strip / map.
-    /// In the timeline the mark stands in for the 7pt dot, so it's drawn well above its size.
-    static let markBox: CGFloat = 20
-    static let mark: CGFloat = 14
-    static let markBoxLarge: CGFloat = 22
-    static let markLarge: CGFloat = 14
-    static let markRing: CGFloat = 1.5
+    /// An agent avatar's waiting / failed point, and the background cutout around it.
+    static let avatarPoint: CGFloat = 8
+    static let avatarCutout: CGFloat = 1.5
+    /// The agents map's tree column, its indent per depth, and an agent tab's crumb bar.
+    static let mapTree: CGFloat = 280
+    static let treeIndent: CGFloat = 18
+    static let crumb: CGFloat = 32
 }
 
 extension Motion {
@@ -136,4 +144,12 @@ extension PanelStyle {
 @MainActor
 enum Mono {
     static var advance: CGFloat { 6.622 * Zoom.shared.scale }
+}
+
+extension Size {
+    /// Avatars in the Agents button overlap by this much.
+    static let avatarOverlap: CGFloat = 3
+    /// The Agents button's waiting / failed point, and its inset from the corner.
+    static let statusPoint: CGFloat = 6
+    static let statusPointInset: CGFloat = 3
 }

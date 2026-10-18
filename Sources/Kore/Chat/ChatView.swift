@@ -5,6 +5,8 @@ import SwiftUI
 /// alone and a streamed token re-renders one row.
 struct ChatView: View {
     let chat: Chat
+    /// Opens one of the chat's sub-agents in its own tab.
+    var openAgent: (String) -> Void = { _ in }
     @FocusState private var composerFocused: Bool
     @StateObject private var viewer = Local<ImageEditor?>(nil)
     /// The turn whose changes are open in the modal.
@@ -22,7 +24,12 @@ struct ChatView: View {
             .frame(maxWidth: ChatColumn.window.maxWidth)
         }
         .overlay {
-            if let turn = changesTurn.value {
+            if chat.agentMap.isOpen {
+                AgentMapView(chat: chat) { id in
+                    chat.agentMap.close()
+                    openAgent(id)
+                }
+            } else if let turn = changesTurn.value {
                 ChangesView(changes: chat.transcript.changes(ofTurn: turn), folder: chat.folder, close: closeChanges)
             } else if let editor = viewer.value {
                 ImageViewer(
@@ -33,6 +40,8 @@ struct ChatView: View {
         }
         .animation(Motion.fade, value: viewer.value?.id)
         .animation(Motion.fade, value: changesTurn.value)
+        .animation(Motion.fade, value: chat.agentMap.isOpen)
+        .onChange(of: chat.agentMap.isOpen) { _, open in composerFocused = !open }
         .onAppear {
             composerFocused = true
             if DevSnapshot.viewImage, let first = chat.attachments.first { view(first, pending: true) }
@@ -52,6 +61,7 @@ struct ChatView: View {
             composerFocused = false
         }
         actions.stopAgent = { chat.stopAgent($0) }
+        actions.openAgent = openAgent
         actions.folder = chat.folder
         return actions
     }

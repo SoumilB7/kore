@@ -26,6 +26,7 @@ import KoreCore
 ///   KORE_SNAPSHOT=<png path> once a folder window is up, save an image of it and quit
 ///   KORE_DUMP=<path>         write the chat's transcript entries as text and quit (KORE_DUMP_AFTER=<s>, default 6)
 ///   KORE_EVENT_LOG=<path>    append every ChatEvent the backend emits, one per line
+///   KORE_TIME_REPLAY=1       print how long applying a resumed session's past took (main thread)
 ///   KORE_STOP_AFTER=<s>      press Stop that many seconds after launch
 ///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
 enum DevSnapshot {
@@ -102,6 +103,13 @@ enum DevSnapshot {
             try? lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
             NSApp.terminate(nil)
         }
+    }
+
+    static let timeReplay = ProcessInfo.processInfo.environment["KORE_TIME_REPLAY"] == "1"
+
+    static func logReplay(_ elapsed: Duration) {
+        let ms = Double(elapsed.components.attoseconds) / 1e15 + Double(elapsed.components.seconds) * 1000
+        FileHandle.standardError.write("REPLAY \(String(format: "%.1f", ms)) ms\n".data(using: .utf8)!)
     }
 
     /// KORE_STOP_AFTER / KORE_ANSWER: drive a started chat without clicking.

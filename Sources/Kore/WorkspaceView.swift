@@ -8,8 +8,10 @@ struct WorkspaceView: View {
 
     var body: some View {
         let tab = workspace.activeTab
-        if let chat = tab.chat {
-            ChatView(chat: chat).id(chat.id)
+        if let chat = tab.chat, let agent = tab.agent {
+            AgentTabView(chat: chat, id: agent, workspace: workspace).id(tab.id)
+        } else if let chat = tab.chat {
+            ChatView(chat: chat) { workspace.openAgent($0, of: chat) }.id(chat.id)
         } else {
             EmptyTab(tab: tab, workspace: workspace).id(tab.id)
         }
@@ -63,6 +65,9 @@ struct TabBar: View {
                 .truncationMode(.middle)
                 .layoutPriority(-1)
                 .help(workspace.folder.path)
+            if let chat = workspace.activeTab.chat {
+                AgentsButton(chat: chat, height: tabHeight)
+            }
             HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight)
         }
         .padding(.leading, leadingInset)
@@ -95,7 +100,9 @@ private struct TabItem: View {
                 workspace.select(tab)
             } label: {
                 HStack(spacing: Space.md) {
-                    if let chat = tab.chat {
+                    if let chat = tab.chat, let agent = tab.agent, let info = chat.transcript.agent(agent) {
+                        AgentAvatar(index: info.index, name: info.name, status: info.status, place: .tab)
+                    } else if let chat = tab.chat {
                         if chat.status.isRunning {
                             ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
                         } else {
@@ -134,9 +141,9 @@ private struct TabItem: View {
             in: RoundedRectangle(cornerRadius: Radius.control)
         )
         .onHover { hovered.value = $0 }
-        .help(tab.title)
+        .help(tab.agent != nil ? "Sub-agent of “\(tab.chat?.title ?? "")”" : tab.title)
         .contextMenu {
-            Button("Rename…") { startRename() }.disabled(tab.chat == nil)
+            Button("Rename…") { startRename() }.disabled(tab.chat == nil || tab.agent != nil)
             Button("Close Tab") { workspace.close(tab) }
         }
         .alert("Rename chat", isPresented: $renaming.value) {

@@ -45,16 +45,22 @@ final class TranscriptStore {
     }
 
     struct AgentInfo: Equatable {
-        typealias Status = AgentMark.Status
+        typealias Status = AgentAvatar.Status
         let id: String
         /// Spawn order in the chat: picks the agent's mark.
         let index: Int
         var name: String
         var type: String?
         var model: String?
+        /// What it was asked to do.
+        var prompt: String?
+        /// The agent that spawned it; nil for the chat's own agent.
+        var parent: String?
         /// A Claude background agent: its commands aren't on stdout.
         var background = false
         var status = Status.running
+        /// Approvals it's waiting on the user for.
+        var waiting = 0
         var startedAt: Date
         var duration: TimeInterval?
         var tokens: Int?
@@ -139,7 +145,37 @@ final class TranscriptStore {
     private(set) var sections: [Section] = []
     /// Changes whenever any row does, so the view can follow the end.
     private(set) var tail = 0
-    @ObservationIgnored private(set) var rows: [Row] = []
+    /// What the Agents button shows; changes only when an agent comes or goes or changes state.
+    private(set) var agentSummary = AgentSummary()
+
+    struct AgentSummary: Equatable {
+        var count = 0
+        /// Running agents' mark indexes and ids, in spawn order.
+        var running: [AgentRef] = []
+        /// Some agent is waiting for the user.
+        var waiting = false
+        /// The first few agents, for the idle stack.
+        var first: [AgentRef] = []
+        var failed: [String] = []
+    }
+
+    struct AgentRef: Equatable, Identifiable {
+        let id: String
+        let index: Int
+        let name: String
+        let status: AgentInfo.Status
+    }
+
+    /// One row of the agent map's tree.
+    struct AgentNode: Identifiable, Equatable {
+        let info: AgentInfo
+        let depth: Int
+        /// The last of its parent's children (└ rather than ├).
+        let isLast: Bool
+        /// For each ancestor level, whether a line continues below (│).
+        let rails: [Bool]
+        var id: String { info.id }
+    }
     /// Bumped when a turn folds by itself, so the view can keep the answer where it was.
     private(set) var folded: (turn: String, answer: String, seq: Int)?
 
@@ -163,6 +199,12 @@ final class TranscriptStore {
     @ObservationIgnored var providerName = "The CLI"
     /// Cards of agents spawned by other sub-agents, in their parent's lane.
     @ObservationIgnored private var laneAgents: [String: (parent: String, entry: UUID)] = [:]
+    /// Every agent id in spawn order.
+    @ObservationIgnored private var agentOrder: [String] = []
+    /// Pending approvals asked for by sub-agents: approval id → agent id.
+    @ObservationIgnored private var askedBy: [String: String] = [:]
+    /// When the chat's first turn began, and the time its finished turns took.
+    @ObservationIgnored private var workedBefore: TimeInterval = 0
 
     var turnIsOpen: Bool { current.map { turns[$0]?.finished == false } ?? false }
 
@@ -201,13 +243,16 @@ final class TranscriptStore {
     func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date()) {
         guard let id = id ?? current, var turn = turns[id] else { return }
         endThinking()
+        settleAll()
         turn.finished = true
-        turn.outcome = outcome
+        // A replayed turn's outcome isn't announced again (replay never showed it).
+        turn.outcome = batching ? .completed : outcome
         // A replayed turn without the CLI's own measure has none: it reads "N previous messages".
         turn.duration = duration ?? (batching ? nil : date.timeIntervalSince(turn.startedAt))
         let hadAnswer = turn.answerFrom != nil
         turns[id] = turn
         if current == id { current = nil }
+        workedBefore += turn.duration ?? 0
         if !hadAnswer { announceFold(id) }
         changed()
     }
@@ -219,6 +264,73 @@ final class TranscriptStore {
     }
 
     func changes(ofTurn id: String) -> [FileChange] { turns[id]?.changes ?? [] }
+
+    // MARK: The agent map
+
+    /// Every agent as a tree, parents before children, in spawn order.
+    func agentTree() -> [AgentNode] {
+        let infos = agentOrder.compactMap(agent)
+        let children = Dictionary(grouping: infos, by: { $0.parent ?? "" })
+        var nodes: [AgentNode] = []
+        func walk(_ parent: String, depth: Int, rails: [Bool]) {
+            let kids = children[parent] ?? []
+            for (i, info) in kids.enumerated() {
+                let last = i == kids.count - 1
+                nodes.append(AgentNode(info: info, depth: depth, isLast: last, rails: rails))
+                walk(info.id, depth: depth + 1, rails: rails + [!last])
+            }
+        }
+        walk("", depth: 0, rails: [])
+        return nodes
+    }
+
+    /// An agent's own items on their timeline, for the map's detail pane and an agent tab.
+    func agentItems(_ id: String) -> [Item] {
+        let rows = (lanes[id] ?? []).map(row)
+        let dots = rows.map { Self.dot($0) ?? .plain }
+        return rows.indices.map { i in
+            Item(row: rows[i], dot: dots[i], above: i > 0, below: i + 1 < rows.count)
+        }
+    }
+
+    private func summarizeAgents() -> AgentSummary {
+        guard !agentOrder.isEmpty else { return AgentSummary() }
+        let infos = agentOrder.compactMap(agent)
+        let refs = infos.map { AgentRef(id: $0.id, index: $0.index, name: $0.name, status: $0.status) }
+        return AgentSummary(
+            count: infos.count, running: refs.filter { $0.status == .running }, waiting: infos.contains { $0.waiting > 0 },
+            first: Array(refs.prefix(3)), failed: infos.filter { $0.status == .failed }.map(\.id))
+    }
+
+    /// Claude frames a sub-agent's report with a first line of its own; the report is the rest.
+    private static func handBack(_ output: String) -> String {
+        guard output.hasPrefix("[Subagent hand-back]"), let newline = output.firstIndex(of: "\n") else { return output }
+        return String(output[output.index(after: newline)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: Waiting agents
+
+    /// A sub-agent asked the user for something.
+    func agentAsked(_ approval: String, agent: String) {
+        askedBy[approval] = agent
+        updateAgent(agent) { $0.waiting += 1 }
+    }
+
+    /// The question was answered or withdrawn.
+    func approvalSettled(_ approval: String) {
+        guard let agent = askedBy.removeValue(forKey: approval) else { return }
+        updateAgent(agent) { $0.waiting = max(0, $0.waiting - 1) }
+    }
+
+    private func settleAll() {
+        for approval in Array(askedBy.keys) { approvalSettled(approval) }
+    }
+
+    /// Time spent working across the chat's turns, the running one included.
+    var workedFor: TimeInterval {
+        let running = current.flatMap { turns[$0] }.map { Date().timeIntervalSince($0.startedAt) } ?? 0
+        return workedBefore + running
+    }
 
     /// Opens or closes a sub-agent's card.
     func toggle(agent id: String) {
@@ -280,7 +392,8 @@ final class TranscriptStore {
         agent: String? = nil
     ) {
         var entry = Entry(kind: .tool, text: detail, toolName: name, toolId: id)
-        entry.input = input
+        // Most commands' input is their detail; keep one copy.
+        entry.input = input == detail ? nil : input
         entry.summary = summary
         entry.path = path
         if agent == nil { endThinking() }
@@ -303,8 +416,14 @@ final class TranscriptStore {
         update(tool: id) { $0.result = ($0.result ?? "") + text }
     }
 
-    /// `output` nil keeps what streamed.
+    /// `output` nil keeps what streamed. On an agent's spawning call (Claude's foreground Agent
+    /// tool) the output is the agent's report, which becomes its result.
     func toolFinished(id: String, output: String?, isError: Bool) {
+        if let card = tools[id], let i = position[card], entries[i].agent != nil {
+            if entries[i].agent!.result == nil, let output { entries[i].agent!.result = Self.handBack(output) }
+            changed()
+            return
+        }
         update(tool: id) {
             if let output { $0.result = output }
             $0.done = true
@@ -325,13 +444,14 @@ final class TranscriptStore {
     // MARK: Sub-agents
 
     func agentSpawned(
-        id: String, name: String, type: String?, model: String? = nil, background: Bool = false, tool: String?,
-        parent: String? = nil, at date: Date = Date()
+        id: String, name: String, type: String?, model: String? = nil, prompt: String? = nil, background: Bool = false,
+        tool: String?, parent: String? = nil, at date: Date = Date()
     ) {
         var entry = Entry(kind: .agent, text: name, toolId: tool)
         entry.agent = AgentInfo(
-            id: id, index: agentCards.count + laneAgents.count, name: name, type: type, model: model,
-            background: background, startedAt: date)
+            id: id, index: agentCards.count + laneAgents.count, name: name, type: type, model: model, prompt: prompt,
+            parent: parent, background: background, startedAt: date)
+        agentOrder.append(id)
         lanes[id] = lanes[id] ?? []
         if let parent {
             // A sub-agent's own agent: a card in its parent's lane, on the call that spawned it.
@@ -370,6 +490,7 @@ final class TranscriptStore {
     }
 
     func agentFinished(id: String, status: AgentInfo.Status, result: String?, at date: Date = Date()) {
+        // It can come twice (Claude background agents): the second carries the result.
         updateAgent(id) {
             $0.status = status
             if let result { $0.result = result }
@@ -412,11 +533,13 @@ final class TranscriptStore {
             layout(turn, entries[i..<end], into: &rows)
             i = end
         }
-        guard rows != self.rows else { return }
-        self.rows = rows
-        tail &+= 1
+        let summary = summarizeAgents()
+        if summary != agentSummary { agentSummary = summary }
+        // Sections are the one built form of the transcript; nothing else keeps the rows.
         let sections = Self.sections(rows)
-        if sections != self.sections { self.sections = sections }
+        guard sections != self.sections else { return }
+        self.sections = sections
+        tail &+= 1
     }
 
     /// Splits rows at each user or peer message, and places them on the timeline.
@@ -471,7 +594,8 @@ final class TranscriptStore {
         case .changes: return .plain
         case .tool(let e, _): return state(e)
         case .file(let e, _, _): return state(e)
-        case .agent(let e, _, _): return e.agent.map { .mark(index: $0.index, status: $0.status) }
+        case .agent(let e, _, _):
+            return e.agent.map { .agent(index: $0.index, name: $0.name, status: $0.status, waiting: $0.waiting > 0) }
         default: return nil
         }
     }

@@ -11,9 +11,13 @@ enum DevTimelineGallery {
     /// True when it showed (the other gallery then stays closed).
     static func showIfRequested() -> Bool {
         let mode = ProcessInfo.processInfo.environment["KORE_GALLERY"]
-        guard mode == "timeline" || mode == "changes" || mode == "timeline-agents" else { return false }
+        guard ["timeline", "changes", "timeline-agents", "agent-map", "agent-tab"].contains(mode) else { return false }
         if mode == "timeline-agents" {
             showAgents()
+            return true
+        }
+        if mode == "agent-map" || mode == "agent-tab" {
+            showMap(tab: mode == "agent-tab")
             return true
         }
         let store = sample()
@@ -113,7 +117,8 @@ enum DevTimelineGallery {
         store.toolFinished(id: "e1", output: nil, isError: false)
         store.toolStarted(id: "c2", name: "Bash", detail: "swift build", input: "swift build", summary: "Build")
         store.toolFinished(id: "c2", output: "error: cannot find 'TranscriptTimeline' in scope", isError: true)
-        store.agentSpawned(id: "a1", name: "Map reads of entries", type: "Explore", model: "haiku", tool: nil, at: start.addingTimeInterval(80))
+        store.agentSpawned(id: "a1", name: "Map reads of entries", type: "Explore", model: "haiku",
+                           prompt: "Find every place that reads ChatModel.entries and say what each one needs.", tool: nil, at: start.addingTimeInterval(80))
         store.toolStarted(id: "a1r", name: "Grep", detail: "entries\\[ in Sources/Kore", input: "entries\\[  in Sources/Kore", agent: "a1")
         store.toolFinished(id: "a1r", output: "12 matches", isError: false)
         store.agentProgress(id: "a1", tokens: 18_240, tools: 9, lastTool: "Grep", duration: nil)
@@ -122,9 +127,7 @@ enum DevTimelineGallery {
         store.turnFinished("t2", .completed, duration: 72)
         store.turnChanges("t2", UnifiedDiff.files(edit + "\n" + multi, root: root))
         store.toggle(turn: "t2")
-        for row in store.rows {
-            if case .agent(let e, _, _) = row { store.toggle(e.id.uuidString) }
-        }
+        store.toggle(agent: "a1")
 
         // An interrupted turn with a Codex multi-file edit and a running agent.
         store.user("Add a README and fix notes.txt", attachments: [])
@@ -153,6 +156,7 @@ enum DevTimelineGallery {
         let approval = Approval(
             id: "ap", title: "wants to run Bash", detail: "Run the scroll tests", body: "swift test --filter Scroll",
             canAlwaysAllow: true, questions: [], agent: .sub("a2"))
+        store.apply(.approvalRequested(approval))
         let asker = store.agent("a2").map { (index: $0.index, name: $0.name) }
         window.contentView = NSHostingView(
             rootView: VStack(spacing: Space.lg) {
@@ -178,8 +182,47 @@ enum DevTimelineGallery {
         +    private var lanes: [String: [Entry]] = [:]
         """
 
+    /// KORE_GALLERY=agent-map / agent-tab: the agents sample in the map, or one agent's tab.
+    private static func showMap(tab: Bool) {
+        let chat = Chat(provider: Registry.all[0], folder: folder)
+        chat.status.apply(.userMessage(text: "Audit the transcript", attachments: []))
+        fill(chat.transcript)
+        let ask = Approval(
+            id: "ap", title: "wants to run Bash", detail: nil, body: "swift test --filter Scroll", canAlwaysAllow: true,
+            questions: [], agent: .sub("a2"))
+        chat.transcript.apply(.approvalRequested(ask))
+        chat.approvals.apply(.approvalRequested(ask))
+        let workspace = Workspace(folder: folder, restore: false)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 760), styleMask: [.titled], backing: .buffered,
+            defer: false)
+        window.title = tab ? "Agent tab" : "Agent map"
+        chat.agentMap.selected = "a1"
+        let root: AnyView = tab
+            ? AnyView(AgentTabView(chat: chat, id: "a1", workspace: workspace))
+            : AnyView(AgentMapView(chat: chat) { _ in })
+        window.contentView = NSHostingView(
+            rootView: VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    AgentsButton(chat: chat, height: Size.tab)
+                }
+                .padding(Space.md)
+                root
+            }
+            .background(Theme.background)
+            .environment(\.colorScheme, .dark))
+        window.orderFront(nil)
+        DevSnapshot.captureIfRequested()
+    }
+
     private static func agentsSample() -> TranscriptStore {
         let store = TranscriptStore()
+        fill(store)
+        return store
+    }
+
+    private static func fill(_ store: TranscriptStore) {
         let now = Date()
         func tool(_ id: String, _ name: String, _ detail: String, input: String? = nil, summary: String? = nil,
                   path: String? = nil, out: String?, error: Bool = false, agent: String? = nil) {
@@ -193,7 +236,8 @@ enum DevTimelineGallery {
              out: " M Sources/Kore/Chat/Chat.swift")
 
         // 1. Finished, open, with its own sub-agent.
-        store.agentSpawned(id: "a1", name: "Map reads of entries", type: "Explore", model: "haiku", tool: nil,
+        store.agentSpawned(id: "a1", name: "Map reads of entries", type: "Explore", model: "haiku",
+                           prompt: "Find every place that reads ChatModel.entries and say what each one needs.", tool: nil,
                            at: now.addingTimeInterval(-90))
         tool("a1-1", "Read", "TranscriptStore.swift", input: "Sources/Kore/Chat/Transcript/TranscriptStore.swift:1-80",
              path: "/Users/dev/kore/Sources/Kore/Chat/Transcript/TranscriptStore.swift", out: "80 lines", agent: "a1")
@@ -242,7 +286,6 @@ enum DevTimelineGallery {
         store.text("ans", .answer, "Two of three agents are back; waiting on the scroll check before summarising.")
 
         for id in ["a1", "a4", "a3"] { store.toggle(agent: id) }
-        return store
     }
 }
 

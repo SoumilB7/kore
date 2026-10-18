@@ -49,7 +49,8 @@ extension TranscriptStore {
 
         case .agentSpawned(let info):
             agentSpawned(
-                id: info.id, name: info.name, type: info.type, model: info.model, background: info.background,
+                id: info.id, name: info.name, type: info.type, model: info.model, prompt: info.prompt,
+                background: info.background,
                 tool: info.toolId, parent: info.parent.sub)
         case .agentProgress(let id, let p):
             agentProgress(id: id, tokens: p.tokens, tools: p.tools, lastTool: p.lastTool, duration: p.duration.map(Self.seconds))
@@ -65,8 +66,13 @@ extension TranscriptStore {
             if turnIsOpen { turnFinished(nil, .interrupted) }
             if status != 0 && status != 15 { notice("\(providerName) exited (\(status))", isError: true) }
 
+        case .approvalRequested(let approval):
+            if case .sub(let agent) = approval.agent { agentAsked(approval.id, agent: agent) }
+        case .approvalWithdrawn(let id):
+            approvalSettled(id)
+
         case .sessionIdentified, .titleChanged, .controlsLoaded, .modeChanged, .planModeChanged, .turnOrigin,
-            .approvalRequested, .approvalWithdrawn, .planReady:
+            .planReady:
             break
         }
     }
@@ -89,3 +95,4 @@ extension AgentID {
         return nil
     }
 }
+

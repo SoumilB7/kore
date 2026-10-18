@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// A timeline item's dot: its state, or a sub-agent's mark. `.none` is a piece of line with no
-/// dot (the WorkedFor rule), so the line runs through it.
+/// A timeline item's dot: its state, or a sub-agent's avatar. `.none` is a piece of line with
+/// no dot (the WorkedFor rule), so the line runs through it.
 enum TimelineDot: Equatable {
     case plain, success, failure, warning, running
-    case mark(index: Int, status: AgentMark.Status)
+    case agent(index: Int, name: String, status: AgentAvatar.Status, waiting: Bool)
     case none
 }
 
@@ -18,6 +18,8 @@ struct TimelineItem<Content: View>: View {
     var below = false
     var top = Layout.Timeline.itemPadding
     var bottom = Layout.Timeline.itemPadding
+    /// An agent's rail instead of the plain line (its hue, thicker).
+    var rail: Color?
     @ViewBuilder let content: Content
 
     private typealias T = Layout.Timeline
@@ -32,8 +34,9 @@ struct TimelineItem<Content: View>: View {
                 if above || below {
                     TimelineLine(
                         top: above ? 0 : top + T.lineStart,
-                        end: below ? nil : T.lineEndTail)
-                        .fill(Theme.timelineLine)
+                        end: below ? nil : T.lineEndTail,
+                        width: rail == nil ? Stroke.hairline : Stroke.rail)
+                        .fill(rail ?? Theme.timelineLine)
                 }
             }
             .overlay(alignment: .topLeading) {
@@ -44,9 +47,9 @@ struct TimelineItem<Content: View>: View {
             }
     }
 
-    /// A mark's ring box is bigger than the dot; it centres where the dot would sit.
+    /// An avatar is bigger than the dot; it centres where the dot would sit.
     private var dotInset: CGFloat {
-        if case .mark = dot { return (Size.markBox - T.dot) / 2 }
+        if case .agent = dot { return (AgentAvatar.Place.timeline.box - T.dot) / 2 }
         return 0
     }
 }
@@ -55,11 +58,13 @@ struct TimelineItem<Content: View>: View {
 struct TimelineLine: Shape {
     let top: CGFloat
     let end: CGFloat?
+    var width = Stroke.hairline
 
     func path(in rect: CGRect) -> Path {
         let bottom = end.map { min($0, rect.height) } ?? rect.height
         guard bottom > top else { return Path() }
-        return Path(CGRect(x: Layout.Timeline.lineX, y: top, width: Stroke.hairline, height: bottom - top))
+        let x = Layout.Timeline.lineX + (Stroke.hairline - width) / 2
+        return Path(CGRect(x: x, y: top, width: width, height: bottom - top))
     }
 }
 
@@ -68,8 +73,8 @@ struct TimelineDotView: View {
 
     var body: some View {
         switch dot {
-        case .mark(let index, let status):
-            AgentMark(index: index, status: status, size: Size.mark, box: Size.markBox)
+        case .agent(let index, let name, let status, let waiting):
+            AgentAvatar(index: index, name: name, status: status, waiting: waiting, place: .timeline)
         case .running:
             BlinkingDot()
         default:
@@ -155,14 +160,14 @@ private struct ClippedText: View {
             .textSelection(.enabled)
             .frame(maxHeight: clip ? Size.clip : nil, alignment: .top)
             .clipped()
-            .mask {
+            // The fade is the box's own fill drawn over the last lines, not a mask: a mask costs
+            // an offscreen layer per tool.
+            .overlay(alignment: .bottom) {
                 if clip {
                     LinearGradient(
-                        stops: [.init(color: .black, location: (Size.clip - Size.clipFade) / Size.clip),
-                                .init(color: .clear, location: 1)],
-                        startPoint: .top, endPoint: .bottom)
-                } else {
-                    Rectangle()
+                        colors: [Theme.surface.opacity(0), Theme.surface], startPoint: .top, endPoint: .bottom)
+                        .frame(height: Size.clipFade)
+                        .allowsHitTesting(false)
                 }
             }
     }

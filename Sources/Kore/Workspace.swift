@@ -2,13 +2,19 @@ import Foundation
 import KoreCore
 import Observation
 
-/// A tab: empty (provider picker) or showing a chat.
+/// A tab: empty (provider picker), showing a chat, or showing one of a chat's sub-agents.
+/// An agent tab holds its parent's chat and reads its stores, so it can't drift from it.
 @MainActor @Observable
 final class ChatTab: Identifiable {
     let id = UUID()
     var chat: Chat?
+    /// Set for an agent tab: the sub-agent of `chat` it shows.
+    var agent: String?
 
-    var title: String { chat?.title ?? "New tab" }
+    var title: String {
+        if let agent, let name = chat?.transcript.agent(agent)?.name { return name }
+        return chat?.title ?? "New tab"
+    }
 }
 
 /// The tabs of one folder window. The folder's chats live in the CLIs' own stores, so every
@@ -57,17 +63,46 @@ final class Workspace {
         activeTab.chat = chat(session)
     }
 
-    /// Ends the tab's chat. Closing the last tab leaves a fresh empty one.
+    /// Shows a chat's sub-agent in its own tab: its tab if already open, else a new one right
+    /// after the parent's tab (or the parent's last agent tab), so the family sits together.
+    func openAgent(_ id: String, of chat: Chat) {
+        if let tab = tabs.first(where: { $0.chat === chat && $0.agent == id }) {
+            select(tab)
+            return
+        }
+        let tab = ChatTab()
+        tab.chat = chat
+        tab.agent = id
+        let family = tabs.indices.filter { tabs[$0].chat === chat }
+        tabs.insert(tab, at: (family.last ?? tabs.count - 1) + 1)
+        activeID = tab.id
+    }
+
+    /// The tab showing a chat itself (not one of its agents).
+    func tab(of chat: Chat) -> ChatTab? {
+        tabs.first { $0.chat === chat && $0.agent == nil }
+    }
+
+    /// Ends the tab's chat, and closes its agents' tabs with it. Closing an agent tab only
+    /// closes the view. Closing the last tab leaves a fresh empty one.
     func close(_ tab: ChatTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
-        tab.chat?.close()
+        if tab.agent == nil, let chat = tab.chat {
+            for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
+        }
+        remove(tab, at: tabs.firstIndex(where: { $0.id == tab.id }) ?? index)
+    }
+
+    private func remove(_ tab: ChatTab, at index: Int? = nil) {
+        guard let index = index ?? tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        if tab.agent == nil { tab.chat?.close() }
         tabs.remove(at: index)
         if tabs.isEmpty { tabs = [ChatTab()] }
         if activeID == tab.id { activeID = tabs[min(index, tabs.count - 1)].id }
     }
 
     func closeAll() {
-        for tab in tabs { tab.chat?.close() }
+        for tab in tabs where tab.agent == nil { tab.chat?.close() }
     }
 
     // MARK: - The folder's chats
@@ -108,7 +143,7 @@ final class Workspace {
     /// couldn't be read are left alone.)
     private func reconcileRestored(listed: Set<String>) {
         let byId = Dictionary(chats.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for tab in tabs {
+        for tab in tabs where tab.agent == nil {
             guard let chat = tab.chat, chat.resumed, let id = chat.sessionId else { continue }
             if let session = byId[id] {
                 if session.archived { close(tab) } else { chat.adoptName(session.title) }
@@ -157,7 +192,7 @@ final class Workspace {
     }
 
     private func tab(for sessionId: String) -> ChatTab? {
-        tabs.first { $0.chat?.sessionId == sessionId }
+        tabs.first { $0.chat?.sessionId == sessionId && $0.agent == nil }
     }
 
     private func chat(_ session: SessionSummary) -> Chat {
@@ -181,14 +216,16 @@ final class Workspace {
         var active: Int
     }
 
+    /// Agent tabs aren't saved: they come back by opening the agent again.
     var saved: Saved {
-        Saved(
-            tabs: tabs.map { tab in
+        let kept = tabs.filter { $0.agent == nil }
+        return Saved(
+            tabs: kept.map { tab in
                 guard let chat = tab.chat else { return Saved.Tab() }
                 let resumable = chat.hasConversation ? chat.sessionId : nil
                 return Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title })
             },
-            active: tabs.firstIndex { $0.id == activeID } ?? 0)
+            active: kept.firstIndex { $0.id == activeID } ?? kept.firstIndex { $0.chat === activeTab.chat } ?? 0)
     }
 
     func save() {

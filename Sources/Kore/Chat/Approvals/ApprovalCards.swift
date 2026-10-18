@@ -13,11 +13,11 @@ struct PermissionCard: View {
         VStack(alignment: .leading, spacing: Space.lg) {
             HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
                 if let asker {
-                    AgentMark(index: asker.index, size: Size.markLarge, box: nil)
+                    AgentAvatar(index: asker.index, name: asker.name, place: .approval)
                         .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                     Text(asker.name)
                         .font(TextStyle.title)
-                        .foregroundStyle(Theme.secondary)
+                        .foregroundStyle(AgentAvatar.hue(asker.index))
                         .lineLimit(1)
                 }
                 Text(approval.title)
