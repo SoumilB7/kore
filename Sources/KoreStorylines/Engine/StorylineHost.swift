@@ -13,7 +13,6 @@ import KoreUI
 package enum StorylineHost {
     private static var runner: Runner?
     private static var launched: NSObjectProtocol?
-    private static var offscreen: NSObjectProtocol?
 
     /// Called by `kore-storylines` before `KoreApp.main()`, with the process's arguments.
     package static func install(arguments: [String]) {
@@ -34,19 +33,8 @@ package enum StorylineHost {
         // The app's own story registry runs only under a host.
         StoryHost.installed = true
         StorylineSeams.events = { chat, event in Runner.current?.record(chat, event) }
-        // A run happens out of sight unless it drives the real pointer: every window the app
-        // shows goes off screen the moment it appears, before it's drawn where the owner works.
-        if !options.flags.realInput {
-            offscreen = NotificationCenter.default.addObserver(
-                forName: NSApplication.didUpdateNotification, object: nil, queue: .main
-            ) { _ in
-                MainActor.assumeIsolated {
-                    for window in NSApp.windows where window.isVisible && window.frame.minX > offscreenX / 2 {
-                        window.setFrameOrigin(NSPoint(x: offscreenX, y: offscreenX))
-                    }
-                }
-            }
-        }
+        // A run happens out of sight unless it drives the real pointer.
+        if !options.flags.realInput { OffscreenWindows.install() }
         let runner = Runner(selection: options.selection, flags: options.flags, out: options.out)
         self.runner = runner
         launched = NotificationCenter.default.addObserver(
@@ -61,9 +49,6 @@ package enum StorylineHost {
             }
         }
     }
-
-    /// Where a run's windows go when nobody needs to see them.
-    static let offscreenX: CGFloat = -30_000
 
     struct Options {
         var selection = Runner.Selection()
@@ -106,5 +91,41 @@ package enum StorylineHost {
             }
             flags.realKeys = flags.realKeys && flags.realInput
         }
+    }
+}
+
+/// Keeps every window the app shows off every screen, from the moment it's ordered in: one
+/// that would land on a screen is moved away first, and AppKit isn't let to pull it back (a
+/// titled window is kept partly on a screen otherwise). Nothing a storyline does needs it on
+/// one: events go in-process and snapshots draw the window's own views.
+@MainActor
+enum OffscreenWindows {
+    /// Below and left of any arrangement of displays.
+    static let origin = NSPoint(x: -30_000, y: -30_000)
+
+    private typealias Order = @convention(c) (NSWindow, Selector, NSWindow.OrderingMode, Int) -> Void
+
+    /// `orderWindow(_:relativeTo:)` is the primitive every order-in goes through.
+    static func install() {
+        let order = #selector(NSWindow.order(_:relativeTo:))
+        if let method = class_getInstanceMethod(NSWindow.self, order) {
+            let original = unsafeBitCast(method_getImplementation(method), to: Order.self)
+            let replacement: @convention(block) (NSWindow, NSWindow.OrderingMode, Int) -> Void = { window, place, other in
+                if place != .out { MainActor.assumeIsolated { moveAway(window) } }
+                original(window, order, place, other)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(replacement))
+        }
+        let constrain = #selector(NSWindow.constrainFrameRect(_:to:))
+        if let method = class_getInstanceMethod(NSWindow.self, constrain) {
+            let replacement: @convention(block) (NSWindow, NSRect, NSScreen?) -> NSRect = { _, rect, _ in rect }
+            method_setImplementation(method, imp_implementationWithBlock(replacement))
+        }
+    }
+
+    /// A window anchored to one already off screen (a popover) stays where it was put.
+    private static func moveAway(_ window: NSWindow) {
+        guard NSScreen.screens.contains(where: { $0.frame.intersects(window.frame) }) else { return }
+        window.setFrameOrigin(origin)
     }
 }
