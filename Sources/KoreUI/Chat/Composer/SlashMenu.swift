@@ -72,6 +72,6 @@ struct CommandChip: View {
         }
         .buttonStyle(.plain)
         .help(command.description)
-        .storyID(StoryID.Composer.chip, press: open)
+        .storyID(StoryID.Composer.chip, press: { open() })
     }
 }
