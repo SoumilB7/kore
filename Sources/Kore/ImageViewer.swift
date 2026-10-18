@@ -62,6 +62,24 @@ final class ImageEditor: Identifiable {
         url = attachment.url
     }
 
+    /// An image file opened in a tab: markup is added to a chat, never written to the file.
+    init(image: NSImage, file url: URL) {
+        self.image = image
+        pendingID = nil
+        self.url = url
+    }
+
+    /// 100% is one image pixel per point, as in VS Code; `@2x` and `@3x` files are drawn at
+    /// their scale.
+    nonisolated static func load(_ url: URL) -> NSImage? {
+        guard let image = NSImage(contentsOf: url), image.size.width > 0, image.size.height > 0 else { return nil }
+        guard let rep = image.representations.first, rep.pixelsWide > 0, rep.pixelsHigh > 0 else { return image }
+        let name = url.deletingPathExtension().lastPathComponent
+        let scale: CGFloat = name.hasSuffix("@3x") ? 3 : name.hasSuffix("@2x") ? 2 : 1
+        image.size = NSSize(width: CGFloat(rep.pixelsWide) / scale, height: CGFloat(rep.pixelsHigh) / scale)
+        return image
+    }
+
     func undo() { if !strokes.isEmpty { strokes.removeLast() } }
     func clear() { strokes.removeAll() }
 
@@ -72,6 +90,11 @@ final class ImageEditor: Identifiable {
 
     /// The image with its markup, at full resolution, as a new PNG file.
     func render() -> URL? {
+        renderPNG().flatMap(Attachments.saveImage)
+    }
+
+    /// The image with its markup, at full resolution, as PNG data.
+    func renderPNG() -> Data? {
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
             let space = CGColorSpace(name: CGColorSpace.sRGB),
             let context = CGContext(
@@ -85,10 +108,8 @@ final class ImageEditor: Identifiable {
         context.translateBy(x: 0, y: height)
         context.scaleBy(x: scale, y: -scale)
         for stroke in strokes { Self.draw(stroke, in: context) }
-        guard let output = context.makeImage(),
-            let png = NSBitmapImageRep(cgImage: output).representation(using: .png, properties: [:])
-        else { return nil }
-        return Attachments.saveImage(png)
+        guard let output = context.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: output).representation(using: .png, properties: [:])
     }
 
     static func draw(_ stroke: Stroke, in context: CGContext) {
@@ -124,7 +145,8 @@ struct ImageViewer: View {
                 }
                 .padding(Layout.Viewer.closeInset)
                 Spacer()
-                toolbar.padding(.bottom, Layout.Viewer.toolbarBottom)
+                ImageToolbar(editor: editor, actionTitle: actionTitle, finish: finish)
+                    .padding(.bottom, Layout.Viewer.toolbarBottom)
             }
         }
         .transition(.opacity)
@@ -162,6 +184,24 @@ struct ImageViewer: View {
         }
         return nil
     }
+
+    private func toolButton(_ symbol: String, help: String, isOn: Bool = false, action: @escaping () -> Void) -> some View {
+        IconButton(symbol: symbol, isOn: isOn, help: help, action: action)
+    }
+}
+
+/// The viewer's bottom toolbar: zoom, the pen and its colours, undo, and the action. Shared by
+/// the modal and the image file tab.
+struct ImageToolbar: View {
+    let editor: ImageEditor
+    let actionTitle: String
+    var actionHelp: String?
+    var actionEnabled = true
+    /// A plain button before the action ("Copy" in a file tab).
+    var secondary: (title: String, help: String, run: () -> Void)?
+    let finish: () -> Void
+
+    var body: some View { toolbar }
 
     /// Full in a roomy window; in a narrow tile it drops the percentage, folds the pen colours
     /// into one swatch menu, and at the smallest keeps only zoom-to-fit, pen, undo and the action.
@@ -230,11 +270,20 @@ struct ImageViewer: View {
                     .disabled(editor.strokes.isEmpty)
             }
             divider
+            if let secondary {
+                Button(secondary.title, action: secondary.run)
+                    .buttonStyle(SubtleButtonStyle())
+                    .lineLimit(1)
+                    .fixedSize()
+                    .help(secondary.help)
+                    .padding(.leading, Space.xs)
+            }
             Button(actionTitle, action: finish)
                 .buttonStyle(SubtleButtonStyle(prominent: true))
                 .lineLimit(1)
                 .fixedSize()
-                .help("\(actionTitle) (Return)")
+                .disabled(!actionEnabled)
+                .help(actionHelp ?? "\(actionTitle) (Return)")
                 .padding(.leading, Space.xs)
         }
     }
@@ -259,7 +308,7 @@ struct ImageViewer: View {
 
 /// NSScrollView gives native pinch-to-zoom and scrolling; the document view draws the image
 /// and the strokes and takes the pen.
-private struct ImageCanvas: NSViewRepresentable {
+struct ImageCanvas: NSViewRepresentable {
     let editor: ImageEditor
 
     func makeNSView(context: Context) -> ImageScrollView {
