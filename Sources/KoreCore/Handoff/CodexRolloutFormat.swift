@@ -223,8 +223,8 @@ public struct CodexRolloutFormat: HandoffFormat {
                 current?.images = images
                 current?.files = files
             case "assistant":
-                let text = texts.joined(separator: "\n")
-                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { current?.reply = text }
+                // Every message, in its place: the last one becomes the reply at the turn's end.
+                current?.say(texts.joined(separator: "\n"))
             default:
                 break  // developer: Codex's own instructions
             }
@@ -357,6 +357,7 @@ public struct CodexRolloutFormat: HandoffFormat {
             }
             pending = [:]
             patches = [:]
+            turn.settleReply()
             turn.lastItem = turn.id
             turns.append(turn)
             current = nil

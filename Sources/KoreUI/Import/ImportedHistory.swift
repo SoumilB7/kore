@@ -70,6 +70,11 @@ enum ImportedEvents {
             events.append(.userMessage(text: prompt.joined(separator: "\n"), attachments: []))
             for (number, step) in turn.steps.enumerated() {
                 let call = "\(id)-\(number)"
+                // Its words between calls, as Kore shows any turn's: they fold under the last ones.
+                if step.kind == .text {
+                    events.append(.text(call, .answer, step.output))
+                    continue
+                }
                 events.append(
                     .toolStarted(
                         ToolCall(

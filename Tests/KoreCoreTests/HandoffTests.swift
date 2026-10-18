@@ -314,4 +314,47 @@ struct HandoffTests {
         let plan = HandoffBudget.plan(read, window: 20_000)
         #expect(plan.notCarriedKnown && plan.carried + plan.notCarried == 30)
     }
+
+    @Test func everyTextOfATurnIsCarriedInOrder() throws {
+        let bash = { (id: String, command: String) -> [String: Any] in ["type": "tool_use", "id": id, "name": "Bash", "input": ["command": command]] }
+        let lines = [
+            claudeRow("p1", nil, "user", "Is it ready?"),
+            claudeRow("a1", "p1", "assistant", [["type": "text", "text": "All 20 hits are product wording."], bash("t1", "git status")]),
+            claudeRow("r1", "a1", "user", [["type": "tool_result", "tool_use_id": "t1", "content": "clean"]]),
+            claudeRow("a2", "r1", "assistant", [["type": "text", "text": "The landing check passed."]]),
+            claudeRow(
+                "n1", "a2", "user", "<task-notification><summary>done</summary></task-notification>",
+                extra: ["isMeta": true, "turnOrigin": "task_notification"]),
+            claudeRow("a3", "n1", "assistant", [["type": "text", "text": "The installed app is current."], bash("t2", "make install")]),
+            claudeRow("r2", "a3", "user", [["type": "tool_result", "tool_use_id": "t2", "content": "installed"]]),
+            claudeRow("a4", "r2", "assistant", [["type": "text", "text": "Installing now."]]),
+        ]
+        let segment = try #require(HandoffFormats.read(try file("texts.jsonl", lines)))
+        #expect(segment.turns.count == 1)
+        let turn = segment.turns[0]
+        #expect(turn.steps.map(\.kind) == [.text, .command, .text, .text, .command])
+        #expect(turn.steps.filter { $0.kind == .text }.map(\.output) == [
+            "All 20 hits are product wording.", "The landing check passed.", "The installed app is current.",
+        ])
+        #expect(turn.reply == "Installing now.")
+        // Codex gets one assistant message per text and per call, in order; shorter levels keep the last words.
+        let blocks = HandoffRender.turn(turn, .full).assistant
+        #expect(blocks.count == 6 && blocks[0] == "All 20 hits are product wording." && blocks[5] == "Installing now.")
+        #expect(blocks[1].hasPrefix("[external_agent_tool_call: Bash]"))
+        #expect(HandoffRender.turn(turn, .bare).assistant == ["Installing now."])
+        #expect(!HandoffRender.turn(turn, .condensed).assistant.contains("The landing check passed."))
+
+        let rolloutTexts = rollout([
+            ["type": "turn_context", "payload": ["turn_id": "turn-1"]],
+            message("user", "Is it ready?"),
+            message("assistant", "First."),
+            response(["type": "function_call", "name": "exec_command", "call_id": "c1", "arguments": "{\"cmd\":\"ls\"}"]),
+            response(["type": "function_call_output", "call_id": "c1", "output": "Process exited with code 0"]),
+            message("assistant", "Second."),
+            message("assistant", "Last."),
+        ])
+        let codexTurn = try #require(HandoffFormats.read(try file("codex-texts.jsonl", rolloutTexts))?.turns.first)
+        #expect(codexTurn.steps.map(\.kind) == [.text, .command, .text])
+        #expect(codexTurn.reply == "Last.")
+    }
 }

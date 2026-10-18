@@ -146,9 +146,8 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
             for block in message?["content"]?.array ?? [] {
                 switch block["type"]?.string {
                 case "text":
-                    if let text = block["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        current?.reply = text
-                    }
+                    // Every text, in its place: the last one becomes the reply at the turn's end.
+                    if let text = block["text"]?.string { current?.say(text) }
                 case "tool_use":
                     guard let id = block["id"]?.string else { continue }
                     pending[id] = current?.steps.count
@@ -199,6 +198,7 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
             for index in pending.values where index < turn.steps.count { turn.steps[index].status = .interrupted }
             if !pending.isEmpty, turn.end == .done { turn.end = .interrupted }
             pending = [:]
+            turn.settleReply()
             turns.append(turn)
             current = nil
         }

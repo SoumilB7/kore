@@ -29,10 +29,12 @@ public struct HandoffImage: Sendable, Hashable, Codable {
     }
 }
 
-/// One tool call and its result.
+/// One tool call and its result, or (`text`) something the assistant said between them.
 public struct HandoffStep: Sendable, Hashable, Codable {
     public enum Kind: String, Sendable, Codable {
         case command, read, search, edit, write, delete, web, agent, plan, question, mcp, other
+        /// The assistant's words before the turn's last ones, in `output`, in their place.
+        case text
     }
 
     public enum Status: String, Sendable, Codable { case ok, error, interrupted }
@@ -83,7 +85,8 @@ public struct HandoffTurn: Sendable, Hashable, Codable {
     /// Attachments that don't carry as content ("[document: spec.pdf]").
     public var files: [String] = []
     public var steps: [HandoffStep] = []
-    /// The last assistant text of the turn.
+    /// The turn's last assistant text, when nothing came after it; the texts before it are
+    /// `text` steps, in order among the tool calls.
     public var reply = ""
     public var end = End.done
     public var at: Date?
@@ -95,6 +98,24 @@ public struct HandoffTurn: Sendable, Hashable, Codable {
         self.prompt = prompt
         self.at = at
         lastItem = id
+    }
+
+    /// The assistant's last words: the reply, else its last text (a turn that ended in a call).
+    public var finalText: String {
+        reply.isEmpty ? steps.last { $0.kind == .text }?.output ?? "" : reply
+    }
+
+    /// Something the assistant said, in its place among the steps.
+    mutating func say(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        steps.append(HandoffStep(kind: .text, tool: "", title: "", output: text))
+    }
+
+    /// At the turn's end: its last words, when nothing came after them, are its reply.
+    mutating func settleReply() {
+        guard reply.isEmpty, let last = steps.last, last.kind == .text else { return }
+        reply = last.output
+        steps.removeLast()
     }
 }
 

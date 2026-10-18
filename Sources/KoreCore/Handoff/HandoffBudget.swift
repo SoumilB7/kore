@@ -160,12 +160,19 @@ public enum HandoffRender {
             user = "(continued)"
         }
         var blocks: [String] = []
+        let calls = turn.steps.filter { $0.kind != .text }
         switch level {
-        case .full: blocks = turn.steps.map(step)
-        case .condensed: if !turn.steps.isEmpty { blocks = [condensed(turn.steps)] }
+        // Full: every text and call in order, the texts as they were said.
+        case .full: blocks = turn.steps.map { $0.kind == .text ? $0.output : step($0) }
+        // Shorter: the calls one line each, and only the last words.
+        case .condensed: if !calls.isEmpty { blocks = [condensed(calls)] }
         case .bare: break
         }
-        blocks.append(reply(turn))
+        if level == .full, turn.reply.isEmpty, turn.end == .done, turn.steps.contains(where: { $0.kind == .text }) {
+            // Its last words are already there, before the calls after them.
+        } else {
+            blocks.append(reply(turn, full: level == .full))
+        }
         return Turn(user: user, images: level == .full ? turn.images : [], assistant: blocks)
     }
 
@@ -225,13 +232,15 @@ public enum HandoffRender {
             case .plan: "updated the plan"
             case .question: "asked the user: \(title)"
             case .mcp, .other: "used \(step.tool): \(title)"
+            case .text: oneLine(step.output)
             }
         return said + status
     }
 
     /// The reply, or what ended the turn without one.
-    static func reply(_ turn: HandoffTurn) -> String {
-        let reply = turn.reply.trimmingCharacters(in: .whitespacesAndNewlines)
+    static func reply(_ turn: HandoffTurn, full: Bool = false) -> String {
+        // Shorter levels drop the text steps, so their last words stand in for a missing reply.
+        let reply = (full ? turn.reply : turn.finalText).trimmingCharacters(in: .whitespacesAndNewlines)
         switch turn.end {
         case .done: return reply.isEmpty ? "(no reply)" : reply
         case .interrupted: return reply.isEmpty ? "(the user interrupted this turn)" : reply + "\n\n(the user interrupted this turn)"
