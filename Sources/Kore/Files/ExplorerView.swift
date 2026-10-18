@@ -419,7 +419,7 @@ private struct TreeRow: View {
     /// comes from the event, as AppKit sends both clicks.
     private func click() {
         guard !editing else { return }
-        let double = (NSApp.currentEvent?.clickCount ?? 1) >= 2
+        let double = NSApp.mouseClickCount >= 2
         focus()
         store.selection = row.id
         if row.isFolder {

@@ -280,7 +280,7 @@ private struct SearchHitRow: View {
         .padding(.horizontal, Size.Tree.rowInset)
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
-        .onTapGesture { action((NSApp.currentEvent?.clickCount ?? 1) >= 2) }
+        .onTapGesture { action(NSApp.mouseClickCount >= 2) }
         .help("Line \(hit.line)")
     }
 

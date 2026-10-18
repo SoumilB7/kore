@@ -171,7 +171,7 @@ private struct TabItem: View {
                 workspace.select(tab)
                 // A double click on a preview tab keeps it (VS Code). Read from the event, so
                 // no second gesture competes with the button or the window drag.
-                if NSApp.currentEvent?.clickCount == 2 { workspace.keep(tab) }
+                if NSApp.mouseClickCount == 2 { workspace.keep(tab) }
             } label: {
                 HStack(spacing: Space.md) {
                     if let file = tab.file {
