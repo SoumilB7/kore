@@ -19,8 +19,7 @@ extension ProviderDescriptor {
                 try? await CodexHistory.unarchive(id, in: folder)
             }
         },
-        usage: UsageWording(
-            product: "Codex", login: "codex login", rows: ["5h limit", "Weekly limit"], resetsCaption: "Reset your current usage limits"),
+        usage: UsageWording(product: "Codex", rows: ["5h limit", "Weekly limit"], resetsCaption: "Reset your current usage limits"),
         account: .codex)
 }
 

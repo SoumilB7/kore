@@ -33,7 +33,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
     package enum Part: String, Sendable, CaseIterable {
         case fork, copy, stop, close, chevron, open, cancel, allow, always, deny, approveplan, keepplanning, archive
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
-        case autoaccept, replaceall, ticks, reset, use
+        case autoaccept, replaceall, ticks, reset, use, method, `switch`
+        case signIn = "signin", signOut = "signout"
     }
 }
 
@@ -74,6 +75,10 @@ extension StoryID {
         /// The usage popup; `.part(.open)` is its "Manage usage" link, `.part(.reset)` its count of
         /// full resets, which unfolds them.
         package static let usage = StoryID(.composer, "usage")
+        /// The Account popup; its action row's parts: `.signIn` (Sign in, Try again), `.method`
+        /// (the ⌄), `.switch`, `.signOut`, then `.allow` / `.cancel` (the question's Yes and No,
+        /// and Cancel during a sign-in), `.copy` (Copy link, Copy code).
+        package static let account = StoryID(.composer, "account")
         /// One of its limits, by its title.
         package static func usageLimit(_ title: String) -> StoryID { StoryID(.composer, "usage.limit", key: title) }
         /// One of its full resets, by the credit's id (empty for the one row of a count alone);
@@ -94,6 +99,8 @@ extension StoryID {
         package static func agent(_ id: String) -> StoryID { StoryID(.transcript, "agent", key: id) }
         package static func changes(_ turn: String) -> StoryID { StoryID(.transcript, "changes", key: turn) }
         package static let earlier = StoryID(.transcript, "earlier")
+        /// A refused login's notice, by its turn; `.part(.signIn)` is its Sign in.
+        package static func signIn(_ turn: String) -> StoryID { StoryID(.transcript, "signin", key: turn) }
         package static func compacted(_ entry: UUID) -> StoryID { StoryID(.transcript, "compacted", key: entry.uuidString) }
         package static func peer(_ entry: UUID) -> StoryID { StoryID(.transcript, "peer", key: entry.uuidString) }
     }
@@ -203,7 +210,9 @@ extension StoryID {
             Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
             Composer.model, Composer.effort, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
-            Composer.usage.part(.reset),
+            Composer.usage.part(.reset), Composer.account, Composer.account.part(.signIn), Composer.account.part(.method),
+            Composer.account.part(.switch), Composer.account.part(.signOut), Composer.account.part(.allow),
+            Composer.account.part(.cancel), Composer.account.part(.copy),
             Transcript.earlier,
             AgentMap.open, AgentMap.stop, AgentMap.close, History.search,
             Explorer.newfile, Explorer.newfolder, Explorer.refresh, Explorer.collapse, Explorer.namefield,
@@ -228,7 +237,8 @@ extension StoryID {
             StoryID(.transcript, "explored", key: k), StoryID(.transcript, "agent", key: k),
             StoryID(.transcript, "agent", key: k).part(.stop), StoryID(.transcript, "agent", key: k).part(.open),
             StoryID(.transcript, "changes", key: k), StoryID(.transcript, "compacted", key: k),
-            StoryID(.transcript, "peer", key: k),
+            StoryID(.transcript, "peer", key: k), StoryID(.transcript, "signin", key: k),
+            StoryID(.transcript, "signin", key: k).part(.signIn),
             StoryID(.approval, key: k).part(.allow), StoryID(.approval, key: k).part(.always),
             StoryID(.approval, key: k).part(.deny), StoryID(.approval, key: k).part(.approveplan),
             StoryID(.approval, key: k).part(.keepplanning), StoryID(.approval, key: k).part(.autoaccept),

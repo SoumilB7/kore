@@ -15,7 +15,7 @@ struct SlashMenu: View {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(matches.enumerated()), id: \.element.id) { index, command in
                         HStack(spacing: Space.md) {
-                            // Kore's own entry: a glyph where the sigil goes, its name a word.
+                            // Kore's own entries: a glyph where the sigil goes, the name a word.
                             if let glyph = command.glyph {
                                 Image(systemName: glyph).font(Glyph.rowIcon).foregroundStyle(Theme.secondary)
                             }
@@ -60,8 +60,14 @@ struct SlashMenu: View {
 }
 
 extension SlashCommand {
-    /// Kore's entry: the plan's limits, in a popup.
+    /// Kore's entries, each a popup: the plan's limits, and the CLI's login.
     static let usage = SlashCommand(name: "usage", description: "Plan limits", hint: "", kind: .kore, glyph: "chart.bar.fill")
+    static let account = SlashCommand(
+        name: "account", description: "Sign in, switch or sign out", hint: "", kind: .kore, glyph: "person.crop.circle")
+    static let kore = [usage, account]
+    /// The CLI's own commands these stand in for: its usage panel, and its login and logout,
+    /// which only work in its terminal.
+    private static let replaced: Set<String> = ["usage", "account", "login", "logout"]
 
     /// "/compact", "$pdf", "Usage".
     var label: String {
@@ -72,15 +78,20 @@ extension SlashCommand {
         }
     }
 
-    /// Usage's other words: a query they start with finds it too.
-    private var aliases: [String] { kind == .kore ? ["limits"] : [] }
+    /// Kore's entries' other words: a query they start with finds them too ("/login" finds
+    /// Account first).
+    private var aliases: [String] {
+        guard kind == .kore else { return [] }
+        return name == Self.account.name ? ["login", "logout", "sign", "switch"] : ["limits"]
+    }
 
-    /// The menu for a typed "/word" (`query` lowercased): Usage first on a bare "/", in place of
-    /// any `usage` command the CLI lists; a "$" lists skills alone. Under a query, names that
-    /// start with it come first.
+    /// The menu for a typed "/word" (`query` lowercased): Usage then Account first on a bare
+    /// "/", in place of the CLI's own usage, login and logout; a "$" lists skills alone. Under
+    /// a query, names that start with it come first.
     static func matches(_ commands: [SlashCommand], sigil: Character, query: String) -> [SlashCommand] {
         let listed =
-            sigil == "$" ? commands.filter { $0.kind == .skill } : [usage] + commands.filter { $0.kind == .skill || $0.name != usage.name }
+            sigil == "$"
+            ? commands.filter { $0.kind == .skill } : kore + commands.filter { $0.kind == .skill || !replaced.contains($0.name) }
         // Foundation's `contains("")` is false, so a bare "/" must list everything explicitly.
         if query.isEmpty { return listed }
         let leads = { (command: SlashCommand) in

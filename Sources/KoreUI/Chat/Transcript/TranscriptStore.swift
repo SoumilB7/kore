@@ -95,7 +95,8 @@ final class TranscriptStore {
         var result: String?
     }
 
-    enum Outcome: Equatable { case completed, interrupted, failed(String) }
+    /// `authFailed`: the CLI's login was refused, in its own words.
+    enum Outcome: Equatable { case completed, interrupted, failed(String), authFailed(String) }
 
     struct Turn {
         let id: String
@@ -119,6 +120,8 @@ final class TranscriptStore {
         /// The mode it started in, and the one the agent last switched to during it.
         var startMode: String?
         var endMode: String?
+        /// The entry before it began: where it shows when it has none of its own.
+        var after: UUID?
     }
 
     /// One drawn row.
@@ -136,6 +139,8 @@ final class TranscriptStore {
         case fold(Fold)
         case rule(turn: String)
         case outcome(turn: String, text: String)
+        /// A turn the CLI's login refused: Kore's words, the CLI's line, and Sign in.
+        case signIn(turn: String, said: String)
         case changes(turn: String, files: Int, added: Int, removed: Int)
         /// Two or more consecutive read-only tool calls, as one "Explored N" item.
         case explored([Entry], open: Bool)
@@ -156,7 +161,7 @@ final class TranscriptStore {
                 e.id.uuidString
             case .fold(let f): "fold-\(f.turn)"
             case .rule(let t): "rule-\(t)"
-            case .outcome(let t, _): "outcome-\(t)"
+            case .outcome(let t, _), .signIn(let t, _): "outcome-\(t)"
             case .changes(let t, _, _, _): "changes-\(t)"
             // The first call's: a read-only call that becomes a group keeps its identity.
             case .explored(let entries, _): entries.first?.id.uuidString ?? "explored"
@@ -364,6 +369,9 @@ final class TranscriptStore {
     /// Each turn's first entry. A turn can span sections (a message sent while it ran lands in
     /// the middle of it), so a change to the turn marks from here.
     @ObservationIgnored private var turnFirst: [String: UUID] = [:]
+    /// Turns the CLI's login refused before they wrote anything: their notice shows after the
+    /// entry before them.
+    @ObservationIgnored private var refusedTurns: [String] = []
     /// Changes waiting to be drawn: streamed deltas are drawn once per `drawInterval`.
     @ObservationIgnored private var drawScheduled = false
     static let drawInterval: TimeInterval = 1.0 / 30
@@ -584,7 +592,7 @@ final class TranscriptStore {
     // MARK: Turns
 
     func turnStarted(_ id: String, at date: Date = Date()) {
-        turns[id] = Turn(id: id, startedAt: date, startMode: effectiveMode)
+        turns[id] = Turn(id: id, startedAt: date, startMode: effectiveMode, after: entries.last?.id)
         current = id
         latestTurn = id
         touchesDirty = true
@@ -645,6 +653,7 @@ final class TranscriptStore {
         }
         workedBefore += turn.duration ?? 0
         if !hadAnswer { announceFold(id) }
+        if case .authFailed = turn.outcome, turnFirst[id] == nil { refusedTurns.append(id) }
         changed(turn: id)
     }
 
@@ -1349,16 +1358,25 @@ final class TranscriptStore {
     private func rows(from begin: Int) -> [Row] {
         var rows: [Row] = []
         answerActions = [:]
+        // Refused turns with nothing of their own, by the entry they follow.
+        var refused: [UUID?: [Turn]] = [:]
+        for id in refusedTurns { if let turn = turns[id], turnFirst[id] == nil { refused[turn.after, default: []].append(turn) } }
+        func refusedAfter(_ entry: UUID?) {
+            for turn in refused[entry] ?? [] { finish(turn, folded: false, into: &rows) }
+        }
+        if begin == 0 { refusedAfter(nil) }
         var i = begin
         while i < entries.count {
             guard let turnID = entries[i].turn, let turn = turns[turnID] else {
                 if let row = visibleRow(entries[i]) { rows.append(row) }
+                if !refused.isEmpty { refusedAfter(entries[i].id) }
                 i += 1
                 continue
             }
             var end = i
             while end < entries.count, entries[end].turn == turnID { end += 1 }
             layout(turn, entries[i..<end], into: &rows)
+            if !refused.isEmpty { refusedAfter(entries[end - 1].id) }
             i = end
         }
         // A compaction no turn shows has its own live row.
@@ -1462,6 +1480,7 @@ final class TranscriptStore {
         case .spinner, .message, .summary, .queued: return nil
         case .rule: return TimelineDot.none
         case .outcome(_, let text): return text == "Interrupted" ? .warning : .failure
+        case .signIn: return .failure
         case .changes: return .plain
         case .tool(let e, _): return state(e)
         case .file(let e, _, _): return state(e)
@@ -1639,6 +1658,7 @@ final class TranscriptStore {
         case .completed: break
         case .interrupted: if !folded { rows.append(.outcome(turn: turn.id, text: "Interrupted")) }
         case .failed(let message): rows.append(.outcome(turn: turn.id, text: message))
+        case .authFailed(let said): rows.append(.signIn(turn: turn.id, said: said))
         }
         if !turn.changes.isEmpty {
             rows.append(.changes(
@@ -1651,7 +1671,7 @@ final class TranscriptStore {
         switch turn.outcome {
         case .completed: nil
         case .interrupted: .interrupted
-        case .failed: .failed
+        case .failed, .authFailed: .failed
         }
     }
 

@@ -21,6 +21,8 @@ struct TranscriptActions {
     var loadEarlierConversation: () -> Void = {}
     /// A fork's "Forked from" line: switches to the original chat's tab; nil when there's none.
     var openOriginal: (() -> Void)?
+    /// An auth failure's Sign in: Account opens in the chat and the sign-in starts.
+    var signIn: () -> Void = {}
     /// A message row moved (its frame in the scroll view: the bottom for its pinned copy, the
     /// top for keeping the reader's place), or left the built rows (nil).
     var messageMoved: (String, CGRect?) -> Void = { _, _ in }
@@ -28,6 +30,35 @@ struct TranscriptActions {
     /// reader's place where no message is near.
     var answerMoved: (String, CGFloat?) -> Void = { _, _ in }
     var folder: URL?
+    /// The chat's CLI, for its notices' words.
+    var provider: ProviderDescriptor?
+}
+
+/// The failed-turn notice of a refused login, in Kore's words ("Your Claude Code sign-in
+/// expired.", or "Claude Code isn't signed in." when the status says so) with the CLI's own
+/// line on hover, then one Sign in. It keeps no state of its own.
+private struct SignInNotice: View {
+    let turn: String
+    let said: String
+    let provider: ProviderDescriptor?
+    let signIn: () -> Void
+
+    var body: some View {
+        let product = provider?.usage.product ?? "The CLI"
+        let signedOut = provider.map { AccountStore.shared.status($0.id) == .signedOut } ?? false
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            Text(AccountText.expired(product, signedOut: signedOut))
+                .font(TextStyle.body)
+                .foregroundStyle(Theme.danger)
+                .help(said)
+                .selectableOnHover()
+            Button("Sign in", action: signIn)
+                .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                .storyID(StoryID.Transcript.signIn(turn).part(.signIn))
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }
 
 /// One row: on the timeline (with its dot and line) or off it.
@@ -98,6 +129,8 @@ struct TimelineRow: View, Equatable {
             return StoryID.Transcript.changes(turn)
         case .explored(let calls, _):
             return calls.first.map { StoryID.Transcript.explored($0.toolId ?? $0.id.uuidString) }
+        case .signIn(let turn, _):
+            return StoryID.Transcript.signIn(turn)
         case .thinking, .rule, .outcome, .summary, .queued, .spinner:
             return nil
         }
@@ -185,6 +218,8 @@ struct RowContent: View {
                 .foregroundStyle(text == "Interrupted" ? Theme.secondary : Theme.danger)
                 .selectableOnHover()
                 .frame(maxWidth: .infinity, alignment: .leading)
+        case .signIn(let turn, let said):
+            SignInNotice(turn: turn, said: said, provider: actions.provider, signIn: actions.signIn)
         case .changes(let turn, let files, let added, let removed):
             ChangesLine(files: files, added: added, removed: removed) { actions.viewChanges(turn) }
         }

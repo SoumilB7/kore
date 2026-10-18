@@ -31,8 +31,7 @@ extension ProviderDescriptor {
             }
         },
         setArchived: { id, archived, _ in ClaudeArchive.set(id, archived: archived) },
-        usage: UsageWording(
-            product: "Claude Code", login: "claude auth login", rows: ["Session (5hr)", "Weekly (7 day)"], resetsCaption: nil),
+        usage: UsageWording(product: "Claude Code", rows: ["Session (5hr)", "Weekly (7 day)"], resetsCaption: nil),
         account: .claude)
 }
 

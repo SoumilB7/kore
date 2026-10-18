@@ -170,4 +170,12 @@ public enum CodexError {
         else { return raw }
         return message
     }
+
+    /// Whether a turn's `error` says the login was refused: `codexErrorInfo` "unauthorized", or
+    /// an HTTP 401 on any of its variants.
+    public static func isUnauthorized(_ error: JSONValue?) -> Bool {
+        guard let info = error?["codexErrorInfo"] else { return false }
+        if info.string == "unauthorized" { return true }
+        return info.object?.values.contains { $0["httpStatusCode"]?.int == 401 } ?? false
+    }
 }

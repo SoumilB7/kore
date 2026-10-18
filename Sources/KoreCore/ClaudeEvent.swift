@@ -33,6 +33,9 @@ public enum ClaudeEvent: Sendable {
     case userEcho(uuid: String?)
     /// End of a turn. The process stays alive for the next `send`.
     case turnCompleted(TurnResult)
+    /// The API refused the login (an assistant message with `error: "authentication_failed"`):
+    /// the CLI's own line ("Not logged in · Please run /login").
+    case authFailed(String)
     case raw(JSONValue)
     case stderr(String)
     /// The process ended; the stream finishes after this.
@@ -198,6 +201,11 @@ extension ClaudeEvent {
             case "thinking_delta": self = .thinkingDelta(delta?["thinking"]?.string ?? "", parentToolUseId: parent)
             default: self = .raw(json)
             }
+        case "assistant" where json["error"]?.string == "authentication_failed" && parent == nil:
+            let said = ContentBlock.list(json["message"]?["content"]).compactMap { block -> String? in
+                if case .text(let text) = block { text } else { nil }
+            }
+            self = .authFailed(said.joined(separator: "\n"))
         case "assistant":
             self = .assistant(
                 messageId: json["message"]?["id"]?.string,

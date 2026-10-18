@@ -54,6 +54,7 @@ final class Script {
         case .fold(let f): "fold" + (f.live ? " live" : "") + (f.outcome.map { " \($0)" } ?? "") + (f.now.map { " now \($0.label)" } ?? "")
         case .rule: "rule"
         case .outcome(_, let text): "outcome \(text)"
+        case .signIn(_, let said): "signin \(said)"
         case .changes: "changes"
         case .explored(let entries, _): "explored \(entries.count)"
         case .message(let e, _, _): "message \(e.text)"

@@ -50,6 +50,7 @@ package final class CLIModes {
         switch mode {
         case .scripted:
             ScriptedWorld.shared.install()
+            ScriptedAccounts.shared.install()
         case .process:
             guard fakeCLI != nil else { throw CLIModeError.noFakeCLI }
         case .live:
@@ -72,6 +73,7 @@ package final class CLIModes {
         switch mode {
         case .scripted:
             ScriptedWorld.shared.reset()
+            ScriptedAccounts.shared.reset()
         case .process:
             guard let fakeCLI else { throw CLIModeError.noFakeCLI }
             guard FileManager.default.fileExists(atPath: cassette.path) else { throw CLIModeError.noCassette(cassette.path) }

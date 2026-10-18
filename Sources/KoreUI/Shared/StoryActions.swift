@@ -75,6 +75,45 @@ extension Chat {
     /// double-click's time after its "Use").
     package var isUsageResetsOpen: Bool { usage.resetsOpen }
     package var storyUsageConfirmable: Bool { usage.confirmable }
+
+    /// Whether the Account popup is open, and its lines as they read: the email, the caption,
+    /// then the action row's words ("Waiting for the browser…"), or the signed-out row alone.
+    package var isAccountOpen: Bool { account.isOpen }
+    package var storyAccount: [String] { account.lines(product: provider.usage.product) }
+    /// The caption under the action row ("Also signs out Terminal and VS Code on this Mac.").
+    package var storyAccountCaption: String? {
+        if account.askingSignOut { return AccountText.signOutCaption(working: AccountStore.shared.workingChats(provider.id)) }
+        guard let flow = AccountStore.shared.flow(provider.id), flow.switching, flow.step.live, flow.step != .signingOut else { return nil }
+        return AccountText.moving
+    }
+    /// Whether "Yes, sign out" would go yet (a double-click's time after Sign out).
+    package var storyAccountConfirmable: Bool { account.confirmable }
+    /// The ⌄ menu as it last opened: "✓ " before the current method, "—" for a separator,
+    /// " (off)" after one Kore can't run; nil while it isn't open.
+    package var storyAccountMenu: [String]? {
+        account.hostMenu?.flatMap { item in
+            (item.separated ? ["—"] : []) + [(item.checked ? "✓ " : "") + item.method.label + (item.method.runs ? "" : " (off)")]
+        }
+    }
+    /// Picks an item of the open ⌄ menu by its title, as a click on it does.
+    package func storyPickMethod(_ title: String) { account.pickHostMenu(title) }
+    /// The account changed since the chat's CLI started: it hasn't started again yet.
+    package var storyAccountGeneration: Int { AccountStore.shared.generation(provider.id) }
+
+    /// The turn whose refused login shows its notice, newest first.
+    package var storySignInNoticeTurn: String? {
+        for section in transcript.sections.reversed() {
+            for item in section.items.reversed() {
+                if case .signIn(let turn, _) = item.row { return turn }
+            }
+        }
+        return nil
+    }
+    /// The notice's words.
+    package var storySignInNotice: String? {
+        guard storySignInNoticeTurn != nil else { return nil }
+        return AccountText.expired(provider.usage.product, signedOut: AccountStore.shared.status(provider.id) == .signedOut)
+    }
 }
 
 extension Workspace {

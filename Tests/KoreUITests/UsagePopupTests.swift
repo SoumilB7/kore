@@ -133,7 +133,7 @@ struct UsagePopupTests {
     }
 
     @Test func theWordingForEachCLI() {
-        #expect(ProviderDescriptor.codex.usage.signedOut == "Codex isn't logged in. Run `codex login` in Terminal.")
+        #expect(ProviderDescriptor.codex.usage.signedOut == "Codex isn't signed in. Sign in from Account in the / menu.")
         #expect(ProviderDescriptor.codex.usage.failed(nil) == "Couldn't read limits from Codex.")
         #expect(
             ProviderDescriptor.codex.usage.failed("Rate limits are unavailable")
@@ -154,15 +154,15 @@ struct UsagePopupTests {
     }
 
     @Test func usageIsFirstOnABareSlashInPlaceOfTheCLIs() {
-        #expect(names("/", "") == ["Usage", "/compact", "$pdf"])
-        #expect(SlashCommand.matches([Self.cliUsage], sigil: "/", query: "").map(\.kind) == [.kore])
+        #expect(names("/", "") == ["Usage", "Account", "/compact", "$pdf"])
+        #expect(SlashCommand.matches([Self.cliUsage], sigil: "/", query: "").map(\.kind) == [.kore, .kore])
     }
 
     @Test func usageIsFoundByItsNameAndItsOtherWords() {
         #expect(names("/", "us") == ["Usage"])
         #expect(names("/", "lim") == ["Usage"])
         #expect(names("/", "sag") == ["Usage"])
-        #expect(names("/", "co") == ["/compact"])
+        #expect(names("/", "co") == ["/compact", "Account"])
     }
 
     @Test func aDollarListsSkillsAlone() {

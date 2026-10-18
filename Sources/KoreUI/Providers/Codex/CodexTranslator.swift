@@ -22,6 +22,8 @@ final class CodexTranslator {
     private var contextWindow: Int?
     private var reportedContext: ContextUsage?
     private var replaying = false
+    /// The model provider began recovering its login this turn and hasn't said it's done.
+    private var authRecovering = false
 
     private var out: [ChatEvent] = []
     private var changeTasks: [(TurnID, Task<[FileChange], Never>)] = []
@@ -193,6 +195,11 @@ final class CodexTranslator {
                 case "failed": .failed(Self.cleanError(result.errorMessage ?? "Turn failed"))
                 default: .completed
                 }
+            // The login was refused (a 401, or a recovery that never finished).
+            if case .failed(let message) = outcome, CodexError.isUnauthorized(result.raw["turn"]?["error"]) || authRecovering {
+                outcome = .authFailed(message)
+            }
+            authRecovering = false
             if compacting {
                 // A compaction runs as a turn of its own: ending without its item completing is a
                 // failure, said once, as "Couldn't compact: …" (its turn adds no line of its own).
@@ -206,6 +213,8 @@ final class CodexTranslator {
             finishTurn(turn ?? result.turnId, outcome, duration: result.durationMs.map { .milliseconds($0) })
             if outcome != .interrupted { outlived(.main) }
         case .raw(let method, let params):
+            if method == "modelProvider/authRecoveryStarted" { authRecovering = true }
+            if method == "modelProvider/authRecoveryCompleted" { authRecovering = false }
             if method == "thread/name/updated", agent == .main, let name = Self.threadName(params["threadName"]) {
                 out.append(.titleChanged(name))
             }

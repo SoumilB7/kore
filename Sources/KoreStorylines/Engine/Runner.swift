@@ -199,17 +199,20 @@ final class Runner {
 @MainActor
 private final class RealCLIs {
     private let backend = StorylineSeams.backend
+    private let accounts = StorylineSeams.accounts
     private let standIns = CLIExecutable.standIns.value
     private let claudeStore = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
 
     init() {
         StorylineSeams.backend = nil
+        StorylineSeams.accounts = nil
         CLIExecutable.standIns.value = [:]
         unsetenv("CLAUDE_CONFIG_DIR")
     }
 
     func restore() {
         StorylineSeams.backend = backend
+        StorylineSeams.accounts = accounts
         CLIExecutable.standIns.value = standIns
         if let claudeStore { setenv("CLAUDE_CONFIG_DIR", claudeStore, 1) }
     }

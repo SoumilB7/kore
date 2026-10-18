@@ -206,6 +206,9 @@ package enum TextKind: Sendable, Equatable {
 package enum TurnOutcome: Sendable, Equatable {
     case completed, interrupted
     case failed(String)
+    /// The CLI's login was refused (Claude's `authentication_failed`, Codex's 401): the CLI's
+    /// own line.
+    case authFailed(String)
 }
 
 /// A tool call, already worded for display.

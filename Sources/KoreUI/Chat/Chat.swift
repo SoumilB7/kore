@@ -64,6 +64,8 @@ package final class Chat: Identifiable {
     let contextCard = ContextCardPresence()
     /// The usage popup over the composer (the / menu's Usage).
     let usage = UsageState()
+    /// The Account popup, in the same place (the / menu's Account).
+    let account = AccountState()
     /// The CLI's account changed since its CLI started: it starts again (with resume) at the
     /// next turn boundary, so it runs as the new account.
     @ObservationIgnored private var relaunchDue = false
@@ -208,6 +210,7 @@ package final class Chat: Identifiable {
 
     /// Opens the usage popup and reads the account's limits once, through this chat's CLI.
     func openUsage() {
+        account.close()
         usage.open(
             provider: provider.id,
             read: { [weak self] in
@@ -218,6 +221,21 @@ package final class Chat: Identifiable {
                 guard let self else { throw UsageUnavailable() }
                 return try await self.connect().useReset(credit: credit, attempt: attempt)
             })
+    }
+
+    /// Opens the Account popup for this chat's CLI.
+    func openAccount() {
+        usage.close()
+        account.open(provider: provider.id)
+    }
+
+    /// The auth-failure notice's Sign in: Account opens, and the sign-in starts with the last
+    /// method (the login lapsed), unless one is already under way.
+    func signInAgain() {
+        openAccount()
+        let store = AccountStore.shared
+        if case .signedIn(let identity) = store.status(provider.id), !identity.changeable { return }
+        account.signIn()
     }
 
     // MARK: Account
@@ -247,6 +265,11 @@ package final class Chat: Identifiable {
 
     private func afterAccountEvent(_ event: ChatEvent) {
         switch event {
+        case .turnFinished(_, .authFailed, _):
+            // The notice says "expired" or "isn't signed in": the status tells which.
+            let provider = provider.id
+            Task { await AccountStore.shared.refresh(provider) }
+            relaunchIfDue()
         case .turnFinished, .agentFinished:
             relaunchIfDue()
         case .exited:

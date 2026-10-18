@@ -75,6 +75,29 @@ struct AuthTests {
         #expect(CodexAuth.Completion(["loginId": "l9", "success": true], loginId: "l1") == nil)
     }
 
+    @Test func codexsRefusedLogin() {
+        #expect(CodexError.isUnauthorized(["message": "401", "codexErrorInfo": "unauthorized"]))
+        #expect(CodexError.isUnauthorized(["codexErrorInfo": ["responseStreamDisconnected": ["httpStatusCode": 401]]]))
+        #expect(!CodexError.isUnauthorized(["codexErrorInfo": ["httpConnectionFailed": ["httpStatusCode": 500]]]))
+        #expect(!CodexError.isUnauthorized(["codexErrorInfo": "usageLimitExceeded"]))
+        #expect(!CodexError.isUnauthorized(nil))
+    }
+
+    @Test func claudesRefusedLoginIsItsOwnEvent() {
+        let message: JSONValue = [
+            "type": "assistant", "error": "authentication_failed", "parent_tool_use_id": nil,
+            "message": ["id": "m1", "content": [["type": "text", "text": "Not logged in · Please run /login"]]],
+        ]
+        guard case .authFailed(let said) = ClaudeEvent(message: message) else { Issue.record("not authFailed"); return }
+        #expect(said == "Not logged in · Please run /login")
+        var other = message
+        if case .object(var fields) = other {
+            fields["error"] = "rate_limit"
+            other = .object(fields)
+        }
+        guard case .assistant = ClaudeEvent(message: other) else { Issue.record("not assistant"); return }
+    }
+
     /// Credentials from the env never reach a CLI Kore starts; what only moves the stores does.
     @Test func foreignCredentialsAreStripped() {
         let stripped = Set(CLIExecutable.foreignAuthVariables)

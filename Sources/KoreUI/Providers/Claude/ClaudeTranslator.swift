@@ -27,6 +27,8 @@ package final class ClaudeTranslator {
     private var followups: [Followup] = []
     /// Replaying a transcript: no snapshots; a turn's files come from its tool edits.
     private var replaying = false
+    /// The running turn's login was refused: the CLI's line, for its failed notice.
+    private var authRefused: String?
     private var replayChanges: [FileChange] = []
     /// Reading a sub-agent's own transcript: its edits belong to no turn of this chat.
     private var reading = false
@@ -201,6 +203,9 @@ package final class ClaudeTranslator {
             stream(.answer, text)
         case .thinkingDelta(let text, nil):
             stream(.thinking, text)
+        case .authFailed(let said):
+            // In a past session's history it stays what it was: the CLI's line, as its answer.
+            if replaying { assistant([.text(said)], agent: .main) } else { authRefused = said }
         case .assistant(let messageId, let blocks, let parent, let usage):
             if parent == nil, turn != nil, turnKey == nil { turnKey = messageId }
             assistant(blocks, agent: agentID(parent))
@@ -246,10 +251,14 @@ package final class ClaudeTranslator {
                 contextWindow = Self.effectiveWindow(window, maxOutput: usage["maxOutputTokens"]?.int ?? 0)
                 if let used = contextUsed { reportContext(used, at: .now) }
             }
-            let outcome: TurnOutcome =
+            var outcome: TurnOutcome =
                 !result.isError
                 ? .completed
                 : result.subtype == "error_during_execution" ? .interrupted : .failed(result.result ?? result.subtype)
+            if let said = authRefused {
+                authRefused = nil
+                outcome = .authFailed(said.isEmpty ? result.result ?? "" : said)
+            }
             finishTurn(outcome, duration: result.durationMs.map { .milliseconds($0) })
         case .raw(let json):
             raw(json)

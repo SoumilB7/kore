@@ -127,6 +127,8 @@ struct ChatView: View {
         actions.loadEarlierConversation = { chat.loadEarlierConversation() }
         actions.openOriginal = workspace.openOriginal(of: chat)
         actions.folder = chat.folder
+        actions.provider = chat.provider
+        actions.signIn = { chat.signInAgain() }
         return actions
     }
 

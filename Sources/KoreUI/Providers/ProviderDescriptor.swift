@@ -32,17 +32,16 @@ struct ProviderDescriptor: Identifiable, Sendable {
 
 /// The usage popup's words for one CLI.
 struct UsageWording: Sendable {
-    /// What it's called and how it's signed in to, in Kore's logged-out line.
+    /// What it's called, in Kore's lines about it ("Claude Code").
     let product: String
-    let login: String
     /// The limits it usually has, drawn empty while the first reading loads.
     let rows: [String]
     /// What a full reset does, in the CLI's own words, over the list of them; nil for a CLI
     /// without full resets.
     let resetsCaption: String?
 
-    /// Kore's wording for a CLI that isn't logged in.
-    var signedOut: String { "\(product) isn't logged in. Run `\(login)` in Terminal." }
+    /// Kore's wording for a CLI that isn't signed in: where to sign in.
+    var signedOut: String { "\(product) isn't signed in. Sign in from Account in the / menu." }
 
     /// The reason line when the limits couldn't be read: the CLI's own words after it, if any.
     func failed(_ detail: String?) -> String {

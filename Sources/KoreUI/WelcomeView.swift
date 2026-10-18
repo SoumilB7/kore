@@ -47,6 +47,13 @@ struct WelcomeView: View {
                     .textSelection(.enabled)
                     .frame(width: Layout.Welcome.contentWidth)
             }
+            if let signedOut = app.signedOutLine {
+                Text(signedOut)
+                    .font(Chrome.label)
+                    .foregroundStyle(Theme.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(width: Layout.Welcome.contentWidth)
+            }
         }
         .padding(.vertical, Layout.Welcome.paddingV)
         .padding(.horizontal, Layout.Welcome.paddingH)

@@ -13,7 +13,7 @@ package final class AppModel {
     private static let recentsLimit = 8
 
     private(set) var recents: [URL] = []
-    /// Set when `claude` is missing or logged out; nil when all is well.
+    /// Set when `claude` can't be run; nil when all is well.
     private(set) var cliProblem: String?
     /// Each CLI's login, app-wide.
     var accounts: AccountStore { .shared }
@@ -71,13 +71,24 @@ package final class AppModel {
         for folder in folders { open(folder, openWindow: openWindow, dismissWindow: dismissWindow) }
     }
 
+    /// Reads both CLIs' logins (the Welcome's lines), and starts watching them for changes
+    /// made outside Kore.
     func checkCLI() async {
-        do {
-            let status = try await ClaudeAuth.status()
-            cliProblem = status.loggedIn ? nil : ProviderDescriptor.claude.usage.signedOut
-        } catch {
-            cliProblem = String(describing: error)
+        accounts.watch()
+        async let claude: Void = accounts.refresh(ProviderDescriptor.claude.id)
+        async let codex: Void = accounts.refresh(ProviderDescriptor.codex.id)
+        _ = await (claude, codex)
+        // Claude Code can't be run: why.
+        if case .unreadable(let reason) = accounts.status(ProviderDescriptor.claude.id) {
+            cliProblem = reason ?? "Claude Code couldn't be run."
+        } else {
+            cliProblem = nil
         }
+    }
+
+    /// The Welcome's line for the CLIs that aren't signed in; nil when none.
+    var signedOutLine: String? {
+        AccountText.welcome(signedOut: Registry.all.filter { accounts.status($0.id) == .signedOut }.map(\.usage.product))
     }
 
     /// One URL per folder however it was reached (panel, recents, `kore`, a symlinked path),

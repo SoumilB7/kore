@@ -77,6 +77,10 @@ struct ComposerView: View {
                     )
                     .padding(.bottom, Space.lg)
                     .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
+                } else if chat.account.isOpen {
+                    AccountPopup(chat: chat, state: chat.account)
+                        .padding(.bottom, Space.lg)
+                        .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 }
             }
         .background(WindowReader { window.value = $0 })
@@ -93,10 +97,12 @@ struct ComposerView: View {
             pasteMonitor.value = nil
             clickMonitor.value = nil
             chat.usage.close()
+            chat.account.close()
         }
         .onChange(of: chat.id) {
-            // The usage popup is the chat the box showed; it closes with the switch.
+            // The popups are the chat the box showed; they close with the switch.
             pasteChat.value?.usage.close()
+            pasteChat.value?.account.close()
             pasteChat.value = chat
             // The caret goes to the end of this chat's draft, ready to go on typing.
             place()
@@ -328,8 +334,8 @@ struct ComposerView: View {
     }
 
     /// A pick replaces the "/word" it was filtered by: a command goes to the chip (one per
-    /// message, so it replaces any there), a Codex skill in the text as "$name ". Usage only
-    /// takes the word out, and opens its popup where the menu was. The caret stays where the
+    /// message, so it replaces any there), a Codex skill in the text as "$name ". Usage and
+    /// Account only take the word out, and open their popup where the menu was. The caret stays where the
     /// word was, and the field's undo starts over, as its text was set.
     private func accept(_ command: SlashCommand) {
         let insertion = command.kind == .skill ? command.insertion : ""
@@ -340,7 +346,9 @@ struct ComposerView: View {
         slashDismissed.value = false
         focused.wrappedValue = true
         forgetUndo()
-        if command.kind == .kore { chat.openUsage() }
+        if command.kind == .kore {
+            if command.name == SlashCommand.account.name { chat.openAccount() } else { chat.openUsage() }
+        }
     }
 
     /// A click outside the menu and the box closes the menu; the click goes on as it was.
