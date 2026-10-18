@@ -244,6 +244,52 @@ final class FileDocument: Identifiable {
 
     func setIndent(_ indent: TextFile.Indent) { file.indent = indent }
 
+    /// VS Code's "Convert Indentation": every line's leading whitespace rewritten as tabs or as
+    /// spaces of the current width (4 when the file uses tabs), keeping each line's column. One
+    /// edit, so one undo; nothing else on a line changes.
+    func convertIndentation(toTabs: Bool) {
+        guard isText, !readOnly else { return }
+        let width = if case .spaces(let n) = file.indent { n } else { 4 }
+        let old = storage.string as NSString
+        let new = Self.reindent(storage.string, width: width, toTabs: toTabs) as NSString
+        file.indent = toTabs ? .tabs : .spaces(width)
+        guard !old.isEqual(to: new as String) else { return }
+        let prefix = Self.commonPrefix(old, new)
+        let suffix = Self.commonSuffix(old, new, limit: min(old.length, new.length) - prefix)
+        let range = NSRange(location: prefix, length: old.length - prefix - suffix)
+        let inserted = new.substring(with: NSRange(location: prefix, length: new.length - prefix - suffix))
+        let text = editor.textView
+        guard text.shouldChangeText(in: range, replacementString: inserted) else { return }
+        text.textStorage?.replaceCharacters(in: range, with: inserted)
+        text.didChangeText()
+    }
+
+    /// Leading tabs and spaces as columns (a tab to the next multiple of `width`), then written
+    /// back as tabs (and spaces for a remainder) or as spaces.
+    static func reindent(_ text: String, width: Int, toTabs: Bool) -> String {
+        var out = ""
+        out.reserveCapacity(text.utf8.count)
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            if line.offset > 0 { out += "\n" }
+            var column = 0
+            var rest = line.element[...]
+            while let c = rest.first, c == " " || c == "\t" {
+                column = c == "\t" ? (column / width + 1) * width : column + 1
+                rest = rest.dropFirst()
+            }
+            // A blank line keeps what it had.
+            if rest.isEmpty || column == 0 {
+                out += line.element
+                continue
+            }
+            out += toTabs
+                ? String(repeating: "\t", count: column / width) + String(repeating: " ", count: column % width)
+                : String(repeating: " ", count: column)
+            out += rest
+        }
+        return out
+    }
+
     var lineEnding: TextFile.LineEnding { file.lineEnding }
 
     func setLineEnding(_ ending: TextFile.LineEnding) {

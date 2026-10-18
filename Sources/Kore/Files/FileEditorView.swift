@@ -290,6 +290,11 @@ private struct StatusRow: View {
                 Button("Indent Using Spaces: 4") { document.setIndent(.spaces(4)) }
                 Button("Indent Using Spaces: 8") { document.setIndent(.spaces(8)) }
                 Button("Indent Using Tabs") { document.setIndent(.tabs) }
+                Divider()
+                Button("Convert Indentation to Spaces") { document.convertIndentation(toTabs: false) }
+                    .disabled(document.readOnly)
+                Button("Convert Indentation to Tabs") { document.convertIndentation(toTabs: true) }
+                    .disabled(document.readOnly)
             }
             StatusText(document.encodingName)
             StatusItem(title: document.lineEnding.rawValue, help: "Line endings") {
