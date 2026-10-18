@@ -16,8 +16,8 @@ struct SlashMenu: View {
                     ForEach(Array(matches.enumerated()), id: \.element.id) { index, command in
                         HStack(spacing: Space.md) {
                             // Kore's own entry: a glyph where the sigil goes, its name a word.
-                            if command.kind == .kore {
-                                Image(systemName: "chart.bar.fill").font(Glyph.rowIcon).foregroundStyle(Theme.secondary)
+                            if let glyph = command.glyph {
+                                Image(systemName: glyph).font(Glyph.rowIcon).foregroundStyle(Theme.secondary)
                             }
                             Text(command.label)
                                 .font(TextStyle.bodyMedium)
@@ -60,8 +60,8 @@ struct SlashMenu: View {
 }
 
 extension SlashCommand {
-    /// Kore's entry: the account and the plan's limits, in a popup.
-    static let usage = SlashCommand(name: "usage", description: "Account and plan limits", hint: "", kind: .kore)
+    /// Kore's entry: the plan's limits, in a popup.
+    static let usage = SlashCommand(name: "usage", description: "Plan limits", hint: "", kind: .kore, glyph: "chart.bar.fill")
 
     /// "/compact", "$pdf", "Usage".
     var label: String {
@@ -73,7 +73,7 @@ extension SlashCommand {
     }
 
     /// Usage's other words: a query they start with finds it too.
-    private var aliases: [String] { kind == .kore ? ["account", "limits"] : [] }
+    private var aliases: [String] { kind == .kore ? ["limits"] : [] }
 
     /// The menu for a typed "/word" (`query` lowercased): Usage first on a bare "/", in place of
     /// any `usage` command the CLI lists; a "$" lists skills alone. Under a query, names that

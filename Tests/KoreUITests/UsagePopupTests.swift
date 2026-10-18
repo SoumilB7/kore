@@ -160,7 +160,6 @@ struct UsagePopupTests {
 
     @Test func usageIsFoundByItsNameAndItsOtherWords() {
         #expect(names("/", "us") == ["Usage"])
-        #expect(names("/", "acc") == ["Usage"])
         #expect(names("/", "lim") == ["Usage"])
         #expect(names("/", "sag") == ["Usage"])
         #expect(names("/", "co") == ["/compact"])

@@ -293,7 +293,7 @@ enum UsageText {
         return [email, org ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    private static func distinct(_ org: String, from email: String) -> Bool {
+    static func distinct(_ org: String, from email: String) -> Bool {
         let org = org.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
         let email = email.lowercased()
         return !org.isEmpty && org != email && org != email + "'s organization"
@@ -374,42 +374,20 @@ enum UsageText {
     }
 }
 
-/// The / menu's Usage, in the menu's place over the chat (A · Ledger in usage-popup-calm.html):
-/// a card at most `usagePopupMax` wide at the composer's leading edge. The plan name (the account
-/// on hover), the freshness and the ↗ to manage usage, then one row per limit (title, bar,
-/// percent, ↻ reset), then one caption of extras. Opaque, no shadow. Esc closes it and goes no
-/// further; a click outside or typing closes it and goes on, so the composer keeps focus
-/// throughout (the context card's monitor pattern).
+/// The / menu's Usage, in the menu's place over the chat (A · Ledger in usage-popup-calm.html),
+/// in a `ComposerPopup`: the plan name (the account on hover), the freshness and the ↗ to manage
+/// usage, then one row per limit (title, bar, percent, ↻ reset), then one caption of extras.
+/// Esc steps back from a reset's question and the unfolded resets, then closes it.
 struct UsagePopup: View {
+    let chat: Chat
     let state: UsageState
     let wording: UsageWording
     /// The most it may be tall: the room above the composer.
     let room: CGFloat
-    @StateObject private var frame = Held(CGRect.zero)
-    @StateObject private var window = Held<NSWindow?>(nil)
-    @StateObject private var monitor = Held<Any?>(nil)
 
     var body: some View {
-        ScrollView {
+        ComposerPopup(chat: chat, id: StoryID.Composer.usage, room: room, stepBack: { state.stepBack() }, close: { state.close() }) {
             content
-                .padding(Inset.well)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .scrollIndicators(.automatic)
-        .frame(maxHeight: room)
-        .fixedSize(horizontal: false, vertical: true)
-        .panel(.panel)
-        .frame(maxWidth: Size.usagePopupMax)
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
-        .background(WindowReader { window.value = $0 })
-        .storyID(StoryID.Composer.usage)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear {
-            monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
-        }
-        .onDisappear {
-            if let m = monitor.value { NSEvent.removeMonitor(m) }
-            monitor.value = nil
         }
     }
 
@@ -606,29 +584,6 @@ struct UsagePopup: View {
             .opacity(reset.isEmpty ? 0 : 1)
             .help(help)
         }
-    }
-
-    // MARK: Dismissal
-
-    /// Esc and Return close it and go no further (Return never sends nor confirms); any other
-    /// key closes it and goes on to the field; a click outside it closes it and goes on. What
-    /// reaches the draft without a key here (a paste the composer takes first, a menu's Paste,
-    /// dictation) closes it from the composer, as the draft changes.
-    private func handle(_ event: NSEvent) -> NSEvent? {
-        guard let window = window.value, event.window === window else { return event }
-        if event.type == .keyDown, event.keyCode == 53, state.stepBack() {
-            // Esc steps back one at a time: a reset's question, then the resets, then the popup.
-            return nil
-        }
-        if event.type == .keyDown {
-            state.close()
-            // Esc, Return, keypad Enter.
-            return [53, 36, 76].contains(event.keyCode) ? nil : event
-        }
-        guard let content = window.contentView else { return event }
-        let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
-        if !frame.value.contains(point) { state.close() }
-        return event
     }
 }
 

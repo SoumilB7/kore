@@ -283,21 +283,24 @@ package struct ModelOption: Identifiable, Hashable, Sendable {
 
 /// An entry in the `/` menu. Picking it inserts `insertion` into the draft.
 package struct SlashCommand: Identifiable, Hashable, Sendable {
-    /// `kore`: Kore's own entry (Usage), which opens a popup and sends the CLI nothing.
+    /// `kore`: Kore's own entries (Usage, Account), which open a popup and send the CLI nothing.
     package enum Kind: Sendable { case command, skill, kore }
     package let name: String
     package let description: String
     package let hint: String
     package let kind: Kind
+    /// The SF Symbol drawn where the sigil goes (Kore's entries).
+    package let glyph: String?
     package var id: String { name }
     /// Claude runs `/name`; Codex invokes skills by mentioning `$name`.
     package var insertion: String { kind == .skill ? "$\(name) " : "/\(name) " }
 
-    package init(name: String, description: String, hint: String, kind: Kind) {
+    package init(name: String, description: String, hint: String, kind: Kind, glyph: String? = nil) {
         self.name = name
         self.description = description
         self.hint = hint
         self.kind = kind
+        self.glyph = glyph
     }
 }
 
