@@ -106,9 +106,11 @@ while position < process.lines.count {
                 ids.learn(recorded: paths.restore(expected[hit].text), live: live)
                 expected.remove(at: hit)
             } else {
+                // What the lines ask for first (their key order varies), then the line itself.
                 fail(
                     "\(cassettePath), process \(process.index), line \(position + 1): Kore sent "
-                        + "\(live.prefix(300)); the cassette expects \(expected.map { String($0.text.prefix(200)) })")
+                        + "[\(FakeMatch.signature(of: live))]; the cassette expects "
+                        + "\(expected.map { "[\(FakeMatch.signature(of: paths.restore($0.text)))]" }). Kore's line: \(live.prefix(400))")
             }
         }
         position += run

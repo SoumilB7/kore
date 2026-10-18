@@ -49,10 +49,12 @@ final class StdioProcess: @unchecked Sendable {
                 chunkSink.yield(data)
             }
         }
+        let (stderrEnded, stderrEnd) = AsyncStream<Void>.makeStream()
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
+                stderrEnd.finish()
             } else {
                 let text = String(decoding: data, as: UTF8.self)
                 if let track { for line in text.split(separator: "\n") { track.record(.err, String(line)) } }
@@ -81,6 +83,14 @@ final class StdioProcess: @unchecked Sendable {
             }
             var status: Int32 = -1
             for await s in exits { status = s }
+            // What it last said on stderr (often why it ended) comes before `.exited`. A process
+            // it left running can keep stderr open, so not for long.
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { for await _ in stderrEnded {} }
+                group.addTask { try? await Task.sleep(for: .milliseconds(200)) }
+                await group.next()
+                group.cancelAll()
+            }
             track?.exited(status)
             sink.yield(.exited(status: status))
             sink.finish()

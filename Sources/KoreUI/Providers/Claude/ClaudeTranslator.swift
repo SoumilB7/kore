@@ -3,7 +3,7 @@ import KoreCore
 
 /// Turns Claude's stream-json into `ChatEvent`s. Transcripts share the shape, so a resumed
 /// session's past goes through the same mapping (`replay`).
-final class ClaudeTranslator {
+package final class ClaudeTranslator {
     /// Work that needs the disk or time; the backend runs it and reports back.
     enum Followup {
         /// A turn the CLI started for a queued command: read its transcript entry for a peer's message.
@@ -102,7 +102,7 @@ final class ClaudeTranslator {
     /// Live: a compaction's boundary came; its summary is the next synthetic user message.
     private var awaitingSummary = false
 
-    init(folder: URL, sessionId: String?) {
+    package init(folder: URL, sessionId: String?) {
         self.folder = folder
         self.sessionId = sessionId
         files = TurnFiles(folder: folder)
@@ -717,7 +717,7 @@ final class ClaudeTranslator {
     /// A transcript (`ClaudeHistory.messages`) as events: turns open at each prompt (or peer
     /// message, cron firing, finished agent) and close before the next one, timed from the
     /// entries' timestamps.
-    func replay(_ messages: [JSONValue]) -> [ChatEvent] {
+    package func replay(_ messages: [JSONValue]) -> [ChatEvent] {
         replaying = true
         defer {
             replaying = false

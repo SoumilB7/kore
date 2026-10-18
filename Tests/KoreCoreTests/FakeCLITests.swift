@@ -103,6 +103,6 @@ struct FakeCLITests {
             if case .exited(let s) = event { status = s }
         }
         #expect(status == 2)
-        #expect(stderr.contains("A prompt the cassette never saw") && stderr.contains("the cassette expects"))
+        #expect(stderr.contains("A prompt the cassette never saw") && stderr.contains("the cassette expects"), "stderr: \(stderr), status: \(String(describing: status))")
     }
 }

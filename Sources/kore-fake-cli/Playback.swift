@@ -124,6 +124,11 @@ enum FakeMatch {
         content?.string ?? content?.array?.compactMap { $0["type"]?.string == "text" ? $0["text"]?.string : nil }.joined(separator: "\n") ?? ""
     }
 
+    /// What a raw line asks for, as `matches` compares it.
+    static func signature(of line: String) -> String {
+        (try? JSONValue.parse(Data(line.utf8))).map(signature) ?? normalized(line)
+    }
+
     static func normalized(_ text: String) -> String {
         text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
