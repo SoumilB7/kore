@@ -16,7 +16,9 @@ protocol ChatBackend: AnyObject {
     /// Text plus files. After `.exited`, relaunches and resumes the same session. Returns
     /// whether a turn is under way: false for commands the CLI runs without one (Codex's /plan
     /// toggle, /goal).
-    func send(_ text: String, files: [Attachments.File]) async throws -> Bool
+    /// `queued`: Kore's id for a message sent while a turn runs; `.queuedMessage(id:)` says where
+    /// the CLI took it. nil for a normal send.
+    func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool
     func interrupt() async
     func respond(to approvalID: String, _ decision: Decision) async
     /// Before `start()`, sets what the CLI launches with.
@@ -91,6 +93,10 @@ enum ForkError: LocalizedError {
 /// merged per file. Two chats running in one folder at once see each other's edits in their
 /// git diffs.
 extension ChatBackend {
+    func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
+        try await send(text, files: files, queued: nil)
+    }
+
     /// For a backend that can't compact.
     func compact() async throws { throw CompactUnavailable() }
 }

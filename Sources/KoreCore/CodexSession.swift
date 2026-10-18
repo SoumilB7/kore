@@ -127,6 +127,15 @@ public actor CodexSession {
         try await send(input: [["type": "text", "text": .string(text), "text_elements": []]])
     }
 
+    /// Adds `input` to the running turn (`turn/steer`): it joins after the current item, as a
+    /// `userMessage` item with `clientId`. Throws when no turn is running.
+    public func steer(input: JSONValue, clientId: String) async throws {
+        guard let turnId = activeTurnId else { throw CodexAppServer.Failure.rpc(code: -32600, message: "no active turn to steer") }
+        _ = try await server.request(
+            "turn/steer",
+            ["threadId": .string(threadId), "expectedTurnId": .string(turnId), "input": input, "clientUserMessageId": .string(clientId)])
+    }
+
     /// `input` is an array of Codex UserInput items (text, localImage, image, mention, skill).
     public func send(input: JSONValue) async throws {
         // Every setting is sent on every turn, as t3code does: some (the reviewer, the

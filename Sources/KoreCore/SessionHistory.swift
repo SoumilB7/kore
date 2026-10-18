@@ -121,6 +121,10 @@ public enum ClaudeHistory {
         for id in window where byId[id]?.type == "user" {
             if byId[id]?.toolResults.contains(where: toolIds.contains) == true { included.insert(id) }
         }
+        // Queued messages taken mid-turn, hanging off an entry of the page.
+        for id in window where byId[id]?.isQueuedCommand == true {
+            if let parent = byId[id]?.parentUuid, included.contains(parent) { included.insert(id) }
+        }
         let ids = window.filter(included.contains)
         let lines = load(ids)
         let messages = ids.compactMap { lines[$0].flatMap { try? JSONValue.parse($0) } }.filter { entry in
@@ -153,8 +157,12 @@ public enum ClaudeHistory {
         let messageId: String?
         let toolUses: [String]
         let toolResults: [String]
+        /// A message sent while a turn ran, taken at a tool boundary (`attachment.type
+        /// "queued_command"`): kept in pages, where it was taken.
+        let isQueuedCommand: Bool
 
-        private enum Keys: String, CodingKey { case uuid, parentUuid, logicalParentUuid, type, subtype, isSidechain, isMeta, message }
+        private enum Keys: String, CodingKey { case uuid, parentUuid, logicalParentUuid, type, subtype, isSidechain, isMeta, message, attachment }
+        private enum AttachmentKeys: String, CodingKey { case type }
         private enum MessageKeys: String, CodingKey { case id, content }
         private struct Block: Decodable {
             let type: String?
@@ -177,6 +185,8 @@ public enum ClaudeHistory {
             let blocks = text == nil ? (try? message?.decodeIfPresent([Block].self, forKey: .content)) ?? [] : []
             toolUses = blocks.compactMap { $0.type == "tool_use" ? $0.id : nil }
             toolResults = blocks.compactMap(\.tool_use_id)
+            let attachment = try? c.nestedContainer(keyedBy: AttachmentKeys.self, forKey: .attachment)
+            isQueuedCommand = type == "attachment" && (try? attachment?.decodeIfPresent(String.self, forKey: .type)) == "queued_command"
             let meta = (try? c.decodeIfPresent(Bool.self, forKey: .isMeta)) == true
             // A stopped turn's marker is a user entry the user didn't write.
             let texts =

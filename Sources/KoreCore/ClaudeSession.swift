@@ -59,6 +59,9 @@ public actor ClaudeSession {
                 "--output-format", "stream-json",
                 "--verbose",
                 "--include-partial-messages",
+                // Each user message is echoed where the CLI takes it: mid-turn for one sent while a
+                // turn runs (it joins at the next tool boundary), or as its own turn.
+                "--replay-user-messages",
                 "--permission-prompt-tool", "stdio",
                 "--permission-mode", permissionMode.rawValue,
             ]
@@ -111,18 +114,21 @@ public actor ClaudeSession {
     // MARK: - Public API
 
     /// Queues a user message. Messages sent mid-turn are picked up by the CLI as it goes.
-    public func send(_ text: String) throws {
-        try send(content: .string(text))
+    /// `uuid` stamps it: the CLI keeps it for the message's echo and `command_lifecycle`.
+    public func send(_ text: String, uuid: String? = nil) throws {
+        try send(content: .string(text), uuid: uuid)
     }
 
     /// `content` is a string or an array of Anthropic content blocks (text, image, ...).
-    public func send(content: JSONValue) throws {
-        try write([
+    public func send(content: JSONValue, uuid: String? = nil) throws {
+        var message: [String: JSONValue] = [
             "type": "user",
             "message": ["role": "user", "content": content],
             "parent_tool_use_id": nil,
             "session_id": .string(sessionId ?? ""),
-        ])
+        ]
+        if let uuid { message["uuid"] = .string(uuid) }
+        try write(.object(message))
     }
 
     public func respond(to request: PermissionRequest, _ decision: PermissionDecision) throws {
@@ -136,9 +142,10 @@ public actor ClaudeSession {
         ])
     }
 
-    /// Stops the current turn. The process stays up; a `result` event follows.
-    public func interrupt() async throws {
-        try await control("interrupt")
+    /// Stops the current turn. The process stays up; a `result` event follows. `cancelQueued` also
+    /// drops uuid-stamped messages still waiting (otherwise the CLI runs them as the next turn).
+    public func interrupt(cancelQueued: Bool = false) async throws {
+        try await control("interrupt", cancelQueued ? ["cancel_queued": true] : [:])
     }
 
     public func setPermissionMode(_ mode: PermissionMode) async throws {

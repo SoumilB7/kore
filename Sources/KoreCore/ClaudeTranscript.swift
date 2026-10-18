@@ -86,7 +86,7 @@ public final class ClaudeTranscript: @unchecked Sendable {
         guard byId[uuid] == nil else { return }
         byId[uuid] = link
         spans[uuid] = span
-        if link.isBoundary {
+        if link.isBoundary || link.isQueuedCommand {
             index[uuid] = order.count
             order.append(uuid)
             return

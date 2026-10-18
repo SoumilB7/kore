@@ -49,6 +49,12 @@ final class ClaudeTranslator {
     private var turnKey: String?
     /// Replay: each recorded turn's changes (`TurnChangeLog`), decoded only for the turns replayed.
     private var recordedChanges: TurnChangeLog.Lookup?
+    /// The main agent's last tool call or text block this turn: where a queued message lands.
+    private var lastItem: String?
+    /// Messages Kore sent while a turn ran, not yet taken by the CLI (their uuid is Kore's id).
+    var pendingQueued: Set<String> = []
+    /// Queued messages the CLI took mid-turn: their `command_lifecycle` start opens nothing.
+    private var deliveredQueued: Set<String> = []
     private var turnStart = Date()
     /// The main agent's answer blocks and tool calls, in order, to find the final answer.
     private var turnItems: [TurnItem] = []
@@ -120,16 +126,23 @@ final class ClaudeTranslator {
 
     /// Opens a turn unless one is open. Kore opens one on send; the CLI's own turns open on
     /// `command_lifecycle` or `status "requesting"`.
-    func openTurn(_ origin: TurnOrigin, at date: Date = .now) {
+    func openTurn(_ origin: TurnOrigin, at date: Date = .now, id: TurnID = ToolText.newID()) {
         guard turn == nil else { return }
-        let id = ToolText.newID()
         turn = id
+        lastItem = nil
         turnStart = date
         turnItems = []
         block = nil
         turnKey = nil
         if replaying { replayChanges = [] } else { files.begin() }
         out.append(.turnStarted(id, origin: origin, at: date))
+    }
+
+    /// A queued message that starts the next turn: says so, then opens it (origin `.user`).
+    func startQueuedTurn(_ queued: String) {
+        let id = ToolText.newID()
+        out.append(.queuedMessage(id: queued, .nextTurn(id)))
+        openTurn(.user, id: id)
     }
 
     /// Closes a turn that never reached the CLI (the send failed).
@@ -203,6 +216,16 @@ final class ClaudeTranslator {
         case .commandStarted(let id, let session):
             // In a chat with nothing sent yet, this comes before system/init.
             if sessionId == nil, let session { identify(session) }
+            if deliveredQueued.remove(id) != nil { return }
+            if pendingQueued.remove(id) != nil {
+                // A queued message the CLI runs as its own turn (no tool boundary was left).
+                if turn == nil {
+                    startQueuedTurn(id)
+                } else {
+                    out.append(.queuedMessage(id: id, .inTurn(after: lastItem)))
+                }
+                return
+            }
             openTurn(.cli)
             if let turn { followups.append(.peer(uuid: id, turn: turn)) }
         case .turnCompleted(let result):
@@ -223,8 +246,18 @@ final class ClaudeTranslator {
             finishTurn(outcome, duration: result.durationMs.map { .milliseconds($0) })
         case .raw(let json):
             raw(json)
+        case .userEcho(let uuid):
+            // A queued message taken mid-turn, at the tool boundary it waited for.
+            if let uuid, turn != nil, pendingQueued.remove(uuid) != nil {
+                deliveredQueued.insert(uuid)
+                out.append(.queuedMessage(id: uuid, .inTurn(after: lastItem)))
+            }
+        case .commandCancelled(let id):
+            if pendingQueued.remove(id) != nil { out.append(.queuedMessage(id: id, .dropped)) }
         case .exited(let status):
             pending.removeAll()
+            for id in pendingQueued { out.append(.queuedMessage(id: id, .dropped)) }
+            pendingQueued.removeAll()
             turn = nil
             turnItems = []
             block = nil
@@ -245,6 +278,7 @@ final class ClaudeTranslator {
         if block?.kind != kind {
             let id = ToolText.newID()
             block = (id, kind)
+            lastItem = id
             if kind == .answer { turnItems.append(.answer(id)) }
         }
         out.append(.text(block!.id, kind, text))
@@ -257,7 +291,10 @@ final class ClaudeTranslator {
             for case .text(let text) in blocks where !text.isEmpty && firstTime("text:" + text, agent) {
                 let id = ToolText.newID()
                 out.append(.text(id, .answer, text, agent: agent))
-                if agent == .main { turnItems.append(.answer(id)) }
+                if agent == .main {
+                    turnItems.append(.answer(id))
+                    lastItem = id
+                }
             }
         }
         if agent == .main { block = nil }
@@ -268,7 +305,10 @@ final class ClaudeTranslator {
                 if replaying { modeCalls[id] = (name, agent) } else { modeCall = (id, name, agent) }
             }
             out.append(.toolStarted(Self.toolCall(id, name, input, in: folder), agent: agent))
-            if agent == .main { turnItems.append(.tool) }
+            if agent == .main {
+                turnItems.append(.tool)
+                lastItem = id
+            }
         }
     }
 
@@ -712,6 +752,13 @@ final class ClaudeTranslator {
                 // turns (Kore's menu, or another client). Placed before the turn it applies to.
                 close()
                 setMode(prompted, .user, at: time)
+            }
+            if message["type"]?.string == "attachment", message["attachment"]?["type"]?.string == "queued_command" {
+                // A message sent while the turn ran, taken at a tool boundary: it reads back in place.
+                if let text = message["attachment"]?["prompt"]?.string {
+                    out.append(.userMessage(text: text, attachments: [], id: message["uuid"]?.string))
+                }
+                continue
             }
             if let peer = PeerMessage(entry: message) {
                 close()

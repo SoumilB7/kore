@@ -29,6 +29,12 @@ final class CodexTranslator {
     private var pending: [String: CodexApproval] = [:]
 
     private var turn: TurnID?
+    /// The main thread's last item this turn: where a steered message lands.
+    private var lastItem: String?
+    /// Messages Kore steered into the running turn, not yet taken (their `clientId` is Kore's id).
+    var pendingSteer: Set<String> = []
+    /// A queued message sent as the next turn (no turn was running to steer into).
+    var nextTurnQueued: String?
     /// Per item: its phase (agentMessage), whether text or output streamed, its changes.
     private var phases: [String: String] = [:]
     private var streamedText: Set<String> = []
@@ -77,6 +83,11 @@ final class CodexTranslator {
 
     private func openTurn(_ id: TurnID, at date: Date) {
         turn = id
+        lastItem = nil
+        if let queued = nextTurnQueued, !replaying {
+            nextTurnQueued = nil
+            out.append(.queuedMessage(id: queued, .nextTurn(id)))
+        }
         turnItems = []
         finalMarked = false
         if replaying { replayChanges = [] } else { files.begin() }
@@ -157,6 +168,9 @@ final class CodexTranslator {
                 return
             }
             pending.removeAll()
+            // Steered messages the turn ended before taking.
+            for id in pendingSteer { out.append(.queuedMessage(id: id, .dropped)) }
+            pendingSteer.removeAll()
             if compacting {
                 // A compaction runs as a turn of its own: ending without its item completing is a failure.
                 compacting = false
@@ -202,6 +216,8 @@ final class CodexTranslator {
             translate(child, agent: .sub(thread))
         case .exited(let status):
             pending.removeAll()
+            for id in pendingSteer { out.append(.queuedMessage(id: id, .dropped)) }
+            pendingSteer.removeAll()
             turn = nil
             out.append(.exited(status: status))
         case .error, .stderr:
@@ -210,6 +226,16 @@ final class CodexTranslator {
     }
 
     private func itemStarted(_ item: CodexItem, agent: AgentID) {
+        if agent == .main, !replaying {
+            if item.type == "userMessage" {
+                // A steered message: Codex took it into the running turn.
+                if let id = item.raw["clientId"]?.string, pendingSteer.remove(id) != nil {
+                    out.append(.queuedMessage(id: id, .inTurn(after: lastItem)))
+                }
+                return
+            }
+            lastItem = item.id
+        }
         if item.type == "contextCompaction", agent == .main, !replaying {
             compacting = true
             out.append(.compactionStarted(auto: !compactRequested))
@@ -564,13 +590,19 @@ final class CodexTranslator {
             // A change between turns goes before the turn it applies to.
             if let settings = settings[id] { apply(settings, .user, at: start) }
             openTurn(id, at: start)
+            var sawPrompt = false
             for item in (turn["items"]?.array ?? []).map(CodexItem.init) {
                 if item.type == "userMessage" {
                     let content = item.raw["content"] ?? []
                     let text = content.array?.compactMap { $0["text"]?.string }.joined(separator: "\n") ?? ""
                     let attachments = Self.attachments(content)
-                    // The turn's id is where a fork from this message starts.
-                    if !text.isEmpty || !attachments.isEmpty { out.append(.userMessage(text: text, attachments: attachments, id: id)) }
+                    // The turn's id is where a fork from its first message starts; a message steered
+                    // into the turn later keeps its own item id.
+                    let first = !sawPrompt
+                    sawPrompt = true
+                    if !text.isEmpty || !attachments.isEmpty {
+                        out.append(.userMessage(text: text, attachments: attachments, id: first ? id : item.id))
+                    }
                 } else if item.type == "contextCompaction" {
                     // Its turn holds nothing else; resume keeps the turns before it.
                     out.append(.compacted(at: Self.date(turn["startedAt"]) ?? .now))

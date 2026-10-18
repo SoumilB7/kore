@@ -309,25 +309,38 @@ final class ClaudeBackend: ChatBackend {
 
     // MARK: - Actions
 
-    func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
+    func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool {
         try await start()
         guard let session else { return false }
         if text.trimmingCharacters(in: .whitespaces) == "/compact" { translator.compactRequested = true }
-        translator.openTurn(.user)
+        // A message sent while a turn runs: stamped with Kore's id, so its echo (mid-turn, at the
+        // next tool boundary) or its `command_lifecycle` start (as the next turn) says where it went.
+        let midTurn = queued != nil && translator.turn != nil
+        if let queued, midTurn {
+            translator.pendingQueued.insert(queued)
+        } else if let queued {
+            translator.startQueuedTurn(queued)
+        } else {
+            translator.openTurn(.user)
+        }
         flush()
         // Snapshot before the CLI can edit anything.
         await translator.files.ready()
         do {
             if files.isEmpty {
-                try await session.send(text)
+                try await session.send(text, uuid: midTurn ? queued : nil)
             } else {
                 // Reading and encoding files can take a moment; keep it off the main actor.
                 let folder = options.folder
                 let content = await Task.detached { Attachments.claudeContent(text: text, files: files, folder: folder) }.value
-                try await session.send(content: content)
+                try await session.send(content: content, uuid: midTurn ? queued : nil)
             }
         } catch {
-            translator.abandonTurn()
+            if let queued, midTurn {
+                translator.pendingQueued.remove(queued)
+            } else {
+                translator.abandonTurn()
+            }
             flush()
             throw error
         }
@@ -344,8 +357,9 @@ final class ClaudeBackend: ChatBackend {
         return true
     }
 
+    /// Also drops messages queued behind the turn (Stop gives their text back to the composer).
     func interrupt() async {
-        try? await session?.interrupt()
+        try? await session?.interrupt(cancelQueued: !translator.pendingQueued.isEmpty)
     }
 
     func respond(to approvalID: String, _ decision: Decision) async {

@@ -163,7 +163,7 @@ final class CodexBackend: ChatBackend {
 
     // MARK: - Actions
 
-    func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
+    func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool {
         // The Codex extension's /plan is a local toggle: nothing is sent.
         if text == "/plan" && files.isEmpty {
             await setPlanMode(!options.planMode)
@@ -183,14 +183,25 @@ final class CodexBackend: ChatBackend {
             return false
         }
         if mayTitle, titlePrompt == nil { titlePrompt = FallbackTitle.from(text) }
+        let input: JSONValue =
+            files.isEmpty ? [["type": "text", "text": .string(text), "text_elements": []]] : Attachments.codexInput(text: text, files: files)
+        if let queued {
+            // While a turn runs, the message joins it (`turn/steer`); otherwise it's the next turn.
+            if await session.activeTurnId != nil {
+                translator.pendingSteer.insert(queued)
+                do {
+                    try await session.steer(input: input, clientId: queued)
+                    return true
+                } catch {
+                    translator.pendingSteer.remove(queued)  // the turn ended meanwhile
+                }
+            }
+            translator.nextTurnQueued = queued
+        }
         // Snapshot before Codex can edit anything; the turn itself opens on turn/started.
         translator.files.begin()
         await translator.files.ready()
-        if files.isEmpty {
-            try await session.send(text)
-        } else {
-            try await session.send(input: Attachments.codexInput(text: text, files: files))
-        }
+        try await session.send(input: input)
         return true
     }
 

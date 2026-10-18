@@ -26,6 +26,11 @@ public enum ClaudeEvent: Sendable {
     /// chat with nothing sent yet, this arrives before `system/init`.
     case commandStarted(id: String, sessionId: String?)
     case commandCompleted(id: String)
+    /// A queued message was dropped (`interrupt {cancel_queued}`).
+    case commandCancelled(id: String)
+    /// A user message echoed where the CLI took it (`--replay-user-messages`); `uuid` is the one
+    /// it was sent with.
+    case userEcho(uuid: String?)
     /// End of a turn. The process stays alive for the next `send`.
     case turnCompleted(TurnResult)
     case raw(JSONValue)
@@ -198,6 +203,8 @@ extension ClaudeEvent {
                 messageId: json["message"]?["id"]?.string,
                 content: ContentBlock.list(json["message"]?["content"]),
                 parentToolUseId: parent, usage: json["message"]?["usage"])
+        case "user" where json["isReplay"]?.bool == true:
+            self = .userEcho(uuid: json["uuid"]?.string)
         case "user":
             self = .user(
                 content: ContentBlock.list(json["message"]?["content"]), parentToolUseId: parent,
@@ -210,6 +217,7 @@ extension ClaudeEvent {
             switch json["state"]?.string {
             case "started": self = .commandStarted(id: id, sessionId: json["session_id"]?.string)
             case "completed": self = .commandCompleted(id: id)
+            case "cancelled": self = .commandCancelled(id: id)
             default: self = .raw(json)
             }
         default:

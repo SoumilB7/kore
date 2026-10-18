@@ -68,7 +68,7 @@ final class FeedBackend: ChatBackend {
         FileHandle.standardError.write(Data((meter.finish() + " " + RebuildStats.shared.summary + "\n").utf8))
     }
 
-    func send(_ text: String, files: [Attachments.File]) async throws -> Bool { false }
+    func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool { false }
     func interrupt() async {}
     func respond(to approvalID: String, _ decision: Decision) async {}
     func setMode(_ id: String) async throws {}

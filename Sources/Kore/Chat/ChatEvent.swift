@@ -32,6 +32,9 @@ enum ChatEvent: Sendable {
 
     // MARK: Transcript
 
+    /// A message Kore sent while a turn ran, by the id Kore gave it: where the CLI took it.
+    case queuedMessage(id: String, QueuedDelivery)
+
     /// The user's own message. `Chat` dispatches it at send time; backends emit it only in replay.
     case userMessage(text: String, attachments: [SentAttachment], id: String? = nil)
     /// A message from another session, placed where `turn` began (at the end when nil).
@@ -139,6 +142,17 @@ struct ContextUsage: Sendable, Equatable {
     /// The CLI compacts by itself when `used` reaches `window`; nil when it doesn't say.
     let autoCompacts: Bool?
     let at: Date
+}
+
+/// Where a message sent while a turn ran went (`ChatBackend.send(_:files:queued:)`).
+enum QueuedDelivery: Sendable, Equatable {
+    /// The CLI took it into the running turn, after `after` (the last main tool call or text
+    /// block; nil when the turn had none yet).
+    case inTurn(after: String?)
+    /// It started this next turn (its `.turnStarted` follows, origin `.user`).
+    case nextTurn(TurnID)
+    /// Stop dropped it before the CLI took it: its text goes back to the composer.
+    case dropped
 }
 
 typealias TurnID = String
