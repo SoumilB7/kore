@@ -61,6 +61,13 @@ package final class CLIModes {
             if !files.fileExists(atPath: auth.path) { try files.createSymbolicLink(at: auth, withDestinationURL: real) }
             CLIExecutable.standIns.value = ["codex": .init(environment: ["CODEX_HOME": codexHome.path])]
         }
+        // The cloud files a platform form reads (AWS profiles, gcloud's project) are the run's
+        // own, empty until a storyline writes one: never the owner's.
+        let cloud = run.appendingPathComponent("cloud", isDirectory: true)
+        try files.createDirectory(at: cloud, withIntermediateDirectories: true)
+        setenv("AWS_CONFIG_FILE", cloud.appendingPathComponent("aws-config").path, 1)
+        setenv("AWS_SHARED_CREDENTIALS_FILE", cloud.appendingPathComponent("aws-credentials").path, 1)
+        setenv("CLOUDSDK_CONFIG", cloud.appendingPathComponent("gcloud").path, 1)
         // Kore reads Claude's store from here (recorded sessions); live Claude needs the real one.
         if case .live = mode {} else { setenv("CLAUDE_CONFIG_DIR", claudeStore.path, 1) }
     }

@@ -14,4 +14,6 @@ package enum StorylineSeams {
     package static var accounts: ((_ provider: String) -> AccountCalls?)?
     /// A sign-in page Kore would have opened in the browser (under a host nothing opens).
     package static var opened: ((URL) -> Void)?
+    /// The file an open panel would have given (a Vertex key file); nil, none picked.
+    package static var chooseFile: (() -> URL?)?
 }

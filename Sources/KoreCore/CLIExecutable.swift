@@ -81,15 +81,27 @@ public enum CLIExecutable {
         return path + ["\(home)/.claude/local", "\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
     }
 
-    /// Variables that would make a CLI authenticate some other way than its own login
-    /// (`claude auth login` / `codex login`). Stripped so we always use that login. The ones
-    /// that only move the stores (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) hold no secret and stay.
+    /// Variables a launch shell may carry that would make a CLI sign in some other way than its
+    /// login (`claude auth login` / `codex login`) or its settings: a key or token, a base URL, a
+    /// platform switch (every `CLAUDE_CODE_USE_*`, by prefix) and the platforms' own keys. They
+    /// are stripped together, so a platform never runs half on (its switch gone, its key kept).
+    /// A platform set up in Claude's settings keeps working: the CLI applies its settings' `env`
+    /// over its environment after it starts, whatever Kore stripped. The variables that only
+    /// say where things are (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `AWS_PROFILE`, `AWS_REGION`, the
+    /// AWS and Google credential files) stay, so "credentials already in my environment" work.
     static let foreignAuthVariables = [
         "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
         "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+        "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN", "ANTHROPIC_AWS_API_KEY",
         "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
     ]
+    /// Every variable with this prefix is a Claude platform switch, stripped with the list above.
+    static let foreignAuthPrefix = "CLAUDE_CODE_USE_"
+
+    /// Whether a launch variable is stripped.
+    static func isForeignAuth(_ name: String) -> Bool {
+        name.hasPrefix(foreignAuthPrefix) || foreignAuthVariables.contains(name)
+    }
 
     /// Set when Kore itself is launched from inside Claude Code (e.g. its VS Code extension);
     /// passed on, they'd record Kore's sessions as that host's.
@@ -119,7 +131,7 @@ public enum CLIExecutable {
     private static func cleaned(path: String?) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         if let path { env["PATH"] = path }
-        for name in foreignAuthVariables + inheritedHostVariables { env[name] = nil }
+        for name in env.keys where isForeignAuth(name) || inheritedHostVariables.contains(name) { env[name] = nil }
         return env
     }
 
