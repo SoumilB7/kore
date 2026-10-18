@@ -608,7 +608,13 @@ struct ToolItem: View {
     /// Tools whose header says it all; they get a box only for an error.
     private static let quiet: Set<String> = ["Read", "Glob", "LS", "NotebookRead", "TodoWrite"]
 
-    private var parts: [ToolBody.Part] {
+    private var parts: [ToolBody.Part] { Self.parts(entry) }
+
+    /// A shell command: its IN copies as a `bash` block.
+    static func isShell(_ entry: TranscriptStore.Entry) -> Bool { ["Bash", "Run", "BashOutput"].contains(entry.toolName ?? "") }
+
+    /// The rows of its IN / OUT box (the selection's paths [0] and [1]).
+    static func parts(_ entry: TranscriptStore.Entry) -> [ToolBody.Part] {
         if Self.quiet.contains(entry.toolName ?? "") {
             guard entry.isError, let result = entry.result, !result.isEmpty else { return [] }
             return [.init(label: "OUT", text: result, isError: true)]
