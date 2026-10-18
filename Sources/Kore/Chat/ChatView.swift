@@ -9,6 +9,7 @@ struct ChatView: View {
     var openAgent: (String) -> Void = { _ in }
     /// Opens a fork of the chat in a new tab.
     var openFork: (ForkStart, String) -> Void = { _, _ in }
+    @Environment(\.chatColumn) private var column
     @FocusState private var composerFocused: Bool
     @StateObject private var viewer = Local<ImageEditor?>(nil)
     /// The turn whose changes are open in the modal.
@@ -23,9 +24,9 @@ struct ChatView: View {
                 ApprovalsView(chat: chat)
                 ComposerView(chat: chat, focused: $composerFocused) { view($0, pending: true) }
             }
-            .padding(.horizontal, ChatColumn.window.padding)
+            .padding(.horizontal, column.composerPadding)
             .padding(.bottom, Space.xxxl)
-            .frame(maxWidth: ChatColumn.window.maxWidth)
+            .frame(maxWidth: column.composerMaxWidth)
         }
         .overlay {
             if chat.agentMap.isOpen {

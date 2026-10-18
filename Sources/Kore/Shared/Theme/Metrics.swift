@@ -123,14 +123,29 @@ enum Elevation {
     static let floating = (color: Color.black.opacity(0.35), radius: CGFloat(18), y: CGFloat(8))
 }
 
-/// The transcript column: centered at reading width in a window, widened in full screen.
-/// The composer stays at `ChatColumn.window` either way, like the VS Code extension's.
-struct ChatColumn {
+/// The chat's columns for the space it has (phase 10 look §7): the transcript's, and the
+/// composer's (with the approval cards and the empty-tab picker). A pure function of the
+/// content width, set once by the folder window from the width it already measures.
+struct ChatColumn: Equatable {
+    /// The transcript.
     let maxWidth: CGFloat
     let padding: CGFloat
+    /// The composer, approval cards and provider picker.
+    let composerMaxWidth: CGFloat
+    let composerPadding: CGFloat
 
-    static let window = ChatColumn(maxWidth: 760, padding: 24)
-    static let fullScreen = ChatColumn(maxWidth: .infinity, padding: 48)
+    /// p(W) = clamp(24, 24 + (W − 800) × 0.04, 48), whole points; the transcript takes all of
+    /// W − 2p (no cap: the sides are used at any size, full screen included); the composer
+    /// is min(760, W − 2p), centred. Continuous, so a drag is one plain relayout per frame.
+    static func fitting(_ width: CGFloat) -> ChatColumn {
+        let padding = min(max(24 + (width - 800) * 0.04, 24), 48).rounded()
+        let composer = min(760, max(width - 2 * padding, 0))
+        return ChatColumn(
+            maxWidth: .infinity, padding: padding, composerMaxWidth: composer + 2 * padding, composerPadding: padding)
+    }
+
+    /// Before the window has measured itself (galleries, previews).
+    static let window = fitting(Layout.Window.defaultWidth)
 }
 
 private struct ChatColumnKey: EnvironmentKey {

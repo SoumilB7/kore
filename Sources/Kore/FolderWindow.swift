@@ -19,6 +19,8 @@ struct FolderWindow: View {
             let workspace = workspace.value
             let floating = geometry.size.width < Layout.Explorer.overlayBelow
             let docked = workspace.explorerOpen && !floating
+            let column = ChatColumn.fitting(
+                geometry.size.width - (docked ? workspace.explorerWidth + Stroke.hairline : 0))
             VStack(spacing: 0) {
                 // Above the chat: its scroll view extends up under the title bar and would
                 // otherwise take the tab bar's clicks.
@@ -39,7 +41,10 @@ struct FolderWindow: View {
                         ExplorerSash(width: Binding(get: { workspace.explorerWidth }, set: { workspace.explorerWidth = $0 }))
                     }
                     WorkspaceView(workspace: workspace)
-                        .environment(\.chatColumn, fullScreen.value ? .fullScreen : .window)
+                        // The columns follow the content's width: the window less a docked sidebar.
+                        .environment(\.chatColumn, column)
+                        // Widths follow the drag frame by frame; nothing animates them.
+                        .animation(nil, value: column)
                         // History hangs under the clock, inside the window whatever its size. It
                         // sits on the content, below the title bar (a text field in an overlay
                         // reaching into the title bar took no typing).

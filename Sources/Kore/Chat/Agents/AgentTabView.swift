@@ -7,6 +7,7 @@ struct AgentTabView: View {
     let chat: Chat
     let id: String
     let workspace: Workspace
+    @Environment(\.chatColumn) private var column
 
     var body: some View {
         _ = chat.transcript.agentsVersion
@@ -33,18 +34,18 @@ struct AgentTabView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, ChatColumn.window.padding)
+                    .padding(.horizontal, column.padding)
                     .padding(.top, Layout.Transcript.top)
                     .padding(.bottom, Layout.Transcript.bottom)
-                    .frame(maxWidth: ChatColumn.window.maxWidth, alignment: .leading)
+                    .frame(maxWidth: column.maxWidth, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }
                 .defaultScrollAnchor(.bottom, for: .alignment)
                 .onAppear { chat.loadAgentIfNeeded(id) }
                 footer(info)
-                    .padding(.horizontal, ChatColumn.window.padding)
+                    .padding(.horizontal, column.composerPadding)
                     .padding(.bottom, Space.xxxl)
-                    .frame(maxWidth: ChatColumn.window.maxWidth)
+                    .frame(maxWidth: column.composerMaxWidth)
             } else {
                 Text("This agent isn't in the chat any more.")
                     .font(TextStyle.body)
@@ -83,7 +84,7 @@ struct AgentTabView: View {
                 Spacer(minLength: Space.md)
                 AgentMeter(info: info)
             }
-            .padding(.horizontal, ChatColumn.window.padding)
+            .padding(.horizontal, column.padding)
             .frame(height: Size.crumb)
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
         }

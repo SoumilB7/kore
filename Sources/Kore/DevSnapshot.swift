@@ -40,6 +40,9 @@ import KoreCore
 ///   KORE_QUICK_OPEN=files|line  open quick open at launch
 ///   KORE_LINE=<n>            put the caret on that line of the shown file
 ///   KORE_SEARCH=<query>      open the sidebar on Search with that query
+///   KORE_RESIZE_SWEEP=<from>,<to>,<s>[,<start>]  after 4s (or <start>), resize the window's width from one to the other and
+///                            back over that many seconds, a frame at a time, inside Kore (a drag's
+///                            relayouts without the pointer); pair with KORE_HANGS=1; logs frames
 ///   KORE_CLOSE_AFTER=<s>     ask the folder window to close (as ⌘W does) that many seconds after launch
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
@@ -162,6 +165,31 @@ enum DevSnapshot {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }?
                     .setContentSize(NSSize(width: size[0], height: size[1]))
+            }
+        }
+        if let sweep = ProcessInfo.processInfo.environment["KORE_RESIZE_SWEEP"]?.split(separator: ",").compactMap({ Double($0) }),
+            sweep.count >= 3
+        {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (sweep.count > 3 ? sweep[3] : 4)) {
+                guard let window = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) })
+                else { return }
+                Task { @MainActor in
+                    let started = Date()
+                    var frames = 0
+                    while true {
+                        let t = Date().timeIntervalSince(started) / sweep[2]
+                        if t >= 1 { break }
+                        // There and back.
+                        let phase = t < 0.5 ? t * 2 : (1 - t) * 2
+                        var size = window.contentRect(forFrameRect: window.frame).size
+                        size.width = (sweep[0] + (sweep[1] - sweep[0]) * phase).rounded()
+                        window.setContentSize(size)
+                        frames += 1
+                        try? await Task.sleep(for: .milliseconds(16))
+                    }
+                    let elapsed = Date().timeIntervalSince(started)
+                    FileHandle.standardError.write(Data("SWEEP \(frames) frames in \(String(format: "%.2f", elapsed))s\n".utf8))
+                }
             }
         }
         if ProcessInfo.processInfo.environment["KORE_FULLSCREEN"] == "1" {

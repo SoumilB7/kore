@@ -283,6 +283,7 @@ private struct NewTabButton: View {
 private struct EmptyTab: View {
     let tab: ChatTab
     let workspace: Workspace
+    @Environment(\.chatColumn) private var column
 
     var body: some View {
         VStack(spacing: 0) {
@@ -295,9 +296,9 @@ private struct EmptyTab: View {
             .padding(Space.md)
             .frame(maxWidth: .infinity)
             .panel(.panel)
-            .padding(.horizontal, ChatColumn.window.padding)
+            .padding(.horizontal, column.composerPadding)
             .padding(.bottom, Space.xxxl)
-            .frame(maxWidth: ChatColumn.window.maxWidth)
+            .frame(maxWidth: column.composerMaxWidth)
         }
         .frame(maxWidth: .infinity)
     }
