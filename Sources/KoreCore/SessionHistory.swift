@@ -563,6 +563,10 @@ public enum ClaudeHistory {
         return projectsDirectory.appendingPathComponent(name)
     }
 
+    /// A transcript's title as the history list shows it: the newest rename, else the newest AI
+    /// title, else the first prompt's first line.
+    public static func title(of file: URL) -> String? { summary(of: file)?.title }
+
     /// Title (rename > AI title > first prompt) and the last message's time. Transcripts can be
     /// many MB, so only the head and tail are read; the CLI re-appends its title entries as the
     /// session goes.

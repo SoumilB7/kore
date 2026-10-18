@@ -85,6 +85,8 @@ public struct CodexRolloutFormat: HandoffFormat {
         }
         if !full, !made { take(lines) }
         segment.turns = newestFirst.reversed()
+        // Codex keeps a thread's name apart from its rollout.
+        segment.title = Self.threadName(identity.sessionId, index: store.deletingLastPathComponent().appendingPathComponent("session_index.jsonl"))
         if !full {
             segment.earlier = 0
         } else if let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= Self.countLimit {
@@ -95,6 +97,18 @@ public struct CodexRolloutFormat: HandoffFormat {
             segment.earlier = nil
         }
         return segment
+    }
+
+    /// A thread's newest name in Codex's index (`{id, thread_name}` lines, appended as it's renamed).
+    static func threadName(_ thread: String, index: URL) -> String? {
+        guard let data = try? Data(contentsOf: index) else { return nil }
+        for line in data.jsonLines(containing: thread).reversed() {
+            guard let entry = try? JSONValue.parse(line), entry["id"]?.string == thread,
+                let name = entry["thread_name"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty
+            else { continue }
+            return name
+        }
+        return nil
     }
 
     /// Files up to this size have their turns counted (a byte scan, no parsing); a longer one's

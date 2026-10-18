@@ -73,7 +73,7 @@ if let previewFile {
     getrusage(RUSAGE_SELF, &usage)
     switch result {
     case .success(let p):
-        out("\(p.product) · \(p.turns.map(String.init) ?? "?") turns · \(p.full) full, \(p.condensed) condensed, \(p.bare) bare, \(p.notCarried)\(p.turns == nil ? "+" : "") not carried\(p.summary ? ", summary" : "") · ~\(p.tokens) of \(p.budget) tokens\n")
+        out("“\(p.title)” · \(p.product) · \(p.turns.map(String.init) ?? "?") turns · \(p.full) full, \(p.condensed) condensed, \(p.bare) bare, \(p.notCarried)\(p.turns == nil ? "+" : "") not carried\(p.summary ? ", summary" : "") · ~\(p.tokens) of \(p.budget) tokens\n")
     case .failure(let why):
         out("not importable: \(why)\n")
     }

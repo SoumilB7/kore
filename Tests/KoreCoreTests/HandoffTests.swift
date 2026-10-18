@@ -357,4 +357,18 @@ struct HandoffTests {
         #expect(codexTurn.steps.map(\.kind) == [.text, .command, .text])
         #expect(codexTurn.reply == "Last.")
     }
+
+    @Test func theSourceIsNamedAsHistoryNamesIt() throws {
+        // An AI title from early on, then a rename: the rename is the name.
+        let lines = [json(["type": "ai-title", "aiTitle": "An old summary", "sessionId": "s-1"])] + claude.dropLast()
+            + [json(["type": "custom-title", "customTitle": "Kore (fork)", "sessionId": "s-1"])]
+        let segment = try #require(HandoffFormats.read(try file("named.jsonl", lines)))
+        #expect(segment.shownTitle == "Kore (fork)")
+        let index = try file("session_index.jsonl", [
+            json(["id": "thread-1", "thread_name": "First name"]), json(["id": "thread-2", "thread_name": "Another"]),
+            json(["id": "thread-1", "thread_name": "Renamed"]),
+        ])
+        #expect(CodexRolloutFormat.threadName("thread-1", index: index) == "Renamed")
+        #expect(CodexRolloutFormat.threadName("thread-9", index: index) == nil)
+    }
 }

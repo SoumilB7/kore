@@ -44,7 +44,8 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
         let written = Set(HandoffRecords.record(target: identity.sessionId)?.written ?? [])
         let folder = URL(fileURLWithPath: identity.cwd ?? file.deletingLastPathComponent().path)
         var segment = Self.segment(page.messages, sessionId: identity.sessionId, folder: folder, skipping: written)
-        segment.title = identity.title
+        // Named as Kore's history lists it (the newest rename wins over an older AI title).
+        segment.title = ClaudeHistory.title(of: file) ?? identity.title
         segment.cwd = identity.cwd
         return segment
     }
