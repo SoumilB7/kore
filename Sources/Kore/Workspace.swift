@@ -286,6 +286,10 @@ final class Workspace {
             let chat: String
             let turn: String
             let tab: UUID
+            /// "Claude", "Codex": who to name in the editor's notice.
+            var provider = ""
+            /// That chat's turn is still running.
+            var running = false
         }
 
         var help: String { sources.map(\.chat).joined(separator: ", ") }
@@ -305,7 +309,10 @@ final class Workspace {
                     touch.agentIndex = index
                     touch.agentName = file.agentName
                 }
-                touch.sources.append(Touch.Source(chat: "\(chat.provider.name) · \(chat.title)", turn: file.turn, tab: tab.id))
+                touch.sources.append(
+                    Touch.Source(
+                        chat: "\(chat.provider.name) · \(chat.title)", turn: file.turn, tab: tab.id,
+                        provider: chat.provider.name, running: chat.status.isRunning))
                 touches[path] = touch
             }
         }

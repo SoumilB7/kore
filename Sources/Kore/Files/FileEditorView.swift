@@ -16,7 +16,10 @@ struct FileEditorView: View {
             PathRow(document: document, workspace: workspace) { changes.value = $0 }
             Rule()
             if let notice = document.notice {
-                NoticeBar(notice: notice, document: document, close: { workspace.close(tab) }) {
+                NoticeBar(
+                    notice: notice, document: document, touch: workspace.turnTouches[document.path],
+                    close: { workspace.close(tab) }
+                ) {
                     Task {
                         if let change = await document.compare() { changes.value = [change] }
                     }
@@ -187,15 +190,22 @@ private struct TurnMark: View {
 private struct NoticeBar: View {
     let notice: FileDocument.Notice
     let document: FileDocument
+    /// The agent turn that changed this file, when one did (look §7: name who changed it).
+    let touch: Workspace.Touch?
     let close: () -> Void
     let compare: () -> Void
 
     var body: some View {
         HStack(spacing: Space.md) {
-            Circle()
-                .fill(notice == .deleted ? Theme.danger : Theme.warning)
-                .frame(width: Size.statusPoint, height: Size.statusPoint)
-            Text(message).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
+            if notice == .changed, let touch, let index = touch.agentIndex {
+                // A sub-agent: its shape, as on its tab.
+                AgentAvatar(index: index, name: touch.agentName ?? "", place: .crumb)
+            } else {
+                Circle()
+                    .fill(notice == .deleted ? Theme.danger : Theme.warning)
+                    .frame(width: Size.statusPoint, height: Size.statusPoint)
+            }
+            message.font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
             Spacer(minLength: Space.md)
             switch notice {
             case .deleted:
@@ -213,10 +223,24 @@ private struct NoticeBar: View {
         .overlay(alignment: .bottom) { Rule() }
     }
 
-    private var message: String {
+    /// "Claude changed this file in the running turn. Your edits aren't saved." (a sub-agent's
+    /// name in accent); without an agent turn, the plain disk-change line.
+    private var message: Text {
         switch notice {
-        case .deleted: "This file was deleted on disk."
-        case .changed: "This file changed on disk. Your edits aren't saved."
+        case .deleted:
+            return Text("This file was deleted on disk.")
+        case .changed:
+            guard let touch, !touch.sources.isEmpty else {
+                return Text("This file changed on disk. Your edits aren't saved.")
+            }
+            let when = touch.sources.contains(where: \.running) ? "the running turn" : "its last turn"
+            let rest = Text(" changed this file in \(when). Your edits aren't saved.")
+            if let agent = touch.agentName {
+                return Text(agent).foregroundColor(Theme.accent) + rest
+            }
+            var names: [String] = []
+            for source in touch.sources where !names.contains(source.provider) { names.append(source.provider) }
+            return Text(names.joined(separator: " and ")) + rest
         }
     }
 }
