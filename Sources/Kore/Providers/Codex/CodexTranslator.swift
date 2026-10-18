@@ -252,9 +252,10 @@ final class CodexTranslator {
         case "subAgentActivity", "collabAgentToolCall":
             agentItem(item, agent: agent)
         case "contextCompaction" where agent == .main:
+            // Codex says nothing about who started it: automatic unless Kore asked.
+            out.append(.compacted(at: .now, auto: !compactRequested))
             compacting = false
             compactRequested = false
-            out.append(.compacted(at: .now))
         default:
             break
         }

@@ -87,6 +87,8 @@ final class ClaudeTranslator {
     private var reportedContext: ContextUsage?
     /// Kore asked for this compaction (`compact()` or a typed /compact): not an automatic one.
     var compactRequested = false
+    /// Live: a compaction's boundary came; its summary is the next synthetic user message.
+    private var awaitingSummary = false
 
     init(folder: URL, sessionId: String?) {
         self.folder = folder
@@ -175,6 +177,13 @@ final class ClaudeTranslator {
             assistant(blocks, agent: parent.map(AgentID.sub) ?? .main)
             if parent == nil, let usage { context(usage) }
         case .user(let blocks, let parent, let result):
+            // After a compaction's boundary, stdout sends its summary as a plain user message
+            // (`isSynthetic`), the transcript's `isCompactSummary` entry.
+            if awaitingSummary, parent == nil, blocks.count == 1, case .text(let text) = blocks[0], !text.hasPrefix("<") {
+                awaitingSummary = false
+                out.append(.compactionSummary(text))
+                return
+            }
             toolResults(blocks, result, agent: parent.map(AgentID.sub) ?? .main)
         case .permissionRequest(let request):
             pending[request.id] = request
@@ -189,6 +198,7 @@ final class ClaudeTranslator {
             if let turn { followups.append(.peer(uuid: id, turn: turn)) }
         case .turnCompleted(let result):
             pending.removeAll()
+            awaitingSummary = false
             // The window of the session's model (the extension reads it from here too).
             let models = result.raw["modelUsage"]
             if let usage = model.flatMap({ models?[$0] }) ?? models?.object?.values.first(where: { $0["contextWindow"] != nil }),
@@ -302,8 +312,9 @@ final class ClaudeTranslator {
             case "compact_boundary":
                 // /compact live: the divider goes above the summary that follows. The context's
                 // new size is asked for (it isn't on the boundary).
-                out.append(.compacted(at: .now, from: Self.preTokens(json)))
+                out.append(.compacted(at: .now, from: Self.preTokens(json), auto: Self.autoCompacted(json)))
                 compactRequested = false
+                awaitingSummary = true
                 followups.append(.contextUsage)
             case "status" where json["status"]?.string == "compacting":
                 out.append(.compactionStarted(auto: !compactRequested))
@@ -531,6 +542,11 @@ final class ClaudeTranslator {
         boundary["compact_metadata"]?["pre_tokens"]?.int ?? boundary["compactMetadata"]?["preTokens"]?.int
     }
 
+    /// Whether the CLI compacted by itself: the boundary's `trigger` ("auto" / "manual").
+    static func autoCompacted(_ boundary: JSONValue) -> Bool? {
+        (boundary["compact_metadata"]?["trigger"] ?? boundary["compactMetadata"]?["trigger"])?.string.map { $0 == "auto" }
+    }
+
     /// Claude's VS Code extension's `Wv0`: the window less the output reserve (at most 20k) and a
     /// 13k buffer. The CLI auto-compacts there.
     static func effectiveWindow(_ window: Int, maxOutput: Int) -> Int {
@@ -685,8 +701,15 @@ final class ClaudeTranslator {
             }
             if ClaudeHistory.isBoundary(message) {
                 close()
-                out.append(.compacted(at: time, from: Self.preTokens(message)))
+                out.append(.compacted(at: time, from: Self.preTokens(message), auto: Self.autoCompacted(message)))
                 contextUsed = nil  // the last call before the compaction no longer describes it
+                continue
+            }
+            if message["type"]?.string == "user", message["isCompactSummary"]?.bool == true {
+                // Its compaction's summary, under the divider (as live), not a prompt of its own.
+                if let text = Self.promptText(message["message"]?["content"]) ?? message["message"]?["content"]?.string {
+                    out.append(.compactionSummary(text))
+                }
                 continue
             }
             if message["type"]?.string == "user" {

@@ -68,11 +68,16 @@ enum ChatEvent: Sendable {
     case exited(status: Int32)
 
     /// The conversation was compacted here: a divider over its summary. `from`: the tokens in
-    /// context before (Claude's `pre_tokens`). Also ends `compactionStarted`.
-    case compacted(at: Date, from: Int? = nil)
+    /// context before (Claude's `pre_tokens`). `auto`: the CLI compacted by itself (true) or was
+    /// asked to (false); nil when unknown (a replayed Codex compaction). Also ends
+    /// `compactionStarted`.
+    case compacted(at: Date, from: Int? = nil, auto: Bool? = nil)
     /// The CLI started compacting: on `ChatBackend.compact()` (`auto` false), or by itself when
     /// the context ran full (`auto` true). `compacted` or `compactionFailed` follows.
     case compactionStarted(auto: Bool)
+    /// The summary a compaction left; the conversation goes on from it. Claude only (Codex's is
+    /// encrypted), right after `.compacted`, live and in replay alike.
+    case compactionSummary(String)
     case compactionFailed(String)
     /// How full the context is: when the CLI comes up, after the main agent's model calls and after
     /// a compaction, and once in a replay (the last known value). Sent only when it changes.

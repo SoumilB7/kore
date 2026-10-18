@@ -20,7 +20,7 @@ final class ContextStore {
             compactedFrom = nil
         case .compactionStarted:
             compacting = true
-        case .compacted(_, let from):
+        case .compacted(_, let from, _):
             compacting = false
             compactedFrom = from
         case .compactionFailed, .exited:

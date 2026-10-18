@@ -77,14 +77,14 @@ extension TranscriptStore {
         case .compactionFailed(let reason):
             compacting(false)
             notice("Couldn't compact: " + reason, isError: true)
-        case .compacted(let at, _):
+        case .compacted(let at, _, _):
             compacting(false)
             compacted(at: at)
         case .earlierHistory(let available):
             earlierHistory(available)
 
         case .sessionIdentified, .titleChanged, .controlsLoaded, .modeChanged, .planModeChanged, .turnOrigin,
-            .planReady, .contextUsage:
+            .planReady, .contextUsage, .compactionSummary:
             break
         }
     }
