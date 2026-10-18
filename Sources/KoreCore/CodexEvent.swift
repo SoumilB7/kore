@@ -151,8 +151,23 @@ public struct CodexTurnResult: Sendable {
         let turn = params["turn"]
         turnId = turn?["id"]?.string ?? ""
         status = turn?["status"]?.string ?? ""
-        errorMessage = turn?["error"]?["message"]?.string
+        errorMessage = turn?["error"]?["message"]?.string.map(CodexError.readable)
         durationMs = turn?["durationMs"]?.int
         raw = params
+    }
+}
+
+/// Codex error text as a person reads it. Codex passes the API's error body through, alone or
+/// after a line of its own ("Error running remote compact task: {"type":"error","status":400,
+/// "error":{"message":"The 'x' model is not supported…"}}"): the body's message is the error.
+public enum CodexError {
+    public static func readable(_ raw: String) -> String {
+        guard let brace = raw.firstIndex(of: "{"),
+            let json = try? JSONValue.parse(Data(raw[brace...].utf8)),
+            let message = (json["error"]?["message"]?.string ?? json["error"]?.string ?? json["message"]?.string)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !message.isEmpty
+        else { return raw }
+        return message
     }
 }

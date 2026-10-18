@@ -178,20 +178,22 @@ final class CodexTranslator {
             // Steered messages the turn ended before taking.
             for id in pendingSteer { out.append(.queuedMessage(id: id, .dropped)) }
             pendingSteer.removeAll()
-            if compacting {
-                // A compaction runs as a turn of its own: ending without its item completing is a failure.
-                compacting = false
-                compactRequested = false
-                if result.status != "completed" {
-                    out.append(.compactionFailed(Self.cleanError(result.errorMessage ?? "Compaction \(result.status)")))
-                }
-            }
-            let outcome: TurnOutcome =
+            var outcome: TurnOutcome =
                 switch result.status {
                 case "interrupted": .interrupted
                 case "failed": .failed(Self.cleanError(result.errorMessage ?? "Turn failed"))
                 default: .completed
                 }
+            if compacting {
+                // A compaction runs as a turn of its own: ending without its item completing is a
+                // failure, said once, as "Couldn't compact: …" (its turn adds no line of its own).
+                compacting = false
+                compactRequested = false
+                if result.status != "completed" {
+                    out.append(.compactionFailed(Self.cleanError(result.errorMessage ?? "Compaction \(result.status)")))
+                    outcome = .completed
+                }
+            }
             finishTurn(turn ?? result.turnId, outcome, duration: result.durationMs.map { .milliseconds($0) })
         case .raw(let method, let params):
             if method == "thread/name/updated", agent == .main, let name = Self.threadName(params["threadName"]) {
@@ -653,12 +655,20 @@ final class CodexTranslator {
                     itemCompleted(item, agent: .main)
                 }
             }
-            let outcome: TurnOutcome =
+            var outcome: TurnOutcome =
                 switch turn["status"]?.string {
                 case "interrupted": .interrupted
                 case "failed": .failed(Self.cleanError(turn["error"]?["message"]?.string ?? "Turn failed"))
                 default: .completed
                 }
+            // A compaction that failed keeps no item: its turn has no prompt and Codex's error names it.
+            if case .failed(let message) = outcome, !sawPrompt,
+                turn["error"]?["message"]?.string?.hasPrefix("Error running remote compact task") == true
+                    || (turn["items"]?.array ?? []).contains(where: { $0["type"]?.string == "contextCompaction" })
+            {
+                out.append(.compactionFailed(message))
+                outcome = .completed
+            }
             finishTurn(id, outcome, duration: turn["durationMs"]?.int.map { .milliseconds($0) })
         }
         // The rollout's last token count: the fill when the chat was left.
@@ -739,11 +749,6 @@ final class CodexTranslator {
         return name
     }
 
-    /// Codex errors are often a JSON string like {"error":{"message":"..."}}.
-    static func cleanError(_ raw: String) -> String {
-        guard let json = try? JSONValue.parse(Data(raw.utf8)), let message = json["error"]?["message"]?.string else {
-            return raw
-        }
-        return message
-    }
+    /// Codex errors often carry the API's JSON body: its message (`CodexError`).
+    static func cleanError(_ raw: String) -> String { CodexError.readable(raw) }
 }

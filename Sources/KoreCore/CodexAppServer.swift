@@ -15,7 +15,7 @@ public actor CodexAppServer {
         case exited(status: Int32)
     }
 
-    public enum Failure: Error, CustomStringConvertible {
+    public enum Failure: LocalizedError, CustomStringConvertible {
         case notRunning
         case rpc(code: Int, message: String)
 
@@ -23,6 +23,14 @@ public actor CodexAppServer {
             switch self {
             case .notRunning: "codex app-server is not running"
             case .rpc(let code, let message): "codex app-server error \(code): \(message)"
+            }
+        }
+
+        /// What the chat shows: Codex's own message, readable.
+        public var errorDescription: String? {
+            switch self {
+            case .notRunning: "Codex isn't running"
+            case .rpc(_, let message): CodexError.readable(message)
             }
         }
     }

@@ -388,7 +388,7 @@ extension CodexEvent {
             case "serverRequest/resolved": .approvalResolved(requestId: params["requestId"] ?? .null)
             case "error":
                 .error(
-                    message: params["error"]?["message"]?.string ?? "unknown error",
+                    message: CodexError.readable(params["error"]?["message"]?.string ?? "unknown error"),
                     willRetry: params["willRetry"]?.bool ?? false)
             default: .raw(method: method, params: params)
             }
