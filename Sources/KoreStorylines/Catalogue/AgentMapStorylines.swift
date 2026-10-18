@@ -108,6 +108,69 @@ final class AgentMapStopped: ChatStoryline {
     }
 }
 
+/// Stop while a foreground agent runs and a background one (spawned a turn before) runs on:
+/// both leave the map's tree and its Background section for the Stopped group. The backends end
+/// the foreground one with the turn, and the background one from its own files (Claude: its
+/// meta file and stop marker, read again at the stop) or its own turn's end (Codex), with no
+/// notification.
+final class AgentMapInterrupted: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents] }
+    private static func spawn(_ id: String, _ name: String, background: Bool) -> Beat {
+        .event(.agentSpawned(AgentInfo(
+            id: id, parent: .main, toolId: nil, name: name, type: nil, model: nil, prompt: "\(name).", background: background)))
+    }
+    /// Stop pressed while the demo runs: what the backend reports for both, then the turn's end.
+    private static let stopped: [Beat] = [
+        .startTurn, spawn("demo", "Stall for a while", background: false), .wait(.interrupt),
+        .event(.agentFinished(id: "demo", .stopped, result: nil)),
+        .event(.agentFinished(id: "build", .stopped, result: nil)),
+        .finishTurn(.interrupted),
+    ]
+
+    override class var script: CLIScript {
+        CLIScript(turns: [
+            [.startTurn, spawn("build", "Build every method", background: true), .stream(.answer, "The build runs."), .finishTurn(.completed)],
+            stopped,
+        ])
+    }
+
+    /// As Codex tells it: the child is one in the background once it outlives its turn.
+    static var codexScript: CLIScript {
+        CLIScript(turns: [
+            [
+                .startTurn, spawn("build", "Build every method", background: false), .stream(.answer, "The build runs."),
+                .event(.agentBackgrounded(id: "build")), .finishTurn(.completed),
+            ],
+            stopped,
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        let build = StoryID.AgentMap.row("build"), demo = StoryID.AgentMap.row("demo")
+        return [UseScript(Self.codexScript, for: "codex")] + super.steps() + [
+            Send("Start the build"), TurnFinished(1), WaitIdle(),
+            Press(.id(StoryID.Titlebar.agents)),
+            ExpectElement(.id(StoryID.AgentMap.background), .visible),
+            ExpectElement(.id(build), .visible),
+            Send("Use a helper"),
+            WaitForEvent("the demo to start") { if case .agentSpawned(let info) = $0 { info.id == "demo" } else { false } },
+            ExpectElement(.id(demo), .visible),
+            Stop(),
+            TurnFinished(2), WaitIdle(),
+            Expect("the turn to end as interrupted") { story in
+                story.chatEvents().contains { if case .turnFinished(_, .interrupted, _) = $0 { true } else { false } }
+            },
+            ExpectElement(.id(StoryID.AgentMap.background), .absent),
+            ExpectElement(.id(StoryID.AgentMap.stopped), .visible),
+            ExpectElement(.id(build), .absent),
+            ExpectElement(.id(demo), .absent),
+            Press(.id(StoryID.AgentMap.stopped)),
+            ExpectElement(.id(build), .visible),
+            ExpectElement(.id(demo), .visible),
+        ]
+    }
+}
+
 /// A background agent that has finished waits in the map's closed "Done in background" group,
 /// just above the stopped one; opened, the group shows it. Run again, it leaves the group for the
 /// Background section, live under the open map. Codex says nothing at the spawn: its child thread

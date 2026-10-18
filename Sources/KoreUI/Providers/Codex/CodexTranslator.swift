@@ -71,6 +71,8 @@ final class CodexTranslator {
     /// before the events that name them; `lookedUp` keeps it to once per thread.
     var agentThreads: [String: CodexAgentThread] = [:]
     private var lookedUp: Set<String> = []
+    /// Where child threads' spawns and ends are logged (`AgentLog`). A replay logs none.
+    var log: AgentLog = .shared
 
     init(folder: URL) {
         self.folder = folder
@@ -105,6 +107,7 @@ final class CodexTranslator {
     }
 
     private func finishTurn(_ id: TurnID, _ outcome: TurnOutcome, duration: Duration?) {
+        if case .interrupted = outcome, !replaying { stopForeground() }
         // Older models don't mark the final answer: the last message after the last tool.
         if !finalMarked {
             let lastTool = turnItems.lastIndex { if case .tool = $0 { true } else { false } }
@@ -181,7 +184,9 @@ final class CodexTranslator {
                 // One that outlived its parent's turn ends with its own: no item of the parent's
                 // says so until the parent's next turn.
                 if background.contains(thread) {
-                    finish(thread, result.status == "interrupted" ? .stopped : result.status == "failed" ? .failed : .completed)
+                    finish(
+                        thread, result.status == "interrupted" ? .stopped : result.status == "failed" ? .failed : .completed,
+                        source: .childTurn)
                 }
                 return
             }
@@ -389,9 +394,9 @@ final class CodexTranslator {
             guard let thread = raw["agentThreadId"]?.string else { return }
             spawn(thread, parent: agent, toolId: item.id, name: raw["agentPath"]?.string, prompt: nil, model: nil)
             switch raw["kind"]?.string {
-            case "completed": finish(thread, .completed, by: item.id)
-            case "interrupted": finish(thread, .stopped, by: item.id)
-            case "errored", "failed": finish(thread, .failed, by: item.id)
+            case "completed": finish(thread, .completed, by: item.id, source: .agentItem)
+            case "interrupted": finish(thread, .stopped, by: item.id, source: .agentItem)
+            case "errored", "failed": finish(thread, .failed, by: item.id, source: .agentItem)
             default: break
             }
             return
@@ -407,9 +412,9 @@ final class CodexTranslator {
         }
         for (thread, state) in raw["agentsStates"]?.object ?? [:] {
             switch state["status"]?.string {
-            case "completed": finish(thread, .completed)
-            case "errored", "failed": finish(thread, .failed)
-            case "interrupted", "shutdown", "closed": finish(thread, .stopped)
+            case "completed": finish(thread, .completed, source: .agentItem)
+            case "errored", "failed": finish(thread, .failed, source: .agentItem)
+            case "interrupted", "shutdown", "closed": finish(thread, .stopped, source: .agentItem)
             default: break
             }
         }
@@ -424,6 +429,7 @@ final class CodexTranslator {
         let task = name.map { $0.split(separator: "/").last.map(String.init) ?? $0 }
         let shown = info?.nickname ?? info?.role ?? task ?? "Agent"
         let beside = info?.nickname != nil ? info?.role ?? task : info?.role != nil ? task : nil
+        if !replaying { log.spawned("codex", chat: threadId, agent: thread, name: shown, background: false, parent: parent.sub) }
         out.append(
             .agentSpawned(
                 AgentInfo(
@@ -433,11 +439,14 @@ final class CodexTranslator {
 
     /// `by`: the activity item reporting it. Each run's end is an item of its own, so another
     /// one is a later run's (a replay has no child turns to say it ran again).
-    private func finish(_ thread: String, _ status: AgentStatus, by item: String? = nil) {
+    private func finish(_ thread: String, _ status: AgentStatus, by item: String? = nil, source: AgentLog.Source, via: String? = nil) {
         if let item, let earlier = finishedBy.updateValue(item, forKey: thread), earlier != item {
             finished.remove(thread)
         }
         guard finished.insert(thread).inserted else { return }
+        if !replaying {
+            log.status("codex", chat: threadId, agent: thread, to: AgentLog.name(status), source: source, via: via)
+        }
         // A replay carries no child messages: the result, tokens and time its rollout ended with.
         let info = agentThreads[thread]
         if info?.tokens != nil || info?.duration != nil {
@@ -455,7 +464,10 @@ final class CodexTranslator {
     /// ends exactly when the live turn did.
     private func outlived(_ parent: AgentID) {
         for thread in spawned.subtracting(finished).sorted() where parents[thread] == parent {
-            if background.insert(thread).inserted { out.append(.agentBackgrounded(id: thread)) }
+            if background.insert(thread).inserted {
+                out.append(.agentBackgrounded(id: thread))
+                if !replaying { log.backgrounded("codex", chat: threadId, agent: thread) }
+            }
         }
     }
 
@@ -466,16 +478,40 @@ final class CodexTranslator {
 
     /// A child thread another client runs ended, as its rollout says: its last answer and
     /// totals come with it.
-    func agentEnded(_ thread: String, _ status: AgentStatus, _ info: CodexAgentThread) {
+    func agentEnded(_ thread: String, _ status: AgentStatus, _ info: CodexAgentThread, source: AgentLog.Source, via: String? = nil) {
         guard spawned.contains(thread) else { return }
         agentThreads[thread] = info
-        finish(thread, status)
+        finish(thread, status, source: source, via: via)
+    }
+
+    /// A stopped turn stops the child threads it ran that hadn't outlived a turn, and theirs (the
+    /// transcript shows them stopped with it); those in the background go on until they end.
+    private func stopForeground() {
+        let open = spawned.subtracting(finished).subtracting(background)
+        var stopped: Set<String> = []
+        var grew = true
+        while grew {
+            grew = false
+            for thread in open.sorted() where !stopped.contains(thread) {
+                let parent = parents[thread] ?? .main
+                if parent == .main || parent.sub.map(stopped.contains) == true {
+                    stopped.insert(thread)
+                    grew = true
+                }
+            }
+        }
+        // Not marked finished: Codex may report one ending later (an item of the next turn).
+        for thread in stopped.sorted() {
+            log.status("codex", chat: threadId, agent: thread, to: "stopped", source: .turnInterrupt)
+            out.append(.agentFinished(id: thread, .stopped, result: nil))
+        }
     }
 
     private func resume(_ thread: String) {
         finished.remove(thread)
         finishedBy[thread] = nil
         out.append(.agentResumed(id: thread))
+        if !replaying { log.resumed("codex", chat: threadId, agent: thread) }
     }
 
     /// Child threads this event names that haven't been looked up yet.

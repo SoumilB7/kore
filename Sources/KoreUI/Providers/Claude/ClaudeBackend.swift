@@ -192,6 +192,8 @@ final class ClaudeBackend: ChatBackend {
             // Run again, it runs in the background: its new entries only (the CLI may have
             // written its first ones a moment before this came).
             if case .agentResumed(let id) = event { tail(id, since: .now.addingTimeInterval(-Self.resumeLead)) }
+            // A stop can end background agents too, with no notification: their files say so.
+            if case .turnFinished(_, .interrupted, _) = event { recheckAgents(via: "turn interrupt") }
         }
         for followup in followups { run(followup) }
     }
@@ -298,6 +300,8 @@ final class ClaudeBackend: ChatBackend {
         let folder = options.folder
         let known = agentTranscripts[id]
         if alone.contains(id) { watchNotices() }
+        tailFiles[id] = known
+        tailsSince[id] = .now
         tails[id] = Task {
             var file = known
             var offset: UInt64 = 0
@@ -306,6 +310,7 @@ final class ClaudeBackend: ChatBackend {
                 let finished = translator.isFinished(id)
                 if file == nil {
                     file = await Task.detached { ClaudeHistory.subagentFile(toolUseId: id, sessionId: session, in: folder) }.value
+                    tailFiles[id] = file
                 }
                 var grew = false
                 if let file {
@@ -313,6 +318,8 @@ final class ClaudeBackend: ChatBackend {
                     var (entries, next) = await Task.detached { ClaudeHistory.entries(in: file, from: start) }.value
                     offset = next
                     grew = next > start
+                    // A run again reads its earlier lines first: only what comes after is new.
+                    if grew, start > 0 || since == nil { tailsWrote.insert(id) }
                     if let since { entries = entries.filter { (ClaudeTranslator.date($0["timestamp"]) ?? since) >= since } }
                     for event in translator.agentEntries(entries, agent: id, skippingPrompt: start == 0 && since == nil, live: true) {
                         yield(event)
@@ -320,32 +327,93 @@ final class ClaudeBackend: ChatBackend {
                 }
                 if finished { break }
                 // Its own files, read only while it writes nothing.
-                if alone.contains(id), !grew, let file {
+                if !grew, let file {
                     let state = await Task.detached { ClaudeHistory.Subagent.read(file) }.value
-                    switch state.outcome() {
-                    case .running:
-                        break
-                    case .finished:
-                        let marked = markedAt ?? .now
-                        markedAt = marked
-                        if Date.now.timeIntervalSince(marked) >= Self.noticeWait {
-                            // No notification brings its tokens: its transcript's last call has them.
-                            let tokens = await Task.detached { ClaudeHistory.Subagent.span(file)?.tokens }.value
-                            end(id, .completed, tokens: tokens)
+                    if !alone.contains(id) {
+                        // This CLI runs it: its notification ends it, except after a stop, which
+                        // brings none.
+                        if let source = stopSource(id, state) { end(id, .stopped, source: source) }
+                    } else {
+                        switch state.outcome() {
+                        case .running:
+                            break
+                        case .finished:
+                            let marked = markedAt ?? .now
+                            markedAt = marked
+                            if Date.now.timeIntervalSince(marked) >= Self.noticeWait {
+                                // No notification brings its tokens: its transcript's last call has them.
+                                let tokens = await Task.detached { ClaudeHistory.Subagent.span(file)?.tokens }.value
+                                end(id, .completed, tokens: tokens, source: .fileFinished)
+                            }
+                        case .stopped:
+                            end(id, .stopped, source: Self.source(of: state))
                         }
-                    case .stopped:
-                        end(id, .stopped)
                     }
                 }
                 try? await Task.sleep(for: .milliseconds(700))
             }
             tails[id] = nil
+            tailFiles[id] = nil
+            tailsSince[id] = nil
+            tailsWrote.remove(id)
             alone.remove(id)
         }
     }
 
-    private func end(_ id: String, _ status: AgentStatus, tokens: Int? = nil) {
-        translator.agentEnded(id, status, tokens: tokens)
+    /// Followed agents' transcripts once found, and when following began.
+    private var tailFiles: [String: URL] = [:]
+    private var tailsSince: [String: Date] = [:]
+    /// Followed agents whose transcripts grew while followed.
+    private var tailsWrote: Set<String> = []
+
+    /// Whether the files of an agent this CLI runs say it was stopped since Kore began following
+    /// it: its transcript's last line is a stop marker (its meta file marks it `stoppedByUser`
+    /// too when the stop killed it). What was there before (a run that was stopped, then run
+    /// again, whose meta file may still say so) doesn't count: it has to have written since.
+    private func stopSource(_ id: String, _ state: ClaudeHistory.Subagent) -> AgentLog.Source? {
+        Self.stopSource(state, wrote: tailsWrote.contains(id), since: tailsSince[id])
+    }
+
+    /// `wrote`: its transcript grew while followed; `since`: when following began.
+    static func stopSource(_ state: ClaudeHistory.Subagent, wrote: Bool, since: Date?) -> AgentLog.Source? {
+        guard state.interrupted, wrote, let modified = state.modified,
+            modified >= (since ?? .distantPast).addingTimeInterval(-resumeLead)
+        else { return nil }
+        return state.stoppedByUser ? .fileStoppedByUser : .fileStopMarker
+    }
+
+    /// Why its files say it ended (`ClaudeHistory.Subagent.outcome`).
+    static func source(of state: ClaudeHistory.Subagent) -> AgentLog.Source {
+        if state.stoppedByUser { return .fileStoppedByUser }
+        if state.finished { return .fileFinished }
+        if state.interrupted { return .fileStopMarker }
+        return .fileStaleness
+    }
+
+    /// After a stop: every followed agent's files, read at once and again shortly after (the CLI
+    /// writes its marks a moment after the turn's result), so one the stop ended leaves the
+    /// running agents now, not at its tail's next quiet look.
+    private func recheckAgents(via: String) {
+        guard !tails.isEmpty else { return }
+        Task {
+            for delay in [0, 600, 1500] {
+                if delay > 0 { try? await Task.sleep(for: .milliseconds(delay)) }
+                let files = tailFiles.filter { !translator.isFinished($0.key) && tails[$0.key] != nil }
+                guard !files.isEmpty else { return }
+                let states = await Task.detached { files.mapValues { ClaudeHistory.Subagent.read($0) } }.value
+                for (id, state) in states.sorted(by: { $0.key < $1.key }) where !translator.isFinished(id) {
+                    if alone.contains(id) {
+                        if state.outcome() == .stopped { end(id, .stopped, source: Self.source(of: state), via: via) }
+                    } else if let source = stopSource(id, state) {
+                        end(id, .stopped, source: source, via: via)
+                    }
+                }
+            }
+        }
+    }
+
+    private func end(_ id: String, _ status: AgentStatus, tokens: Int? = nil, source: AgentLog.Source, via: String? = nil) {
+        translator.agentEnded(id, status, tokens: tokens, source: source, via: via)
         flush()
     }
 
@@ -366,16 +434,26 @@ final class ClaudeBackend: ChatBackend {
             return (found, spans)
         }.value
         var running: [(id: String, ran: TimeInterval?)] = []
-        for (id, background) in open {
-            guard let agent = found[id] else { continue }
+        let log = translator.log
+        for (id, background) in open.sorted(by: { $0.id < $1.id }) {
+            guard let agent = found[id] else {
+                log.status("claude", chat: session, agent: id, to: "stopped", source: .replay, via: "no files")
+                continue
+            }
             agentTranscripts[id] = agent.transcript
             switch agent.outcome() {
             case .finished:
                 let span = spans[id]
                 translator.agentEnded(
-                    id, .completed, duration: span.map { .seconds($0.end.timeIntervalSince($0.start)) }, tokens: span?.tokens)
-            case .running where background: running.append((id, spans[id].map { Date.now.timeIntervalSince($0.start) }))
-            case .running, .stopped: break  // the replay stops it
+                    id, .completed, duration: span.map { .seconds($0.end.timeIntervalSince($0.start)) }, tokens: span?.tokens,
+                    source: .fileFinished, via: "replay")
+            case .running where background:
+                running.append((id, spans[id].map { Date.now.timeIntervalSince($0.start) }))
+                log.resumed("claude", chat: session, agent: id, via: "replay, files still written")
+            case .running:  // the replay stops it
+                log.status("claude", chat: session, agent: id, to: "stopped", source: .replay, via: "foreground")
+            case .stopped:  // the replay stops it
+                log.status("claude", chat: session, agent: id, to: "stopped", source: Self.source(of: agent), via: "replay")
             }
         }
         return running
@@ -505,6 +583,7 @@ final class ClaudeBackend: ChatBackend {
     /// Also drops messages queued behind the turn (Stop gives their text back to the composer).
     func interrupt() async {
         try? await session?.interrupt(cancelQueued: !translator.pendingQueued.isEmpty)
+        recheckAgents(via: "stop")
     }
 
     func respond(to approvalID: String, _ decision: Decision) async {
@@ -513,7 +592,7 @@ final class ClaudeBackend: ChatBackend {
             switch decision {
             case .allow: .allow
             case .allowAlways: .allowAlways
-            case .deny: .deny(message: "The user denied this tool call.")
+            case .deny: .deny(message: ClaudeTranslator.deniedCall)
             case .answers(let answers): .answers(answers)
             case .approvePlan(let autoAcceptEdits): autoAcceptEdits ? .allowSettingMode("acceptEdits") : .allow
             case .keepPlanning: .deny(message: "The user wants to keep planning. Ask what to change.")
@@ -568,6 +647,9 @@ final class ClaudeBackend: ChatBackend {
     func close() async {
         for tail in tails.values { tail.cancel() }
         tails = [:]
+        tailFiles = [:]
+        tailsSince = [:]
+        tailsWrote = []
         notices?.cancel()
         notices = nil
         pump?.cancel()

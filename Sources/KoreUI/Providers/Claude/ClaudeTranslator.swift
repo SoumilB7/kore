@@ -82,6 +82,10 @@ package final class ClaudeTranslator {
     private var resumedBy: [String: String] = [:]
 
     static let agentTools: Set<String> = ["Agent", "Task"]
+    /// Agents spawned in the running turn (live): a stop ends those in the foreground.
+    private var turnAgents: Set<String> = []
+    /// Where agents' spawns and ends are logged (`AgentLog`). A replay logs none of its own.
+    var log: AgentLog = .shared
 
     // Modes. The CLI reports every change as `system/status {permissionMode}` (and each turn's
     // `system/init`) but not why; the cause is what came just before it.
@@ -143,6 +147,7 @@ package final class ClaudeTranslator {
         turnItems = []
         block = nil
         turnKey = nil
+        turnAgents = []
         if replaying { replayChanges = [] } else { files.begin() }
         out.append(.turnStarted(id, origin: origin, at: date))
     }
@@ -163,6 +168,8 @@ package final class ClaudeTranslator {
     }
 
     private func finishTurn(_ outcome: TurnOutcome, duration: Duration?) {
+        if case .interrupted = outcome, !replaying { stopForeground() }
+        turnAgents = []
         if let answer = finalAnswer() { out.append(.finalAnswer(answer)) }
         out.append(.turnFinished(turn, outcome, duration: duration))
         if let turn {
@@ -177,6 +184,26 @@ package final class ClaudeTranslator {
         turn = nil
         turnItems = []
         block = nil
+    }
+
+    /// A stopped turn stops the agents it ran in the foreground, and theirs: the CLI ends them
+    /// with it, and may say nothing (its Agent call's result, when it comes, says the same).
+    /// Background agents, and what they run, go on until their own files or notification say.
+    private func stopForeground() {
+        let open = turnAgents.filter { finished[$0] == nil && !background.contains($0) }
+        var stopped: Set<String> = []
+        var grew = true
+        while grew {
+            grew = false
+            for id in open where !stopped.contains(id) {
+                let parent = toolAgent[id] ?? .main
+                if parent == .main || parent.sub.map(stopped.contains) == true {
+                    stopped.insert(id)
+                    grew = true
+                }
+            }
+        }
+        for id in stopped.sorted() { agentEnded(id, .stopped, source: .turnInterrupt) }
     }
 
     /// Claude doesn't mark its final answer: it's the text after the turn's last tool call.
@@ -334,8 +361,20 @@ package final class ClaudeTranslator {
 
     private func toolResults(_ blocks: [ContentBlock], _ result: JSONValue?, agent: AgentID) {
         var first: String?
+        var firstFailed = false
         for case .toolResult(let id, let content, let isError) in blocks where firstTime("end:" + id, agent) {
-            first = first ?? id
+            if first == nil {
+                first = id
+                firstFailed = isError
+            }
+            // An Agent call that errs ended its agent: a stop or a rejection (the CLI's text, or
+            // Kore's denial) stopped it; anything else failed it. Its result says nothing of an
+            // agent ("User rejected tool use"), and may not come at all.
+            if isError, agentInputs[id] != nil {
+                let said = Self.text(of: content)
+                let stopped = said.hasPrefix(Self.stoppedCall) || said.hasPrefix(Self.deniedCall)
+                agentFailed(id, stopped ? .stopped : .failed)
+            }
             if modeCall?.id == id { modeCall = nil }  // live, the status (if any) came before it
             if replaying, !isError, let call = modeCalls.removeValue(forKey: id) {
                 // A transcript has no status lines: the call succeeding is the switch.
@@ -367,7 +406,7 @@ package final class ClaudeTranslator {
                 files.record([change])
             }
         } else if agentInputs[id] != nil {
-            agentReturned(id, result)
+            if !firstFailed { agentReturned(id, result) }
         } else if let to = sendCalls.removeValue(forKey: id) {
             messageSent(id, to: to, result)
         }
@@ -422,9 +461,9 @@ package final class ClaudeTranslator {
                             duration: usage?["duration_ms"]?.int.map { .milliseconds($0) },
                             lastTool: json["last_tool_name"]?.string)))
             case "task_updated":
-                finishAgent(agent(ofTask: json), status: json["patch"]?["status"]?.string, result: nil)
+                finishAgent(agent(ofTask: json), status: json["patch"]?["status"]?.string, result: nil, source: .taskUpdate)
             case "task_notification":
-                finishAgent(agent(ofTask: json), status: json["status"]?.string, result: json["summary"]?.string)
+                finishAgent(agent(ofTask: json), status: json["status"]?.string, result: json["summary"]?.string, source: .notification)
             default:
                 break
             }
@@ -455,6 +494,7 @@ package final class ClaudeTranslator {
     private func resume(_ id: String) {
         finished[id] = nil
         out.append(.agentResumed(id: id))
+        if !replaying { log.resumed("claude", chat: sessionId, agent: id) }
     }
 
     /// SendMessage to an agent that isn't running runs it again: the CLI answers "Resuming agent
@@ -477,12 +517,16 @@ package final class ClaudeTranslator {
         let flag = input?["run_in_background"]
         let background = background ?? flag?.bool ?? (flag?.string == "true")
         if background { self.background.insert(id) }
+        let shown = name ?? input?["description"]?.string ?? "Agent"
+        if !replaying {
+            if turn != nil { turnAgents.insert(id) }
+            log.spawned("claude", chat: sessionId, agent: id, name: shown, background: background, parent: toolAgent[id]?.sub)
+        }
         out.append(
             .agentSpawned(
                 AgentInfo(
                     id: id, parent: toolAgent[id] ?? .main, toolId: id,
-                    name: name ?? input?["description"]?.string ?? "Agent",
-                    type: type ?? input?["subagent_type"]?.string, model: input?["model"]?.string,
+                    name: shown, type: type ?? input?["subagent_type"]?.string, model: input?["model"]?.string,
                     prompt: prompt ?? input?["prompt"]?.string, background: background)))
     }
 
@@ -491,12 +535,15 @@ package final class ClaudeTranslator {
         spawned.filter { finished[$0] == nil }.map { ($0, background.contains($0)) }
     }
 
-    /// An agent another client runs ended, as its own files say, with the time they span and its
-    /// last model call's tokens when known (no notification brings them): the tokens marked
-    /// approximate.
-    func agentEnded(_ id: String, _ status: AgentStatus, duration: Duration? = nil, tokens: Int? = nil) {
+    /// An agent ended with no notification to say so: as its own files say (one another client
+    /// runs, or one a stop ended), with the time they span and its last model call's tokens when
+    /// known, the tokens marked approximate; or with its stopped turn. `source`: what said so.
+    func agentEnded(
+        _ id: String, _ status: AgentStatus, duration: Duration? = nil, tokens: Int? = nil, source: AgentLog.Source, via: String? = nil
+    ) {
         guard spawned.contains(id), finished[id] == nil else { return }
         finished[id] = false
+        log.status("claude", chat: sessionId, agent: id, to: AgentLog.name(status), source: source, via: via)
         if duration != nil || tokens != nil {
             out.append(.agentProgress(id: id, AgentProgress(tokens: tokens, duration: duration, approximate: tokens != nil)))
         }
@@ -505,15 +552,24 @@ package final class ClaudeTranslator {
 
     /// Once per agent, plus once more if its result text comes later (stdout's
     /// `task_notification` has none; the notification prompt that follows has it).
-    private func finishAgent(_ id: String, status: String?, result: String?) {
+    private func finishAgent(_ id: String, status: String?, result: String?, source: AgentLog.Source) {
         guard spawned.contains(id), let status = status.flatMap(Self.agentStatus) else { return }
         switch finished[id] {
-        case nil: break
+        case nil: if !replaying { log.status("claude", chat: sessionId, agent: id, to: AgentLog.name(status), source: source) }
         case false? where result != nil: break
         default: return
         }
         finished[id] = result != nil
         out.append(.agentFinished(id: id, status, result: result))
+    }
+
+    /// Its Agent call returned an error.
+    private func agentFailed(_ id: String, _ status: AgentStatus) {
+        spawn(id)
+        guard finished[id] == nil else { return }
+        finished[id] = false
+        if !replaying { log.status("claude", chat: sessionId, agent: id, to: AgentLog.name(status), source: .toolResultError) }
+        out.append(.agentFinished(id: id, status, result: nil))
     }
 
     /// The Agent call's own result. Live, the `task_*` events said it all already; a transcript
@@ -525,7 +581,7 @@ package final class ClaudeTranslator {
         spawn(id)
         guard status != "async_launched" else { return }  // background: ends later
         // Live, `task_notification` finished it already, without the report; this has it.
-        defer { finishAgent(id, status: status, result: result["content"].map(Self.text(of:))) }
+        defer { finishAgent(id, status: status, result: result["content"].map(Self.text(of:)), source: .toolResult) }
         guard finished[id] == nil else { return }
         out.append(
             .agentProgress(
@@ -560,7 +616,7 @@ package final class ClaudeTranslator {
                         duration: Self.tag("duration_ms", in: text).flatMap { Int($0) }.map { .milliseconds($0) },
                         lastTool: nil)))
         }
-        finishAgent(id, status: Self.tag("status", in: text), result: Self.tag("result", in: text))
+        finishAgent(id, status: Self.tag("status", in: text), result: Self.tag("result", in: text), source: .notification)
     }
 
     private static func tag(_ name: String, in text: String) -> String? {
@@ -1022,6 +1078,9 @@ package final class ClaudeTranslator {
     /// tool use was rejected…, STOP what you are doing…"). Kore's own denials carry Kore's
     /// message instead.
     static let stoppedCall = "The user doesn't want to proceed with this tool use."
+
+    /// The start of Kore's own denial (`ClaudeBackend.respond`).
+    static let deniedCall = "The user denied this tool call."
 
     static func text(of content: JSONValue) -> String {
         if let s = content.string { return s }

@@ -83,8 +83,8 @@ struct BackgroundAgentsTests {
     @Test func endedByItsFilesThenByItsNotification() {
         let translator = translator()
         _ = translator.replay(spawned)
-        translator.agentEnded("toolu_bgB", .completed)
-        translator.agentEnded("toolu_bgB", .completed)
+        translator.agentEnded("toolu_bgB", .completed, source: .fileFinished)
+        translator.agentEnded("toolu_bgB", .completed, source: .fileFinished)
         translator.taskNotification(text: notification(7))
         let ends = translator.take().events.compactMap { event -> String? in
             if case .agentFinished(let id, let status, let result) = event { "\(id) \(status) \(result ?? "-")" } else { nil }
@@ -155,8 +155,8 @@ struct BackgroundAgentsTests {
         let translator = translator()
         let script = Script()
         script.on(.replayed(translator.replay(spawned)))
-        translator.agentEnded("toolu_bgA", .completed, duration: .seconds(4175))
-        translator.agentEnded("toolu_bgB", .completed)
+        translator.agentEnded("toolu_bgA", .completed, duration: .seconds(4175), source: .fileFinished)
+        translator.agentEnded("toolu_bgB", .completed, source: .fileFinished)
         translator.take().events.forEach(script.store.apply)
         _ = script.sections
         #expect(script.store.agent("toolu_bgA")?.duration == 4175)
@@ -170,7 +170,7 @@ struct BackgroundAgentsTests {
         let translator = translator()
         let script = Script()
         script.on(.replayed(translator.replay(spawned)))
-        translator.agentEnded("toolu_bgA", .completed, duration: .seconds(7660), tokens: 239_412)
+        translator.agentEnded("toolu_bgA", .completed, duration: .seconds(7660), tokens: 239_412, source: .fileFinished)
         translator.take().events.forEach(script.store.apply)
         _ = script.sections
         let agent = script.store.agent("toolu_bgA")
@@ -317,7 +317,7 @@ struct BackgroundAgentsTests {
         info = CodexAgentThread(nickname: "Scout")
         info.readOutcome(rollout: rollout.path)
         #expect(info.outcome() == .finished)
-        translator.agentEnded("child", .completed, info)
+        translator.agentEnded("child", .completed, info, source: .fileFinished)
         let ends = translator.take().events.compactMap { event -> String? in
             if case .agentFinished(let id, let status, let result) = event { "\(id) \(status) \(result ?? "-")" } else { nil }
         }

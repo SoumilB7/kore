@@ -187,14 +187,26 @@ final class CodexBackend: ChatBackend {
         for thread in translator.unfinishedAgents() {
             guard let info = translator.agentThreads[thread], info.path != nil else { continue }
             switch info.outcome() {
-            case .finished: translator.agentEnded(thread, .completed, info)
+            case .finished: translator.agentEnded(thread, .completed, info, source: .fileFinished, via: "replay")
             case .running:
                 yield(.agentResumed(id: thread))
+                translator.log.resumed("codex", chat: sessionId, agent: thread, via: "replay, rollout still written")
                 follow(thread, info)
-            case .stopped: break  // the replay stops it
+            case .stopped:  // the replay stops it
+                translator.log.status(
+                    "codex", chat: sessionId, agent: thread, to: "stopped", source: Self.source(of: info), via: "replay")
             }
         }
         flush()
+    }
+
+    /// Why its rollout says it ended: its last turn aborted (a stop's mark), else it went quiet.
+    private static func source(of info: CodexAgentThread) -> AgentLog.Source {
+        switch info.lastEnd {
+        case .completed?: .fileFinished
+        case .aborted?: .fileStopMarker
+        case nil: .fileStaleness
+        }
     }
 
     /// Its rollout, looked at each second and read again (its last 64 KB) only when it grew,
@@ -216,8 +228,8 @@ final class CodexBackend: ChatBackend {
                 }
                 switch info.outcome() {
                 case .running: continue
-                case .finished: translator.agentEnded(thread, .completed, info)
-                case .stopped: translator.agentEnded(thread, .stopped, info)
+                case .finished: translator.agentEnded(thread, .completed, info, source: .fileFinished)
+                case .stopped: translator.agentEnded(thread, .stopped, info, source: Self.source(of: info))
                 }
                 flush()
             }
