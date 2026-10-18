@@ -112,7 +112,8 @@ struct TabBar: View {
                         ForEach(Array(workspace.tabs.enumerated()), id: \.element.id) { index, tab in
                             let dragged = drag.value?.id == tab.id
                             TabItem(tab: tab, workspace: workspace, height: tabHeight)
-                                .frame(width: tabWidth)
+                                // The close question takes the room it needs.
+                                .frame(width: workspace.asking(tab) ? max(tabWidth, Size.tabAsking) : tabWidth)
                                 .offset(x: shift(index))
                                 .zIndex(dragged ? 1 : 0)
                                 // The others slide aside as the dragged one passes; it follows the pointer.
@@ -125,8 +126,9 @@ struct TabBar: View {
                     }
                 }
                 .scrollBounceBehavior(.basedOnSize)
-                // Never wider than the tabs at full size, so the rest of the row still drags the window.
-                .frame(maxWidth: CGFloat(workspace.tabs.count) * 184)
+                // Never wider than the tabs at full size (a close question's a little wider), so the
+                // rest of the row still drags the window.
+                .frame(maxWidth: CGFloat(workspace.tabs.count) * 184 + (workspace.tabs.contains(where: workspace.asking) ? Size.tabAsking - Size.tabMaxWidth : 0))
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stripWidth.value = $0 }
                 .onChange(of: workspace.activeID) { _, id in
                     withAnimation(Motion.fade) { scroller.scrollTo(id) }
@@ -238,6 +240,55 @@ private struct TabItem: View {
     }
 
     var body: some View {
+        Group {
+            if workspace.asking(tab) { question } else { item }
+        }
+        // Width set by the tab bar (180 down to 90, like browser tabs); titles truncate.
+        .frame(height: height)
+        .background(
+            isActive ? Theme.surface : (hovered.value ? Theme.tabHover : .clear),
+            in: RoundedRectangle(cornerRadius: Radius.control)
+        )
+        .onHover { hovered.value = $0 }
+        .help(workspace.asking(tab) ? "Closing the tab stops its turn" : help)
+        .contextMenu {
+            if tab.isPreview {
+                Button("Keep Open") { workspace.keep(tab) }
+            }
+            Button("Rename…") { startRename() }.disabled(tab.chat == nil || tab.agent != nil)
+            Button("Close Tab") { workspace.requestClose(tab) }
+        }
+        .alert("Rename chat", isPresented: $renaming.value) {
+            TextField("Name", text: $newName.value)
+            Button("Rename") { tab.chat?.rename(newName.value) }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// Closing a running chat's tab asks first, in the tab (sign-out's pattern): No where the ×
+    /// was, so a double click's second half goes back, and Yes before it.
+    private var question: some View {
+        HStack(spacing: Space.sm) {
+            Text("Stop the turn?")
+                .font(Chrome.label)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            Button("Yes") { workspace.confirmClose() }
+                .smallButton(prominent: true)
+                .storyID(storyKey.part(.allow))
+            Button("No") { workspace.cancelClose() }
+                .smallButton()
+                .storyID(storyKey.part(.cancel))
+        }
+        .padding(.leading, Space.xl)
+        .padding(.trailing, Space.sm)
+        .frame(maxHeight: .infinity)
+        .transition(.opacity.animation(Motion.fade))
+    }
+
+    private var item: some View {
         // Two sibling buttons (select, close) rather than tap gestures: plain clicks, nothing
         // to compete with the title bar's own window dragging.
         HStack(spacing: 0) {
@@ -279,7 +330,7 @@ private struct TabItem: View {
             .buttonStyle(.plain)
             .storyID(storyKey)
             Button {
-                workspace.close(tab)
+                workspace.requestClose(tab)
             } label: {
                 Group {
                     if dirty && !closeHovered.value {
@@ -302,27 +353,7 @@ private struct TabItem: View {
             .opacity(hovered.value || isActive || dirty ? 1 : 0)
             .help("Close tab")
             // Hidden on an inactive tab until hover: pressed by its action.
-            .storyID(storyKey.part(.close), press: { workspace.close(tab) })
-        }
-        // Width set by the tab bar (180 down to 90, like browser tabs); titles truncate.
-        .frame(height: height)
-        .background(
-            isActive ? Theme.surface : (hovered.value ? Theme.tabHover : .clear),
-            in: RoundedRectangle(cornerRadius: Radius.control)
-        )
-        .onHover { hovered.value = $0 }
-        .help(help)
-        .contextMenu {
-            if tab.isPreview {
-                Button("Keep Open") { workspace.keep(tab) }
-            }
-            Button("Rename…") { startRename() }.disabled(tab.chat == nil || tab.agent != nil)
-            Button("Close Tab") { workspace.close(tab) }
-        }
-        .alert("Rename chat", isPresented: $renaming.value) {
-            TextField("Name", text: $newName.value)
-            Button("Rename") { tab.chat?.rename(newName.value) }
-            Button("Cancel", role: .cancel) {}
+            .storyID(storyKey.part(.close), press: { workspace.requestClose(tab) })
         }
     }
 

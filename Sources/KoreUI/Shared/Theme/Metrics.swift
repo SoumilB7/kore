@@ -87,6 +87,8 @@ enum Size {
     static let tab: CGFloat = 30
     static let tabMinWidth: CGFloat = 90
     static let tabMaxWidth: CGFloat = 180
+    /// A tab asking before its close stops a turn: the question and its Yes and No.
+    static let tabAsking: CGFloat = 200
     static let tabGap: CGFloat = 4
     /// A tab drag starts after this much movement, so clicks and double clicks stay clicks.
     static let tabDragStart: CGFloat = 4

@@ -9,6 +9,9 @@ package struct Command: Step {
     package var label: String {
         switch command {
         case .newTab: "New tab"
+        case .closeTab: "Close the tab"
+        case .nextTab: "Show the next tab"
+        case .previousTab: "Show the previous tab"
         case .moveTabRight: "Move the tab right"
         case .moveTabLeft: "Move the tab left"
         case .save: "Save the file"

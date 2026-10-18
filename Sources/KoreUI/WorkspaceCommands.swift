@@ -4,14 +4,14 @@ import Foundation
 /// focused window, and storylines run the same ones for theirs (a window that isn't focused
 /// has no focused value, so the menu can't reach it).
 package enum WorkspaceCommand: String, CaseIterable, Sendable {
-    case newTab, moveTabRight, moveTabLeft, save, saveAll, goToFile, goToLine, toggleExplorer, search
+    case newTab, closeTab, nextTab, previousTab, moveTabRight, moveTabLeft, save, saveAll, goToFile, goToLine, toggleExplorer, search
 }
 
 extension Workspace {
     /// Whether the command does anything here (the menu item's enabled state).
     package func can(_ command: WorkspaceCommand) -> Bool {
         switch command {
-        case .newTab, .moveTabRight, .moveTabLeft, .goToFile, .toggleExplorer, .search: true
+        case .newTab, .closeTab, .nextTab, .previousTab, .moveTabRight, .moveTabLeft, .goToFile, .toggleExplorer, .search: true
         case .save, .goToLine: activeFile?.isText == true
         case .saveAll: hasUnsavedFiles
         }
@@ -21,6 +21,9 @@ extension Workspace {
         guard can(command) else { return }
         switch command {
         case .newTab: newTab()
+        case .closeTab: requestClose(activeTab, window: isLast(activeTab))
+        case .nextTab: selectAdjacent(1)
+        case .previousTab: selectAdjacent(-1)
         case .moveTabRight: moveActive(by: 1)
         case .moveTabLeft: moveActive(by: -1)
         case .save: activeFile?.save()

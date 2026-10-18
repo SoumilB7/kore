@@ -18,6 +18,9 @@ package struct KoreApp: App {
         // walk the window's key-view loop, every selectable line of the transcript included, and
         // build a hidden AutoFill window.
         UserDefaults.standard.register(defaults: ["NSAutoFillHeuristicsEnabled": false])
+        // Kore draws its own tabs: the system's window tabs would add a second set, and their
+        // Window menu items take ⌃⇥ and ⌃⇧⇥.
+        NSWindow.allowsAutomaticWindowTabbing = false
         DispatchQueue.main.async {
             DevSnapshot.watchHangs()
             DevGallery.showIfRequested()
@@ -40,6 +43,8 @@ package struct KoreApp: App {
             CommandGroup(replacing: .newItem) { FileCommands(app: app) }
             // SwiftUI has no save slot outside document apps.
             CommandGroup(after: .newItem) { SaveCommands() }
+            // The system's Close ⌘W; Close Tab and Close Window replace it.
+            CommandGroup(replacing: .saveItem) {}
             // ⌘P is quick open.
             CommandGroup(replacing: .printItem) {}
             CommandGroup(before: .toolbar) { ExplorerCommands() }
@@ -135,6 +140,31 @@ private struct FileCommands: View {
             .keyboardShortcut("t")
             .disabled(workspace?.can(.newTab) != true)
 
+        // Safari's tab keys. A folder window takes them before the menu (`TabKeys`); the
+        // Welcome window has no tabs, so Close Tab closes it.
+        Button("Close Tab") {
+            if let workspace { workspace.perform(.closeTab) } else { NSApp.keyWindow?.performClose(nil) }
+        }
+        .keyboardShortcut("w")
+        Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
+            .keyboardShortcut("w", modifiers: [.command, .shift])
+        Divider()
+        Button("Show Next Tab") { workspace?.perform(.nextTab) }
+            .keyboardShortcut(.tab, modifiers: .control)
+            .disabled(workspace == nil)
+        Button("Show Previous Tab") { workspace?.perform(.previousTab) }
+            .keyboardShortcut(.tab, modifiers: [.control, .shift])
+            .disabled(workspace == nil)
+        Menu("Go to Tab") {
+            ForEach(1..<9) { n in
+                Button("Tab \(n)") { workspace?.selectNumber(n) }
+                    .keyboardShortcut(KeyEquivalent(Character("\(n)")))
+            }
+            Button("Last Tab") { workspace?.selectNumber(9) }
+                .keyboardShortcut("9")
+        }
+        .disabled(workspace == nil)
+
         // VS Code's keys for moving the active tab.
         Button("Move Tab Right") { workspace?.perform(.moveTabRight) }
             .keyboardShortcut(.pageDown, modifiers: [.control, .shift])
@@ -150,8 +180,9 @@ private struct FileCommands: View {
         }
         .keyboardShortcut("o")
 
+        // ⇧⌘1 is the editor's Replace.
         Button("Welcome Window") { openWindow(id: KoreApp.welcomeID) }
-            .keyboardShortcut("1", modifiers: [.command, .shift])
+            .keyboardShortcut("1", modifiers: [.command, .option])
     }
 }
 

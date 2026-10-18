@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import KoreCore
 
 // What a chat's controls do, for a storyline host (phase 12): the same calls the composer, the
@@ -182,6 +182,13 @@ extension Chat {
 }
 
 extension Workspace {
+    /// The tab asking before its close stops its turn, and whether its Yes (or a second ⌘W)
+    /// would go yet: a double click's time after it asked.
+    package var storyClosingTab: UUID? { tabs.first(where: asking)?.id }
+    package var storyCloseConfirmable: Bool {
+        closing.map { ProcessInfo.processInfo.systemUptime - $0.at >= NSEvent.doubleClickInterval } ?? false
+    }
+
     /// The nth user message's Fork button (1-based): its fork opens in a new tab. False when
     /// there's no such message or the fork failed.
     package func storyFork(_ chat: Chat, message n: Int) async -> Bool {

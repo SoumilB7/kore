@@ -34,11 +34,18 @@ package final class Workspace {
     package private(set) var tabs: [ChatTab]
     /// The folder's window, once it's on screen (a storyline host sizes and snapshots it).
     @ObservationIgnored package weak var window: NSWindow?
-    private(set) var activeID: UUID
+    private(set) var activeID: UUID {
+        // A tab's close question goes with a switch.
+        didSet { if closing != nil, activeID != oldValue { closing = nil } }
+    }
     /// Every chat the CLIs have for this folder, newest first, archived ones flagged.
     private(set) var chats: [SessionSummary] = []
     private(set) var loaded = false
     private var refreshing: Task<Void, Never>?
+    /// A running chat's tab asking before its close ends the turn (`requestClose`).
+    private(set) var closing: CloseAsk?
+    /// The explorer floats over the content (a narrow window), so Esc closes it.
+    @ObservationIgnored var explorerFloats = false
     /// The explorer's files; made when the explorer first opens or a file first shows.
     private(set) var files: FilesStore?
     package var explorerOpen = false {
@@ -207,10 +214,96 @@ package final class Workspace {
 
     private func remove(_ tab: ChatTab, at index: Int? = nil) {
         guard let index = index ?? tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        if closing?.tab == tab.id { closing = nil }
         if tab.agent == nil, tab.file == nil { tab.chat?.close() }
         tabs.remove(at: index)
         if tabs.isEmpty { tabs = [ChatTab()] }
         if activeID == tab.id { activeID = tabs[min(index, tabs.count - 1)].id }
+    }
+
+    // MARK: - Tab keys
+
+    /// A close that would end a running turn asks first, as sign-out does: the tab turns into the
+    /// question, and its Yes or a second ⌘W, a double click's time later, closes it. `window`:
+    /// it was the window's last tab, so the window closes with it.
+    struct CloseAsk: Equatable {
+        let tab: UUID
+        let window: Bool
+        let at: TimeInterval
+    }
+
+    enum CloseStep: Equatable { case ask, wait, close, closeWindow }
+
+    /// What closing `tab` does now: ask while its chat's turn runs, then (once asked, and past a
+    /// double click's time) close it, or the window when `window`.
+    func closeStep(_ tab: ChatTab, window: Bool, now: TimeInterval) -> CloseStep {
+        if tab.agent == nil, tab.chat?.status.isRunning == true {
+            guard let closing, closing.tab == tab.id else { return .ask }
+            if now - closing.at < NSEvent.doubleClickInterval { return .wait }
+        }
+        return window ? .closeWindow : .close
+    }
+
+    /// Closing `tab` would leave no other: its chat's agent tabs go with it.
+    func isLast(_ tab: ChatTab) -> Bool {
+        tabs.allSatisfy { $0.id == tab.id || (tab.agent == nil && tab.chat != nil && $0.chat === tab.chat) }
+    }
+
+    /// The tab's ×, its menu's Close Tab, and ⌘W (`window`: on the last tab, as the window's
+    /// close does).
+    func requestClose(_ tab: ChatTab, window closesWindow: Bool = false) {
+        let now = ProcessInfo.processInfo.systemUptime
+        switch closeStep(tab, window: closesWindow, now: now) {
+        case .ask: closing = CloseAsk(tab: tab.id, window: closesWindow, at: now)
+        case .wait: break
+        case .close:
+            closing = nil
+            close(tab)
+        case .closeWindow:
+            closing = nil
+            window?.performClose(nil)
+        }
+    }
+
+    /// The question's Yes.
+    func confirmClose() {
+        guard let closing, let tab = tabs.first(where: { $0.id == closing.tab }) else { return }
+        requestClose(tab, window: closing.window)
+    }
+
+    func cancelClose() { closing = nil }
+
+    /// The tab showing the close question: asked, and its turn still running.
+    func asking(_ tab: ChatTab) -> Bool { closing?.tab == tab.id && tab.chat?.status.isRunning == true }
+
+    /// ⌃⇥ / ⌃⇧⇥: the next or previous tab, round from the last to the first.
+    func selectAdjacent(_ step: Int) {
+        guard let index = tabs.firstIndex(where: { $0.id == activeID }) else { return }
+        let count = tabs.count
+        select(tabs[((index + step) % count + count) % count])
+    }
+
+    /// ⌘1–8: that tab, when there is one; ⌘9: the last, as in Safari.
+    func selectNumber(_ n: Int) {
+        let index = n == 9 ? tabs.count - 1 : n - 1
+        guard tabs.indices.contains(index) else { return }
+        select(tabs[index])
+    }
+
+    /// Open over the window, and closed by Esc before anything in the chat: a tab's close
+    /// question, quick open, the explorer floating over a narrow window.
+    var hasOverlay: Bool {
+        tabs.contains(where: asking) || quickOpen != nil || (explorerOpen && explorerFloats)
+    }
+
+    func closeOverlay() {
+        if tabs.contains(where: asking) {
+            closing = nil
+        } else if quickOpen != nil {
+            quickOpen = nil
+        } else if explorerFloats {
+            explorerOpen = false
+        }
     }
 
     func closeAll() {

@@ -88,6 +88,7 @@ struct FolderWindow: View {
                     }
                 }
                 .onChange(of: workspace.activeID) { if floating, workspace.explorerOpen { workspace.explorerOpen = false } }
+                .onChange(of: floating, initial: true) { _, floats in workspace.explorerFloats = floats }
             }
             .ignoresSafeArea(.container, edges: .top)
             .animation(Motion.fade, value: historyOpen.value)
@@ -103,6 +104,7 @@ struct FolderWindow: View {
         .frame(minWidth: Layout.Window.minWidth, minHeight: Layout.Window.minHeight)
         .navigationTitle(folder.lastPathComponent)
         .focusedSceneValue(\.workspace, workspace.value)
+        .modifier(TabKeys(workspace: workspace.value))
         .onAppear {
             if let provider = DevSnapshot.startProvider {
                 workspace.value.start(provider, in: workspace.value.activeTab)
