@@ -313,7 +313,7 @@ private struct TimelineSection: View {
             }
         } header: {
             if let header = section.header {
-                StickyMessage(entry: header, open: section.headerOpen, actions: reveal, tracker: sticky)
+                StickyMessage(entry: header, open: section.headerOpen, actions: reveal, tracker: sticky).equatable()
             }
         }
     }
