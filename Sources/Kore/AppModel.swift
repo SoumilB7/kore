@@ -14,6 +14,11 @@ final class AppModel {
     /// Set when `claude` is missing or logged out; nil when all is well.
     private(set) var cliProblem: String?
 
+    /// SwiftUI's window actions, from the first window that appeared. Folders opened from
+    /// outside before then wait in `pendingFolders`.
+    @ObservationIgnored private var windowActions: (OpenWindowAction, DismissWindowAction)?
+    @ObservationIgnored private var pendingFolders: [URL] = []
+
     init() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.recentsKey) ?? []
         recents = paths.map { URL(fileURLWithPath: $0) }.filter(Self.isDirectory)
@@ -30,13 +35,31 @@ final class AppModel {
 
     /// Opens (or focuses) the folder's window and closes the welcome window.
     func open(_ folder: URL, openWindow: OpenWindowAction, dismissWindow: DismissWindowAction) {
-        let folder = folder.standardizedFileURL
+        let folder = Self.canonical(folder)
         recents.removeAll { $0 == folder }
         recents.insert(folder, at: 0)
         recents = Array(recents.prefix(Self.recentsLimit))
         UserDefaults.standard.set(recents.map(\.path), forKey: Self.recentsKey)
         openWindow(value: folder)
         dismissWindow(id: KoreApp.welcomeID)
+    }
+
+    /// Folders the system hands the app (`kore <folder>`, Dock drops). Each opens its window,
+    /// or focuses it when it's already open.
+    func openFromOutside(_ urls: [URL]) {
+        let folders = urls.filter(Self.isDirectory)
+        guard let (openWindow, dismissWindow) = windowActions else {
+            pendingFolders += folders
+            return
+        }
+        for folder in folders { open(folder, openWindow: openWindow, dismissWindow: dismissWindow) }
+    }
+
+    func setWindowActions(openWindow: OpenWindowAction, dismissWindow: DismissWindowAction) {
+        windowActions = (openWindow, dismissWindow)
+        let folders = pendingFolders
+        pendingFolders = []
+        for folder in folders { open(folder, openWindow: openWindow, dismissWindow: dismissWindow) }
     }
 
     func checkCLI() async {
@@ -46,6 +69,14 @@ final class AppModel {
         } catch {
             cliProblem = String(describing: error)
         }
+    }
+
+    /// One URL per folder however it was reached (panel, recents, `kore`, a symlinked path),
+    /// so its window value matches and the open window is focused instead of duplicated.
+    static func canonical(_ url: URL) -> URL {
+        guard let resolved = realpath(url.path, nil) else { return url.standardizedFileURL }
+        defer { free(resolved) }
+        return URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
     }
 
     private static func isDirectory(_ url: URL) -> Bool {

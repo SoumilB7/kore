@@ -4,8 +4,8 @@ import SwiftUI
 struct KoreApp: App {
     static let welcomeID = "welcome"
 
-    // The App value lives for the whole process, so a plain stored model is safe here.
-    let app = AppModel()
+    @NSApplicationDelegateAdaptor private var delegate: AppDelegate
+    private var app: AppModel { delegate.app }
 
     init() {
         // Needed when launched as a bare binary (`swift run Kore`); a no-op inside Kore.app.
@@ -17,6 +17,7 @@ struct KoreApp: App {
         Window("Welcome to Kore", id: Self.welcomeID) {
             WelcomeView()
                 .environment(app)
+                .modifier(WindowActions(app: app))
                 .containerBackground(Theme.background, for: .window)
                 .preferredColorScheme(.dark)
         }
@@ -36,12 +37,37 @@ struct KoreApp: App {
         WindowGroup(for: URL.self) { $folder in
             if let folder {
                 FolderWindow(folder: folder)
+                    .modifier(WindowActions(app: app))
                     .containerBackground(Theme.background, for: .window)
                     .preferredColorScheme(.dark)
             }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 880, height: 760)
+    }
+}
+
+/// Receives folders opened from outside the app: the `kore` command (`open -a Kore <folder>`)
+/// and folders dropped on the Dock icon. It owns the app model so both it and the scenes see
+/// the same one.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let app = AppModel()
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        app.openFromOutside(urls)
+    }
+}
+
+/// Hands the app model SwiftUI's window actions, which only views can read, so folders
+/// opened from outside can open (or focus) their windows.
+private struct WindowActions: ViewModifier {
+    let app: AppModel
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    func body(content: Content) -> some View {
+        content.onAppear { app.setWindowActions(openWindow: openWindow, dismissWindow: dismissWindow) }
     }
 }
 

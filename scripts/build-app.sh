@@ -12,6 +12,7 @@ BIN="$(swift build -c release --show-bin-path)/Kore"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Kore"
+cp scripts/kore "$APP/Contents/Resources/kore"
 
 # App icon, rendered from the SVGs in Resources/.
 ICONSET="build/AppIcon.iconset"
@@ -36,6 +37,15 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>Folder</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSHandlerRank</key><string>None</string>
+            <key>LSItemContentTypes</key><array><string>public.folder</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 EOF
@@ -49,4 +59,8 @@ if [[ "${1:-}" == "--install" ]]; then
     rm -rf /Applications/Kore.app
     ditto "$APP" /Applications/Kore.app
     echo "installed /Applications/Kore.app"
+    # The `kore` command: `kore [folder]` opens or focuses that folder's window.
+    mkdir -p ~/.local/bin
+    ln -sf /Applications/Kore.app/Contents/Resources/kore ~/.local/bin/kore
+    echo "linked ~/.local/bin/kore"
 fi

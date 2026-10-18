@@ -1,0 +1,14 @@
+#!/bin/zsh
+# kore [folder] - opens the folder (the current one by default) in Kore. A folder that
+# already has a window gets that window focused instead of a second one.
+set -eu
+
+dir="${1:-.}"
+if [[ ! -d "$dir" ]]; then
+    print -u2 "kore: not a folder: $dir"
+    exit 1
+fi
+
+# This script ships inside Kore.app/Contents/Resources, so it opens the app it came with.
+app="${0:A:h:h:h}"
+exec open -a "$app" "${dir:A}"

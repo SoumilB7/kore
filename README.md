@@ -15,5 +15,14 @@ a simple interface: one window per folder, tabs for chats, and history for past 
 
 ```sh
 ./scripts/build-app.sh            # builds build/Kore.app
-./scripts/build-app.sh --install  # also copies it to /Applications
+./scripts/build-app.sh --install  # also copies it to /Applications and links `kore`
 ```
+
+## Command line
+
+```sh
+kore           # opens the current folder in Kore
+kore ~/code/x  # opens that folder
+```
+
+A folder that is already open has its window brought to the front instead.
