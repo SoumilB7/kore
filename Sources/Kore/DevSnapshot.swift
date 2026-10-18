@@ -5,7 +5,7 @@ import KoreCore
 ///   KORE_OPEN=<folder>       open that folder's window at launch
 ///   KORE_START=claude|codex  start a chat of that provider in its first tab
 ///   KORE_RESUME=<agent>:<id> open that past session instead
-///   KORE_SEND=<text>         send that message in the started chat
+///   KORE_SEND=<text>         send that message in the started or resumed chat (KORE_SEND_AFTER=<s>, resumed only)
 ///   KORE_MODE=<mode id>      switch the started chat to that mode
 ///   KORE_MODEL=<model>       launch the started or resumed chat on that model (haiku / gpt-6-luna keep tests cheap)
 ///   KORE_ATTACH=<path>[:...] attach those files to the started chat's composer

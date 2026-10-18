@@ -33,6 +33,10 @@ final class Chat: Identifiable {
     @ObservationIgnored private let fork: ForkPoint?
     /// The chat this one was forked from, for the line after its history.
     @ObservationIgnored private var forkedFrom: String?
+    /// A past session's history hasn't been shown yet; messages sent meanwhile wait in `held`,
+    /// so they come after it rather than above it.
+    @ObservationIgnored private var awaitingHistory: Bool
+    @ObservationIgnored private var held: [ChatEvent] = []
 
     /// `fork` makes this chat a fork of `session` that its CLI creates; it has no session of its
     /// own until then. `forkedFrom` names the original chat.
@@ -45,6 +49,7 @@ final class Chat: Identifiable {
         resume = session
         self.fork = fork
         self.forkedFrom = forkedFrom
+        awaitingHistory = session != nil
         controls = ControlsStore(provider: provider)
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
@@ -88,6 +93,15 @@ final class Chat: Identifiable {
         controls.apply(event)
         status.apply(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
+        if case .replayed = event { showHeld() }
+    }
+
+    /// The user's messages that waited for the history.
+    private func showHeld() {
+        awaitingHistory = false
+        let waiting = held
+        held = []
+        waiting.forEach(dispatch)
     }
 
     private static func isReplay(_ event: ChatEvent) -> Bool {
@@ -96,6 +110,8 @@ final class Chat: Identifiable {
     }
 
     private func fail(_ message: String) {
+        // No history is coming.
+        showHeld()
         dispatch(.notice(message, isError: true))
     }
 
@@ -160,7 +176,8 @@ final class Chat: Identifiable {
             return
         }
         approvals.offerImplementPlan = false
-        dispatch(.userMessage(text: text, attachments: sent.map(SentAttachment.init)))
+        let message = ChatEvent.userMessage(text: text, attachments: sent.map(SentAttachment.init))
+        if awaitingHistory { held.append(message) } else { dispatch(message) }
         status.setRunning(true)
         let backend = connect()
         Task {

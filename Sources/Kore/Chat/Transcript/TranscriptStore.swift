@@ -579,7 +579,11 @@ final class TranscriptStore {
     // MARK: Content
 
     func user(_ text: String, attachments: [Attachment], source: String? = nil) {
-        if !batching { sentAt = Date() }
+        if !batching {
+            sentAt = Date()
+            // A send never drops a turn from the top: a full window grows by the turn it adds.
+            if entries.lazy.filter({ $0.kind == .user }).count >= windowTurns { windowTurns += 1 }
+        }
         var entry = Entry(kind: .user, text: text, attachments: attachments)
         entry.source = source
         append(entry)

@@ -137,6 +137,13 @@ struct FolderWindow: View {
             if let session = DevSnapshot.resume {
                 workspace.value.open(session)
                 workspace.value.activeTab.chat?.launchModel = DevSnapshot.model
+                if let text = DevSnapshot.send, let chat = workspace.value.activeTab.chat {
+                    let after = Double(ProcessInfo.processInfo.environment["KORE_SEND_AFTER"] ?? "") ?? 0
+                    DispatchQueue.main.asyncAfter(deadline: .now() + after) {
+                        chat.draft = text
+                        chat.send()
+                    }
+                }
             }
             DevSnapshot.captureIfRequested()
             DevSnapshot.dumpIfRequested { workspace.value.activeTab.chat }
