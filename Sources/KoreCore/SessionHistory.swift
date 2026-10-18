@@ -40,53 +40,163 @@ public enum ClaudeHistory {
     }
 
     /// The session's user/assistant messages along its current branch, oldest first, in the
-    /// same shape as stream-json `user` / `assistant` messages.
+    /// same shape as stream-json `user` / `assistant` messages, back to its last compaction.
+    public static func messages(sessionId: String, in folder: URL) -> [JSONValue] {
+        page(sessionId: sessionId, in: folder).messages
+    }
+
+    /// Part of a session's history, oldest first: user / assistant entries, plus a
+    /// `system/compact_boundary` entry where the conversation was compacted.
+    public struct Page: Sendable {
+        public let messages: [JSONValue]
+        /// Where earlier history continues (pass it as `before`), or nil at the session's start.
+        public let earlier: String?
+
+        public init(messages: [JSONValue], earlier: String?) {
+            self.messages = messages
+            self.earlier = earlier
+        }
+    }
+
+    /// The current branch back to its last compaction (`before` nil), or `userTurns` user turns
+    /// ending at `before`, crossing compactions.
     ///
     /// The branch is the `parentUuid` walk back from the last message, which leaves out rewound
-    /// branches. Parallel tool calls fork that chain: each call is its own entry (blocks of one
-    /// assistant message), and results that come back out of order hang off different calls, so
-    /// the walk misses some. Those are added back: entries of the same assistant messages, then
-    /// the results of every included tool call, all in file order.
-    public static func messages(sessionId: String, in folder: URL) -> [JSONValue] {
+    /// branches. A compaction ends that walk: its boundary has no parent, only a
+    /// `logicalParentUuid` naming the entry before it, where earlier history goes on.
+    /// Parallel tool calls fork the chain: each call is its own entry (blocks of one assistant
+    /// message), and results that come back out of order hang off different calls, so the walk
+    /// misses some. Those are added back: entries of the same assistant messages, then the
+    /// results of every included tool call, all in file order.
+    public static func page(sessionId: String, in folder: URL, before: String? = nil, userTurns: Int? = nil) -> Page {
         let file = projectDirectory(for: folder).appendingPathComponent("\(sessionId).jsonl")
-        guard let data = try? Data(contentsOf: file) else { return [] }
-        var byId: [String: JSONValue] = [:]
+        guard let data = try? Data(contentsOf: file, options: .mappedIfSafe) else { return Page(messages: [], earlier: nil) }
+        // Two passes keep a long session cheap: every entry is read for its links only (no text,
+        // no tool output), and only the page's entries are parsed whole. Only entries with a
+        // uuid (user, assistant, attachment, system) can be on the branch; the rest, such as
+        // api-request bodies (a third of a long session's bytes), are skipped unread. Only the
+        // key is matched, so JSON written with spaces after its colons is read too.
+        var byId: [String: Link] = [:]
+        var lines: [String: Data] = [:]
         var order: [String] = []
         var leaf: String?
-        // Only entries with a uuid (user, assistant, attachment, system) can be on the branch. The
-        // rest, such as api-request bodies (a third of a long session's bytes), are skipped
-        // unparsed: a line without this key can't have it at the top level. Only the key is
-        // matched, so JSON written with spaces after its colons is read too.
-        let uuidKey = Data("\"uuid\"".utf8)
-        for line in data.jsonLines() where line.range(of: uuidKey) != nil {
-            guard let entry = try? JSONValue.parse(line), let uuid = entry["uuid"]?.string else { continue }
-            byId[uuid] = entry
-            let type = entry["type"]?.string
-            guard (type == "user" || type == "assistant") && entry["isSidechain"]?.bool != true else { continue }
+        let decoder = JSONDecoder()
+        for line in data.jsonLines(containing: "\"uuid\"") {
+            guard let link = try? decoder.decode(Link.self, from: line) else { continue }
+            let uuid = link.uuid
+            byId[uuid] = link
+            lines[uuid] = line
+            if link.isBoundary {
+                order.append(uuid)
+                continue
+            }
+            guard (link.type == "user" || link.type == "assistant") && link.isSidechain != true else { continue }
             order.append(uuid)
             leaf = uuid
         }
+        let index = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        /// Where history goes on before a compaction: its logical parent, or, when that entry
+        /// isn't in the file (the compaction kept it under a new id), the last message before
+        /// the boundary.
+        func continuation(of link: Link) -> String? {
+            if let logical = link.logicalParentUuid, byId[logical] != nil { return logical }
+            guard let at = index[link.uuid] else { return nil }
+            return order[..<at].last { byId[$0]?.type != "system" }
+        }
         var included: Set<String> = []
-        var cursor = leaf
-        while let id = cursor, let entry = byId[id], included.insert(id).inserted {
-            cursor = entry["parentUuid"]?.string
+        var earlier: String?
+        var prompts = 0
+        var cursor = before ?? leaf
+        while let id = cursor, let link = byId[id], included.insert(id).inserted {
+            if let limit = userTurns, link.isPrompt {
+                prompts += 1
+                if prompts == limit {
+                    earlier = link.parentUuid
+                    break
+                }
+            }
+            if let parent = link.parentUuid {
+                cursor = parent
+            } else {
+                // A compaction: the current branch stops here; a page of earlier turns goes on.
+                let logical = link.isBoundary ? continuation(of: link) : nil
+                if userTurns == nil {
+                    earlier = logical
+                    break
+                }
+                cursor = logical
+            }
         }
-        func blocks(_ entry: JSONValue) -> [JSONValue] { entry["message"]?["content"]?.array ?? [] }
-        let messageIds = Set(included.compactMap { byId[$0]?["type"]?.string == "assistant" ? byId[$0]?["message"]?["id"]?.string : nil })
-        for id in order where byId[id]?["type"]?.string == "assistant" {
-            if let message = byId[id]?["message"]?["id"]?.string, messageIds.contains(message) { included.insert(id) }
+        let span = included.compactMap { index[$0] }
+        guard let first = span.min(), let last = span.max() else { return Page(messages: [], earlier: nil) }
+        let window = order[first...last]
+        let messageIds = Set(included.compactMap { byId[$0].flatMap { $0.type == "assistant" ? $0.messageId : nil } })
+        for id in window where byId[id]?.type == "assistant" {
+            if let message = byId[id]?.messageId, messageIds.contains(message) { included.insert(id) }
         }
-        let toolIds = Set(included.flatMap { id in
-            byId[id]?["type"]?.string == "assistant" ? blocks(byId[id]!).compactMap { $0["type"]?.string == "tool_use" ? $0["id"]?.string : nil } : []
-        })
-        for id in order where byId[id]?["type"]?.string == "user" {
-            if blocks(byId[id]!).contains(where: { toolIds.contains($0["tool_use_id"]?.string ?? "") }) { included.insert(id) }
+        let toolIds = Set(included.flatMap { id in byId[id]?.type == "assistant" ? byId[id]?.toolUses ?? [] : [] })
+        for id in window where byId[id]?.type == "user" {
+            if byId[id]?.toolResults.contains(where: toolIds.contains) == true { included.insert(id) }
         }
-        return order.filter(included.contains).compactMap { byId[$0] }.filter { entry in
+        let messages = window.filter(included.contains).compactMap { lines[$0].flatMap { try? JSONValue.parse($0) } }.filter { entry in
             // Peer messages, cron firings and finished-agent notices are meta entries, but they
             // start turns of the conversation.
-            entry["isMeta"]?.bool != true || PeerMessage(entry: entry) != nil
+            isBoundary(entry) || entry["isMeta"]?.bool != true || PeerMessage(entry: entry) != nil
                 || cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? "")
+        }
+        return Page(messages: messages, earlier: earlier)
+    }
+
+    /// A compaction's boundary: earlier history goes on from its `logicalParentUuid`.
+    public static func isBoundary(_ entry: JSONValue) -> Bool {
+        entry["type"]?.string == "system" && entry["subtype"]?.string == "compact_boundary"
+    }
+
+    /// What `page` reads of every entry: how it links to others, and nothing of its text or
+    /// tool output (the decoder skips what isn't named here).
+    struct Link: Decodable {
+        let uuid: String
+        let parentUuid: String?
+        let logicalParentUuid: String?
+        let type: String?
+        let isBoundary: Bool
+        let isSidechain: Bool?
+        /// Something the user typed (or sent as files): it starts a turn. Tool results and
+        /// command output (`<…>`) are user entries too, but not prompts.
+        let isPrompt: Bool
+        /// The assistant message an entry is a block of.
+        let messageId: String?
+        let toolUses: [String]
+        let toolResults: [String]
+
+        private enum Keys: String, CodingKey { case uuid, parentUuid, logicalParentUuid, type, subtype, isSidechain, isMeta, message }
+        private enum MessageKeys: String, CodingKey { case id, content }
+        private struct Block: Decodable {
+            let type: String?
+            let id: String?
+            let tool_use_id: String?
+        }
+
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: Keys.self)
+            uuid = try c.decode(String.self, forKey: .uuid)
+            parentUuid = try? c.decodeIfPresent(String.self, forKey: .parentUuid)
+            logicalParentUuid = try? c.decodeIfPresent(String.self, forKey: .logicalParentUuid)
+            type = try? c.decodeIfPresent(String.self, forKey: .type)
+            isBoundary = type == "system" && (try? c.decodeIfPresent(String.self, forKey: .subtype)) == "compact_boundary"
+            isSidechain = try? c.decodeIfPresent(Bool.self, forKey: .isSidechain)
+            let message = try? c.nestedContainer(keyedBy: MessageKeys.self, forKey: .message)
+            messageId = try? message?.decodeIfPresent(String.self, forKey: .id)
+            let text = try? message?.decodeIfPresent(String.self, forKey: .content)
+            let blocks = text == nil ? (try? message?.decodeIfPresent([Block].self, forKey: .content)) ?? [] : []
+            toolUses = blocks.compactMap { $0.type == "tool_use" ? $0.id : nil }
+            toolResults = blocks.compactMap(\.tool_use_id)
+            let meta = (try? c.decodeIfPresent(Bool.self, forKey: .isMeta)) == true
+            isPrompt =
+                type == "user" && !meta
+                && (text.map { !$0.hasPrefix("<") }
+                    ?? (!blocks.contains { $0.type == "tool_result" }
+                        && blocks.contains { ["text", "image", "document"].contains($0.type ?? "") }))
         }
     }
 
@@ -278,6 +388,23 @@ extension Data {
             while start < bytes.count {
                 let end = memchr(base + start, 0x0A, bytes.count - start).map { base.distance(to: UnsafeRawPointer($0)) } ?? bytes.count
                 if end > start { ranges.append(start..<end) }
+                start = end + 1
+            }
+        }
+        return ranges.map { self[(startIndex + $0.lowerBound)..<(startIndex + $0.upperBound)] }
+    }
+
+    /// The lines that contain `needle`, found with `memchr` and `memmem` (several times faster
+    /// than `range(of:)` across a long transcript).
+    func jsonLines(containing needle: String) -> [Data] {
+        var ranges: [Range<Int>] = []
+        let pattern = Array(needle.utf8)
+        withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            guard let base = bytes.baseAddress else { return }
+            var start = 0
+            while start < bytes.count {
+                let end = memchr(base + start, 0x0A, bytes.count - start).map { base.distance(to: UnsafeRawPointer($0)) } ?? bytes.count
+                if end > start, memmem(base + start, end - start, pattern, pattern.count) != nil { ranges.append(start..<end) }
                 start = end + 1
             }
         }
