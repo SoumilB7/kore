@@ -179,6 +179,8 @@ extension Size {
         /// A find match's mark on the vertical scroller (look §5: VS Code's overview ruler).
         static let findTick = CGSize(width: 6, height: 2)
         static let findTickInset: CGFloat = 2
+        /// A path row segment's menu (look §5).
+        static let crumbMenu: CGFloat = 260
         static let stateWidth: CGFloat = 320
         static let tabDirty: CGFloat = 8
     }

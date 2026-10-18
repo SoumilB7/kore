@@ -47,6 +47,7 @@ struct ExplorerSidebar: View {
     let store: FilesStore
     let floating: Bool
     @FocusState private var focused: Bool
+    @Environment(\.undoManager) private var undoManager
     @StateObject private var hovered = Local(false)
     /// Type to find: what's been typed, cleared after a pause or by Esc.
     @StateObject private var typed = Local("")
@@ -152,12 +153,15 @@ struct ExplorerSidebar: View {
                 .buttonStyle(.plain)
                 .focusable(false)
                 .accessibilityHidden(true)
+                // Dropped below the rows: into the folder itself.
+                .onDrop(of: [.fileURL], delegate: TreeDrop(folder: store.root, store: store, workspace: workspace, undo: undoManager))
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { treeHeight.value = $0 }
             .focusable(interactions: .edit)
             .focused($focused)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in key(press, rows: rows) }
+            .onAppear { DevFileHooks.explorerShown(store: store, workspace: workspace, undo: undoManager) }
             .onChange(of: store.selection) { _, selection in
                 if let selection { withAnimation(Motion.fade) { proxy.scrollTo(selection) } }
             }
@@ -311,8 +315,18 @@ private struct TreeRow: View {
     /// A click puts the keyboard in the tree, as in VS Code.
     let focus: () -> Void
     @StateObject private var hovered = Local(false)
+    @Environment(\.undoManager) private var undoManager
 
     private var isSelected: Bool { store.selection == row.id }
+
+    /// Where a drop on this row goes: into it if it's a folder, else beside it.
+    private var dropFolder: String { row.isFolder ? row.id : (row.id as NSString).deletingLastPathComponent }
+
+    /// Under a drag: the target folder, or a row inside it.
+    private var inDropTarget: Bool {
+        guard let target = store.dropTarget else { return false }
+        return row.id == target || row.id.hasPrefix(target + "/")
+    }
     private var editing: Bool {
         if row.kind != .node { return true }
         return store.edit == .rename(row.id)
@@ -349,11 +363,17 @@ private struct TreeRow: View {
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .onTapGesture { click() }
+        // As a file URL: it drops into another folder here, or into Finder.
+        .onDrag {
+            NSItemProvider(object: URL(fileURLWithPath: row.id) as NSURL)
+        }
+        .onDrop(of: [.fileURL], delegate: TreeDrop(folder: dropFolder, store: store, workspace: workspace, undo: undoManager))
         .contextMenu { TreeMenu(path: row.id, isFolder: row.isFolder, store: store, workspace: workspace) }
         .help(row.names.count > 1 ? row.names.joined(separator: "/") : "")
     }
 
     private var fill: Color {
+        if inDropTarget { return Theme.Tree.dropTarget }
         if isSelected { return focused ? Theme.Tree.selectedFocused : Theme.Tree.selected }
         return hovered.value ? Theme.Tree.hover : .clear
     }
@@ -607,6 +627,67 @@ enum TreeActions {
         if let failure = store.trash(path) { show(failure) }
     }
 
+    // MARK: Dropping
+
+    /// Moves (or with ⌥, or from outside the folder, copies) `sources` into `folder`, as VS
+    /// Code does: a drop of several asks first, a taken name asks Replace / Keep Both / Cancel,
+    /// open tabs follow, and it's one undo.
+    static func drop(
+        _ sources: [String], into folder: String, copy: Bool, store: FilesStore, workspace: Workspace, undo: UndoManager?,
+        answer: FilesStore.Collision? = nil
+    ) {
+        let sources = sources.filter { store.canDrop($0, into: folder, copy: copy) }
+        guard !sources.isEmpty else { return }
+        let folderName = folder == store.root ? (folder as NSString).lastPathComponent : store.relative(folder)
+        if sources.count > 1, answer == nil {
+            let alert = NSAlert()
+            alert.messageText = "\(copy ? "Copy" : "Move") \(sources.count) items into “\(folderName)”?"
+            alert.addButton(withTitle: copy ? "Copy" : "Move")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        var always = answer
+        let result = store.transfer(sources, into: folder, copy: copy, collision: { name in
+            if let always { return always }
+            let alert = NSAlert()
+            alert.messageText = "“\(name)” already exists in “\(folderName)”."
+            alert.informativeText = "Replacing it moves the one that's there to the Trash."
+            alert.addButton(withTitle: "Replace")
+            alert.addButton(withTitle: "Keep Both")
+            alert.addButton(withTitle: "Cancel")
+            if sources.count > 1 {
+                alert.showsSuppressionButton = true
+                alert.suppressionButton?.title = "Apply to all"
+            }
+            let choice: FilesStore.Collision = switch alert.runModal() {
+            case .alertFirstButtonReturn: .replace
+            case .alertSecondButtonReturn: .keepBoth
+            default: .cancel
+            }
+            if alert.suppressionButton?.state == .on { always = choice }
+            return choice
+        }, moved: workspace.renamed)
+        if let failure = result.failure { show(failure) }
+        registerUndo(result.done, store: store, workspace: workspace, undo: undo)
+    }
+
+    private static func registerUndo(_ done: [FilesStore.Transfer], store: FilesStore, workspace: Workspace, undo: UndoManager?) {
+        guard let undo, !done.isEmpty else { return }
+        undo.registerUndo(withTarget: store) { store in
+            MainActor.assumeIsolated {
+                if let failure = store.undo(done, moved: workspace.renamed) { show(failure) }
+                undo.registerUndo(withTarget: store) { store in
+                    MainActor.assumeIsolated {
+                        let again = store.redo(done, moved: workspace.renamed)
+                        if let failure = again.failure { show(failure) }
+                        registerUndo(again.done, store: store, workspace: workspace, undo: undo)
+                    }
+                }
+            }
+        }
+        undo.setActionName(done.first?.copied == true ? "Copy" : "Move")
+    }
+
     static func show(_ failure: FilesStore.Failure) {
         let alert = NSAlert()
         alert.messageText = failure.message
@@ -656,5 +737,52 @@ struct ExplorerSash: View {
                     )
                     .onTapGesture(count: 2) { width = Layout.Explorer.width }
             }
+    }
+}
+
+/// A row (or the space under the rows) as a drop target: it and its open rows fill while a drag
+/// is over it, and the drop moves or copies into its folder.
+private struct TreeDrop: DropDelegate {
+    let folder: String
+    let store: FilesStore
+    let workspace: Workspace
+    let undo: UndoManager?
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.fileURL]) }
+
+    func dropEntered(info: DropInfo) { store.dropTarget = folder }
+
+    func dropExited(info: DropInfo) {
+        if store.dropTarget == folder { store.dropTarget = nil }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        if store.dropTarget != folder { store.dropTarget = folder }
+        return DropProposal(operation: NSEvent.modifierFlags.contains(.option) ? .copy : .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        store.dropTarget = nil
+        let option = NSEvent.modifierFlags.contains(.option)
+        let providers = info.itemProviders(for: [.fileURL])
+        let (folder, store, workspace, undo) = (folder, store, workspace, undo)
+        Task { @MainActor in
+            var paths: [String] = []
+            for provider in providers {
+                if let url = await Self.url(provider) { paths.append(realPath(url.path)) }
+            }
+            // From outside the folder (Finder, another app): a copy, as in VS Code.
+            let outside = paths.contains { !$0.hasPrefix(store.root + "/") }
+            TreeActions.drop(paths, into: folder, copy: option || outside, store: store, workspace: workspace, undo: undo)
+        }
+        return true
+    }
+
+    private static func url(_ provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: NSURL.self) { object, _ in
+                continuation.resume(returning: (object as? NSURL) as URL?)
+            }
+        }
     }
 }

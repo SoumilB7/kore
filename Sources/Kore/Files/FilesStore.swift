@@ -40,6 +40,8 @@ final class FilesStore {
     private(set) var rootLoaded = false
     private(set) var rootError = false
     var selection: String?
+    /// The folder a drag is over: it and its open rows fill (look §3).
+    var dropTarget: String?
     var edit: Edit? {
         didSet { if edit != oldValue { rebuild() } }
     }
@@ -145,7 +147,8 @@ final class FilesStore {
         if rebuilding { rebuild() }
     }
 
-    nonisolated private static func list(_ folder: String) -> [Node]? {
+    /// A folder's entries, folders first (the path row's menu lists them too).
+    nonisolated static func list(_ folder: String) -> [Node]? {
         let url = URL(fileURLWithPath: folder, isDirectory: true)
         let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
         guard let urls = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys) else {
@@ -306,6 +309,173 @@ final class FilesStore {
         }
         Task { await reload((path as NSString).deletingLastPathComponent) }
         return nil
+    }
+
+    // MARK: - Moving and copying (drag in the tree)
+
+    /// What to do when a dropped item's name is taken in the folder.
+    enum Collision { case replace, keepBoth, cancel }
+
+    /// One move or copy that was done, with what undoing it needs.
+    struct Transfer: Sendable {
+        let from: String
+        let to: String
+        let copied: Bool
+        /// What was at `to` before, now in the Trash (a replace).
+        let replaced: URL?
+    }
+
+    /// Whether `source` can go into `folder`: never into itself or below it; a move into its
+    /// own folder does nothing (a copy there makes a "copy").
+    func canDrop(_ source: String, into folder: String, copy: Bool) -> Bool {
+        guard folder != source, !folder.hasPrefix(source + "/") else { return false }
+        return copy || (source as NSString).deletingLastPathComponent != folder
+    }
+
+    /// Moves or copies each of `sources` into `folder`, asking `collision` when a name is
+    /// taken (Cancel stops the rest). Moved folders stay open; the selection follows the last
+    /// item; `moved` is told each move so open tabs follow.
+    func transfer(
+        _ sources: [String], into folder: String, copy: Bool, collision: (String) -> Collision,
+        moved: (String, String) -> Void
+    ) -> (done: [Transfer], failure: Failure?) {
+        var done: [Transfer] = []
+        var failure: Failure?
+        let manager = FileManager.default
+        items: for source in sources where canDrop(source, into: folder, copy: copy) {
+            let name = (source as NSString).lastPathComponent
+            var target = folder + "/" + name
+            var replaced: URL?
+            if target == source {
+                target = Self.unusedName(for: name, in: folder)
+            } else if manager.fileExists(atPath: target) {
+                switch collision(name) {
+                case .cancel:
+                    break items
+                case .keepBoth:
+                    target = Self.unusedName(for: name, in: folder)
+                case .replace:
+                    var trashed: NSURL?
+                    do { try manager.trashItem(at: URL(fileURLWithPath: target), resultingItemURL: &trashed) } catch {
+                        failure = .system(error.localizedDescription)
+                        continue items
+                    }
+                    replaced = trashed as URL?
+                }
+            }
+            do {
+                if copy { try manager.copyItem(atPath: source, toPath: target) } else { try manager.moveItem(atPath: source, toPath: target) }
+            } catch {
+                failure = .system(error.localizedDescription)
+                // What the replace sent to the Trash goes back where it was.
+                if let replaced { try? manager.moveItem(at: replaced, to: URL(fileURLWithPath: target)) }
+                continue
+            }
+            if !copy {
+                follow(source, to: target)
+                moved(source, target)
+            }
+            done.append(Transfer(from: source, to: target, copied: copy, replaced: replaced))
+        }
+        if let last = done.last {
+            if folder != root { expanded.insert(folder) }
+            selection = last.to
+        }
+        reloadAround(done)
+        return (done, failure)
+    }
+
+    /// Puts transfers back: a copy goes to the Trash, a move goes home, and what a replace sent
+    /// to the Trash comes back. Last first. `moved` is told each move back.
+    func undo(_ transfers: [Transfer], moved: (String, String) -> Void) -> Failure? {
+        var failure: Failure?
+        let manager = FileManager.default
+        for transfer in transfers.reversed() {
+            do {
+                if transfer.copied {
+                    try manager.trashItem(at: URL(fileURLWithPath: transfer.to), resultingItemURL: nil)
+                } else {
+                    try manager.moveItem(atPath: transfer.to, toPath: transfer.from)
+                    follow(transfer.to, to: transfer.from)
+                    moved(transfer.to, transfer.from)
+                }
+                if let replaced = transfer.replaced { try manager.moveItem(at: replaced, to: URL(fileURLWithPath: transfer.to)) }
+            } catch {
+                failure = .system(error.localizedDescription)
+            }
+        }
+        if let first = transfers.first { selection = first.from }
+        reloadAround(transfers)
+        return failure
+    }
+
+    /// Does transfers again after an undo, the way they were done.
+    func redo(_ transfers: [Transfer], moved: (String, String) -> Void) -> (done: [Transfer], failure: Failure?) {
+        var done: [Transfer] = []
+        var failure: Failure?
+        let manager = FileManager.default
+        for transfer in transfers {
+            do {
+                var replaced: URL?
+                if manager.fileExists(atPath: transfer.to) {
+                    var trashed: NSURL?
+                    try manager.trashItem(at: URL(fileURLWithPath: transfer.to), resultingItemURL: &trashed)
+                    replaced = trashed as URL?
+                }
+                if transfer.copied {
+                    try manager.copyItem(atPath: transfer.from, toPath: transfer.to)
+                } else {
+                    try manager.moveItem(atPath: transfer.from, toPath: transfer.to)
+                    follow(transfer.from, to: transfer.to)
+                    moved(transfer.from, transfer.to)
+                }
+                done.append(Transfer(from: transfer.from, to: transfer.to, copied: transfer.copied, replaced: replaced))
+            } catch {
+                failure = .system(error.localizedDescription)
+            }
+        }
+        if let last = done.last { selection = last.to }
+        reloadAround(done)
+        return (done, failure)
+    }
+
+    /// A moved folder keeps its open folders, at their new paths.
+    private func follow(_ old: String, to new: String) {
+        let moved = expanded.filter { $0 == old || $0.hasPrefix(old + "/") }
+        for path in moved {
+            expanded.remove(path)
+            expanded.insert(new + path.dropFirst(old.count))
+        }
+        for key in children.keys where key == old || key.hasPrefix(old + "/") { children[key] = nil }
+    }
+
+    private func reloadAround(_ transfers: [Transfer]) {
+        var folders = Set<String>()
+        for transfer in transfers {
+            folders.insert((transfer.from as NSString).deletingLastPathComponent)
+            folders.insert((transfer.to as NSString).deletingLastPathComponent)
+        }
+        Task {
+            for folder in folders where folder == root || children[folder] != nil || expanded.contains(folder) {
+                await load(folder, rebuilding: false)
+            }
+            rebuild()
+        }
+    }
+
+    /// "name copy.ext", then "name copy 2.ext"…, as VS Code names a kept or duplicated item.
+    nonisolated static func unusedName(for name: String, in folder: String) -> String {
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        let suffix = ext.isEmpty || base.isEmpty ? "" : "." + ext
+        let stem = base.isEmpty ? name : base
+        var n = 1
+        while true {
+            let candidate = stem + (n == 1 ? " copy" : " copy \(n)") + suffix
+            let path = folder + "/" + candidate
+            if !FileManager.default.fileExists(atPath: path) { return path }
+            n += 1
+        }
     }
 
     private func reload(_ folder: String) async {

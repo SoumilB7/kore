@@ -10,10 +10,14 @@ struct FileEditorView: View {
     let workspace: Workspace
     /// The turn's changes to this file, open in the changes modal.
     @StateObject private var changes = Local<[FileChange]?>(nil)
+    /// A path row segment's menu, open under it.
+    @StateObject private var crumbMenu = Local<CrumbMenu.Target?>(nil)
 
     var body: some View {
         VStack(spacing: 0) {
-            PathRow(document: document, workspace: workspace) { changes.value = $0 }
+            PathRow(document: document, workspace: workspace, menu: crumbMenu.value) { changes.value = $0 } openMenu: { target in
+                crumbMenu.value = crumbMenu.value?.anchor == target.anchor ? nil : target
+            }
             Rule()
             if let notice = document.notice {
                 NoticeBar(
@@ -33,6 +37,17 @@ struct FileEditorView: View {
             }
         }
         .background(Theme.background)
+        .coordinateSpace(name: CrumbMenu.space)
+        .overlay(alignment: .topLeading) {
+            if let target = crumbMenu.value {
+                CrumbMenu(target: target, workspace: workspace) { crumbMenu.value = nil }
+                    .id(target.anchor.minX)
+                    .padding(.leading, max(Space.xs, target.anchor.minX))
+                    .padding(.top, target.anchor.maxY + Space.xs)
+            }
+        }
+        // A file opened from the menu, or another tab, closes it.
+        .onChange(of: document.path) { crumbMenu.value = nil }
         .overlay {
             if let list = changes.value {
                 ChangesView(changes: list, folder: workspace.folder) { changes.value = nil }
@@ -95,7 +110,10 @@ struct FileEditorView: View {
 private struct PathRow: View {
     let document: FileDocument
     let workspace: Workspace
+    /// The open segment menu, if any (its segment shows as pressed).
+    let menu: CrumbMenu.Target?
     let showChanges: ([FileChange]) -> Void
+    let openMenu: (CrumbMenu.Target) -> Void
 
     var body: some View {
         let relative = workspace.relativePath(document.path)
@@ -106,10 +124,10 @@ private struct PathRow: View {
                 if index > 0 {
                     Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
                 }
+                let path = base + parts[0...index].joined(separator: "/")
                 Crumb(
-                    name: part, isFile: index == parts.count - 1,
-                    path: base + parts[0...index].joined(separator: "/"),
-                    workspace: workspace)
+                    name: part, isFile: index == parts.count - 1, path: path, open: menu?.current == path || menu?.folder == path && menu?.current == nil,
+                    openMenu: openMenu)
             }
             Spacer(minLength: Space.md)
             if let touch = workspace.turnTouches[document.path] {
@@ -127,22 +145,23 @@ private struct PathRow: View {
     }
 }
 
+/// A path row segment: a click opens its menu (`CrumbMenu`), a folder's entries or, for the
+/// file, its siblings with it marked.
 private struct Crumb: View {
     let name: String
     let isFile: Bool
     let path: String
-    let workspace: Workspace
+    /// Its menu is open.
+    let open: Bool
+    let openMenu: (CrumbMenu.Target) -> Void
     @StateObject private var hovered = Local(false)
+    @StateObject private var frames = Held((local: CGRect.zero, window: CGRect.zero))
 
     var body: some View {
         Button {
-            // Shows it in the explorer.
-            workspace.explorerOpen = true
-            let store = workspace.filesStore()
-            Task {
-                await store.reveal(path)
-                if !isFile { store.expand(path) }
-            }
+            openMenu(CrumbMenu.Target(
+                folder: isFile ? (path as NSString).deletingLastPathComponent : path, current: isFile ? path : nil,
+                anchor: frames.value.local, window: frames.value.window))
         } label: {
             HStack(spacing: Space.xs) {
                 if isFile { FileIconView(name: name, color: Theme.text) }
@@ -153,12 +172,15 @@ private struct Crumb: View {
             }
             .padding(.horizontal, Space.xs)
             .padding(.vertical, Space.xxs)
-            .background(hovered.value ? Theme.Tree.hover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+            .background(hovered.value || open ? Theme.Tree.hover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("Reveal in Explorer")
+        .onGeometryChange(for: [CGRect].self) { [$0.frame(in: .named(CrumbMenu.space)), $0.frame(in: .global)] } action: {
+            frames.value = ($0[0], $0[1])
+        }
+        .help(isFile ? "Files beside \(name)" : "Files in \(name)")
     }
 }
 
