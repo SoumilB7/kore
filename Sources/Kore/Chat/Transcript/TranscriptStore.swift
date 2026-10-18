@@ -203,6 +203,15 @@ final class TranscriptStore {
         /// The row's id; a call listed under its open "Explored" group (which has the first
         /// call's id) gets "<id>/call".
         let id: String
+        /// The action row under a message or a finished turn's final answer (look §11).
+        var actions: MessageActions?
+    }
+
+    struct MessageActions: Equatable {
+        /// Always shown (the chat's newest finished answer); otherwise only under the pointer.
+        let always: Bool
+        /// False on the message of a turn that's still running.
+        let canFork: Bool
     }
 
     /// One user (or peer) message and what followed it. The header sticks to the top while
@@ -328,6 +337,10 @@ final class TranscriptStore {
     @ObservationIgnored private var sectionStarts: [Int] = []
     /// The latest turn's tools changed, so `fileTouches` is due again.
     @ObservationIgnored private var touchesDirty = false
+    /// The newest finished turn with an answer: its final answer's actions always show.
+    @ObservationIgnored private var lastAnswerTurn: String?
+    /// Final answers' actions, by row id, filled while a rebuild lays out turns.
+    @ObservationIgnored private var answerActions: [String: MessageActions] = [:]
     /// Each turn's first entry. A turn can span sections (a message sent while it ran lands in
     /// the middle of it), so a change to the turn marks from here.
     @ObservationIgnored private var turnFirst: [String: UUID] = [:]
@@ -541,10 +554,12 @@ final class TranscriptStore {
         // Its text has stopped streaming; after a stop, calls and agents the CLI never closed
         // (Codex sends nothing more for them) end as stopped. Replayed turns too.
         let interrupted = outcome == .interrupted
+        var answered = false
         for i in (turnIndex(id) ?? entries.count)..<entries.count where entries[i].turn == id {
             switch entries[i].kind {
             case .answer:
                 entries[i].done = true
+                answered = true
             case .tool where interrupted && !entries[i].done:
                 entries[i].done = true
                 entries[i].stopped = true
@@ -563,6 +578,11 @@ final class TranscriptStore {
         turn.duration = duration ?? (batching ? nil : date.timeIntervalSince(turn.startedAt))
         let hadAnswer = turn.answerFrom != nil
         turns[id] = turn
+        if answered, lastAnswerTurn != id {
+            // The older answer's actions stop showing always: its section is built again.
+            if let old = lastAnswerTurn { mark(turnIndex(old)) }
+            lastAnswerTurn = id
+        }
         if current == id { current = nil }
         if !turnIsOpen, let held = heldModeChange {
             heldModeChange = nil
@@ -1156,6 +1176,7 @@ final class TranscriptStore {
         let begin = whole ? start : sectionStarts[kept]
 
         var rows: [Row] = []
+        answerActions = [:]
         var i = begin
         while i < entries.count {
             guard let turnID = entries[i].turn, let turn = turns[turnID] else {
@@ -1183,7 +1204,9 @@ final class TranscriptStore {
         var models = Array(sections.prefix(kept))
         var starts = Array(sectionStarts.prefix(kept))
         var changed = false
-        for section in Self.sections(rows, open: openKeys) {
+        // The message whose turn still runs can't be forked from yet.
+        let running = turnIsOpen ? entries.last(where: { ($0.kind == .user && !$0.inTurn) || $0.kind == .peer })?.id : nil
+        for section in Self.sections(rows, open: openKeys, actions: answerActions, running: running) {
             if let model = old[section.id] {
                 if model.update(section) { changed = true }
                 models.append(model)
@@ -1207,7 +1230,9 @@ final class TranscriptStore {
     }
 
     /// Splits rows at each user or peer message, and places them on the timeline.
-    private static func sections(_ rows: [Row], open: Set<String>) -> [Section] {
+    private static func sections(
+        _ rows: [Row], open: Set<String>, actions: [String: MessageActions] = [:], running: UUID? = nil
+    ) -> [Section] {
         var sections: [Section] = []
         var header: Entry?
         var id = "start"
@@ -1218,11 +1243,14 @@ final class TranscriptStore {
             var ids: Set<String> = []
             let items = run.indices.map { i in
                 let id = run[i].id
+                let rowActions: MessageActions? =
+                    if case .message(let e, _, _) = run[i] { MessageActions(always: false, canFork: e.id != running) }
+                    else { actions[id] }
                 return Item(
                     row: run[i], dot: dots[i],
                     above: dots[i] != nil && i > 0 && dots[i - 1] != nil,
                     below: dots[i] != nil && i + 1 < dots.count && dots[i + 1] != nil,
-                    id: ids.insert(id).inserted ? id : id + "/call")
+                    id: ids.insert(id).inserted ? id : id + "/call", actions: rowActions)
             }
             let headerOpen = header.map { $0.kind == .user || open.contains($0.id.uuidString) } ?? false
             sections.append(Section(id: id, header: header, headerOpen: headerOpen, items: items))
@@ -1323,7 +1351,9 @@ final class TranscriptStore {
         // went before its answer, or when it stopped on work.
         let folds = live ? foldable.contains(where: Self.isWork) : split != nil && (!foldable.isEmpty || keepingLast)
         guard folds else {
-            rows.append(contentsOf: grouped(group))
+            let answer = grouped(group)
+            tagAnswer(turn, answer)
+            rows.append(contentsOf: answer)
             finish(turn, folded: false, into: &rows)
             return
         }
@@ -1349,9 +1379,22 @@ final class TranscriptStore {
         rows.append(contentsOf: open ? grouped(rest) : rest.filter(Self.pinned).compactMap(visibleRow))
         if let split {
             rows.append(.rule(turn: turn.id))
-            rows.append(contentsOf: grouped(group[split...]))
+            let answer = grouped(group[split...])
+            if !keepingLast { tagAnswer(turn, answer) }
+            rows.append(contentsOf: answer)
         }
         finish(turn, folded: split != nil, into: &rows)
+    }
+
+    /// A finished turn's final answer (its last finished answer row) gets the action row.
+    private func tagAnswer(_ turn: Turn, _ rows: [Row]) {
+        guard turn.finished else { return }
+        for row in rows.reversed() {
+            if case .entry(let e) = row, e.kind == .answer, e.done {
+                answerActions[row.id] = MessageActions(always: turn.id == lastAnswerTurn, canFork: true)
+                return
+            }
+        }
     }
 
     /// A running turn ends with the spinner (hidden while an approval waits: the fold says so);
