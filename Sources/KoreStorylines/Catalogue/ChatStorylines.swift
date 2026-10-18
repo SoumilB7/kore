@@ -243,16 +243,19 @@ final class SelectableOnHover: ChatStoryline {
     return window?.contentView.map(count) ?? 0
 }
 
-/// The `/` key opens the command menu with the caret after the "/", and a pick leaves the caret
-/// after the command and its space, ready for arguments. The menu floats over the chat: the
-/// transcript stays where it was beside it, and a click outside closes it.
+/// The `/` key opens the command menu with the caret after the "/". The menu floats over the
+/// chat: the transcript stays where it was beside it, and a click outside closes it. A pick puts
+/// the command in the chip before the text; "/" typed mid-text filters the menu and a pick
+/// replaces the chip; Codex skills go in the text as "$name". Backspace at the start takes the
+/// chip off, a send goes out as "/command text", and a fork brings the chip back.
 final class SlashMenuCaret: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
-    override class var variants: [Variant] { [.claude] }
     override class var script: CLIScript {
         let commands = [
             SlashCommand(name: "compact", description: "Summarize the conversation", hint: "", kind: .command),
             SlashCommand(name: "review", description: "Review a pull request", hint: "", kind: .command),
+            SlashCommand(name: "plan", description: "Plan mode", hint: "", kind: .command),
+            SlashCommand(name: "pdf", description: "Read and fill PDF files", hint: "", kind: .skill),
         ]
         return CLIScript(
             start: [
@@ -269,12 +272,15 @@ final class SlashMenuCaret: ChatStoryline {
         return (editor.string, editor.selectedRange().location)
     }
 
-    static func expectCaret(_ what: String, _ draft: String) -> Expect {
+    /// The chip's command, the field's text and the caret: `at` nil for the end of the text.
+    static func expectComposer(_ what: String, chip: String?, _ draft: String, at: Int? = nil) -> Expect {
         Expect(what, found: { story in
-            caret(story).map { "“\($0.draft)” with the caret at \($0.at)" } ?? "no field editor"
+            let chip = story.app.chat?.command.map { "/\($0.name)" } ?? "no chip"
+            return chip + ", " + (caret(story).map { "“\($0.draft)” with the caret at \($0.at)" } ?? "no field editor")
         }) { story in
-            guard let now = caret(story) else { return false }
-            return now.draft == draft && now.at == (draft as NSString).length && story.app.chat?.draft == draft
+            guard let now = caret(story), let chat = story.app.chat else { return false }
+            return chat.command?.name == chip && now.draft == draft && chat.draft == draft
+                && now.at == (at ?? (draft as NSString).length)
         }
     }
 
@@ -286,10 +292,14 @@ final class SlashMenuCaret: ChatStoryline {
     }
 
     override func steps() -> [any Step] {
+        let codex = variant == .codex
         let tab = Locator("the chat's tab") { app in
             app.workspace.map { .success(StoryID.Tabs.tab($0.activeTab.id)) } ?? .failure(LocatorMiss("no workspace"))
         }
-        return super.steps() + [
+        let row = { (name: String) in Locator.id(StoryID.Composer.command(name)) }
+        let text = codex ? "fix the bug $pdf " : "fix the bug "
+        let sent = "/review " + text.trimmingCharacters(in: .whitespaces)
+        var steps: [any Step] = super.steps() + [
             Send("Hello"),
             TurnFinished(1),
             Expect("the answer in view") { [unowned self] story in
@@ -297,20 +307,111 @@ final class SlashMenuCaret: ChatStoryline {
                 return answerTop != nil
             },
             WaitForFocus(.id(StoryID.Composer.field)),
+            // The key: "/" with the caret after it, the menu over the chat.
             Press(.id(StoryID.Composer.slash)),
-            WaitForElement(.id(StoryID.Composer.command("compact"))),
+            WaitForElement(row("compact")),
             Snapshot("slash-menu"),
-            Self.expectCaret("“/” with the caret after it", "/"),
+            Self.expectComposer("“/” with the caret after it", chip: nil, "/"),
             Expect("the answer where it was, the transcript not cut short by the menu") { [unowned self] story in
                 guard let top = try Self.lastRowTop(story), let before = answerTop else { return false }
                 return abs(top - before) < 0.5
             },
             Click(tab),
-            ExpectElement(.id(StoryID.Composer.command("compact")), .absent),
+            ExpectElement(row("compact"), .absent),
+            // The key again in that "/": the menu back, nothing added.
             Press(.id(StoryID.Composer.slash)),
-            Press(.id(StoryID.Composer.command("review"))),
-            Self.expectCaret("the command picked, the caret after its space", "/review "),
-            ExpectElement(.id(StoryID.Composer.command("compact")), .absent),
+            Press(row("review")),
+            Self.expectComposer("/review in the chip, the field empty", chip: "review", ""),
+            ExpectElement(row("compact"), .absent),
+            // "/" mid-text filters at the caret; a pick replaces the chip and leaves the text.
+            TypeText("fix the bug /com"),
+            WaitForElement(row("compact")),
+            ExpectElement(row("review"), .absent),
+            Key(.returnKey),
+            Self.expectComposer("/compact in the chip, “/com” gone", chip: "compact", "fix the bug "),
+        ]
+        if codex {
+            steps += [
+                TypeText("$pd"),
+                Key(.returnKey),
+                Self.expectComposer("the skill in the text", chip: "compact", text),
+            ]
+        }
+        steps += [
+            // Backspace at the start takes the chip off, the text stays.
+            Key(KeyChord(.left, .command)),
+            Key(KeyChord(.backspace)),
+            Self.expectComposer("no chip, the text as it was", chip: nil, text, at: 0),
+            // The key at the start: the full list, /review back in the chip, the caret before the text.
+            Press(.id(StoryID.Composer.slash)),
+            Press(row("review")),
+            Self.expectComposer("/review in the chip again", chip: "review", text, at: 0),
+            Press(.id(StoryID.Composer.send)),
+            TurnFinished(2),
+            Expect("“\(sent)” sent to the CLI") { try $0.scriptedBackend().log.contains(.send(sent)) },
+            Expect("the composer empty") { try $0.activeChat().command == nil && $0.activeChat().draft.isEmpty },
+            // A typed-in-chip /compact still compacts.
+            Press(.id(StoryID.Composer.slash)),
+            Press(row("compact")),
+            Press(.id(StoryID.Composer.send)),
+            Expect("the CLI asked to compact") { try $0.scriptedBackend().log.contains(.compact) },
+            Expect("the compaction over") { try !$0.activeChat().isCompacting },
+        ]
+        if codex {
+            steps += [
+                Press(.id(StoryID.Composer.slash)),
+                Press(row("plan")),
+                Press(.id(StoryID.Composer.send)),
+                Expect("/plan turning plan mode on") { try $0.scriptedBackend().log.contains(.setPlanMode(true)) },
+            ]
+        }
+        steps += [
+            // A fork from the command's message brings it back in the chip.
+            Fork.fromMessage(2),
+            Expect("the fork's chip and text", found: { story in
+                "chip \(story.app.chat?.command?.name ?? "none"), draft “\(story.app.chat?.draft ?? "?")”"
+            }) { story in
+                story.app.chat?.storyTitle.hasSuffix("(fork)") == true && story.app.chat?.command?.name == "review"
+                    && story.app.chat?.draft == text.trimmingCharacters(in: .whitespaces)
+            },
+        ]
+        return steps
+    }
+}
+
+/// Live (`--live haiku`, `--live gpt-6-luna`): a command picked into the chip is sent and runs.
+/// Claude runs the folder's own /ping with the typed text as its arguments; Codex takes /goal as
+/// a goal, not as a prompt.
+final class SlashChipLive: Storyline {
+    override class var tags: Set<Tag> { [.live] }
+    override class var variants: [Variant] { [.claude, .codex] }
+
+    override func steps() -> [any Step] {
+        let codex = variant == .codex
+        let command = codex ? "goal" : "ping"
+        let steps: [any Step] = [
+            WriteFiles([(".claude/commands/ping.md", "---\ndescription: Probe ping\n---\nReply with the single word PING-$ARGUMENTS.\n")]),
+            OpenFolder(),
+            StartChat(),
+            Expect("the run's model set, and /\(command) offered", timeout: .seconds(60)) { story in
+                guard case .live(let model) = story.flags.cli, let chat = story.app.chat, chat.storyCommands.contains(command)
+                else { return false }
+                return chat.storySetModel(model)
+            },
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Press(.id(StoryID.Composer.slash)),
+            Press(.id(StoryID.Composer.command(command))),
+            TypeText(codex ? "Reply with the single word DONE" : "chip"),
+            Press(.id(StoryID.Composer.send)),
+        ]
+        if codex {
+            return steps + [
+                WaitForEvent("Codex to set the goal") { if case .notice("Goal set", _) = $0 { true } else { false } }
+            ]
+        }
+        return steps + [
+            TurnFinished(1),
+            Expect.rows("/ping's answer") { $0.contains { $0.kind == "assistant" && $0.text.contains("PING-chip") } },
         ]
     }
 }

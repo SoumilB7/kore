@@ -53,6 +53,16 @@ extension Chat {
     /// The mode menu.
     package func storySetMode(_ id: String) { setMode(id) }
 
+    /// The model menu: the option with this id; false when the chat doesn't offer it.
+    package func storySetModel(_ id: String) -> Bool {
+        guard let option = controls.models.first(where: { $0.id == id || $0.resolved == id }) else { return false }
+        setModel(option)
+        return true
+    }
+
+    /// The `/` menu's names, and the command chip's.
+    package var storyCommands: [String] { controls.commands.map(\.name) }
+
     /// Whether the agent map shows over the chat (the Agents button, ⇧⌘A).
     package var isAgentMapOpen: Bool { agentMap.isOpen }
 }
