@@ -91,6 +91,7 @@ struct ComposerView: View {
             .font(TextStyle.body)
             .foregroundStyle(Theme.text)
             .lineLimit(1...10)
+            .storyID(StoryID.Composer.field)
             .focused(focused)
             .onSubmit { chat.send() }
             .onKeyPress(.upArrow) { moveSlash(-1) }

@@ -47,12 +47,15 @@ struct PermissionCard: View {
             AdaptiveButtons {
                 Button("Deny") { decide(.deny) }
                     .buttonStyle(SubtleButtonStyle())
+                    .storyID(StoryID.Approval.card(approval.id).part(.deny))
                 if approval.canAlwaysAllow {
                     Button("Always allow") { decide(.allowAlways) }
                         .buttonStyle(SubtleButtonStyle())
+                        .storyID(StoryID.Approval.card(approval.id).part(.always))
                 }
                 Button("Allow") { decide(.allow) }
                     .buttonStyle(SubtleButtonStyle(prominent: true))
+                    .storyID(StoryID.Approval.card(approval.id).part(.allow))
             }
         }
         .padding(Inset.card)
@@ -105,6 +108,8 @@ struct QuestionCard: View {
 /// Claude Code's exit-plan prompt.
 struct PlanApprovalCard: View {
     let plan: String
+    /// The approval it answers, for its storyline names.
+    var id = ""
     let decide: (Decision) -> Void
 
     var body: some View {
@@ -127,10 +132,13 @@ struct PlanApprovalCard: View {
             AdaptiveButtons {
                 Button("No, keep planning") { decide(.keepPlanning) }
                     .buttonStyle(SubtleButtonStyle())
+                    .storyID(StoryID.Approval.card(id).part(.keepplanning))
                 Button("Yes, manually approve edits") { decide(.approvePlan(autoAcceptEdits: false)) }
                     .buttonStyle(SubtleButtonStyle())
+                    .storyID(StoryID.Approval.card(id).part(.approveplan))
                 Button("Yes, auto-accept edits") { decide(.approvePlan(autoAcceptEdits: true)) }
                     .buttonStyle(SubtleButtonStyle(prominent: true))
+                    .storyID(StoryID.Approval.card(id).part(.autoaccept))
             }
         }
         .padding(Inset.card)

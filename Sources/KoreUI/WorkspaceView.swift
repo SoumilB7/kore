@@ -51,7 +51,7 @@ struct TabBar: View {
 
     var body: some View {
         HStack(spacing: Size.tabGap) {
-            ExplorerButton(workspace: workspace, size: tabHeight)
+            ExplorerButton(workspace: workspace, size: tabHeight).storyID(StoryID.Titlebar.explorer)
             if let explorerDock {
                 Color.clear.frame(width: max(0, explorerDock + Space.md - leadingInset - tabHeight - 2 * Size.tabGap), height: 0)
             }
@@ -75,7 +75,7 @@ struct TabBar: View {
                     withAnimation(Motion.fade) { scroller.scrollTo(id) }
                 }
             }
-            NewTabButton(size: tabHeight) { workspace.newTab() }
+            NewTabButton(size: tabHeight) { workspace.newTab() }.storyID(StoryID.Titlebar.newtab)
             Spacer(minLength: Space.xl)
             Text(workspace.folder.lastPathComponent)
                 .font(Chrome.label)
@@ -85,9 +85,9 @@ struct TabBar: View {
                 .layoutPriority(-1)
                 .help(workspace.folder.path)
             if let chat = workspace.activeTab.chat {
-                AgentsButton(chat: chat, height: tabHeight)
+                AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents)
             }
-            HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight)
+            HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight).storyID(StoryID.Titlebar.history)
         }
         .padding(.leading, leadingInset)
         .padding(.trailing, Space.md)
@@ -140,6 +140,12 @@ private struct TabItem: View {
 
     private var isActive: Bool { workspace.activeID == tab.id }
     private var dirty: Bool { tab.file?.isDirty == true }
+
+    /// `tabs.file[<path>]` for a file tab, else `tabs.tab[<id>]`.
+    private var storyKey: StoryID {
+        if let file = tab.file { return StoryID.Tabs.file(workspace.relativePath(file.path)) }
+        return StoryID.Tabs.tab(tab.id)
+    }
 
     private var help: String {
         if let file = tab.file {
@@ -204,6 +210,7 @@ private struct TabItem: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .storyID(storyKey)
             Button {
                 workspace.close(tab)
             } label: {
@@ -226,6 +233,8 @@ private struct TabItem: View {
             .onHover { closeHovered.value = $0 }
             .opacity(hovered.value || isActive || dirty ? 1 : 0)
             .help("Close tab")
+            // Hidden on an inactive tab until hover: pressed by its action.
+            .storyID(storyKey.part(.close), press: { workspace.close(tab) })
             .padding(.trailing, Space.sm)
         }
         // Width set by the tab bar (180 down to 90, like browser tabs); titles truncate.
@@ -293,6 +302,7 @@ private struct EmptyTab: View {
             HStack(spacing: Space.md) {
                 ForEach(Provider.allCases) { provider in
                     ProviderButton(provider: provider) { workspace.start(provider, in: tab) }
+                        .storyID(StoryID.NewTab.provider(provider.id))
                 }
             }
             .padding(Space.md)

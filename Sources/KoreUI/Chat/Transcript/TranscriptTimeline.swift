@@ -61,11 +61,13 @@ struct TranscriptTimeline: View, Equatable {
                     // conversation before its compaction.
                     if store.hiddenTurns > 0 {
                         LoadEarlierRow(label: "Load earlier turns") { loadEarlier() }
+                            .storyID(StoryID.Transcript.earlier)
                     } else if store.earlierAvailable {
                         LoadEarlierRow(
                             label: "Load earlier conversation",
                             loading: store.loadingEarlier ? "Loading earlier conversation…" : nil
                         ) { loadEarlierConversation() }
+                            .storyID(StoryID.Transcript.earlier)
                             .id(Self.loadRow)
                     }
                     ForEach(store.sections) { section in

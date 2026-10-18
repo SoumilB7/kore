@@ -357,5 +357,6 @@ struct QueuedMessage: View {
             Text("Queued").font(TextStyle.caption).foregroundStyle(Theme.tertiary)
         }
         .padding(.vertical, Space.sm / 2)
+        .storyID(StoryID.Composer.queued(entry.id))
     }
 }

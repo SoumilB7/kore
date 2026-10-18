@@ -34,6 +34,50 @@ struct TimelineRow: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item }
 
     var body: some View {
+        content.storyID(Self.story(item.row), press: press)
+    }
+
+    /// What pressing the row does, where its name and a click on its middle could differ:
+    /// open or close it.
+    private var press: (@MainActor () -> Void)? {
+        let actions = actions
+        switch item.row {
+        case .fold(let fold): return { actions.toggleTurn(fold.turn) }
+        case .tool(let e, _), .agent(let e, _, _): return { actions.toggle(e.id.uuidString) }
+        case .explored(let calls, _):
+            guard let first = calls.first else { return nil }
+            return { actions.toggle("explored-\(first.id.uuidString)") }
+        default: return nil
+        }
+    }
+
+    /// The row's storyline name, by its entry, tool, agent or turn id (phase 12 plan §3).
+    static func story(_ row: TranscriptStore.Row) -> StoryID? {
+        switch row {
+        case .message(let e, _, _):
+            return e.kind == .peer ? StoryID.Transcript.peer(e.id) : StoryID.Transcript.user(e.id)
+        case .entry(let e):
+            switch e.kind {
+            case .answer: return StoryID.Transcript.answer(e.id)
+            case .divider where e.source != TranscriptStore.forkSource: return StoryID.Transcript.compacted(e.id)
+            default: return nil
+            }
+        case .tool(let e, _), .file(let e, _, _):
+            return StoryID.Transcript.tool(e.toolId ?? e.id.uuidString)
+        case .agent(let e, _, _):
+            return StoryID.Transcript.agent(e.agent?.id ?? e.id.uuidString)
+        case .fold(let fold):
+            return StoryID.Transcript.fold(fold.turn)
+        case .changes(let turn, _, _, _):
+            return StoryID.Transcript.changes(turn)
+        case .explored(let calls, _):
+            return calls.first.map { StoryID.Transcript.explored($0.toolId ?? $0.id.uuidString) }
+        case .thinking, .rule, .outcome, .summary, .queued, .spinner:
+            return nil
+        }
+    }
+
+    @ViewBuilder private var content: some View {
         if case .entry(let entry) = item.row, entry.kind == .divider {
             DividerRow(text: entry.text, open: entry.source == TranscriptStore.forkSource ? actions.openOriginal : nil)
         } else if case .entry(let entry) = item.row, entry.kind == .mode, entry.modeLead == nil, let mode = entry.mode {
@@ -196,7 +240,8 @@ struct MessageHeader: View {
             }
             if place == .row, let messageActions {
                 MessageActionsRow(
-                    text: entry.text, shown: messageActions.always || hovered.value, canFork: messageActions.canFork
+                    text: entry.text, shown: messageActions.always || hovered.value, canFork: messageActions.canFork,
+                    story: entry.kind == .peer ? StoryID.Transcript.peer(entry.id) : StoryID.Transcript.user(entry.id)
                 ) { actions.fork(entry) }
             }
         }
@@ -470,7 +515,10 @@ private struct AnswerWithActions: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             RowContent(row: .entry(entry), actions: actions)
-            MessageActionsRow(text: entry.text, shown: messageActions.always || hovered.value, canFork: messageActions.canFork) {
+            MessageActionsRow(
+                text: entry.text, shown: messageActions.always || hovered.value, canFork: messageActions.canFork,
+                story: StoryID.Transcript.answer(entry.id)
+            ) {
                 actions.forkAfter(entry)
             }
         }
@@ -485,27 +533,36 @@ struct MessageActionsRow: View {
     let text: String
     let shown: Bool
     let canFork: Bool
+    /// The message's or answer's storyline name; Copy and Fork are its `.copy` and `.fork`.
+    let story: StoryID
     let fork: () -> Void
     @StateObject private var copied = Local(false)
 
     var body: some View {
         HStack(spacing: Size.MessageActions.gap) {
             if shown {
-                IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                    copied.value = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(Motion.copied))
-                        copied.value = false
-                    }
-                }
+                IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy", action: copy)
+                    .storyID(story.part(.copy))
                 IconButton(symbol: "arrow.triangle.branch", kind: .mini, font: Chrome.label, help: "Fork", action: fork)
                     .disabled(!canFork)
+                    .storyID(story.part(.fork))
             }
         }
         .frame(height: Size.MessageActions.row, alignment: .leading)
         .padding(.top, Size.MessageActions.top)
+        // Hidden until hover: pressed through their actions meanwhile.
+        .storyAction(story.part(.copy)) { copy() }
+        .storyAction(story.part(.fork)) { if canFork { fork() } }
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied.value = true
+        Task {
+            try? await Task.sleep(for: .seconds(Motion.copied))
+            copied.value = false
+        }
     }
 }
 
@@ -846,6 +903,7 @@ private struct AgentHeader: View {
                         }
                         .buttonStyle(.plain)
                         .help("Open in tab (⌘-click)")
+                        .storyID(StoryID.Transcript.agent(info.id).part(.open))
                     }
                     AgentMeter(info: info)
                 }
@@ -854,10 +912,13 @@ private struct AgentHeader: View {
             .buttonStyle(.plain)
             .onHover { hovered.value = $0 }
             .accessibilityHint(Text(open ? "Hides the agent's work" : "Shows the agent's work"))
+            // "Open in tab" is built only on hover: pressed through its action meanwhile.
+            .storyAction(StoryID.Transcript.agent(info.id).part(.open)) { actions.openAgent(info.id) }
             if info.status == .running {
                 IconButton(symbol: "stop.fill", kind: .small, font: Glyph.stop, help: "Stop agent") {
                     actions.stopAgent(info.id)
                 }
+                .storyID(StoryID.Transcript.agent(info.id).part(.stop))
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             }
             Button {

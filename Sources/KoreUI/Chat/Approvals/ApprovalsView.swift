@@ -7,7 +7,7 @@ struct ApprovalsView: View {
     var body: some View {
         ForEach(chat.approvals.pending) { approval in
             if let plan = approval.plan {
-                PlanApprovalCard(plan: plan) { chat.answer(approval, $0) }
+                PlanApprovalCard(plan: plan, id: approval.id) { chat.answer(approval, $0) }
             } else if approval.questions.isEmpty {
                 PermissionCard(approval: approval, asker: asker(approval), folder: chat.folder) {
                     chat.answer(approval, $0)

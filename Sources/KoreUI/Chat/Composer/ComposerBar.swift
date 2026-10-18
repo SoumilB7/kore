@@ -20,6 +20,7 @@ struct ComposerBar: View {
             .onHover { plusHovered.value = $0 }
             .help("Attach")
             .accessibilityLabel(Text("Attach files"))
+            .storyID(StoryID.Composer.attach)
 
             Button(action: slash) {
                 Text("/")
@@ -30,10 +31,12 @@ struct ComposerBar: View {
             }
             .buttonStyle(.plain)
             .help("Slash commands")
+            .storyID(StoryID.Composer.slash)
 
             // The slot is kept once there's a session, so the bar doesn't shift when usage arrives.
             if chat.status.sessionId != nil {
                 ContextWheel(chat: chat)
+                    .storyID(StoryID.Composer.context)
                     .padding(.horizontal, -Space.sm)
             }
 
@@ -59,13 +62,13 @@ struct ComposerBar: View {
                     .padding(.leading, -Space.sm)
             }
             if !chat.controls.models.isEmpty && density != .minimal {
-                ModelMenu(chat: chat, showEffort: density == .full)
+                ModelMenu(chat: chat, showEffort: density == .full).storyID(StoryID.Composer.model)
             }
             Spacer(minLength: 0)
             if let plan = chat.provider.planToggle, chat.controls.planMode {
                 PlanChip(mode: plan) { chat.setPlanMode(false) }
             }
-            ModeMenu(chat: chat, showLabel: density == .full || density == .noEffort)
+            ModeMenu(chat: chat, showLabel: density == .full || density == .noEffort).storyID(StoryID.Composer.mode)
         }
     }
 
@@ -82,6 +85,8 @@ struct ComposerBar: View {
         .buttonStyle(.plain)
         .disabled(!chat.status.isRunning && !chat.canSend)
         .opacity(!chat.status.isRunning && !chat.canSend ? 0.3 : 1)
+        // One button: Stop while a turn runs, else Send.
+        .storyID(chat.status.isRunning ? StoryID.Composer.stop : StoryID.Composer.send)
     }
 }
 
