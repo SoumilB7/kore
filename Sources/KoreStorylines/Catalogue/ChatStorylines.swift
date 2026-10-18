@@ -74,6 +74,32 @@ final class QueuedMessage: ChatStoryline {
     }
 }
 
+/// ⌘Z in the composer undoes the typing in the field and in the chat's draft alike, and ⇧⌘Z
+/// brings it back to both.
+final class ComposerUndo: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var variants: [Variant] { [.claude] }
+
+    override func steps() -> [any Step] {
+        func both(_ what: String, _ text: String) -> Expect {
+            Expect(what, found: { story in
+                "field “\(SwitchTab.composerText(story) ?? "?")”, draft “\(story.app.chat?.draft ?? "?")”"
+            }) { story in
+                SwitchTab.composerText(story) == text && story.app.chat?.draft == text
+            }
+        }
+        return super.steps() + [
+            WaitForFocus(.id(StoryID.Composer.field)),
+            TypeText("hello"),
+            both("“hello” in the field and the draft", "hello"),
+            Key(.cmd("z")),
+            both("the typing undone in the field and the draft", ""),
+            Key(.cmdShift("z")),
+            both("and redone in both", "hello"),
+        ]
+    }
+}
+
 /// Fork from the second message: a new tab with the history before it, the message back in its
 /// composer, and the original left as it was.
 final class ForkFromMessage: ChatStoryline {

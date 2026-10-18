@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The input box: attachments, text, and the bar of controls under it, with the slash menu
@@ -54,6 +55,7 @@ struct ComposerView: View {
             if let monitor = pasteMonitor.value { NSEvent.removeMonitor(monitor) }
             pasteMonitor.value = nil
         }
+        .onReceive(Self.undoChanges) { draftFromUndo($0) }
         .onChange(of: chat.id) {
             // The caret goes to the end of this chat's draft, ready to go on typing.
             caret.value = Caret(chat: chat.id, selection: TextSelection(insertionPoint: chat.draft.endIndex))
@@ -61,6 +63,19 @@ struct ComposerView: View {
             slashDismissed.value = false
             forgetUndo()
         }
+    }
+
+    /// Every undo and redo in the app; `draftFromUndo` keeps the composer's.
+    private static let undoChanges = NotificationCenter.default.publisher(for: .NSUndoManagerDidUndoChange)
+        .merge(with: NotificationCenter.default.publisher(for: .NSUndoManagerDidRedoChange))
+
+    /// Undo and redo change the field's text without the text binding hearing of it, so the
+    /// field and the draft would part: the draft takes the field's text back.
+    private func draftFromUndo(_ note: Notification) {
+        guard focused.wrappedValue, let editor = window.value?.firstResponder as? NSTextView, editor.isFieldEditor,
+            let undo = note.object as? UndoManager, undo === editor.undoManager, editor.string != chat.draft
+        else { return }
+        chat.draft = editor.string
     }
 
     /// The field stays focused through a switch, and its undo was the last chat's typing: undone
