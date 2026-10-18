@@ -56,6 +56,7 @@ final class Workspace {
     private(set) var search: SearchStore?
     /// Files opened, most recent first (quick open's empty state).
     private(set) var recentFiles: [String] = []
+    @ObservationIgnored private var saveQueued = false
 
     init(folder: URL, restore: Bool = true) {
         self.folder = folder
@@ -180,6 +181,10 @@ final class Workspace {
     }
 
     func closeAll() {
+        // A save still waiting goes now.
+        if saveQueued, Self.persists(folder) {
+            UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: Self.key(Self.savedKey, folder))
+        }
         for tab in tabs where tab.agent == nil && tab.file == nil { tab.chat?.close() }
         files?.stop()
     }
@@ -383,13 +388,14 @@ final class Workspace {
     private static let explorerKey = "explorer"
 
     private func saveExplorer() {
-        var all = UserDefaults.standard.dictionary(forKey: Self.explorerKey) ?? [:]
-        all[folder.standardizedFileURL.path] = try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth))
-        UserDefaults.standard.set(all, forKey: Self.explorerKey)
+        guard Self.persists(folder) else { return }
+        UserDefaults.standard.set(
+            try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth)),
+            forKey: Self.key(Self.explorerKey, folder))
     }
 
     private static func savedExplorer(for folder: URL) -> ExplorerState? {
-        let data = UserDefaults.standard.dictionary(forKey: explorerKey)?[folder.standardizedFileURL.path] as? Data
+        let data = stored(explorerKey, folder)
         return data.flatMap { try? JSONDecoder().decode(ExplorerState.self, from: $0) }
     }
 
@@ -519,17 +525,44 @@ final class Workspace {
             active: kept.firstIndex { $0.id == activeID } ?? kept.firstIndex { $0.chat === activeTab.chat } ?? 0)
     }
 
+    /// Saves this folder's tabs, once for a burst of changes.
     func save() {
-        var all = UserDefaults.standard.dictionary(forKey: Self.savedKey) ?? [:]
-        all[folder.standardizedFileURL.path] = try? JSONEncoder().encode(saved)
-        UserDefaults.standard.set(all, forKey: Self.savedKey)
+        guard Self.persists(folder), !saveQueued else { return }
+        saveQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            saveQueued = false
+            UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: Self.key(Self.savedKey, folder))
+        }
     }
 
     private static let savedKey = "openTabs"
 
     private static func saved(for folder: URL) -> Saved? {
-        let data = UserDefaults.standard.dictionary(forKey: savedKey)?[folder.standardizedFileURL.path] as? Data
+        let data = stored(savedKey, folder)
         return data.flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }
+    }
+
+    // MARK: - Where it's kept
+
+    /// One small key per folder ("openTabs./path/to/folder"), not one dictionary of every
+    /// folder rewritten on each change.
+    private static func key(_ base: String, _ folder: URL) -> String { base + "." + folder.standardizedFileURL.path }
+
+    /// The folder's own key, else its entry in the dictionary older builds kept.
+    private static func stored(_ base: String, _ folder: URL) -> Data? {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: key(base, folder)) { return data }
+        return defaults.dictionary(forKey: base)?[folder.standardizedFileURL.path] as? Data
+    }
+
+    /// Temporary folders and dev runs (any KORE_ hook) leave nothing behind: agents' scratch
+    /// folders would otherwise pile up in the shared defaults.
+    static func persists(_ folder: URL) -> Bool {
+        let path = folder.standardizedFileURL.path
+        let temporary = ["/private/tmp/", "/tmp/", "/private/var/folders/", "/var/folders/", NSTemporaryDirectory()]
+        if temporary.contains(where: { path.hasPrefix($0) }) { return false }
+        return !ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KORE_") }
     }
 
     private static func tab(_ saved: Saved.Tab, in folder: URL) -> ChatTab {

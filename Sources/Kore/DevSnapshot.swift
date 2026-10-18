@@ -43,6 +43,7 @@ import KoreCore
 ///   KORE_RESIZE_SWEEP=<from>,<to>,<s>[,<start>]  after 4s (or <start>), resize the window's width from one to the other and
 ///                            back over that many seconds, a frame at a time, inside Kore (a drag's
 ///                            relayouts without the pointer); pair with KORE_HANGS=1; logs frames
+///   KORE_TAB_SWITCH=<n>      after 4s, select the next tab n times, 0.25s apart (prints the CPU time it took)
 ///   KORE_CLOSE_AFTER=<s>     ask the folder window to close (as ⌘W does) that many seconds after launch
 enum DevSnapshot {
     static let openFolder = ProcessInfo.processInfo.environment["KORE_OPEN"].map { URL(fileURLWithPath: $0) }
@@ -67,6 +68,27 @@ enum DevSnapshot {
     static let quickOpen = ProcessInfo.processInfo.environment["KORE_QUICK_OPEN"]
     static let line = ProcessInfo.processInfo.environment["KORE_LINE"].flatMap { Int($0) }
     static let search = ProcessInfo.processInfo.environment["KORE_SEARCH"]
+    static let tabSwitches = ProcessInfo.processInfo.environment["KORE_TAB_SWITCH"].flatMap { Int($0) }
+
+    /// KORE_TAB_SWITCH: cycles the tabs, timing the process's CPU across it.
+    @MainActor static func switchTabs(_ count: Int, in workspace: Workspace) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            Task { @MainActor in
+                let start = ProcessInfo.processInfo.systemUptime
+                var usage = rusage()
+                getrusage(RUSAGE_SELF, &usage)
+                let cpu0 = Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6
+                for _ in 0..<count {
+                    let index = workspace.tabs.firstIndex { $0.id == workspace.activeID } ?? 0
+                    workspace.select(workspace.tabs[(index + 1) % workspace.tabs.count])
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+                getrusage(RUSAGE_SELF, &usage)
+                let cpu1 = Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6
+                FileHandle.standardError.write(Data(String(format: "TABS %d switches: cpu %.2fs over %.2fs\n", count, cpu1 - cpu0, ProcessInfo.processInfo.systemUptime - start).utf8))
+            }
+        }
+    }
     static let attach = ProcessInfo.processInfo.environment["KORE_ATTACH"].map {
         $0.split(separator: ":").map { URL(fileURLWithPath: String($0)) }
     }

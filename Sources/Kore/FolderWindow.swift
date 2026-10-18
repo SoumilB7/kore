@@ -128,6 +128,7 @@ struct FolderWindow: View {
             if let line = DevSnapshot.line, let file = workspace.value.activeFile {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { file.editor.goTo(line: line) }
             }
+            if let count = DevSnapshot.tabSwitches { DevSnapshot.switchTabs(count, in: workspace.value) }
             if let query = DevSnapshot.search {
                 workspace.value.showSearch()
                 workspace.value.searchStore().text = query
