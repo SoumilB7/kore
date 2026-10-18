@@ -561,6 +561,23 @@ final class CodexTranslator {
         }.value
     }
 
+    /// A child thread's turns as its card's events, on a translator of its own off the main
+    /// thread: a child's history can be thousands of items.
+    static func agentHistory(
+        _ turns: [JSONValue], agent thread: String, folder: URL, agents: [String: CodexAgentThread]
+    ) async -> Replayed {
+        await Task.detached(priority: .userInitiated) {
+            let translator = CodexTranslator(folder: folder)
+            translator.agentThreads = agents
+            let events = translator.agentTurns(turns, agent: thread)
+            return Replayed(
+                events: events,
+                carried: Carried(
+                    mode: nil, planMode: false, planKnown: false, spawned: translator.spawned, finished: translator.finished,
+                    lastText: translator.lastText, contextUsed: nil, contextWindow: nil))
+        }.value
+    }
+
     /// `history`: an older page, which leaves the live mode, plan toggle and context alone.
     func adopt(_ replayed: Carried, history: Bool = false) {
         spawned.formUnion(replayed.spawned)

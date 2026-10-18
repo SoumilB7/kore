@@ -309,7 +309,10 @@ final class CodexBackend: ChatBackend {
     func agentHistory(_ id: String) async -> [ChatEvent] {
         try? await start()
         guard let session, let turns = try? await session.readThread(id) else { return [] }
-        return translator.agentTurns(turns, agent: id)
+        let history = await CodexTranslator.agentHistory(turns, agent: id, folder: options.folder, agents: translator.agentThreads)
+        // Its own sub-agents and last words, as an older page's are: the live mode stays.
+        translator.adopt(history.carried, history: true)
+        return history.events
     }
 
     /// The turns before the message's turn, forked by the new tab's own app-server when it opens
