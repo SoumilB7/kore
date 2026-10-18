@@ -1052,13 +1052,30 @@ final class TranscriptStore {
     /// happening, and a spinner row ends it. Once its answer starts, the work folds above the
     /// answer.
     private func layout(_ turn: Turn, _ group: ArraySlice<Entry>, into rows: inout [Row]) {
-        let split = answerStart(turn, group)
+        // A stopped or failed turn that ended on work keeps its last tool call in view, below
+        // the fold; whatever came with or after it (late thinking) goes into the fold, the same
+        // for both CLIs ("Worked for 8s · Interrupted").
+        if turn.finished, turn.outcome != .completed, answerStart(turn, group) != nil,
+            !group.contains(where: { $0.kind == .answer }),
+            let kept = group.lastIndex(where: { $0.kind == .tool || $0.kind == .agent })
+        {
+            var reordered = Array(group)
+            let call = reordered.remove(at: kept - group.startIndex)
+            reordered.append(call)
+            layout(turn, reordered[...], keepingLast: true, into: &rows)
+            return
+        }
+        layout(turn, group, keepingLast: false, into: &rows)
+    }
+
+    private func layout(_ turn: Turn, _ group: ArraySlice<Entry>, keepingLast: Bool, into rows: inout [Row]) {
+        let split = keepingLast ? group.endIndex - 1 : answerStart(turn, group)
         let work = split.map { group[group.startIndex..<$0] } ?? group
         let foldable = work.filter { !Self.pinned($0) }
         let live = !turn.finished && split == nil
         // A live turn's fold comes with its first piece of work; a finished turn's, when work
-        // went before its answer.
-        let folds = live ? foldable.contains(where: Self.isWork) : split != nil && !foldable.isEmpty
+        // went before its answer, or when it stopped on work.
+        let folds = live ? foldable.contains(where: Self.isWork) : split != nil && (!foldable.isEmpty || keepingLast)
         guard folds else {
             rows.append(contentsOf: grouped(group))
             finish(turn, folded: false, into: &rows)
