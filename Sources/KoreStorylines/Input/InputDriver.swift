@@ -117,6 +117,36 @@ package final class InputDriver {
         await pass()
     }
 
+    /// Presses and releases at a window point, `count` times in a row (a double or triple
+    /// click), through the app as a person's clicks come.
+    package func click(at point: CGPoint, in window: NSWindow, count: Int = 1, modifiers: NSEvent.ModifierFlags = []) async {
+        for n in 1...max(count, 1) {
+            if let down = mouseEvent(.leftMouseDown, at: point, in: window, clickCount: n, modifiers: modifiers) { NSApp.sendEvent(down) }
+            if let up = mouseEvent(.leftMouseUp, at: point, in: window, clickCount: n, modifiers: modifiers) { NSApp.sendEvent(up) }
+        }
+        await pass()
+    }
+
+    /// A press at one window point, the pointer moved there in steps (a run-loop pass between
+    /// each), and a release at another: a drag between two places that aren't elements.
+    /// `hold`: how long the button stays down at the end before the release (a person holding a
+    /// drag past an edge while the view scrolls).
+    package func drag(
+        from start: CGPoint, to end: CGPoint, in window: NSWindow, steps: Int = 12, clicks: Int = 1, hold: Duration = .zero
+    ) async {
+        if let down = mouseEvent(.leftMouseDown, at: start, in: window, clickCount: clicks) { NSApp.sendEvent(down) }
+        for i in 1...max(steps, 1) {
+            let t = CGFloat(i) / CGFloat(max(steps, 1))
+            await pass()
+            mouse(.leftMouseDragged, at: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t), in: window)
+        }
+        await pass()
+        let release = ContinuousClock.now + hold
+        while ContinuousClock.now < release { await pass() }
+        if let up = mouseEvent(.leftMouseUp, at: end, in: window, clickCount: clicks) { NSApp.sendEvent(up) }
+        await pass()
+    }
+
     /// Scrolls the list the element sits in, wherever in it the element is, by moving its scroll
     /// view: where a scroll gesture ends up, without the gesture. (Wheel and trackpad events built
     /// in the process don't reach SwiftUI's scroll views; the spike behind this showed none
@@ -326,11 +356,17 @@ package final class InputDriver {
 
     /// The menu item a key equivalent matches. Items with a target are performed by the menu; an
     /// item that goes up the responder chain (Copy, Paste, Select All) is sent to the storyline
-    /// window's first responder, since AppKit would send it to the key window's.
+    /// window's first responder when it takes it, since AppKit would send it to the key window's.
     private func menu(_ event: NSEvent, in window: NSWindow) -> Bool {
         guard let main = NSApp.mainMenu else { return false }
-        if let item = Self.item(in: main, matching: event), item.target == nil, let action = item.action {
-            if NSApp.sendAction(action, to: window.firstResponder, from: item) { return true }
+        if let item = Self.item(in: main, matching: event), item.target == nil, let action = item.action,
+            let target = NSApp.target(forAction: action, to: window.firstResponder, from: item) as AnyObject?
+        {
+            // The item's own enabled state was last worked out for another window's responder:
+            // the storyline window's own responder says whether it takes the action now.
+            let valid = (target as? NSMenuItemValidation)?.validateMenuItem(item)
+                ?? (target as? NSUserInterfaceValidations)?.validateUserInterfaceItem(item) ?? true
+            if valid, NSApp.sendAction(action, to: target, from: item) { return true }
         }
         return main.performKeyEquivalent(with: event)
     }
@@ -340,7 +376,9 @@ package final class InputDriver {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         for item in menu.items {
             if let sub = item.submenu, let found = Self.item(in: sub, matching: event) { return found }
-            guard item.isEnabled, !item.keyEquivalent.isEmpty else { continue }
+            // An item sent up the responder chain is checked against the storyline window's
+            // responder (`menu`), not by its last enabled state.
+            guard item.isEnabled || item.target == nil, !item.keyEquivalent.isEmpty else { continue }
             var mask = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control])
             // An uppercase equivalent implies ⇧.
             if item.keyEquivalent != item.keyEquivalent.lowercased() { mask.insert(.shift) }
