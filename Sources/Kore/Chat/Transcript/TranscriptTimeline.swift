@@ -132,7 +132,7 @@ struct TranscriptTimeline: View {
         guard following.value else { return }
         let gliding = !reduceMotion && store.sentAt.map { Date().timeIntervalSince($0) < Self.glide } == true
         if gliding {
-            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(Self.end, anchor: .bottom) }
+            withAnimation(Motion.glide) { proxy.scrollTo(Self.end, anchor: .bottom) }
         } else {
             proxy.scrollTo(Self.end, anchor: .bottom)
         }
