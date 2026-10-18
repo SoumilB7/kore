@@ -274,6 +274,10 @@ public actor CodexSession {
     /// picked since (or the fallback for one the account can't use) is put on the thread first.
     public func compact() async throws {
         if let model, model != threadModel, activeTurnId == nil {
+            // Before its first turn a thread is only in memory: unloaded, it would be gone.
+            guard let rolloutPath, FileManager.default.fileExists(atPath: rolloutPath) else {
+                throw CodexAppServer.Failure.rpc(code: -32600, message: "Nothing to compact yet")
+            }
             try await reopen(model: model)
         }
         _ = try await server.request("thread/compact/start", ["threadId": .string(threadId)])

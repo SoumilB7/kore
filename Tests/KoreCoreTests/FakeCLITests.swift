@@ -100,6 +100,10 @@ struct FakeCLITests {
         let session = try await CodexSession.start(.init(cwd: work, model: "gpt-6.1-sol"))
         #expect(await session.threadModel == "gpt-6.1-sol")
         await session.setModel("gpt-6-luna")
+        // Before its first turn, a thread is in memory only: unloading it would lose it.
+        await #expect(throws: CodexAppServer.Failure.self) { try await session.compact() }
+        let rollout = try #require(await session.rolloutPath)
+        FileManager.default.createFile(atPath: rollout, contents: Data())
         try await session.compact()
         #expect(await session.threadModel == "gpt-6-luna")
         var status: String?
