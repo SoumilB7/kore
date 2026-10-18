@@ -208,7 +208,9 @@ struct MessageHeader: View {
     private var text: some View {
         MessageText(
             text: entry.text, lines: shown,
-            fade: place == .sticky ? MessageText.lineHeight : Size.collapseFade * Zoom.shared.scale
+            fade: place == .sticky ? MessageText.lineHeight : Size.collapseFade * Zoom.shared.scale,
+            // A user's message sits in its filled box; a peer's in an outline on the ground.
+            ground: entry.kind == .peer ? Theme.background : PanelStyle.userBox.fill ?? Theme.surface
         ) { lines.value = $0 }
     }
 
@@ -384,24 +386,39 @@ private struct MessageToggle: View {
     }
 }
 
-/// A message's text, whole or stopped at `lines` laid-out lines, its last part fading out (an
-/// alpha mask on the text only; the box keeps its fill and border). Selection still takes the
-/// whole text. Reports how many lines it lays out to at this width.
+/// A message's text, whole or stopped at `lines` laid-out lines, its last part fading into the
+/// box's fill (an overlay, not a mask: a mask costs an offscreen pass). Stopped, it lays out
+/// only the text's start, enough to fill the lines and to tell a long message from a short one;
+/// selection then takes what shows. Reports how many lines it lays out to at this width.
 private struct MessageText: View {
     let text: String
     let lines: Int?
     let fade: CGFloat
+    /// What's behind the text: the fade ends in it.
+    let ground: Color
     let measured: (Int) -> Void
 
-    /// The body font's line height at the current zoom.
+    /// The body font's line height, worked out once per zoom.
     static var lineHeight: CGFloat {
-        NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: 13 * Zoom.shared.scale))
+        let zoom = Zoom.shared.scale
+        if let height = lineHeights[zoom] { return height }
+        let height = NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: 13 * zoom))
+        lineHeights[zoom] = height
+        return height
     }
+
+    private static var lineHeights: [CGFloat: CGFloat] = [:]
+
+    /// A stopped message lays out this much: past `collapseFrom` lines whatever the width (a
+    /// laid-out line holds at most about twice `charsPerLine`).
+    private static let prefixLines = Layout.Timeline.collapseFrom + 1
+    private static let prefixBytes = prefixLines * Layout.Timeline.charsPerLine * 2
 
     var body: some View {
         let line = Self.lineHeight
         let height = lines.map { CGFloat($0) * line }
-        Text(text)
+        let shown = lines == nil ? text : TextPrefix.of(text, lines: Self.prefixLines, bytes: Self.prefixBytes).text
+        Text(shown)
             .font(TextStyle.body)
             .foregroundStyle(Theme.text)
             .textSelection(.enabled)
@@ -409,26 +426,13 @@ private struct MessageText: View {
             .onGeometryChange(for: Int.self) { Int(($0.size.height / line).rounded()) } action: { measured($0) }
             .frame(height: height, alignment: .top)
             .clipped()
-            .modifier(FadeMask(height: height, fade: fade))
-    }
-}
-
-private struct FadeMask: ViewModifier {
-    let height: CGFloat?
-    let fade: CGFloat
-
-    func body(content: Content) -> some View {
-        if let height, height > 0 {
-            content.mask(alignment: .top) {
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0), .init(color: .black, location: max(0, 1 - fade / height)),
-                        .init(color: .clear, location: 1),
-                    ], startPoint: .top, endPoint: .bottom)
+            .overlay(alignment: .bottom) {
+                if let height, height > 0 {
+                    LinearGradient(colors: [ground.opacity(0), ground], startPoint: .top, endPoint: .bottom)
+                        .frame(height: min(fade, height))
+                        .allowsHitTesting(false)
+                }
             }
-        } else {
-            content
-        }
     }
 }
 
@@ -470,7 +474,8 @@ struct ToolItem: View {
         if let input = entry.input ?? (isCommand && entry.summary != nil ? entry.text : nil), !input.isEmpty {
             parts.append(.init(label: "IN", text: input))
         }
-        if let result = entry.result?.trimmingCharacters(in: .newlines), !result.isEmpty, isCommand || entry.isError {
+        // Not trimmed here: that copies the whole output on every body. The box trims what it shows.
+        if let result = entry.result, isCommand || entry.isError, TextPrefix.hasContent(result) {
             parts.append(.init(label: "OUT", text: result, isError: entry.isError))
         }
         return parts

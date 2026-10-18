@@ -102,6 +102,9 @@ extension Stroke {
 extension Size {
     /// IN / OUT content clips here, fading over the last 10.
     static let clip: CGFloat = 60
+    /// What a closed tool body lays out: more than `clip` shows, so the fade has text under it.
+    static let clipLines = 12
+    static let clipBytes = 1536
     static let clipFade: CGFloat = 10
     /// The disclosure chevron's box.
     static let disclosure: CGFloat = 14

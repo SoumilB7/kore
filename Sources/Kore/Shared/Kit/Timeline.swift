@@ -147,15 +147,17 @@ struct ToolBody: View {
     }
 }
 
-/// Monospaced text that stops at `bodyClip` and fades out, unless open.
+/// Monospaced text that stops at `bodyClip` and fades out, unless open. Closed, it lays out
+/// only the start of the text (`TextPrefix`), so a long or streaming output costs a few lines.
 private struct ClippedText: View {
     let text: String
     let isError: Bool
     let open: Bool
 
     var body: some View {
-        let clip = !open && Self.mayOverflow(text)
-        Text(text)
+        let prefix = TextPrefix.of(text, lines: open ? .max : Size.clipLines, bytes: open ? .max : Size.clipBytes)
+        let clip = !open && Self.mayOverflow(prefix)
+        Text(prefix.text)
             .font(TextStyle.codeSmall)
             .foregroundStyle(Theme.text)
             .fixedSize(horizontal: false, vertical: true)
@@ -176,7 +178,7 @@ private struct ClippedText: View {
 
     /// Over about four lines: worth clipping. (Measuring every row's text would cost more than
     /// the clip saves.)
-    static func mayOverflow(_ text: String) -> Bool {
-        text.count > 320 || text.utf8.reduce(0) { $1 == 10 ? $0 + 1 : $0 } >= 4
+    static func mayOverflow(_ prefix: TextPrefix) -> Bool {
+        prefix.truncated || prefix.lines >= 4 || prefix.text.utf8.count > 320
     }
 }
