@@ -1,0 +1,3 @@
+import KoreUI
+
+KoreApp.main()

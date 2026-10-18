@@ -14,7 +14,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "KoreCore", swiftSettings: releaseForSize),
-        .executableTarget(name: "Kore", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
+        // The app's views, stores and providers; `Kore` is its launcher. Other targets in this
+        // package reach its `package` declarations.
+        .target(name: "KoreUI", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
+        .executableTarget(name: "Kore", dependencies: ["KoreUI"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
     ]
 )

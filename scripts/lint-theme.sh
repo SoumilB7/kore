@@ -23,7 +23,7 @@ patterns=(
   'BrandMark\(height: *[0-9]'
   'defaultSize\(width: *[0-9]'
 )
-files=(${(f)"$(find Sources/Kore -name '*.swift' \
+files=(${(f)"$(find Sources/KoreUI Sources/Kore -name '*.swift' \
   -not -path '*/Shared/Theme/*' -not -path '*/Shared/Kit/*' \
   -not -name BrandMark.swift -not -name Logos.swift -not -name ModeIcons.swift -not -name DevSnapshot.swift -not -name DevGallery.swift -not -name DevTimelineGallery.swift -not -name 'DevBench.swift' -not -name 'DevFramePacer.swift' -not -name 'DevScroller.swift' -not -name 'DevResourceSampler.swift')"})
 hits=$(grep -nE "${(j:|:)patterns}" $files | grep -v 'lint:allow')
