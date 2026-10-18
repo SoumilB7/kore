@@ -28,6 +28,10 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var pendingFold = Held(false)
     /// The send already followed, and a saved place still to go back to.
     @StateObject private var lastSend = Held(Date?.none)
+    /// Until then, a glide to the end is under way: layout doesn't pin over it. And the send
+    /// whose glide a tab switch cut: the rest of its reply is pinned at once.
+    @StateObject private var glidingUntil = Held(Date?.none)
+    @StateObject private var glideCut = Held(Date?.none)
     @StateObject private var restore = Held(TranscriptStore.SavedScroll?.none)
     /// After scrolling a saved row to the top: how far into it to go.
     @StateObject private var restoreInRow = Held(CGFloat?.none)
@@ -133,6 +137,12 @@ struct TranscriptTimeline: View, Equatable {
                 insetTop.value = new[3]
                 let (height, offset) = (new[0], new[1])
                 visibleHeight.value = new[2]
+                // Under another tab, nobody reads or scrolls it: its moves are layout's and a glide's
+                // still under way, and say nothing of where the reader is. It shows as it was left.
+                if hidden {
+                    geometry.value = (height, offset)
+                    return
+                }
                 if let inRow = restoreInRow.value, height > 0 {
                     // The saved row's top is at the top of the visible area now: on into it (or
                     // back above it).
@@ -221,13 +231,13 @@ struct TranscriptTimeline: View, Equatable {
                 }
                 // Rows measured after they were placed change the height: while following, stay
                 // pinned to the end through layout as well as new content (T3 Code does both).
-                if following.value, height != geometry.value.height, store.sentAt.map({ Date().timeIntervalSince($0) >= Self.glide }) ?? true {
+                if following.value, height != geometry.value.height, glidingUntil.value.map({ Date() >= $0 }) ?? true {
                     proxy.scrollTo(Self.end, anchor: .bottom)
                 }
                 // Within a screen of the top on the way up: earlier turns go in above, as the top
                 // row's press does, with what's on screen kept where it is. Only the reader's own
-                // scroll in a shown tab: never a place being restored (a tab coming back).
-                if !hidden, !following.value, restore.value == nil, restoreInRow.value == nil, anchor.value == nil, paged.value == nil,
+                // scroll: never a place being restored (a tab coming back).
+                if !following.value, restore.value == nil, restoreInRow.value == nil, anchor.value == nil, paged.value == nil,
                     !fetching.value, offset < geometry.value.offset - 1, offset + insetTop.value < new[2]
                 {
                     if store.hiddenTurns > 0 {
@@ -246,7 +256,15 @@ struct TranscriptTimeline: View, Equatable {
                     paged.value = geometry.value.height
                 }
             }
-            .onChange(of: tail, initial: true) { follow(proxy) }
+            // New content follows the end; a tab showing again is at its end at once if it was
+            // following when it hid, whatever came meanwhile. Nothing moves while it's hidden, and
+            // a tab showing with nothing new and no glide cut short stays as it was left.
+            .onChange(of: [tail, hidden ? 1 : 0], initial: true) { old, new in
+                guard new[1] == 0 else { return }
+                let showing = old[1] == 1
+                if showing, old[0] == new[0], glidingUntil.value.map({ Date() >= $0 }) ?? true { return }
+                follow(proxy, showing: showing)
+            }
             .onAppear {
                 if StoryHost.installed {
                     store.storyScroll = { id in
@@ -301,16 +319,24 @@ struct TranscriptTimeline: View, Equatable {
     }
 
     /// Pins the end while following: at once, or gliding for 2s after a send. A send always
-    /// brings the end back into view.
-    private func follow(_ proxy: ScrollViewProxy) {
+    /// brings the end back into view. A tab `showing` again never glides: it's there at once.
+    private func follow(_ proxy: ScrollViewProxy, showing: Bool = false) {
         if let sent = store.sentAt, sent != lastSend.value {
             lastSend.value = sent
             following.value = true
         }
         guard following.value else { return }
-        let gliding = !reduceMotion && store.sentAt.map { Date().timeIntervalSince($0) < Self.glide } == true
-        if gliding {
+        let glideEnd = store.sentAt.map { $0.addingTimeInterval(Self.glide) }
+        if !showing, !reduceMotion, store.sentAt != glideCut.value, let glideEnd, Date() < glideEnd {
+            glidingUntil.value = glideEnd
             withAnimation(Motion.glide) { proxy.scrollTo(Self.end, anchor: .bottom) }
+        } else if showing {
+            // Over any glide it hid in the middle of.
+            glidingUntil.value = nil
+            glideCut.value = store.sentAt
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) { proxy.scrollTo(Self.end, anchor: .bottom) }
         } else {
             proxy.scrollTo(Self.end, anchor: .bottom)
         }
