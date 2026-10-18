@@ -31,6 +31,8 @@ import KoreCore
 ///   KORE_EVENT_LOG=<path>    append every ChatEvent the backend emits, one per line
 ///   KORE_TIME_REPLAY=1       print how long applying a resumed session's past took (main thread)
 ///   KORE_STOP_AFTER=<s>      press Stop that many seconds after launch
+///   KORE_SET_MODE=<id>@<s>[;…] switch the chat's mode that many seconds after launch, as the mode
+///                            menu does (plan-on / plan-off toggle Codex's Plan)
 ///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
 ///   KORE_FORK=<n>            fork the opened chat from its nth user message (after 6s); KORE_FORK_SEND=<text>
 ///                            then sends that text in the fork's tab
@@ -204,6 +206,15 @@ enum DevSnapshot {
         let env = ProcessInfo.processInfo.environment
         if let after = env["KORE_STOP_AFTER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + after) { chat.stop() }
+        }
+        // As the mode menu does, mid-session: "<id>@<seconds>[;<id>@<seconds>…]".
+        for step in (env["KORE_SET_MODE"] ?? "").split(separator: ";") {
+            let parts = step.split(separator: "@")
+            guard parts.count == 2, let after = Double(parts[1]) else { continue }
+            let id = String(parts[0])
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) {
+                if id == "plan-on" || id == "plan-off" { chat.setPlanMode(id == "plan-on") } else { chat.setMode(id) }
+            }
         }
         let decision: Decision? =
             switch env["KORE_ANSWER"] {

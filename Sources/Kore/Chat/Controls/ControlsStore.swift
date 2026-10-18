@@ -27,10 +27,10 @@ final class ControlsStore {
             modelId = controls.model
             effort = controls.effort
             commands = controls.commands
-        case .modeChanged(let id):
-            mode = id
-        case .planModeChanged(let on):
-            planMode = on
+        case .modeChanged(let change):
+            mode = change.mode
+        case .planModeChanged(let change):
+            planMode = change.on
         case .replayed(let events):
             events.forEach(apply)
         default:

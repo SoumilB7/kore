@@ -11,6 +11,10 @@ final class CodexTranslator {
     private(set) var threadId: String?
     /// Plan mode is on: a finished plan offers "Implement this plan?".
     var planMode = false
+    /// The permissions preset last reported; nil until known. Codex changes modes only when a
+    /// client asks (Kore, per turn): no agent switches them.
+    private(set) var mode: String?
+    private var planKnown = false
     private var replaying = false
 
     private var out: [ChatEvent] = []
@@ -146,6 +150,11 @@ final class CodexTranslator {
         case .raw(let method, let params):
             if method == "turn/diff/updated", agent == .main, let diff = params["diff"]?.string {
                 files.setTurnDiff(UnifiedDiff.files(diff, root: folder))
+            }
+            // Sent as each turn starts, with the settings it runs under: Kore's own changes were
+            // reported when made, so this adds only what differs (a relaunch in another preset).
+            if method == "thread/settings/updated", agent == .main, let settings = CodexTurnSettings(params["threadSettings"] ?? .null) {
+                apply(settings, .user, at: .now)
             }
         case .subThread(let thread, let method, let params):
             let child = CodexEvent(notification: method, params: params)
@@ -353,15 +362,48 @@ final class CodexTranslator {
         return out
     }
 
+    // MARK: - Modes
+
+    /// The user picked a preset in Kore; Codex runs the next turn with it.
+    func userChanged(mode id: String) { setMode(id, .user, at: .now) }
+
+    /// The user toggled Plan in Kore (the toggle or `/plan`).
+    func userChanged(plan on: Bool) { setPlan(on, .user, at: .now) }
+
+    private func apply(_ settings: CodexTurnSettings, _ source: ModeSource, at date: Date) {
+        setMode(settings.permissions.rawValue, source, at: date)
+        setPlan(settings.plan, source, at: date)
+    }
+
+    private func setMode(_ new: String, _ source: ModeSource, at date: Date) {
+        guard new != mode else { return }
+        let previous = mode
+        mode = new
+        out.append(.modeChanged(ModeChange(mode: new, previous: previous, source: previous == nil ? .session : source, at: date)))
+    }
+
+    private func setPlan(_ on: Bool, _ source: ModeSource, at date: Date) {
+        guard !planKnown || on != planMode else { return }
+        let first = !planKnown
+        planKnown = true
+        planMode = on
+        out.append(.planModeChanged(PlanModeChange(on: on, source: first ? .session : source, at: date)))
+    }
+
     // MARK: - Replay
 
     /// `thread/resume` turns as events.
-    func replay(_ turns: [JSONValue]) -> [ChatEvent] {
+    /// `settings`: each turn's settings from the rollout (`CodexHistory.turnSettings`), for the
+    /// mode changes between turns.
+    func replay(_ turns: [JSONValue], settings: [String: CodexTurnSettings] = [:]) -> [ChatEvent] {
         replaying = true
         defer { replaying = false }
         for turn in turns {
             let id = turn["id"]?.string ?? ToolText.newID()
-            openTurn(id, at: Self.date(turn["startedAt"]) ?? .now)
+            let start = Self.date(turn["startedAt"]) ?? .now
+            // A change between turns goes before the turn it applies to.
+            if let settings = settings[id] { apply(settings, .user, at: start) }
+            openTurn(id, at: start)
             for item in (turn["items"]?.array ?? []).map(CodexItem.init) {
                 if item.type == "userMessage" {
                     let content = item.raw["content"] ?? []

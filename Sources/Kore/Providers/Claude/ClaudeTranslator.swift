@@ -61,6 +61,20 @@ final class ClaudeTranslator {
 
     static let agentTools: Set<String> = ["Agent", "Task"]
 
+    // Modes. The CLI reports every change as `system/status {permissionMode}` (and each turn's
+    // `system/init`) but not why; the cause is what came just before it.
+    /// The permission mode the CLI last confirmed.
+    private(set) var mode: String?
+    /// Asked for with `set_permission_mode`, not confirmed yet.
+    private var requestedMode: String?
+    /// An EnterPlanMode / ExitPlanMode call the CLI hasn't settled yet (live: until its result).
+    private var modeCall: (id: String, tool: String, agent: AgentID)?
+    /// Replay: plan-mode calls by tool id, and the time and exit target of the entry being read.
+    private var modeCalls: [String: (tool: String, agent: AgentID)] = [:]
+    private var replayTime = Date()
+    private var replayExitMode: String?
+    static let modeTools: Set<String> = ["EnterPlanMode", "ExitPlanMode"]
+
     init(folder: URL, sessionId: String?) {
         self.folder = folder
         self.sessionId = sessionId
@@ -135,9 +149,10 @@ final class ClaudeTranslator {
         switch event {
         case .sessionStarted(let info):
             identify(info.sessionId)
-            if let mode = info.permissionMode { out.append(.modeChanged(mode)) }
-        case .permissionModeChanged(let mode):
-            out.append(.modeChanged(mode))
+            // Repeated at every turn; it differs only when Kore launched in another mode.
+            if let reported = info.permissionMode { setMode(reported, .user, at: .now) }
+        case .permissionModeChanged(let reported):
+            modeReported(reported)
         case .textDelta(let text, nil):
             stream(.answer, text)
         case .thinkingDelta(let text, nil):
@@ -207,6 +222,9 @@ final class ClaudeTranslator {
         for case .toolUse(let id, let name, let input) in blocks where firstTime("start:" + id, agent) {
             toolAgent[id] = agent
             if Self.agentTools.contains(name) { agentInputs[id] = input }
+            if Self.modeTools.contains(name) {
+                if replaying { modeCalls[id] = (name, agent) } else { modeCall = (id, name, agent) }
+            }
             out.append(.toolStarted(Self.toolCall(id, name, input, in: folder), agent: agent))
             if agent == .main { turnItems.append(.tool) }
         }
@@ -216,6 +234,20 @@ final class ClaudeTranslator {
         var first: String?
         for case .toolResult(let id, let content, let isError) in blocks where firstTime("end:" + id, agent) {
             first = first ?? id
+            if modeCall?.id == id { modeCall = nil }  // live, the status (if any) came before it
+            if replaying, !isError, let call = modeCalls.removeValue(forKey: id) {
+                // A transcript has no status lines: the call succeeding is the switch.
+                if call.tool == "EnterPlanMode" {
+                    setMode("plan", .agent(.enteredPlanMode, call.agent), at: replayTime)
+                } else {
+                    // The target is the next prompt's mode. With no next prompt, or one sent back
+                    // in plan (Kore switched it between turns, unrecorded), it isn't known: no
+                    // guess; the next prompt (or the live session) says the mode.
+                    if let target = replayExitMode, target != "plan" {
+                        setMode(target, .agent(.planApproved, call.agent), at: replayTime)
+                    }
+                }
+            }
             out.append(.toolFinished(id: id, output: Self.text(of: content), isError: isError, agent: agent))
         }
         guard let id = first, let result else { return }
@@ -437,22 +469,81 @@ final class ClaudeTranslator {
         return out
     }
 
+    // MARK: - Modes
+
+    /// Kore asked the CLI for a mode; its status confirms it.
+    func requestMode(_ id: String) { requestedMode = id }
+
+    /// The CLI rejected the mode Kore asked for and kept its own.
+    func modeRefused() {
+        guard let asked = requestedMode else { return }
+        requestedMode = nil
+        guard let mode else { return }
+        out.append(.modeChanged(ModeChange(mode: mode, previous: asked, source: .refused, at: .now)))
+    }
+
+    /// A live `system/status` mode: Kore's request, or the agent's plan-mode call before it.
+    private func modeReported(_ reported: String) {
+        let source: ModeSource
+        if let asked = requestedMode, asked == reported {
+            source = .user
+            requestedMode = nil
+        } else if let call = modeCall {
+            source = .agent(call.tool == "EnterPlanMode" ? .enteredPlanMode : .planApproved, call.agent)
+            modeCall = nil
+        } else {
+            source = .agent(.other, .main)  // not asked for by Kore: the CLI did it
+        }
+        setMode(reported, source, at: .now)
+    }
+
+    private func setMode(_ new: String, _ source: ModeSource, at date: Date) {
+        guard !new.isEmpty, new != mode else { return }
+        let previous = mode
+        mode = new
+        out.append(.modeChanged(ModeChange(mode: new, previous: previous, source: previous == nil ? .session : source, at: date)))
+    }
+
     // MARK: - Replay
 
     /// A transcript (`ClaudeHistory.messages`) as events: turns open at each prompt (or peer
     /// message, cron firing, finished agent) and close before the next one, timed from the
     /// entries' timestamps.
-    func replay(_ messages: [JSONValue]) -> [ChatEvent] {
+    /// `earlier`: an older page, prepended. Its modes are history; the chat's current one stays.
+    func replay(_ messages: [JSONValue], earlier: Bool = false) -> [ChatEvent] {
         replaying = true
-        defer { replaying = false }
+        let current = mode
+        if earlier { mode = nil }
+        defer {
+            replaying = false
+            modeCalls = [:]
+            if earlier { mode = current }
+        }
+        // Leaving plan mode isn't recorded with its target; the next prompt's mode is it.
+        var nextPromptMode = [String?](repeating: nil, count: messages.count)
+        var upcoming: String?
+        for index in messages.indices.reversed() {
+            nextPromptMode[index] = upcoming
+            if messages[index]["type"]?.string == "user", let mode = messages[index]["permissionMode"]?.string {
+                upcoming = mode
+            }
+        }
         var lastAnswer: Date?
         func close() {
             guard turn != nil else { return }
             finishTurn(.completed, duration: lastAnswer.map { .seconds(max(0, $0.timeIntervalSince(turnStart))) })
             lastAnswer = nil
         }
-        for message in messages {
+        for (index, message) in messages.enumerated() {
             let time = Self.date(message["timestamp"]) ?? .now
+            replayTime = time
+            replayExitMode = nextPromptMode[index]
+            if message["type"]?.string == "user", let prompted = message["permissionMode"]?.string, prompted != mode {
+                // Each prompt records the mode it was sent in: a difference is a change between
+                // turns (Kore's menu, or another client). Placed before the turn it applies to.
+                close()
+                setMode(prompted, .user, at: time)
+            }
             if let peer = PeerMessage(entry: message) {
                 close()
                 openTurn(.peer, at: time)

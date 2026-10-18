@@ -254,7 +254,7 @@ final class ClaudeBackend: ChatBackend {
         let folder = options.folder
         let page = await Task.detached { ClaudeHistory.page(sessionId: source, in: folder, before: from, userTurns: 10) }.value
         earlierFrom = page.earlier
-        return (translator.replay(page.messages), page.earlier != nil)
+        return (translator.replay(page.messages, earlier: true), page.earlier != nil)
     }
 
     // MARK: - Actions
@@ -314,7 +314,14 @@ final class ClaudeBackend: ChatBackend {
     func setMode(_ id: String) async throws {
         options.mode = id
         guard let session, let mode = ClaudeSession.PermissionMode(rawValue: id) else { return }
-        try await session.setPermissionMode(mode)
+        translator.requestMode(id)
+        do {
+            try await session.setPermissionMode(mode)
+        } catch {
+            translator.modeRefused()
+            flush()
+            throw error
+        }
     }
 
     func setPlanMode(_ on: Bool) async {}

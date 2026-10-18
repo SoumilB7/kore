@@ -12,10 +12,11 @@ enum ChatEvent: Sendable {
     case titleChanged(String)
     /// Models, current model and effort, and `/` commands, once the CLI has started.
     case controlsLoaded(ChatControls)
-    /// The CLI reported or switched its mode itself (e.g. after a plan is approved).
-    case modeChanged(String)
+    /// The mode changed (Claude permission mode / Codex permissions preset), with who changed it.
+    /// Sent only when it differs from the last one, live and in replay.
+    case modeChanged(ModeChange)
     /// Providers with a plan toggle apart from their modes (Codex).
-    case planModeChanged(Bool)
+    case planModeChanged(PlanModeChange)
 
     // MARK: Turns
 
@@ -74,6 +75,43 @@ enum ChatEvent: Sendable {
 
     /// A resumed session's past, in order, as one event so it lands as one change.
     case replayed([ChatEvent])
+}
+
+/// Who changed a mode.
+enum ModeSource: Sendable, Equatable {
+    /// The mode a session started or resumed in: not a change anyone made.
+    case session
+    /// From Kore (the mode menu, Shift+Tab, `/plan`), or between turns in another client.
+    case user
+    /// The agent's doing, and why: which agent called the tool (main, or a sub-agent's id).
+    case agent(ModeCause, AgentID)
+    /// Kore asked for a mode and the CLI kept `mode` instead.
+    case refused
+}
+
+enum ModeCause: Sendable, Equatable {
+    /// It started planning (Claude's EnterPlanMode).
+    case enteredPlanMode
+    /// Its plan was approved (Claude's ExitPlanMode accepted): plan mode left for the chosen mode.
+    case planApproved
+    /// The CLI changed it with no call Kore saw.
+    case other
+}
+
+struct ModeChange: Sendable, Equatable {
+    /// The provider's mode id ("plan", "acceptEdits", "fullAccess", …).
+    let mode: String
+    /// nil for the first mode a chat learns.
+    let previous: String?
+    let source: ModeSource
+    /// The CLI's own time in replay (the transcript entry); when it was reported, live.
+    let at: Date
+}
+
+struct PlanModeChange: Sendable, Equatable {
+    let on: Bool
+    let source: ModeSource
+    let at: Date
 }
 
 typealias TurnID = String

@@ -92,6 +92,8 @@ public actor CodexSession {
     public private(set) var model: String?
     /// Turns of a resumed thread (each with its `items`), oldest first.
     public private(set) var history: [JSONValue] = []
+    /// The thread's rollout file, where each turn's settings are kept (`CodexHistory.turnSettings`).
+    public private(set) var rolloutPath: String?
 
     /// Spawns the app-server and opens (or resumes) the thread.
     public static func start(_ options: Options) async throws -> CodexSession {
@@ -238,6 +240,7 @@ public actor CodexSession {
             result = try await server.request("thread/start", .object(params))
         }
         threadId = result["thread"]?["id"]?.string ?? ""
+        rolloutPath = result["thread"]?["path"]?.string
         model = result["model"]?.string
         sink.yield(.threadStarted(threadId: threadId, model: result["model"]?.string, raw: result))
 

@@ -51,7 +51,9 @@ final class CodexBackend: ChatBackend {
         }
         if replayPending {
             replayPending = false
-            yield(.replayed(translator.replay(await session.history)))
+            let rollout = await session.rolloutPath
+            let settings = await Task.detached { rollout.map { CodexHistory.turnSettings(rollout: $0) } ?? [:] }.value
+            yield(.replayed(translator.replay(await session.history, settings: settings)))
         }
         self.session = session
         pump = Task {
@@ -103,6 +105,15 @@ final class CodexBackend: ChatBackend {
 
     private func handle(_ event: CodexEvent) {
         translator.translate(event)
+        flush()
+        if case .exited = event {
+            resumeId = sessionId
+            session = nil
+            pump = nil
+        }
+    }
+
+    private func flush() {
         let (events, changes) = translator.take()
         for event in events { yield(event) }
         for (turn, task) in changes {
@@ -110,11 +121,6 @@ final class CodexBackend: ChatBackend {
                 let changes = await task.value
                 if !changes.isEmpty { yield(.turnChanges(turn, changes)) }
             }
-        }
-        if case .exited = event {
-            resumeId = sessionId
-            session = nil
-            pump = nil
         }
     }
 
@@ -130,7 +136,6 @@ final class CodexBackend: ChatBackend {
         // The Codex extension's /plan is a local toggle: nothing is sent.
         if text == "/plan" && files.isEmpty {
             await setPlanMode(!options.planMode)
-            yield(.planModeChanged(options.planMode))
             return false
         }
         try await start()
@@ -174,12 +179,15 @@ final class CodexBackend: ChatBackend {
 
     func setMode(_ id: String) async throws {
         options.mode = id
+        translator.userChanged(mode: id)
+        flush()
         if let permissions = CodexSession.Permissions(rawValue: id) { await session?.setPermissions(permissions) }
     }
 
     func setPlanMode(_ on: Bool) async {
         options.planMode = on
-        translator.planMode = on
+        translator.userChanged(plan: on)
+        flush()
         await session?.setPlanMode(on)
     }
 
