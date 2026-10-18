@@ -32,7 +32,8 @@ public actor CodexAppServer {
     private var io: StdioProcess?
     private var running = false
     private var nextId = 1
-    private var pending: [Int: CheckedContinuation<JSONValue, Error>] = [:]
+    /// What to do with each awaited request's reply.
+    private var pending: [Int: (Result<JSONValue, any Error>) -> Void] = [:]
 
     /// The `initialize` response: user agent, CODEX_HOME, platform.
     public private(set) var info: JSONValue = .null
@@ -58,7 +59,7 @@ public actor CodexAppServer {
         nextId += 1
         let message: JSONValue = ["id": .number(Double(id)), "method": .string(method), "params": params]
         return try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
+            pending[id] = { continuation.resume(with: $0) }
             do {
                 try write(message)
             } catch {
@@ -66,6 +67,31 @@ public actor CodexAppServer {
                 continuation.resume(throwing: error)
             }
         }
+    }
+
+    /// Several requests, written in this order before any reply is awaited (Codex works on them
+    /// together), and their replies in the same order.
+    public func requests(_ calls: [(method: String, params: JSONValue)]) async -> [Result<JSONValue, any Error>] {
+        let (replies, sink) = AsyncStream<(Int, Result<JSONValue, any Error>)>.makeStream()
+        for (index, call) in calls.enumerated() {
+            let id = nextId
+            nextId += 1
+            pending[id] = { sink.yield((index, $0)) }
+            do {
+                try write(["id": .number(Double(id)), "method": .string(call.method), "params": call.params])
+            } catch {
+                pending[id] = nil
+                sink.yield((index, .failure(error)))
+            }
+        }
+        var results = [Result<JSONValue, any Error>?](repeating: nil, count: calls.count)
+        var left = calls.count
+        for await (index, result) in replies {
+            results[index] = result
+            left -= 1
+            if left == 0 { break }
+        }
+        return results.map { $0 ?? .failure(Failure.notRunning) }
     }
 
     public func notify(_ method: String, _ params: JSONValue? = nil) throws {
@@ -121,7 +147,7 @@ public actor CodexAppServer {
         running = false
         let waiting = pending
         pending = [:]
-        for continuation in waiting.values { continuation.resume(throwing: Failure.notRunning) }
+        for reply in waiting.values { reply(.failure(Failure.notRunning)) }
         sink.yield(.exited(status: status))
         sink.finish()
     }
@@ -138,12 +164,11 @@ public actor CodexAppServer {
             } else {
                 sink.yield(.notification(method: method, params: params))
             }
-        } else if let id = message["id"]?.int, let continuation = pending.removeValue(forKey: id) {
+        } else if let id = message["id"]?.int, let reply = pending.removeValue(forKey: id) {
             if let error = message["error"] {
-                continuation.resume(throwing: Failure.rpc(
-                    code: error["code"]?.int ?? 0, message: error["message"]?.string ?? "unknown error"))
+                reply(.failure(Failure.rpc(code: error["code"]?.int ?? 0, message: error["message"]?.string ?? "unknown error")))
             } else {
-                continuation.resume(returning: message["result"] ?? .null)
+                reply(.success(message["result"] ?? .null))
             }
         }
     }

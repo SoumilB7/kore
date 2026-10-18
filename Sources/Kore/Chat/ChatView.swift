@@ -61,6 +61,7 @@ struct ChatView: View {
                 // controls are in (the fork takes the model and effort from them).
                 let actions = actions
                 Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(DevSnapshot.forkAfter))
                     for _ in 0..<40 {
                         let users = chat.transcript.entries.filter { $0.kind == .user }
                         if users.indices.contains(n - 1), !chat.controls.models.isEmpty {

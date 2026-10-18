@@ -41,7 +41,8 @@ import KoreCore
 ///   KORE_UNFOLD=<s>          open every turn's "Worked for" fold that many seconds after launch
 ///   KORE_ANSWER=allow|always|deny  answer every approval as it appears
 ///   KORE_FORK=<n>            fork the opened chat from its nth user message (once its CLI is up); KORE_FORK_SEND=<text>
-///                            then sends that text in the fork's tab
+///                            then sends that text in the fork's tab; KORE_FORK_AFTER=<s> waits that long first
+///                            (so KORE_EARLIER can load older pages to fork from)
 ///   KORE_EARLIER=top|load    after KORE_EARLIER_AFTER seconds (default 4), scroll the transcript to its
 ///                            top; with load, then press the top row KORE_EARLIER_TIMES times (default 1); then
 ///                            KORE_EARLIER_SHOW=divider|top scrolls to the first divider or the top
@@ -514,4 +515,5 @@ enum DevSnapshot {
     /// KORE_FORK: which user message to fork from, 1-based.
     static let forkMessage = ProcessInfo.processInfo.environment["KORE_FORK"].flatMap { Int($0) }
     static let forkSend = ProcessInfo.processInfo.environment["KORE_FORK_SEND"]
+    static let forkAfter = ProcessInfo.processInfo.environment["KORE_FORK_AFTER"].flatMap { Double($0) } ?? 0
 }

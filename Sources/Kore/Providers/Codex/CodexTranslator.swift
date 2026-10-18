@@ -3,7 +3,7 @@ import KoreCore
 
 /// Turns Codex app-server notifications into `ChatEvent`s. A turn is a list of items, each
 /// started → deltas → completed; sub-agents are child threads on the same connection, mapped
-/// with `agent: .sub(threadId)`. `thread/resume` turns replay through the same item mapping.
+/// with `agent: .sub(threadId)`. A resumed thread's turns replay through the same item mapping.
 final class CodexTranslator {
     let files: TurnFiles
     private let folder: URL
@@ -542,7 +542,7 @@ final class CodexTranslator {
         let carried: Carried
     }
 
-    /// Replays `thread/resume` turns on a translator of its own, off the main thread.
+    /// Replays a page of turns (`thread/turns/list`) on a translator of its own, off the main thread.
     static func replayed(
         _ turns: [JSONValue], rollout: CodexRollout, folder: URL, agents: [String: CodexAgentThread] = [:]
     ) async -> Replayed {
@@ -561,15 +561,17 @@ final class CodexTranslator {
         }.value
     }
 
-    func adopt(_ replayed: Carried) {
+    /// `history`: an older page, which leaves the live mode, plan toggle and context alone.
+    func adopt(_ replayed: Carried, history: Bool = false) {
+        spawned.formUnion(replayed.spawned)
+        finished.formUnion(replayed.finished)
+        lastText.merge(replayed.lastText) { live, _ in live }
+        guard !history else { return }
         if replayed.planKnown {
             planMode = replayed.planMode
             planKnown = true
         }
         mode = replayed.mode ?? mode
-        spawned.formUnion(replayed.spawned)
-        finished.formUnion(replayed.finished)
-        lastText.merge(replayed.lastText) { live, _ in live }
         contextUsed = replayed.contextUsed ?? contextUsed
         contextWindow = replayed.contextWindow ?? contextWindow
         // What the replay reported counts as reported (thread/resume sends the same count again).
@@ -578,8 +580,8 @@ final class CodexTranslator {
 
     // MARK: - Replay
 
-    /// `thread/resume` turns as events.
-    /// `settings`: each turn's settings from the rollout (`CodexHistory.turnSettings`), for the
+    /// Turns (`thread/turns/list`, oldest first) as events.
+    /// `settings`: each turn's settings from the rollout (`CodexRolloutReader`), for the
     /// mode changes between turns.
     func replay(_ turns: [JSONValue], settings: [String: CodexTurnSettings] = [:], context: (used: Int, window: Int?)? = nil) -> [ChatEvent] {
         replaying = true
@@ -640,7 +642,7 @@ final class CodexTranslator {
     }
 
     /// Codex times turns in Unix seconds (or milliseconds); ISO strings are taken too.
-    private static func date(_ json: JSONValue?) -> Date? {
+    static func date(_ json: JSONValue?) -> Date? {
         if let n = json?.double { return Date(timeIntervalSince1970: n > 1e12 ? n / 1000 : n) }
         return ClaudeTranslator.date(json)
     }

@@ -21,6 +21,12 @@ final class CodexBackend: ChatBackend {
     /// can't generate a title), unless a name came from anywhere first: Kore never replaces one.
     private var mayTitle: Bool
     private var titlePrompt: String?
+    /// Where the turns before the ones shown start (`thread/turns/list`'s cursor), and the
+    /// rollout, read back as far as they need.
+    private var earlierFrom: String?
+    private var rollout: CodexRolloutReader?
+    /// Turns per page: the newest when a chat opens, then each `earlier()`.
+    private static let pageTurns = 10
     private static let log = Logger(subsystem: "Kore", category: "codex")
 
     var sessionId: String? { translator.threadId ?? resumeId }
@@ -46,11 +52,19 @@ final class CodexBackend: ChatBackend {
     }
 
     private func launch() async throws {
-        let session = try await CodexSession.start(
+        let session = try await CodexSession.launch(
             .init(
                 cwd: options.folder, model: options.model, effort: options.effort,
                 permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
                 plan: options.planMode, resume: sessionId, forkAt: forkAt))
+        // A resumed or forked thread's newest turns, read while Codex resumes it.
+        let newest: (turns: [JSONValue], earlier: String?)?
+        do {
+            newest = try await session.open(page: replayPending ? Self.pageTurns : nil)
+        } catch {
+            await session.close()
+            throw error
+        }
         if forkAt != nil {
             // The fork is its own thread from here on (a relaunch resumes it).
             forkAt = nil
@@ -59,15 +73,12 @@ final class CodexBackend: ChatBackend {
         }
         if replayPending {
             replayPending = false
-            // Read and parsed into events off the main thread, on a translator of its own.
-            let path = await session.rolloutPath
-            let rollout = await Task.detached { path.map { CodexHistory.rollout(at: $0) } ?? CodexRollout() }.value
-            let history = await session.history
-            // Its sub-agents' nicknames and outcomes: metadata reads, about a millisecond each.
-            let agents = await session.agentThreads(CodexTranslator.agents(in: history))
-            let replayed = await CodexTranslator.replayed(history, rollout: rollout, folder: options.folder, agents: agents)
+            earlierFrom = newest?.earlier
+            rollout = await session.rolloutPath.map(CodexRolloutReader.init)
+            let replayed = await replay(newest?.turns ?? [], session)
             translator.adopt(replayed.carried)
             yield(.replayed(replayed.events))
+            yield(.earlierHistory(earlierFrom != nil))
         }
         self.session = session
         pump = Task {
@@ -79,6 +90,22 @@ final class CodexBackend: ChatBackend {
             }
         }
         yield(.controlsLoaded(await controls(session)))
+    }
+
+    /// A page of turns as events, with their settings from the rollout, parsed off the main
+    /// thread on a translator of its own.
+    private func replay(_ turns: [JSONValue], _ session: CodexSession) async -> CodexTranslator.Replayed {
+        let wanted = turns.map { CodexRolloutReader.Turn(id: $0["id"]?.string ?? "", start: CodexTranslator.date($0["startedAt"])) }
+        let reader = rollout
+        let (settings, read) = await Task.detached(priority: .userInitiated) { () -> (CodexRollout, CodexRolloutReader?) in
+            var reader = reader
+            let settings = reader?.read(wanted) ?? CodexRollout()
+            return (settings, reader)
+        }.value
+        rollout = read
+        // Its sub-agents' nicknames and outcomes: metadata reads, about a millisecond each.
+        let agents = await session.agentThreads(CodexTranslator.agents(in: turns))
+        return await CodexTranslator.replayed(turns, rollout: settings, folder: options.folder, agents: agents)
     }
 
     /// Models (falling back to the account's default when the configured one isn't offered),
@@ -291,21 +318,50 @@ final class CodexBackend: ChatBackend {
     func fork(message id: String?, text: String) async throws -> ForkStart {
         try await start()
         guard let session, let thread = sessionId else { return .fresh }
-        let turns = try await session.readThread(thread)
-        let ids = turns.map { $0["id"]?.string ?? "" }
-        let index = id.flatMap { ids.firstIndex(of: $0) } ?? turns.lastIndex { turn in
+        // A replayed message by its turn's id; one sent in this run by its text from the end.
+        if let id, let start = try await fork(session, thread, view: .notLoaded, at: { $0["id"]?.string == id }) { return start }
+        let match = { (turn: JSONValue) in
             (turn["items"]?.array ?? []).contains { item in
                 item["type"]?.string == "userMessage"
                     && (item["content"]?.array ?? []).compactMap { $0["text"]?.string }.joined(separator: "\n") == text
             }
         }
-        guard let index else { throw ForkError.notFound }
-        guard index > 0 else { return .fresh }
-        return .pending(ForkPoint(from: thread, at: ids[index - 1]))
+        if let start = try await fork(session, thread, view: .summary, at: match) { return start }
+        throw ForkError.notFound
     }
 
-    /// Codex keeps a compacted thread's earlier turns in `thread/resume`, so nothing is held back.
-    func earlier() async -> (events: [ChatEvent], more: Bool)? { nil }
+    /// Finds the newest turn `at` matches, a page at a time from the end (a long thread's turns
+    /// are never read whole), and forks through the turn before it. Nil when none matches.
+    private func fork(
+        _ session: CodexSession, _ thread: String, view: CodexSession.TurnsView, at match: (JSONValue) -> Bool
+    ) async throws -> ForkStart? {
+        var cursor: String?
+        var found = false
+        repeat {
+            let page = try await session.turns(of: thread, before: cursor, limit: 50, view: view)
+            for turn in page.turns.reversed() {
+                if found, let before = turn["id"]?.string { return .pending(ForkPoint(from: thread, at: before)) }
+                found = match(turn)
+            }
+            cursor = page.earlier
+        } while cursor != nil
+        // The thread's first turn: nothing comes before it.
+        return found ? .fresh : nil
+    }
+
+    /// The ten turns before the ones shown.
+    func earlier() async -> (events: [ChatEvent], more: Bool)? {
+        guard let from = earlierFrom else { return nil }
+        try? await start()
+        guard let session, let thread = sessionId,
+            let older = try? await session.turns(of: thread, before: from, limit: Self.pageTurns)
+        else { return nil }
+        earlierFrom = older.earlier
+        // An older page is history only: it starts from no mode and leaves the live one alone.
+        let replayed = await replay(older.turns, session)
+        translator.adopt(replayed.carried, history: true)
+        return (replayed.events, older.earlier != nil)
+    }
 
     func close() async {
         pump?.cancel()

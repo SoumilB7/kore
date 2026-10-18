@@ -94,23 +94,33 @@ public actor CodexSession {
     private var finishedTurnId: String?
     /// Model the thread runs on; updated by `setModel`.
     public private(set) var model: String?
-    /// Turns of a resumed thread (each with its `items`), oldest first.
-    public private(set) var history: [JSONValue] = []
-    /// The thread's rollout file, where each turn's settings are kept (`CodexHistory.turnSettings`).
+    /// The thread's rollout file, where each turn's settings are kept (`CodexRolloutReader`).
     public private(set) var rolloutPath: String?
-
     /// Spawns the app-server and opens (or resumes) the thread.
     public static func start(_ options: Options) async throws -> CodexSession {
-        let server = try await CodexAppServer.start(
-            cwd: options.cwd, executable: options.executable, environment: options.environment)
-        let session = CodexSession(server: server, options: options)
+        let session = try await launch(options)
         do {
-            try await session.openThread()
+            _ = try await session.open()
         } catch {
-            await server.close()
+            await session.close()
             throw error
         }
         return session
+    }
+
+    /// Spawns the app-server only; `open` opens the thread.
+    public static func launch(_ options: Options) async throws -> CodexSession {
+        let server = try await CodexAppServer.start(
+            cwd: options.cwd, executable: options.executable, environment: options.environment)
+        return CodexSession(server: server, options: options)
+    }
+
+    /// Opens, resumes or forks the thread. A resumed or forked thread's turns don't come with it
+    /// (a long one's are tens of MB): `turns` pages them. `page`: also its newest turns, read
+    /// while Codex resumes it. Sent before the resume, a read slows it (twice as long on a
+    /// small thread); sent just after, it's answered in tens of ms while the resume runs on.
+    public func open(page limit: Int? = nil) async throws -> (turns: [JSONValue], earlier: String?)? {
+        try await openThread(page: limit)
     }
 
     private init(server: CodexAppServer, options: Options) {
@@ -179,6 +189,37 @@ public actor CodexSession {
         return result["thread"]?["turns"]?.array ?? []
     }
 
+    /// How much of each turn's items `turns` returns.
+    public enum TurnsView: String, Sendable {
+        /// Every item.
+        case full
+        /// The user's and agent's messages only.
+        case summary
+        /// None: ids, times and status.
+        case notLoaded
+    }
+
+    /// Up to `limit` turns of `thread` (this one by default) before `cursor` (nil: the newest),
+    /// oldest first, and the cursor for the ones before them (nil when there are none).
+    public func turns(
+        of thread: String? = nil, before cursor: String? = nil, limit: Int, view: TurnsView = .full
+    ) async throws -> (turns: [JSONValue], earlier: String?) {
+        let result = try await server.request("thread/turns/list", Self.turnsParams(thread ?? threadId, cursor, limit, view))
+        return Self.page(result)
+    }
+
+    private static func turnsParams(_ thread: String, _ cursor: String?, _ limit: Int, _ view: TurnsView) -> JSONValue {
+        var params: [String: JSONValue] = [
+            "threadId": .string(thread), "sortDirection": "desc", "limit": .number(Double(limit)), "itemsView": .string(view.rawValue),
+        ]
+        if let cursor { params["cursor"] = .string(cursor) }
+        return .object(params)
+    }
+
+    private static func page(_ result: JSONValue) -> (turns: [JSONValue], earlier: String?) {
+        ((result["data"]?.array ?? []).reversed(), result["nextCursor"]?.string)
+    }
+
     /// A thread's metadata (nickname, role, rollout path…) without its turns.
     public func threadInfo(_ id: String) async throws -> JSONValue {
         try await server.request("thread/read", ["threadId": .string(id), "includeTurns": false])["thread"] ?? .null
@@ -242,7 +283,7 @@ public actor CodexSession {
 
     // MARK: - Wiring
 
-    private func openThread() async throws {
+    private func openThread(page limit: Int?) async throws -> (turns: [JSONValue], earlier: String?)? {
         var params: [String: JSONValue] = [
             "cwd": .string(options.cwd.path),
             "approvalPolicy": options.permissions.approvalPolicy,
@@ -252,16 +293,33 @@ public actor CodexSession {
         if let model = options.model { params["model"] = .string(model) }
 
         let result: JSONValue
-        if let resume = options.resume {
+        var page: (turns: [JSONValue], earlier: String?)?
+        if let resume = options.resume, options.forkAt == nil {
             params["threadId"] = .string(resume)
-            if let turn = options.forkAt { params["lastTurnId"] = .string(turn) }
-            result = try await server.request(options.forkAt == nil ? "thread/resume" : "thread/fork", .object(params))
-            history = result["thread"]?["turns"]?.array ?? []
+            params["excludeTurns"] = true
+            if let limit {
+                let replies = await server.requests([
+                    ("thread/resume", .object(params)), ("thread/turns/list", Self.turnsParams(resume, nil, limit, .full)),
+                ])
+                result = try replies[0].get()
+                page = (try? replies[1].get()).map(Self.page)
+            } else {
+                result = try await server.request("thread/resume", .object(params))
+            }
+        } else if let resume = options.resume, let turn = options.forkAt {
+            params["threadId"] = .string(resume)
+            params["lastTurnId"] = .string(turn)
+            params["excludeTurns"] = true
+            result = try await server.request("thread/fork", .object(params))
         } else {
             result = try await server.request("thread/start", .object(params))
         }
         threadId = result["thread"]?["id"]?.string ?? ""
         rolloutPath = result["thread"]?["path"]?.string
+        // A fork's turns exist once Codex has made it.
+        if let limit, page == nil, options.forkAt != nil {
+            page = try? await turns(limit: limit)
+        }
         model = result["model"]?.string
         if effort == nil { effort = result["reasoningEffort"]?.string }
         sink.yield(.threadStarted(threadId: threadId, model: result["model"]?.string, raw: result))
@@ -270,6 +328,7 @@ public actor CodexSession {
         Task {
             for await message in server.incoming { await handle(message) }
         }
+        return page
     }
 
     private func handle(_ message: CodexAppServer.Incoming) async {
