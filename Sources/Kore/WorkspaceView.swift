@@ -130,6 +130,9 @@ private struct TabItem: View {
         HStack(spacing: 0) {
             Button {
                 workspace.select(tab)
+                // A double click on a preview tab keeps it (VS Code). Read from the event, so
+                // no second gesture competes with the button or the window drag.
+                if NSApp.currentEvent?.clickCount == 2 { workspace.keep(tab) }
             } label: {
                 HStack(spacing: Space.md) {
                     if let file = tab.file {
@@ -158,7 +161,6 @@ private struct TabItem: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .simultaneousGesture(TapGesture(count: 2).onEnded { workspace.keep(tab) })
             Button {
                 workspace.close(tab)
             } label: {

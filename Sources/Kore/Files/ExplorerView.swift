@@ -303,7 +303,6 @@ private struct TreeRow: View {
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .onTapGesture { click() }
-        .simultaneousGesture(TapGesture(count: 2).onEnded { doubleClick() })
         .contextMenu { TreeMenu(path: row.id, isFolder: row.isFolder, store: store, workspace: workspace) }
         .help(row.names.count > 1 ? row.names.joined(separator: "/") : "")
     }
@@ -394,21 +393,22 @@ private struct TreeRow: View {
         .allowsHitTesting(false)
     }
 
+    /// One click selects (a folder opens or closes; a file opens in the preview tab); the
+    /// second click of a double click keeps the file's tab and puts the caret in it. The count
+    /// comes from the event, as AppKit sends both clicks.
     private func click() {
         guard !editing else { return }
+        let double = (NSApp.currentEvent?.clickCount ?? 1) >= 2
         focus()
         store.selection = row.id
         if row.isFolder {
-            store.toggle(row.id)
+            if !double { store.toggle(row.id) }
+        } else if double {
+            workspace.openFile(URL(fileURLWithPath: row.id), preview: false)
+            workspace.activeFile?.editor.focus()
         } else {
             workspace.openFile(URL(fileURLWithPath: row.id), preview: true)
         }
-    }
-
-    private func doubleClick() {
-        guard !editing, !row.isFolder else { return }
-        workspace.openFile(URL(fileURLWithPath: row.id), preview: false)
-        workspace.activeFile?.editor.focus()
     }
 }
 
