@@ -81,6 +81,7 @@ struct RendererContext {
 @MainActor enum Renderers {
     static let all: [any FileRenderer.Type] = [
         MarkdownRenderer.self,
+        DelimitedRenderer.self,
     ]
 
     static func renderer(for file: FileInfo) -> (any FileRenderer.Type)? {
@@ -119,6 +120,7 @@ final class FileRendering {
 
     func resolve(_ url: URL) async {
         guard resolved != url else { return }
+        RenderTiming.begin()
         let info = await Task.detached { FileInfo.read(url) }.value
         self.info = info
         renderer = Renderers.renderer(for: info)

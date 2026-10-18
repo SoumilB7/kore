@@ -60,6 +60,7 @@ private struct MarkdownFileView: View {
             let text = try await readText(file.url)
             let segments = await Task.detached { MarkdownSegment.split(text) }.value
             loaded.value = .ready(segments)
+            RenderTiming.ready(MarkdownRenderer.id)
         } catch {
             loaded.value = .failed(error.localizedDescription)
         }

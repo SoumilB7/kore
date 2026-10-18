@@ -174,3 +174,33 @@ struct RendererNotice: View {
         .overlay(alignment: .bottom) { Rule() }
     }
 }
+
+/// KORE_TIME_RENDER=1: logs, per file tab, how long the renderer took from the tab's first look
+/// at the file to its content being set, and to the first frame after that (stderr,
+/// `RENDER <id> ready=… frame=…` in ms).
+@MainActor enum RenderTiming {
+    static let on = ProcessInfo.processInfo.environment["KORE_TIME_RENDER"] == "1"
+    private static var start: ContinuousClock.Instant?
+
+    static func begin() {
+        guard on else { return }
+        start = .now
+    }
+
+    static func ready(_ id: String) {
+        guard on, let start else { return }
+        self.start = nil
+        let ready = ContinuousClock.now - start
+        // The first time the main run loop goes idle after this: the frame has been committed.
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, false, CFIndex.max) { _, _ in
+            let frame = ContinuousClock.now - start
+            FileHandle.standardError.write(Data("RENDER \(id) ready=\(ms(ready)) frame=\(ms(frame))\n".utf8))
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+    }
+
+    private nonisolated static func ms(_ duration: Duration) -> String {
+        let value = Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+        return String(format: "%.1f", value)
+    }
+}
