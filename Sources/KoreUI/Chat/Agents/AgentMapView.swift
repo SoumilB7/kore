@@ -2,8 +2,9 @@ import SwiftUI
 
 /// Every agent the chat has spawned, over the chat area (phase 10 §6): a graph on the left with
 /// the chat as its root O and each agent an O whose wire drops from the bottom of its parent's,
-/// and the selected agent on the right with its prompt and its own timeline, live. Stopped agents
-/// wait apart in a closed group below the tree. ↑ ↓ select, Return opens the agent in a tab,
+/// and the selected agent on the right with its prompt and its own timeline, live. The chat's
+/// background agents hang below the tree under their own label, and stopped agents wait apart in
+/// a closed group below them. ↑ ↓ select, Return opens the agent in a tab,
 /// ← → fold and unfold, Esc closes. In a narrow tile the graph becomes a menu.
 struct AgentMapView: View {
     let chat: Chat
@@ -30,7 +31,7 @@ struct AgentMapView: View {
                         // The stopped group's rows count whether it's open or not: opening it
                         // doesn't move the divider.
                         tree(all, selected: selected?.id)
-                            .frame(width: paneWidth(visible(all.tree) + all.stopped, in: geometry.size.width))
+                            .frame(width: paneWidth(visible(all.tree) + visible(all.background) + all.stopped, in: geometry.size.width))
                         Rectangle().fill(Theme.border).frame(width: Stroke.hairline)
                     }
                     VStack(alignment: .leading, spacing: 0) {
@@ -60,11 +61,14 @@ struct AgentMapView: View {
         .onChange(of: chat.transcript.agentSummary.failed) { _, failed in map.markSeen(failed) }
     }
 
-    typealias Trees = (tree: [TranscriptStore.AgentNode], stopped: [TranscriptStore.AgentNode])
+    typealias Trees = (
+        tree: [TranscriptStore.AgentNode], background: [TranscriptStore.AgentNode], stopped: [TranscriptStore.AgentNode]
+    )
 
-    /// The rows ↑ ↓ move through: the tree's, then the stopped group's while it's open.
+    /// The rows ↑ ↓ move through: the tree's, the background group's, then the stopped group's
+    /// while it's open.
     private func shown(_ all: Trees) -> [TranscriptStore.AgentNode] {
-        visible(all.tree) + (map.stoppedOpen ? visible(all.stopped) : [])
+        visible(all.tree) + visible(all.background) + (map.stoppedOpen ? visible(all.stopped) : [])
     }
 
     /// The tree without the descendants of folded branches.
@@ -88,6 +92,10 @@ struct AgentMapView: View {
                 MapHeader(summary: chat.transcript.agentSummary)
                 GraphRootRow(chat: chat, hasChildren: !all.tree.isEmpty)
                 rows(all.tree, selected: selected, dimmed: false)
+                if !all.background.isEmpty {
+                    BackgroundGroupRow(count: all.background.count).padding(.top, Layout.AgentMap.groupTop)
+                    rows(all.background, selected: selected, dimmed: false, grouped: true)
+                }
                 if !all.stopped.isEmpty {
                     StoppedGroupRow(count: all.stopped.count, open: map.stoppedOpen) { map.stoppedOpen.toggle() }
                         .padding(.top, Layout.AgentMap.groupTop)
@@ -100,13 +108,14 @@ struct AgentMapView: View {
     }
 
     /// One tree's rows, without its folded branches' descendants.
-    private func rows(_ all: [TranscriptStore.AgentNode], selected: String?, dimmed: Bool) -> some View {
+    /// `grouped`: under the background label, which says what their meters would.
+    private func rows(_ all: [TranscriptStore.AgentNode], selected: String?, dimmed: Bool, grouped: Bool = false) -> some View {
         let parents = Set(zip(all, all.dropFirst()).filter { $1.depth > $0.depth }.map(\.0.id))
         return ForEach(visible(all)) { node in
             let hidden = map.folded.contains(node.id) ? descendants(of: node.id, in: all) : 0
             AgentGraphRow(
                 node: node, selected: node.id == selected, waiting: waiting(node.id),
-                hasChildren: parents.contains(node.id) && hidden == 0, hidden: hidden, dimmed: dimmed
+                hasChildren: parents.contains(node.id) && hidden == 0, hidden: hidden, dimmed: dimmed, grouped: grouped
             ) {
                 map.selected = node.id
             }
@@ -129,6 +138,9 @@ struct AgentMapView: View {
     private func treeMenu(_ all: Trees, selected: TranscriptStore.AgentNode?) -> some View {
         Menu {
             menuItems(all.tree)
+            if !all.background.isEmpty {
+                Section("Background") { menuItems(all.background) }
+            }
             if !all.stopped.isEmpty {
                 Section("Stopped") { menuItems(all.stopped) }
             }
@@ -262,6 +274,25 @@ private struct StoppedGroupRow: View {
     }
 }
 
+/// "Background  2" under a hairline, below the tree: the chat's background agents hang below it
+/// as the tree's hang off the chat.
+private struct BackgroundGroupRow: View {
+    let count: Int
+
+    var body: some View {
+        let m = Layout.AgentMap.self
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
+            (Text("Background").font(TextStyle.labelMedium).foregroundColor(Theme.secondary)
+                + Text("  \(count)").font(TextStyle.caption.monospacedDigit()).foregroundColor(Theme.tertiary))
+                .lineLimit(1)
+                .padding(.leading, m.leading - Size.disclosure / 2)
+                .frame(maxWidth: .infinity, minHeight: m.groupRow * Zoom.shared.scale, alignment: .leading)
+        }
+        .storyMark(StoryID.AgentMap.background)
+    }
+}
+
 /// One agent in the graph: its O at its depth, then its name and live meter. The wires are
 /// drawn behind it (`GraphWires`).
 private struct AgentGraphRow: View {
@@ -273,6 +304,8 @@ private struct AgentGraphRow: View {
     let hidden: Int
     /// In the stopped group.
     let dimmed: Bool
+    /// In the background group.
+    let grouped: Bool
     let select: () -> Void
     @StateObject private var hovered = Local(false)
 
@@ -289,7 +322,7 @@ private struct AgentGraphRow: View {
                         .font(TextStyle.labelMedium)
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
-                    AgentNodeMeter(info: info, waiting: waiting, hidden: hidden, background: info.background)
+                    AgentNodeMeter(info: info, waiting: waiting, hidden: hidden, background: info.background && !grouped)
                 }
                 Spacer(minLength: 0)
             }

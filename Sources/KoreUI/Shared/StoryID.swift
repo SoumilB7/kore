@@ -102,6 +102,8 @@ extension StoryID {
         package static func wires(_ agent: String) -> StoryID { StoryID(.agentmap, "wires", key: agent) }
         /// The stopped agents' group: its row opens and closes it.
         package static let stopped = StoryID(.agentmap, "stopped")
+        /// The background agents' group's label, over its rows.
+        package static let background = StoryID(.agentmap, "background")
         package static let open = StoryID(.agentmap, "open")
         package static let stop = StoryID(.agentmap, "stop")
         package static let close = StoryID(.agentmap, "close")

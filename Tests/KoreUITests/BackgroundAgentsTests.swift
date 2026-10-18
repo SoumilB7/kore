@@ -105,6 +105,29 @@ struct BackgroundAgentsTests {
         #expect(script.store.agentSummary.first.allSatisfy { $0.background })
     }
 
+    /// The map lists the chat's background agents apart, below the tree: the running ones
+    /// first, each with its own agents; one of them stopped goes with the stopped, and one
+    /// another agent runs in the background stays under it.
+    @Test func theMapListsBackgroundAgentsApart() {
+        func spawn(_ id: String, under parent: AgentID = .main, background: Bool = false) -> ChatEvent {
+            .agentSpawned(AgentInfo(
+                id: id, parent: parent, toolId: nil, name: id, type: nil, model: nil, prompt: nil, background: background))
+        }
+        let script = Script()
+        script.send("Go")
+        script.start("t1")
+        script.on(
+            spawn("done", background: true), spawn("writer"), spawn("helper", under: .sub("writer"), background: true),
+            spawn("scout", background: true), spawn("reader", under: .sub("scout")), spawn("gone", background: true),
+            .agentFinished(id: "done", .completed, result: "Done"), .agentFinished(id: "gone", .stopped, result: nil))
+        _ = script.sections
+        let map = script.store.agentTree()
+        let names = { (nodes: [TranscriptStore.AgentNode]) in nodes.map { String(repeating: ".", count: $0.depth) + $0.id } }
+        #expect(names(map.tree) == ["writer", ".helper"])
+        #expect(names(map.background) == ["scout", ".reader", "done"])
+        #expect(names(map.stopped) == ["gone"])
+    }
+
     // MARK: Codex
 
     /// A child thread another client runs outlives its parent's turn: its rollout says it still
