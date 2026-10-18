@@ -6,7 +6,8 @@ import SwiftUI
 /// everything else through.
 @MainActor
 final class UnsavedGuard: NSObject, NSWindowDelegate {
-    private weak var original: NSWindowDelegate?
+    /// Read from the Objective-C forwarding hooks, which AppKit calls on the main thread.
+    nonisolated(unsafe) private weak var original: NSWindowDelegate?
     private weak var workspace: Workspace?
     private static var guards: [ObjectIdentifier: UnsavedGuard] = [:]
 
