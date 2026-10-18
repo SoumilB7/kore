@@ -68,6 +68,15 @@ public actor KoreUsage {
                 requests, points: points, window: window, now: now, scope: cli == "claude" ? bar.scope : nil, surfaces: bar.surfaces,
                 cap: cap)
         }
+        if let titles = codexIndex?.titles(), !titles.isEmpty {
+            for (key, share) in limits {
+                limits[key]?.chats = share.chats.map { chat in
+                    var chat = chat
+                    chat.title = titles[chat.id]
+                    return chat
+                }
+            }
+        }
         return KoreShares(at: now, limits: limits)
     }
 

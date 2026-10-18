@@ -73,16 +73,20 @@ struct ChatView: View {
         }
         .animation(Motion.fade, value: viewer.value?.editor.id)
         .animation(Motion.fade, value: changesTurn.value?.turn)
+        .animation(Motion.fade, value: chat.usage.extended)
+        // The composer gives up its focus to the usage card and takes it back after.
+        .onChange(of: chat.usage.extended) { _, open in composerFocused = !open }
         // A switch shows the other chat as it is: its mode's outline, its context, its overlays
         // appear at once, not animated from the last chat's.
         .transaction(value: chat.id) { transaction in
             transaction.animation = nil
             transaction.disablesAnimations = true
         }
-        .onChange(of: active?.id, initial: true) {
-            // The viewer and the changes modal belonged to the last chat.
+        .onChange(of: active?.id, initial: true) { last, _ in
+            // The viewer, the changes modal and the usage card belonged to the last chat.
             if viewer.value != nil { viewer.value = nil }
             if changesTurn.value != nil { changesTurn.value = nil }
+            if let last, last != active?.id { kept.chats.first { $0.id == last }?.usage.closeExtended() }
             guard let active else { return }
             composerFocused = true
             devHooks(active)
@@ -90,7 +94,8 @@ struct ChatView: View {
         .task(id: chat.id) { await chat.startOnce() }
     }
 
-    /// The changes modal or the image viewer, over the active chat (under the agent map).
+    /// The changes modal, the image viewer or the usage card, over the active chat (under the
+    /// agent map).
     @ViewBuilder private func overlay(_ chat: Chat) -> some View {
         if let open = changesTurn.value, open.chat == chat.id {
             ChangesView(changes: chat.transcript.changes(ofTurn: open.turn), folder: chat.folder, close: closeChanges)
@@ -100,6 +105,8 @@ struct ChatView: View {
                 editor: editor, actionTitle: editor.pendingID == nil ? "Add to message" : "Done",
                 finish: { finishViewing(editor, in: chat) }, close: closeViewer
             )
+        } else if chat.usage.extended {
+            UsageModal(chat: chat, state: chat.usage, wording: chat.provider.usage)
         }
     }
 

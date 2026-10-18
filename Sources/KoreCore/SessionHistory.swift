@@ -50,6 +50,12 @@ public enum ClaudeHistory {
         }
     }
 
+    /// A session's title as the history lists it (its custom or generated title, else its first
+    /// prompt); nil when it has none. Reads the transcript's first and last 128 KB.
+    public static func title(sessionId: String, in folder: URL) -> String? {
+        summary(of: transcript(sessionId: sessionId, in: folder))?.title
+    }
+
     /// The session's user/assistant messages along its current branch, oldest first, in the
     /// same shape as stream-json `user` / `assistant` messages, back to its last compaction.
     public static func messages(sessionId: String, in folder: URL) -> [JSONValue] {

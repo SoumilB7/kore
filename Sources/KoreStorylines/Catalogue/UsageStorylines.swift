@@ -108,6 +108,22 @@ final class UsagePopup: ChatStoryline {
 
     private static func epoch(hours: Double) -> Double { Date().addingTimeInterval(hours * 3600).timeIntervalSince1970.rounded() }
 
+    /// Kore's chat and another app's in "/work/app", Kore's with 40% of the units on Claude and
+    /// 30% on Codex.
+    fileprivate static let records = UsageRecords(
+        claude: { _ in
+            [
+                .init(session: "kore-session", folder: "/work/app", kore: true, outputs: [40]),
+                .init(session: "ide-session", folder: "/work/app", kore: false, outputs: [60]),
+            ]
+        },
+        codex: { _ in
+            [
+                .init(thread: "kore-thread", folder: "/work/app", originator: "kore", inputs: [30]),
+                .init(thread: "ide-thread", folder: "/work/app", originator: "codex_vscode", inputs: [70]),
+            ]
+        })
+
     /// Each hatch from its bar's leading edge, as wide as Kore's part of the fill (two bands at
     /// least), and the bar's tooltip saying it.
     private static func hatches(_ limits: [(title: String, used: Double, kore: Double)]) -> [any Step] {
@@ -171,7 +187,7 @@ final class UsagePopup: ChatStoryline {
             }
         }
         var steps: [any Step] = [
-            UseScript(Self.claude, for: "claude"), UseScript(Self.codex(variant), for: "codex"), KoreUsageRecords(), OpenFolder(), StartChat(),
+            UseScript(Self.claude, for: "claude"), UseScript(Self.codex(variant), for: "codex"), Self.records, OpenFolder(), StartChat(),
             WaitForFocus(.id(StoryID.Composer.field)),
             // A bare "/": Usage first, the CLI's own usage command not listed beside it.
             Press(.id(StoryID.Composer.slash)),
@@ -441,39 +457,208 @@ final class UsagePopup: ChatStoryline {
     }
 }
 
-/// The run's records of what each request used, as the CLIs write them, half an hour ago in
-/// "/work/app": Kore's chat (Claude's stream-json lines in a session Kore ran; Codex's thread
-/// that Kore started) and another app's, Kore's with 40% of the units on Claude and 30% on Codex.
-private struct KoreUsageRecords: Step {
+/// The Usage popup's extended view: its button opens a card over the chat (the popup closes)
+/// with the limits on top, the first picked, and under them that limit's distribution: In
+/// Kore, Kore's chats largest first (this chat as "This chat", another with its agent), Outside
+/// Kore, and a line on how far to trust it. ↓ ↑ and a click pick another limit; a limit nothing
+/// of Kore's used says so. Esc closes it and the composer has its focus again; a click outside
+/// closes it too, and a click on a chat goes to that chat.
+final class UsageExtendedView: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var variants: [Variant] { [.claude, .codex] }
+
+    override func steps() -> [any Step] {
+        let codex = variant == .codex
+        let popup = Locator.id(StoryID.Composer.usage)
+        let card = Locator.id(StoryID.UsageModal.card)
+        let extended = Locator.id(StoryID.Composer.usage.part(.extended))
+        let other = codex ? "kore-thread" : "kore-session"
+        let records = UsageRecords(
+            claude: { story in
+                let (folder, chat) = (story.app.chat?.folder.path ?? "/work/app", story.app.chat?.sessionId ?? "")
+                return [
+                    .init(session: "kore-session", folder: folder, kore: true, outputs: [20], agent: 10, title: "Fix the race in LoginTests"),
+                    .init(session: chat, folder: folder, kore: true, outputs: [10]),
+                    .init(session: "ide-session", folder: folder, kore: false, outputs: [60]),
+                ]
+            },
+            codex: { story in
+                let (folder, chat) = (story.app.chat?.folder.path ?? "/work/app", story.app.chat?.sessionId ?? "")
+                return [
+                    .init(thread: "kore-thread", folder: folder, originator: "kore", inputs: [20], prompt: "Port the tile layout"),
+                    .init(thread: "kore-child", folder: folder, originator: "kore", parent: "kore-thread", inputs: [10]),
+                    .init(thread: chat, folder: folder, originator: "kore", inputs: [10]),
+                    .init(thread: "ide-thread", folder: folder, originator: "codex_vscode", inputs: [60]),
+                ]
+            })
+        // Kore 40 of 100 units: the other chat 30 (10 its agent's), this chat 10.
+        let (first, second) = codex ? ("5h limit", "Weekly limit") : ("Session (5hr)", "Weekly (7 day)")
+        let name = codex ? "Port the tile layout" : "Fix the race in LoginTests"
+        let ledgers =
+            codex
+            ? [
+                first: ["In Kore · ~34%", "\(name) · ~25%", "This chat · ~8%", "Outside Kore · ~50%"],
+                second: ["In Kore · ~2%", "\(name) · ~2%", "This chat · <1%", "Outside Kore · ~4%"],
+            ]
+            : [
+                first: ["In Kore · ~12%", "\(name) · ~9%", "This chat · ~3%", "Outside Kore · ~18%"],
+                second: ["In Kore · ~18%", "\(name) · ~13%", "This chat · ~4%", "Outside Kore · ~26%"],
+            ]
+        let ledger = { (title: String) in
+            Expect("\(title)'s ledger", found: { $0.app.chat.map { "\($0.storyUsagePicked ?? "none"): \($0.storyUsageLedger)" } }) { story in
+                story.app.chat?.storyUsagePicked == title && story.app.chat?.storyUsageLedger == ledgers[title]
+            }
+        }
+        let open: [any Step] = [
+            Press(.id(StoryID.Composer.slash)),
+            Press(.id(StoryID.Composer.command("usage"))),
+            WaitForElement(popup),
+            WaitForElement(.id(StoryID.Composer.usageLimit(first).part(.share))),
+            Click(extended),
+            WaitForElement(card),
+            ExpectElement(popup, .absent),
+        ]
+        var steps: [any Step] = [
+            UseScript(UsagePopup.claude, for: "claude"), UseScript(UsagePopup.codex(.codex), for: "codex"), OpenFolder(), StartChat(),
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Expect("the chat has its session") { $0.app.chat?.sessionId != nil },
+            records,
+        ]
+        steps += open
+        steps += [
+            Expect("the card open, the composer's focus given up") { $0.app.chat?.isUsageExtendedOpen == true },
+            // The first limit picked; its ledger, largest first, this chat by that name.
+            ledger(first),
+            ExpectElement(.id(StoryID.UsageModal.chat(other))),
+            ExpectElement(.id(StoryID.UsageModal.card.part(.outside))),
+            FadesEnd(),
+            Snapshot("usage-extended"),
+            // ↓ picks the next limit, ↑ the one before.
+            Key(.down),
+            ledger(second),
+            Key(.up),
+            ledger(first),
+            Click(.id(StoryID.UsageModal.limit(second))),
+            ledger(second),
+        ]
+        if !codex {
+            // Nothing of Kore's on the model week: one line.
+            steps += [
+                Click(.id(StoryID.UsageModal.limit("Weekly Fable"))),
+                Expect("the model week's one line", found: { $0.app.chat?.storyUsageLedger.joined(separator: " | ") }) {
+                    $0.app.chat?.storyUsageLedger == ["Nothing from Kore in this window."]
+                },
+                ExpectElement(.id(StoryID.UsageModal.card.part(.outside)), .absent),
+            ]
+        }
+        steps += [
+            // Esc closes it; the composer has the keys again.
+            Key(.escape),
+            ExpectElement(card, .absent),
+            WaitForFocus(.id(StoryID.Composer.field)),
+        ]
+        steps += open
+        steps += [
+            // It opens on the limit picked last.
+            Expect("the limit picked last", found: { $0.app.chat?.storyUsagePicked }) {
+                $0.app.chat?.storyUsagePicked == (codex ? second : "Weekly Fable")
+            },
+            // Its × closes it.
+            Click(.id(StoryID.UsageModal.card.part(.close))),
+            ExpectElement(card, .absent),
+        ]
+        steps += open
+        steps += [
+            Click(.id(StoryID.UsageModal.limit(first))),
+            ledger(first),
+            // Past a double click's time, a click on the other chat goes to it, in a tab of its own.
+            PastDoubleClick(),
+            Click(.id(StoryID.UsageModal.chat(other))),
+            ExpectElement(card, .absent),
+            Expect("the other chat open", found: { $0.app.chat?.sessionId }) { $0.app.chat?.sessionId == other },
+        ]
+        return steps
+    }
+}
+
+/// The run's records of what each request used, as the CLIs write them, half an hour ago: in
+/// place of any written before, so each storyline's figures are its own. Kore's Claude sessions
+/// go on Kore's list.
+private struct UsageRecords: Step {
+    /// A Claude session's assistant lines: its id, its folder, whether Kore wrote it, output
+    /// tokens per line (all on one model), an agent's own file, and a title.
+    struct Claude {
+        var session: String
+        var folder: String
+        var kore: Bool
+        var outputs: [Int]
+        var agent: Int?
+        var title: String?
+    }
+
+    /// A Codex thread: its id, its folder, its originator, its parent, input tokens per request,
+    /// and its first prompt.
+    struct Codex {
+        var thread: String
+        var folder: String
+        var originator: String
+        var parent: String?
+        var inputs: [Int]
+        var prompt: String?
+    }
+
+    var claude: @MainActor (StoryContext) -> [Claude] = { _ in [] }
+    var codex: @MainActor (StoryContext) -> [Codex] = { _ in [] }
     var label: String { "Write the run's usage records" }
 
     func run(_ story: StoryContext) async throws {
         let paths = UsagePaths.current
+        let files = FileManager.default
+        try? files.removeItem(at: paths.claudeProjects)
+        try? files.removeItem(at: paths.codexSessions)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let stamp = formatter.string(from: Date().addingTimeInterval(-30 * 60))
-        func claude(_ id: String, _ entry: String, _ session: String, _ output: Int) -> String {
-            #"{"type":"assistant","timestamp":"\#(stamp)","entrypoint":"\#(entry)","cwd":"/work/app","sessionId":"\#(session)","message":{"id":"\#(id)","model":"test-model","usage":{"input_tokens":0,"output_tokens":\#(output),"cache_read_input_tokens":0}}}"#
-        }
-        func codex(_ thread: String, _ originator: String, _ input: Int) -> [String] {
-            [
-                #"{"timestamp":"\#(stamp)","type":"session_meta","payload":{"id":"\#(thread)","originator":"\#(originator)","cwd":"/work/app","source":"vscode"}}"#,
-                #"{"timestamp":"\#(stamp)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":\#(input)},"last_token_usage":{"input_tokens":\#(input),"cached_input_tokens":0,"output_tokens":0}},"rate_limits":null}}"#,
-            ]
+        var out: [(URL, [String])] = []
+        for session in claude(story) {
+            let folder = URL(fileURLWithPath: session.folder)
+            let transcript = paths.claudeProjects.appendingPathComponent(ClaudeHistory.transcript(sessionId: session.session, in: folder).deletingLastPathComponent().lastPathComponent)
+            func line(_ id: String, _ output: Int) -> String {
+                let entry = session.kore ? "sdk-cli" : "claude-vscode"
+                return #"{"type":"assistant","timestamp":"\#(stamp)","entrypoint":"\#(entry)","cwd":"\#(session.folder)","sessionId":"\#(session.session)","message":{"id":"\#(id)","model":"test-model","usage":{"input_tokens":0,"output_tokens":\#(output),"cache_read_input_tokens":0}}}"#
+            }
+            var lines = session.title.map { [#"{"type":"custom-title","customTitle":"\#($0)","sessionId":"\#(session.session)"}"#] } ?? []
+            lines += session.outputs.enumerated().map { line("\(session.session)-m\($0.offset)", $0.element) }
+            out.append((transcript.appendingPathComponent(session.session + ".jsonl"), lines))
+            if let agent = session.agent {
+                out.append((transcript.appendingPathComponent("\(session.session)/subagents/agent-a1.jsonl"), [line("\(session.session)-a1", agent)]))
+            }
+            if session.kore { KoreSessions.shared.record(cli: "claude", session: session.session, folder: folder, launch: "new") }
         }
         let day = Calendar(identifier: .gregorian).dateComponents(in: .current, from: Date())
         let dayPath = String(format: "%04d/%02d/%02d", day.year ?? 2026, day.month ?? 1, day.day ?? 1)
-        let files: [(URL, [String])] = [
-            (paths.claudeProjects.appendingPathComponent("-work-app/kore-session.jsonl"), [claude("m1", "sdk-cli", "kore-session", 40)]),
-            (paths.claudeProjects.appendingPathComponent("-work-app/ide-session.jsonl"), [claude("m2", "claude-vscode", "ide-session", 60)]),
-            (paths.codexSessions.appendingPathComponent("\(dayPath)/rollout-kore.jsonl"), codex("kore-thread", "kore", 30)),
-            (paths.codexSessions.appendingPathComponent("\(dayPath)/rollout-ide.jsonl"), codex("ide-thread", "codex_vscode", 70)),
-        ]
-        for (url, lines) in files {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        for (index, thread) in codex(story).enumerated() {
+            // Each thread at its own moment: Codex tells copies of a request apart by time and total.
+            let stamp = formatter.string(from: Date().addingTimeInterval(-30 * 60 + Double(index)))
+            let source = thread.parent.map { #"{"subagent":{"thread_spawn":{"parent_thread_id":"\#($0)"}}}"# } ?? #""vscode""#
+            var lines = [
+                #"{"timestamp":"\#(stamp)","type":"session_meta","payload":{"id":"\#(thread.thread)","originator":"\#(thread.originator)","cwd":"\#(thread.folder)","source":\#(source)}}"#
+            ]
+            if let prompt = thread.prompt {
+                lines.append(#"{"timestamp":"\#(stamp)","type":"event_msg","payload":{"type":"user_message","message":"\#(prompt)"}}"#)
+            }
+            var total = 0
+            for input in thread.inputs {
+                total += input
+                lines.append(
+                    #"{"timestamp":"\#(stamp)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":\#(total)},"last_token_usage":{"input_tokens":\#(input),"cached_input_tokens":0,"output_tokens":0}},"rate_limits":null}}"#)
+            }
+            out.append((paths.codexSessions.appendingPathComponent("\(dayPath)/rollout-\(thread.thread).jsonl"), lines))
+        }
+        for (url, lines) in out {
+            try files.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
         }
-        KoreSessions.shared.record(cli: "claude", session: "kore-session", folder: URL(fileURLWithPath: "/work/app"), launch: "new")
         await Task.detached { KoreSessions.shared.sync() }.value
     }
 }
@@ -484,6 +669,16 @@ private struct KoreUsageRecords: Step {
 }
 
 /// Waits out the popup's fades (`Motion.fade`) and a bar's move, so a snapshot shows where they end.
+/// Waits out a double click's time, so the next click is a click of its own.
+private struct PastDoubleClick: Step {
+    var label: String { "Wait out a double click" }
+
+    func run(_ story: StoryContext) async throws {
+        let end = ContinuousClock.now + .seconds(NSEvent.doubleClickInterval) + .milliseconds(100)
+        try await story.until("a double click's time") { ContinuousClock.now >= end }
+    }
+}
+
 private struct FadesEnd: Step {
     var label: String { "Wait for the fades to end" }
 

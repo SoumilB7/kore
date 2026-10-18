@@ -27,13 +27,13 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
 
     package enum Area: String, Sendable, CaseIterable {
         case titlebar, tabs, newtab, composer, transcript, approval, agentmap, history, explorer, editor, quickopen,
-            search, changes, viewer
+            search, changes, viewer, usage
     }
 
     package enum Part: String, Sendable, CaseIterable {
         case fork, copy, stop, close, chevron, open, cancel, allow, always, deny, approveplan, keepplanning, archive
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
-        case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track
+        case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track, outside, extended
         case signIn = "signin", signOut = "signout"
         case `continue`
     }
@@ -77,8 +77,8 @@ extension StoryID {
         package static let chip = StoryID(.composer, "chip")
         /// A row of the slash menu, by the command's name.
         package static func command(_ name: String) -> StoryID { StoryID(.composer, "command", key: name) }
-        /// The usage popup; `.part(.open)` is its "Manage usage" link, `.part(.reset)` its count of
-        /// full resets, which unfolds them.
+        /// The usage popup; `.part(.open)` is its "Manage usage" link, `.part(.extended)` the button
+        /// to its extended view, `.part(.reset)` its count of full resets, which unfolds them.
         package static let usage = StoryID(.composer, "usage")
         /// The Account popup; its action row's parts: `.signIn` (Sign in, Try again), `.method`
         /// (the ⌄), `.switch`, `.signOut`, then `.allow` / `.cancel` (the question's Yes and No,
@@ -96,6 +96,14 @@ extension StoryID {
         package static func usageReset(_ id: String?) -> StoryID { StoryID(.composer, "usage.reset", key: id ?? "") }
         /// A message waiting for the turn to end; `.part(.cancel)` takes it back.
         package static func queued(_ id: UUID) -> StoryID { StoryID(.composer, "queued", key: id.uuidString) }
+    }
+
+    /// The Usage popup's extended view: its card (`.part(.close)` its ×, `.part(.outside)` its
+    /// Outside Kore row), its limits (the picker) by title, and the chats of the picked one.
+    package enum UsageModal {
+        package static let card = StoryID(.usage, "modal")
+        package static func limit(_ title: String) -> StoryID { StoryID(.usage, "limit", key: title) }
+        package static func chat(_ id: String) -> StoryID { StoryID(.usage, "chat", key: id) }
     }
 
     package enum Transcript {

@@ -233,6 +233,8 @@ public struct UsageWindow: Sendable, Equatable {
 public struct ChatShare: Sendable, Equatable, Identifiable {
     public var id: String
     public var folder: String?
+    /// Its title where the CLI's files give one (a Codex thread's first prompt).
+    public var title: String?
     /// Plan points: percent of the limit.
     public var points: Double
     /// Sub-agents and background agents rolled into it, and their part of `points`.

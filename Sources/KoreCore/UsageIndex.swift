@@ -321,6 +321,8 @@ struct CodexUsageIndex {
         var parent: String?
         var originator: String?
         var cwd: String?
+        /// Its first prompt's first line, as Codex's own list names a thread without a name.
+        var title: String?
         /// Carried between reads: the model in use, the last total counted, and the windows
         /// and limit its last snapshot reported.
         var model: String?
@@ -332,7 +334,7 @@ struct CodexUsageIndex {
         var records: [Record] = []
         var points: [Point] = []
 
-        enum CodingKeys: CodingKey { case inode, offset, born, thread, parent, originator, cwd, model, total, limit, tags, count, pointCount }
+        enum CodingKeys: CodingKey { case inode, offset, born, thread, parent, originator, cwd, title, model, total, limit, tags, count, pointCount }
 
         init(inode: UInt64, born: Double) {
             self.inode = inode
@@ -345,7 +347,7 @@ struct CodexUsageIndex {
     var names = UsageNames()
     var horizon = Date.distantFuture
 
-    static let needles = [#""token_count""#, #""session_meta""#, #""turn_context""#].map { Array($0.utf8) }
+    static let needles = [#""token_count""#, #""session_meta""#, #""turn_context""#, #""user_message""#].map { Array($0.utf8) }
 
     mutating func refresh(root: URL, since: Date) -> Bool {
         var changed = false
@@ -400,6 +402,9 @@ struct CodexUsageIndex {
                 state.parent = spawn?["parent_thread_id"] as? String
             case "turn_context":
                 if let model = payload["model"] as? String { state.model = model }
+            case "event_msg" where payload["type"] as? String == "user_message" && state.title == nil:
+                let line = (payload["message"] as? String)?.split(whereSeparator: \.isNewline).first
+                if let line = line?.trimmingCharacters(in: .whitespaces), !line.isEmpty { state.title = String(line.prefix(80)) }
             case "event_msg" where payload["type"] as? String == "token_count":
                 guard let stamp = entry["timestamp"] as? String, let time = Timestamp.parse(stamp)?.timeIntervalSince1970 else { return }
                 if let limits = payload["rate_limits"] as? [String: Any] {
@@ -501,6 +506,15 @@ struct CodexUsageIndex {
                 units: UsageAttribution.codexUnits(input: Double(record.input), cached: Double(record.cached), output: Double(record.output)),
                 kore: kore, limit: record.limit == .max ? nil : names.name(record.limit), windows: tags)
         }
+    }
+
+    /// Each thread's title, where its rollout has one.
+    func titles() -> [String: String] {
+        var titles: [String: String] = [:]
+        for file in files.values {
+            if let thread = file.thread, let title = file.title { titles[thread] = title }
+        }
+        return titles
     }
 
     /// The plan's readings in the rollouts for a window of `minutes` (and `limit`) that resets

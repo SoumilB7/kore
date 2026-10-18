@@ -47,6 +47,11 @@ final class UsageState {
     /// Kore's part of each limit, worked out from this Mac's files once a reading lands (the
     /// last one meanwhile); nil until then, and the bars show plain.
     private(set) var shares: KoreShares?
+    /// The extended view is open over the chat, showing the picked limit (by title).
+    private(set) var extended = false
+    private(set) var picked: String?
+    /// The chats' names as the extended view found them, by id.
+    private(set) var chatNames: [String: String] = [:]
     /// Each open's own number: a read that lands after a close, or after the next open, is
     /// only kept for next time.
     @ObservationIgnored private var serial = 0
@@ -63,6 +68,8 @@ final class UsageState {
     private static var kept: [String: (reading: PlanReading, at: Date)] = [:]
     /// Each provider's last shares.
     private static var keptShares: [String: KoreShares] = [:]
+    /// The limit picked last in the extended view, which it opens on next time.
+    private static var lastPicked: String?
     /// A read the CLI never answers stops showing a spinner after this.
     private static let patience: Duration = .seconds(35)
 
@@ -99,16 +106,67 @@ final class UsageState {
         }
     }
 
-    /// Kore's share of `reading`'s limits; it shows when it lands, unless the popup closed.
+    /// Kore's share of `reading`'s limits; it shows when it lands, while that reading shows
+    /// (in the popup, or the extended view it opened).
     private func attribute(_ reading: PlanReading, open: Int) {
         guard let attribute else { return }
         let provider = provider
         Task { [weak self] in
             guard let shares = await attribute(reading) else { return }
             Self.keptShares[provider] = shares
-            guard let self, self.serial == open else { return }
+            guard let self, self.reading == reading else { return }
             self.shares = shares
         }
+    }
+
+    // MARK: Extended view
+
+    /// Opens the extended view (the popup closes): on the limit picked last in this run, else
+    /// the first. Only with limits to show.
+    func openExtended() {
+        let titles = reading?.limits?.bars.map(\.title) ?? []
+        guard !titles.isEmpty, reading?.account.access == .plan else { return }
+        close()
+        picked = Self.lastPicked.flatMap { titles.contains($0) ? $0 : nil } ?? titles.first
+        extended = true
+    }
+
+    func closeExtended() {
+        extended = false
+    }
+
+    func pick(_ title: String) {
+        picked = title
+        Self.lastPicked = title
+    }
+
+    /// ↑ ↓ in the extended view: the limit before or after the picked one, stopping at the ends.
+    func step(_ by: Int) {
+        let titles = reading?.limits?.bars.map(\.title) ?? []
+        guard let at = picked.flatMap(titles.firstIndex(of:)) else { return }
+        pick(titles[min(max(at + by, 0), titles.count - 1)])
+    }
+
+    /// The picked limit, as the reading shows it.
+    var pickedLimit: PlanLimit? { reading?.limits?.bars.first { $0.title == picked } ?? reading?.limits?.bars.first }
+
+    /// Names for the extended view's chats, by id, as they were found.
+    func named(_ names: [String: String]) {
+        guard names != chatNames else { return }
+        chatNames = names
+    }
+
+    /// The extended view's ledger for the picked limit, one line per row ("In Kore · ~12%",
+    /// "Fix the race in LoginTests · ~6%", "Outside Kore · ~31%"), for a storyline's checks;
+    /// `current`: this chat's id, whose row reads "This chat".
+    func ledger(current: String?) -> [String] {
+        guard let limit = pickedLimit, let share = share(limit) else { return [] }
+        guard share.kore > 0 else { return [UsageText.nothingFromKore] }
+        let chats = share.chats.map { chat in
+            [chat.id == current ? "This chat" : chatNames[chat.id] ?? chat.title ?? UsageText.untitled, UsageText.kore(chat.points)]
+                .joined(separator: " · ")
+        }
+        return ["In Kore · " + UsageText.kore(share.kore)] + chats + ["Outside Kore · " + UsageText.kore(share.outside)]
     }
 
     /// A limit's share of Kore, while a reading of it shows; nil while it's worked out.
@@ -230,6 +288,8 @@ final class UsageState {
         case .failure(let error):
             status = .unavailable(PlanReading.reason(of: error))
         }
+        // Signed out meanwhile: the extended view has nothing to show.
+        if reading?.account.access == .signedOut { extended = false }
     }
 
     /// The popup's bars, each as one line, then the unfolded resets' rows, for a storyline's
@@ -398,6 +458,11 @@ enum UsageText {
             .compactMap { $0 }.joined(separator: ", ")
     }
 
+    /// The extended view's ledger for a limit Kore didn't use.
+    static let nothingFromKore = "Nothing from Kore in this window."
+    /// A chat whose title Kore couldn't find.
+    static let untitled = "Untitled chat"
+
     /// A reset's row while it's sent.
     static let resetting = "Resetting your usage…"
     /// A reset's row once the limits were reset.
@@ -474,17 +539,26 @@ struct UsagePopup: View {
                 .help(account.map(UsageText.who) ?? "")
             Spacer(minLength: 0)
             freshness
-            if let url = account?.manage {
-                IconButton(
-                    symbol: "arrow.up.right", kind: .mini, font: Glyph.chevron, help: "Manage usage on \(url.host() ?? url.absoluteString)"
-                ) {
-                    NSWorkspace.shared.open(url)
-                    state.close()
+            HStack(spacing: Space.xxs) {
+                // With limits to show, fresh or kept: the extended view, over the chat.
+                if state.reading?.limits?.bars.isEmpty == false, account?.access == .plan {
+                    IconButton(symbol: "rectangle.expand.vertical", kind: .mini, font: TextStyle.caption, help: "Extended view") {
+                        state.openExtended()
+                    }
+                    .storyID(StoryID.Composer.usage.part(.extended))
                 }
-                // The glyph, not its box, on the rows' trailing edge.
-                .padding(.trailing, -Space.sm)
-                .storyID(StoryID.Composer.usage.part(.open))
+                if let url = account?.manage {
+                    IconButton(
+                        symbol: "arrow.up.right", kind: .mini, font: Glyph.chevron, help: "Manage usage on \(url.host() ?? url.absoluteString)"
+                    ) {
+                        NSWorkspace.shared.open(url)
+                        state.close()
+                    }
+                    .storyID(StoryID.Composer.usage.part(.open))
+                }
             }
+            // The glyph, not its box, on the rows' trailing edge.
+            .padding(.trailing, account?.manage == nil ? 0 : -Space.sm)
         }
         .frame(minHeight: Size.MessageActions.button)
     }
@@ -789,7 +863,7 @@ private struct ResetRowView: View {
 
 /// Its content as wide as it would be, up to `cap`, never wider: the grid's title column is its
 /// longest title's width rather than all it's offered, so the bars take the rest.
-private struct CappedWidth: SwiftUI.Layout {
+struct CappedWidth: SwiftUI.Layout {
     let cap: CGFloat
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -806,27 +880,29 @@ private struct CappedWidth: SwiftUI.Layout {
 /// A limit's bar, its fill as drawn: it moves to a new value on its own, so a reading landing
 /// fills the bars in place. Kore's share (`kore`, of the whole bar) moves with it; arriving, or
 /// leaving, it fades rather than slides.
-private struct LimitBar: View {
+struct LimitBar: View {
     let fraction: Double
     let kore: Double
     /// Its hatched stretch's name, for storylines.
     let share: StoryID?
+    var height = Size.contextTrack.intent
     @StateObject private var shown: Local<Double>
     @StateObject private var koreShown: Local<Double>
     @StateObject private var hatch: Local<Double>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(fraction: Double, kore: Double, share: StoryID?) {
+    init(fraction: Double, kore: Double, share: StoryID?, height: CGFloat = Size.contextTrack.intent) {
         self.fraction = fraction
         self.kore = kore
         self.share = share
+        self.height = height
         _shown = StateObject(wrappedValue: Local(fraction))
         _koreShown = StateObject(wrappedValue: Local(kore))
         _hatch = StateObject(wrappedValue: Local(kore > 0 ? 1 : 0))
     }
 
     var body: some View {
-        UsageBar(fraction: shown.value, kore: koreShown.value, hatch: hatch.value)
+        UsageBar(fraction: shown.value, kore: koreShown.value, hatch: hatch.value, height: height)
             .overlay(alignment: .leading) {
                 if kore > 0, fraction > 0, let share {
                     GeometryReader { geometry in
@@ -883,10 +959,13 @@ enum UsageHatch {
 /// near the limit it is, at least as wide as it is tall so a sliver still shows; Kore's share
 /// hatched at its start (`hatch`: how far it has faded in). Drawn in one canvas; animatable, so a
 /// new value moves it as the ring moves.
-private struct UsageBar: View, @preconcurrency Animatable {
+struct UsageBar: View, @preconcurrency Animatable {
     var fraction: Double
     var kore: Double
     var hatch: Double
+    /// The fraction its colour goes by (a chat's mini bar takes its limit's); nil: its own.
+    var tint: Double?
+    var height = Size.contextTrack.intent
 
     var animatableData: AnimatablePair<Double, AnimatablePair<Double, Double>> {
         get { AnimatablePair(fraction, AnimatablePair(kore, hatch)) }
@@ -894,7 +973,7 @@ private struct UsageBar: View, @preconcurrency Animatable {
     }
 
     var body: some View {
-        let (fraction, kore, hatch) = (fraction, kore, hatch)
+        let (fraction, kore, hatch, tint) = (fraction, kore, hatch, tint ?? fraction)
         Canvas { canvas, size in
             let line = size.height
             func bar(_ width: CGFloat) -> Path {
@@ -903,7 +982,7 @@ private struct UsageBar: View, @preconcurrency Animatable {
             canvas.fill(bar(size.width), with: .color(Theme.contextTrack))
             guard fraction > 0 else { return }
             let width = UsageHatch.fill(fraction, in: size)
-            let color = Theme.usageFill(fraction)
+            let color = Theme.usageFill(tint)
             let stretch = hatch > 0 ? UsageHatch.width(fill: width, kore: kore, used: fraction) : 0
             guard stretch > 0 else {
                 canvas.fill(bar(width), with: .color(color))
@@ -919,6 +998,6 @@ private struct UsageBar: View, @preconcurrency Animatable {
                 layer.stroke(UsageHatch.bands(hatched), with: .color(color), lineWidth: Size.usageHatch.band)
             }
         }
-        .frame(height: Size.contextTrack.intent)
+        .frame(height: height)
     }
 }

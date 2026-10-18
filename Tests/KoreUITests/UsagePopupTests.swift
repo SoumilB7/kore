@@ -73,6 +73,44 @@ struct UsagePopupTests {
         state.close()
     }
 
+    @Test func theExtendedViewPicksALimitAndListsItsChats() async throws {
+        let state = UsageState()
+        let reset = Self.now.addingTimeInterval(3600)
+        let reading = PlanReading(
+            account: PlanAccount(access: .plan),
+            limits: PlanLimits(bars: [
+                PlanLimit(title: "Session (5hr)", used: 30, resetsAt: reset, window: 5 * 3600),
+                PlanLimit(title: "Weekly (7 day)", used: 2, resetsAt: reset, window: 7 * 86400),
+            ]))
+        let shares = KoreShares(
+            at: Self.now,
+            limits: [
+                "Session (5hr)": KoreShare(used: 30, kore: 12, chats: [ChatShare(id: "a", points: 9), ChatShare(id: "me", points: 3)]),
+                "Weekly (7 day)": KoreShare(used: 2, kore: 0),
+            ])
+        state.open(provider: "test-\(UUID())", read: { reading }, useReset: { _, _ in .reset }, shares: { _ in shares })
+        for _ in 0..<100 where state.shares == nil { try await Task.sleep(for: .milliseconds(10)) }
+        state.openExtended()
+        // The popup closes; the card opens on the first limit.
+        #expect(!state.isOpen && state.extended)
+        #expect(state.pickedLimit?.title == "Session (5hr)")
+        state.named(["a": "Fix the race"])
+        #expect(state.ledger(current: "me") == ["In Kore · ~12%", "Fix the race · ~9%", "This chat · ~3%", "Outside Kore · ~18%"])
+        // ↓ past the last limit stays on it; nothing of Kore's there.
+        state.step(1)
+        state.step(1)
+        #expect(state.pickedLimit?.title == "Weekly (7 day)")
+        #expect(state.ledger(current: "me") == [UsageText.nothingFromKore])
+        state.step(-1)
+        #expect(state.picked == "Session (5hr)")
+        state.closeExtended()
+        // Next time it opens on the limit picked last.
+        state.pick("Weekly (7 day)")
+        state.openExtended()
+        #expect(state.picked == "Weekly (7 day)")
+        state.closeExtended()
+    }
+
     @Test func resetsReadInTheLargestUnit() {
         let later = { (seconds: Double) in UsageText.resets(Self.now.addingTimeInterval(seconds), now: Self.now) }
         #expect(later(3 * 3600 - 300) == "Resets in 3h")

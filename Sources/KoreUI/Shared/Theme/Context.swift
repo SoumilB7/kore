@@ -87,4 +87,19 @@ extension Size {
     static let usageHatch = (band: CGFloat(2), period: CGFloat(3))
     /// The least width of a share of Kore that isn't zero: two bands, so a sliver still reads hatched.
     static let usageHatchMin: CGFloat = 6
+    /// The extended view's card at its widest (narrower windows give it their width less a margin).
+    static let usageModalWidth: CGFloat = 560
+    /// A limit's bar in the extended view.
+    static let usageModalBar: CGFloat = 6
+    /// The extended view's number columns: the plan's %, Kore's ~%, the reset (or a chat's agents).
+    static let usageModalColumn: CGFloat = 40
+    /// A chat's mini bar in the extended view (a card under 400pt wide), as long as the limit's
+    /// used part; `usageShareBarWide` in a wider card.
+    static let usageShareBar: CGFloat = 40
+    static let usageShareBarWide: CGFloat = 64
+    /// The card width from which chat rows get the wide mini bar, and from which they show their folder.
+    static let usageModalWide: CGFloat = 400
+    static let usageModalFolders: CGFloat = 360
+    /// A chat's agents: two rings side by side.
+    static let usageAgentsGlyph = CGSize(width: 11, height: 8)
 }
