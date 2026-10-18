@@ -426,6 +426,21 @@ final class CodexTranslator {
         out.append(.agentFinished(id: thread, status, result: lastText[thread] ?? info?.result))
     }
 
+    func isFinished(_ thread: String) -> Bool { finished.contains(thread) }
+
+    /// Child threads the history never saw end.
+    func unfinishedAgents() -> [String] {
+        spawned.subtracting(finished).sorted()
+    }
+
+    /// A child thread another client runs ended, as its rollout says: its last answer and
+    /// totals come with it.
+    func agentEnded(_ thread: String, _ status: AgentStatus, _ info: CodexAgentThread) {
+        guard spawned.contains(thread) else { return }
+        agentThreads[thread] = info
+        finish(thread, status)
+    }
+
     private func resume(_ thread: String) {
         finished.remove(thread)
         finishedBy[thread] = nil

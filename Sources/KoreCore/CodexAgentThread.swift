@@ -10,6 +10,14 @@ public struct CodexAgentThread: Sendable {
     public var result: String?
     public var tokens: Int?
     public var duration: Duration?
+    /// Its rollout, where it was read from, and when that was last written.
+    public var path: String?
+    public var size: UInt64 = 0
+    public var modified: Date?
+    /// How its last turn ended: nil while it runs (or the end isn't in the rollout's tail).
+    public var lastEnd: End?
+
+    public enum End: Sendable { case completed, aborted }
 
     public init(nickname: String? = nil, role: String? = nil) {
         self.nickname = nickname
@@ -17,18 +25,34 @@ public struct CodexAgentThread: Sendable {
     }
 
     /// The last `task_complete` and `token_count` in the rollout's final 64 KB: both come at the
-    /// end of a finished turn, so the rest of the file is never read.
+    /// end of a finished turn, so the rest of the file is never read. The last turn's start or
+    /// end there says whether it still runs.
     public mutating func readOutcome(rollout path: String) {
+        self.path = path
         guard let handle = FileHandle(forReadingAtPath: path) else { return }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
+        self.size = size
+        modified = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
         try? handle.seek(toOffset: size > 65_536 ? size - 65_536 : 0)
         guard let data = try? handle.readToEnd() else { return }
         let complete = Data(#""type":"task_complete""#.utf8)
         let count = Data(#""type":"token_count""#.utf8)
+        let started = Data(#""type":"task_started""#.utf8)
+        let aborted = Data(#""type":"turn_aborted""#.utf8)
         var sawComplete = false
-        for line in data.split(separator: 0x0A).reversed() where !sawComplete || tokens == nil {
+        var sawLast = false
+        lastEnd = nil
+        for line in data.split(separator: 0x0A).reversed() where !sawComplete || tokens == nil || !sawLast {
             let head = line.prefix(160)
+            if !sawLast {
+                if head.range(of: complete) != nil {
+                    lastEnd = .completed
+                } else if head.range(of: aborted) != nil {
+                    lastEnd = .aborted
+                }
+                sawLast = lastEnd != nil || head.range(of: started) != nil
+            }
             if !sawComplete, head.range(of: complete) != nil, let payload = try? JSONValue.parse(Data(line))["payload"] {
                 sawComplete = true
                 result = payload["last_agent_message"]?.string
@@ -36,6 +60,18 @@ public struct CodexAgentThread: Sendable {
             } else if tokens == nil, head.range(of: count) != nil, let payload = try? JSONValue.parse(Data(line))["payload"] {
                 tokens = payload["info"]?["total_token_usage"]?["total_tokens"]?.int
             }
+        }
+    }
+
+    /// What became of it as of `now`, for one another client runs: running while its last turn
+    /// hasn't ended and its rollout was written within `quiet`.
+    public func outcome(at now: Date = Date(), quiet: TimeInterval = AgentOutcome.quietLimit) -> AgentOutcome {
+        switch lastEnd {
+        case .completed?: return .finished
+        case .aborted?: return .stopped
+        case nil:
+            guard let modified, now.timeIntervalSince(modified) <= quiet else { return .stopped }
+            return .running
         }
     }
 }

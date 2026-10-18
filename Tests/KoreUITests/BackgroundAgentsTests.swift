@@ -91,4 +91,48 @@ struct BackgroundAgentsTests {
         }
         #expect(ends == ["toolu_bgB completed -", "toolu_bgB failed The publish step timed out."])
     }
+
+    // MARK: Codex
+
+    /// A child thread another client runs outlives its parent's turn: its rollout says it still
+    /// runs until its turn's end is written there, with its last answer.
+    @Test func aCodexChildIsReadFromItsRollout() throws {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
+        let item = CodexItem(.object([
+            "id": .string("call_1"), "type": .string("subAgentActivity"), "kind": .string("started"),
+            "agentThreadId": .string("child"), "agentPath": .string("/root/scout"),
+        ]))
+        translator.translate(.itemStarted(item))
+        translator.translate(.itemCompleted(item))
+        _ = translator.take()
+        #expect(translator.unfinishedAgents() == ["child"])
+
+        let rollout = FileManager.default.temporaryDirectory.appendingPathComponent("kore-rollout-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: rollout) }
+        func write(_ events: [String]) throws {
+            let lines = events.map { #"{"timestamp":"2026-10-23T06:30:00Z","type":"event_msg","payload":"# + $0 + "}" }
+            try (lines.joined(separator: "\n") + "\n").write(to: rollout, atomically: true, encoding: .utf8)
+        }
+        let started = #"{"type":"task_started","turn_id":"t1"}"#
+        try write([started, #"{"type":"token_count","info":{"total_token_usage":{"total_tokens":900}}}"#])
+        var info = CodexAgentThread(nickname: "Scout")
+        info.readOutcome(rollout: rollout.path)
+        #expect(info.outcome() == .running)
+        #expect(info.outcome(at: Date().addingTimeInterval(AgentOutcome.quietLimit + 60)) == .stopped)
+
+        try write([started, #"{"type":"task_complete","turn_id":"t1","last_agent_message":"Found it."}"#])
+        info = CodexAgentThread(nickname: "Scout")
+        info.readOutcome(rollout: rollout.path)
+        #expect(info.outcome() == .finished)
+        translator.agentEnded("child", .completed, info)
+        let ends = translator.take().events.compactMap { event -> String? in
+            if case .agentFinished(let id, let status, let result) = event { "\(id) \(status) \(result ?? "-")" } else { nil }
+        }
+        #expect(ends == ["child completed Found it."])
+        #expect(translator.unfinishedAgents().isEmpty)
+
+        try write([started, #"{"type":"turn_aborted","turn_id":"t1"}"#])
+        info.readOutcome(rollout: rollout.path)
+        #expect(info.outcome() == .stopped)
+    }
 }

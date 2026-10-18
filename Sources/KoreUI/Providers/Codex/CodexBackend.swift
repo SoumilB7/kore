@@ -25,6 +25,8 @@ final class CodexBackend: ChatBackend {
     /// rollout, read back as far as they need.
     private var earlierFrom: String?
     private var rollout: CodexRolloutReader?
+    /// Child threads another client runs, followed through their rollouts.
+    private var follows: [String: Task<Void, Never>] = [:]
     /// Turns per page: the newest when a chat opens, then each `earlier()`.
     private static let pageTurns = 10
     private static let log = Logger(subsystem: "Kore", category: "codex")
@@ -89,6 +91,7 @@ final class CodexBackend: ChatBackend {
             }
             yield(.replayed(replayed.events))
             yield(.earlierHistory(earlierFrom != nil))
+            settleUnfinished()
         }
         self.session = session
         pump = Task {
@@ -115,6 +118,7 @@ final class CodexBackend: ChatBackend {
         rollout = read
         // Its sub-agents' nicknames and outcomes: metadata reads, about a millisecond each.
         let agents = await session.agentThreads(CodexTranslator.agents(in: turns))
+        translator.agentThreads.merge(agents) { live, _ in live }
         return await CodexTranslator.replayed(turns, rollout: settings, folder: options.folder, agents: agents)
     }
 
@@ -158,6 +162,52 @@ final class CodexBackend: ChatBackend {
         let effort = options.effort ?? running
             ?? current.flatMap { id in list.first { $0["id"]?.string == id } }?["defaultReasoningEffort"]?.string
         return ChatControls(models: models, model: current, effort: effort, commands: commands)
+    }
+
+    // MARK: - Child threads another client runs
+
+    /// After a replay: the child threads it never saw end, as their rollouts say (read with the
+    /// replay's lookup). Those that ended end now; those still running are followed.
+    private func settleUnfinished() {
+        for thread in translator.unfinishedAgents() {
+            guard let info = translator.agentThreads[thread], info.path != nil else { continue }
+            switch info.outcome() {
+            case .finished: translator.agentEnded(thread, .completed, info)
+            case .running:
+                yield(.agentResumed(id: thread))
+                follow(thread, info)
+            case .stopped: break  // the replay stops it
+            }
+        }
+        flush()
+    }
+
+    /// Its rollout, looked at each second and read again (its last 64 KB) only when it grew,
+    /// until its turn ends there or it stays quiet past `AgentOutcome.quietLimit`.
+    private func follow(_ thread: String, _ first: CodexAgentThread) {
+        guard follows[thread] == nil, let path = first.path else { return }
+        follows[thread] = Task {
+            var info = first
+            while !Task.isCancelled, !translator.isFinished(thread) {
+                try? await Task.sleep(for: .seconds(1))
+                let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.uint64Value ?? 0
+                if size != info.size {
+                    let known = info
+                    info = await Task.detached {
+                        var fresh = CodexAgentThread(nickname: known.nickname, role: known.role)
+                        fresh.readOutcome(rollout: path)
+                        return fresh
+                    }.value
+                }
+                switch info.outcome() {
+                case .running: continue
+                case .finished: translator.agentEnded(thread, .completed, info)
+                case .stopped: translator.agentEnded(thread, .stopped, info)
+                }
+                flush()
+            }
+            follows[thread] = nil
+        }
     }
 
     // MARK: - Events
@@ -388,6 +438,8 @@ final class CodexBackend: ChatBackend {
     }
 
     func close() async {
+        for follow in follows.values { follow.cancel() }
+        follows = [:]
         pump?.cancel()
         pump = nil
         let session = session

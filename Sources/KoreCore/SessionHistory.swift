@@ -23,6 +23,17 @@ public struct SessionSummary: Sendable, Identifiable, Hashable {
 
 /// Claude Code's transcripts: `~/.claude/projects/<folder path, non-alphanumerics → "-">/<session>.jsonl`.
 /// Read directly, as the Agent SDK's session helpers do (which t3code uses).
+/// What became of a sub-agent another client runs, as its own files say.
+public enum AgentOutcome: Sendable, Equatable {
+    case running, finished, stopped
+
+    /// One whose files have had nothing new for this long has stopped: one call can run ten
+    /// minutes without a line (the Bash tool's longest timeout), and its answer a few more. Of
+    /// some 218,000 gaps between lines in agents' runs, 0.04% were longer (a machine asleep,
+    /// mostly).
+    public static let quietLimit: TimeInterval = 15 * 60
+}
+
 public enum ClaudeHistory {
     public static func sessions(in folder: URL) -> [SessionSummary] {
         let directory = projectDirectory(for: folder)
@@ -274,11 +285,9 @@ public enum ClaudeHistory {
             self.modified = modified
         }
 
-        public enum Outcome: Sendable, Equatable { case running, finished, stopped }
-
         /// What became of it as of `now`: running while it isn't marked finished or stopped and
         /// its transcript was written within `quiet` (a call can run minutes without a line).
-        public func outcome(at now: Date = Date(), quiet: TimeInterval) -> Outcome {
+        public func outcome(at now: Date = Date(), quiet: TimeInterval = AgentOutcome.quietLimit) -> AgentOutcome {
             if stoppedByUser { return .stopped }
             if finished { return .finished }
             if interrupted { return .stopped }

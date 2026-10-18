@@ -277,11 +277,6 @@ final class ClaudeBackend: ChatBackend {
 
     private static let resumeLead: TimeInterval = 2
 
-    /// An agent another client runs, whose transcript has had nothing new for this long, has
-    /// stopped: one call can run ten minutes without a line (the Bash tool's longest timeout),
-    /// and its answer a few more. Of some 218,000 gaps between lines in agents' runs, 0.04% were
-    /// longer (a machine asleep, mostly).
-    static let quietLimit: TimeInterval = 15 * 60
     /// Its meta file marks it finished a moment before its notification (with its result)
     /// reaches the chat's transcript.
     private static let noticeWait: TimeInterval = 3
@@ -289,7 +284,7 @@ final class ClaudeBackend: ChatBackend {
     /// Reads a running background agent's transcript as it grows, until the agent finishes;
     /// `since`, the entries written from then on. One another client runs (`alone`) ends when
     /// its notification is written to the chat's transcript (`watchNotices`), its meta file
-    /// marks it ended, or its transcript stays quiet past `quietLimit`.
+    /// marks it ended, or its transcript stays quiet past `AgentOutcome.quietLimit`.
     private func tail(_ id: String, since: Date? = nil) {
         guard tails[id] == nil, let session = sessionId else { return }
         let folder = options.folder
@@ -319,7 +314,7 @@ final class ClaudeBackend: ChatBackend {
                 // Its own files, read only while it writes nothing.
                 if alone.contains(id), !grew, let file {
                     let state = await Task.detached { ClaudeHistory.Subagent.read(file) }.value
-                    switch state.outcome(quiet: Self.quietLimit) {
+                    switch state.outcome() {
                     case .running:
                         break
                     case .finished:
@@ -358,7 +353,7 @@ final class ClaudeBackend: ChatBackend {
         for (id, background) in open {
             guard let agent = found[id] else { continue }
             agentTranscripts[id] = agent.transcript
-            switch agent.outcome(quiet: Self.quietLimit) {
+            switch agent.outcome() {
             case .finished: translator.agentEnded(id, .completed)
             case .running where background: running.append(id)
             case .running, .stopped: break  // the replay stops it
