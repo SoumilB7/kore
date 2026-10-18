@@ -741,7 +741,7 @@ final class ClaudeTranslator {
                 }
                 let content = message["message"]?["content"]
                 let prompt = Self.promptText(content)
-                if let prompt, Self.stopMarkers.contains(prompt) {
+                if let prompt, ClaudeHistory.stopMarkers.contains(prompt) {
                     // Not something the user wrote: the turn ends as stopped, as it did live.
                     stopped = true
                     continue
@@ -763,9 +763,6 @@ final class ClaudeTranslator {
         if let used = contextUsed { reportContext(used, at: replayTime) }
         return take().events
     }
-
-    /// What the CLI writes into a transcript, as a user message, when a turn is stopped.
-    static let stopMarkers: Set<String> = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"]
 
     static func origin(_ turnOrigin: String?) -> TurnOrigin? {
         switch turnOrigin {

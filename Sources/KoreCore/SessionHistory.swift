@@ -161,6 +161,7 @@ public enum ClaudeHistory {
             let id: String?
             let tool_use_id: String?
         }
+        private struct TextBlock: Decodable { let text: String? }
 
         init(from decoder: any Decoder) throws {
             let c = try decoder.container(keyedBy: Keys.self)
@@ -177,13 +178,21 @@ public enum ClaudeHistory {
             toolUses = blocks.compactMap { $0.type == "tool_use" ? $0.id : nil }
             toolResults = blocks.compactMap(\.tool_use_id)
             let meta = (try? c.decodeIfPresent(Bool.self, forKey: .isMeta)) == true
+            // A stopped turn's marker is a user entry the user didn't write.
+            let texts =
+                type != "user" ? []
+                : text.map { [$0] } ?? ((try? message?.decodeIfPresent([TextBlock].self, forKey: .content)) ?? []).compactMap(\.text)
+            let stopMarker = texts.count == 1 && ClaudeHistory.stopMarkers.contains(texts[0])
             isPrompt =
-                type == "user" && !meta
+                type == "user" && !meta && !stopMarker
                 && (text.map { !$0.hasPrefix("<") }
                     ?? (!blocks.contains { $0.type == "tool_result" }
                         && blocks.contains { ["text", "image", "document"].contains($0.type ?? "") }))
         }
     }
+
+    /// What the CLI writes into a transcript, as a user message, when a turn is stopped.
+    public static let stopMarkers: Set<String> = ["[Request interrupted by user]", "[Request interrupted by user for tool use]"]
 
     /// `turnOrigin` values of turns the CLI starts by itself ("sdk" is a typed prompt).
     public static let cliTurnOrigins: Set<String> = ["scheduled", "task_notification", "peer"]
