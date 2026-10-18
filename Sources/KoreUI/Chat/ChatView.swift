@@ -157,15 +157,13 @@ struct ChatView: View {
                 ImportFilePanel.choose(for: chat.provider, in: workspace.window) { picked in
                     // The panel greys unknown files; one that isn't a chat opens nothing.
                     guard HandoffFormats.identify(picked, quick: true) != nil else { return }
-                    chat.usage.close()
-                    chat.account.close()
+                    chat.closePopups(keeping: .importer)
                     chat.importer.open()
                     chat.importer.add(file: picked)
                 }
                 return
             }
-            chat.usage.close()
-            chat.account.close()
+            chat.closePopups(keeping: .importer)
             chat.importer.open()
             if let file { chat.importer.add(file: file) }
         }

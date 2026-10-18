@@ -96,10 +96,12 @@ final class ContextCardPresence {
     @ObservationIgnored var frames: [CGRect] = []
     /// The track has the keyboard, so keys are its own.
     @ObservationIgnored var trackFocused = false
+    /// As it shows: the chat's other popups close (`Chat.closePopups`).
+    @ObservationIgnored var opening: (() -> Void)?
 
     func wheel(_ inside: Bool) {
         onWheel = inside
-        if inside && !shown { after(Motion.cardDelay) { $0.shown = true } } else { settle() }
+        if inside && !shown { after(Motion.cardDelay) { $0.show() } } else { settle() }
     }
 
     /// The card or its bridge; `intent` for the card itself.
@@ -117,6 +119,12 @@ final class ContextCardPresence {
 
     func open() {
         pending?.cancel()
+        show()
+    }
+
+    private func show() {
+        guard !shown else { return }
+        opening?()
         shown = true
     }
 

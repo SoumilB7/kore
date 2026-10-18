@@ -14,7 +14,6 @@ struct ComposerView: View {
     var focused: FocusState<Bool>.Binding
     let openImage: (Attachment) -> Void
     @StateObject private var slashSelection = Local(0)
-    @StateObject private var slashDismissed = Local(false)
     /// The window and the ⌘V monitor: kept for the monitor, never shown, so setting them as the
     /// composer appears doesn't draw it again.
     @StateObject private var window = Held<NSWindow?>(nil)
@@ -26,6 +25,9 @@ struct ComposerView: View {
     /// closes the menu. Kept for the click monitor, never shown.
     @StateObject private var menuFrame = Held<CGRect?>(nil)
     @StateObject private var boxFrame = Held<CGRect>(.zero)
+    /// The bar under the text (global): a press on it closes what's open over the composer.
+    @StateObject private var barFrame = Held<CGRect>(.zero)
+    @StateObject private var slashFrame = Held<CGRect>(.zero)
     @StateObject private var clickMonitor = Held<Any?>(nil)
     /// The caret Kore last placed, with the draft it had just set: a range is only good in the
     /// text it was made for. The text view takes it once it shows that text.
@@ -122,7 +124,7 @@ struct ComposerView: View {
             // The caret goes to the end of this chat's draft, ready to go on typing.
             place()
             slashSelection.value = 0
-            slashDismissed.value = false
+            if chat.slashClosed { chat.slashClosed = false }
             forgetUndo()
         }
     }
@@ -165,7 +167,8 @@ struct ComposerView: View {
             }
             field
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
-            ComposerBar(chat: chat, attach: attach, slash: openSlash)
+            ComposerBar(chat: chat, attach: attach, slash: openSlash) { slashFrame.value = $0 }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { barFrame.value = $0 }
         }
         .modeOutline(chat.controls.activeMode.rung, focused: focused.wrappedValue, highlighted: dropTargeted.value)
         // Only the box takes drops; the rest of the chat ignores them.
@@ -215,8 +218,10 @@ struct ComposerView: View {
             // Typed: the first row is lit, whatever the menu opens under.
             PointerGate.keyed()
             // Esc closes the menu for this "/word"; the next one opens it again.
-            if new?.range.lowerBound != old?.range.lowerBound { slashDismissed.value = false }
+            if new?.range.lowerBound != old?.range.lowerBound, chat.slashClosed { chat.slashClosed = false }
         }
+        // One popup at a time: the menu showing closes the rest.
+        .onChange(of: slashMatches.isEmpty) { _, empty in if !empty { chat.closePopups(keeping: .slash) } }
     }
 
     /// The keys the composer gives a meaning, as the text view's commands: true when taken.
@@ -258,21 +263,13 @@ struct ComposerView: View {
     /// does; they're closed here too, so no Esc gets past one to the turn.
     private func escape(_ view: NSTextView) {
         let selection = chat.transcript.selection
-        let popup = chat.usage.isOpen || chat.usage.extended || chat.account.isOpen || chat.importer.isOpen
-            || chat.contextCard.shown || chat.agentMap.isOpen
         switch EscStep.next(
-            overlay: workspace.hasOverlay, slashMenu: !slashMatches.isEmpty, popup: popup, selection: selection.hasSelection,
+            overlay: workspace.hasOverlay, slashMenu: !slashMatches.isEmpty, popup: chat.hasPopup, selection: selection.hasSelection,
             running: chat.status.isRunning, sheet: view.window?.attachedSheet != nil || NSApp.modalWindow != nil)
         {
         case .closeOverlay: workspace.closeOverlay()
-        case .closeSlashMenu: slashDismissed.value = true
-        case .closePopup:
-            chat.usage.closeExtended()
-            chat.usage.close()
-            chat.account.close()
-            chat.importer.close()
-            chat.contextCard.close()
-            chat.agentMap.close()
+        case .closeSlashMenu: chat.slashClosed = true
+        case .closePopup: chat.closePopups()
         case .clearSelection: selection.clear()
         case .stop: chat.stop()
         case .nothing: break
@@ -338,7 +335,7 @@ struct ComposerView: View {
     }
 
     private var slashMatches: [SlashCommand] {
-        guard !slashDismissed.value, let token = slashToken else { return [] }
+        guard !chat.slashClosed, let token = slashToken else { return [] }
         return SlashCommand.matches(chat.controls.commands, sigil: token.sigil, query: token.query)
     }
 
@@ -364,7 +361,7 @@ struct ComposerView: View {
     /// A space goes before it when the caret ends a word; in a "/word" already, the menu opens
     /// again for it.
     private func openSlash() {
-        slashDismissed.value = false
+        chat.slashClosed = false
         focused.wrappedValue = true
         if slashToken != nil { return }
         var draft = chat.draft
@@ -386,7 +383,7 @@ struct ComposerView: View {
         if command.kind == .command { chat.command = command }
         chat.draft = draft
         place(at: caret)
-        slashDismissed.value = false
+        chat.slashClosed = false
         focused.wrappedValue = true
         forgetUndo()
         if command.kind == .kore {
@@ -394,13 +391,19 @@ struct ComposerView: View {
         }
     }
 
-    /// A click outside the menu and the box closes the menu; the click goes on as it was.
+    /// A click outside the menu and the box closes the menu, and a press on the bar under the
+    /// text (a chip, +, the context wheel) closes whatever is open before its own menu or panel
+    /// opens, which the system's menus then hold the events for. The click goes on as it was.
     private func closeMenu(onClick event: NSEvent) -> NSEvent? {
-        guard let menu = menuFrame.value, let window = window.value, event.window === window, let content = window.contentView
-        else { return event }
+        guard let window = window.value, event.window === window, let content = window.contentView else { return event }
         // Window coordinates (bottom-left) to SwiftUI's global ones (top-left).
         let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
-        if !menu.contains(point), !boxFrame.value.contains(point) { slashDismissed.value = true }
+        guard let chat = pasteChat.value else { return event }
+        if barFrame.value.contains(point) {
+            chat.closePopups(keeping: slashFrame.value.contains(point) ? .slash : nil)
+        } else if let menu = menuFrame.value, !menu.contains(point), !boxFrame.value.contains(point) {
+            chat.slashClosed = true
+        }
         return event
     }
 }

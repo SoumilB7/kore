@@ -81,6 +81,9 @@ extension Chat {
     /// the plan name and its tooltip), its bars as they read ("Weekly limit · 6% · Resets in 4d")
     /// and its extras line.
     package var isUsageOpen: Bool { usage.isOpen }
+    /// The context card, opened as the keyboard opens it (a hover needs the real pointer).
+    package var isContextCardOpen: Bool { contextCard.shown }
+    package func storyOpenContextCard() { contextCard.open() }
     package var storyUsageHeader: String {
         guard let account = usage.reading?.account else { return "" }
         return [account.plan, UsageText.who(account)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")

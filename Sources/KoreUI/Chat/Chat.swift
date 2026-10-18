@@ -29,6 +29,9 @@ package final class Chat: Identifiable {
     /// The `/` command this message starts with, shown as a chip before the draft: one per
     /// message, as both CLIs run one.
     package var command: SlashCommand?
+    /// The / menu was closed (Esc, a click away, another popup) for the "/word" at the caret;
+    /// the next one opens it again.
+    var slashClosed = false
     /// Launch with this model and effort instead of the CLI's defaults (a fork, the dev hook).
     @ObservationIgnored var launchModel: String?
     @ObservationIgnored var launchEffort: String?
@@ -115,6 +118,7 @@ package final class Chat: Identifiable {
         transcript.provider = provider
         AccountStore.shared.register(self)
         StayAwake.register(self)
+        ownPopups()
     }
 
     package var sessionId: String? { status.sessionId }
@@ -307,8 +311,7 @@ package final class Chat: Identifiable {
 
     /// Opens the usage popup and reads the account's limits once, through this chat's CLI.
     func openUsage() {
-        account.close()
-        importer.close()
+        closePopups(keeping: .usage)
         usage.open(
             provider: provider.id,
             read: { [weak self] in
@@ -327,8 +330,7 @@ package final class Chat: Identifiable {
 
     /// Opens the Account popup for this chat's CLI.
     func openAccount() {
-        usage.close()
-        importer.close()
+        closePopups(keeping: .account)
         account.open(provider: provider.id, folder: folder)
     }
 

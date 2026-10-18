@@ -19,6 +19,8 @@ final class AgentMapState {
     var foldCursor: Fold?
     /// An agent to bring into view: the map opens the group that holds it.
     private(set) var reveal: String?
+    /// As it opens: the chat's other popups close (`Chat.closePopups`).
+    @ObservationIgnored var opening: (() -> Void)?
 
     func open(selecting id: String? = nil) {
         if let id {
@@ -26,6 +28,7 @@ final class AgentMapState {
             foldCursor = nil
             reveal = id
         }
+        if !isOpen { opening?() }
         isOpen = true
     }
 

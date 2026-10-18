@@ -6,6 +6,8 @@ struct ComposerBar: View {
     let chat: Chat
     let attach: () -> Void
     let slash: () -> Void
+    /// The / key's frame (global): a press there leaves the / menu to it.
+    var slashFrame: (CGRect) -> Void = { _ in }
     @StateObject private var plusHovered = Local(false)
     @StateObject private var slashHovered = Local(false)
 
@@ -37,6 +39,7 @@ struct ComposerBar: View {
                 .buttonStyle(.plain)
                 .onHover { slashHovered.value = $0 }
                 .help("Slash commands")
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slashFrame($0) }
                 .storyID(StoryID.Composer.slash)
             }
             .padding(.horizontal, -Space.sm)
@@ -65,13 +68,17 @@ struct ComposerBar: View {
     private func controls(_ density: Density) -> some View {
         HStack(spacing: Space.xxl) {
             if !chat.controls.models.isEmpty && density != .minimal {
-                ModelMenu(chat: chat, showEffort: density == .full).storyID(StoryID.Composer.model)
+                // Pressed by a storyline, the menu's opening as far as the other popups go: the
+                // system menu's own tracking would hold the storyline.
+                ModelMenu(chat: chat, showEffort: density == .full)
+                    .storyID(StoryID.Composer.model, press: { chat.closePopups(keeping: .menu) })
             }
             Spacer(minLength: 0)
             if let plan = chat.provider.planToggle, chat.controls.planMode {
                 PlanChip(mode: plan) { chat.setPlanMode(false) }
             }
-            ModeMenu(chat: chat, showLabel: density == .full || density == .noEffort).storyID(StoryID.Composer.mode)
+            ModeMenu(chat: chat, showLabel: density == .full || density == .noEffort)
+                .storyID(StoryID.Composer.mode, press: { chat.closePopups(keeping: .menu) })
         }
     }
 
