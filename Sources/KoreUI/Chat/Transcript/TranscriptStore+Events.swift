@@ -55,7 +55,9 @@ extension TranscriptStore {
                 background: info.background,
                 tool: info.toolId, parent: info.parent.sub)
         case .agentProgress(let id, let p):
-            agentProgress(id: id, tokens: p.tokens, tools: p.tools, lastTool: p.lastTool, duration: p.duration.map(Self.seconds))
+            agentProgress(
+                id: id, tokens: p.tokens, tools: p.tools, lastTool: p.lastTool, duration: p.duration.map(Self.seconds),
+                approximate: p.approximate)
         case .agentFinished(let id, let status, let result):
             let status: AgentInfo.Status = switch status {
             case .completed: .finished

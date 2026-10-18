@@ -322,7 +322,11 @@ final class ClaudeBackend: ChatBackend {
                     case .finished:
                         let marked = markedAt ?? .now
                         markedAt = marked
-                        if Date.now.timeIntervalSince(marked) >= Self.noticeWait { end(id, .completed) }
+                        if Date.now.timeIntervalSince(marked) >= Self.noticeWait {
+                            // No notification brings its tokens: its transcript's last call has them.
+                            let tokens = await Task.detached { ClaudeHistory.Subagent.span(file)?.tokens }.value
+                            end(id, .completed, tokens: tokens)
+                        }
                     case .stopped:
                         end(id, .stopped)
                     }
@@ -334,15 +338,15 @@ final class ClaudeBackend: ChatBackend {
         }
     }
 
-    private func end(_ id: String, _ status: AgentStatus) {
-        translator.agentEnded(id, status)
+    private func end(_ id: String, _ status: AgentStatus, tokens: Int? = nil) {
+        translator.agentEnded(id, status, tokens: tokens)
         flush()
     }
 
     /// After a replay: what became of the agents it never saw end, from their own files (see
     /// `ClaudeHistory.Subagent.outcome`). Those marked ended end (their events wait in the
-    /// translator), with the time their transcripts span; the background ones still running are
-    /// returned, to follow, with how long they've run.
+    /// translator), with the time their transcripts span and their tokens; the background ones
+    /// still running are returned, to follow, with how long they've run.
     private func settleUnfinished() async -> [(id: String, ran: TimeInterval?)] {
         let open = translator.unfinishedAgents()
         guard let session = sessionId, !open.isEmpty else { return [] }
@@ -361,7 +365,9 @@ final class ClaudeBackend: ChatBackend {
             agentTranscripts[id] = agent.transcript
             switch agent.outcome() {
             case .finished:
-                translator.agentEnded(id, .completed, duration: spans[id].map { .seconds($0.end.timeIntervalSince($0.start)) })
+                let span = spans[id]
+                translator.agentEnded(
+                    id, .completed, duration: span.map { .seconds($0.end.timeIntervalSince($0.start)) }, tokens: span?.tokens)
             case .running where background: running.append((id, spans[id].map { Date.now.timeIntervalSince($0.start) }))
             case .running, .stopped: break  // the replay stops it
             }

@@ -368,7 +368,7 @@ private struct AgentGraphRow: View {
 }
 
 /// "0:41 · 12.8k", ticking while the agent runs; "failed · 0:27"; "waiting · 0:31";
-/// "background · 12:04 · 295k".
+/// "background · 12:04 · 295k"; "~239k" when read from its transcript.
 private struct AgentNodeMeter: View {
     let info: TranscriptStore.AgentInfo
     let waiting: Bool
@@ -394,7 +394,7 @@ private struct AgentNodeMeter: View {
         if info.status == .failed { parts.append("failed") } else if info.status == .stopped { parts.append("stopped") }
         if waiting { parts.append("waiting") }
         if let duration { parts.append(AgentMeter.clock(duration)) }
-        if let tokens = info.tokens, info.status != .failed { parts.append(AgentMeter.tokens(tokens)) }
+        if let tokens = AgentMeter.tokens(of: info), info.status != .failed { parts.append(tokens) }
         if hidden > 0 { parts.append("+\(hidden) folded") }
         let colour = info.status == .failed ? Theme.danger : info.status == .running ? Theme.secondary : Theme.tertiary
         return Text(parts.joined(separator: " · ")).foregroundStyle(colour)
@@ -600,7 +600,7 @@ struct AgentMeta: View {
     private func line(_ duration: TimeInterval?) -> some View {
         var parts = [info.type, info.model].compactMap { $0 }
         if let duration { parts.append(AgentMeter.clock(duration)) }
-        if let tokens = info.tokens { parts.append("\(AgentMeter.tokens(tokens)) tokens") }
+        if let tokens = AgentMeter.tokens(of: info) { parts.append("\(tokens) tokens") }
         if info.tools > 0 { parts.append(info.tools == 1 ? "1 tool" : "\(info.tools) tools") }
         return Text(parts.joined(separator: " · "))
             .font(TextStyle.caption.monospacedDigit())

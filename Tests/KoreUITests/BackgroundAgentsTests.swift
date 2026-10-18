@@ -164,6 +164,26 @@ struct BackgroundAgentsTests {
         #expect(names(script.store.agentTree().done) == ["toolu_bgA", "toolu_bgB"])
     }
 
+    /// Its tokens, read from its transcript's last model call, are marked approximate; a
+    /// notification's own count, read later, is exact.
+    @Test func oneEndedByItsFilesHasApproximateTokens() {
+        let translator = translator()
+        let script = Script()
+        script.on(.replayed(translator.replay(spawned)))
+        translator.agentEnded("toolu_bgA", .completed, duration: .seconds(7660), tokens: 239_412)
+        translator.take().events.forEach(script.store.apply)
+        _ = script.sections
+        let agent = script.store.agent("toolu_bgA")
+        #expect(agent?.tokens == 239_412)
+        #expect(agent?.approximate == true)
+        #expect(agent.flatMap(AgentMeter.tokens(of:)) == "~239.4k")
+        script.on(.agentProgress(id: "toolu_bgA", AgentProgress(tokens: 241_000)))
+        #expect(script.store.agent("toolu_bgA")?.approximate == false)
+        #expect(script.store.agent("toolu_bgA").flatMap(AgentMeter.tokens(of:)) == "241k")
+    }
+
+    // MARK: Codex
+
     private func activity(_ kind: String, _ id: String, thread: String = "child") -> CodexItem {
         CodexItem(.object([
             "id": .string(id), "type": .string("subAgentActivity"), "kind": .string(kind),

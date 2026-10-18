@@ -310,9 +310,18 @@ public enum ClaudeHistory {
 
         /// When it began and when it last wrote: its transcript's first and last timestamps. One
         /// its files say ended had no notification to bring its time; this is the same time (the
-        /// notification's `duration_ms` is the span between them). Reads the first line and the
-        /// file's last 64 KB (1 MB when those hold no time).
-        public static func span(_ transcript: URL) -> (start: Date, end: Date)? {
+        /// notification's `duration_ms` is the span between them).
+        public struct Span: Sendable, Equatable {
+            public let start: Date
+            public let end: Date
+            /// Its last model call's input, cache and output tokens: what its notification's
+            /// `total_tokens` counts (within 1% for half of 240 real agents, 3% for most).
+            public let tokens: Int?
+        }
+
+        /// Reads the first line and the file's last 64 KB (1 MB when those hold no time or no
+        /// model call).
+        public static func span(_ transcript: URL) -> Span? {
             guard let handle = try? FileHandle(forReadingFrom: transcript) else { return nil }
             defer { try? handle.close() }
             // The first line holds the prompt, which can run long.
@@ -322,23 +331,41 @@ public enum ClaudeHistory {
             {
                 head += more
             }
-            guard let start = timestamp(head.jsonLines().first) else { return nil }
+            guard let start = head.jsonLines().first.flatMap({ try? JSONValue.parse($0) }).flatMap(timestamp) else { return nil }
             let size = (try? handle.seekToEnd()) ?? 0
-            // The last 64 KB nearly always hold a whole line with a time; a long tool result at
-            // the end takes up to 1 MB.
+            var end: Date?
+            var tokens: Int?
+            // The last 64 KB nearly always hold a whole line with a time and the last model call;
+            // a long tool result at the end takes up to 1 MB.
             for tail: UInt64 in [64 << 10, 1 << 20] {
                 let from = size > tail ? size - tail : 0
                 try? handle.seek(toOffset: from)
-                // The read cuts the first line it gets; the last whole line with a time ends it.
+                // The read cuts the first line it gets; the last whole lines end it.
                 let lines = ((try? handle.readToEnd()) ?? Data()).jsonLines().dropFirst(from > 0 ? 1 : 0)
-                if let end = lines.reversed().lazy.compactMap(timestamp).first { return (start, max(start, end)) }
-                if from == 0 { break }
+                for line in lines.reversed() where end == nil || tokens == nil {
+                    // Only a line that can hold usage is parsed for it alone.
+                    guard end == nil || line.range(of: usageKey) != nil, let json = try? JSONValue.parse(line) else { continue }
+                    end = end ?? timestamp(json)
+                    tokens = tokens ?? usage(json)
+                }
+                if (end != nil && tokens != nil) || from == 0 { break }
             }
-            return nil
+            guard let end else { return nil }
+            return Span(start: start, end: max(start, end), tokens: tokens)
         }
 
-        private static func timestamp(_ line: Data?) -> Date? {
-            line.flatMap { try? JSONValue.parse($0) }?["timestamp"]?.string.flatMap { iso.date(from: $0) }
+        private static let usageKey = Data(#""usage""#.utf8)
+
+        private static func timestamp(_ json: JSONValue) -> Date? {
+            json["timestamp"]?.string.flatMap { iso.date(from: $0) }
+        }
+
+        /// An assistant entry's input, cache and output tokens.
+        private static func usage(_ json: JSONValue) -> Int? {
+            guard json["type"]?.string == "assistant", let usage = json["message"]?["usage"] else { return nil }
+            let total = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"]
+                .compactMap { usage[$0]?.int }.reduce(0, +)
+            return total > 0 ? total : nil
         }
 
         /// ISO8601DateFormatter is thread-safe once configured.

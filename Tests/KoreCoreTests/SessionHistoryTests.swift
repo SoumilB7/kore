@@ -133,18 +133,32 @@ struct SessionHistoryTests {
         #expect(interrupted.outcome(quiet: 900) == .stopped)
     }
 
-    /// Its time is from its first line to the last that has one, as its notification's would be.
+    /// Its time is from its first line to the last that has one, and its tokens its last model
+    /// call's, as its notification's would be.
     @Test func anAgentsTranscriptSpansItsTime() throws {
         var first = user("x1", nil, "Find why uploads fail. " + String(repeating: "More. ", count: 20_000))
         first["timestamp"] = "2026-10-21T12:46:10.460Z"
-        var last = answer("x2", "x1", "Found it.")
+        var call = answer("x2", "x1", "Looking.")
+        call["message"] = ["role": "assistant", "content": [], "usage": ["input_tokens": 1, "output_tokens": 2]]
+        var last = answer("x3", "x2", "Found it.")
         last["timestamp"] = "2026-10-21T14:53:50.997Z"
+        last["message"] = [
+            "role": "assistant", "content": [["type": "text", "text": "Found it."]],
+            "usage": [
+                "input_tokens": 3, "cache_creation_input_tokens": 2_000, "cache_read_input_tokens": 237_000, "output_tokens": 409,
+            ],
+        ]
+        // A long tool result after it: the last call is found past it.
+        let result = user("x4", "x3", String(repeating: "Output. ", count: 10_000))
         let untimed: [String: Any] = ["type": "api-request"]
         let file = folder.appendingPathComponent("agent-span.jsonl")
-        let text = try [first, last, untimed].map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }
+        let text = try [first, call, last, result, untimed].map {
+            String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self)
+        }
         try (text.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
         let span = try #require(ClaudeHistory.Subagent.span(file))
         #expect(abs(span.end.timeIntervalSince(span.start) - 7660.537) < 0.001)
+        #expect(span.tokens == 239_412)
         #expect(ClaudeHistory.Subagent.span(try agent("u", session: "s5", tool: "t5")) == nil)
     }
 

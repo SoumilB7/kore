@@ -88,6 +88,8 @@ final class TranscriptStore {
         var startedAt: Date
         var duration: TimeInterval?
         var tokens: Int?
+        /// `tokens` were read from its transcript, not reported: "~239k".
+        var approximate = false
         var tools = 0
         var lastTool: String?
         var result: String?
@@ -1207,9 +1209,14 @@ final class TranscriptStore {
         }
     }
 
-    func agentProgress(id: String, tokens: Int?, tools count: Int?, lastTool: String?, duration: TimeInterval?) {
+    func agentProgress(
+        id: String, tokens: Int?, tools count: Int?, lastTool: String?, duration: TimeInterval?, approximate: Bool = false
+    ) {
         updateAgent(id) {
-            if let tokens { $0.tokens = tokens }
+            if let tokens {
+                $0.tokens = tokens
+                $0.approximate = approximate
+            }
             if let count { $0.tools = count }
             if let lastTool { $0.lastTool = lastTool }
             if let duration { $0.duration = duration }

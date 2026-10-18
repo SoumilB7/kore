@@ -1074,7 +1074,7 @@ struct AgentMeter: View {
     private func line(_ duration: TimeInterval?) -> some View {
         var parts: [String] = []
         if let duration { parts.append(Self.clock(duration)) }
-        if let tokens = info.tokens { parts.append(Self.tokens(tokens)) }
+        if let tokens = Self.tokens(of: info) { parts.append(tokens) }
         if info.tools > 0 { parts.append(info.tools == 1 ? "1 tool" : "\(info.tools) tools") }
         return Text(parts.joined(separator: " · "))
             .font(TextStyle.caption.monospacedDigit())
@@ -1100,5 +1100,10 @@ struct AgentMeter: View {
         if n < 1000 { return "\(n)" }
         if n < 1_000_000 { return one(Double(n) / 1000, "k") }
         return one(Double(n) / 1_000_000, "M")
+    }
+
+    /// Its tokens, "~239k" when read from its transcript rather than reported.
+    static func tokens(of info: TranscriptStore.AgentInfo) -> String? {
+        info.tokens.map { (info.approximate ? "~" : "") + tokens($0) }
     }
 }

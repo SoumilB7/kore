@@ -482,12 +482,15 @@ package final class ClaudeTranslator {
         spawned.filter { finished[$0] == nil }.map { ($0, background.contains($0)) }
     }
 
-    /// An agent another client runs ended, as its own files say, with the time they span when
-    /// known (no notification brings it).
-    func agentEnded(_ id: String, _ status: AgentStatus, duration: Duration? = nil) {
+    /// An agent another client runs ended, as its own files say, with the time they span and its
+    /// last model call's tokens when known (no notification brings them): the tokens marked
+    /// approximate.
+    func agentEnded(_ id: String, _ status: AgentStatus, duration: Duration? = nil, tokens: Int? = nil) {
         guard spawned.contains(id), finished[id] == nil else { return }
         finished[id] = false
-        if let duration { out.append(.agentProgress(id: id, AgentProgress(duration: duration))) }
+        if duration != nil || tokens != nil {
+            out.append(.agentProgress(id: id, AgentProgress(tokens: tokens, duration: duration, approximate: tokens != nil)))
+        }
         out.append(.agentFinished(id: id, status, result: nil))
     }
 

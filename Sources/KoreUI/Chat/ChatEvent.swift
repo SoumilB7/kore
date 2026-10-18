@@ -335,12 +335,18 @@ package struct AgentProgress: Sendable {
     package var tools: Int?
     package var duration: Duration?
     package var lastTool: String?
+    /// Its tokens were read from its transcript, not reported (Claude's agents ended by their
+    /// files): "~239k".
+    package var approximate: Bool
 
-    package init(tokens: Int? = nil, tools: Int? = nil, duration: Duration? = nil, lastTool: String? = nil) {
+    package init(
+        tokens: Int? = nil, tools: Int? = nil, duration: Duration? = nil, lastTool: String? = nil, approximate: Bool = false
+    ) {
         self.tokens = tokens
         self.tools = tools
         self.duration = duration
         self.lastTool = lastTool
+        self.approximate = approximate
     }
 }
 
