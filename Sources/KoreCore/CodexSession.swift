@@ -94,6 +94,12 @@ public actor CodexSession {
     private var finishedTurnId: String?
     /// Model the thread runs on; updated by `setModel`.
     public private(set) var model: String?
+    /// The model Codex has the loaded thread on: what it opened with, then each turn's
+    /// (`thread/settings/updated`). A `setModel` reaches it with the next turn, or `compact`.
+    public private(set) var threadModel: String?
+    /// While `reopen` waits for Codex to unload the thread.
+    private var unloading: CheckedContinuation<Void, Never>?
+    private var unloaded = false
     /// The thread's rollout file, where each turn's settings are kept (`CodexRolloutReader`).
     public private(set) var rolloutPath: String?
     /// Spawns the app-server and opens (or resumes) the thread.
@@ -240,7 +246,7 @@ public actor CodexSession {
         plan = on
     }
 
-    /// Takes effect from the next turn.
+    /// Takes effect from the next turn, or the next compaction (`compact`).
     public func setModel(_ model: String) {
         self.model = model
     }
@@ -264,8 +270,52 @@ public actor CodexSession {
     }
 
     /// Summarizes the thread to free context. Runs as a turn (turn/started → turn/completed).
+    /// Codex compacts with the model the thread is loaded on, which only a turn changes: a model
+    /// picked since (or the fallback for one the account can't use) is put on the thread first.
     public func compact() async throws {
+        if let model, model != threadModel, activeTurnId == nil {
+            try await reopen(model: model)
+        }
         _ = try await server.request("thread/compact/start", ["threadId": .string(threadId)])
+    }
+
+    /// Puts the idle thread on `model` without a turn. Codex has no request for that, and ignores
+    /// a resume's overrides while the thread is loaded: so it's unloaded (`thread/unsubscribe`,
+    /// then `thread/closed`) and resumed with them, its turns left out. Throws when Codex keeps
+    /// it on another model.
+    private func reopen(model: String) async throws {
+        unloaded = false
+        let status = try await server.request("thread/unsubscribe", ["threadId": .string(threadId)])["status"]?.string
+        if status == "unsubscribed", !unloaded {
+            // Bounded: if it never comes, the resume below says what Codex kept.
+            let timeout = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                await self?.didUnload()
+            }
+            await withCheckedContinuation { unloading = $0 }
+            timeout.cancel()
+        }
+        let result = try await server.request("thread/resume", Self.reopenParams(threadId, model: model, cwd: options.cwd, permissions))
+        threadModel = result["model"]?.string
+        guard threadModel == model else {
+            throw CodexAppServer.Failure.rpc(
+                code: -32600, message: "Codex kept this thread on \(threadModel ?? "its model"); send a message to move it to \(model)")
+        }
+    }
+
+    /// `thread/resume` putting a thread on `model`, under the current permissions, without its turns.
+    static func reopenParams(_ thread: String, model: String, cwd: URL, _ permissions: Permissions) -> JSONValue {
+        [
+            "threadId": .string(thread), "model": .string(model), "cwd": .string(cwd.path), "excludeTurns": true,
+            "approvalPolicy": permissions.approvalPolicy, "approvalsReviewer": permissions.approvalsReviewer,
+            "sandbox": permissions.sandboxMode,
+        ]
+    }
+
+    private func didUnload() {
+        unloaded = true
+        unloading?.resume()
+        unloading = nil
     }
 
     public func rename(_ name: String) async throws {
@@ -321,6 +371,7 @@ public actor CodexSession {
             page = try? await turns(limit: limit)
         }
         model = result["model"]?.string
+        threadModel = model
         if effort == nil { effort = result["reasoningEffort"]?.string }
         sink.yield(.threadStarted(threadId: threadId, model: result["model"]?.string, raw: result))
 
@@ -363,6 +414,9 @@ public actor CodexSession {
         case "turn/completed":
             activeTurnId = nil
             finishedTurnId = params["turn"]?["id"]?.string
+        case "thread/settings/updated":
+            if let model = params["threadSettings"]?["model"]?.string { threadModel = model }
+        case "thread/closed": didUnload()
         default: break
         }
         return CodexEvent(notification: method, params: params)
