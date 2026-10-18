@@ -90,6 +90,8 @@ enum Size {
     static let tabGap: CGFloat = 4
     /// A tab drag starts after this much movement, so clicks and double clicks stay clicks.
     static let tabDragStart: CGFloat = 4
+    /// The least a control takes clicks across, however small it's drawn (WCAG 2.5.8).
+    static let hitTarget: CGFloat = 24
     static let iconButton: CGFloat = 28
     static let iconButtonSmall: CGFloat = 26
     /// `SubtleButtonStyle(small:)`: a capsule button inside a row.
@@ -123,6 +125,11 @@ enum Size {
     static let menuMax: CGFloat = 260
     static let planScrollMax: CGFloat = 320
     static let chipBadge = CGSize(width: 5, height: -5)
+    /// The remove badge (15 across, 5 past its chip's corner) takes clicks 24 across: back over
+    /// its own chip, and 3 short of the next one, `Space.md` on.
+    static let chipBadgeReach = EdgeInsets(top: 4, leading: 6, bottom: 5, trailing: 3)
+    /// The command chip is a line of body text, 16 tall at 100%.
+    static let commandChipReach = HitTarget.reach(height: 16)
 }
 
 enum Stroke {

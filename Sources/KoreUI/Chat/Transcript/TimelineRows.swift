@@ -59,7 +59,7 @@ private struct SignInNotice: View {
                 .help(said)
                 .selectableOnHover()
             Button("Sign in", action: signIn)
-                .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                .smallButton(prominent: true)
                 .storyID(StoryID.Transcript.signIn(turn).part(.signIn))
             Spacer(minLength: 0)
         }
@@ -141,7 +141,7 @@ private struct SleptNotice: View {
                 .help(said)
                 .selectableOnHover()
             Button("Continue", action: resume)
-                .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                .smallButton(prominent: true)
                 .storyID(StoryID.Transcript.slept(turn).part(.continue))
             Spacer(minLength: 0)
         }
@@ -614,8 +614,10 @@ struct MessageToggle: View {
                 .padding(Inset.messageToggle)
                 .background(
                     hovered.value ? Theme.surfaceHover : Color.clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+                .hitTarget(Size.messageToggleReach)
         }
         .buttonStyle(.plain)
+        .hitTargetRoom(Size.messageToggleReach)
         .onHover { hovered.value = $0 }
     }
 }

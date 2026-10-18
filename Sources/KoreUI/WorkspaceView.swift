@@ -189,6 +189,11 @@ extension TabBar {
 }
 
 private struct TabItem: View {
+    /// The close button takes clicks 24 tall, and on to the tab's edge, `Space.sm` past it: the
+    /// tab's own button is on its left. Only the height is given back.
+    private static let closeRoom = HitTarget.reach(height: Size.closeGlyph)
+    private static let closeReach = EdgeInsets(top: closeRoom.top, leading: 0, bottom: closeRoom.bottom, trailing: Space.sm)
+
     let tab: ChatTab
     let workspace: Workspace
     let height: CGFloat
@@ -289,15 +294,15 @@ private struct TabItem: View {
                     }
                 }
                 .frame(width: Size.closeGlyph, height: Size.closeGlyph)
-                .contentShape(Rectangle())
+                .hitTarget(Self.closeReach)
             }
             .buttonStyle(.plain)
+            .hitTargetRoom(Self.closeRoom)
             .onHover { closeHovered.value = $0 }
             .opacity(hovered.value || isActive || dirty ? 1 : 0)
             .help("Close tab")
             // Hidden on an inactive tab until hover: pressed by its action.
             .storyID(storyKey.part(.close), press: { workspace.close(tab) })
-            .padding(.trailing, Space.sm)
         }
         // Width set by the tab bar (180 down to 90, like browser tabs); titles truncate.
         .frame(height: height)

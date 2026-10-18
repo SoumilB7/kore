@@ -179,6 +179,8 @@ extension Size {
         static let notice: CGFloat = 32
         static let find: CGFloat = 360
         static let findToggle: CGFloat = 20
+        /// The toggles sit `Space.xxs` apart: each takes clicks halfway to the next.
+        static let findToggleReach = HitTarget.reach(width: findToggle + Space.xxs, height: findToggle)
         static let findMargin: CGFloat = 12
         /// A find match's mark on the vertical scroller (look §5: VS Code's overview ruler).
         static let findTick = CGSize(width: 6, height: 2)

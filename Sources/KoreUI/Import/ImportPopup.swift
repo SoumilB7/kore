@@ -89,11 +89,11 @@ struct ImportPopup: View {
         HStack(spacing: Space.md) {
             line.frame(maxWidth: .infinity, alignment: .leading)
             Button("Choose file…", action: choose)
-                .buttonStyle(SubtleButtonStyle(small: true))
+                .smallButton()
                 .storyID(StoryID.Composer.importer.part(.choose), press: choose)
                 .tabStop(StoryID.Composer.importer.part(.choose), action: choose)
             Button("Import") { state.importPicked() }
-                .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                .smallButton(prominent: true)
                 .storyID(StoryID.Composer.importer.part(.add), press: { [state] in if state.canImport { state.importPicked() } })
                 .tabStop(StoryID.Composer.importer.part(.add)) { state.importPicked() }
                 .disabled(!state.canImport)
@@ -117,7 +117,7 @@ struct ImportPopup: View {
             HStack(spacing: Space.md) {
                 caption("\(product) isn't signed in.", Theme.secondary)
                 Button("Sign in") { chat.signInAgain() }
-                    .buttonStyle(SubtleButtonStyle(small: true))
+                    .smallButton()
                     .storyID(StoryID.Composer.importer.part(.signIn), press: { chat.signInAgain() })
             }
         case .importing(let turns):
@@ -129,7 +129,7 @@ struct ImportPopup: View {
             HStack(spacing: Space.md) {
                 caption("Couldn't import: \(why)", Theme.danger)
                 Button("Try again") { state.retry() }
-                    .buttonStyle(SubtleButtonStyle(small: true))
+                    .smallButton()
                     .storyID(StoryID.Composer.importer.part(.reload), press: { state.retry() })
             }
         }

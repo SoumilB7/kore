@@ -391,9 +391,10 @@ private struct SearchToggle: View {
                 .foregroundStyle(isOn || hovered.value ? Theme.text : Theme.secondary)
                 .frame(width: Size.Editor.findToggle, height: Size.Editor.findToggle)
                 .background(isOn ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: Radius.glyph))
-                .contentShape(Rectangle())
+                .hitTarget(Size.Editor.findToggleReach)
         }
         .buttonStyle(.plain)
+        .hitTargetRoom(Size.Editor.findToggleReach)
         .onHover { hovered.value = $0 }
         .help(help)
     }

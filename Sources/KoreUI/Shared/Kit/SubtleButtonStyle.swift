@@ -3,7 +3,8 @@ import SwiftUI
 /// Quiet bordered button used across the app; `prominent` is the one primary action.
 /// `small` is the same button sized for a row: `Size.smallButton` tall in caption text
 /// that brightens under the pointer (a usage reset's "Use reset"); small and `prominent`, it's
-/// tinted with the accent rather than filled with the text colour.
+/// tinted with the accent rather than filled with the text colour. Small ones are set with
+/// `smallButton()`, which gives back the room their clicks reach into.
 struct SubtleButtonStyle: ButtonStyle {
     var prominent = false
     var small = false
@@ -45,7 +46,16 @@ private struct SmallButton: View {
             .frame(height: Size.smallButton)
             .background(isEnabled ? fill : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
             .overlay(RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(line, lineWidth: Stroke.hairline))
-            .contentShape(RoundedRectangle(cornerRadius: Radius.chip))
+            .hitTarget(Self.reach)
             .onHover { hovered.value = $0 }
+    }
+
+    static let reach = HitTarget.reach(height: Size.smallButton)
+}
+
+extension View {
+    /// `SubtleButtonStyle(small:)`, taking clicks a little above and below its outline.
+    func smallButton(prominent: Bool = false) -> some View {
+        buttonStyle(SubtleButtonStyle(prominent: prominent, small: true)).hitTargetRoom(SmallButton.reach)
     }
 }

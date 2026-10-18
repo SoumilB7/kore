@@ -458,12 +458,12 @@ private struct AccountRow: View {
                     .foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
                 Button("Yes, sign out") { state.signOut() }
-                    .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                    .smallButton(prominent: true)
                     .storyID(id.part(.allow))
                     .tabStop(id.part(.allow)) { state.signOut() }
                 // Asked from the keys, the ring lands here: a second Return goes back.
                 Button("No, go back") { state.cancelSignOut() }
-                    .buttonStyle(SubtleButtonStyle(small: true))
+                    .smallButton()
                     .storyID(id.part(.cancel))
                     .tabStop(id.part(.cancel), after: id.part(.signOut)) { state.cancelSignOut() }
             } else if state.showsKeyField {
@@ -472,15 +472,16 @@ private struct AccountRow: View {
                 flowLine(step, id: id)
             } else if signedIn {
                 Spacer(minLength: 0)
-                HStack(spacing: Space.xxs) {
+                // Apart enough that each one's clicks stay its own.
+                HStack(spacing: Space.sm) {
                     Button("Switch account") { state.signIn() }
-                        .buttonStyle(SubtleButtonStyle(small: true))
+                        .smallButton()
                         .storyID(id.part(.switch))
                         .tabStop(id.part(.switch)) { state.signIn() }
                     if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method), press: { state.showHostMenu() }) }
                 }
                 Button("Sign out") { state.askSignOut() }
-                    .buttonStyle(SubtleButtonStyle(small: true))
+                    .smallButton()
                     .storyID(id.part(.signOut))
                     .tabStop(id.part(.signOut), after: id.part(.cancel)) { state.askSignOut() }
             } else {
@@ -513,7 +514,7 @@ private struct AccountRow: View {
         case .browser(let url):
             spinning(AccountText.browser)
             Button(state.copied ? "Copied" : "Copy link") { state.copy(url.absoluteString) }
-                .buttonStyle(SubtleButtonStyle(small: true))
+                .smallButton()
                 .storyID(id.part(.copy))
                 .tabStop(id.part(.copy)) { state.copy(url.absoluteString) }
             cancel(id)
@@ -526,7 +527,7 @@ private struct AccountRow: View {
             .help(AccountText.deviceHelp)
             Spacer(minLength: 0)
             Button(state.copied ? "Copied" : "Copy code") { state.copy(code) }
-                .buttonStyle(SubtleButtonStyle(small: true))
+                .smallButton()
                 .storyID(id.part(.copy))
                 .tabStop(id.part(.copy)) { state.copy(code) }
             cancel(id)
@@ -566,16 +567,16 @@ private struct AccountRow: View {
 
     private func cancel(_ id: StoryID) -> some View {
         Button("Cancel") { state.cancel() }
-            .buttonStyle(SubtleButtonStyle(small: true))
+            .smallButton()
             .storyID(id.part(.cancel))
             .tabStop(id.part(.cancel)) { state.cancel() }
     }
 
     /// Sign in (or Try again) and, with more than one method, the ⌄ of methods.
     private func signInControl(_ title: String, id: StoryID) -> some View {
-        HStack(spacing: Space.xxs) {
+        HStack(spacing: Space.sm) {
             Button(title) { state.signIn() }
-                .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                .smallButton(prominent: true)
                 .storyID(id.part(.signIn))
                 .tabStop(id.part(.signIn)) { state.signIn() }
             if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method), press: { state.showHostMenu() }) }
@@ -606,14 +607,14 @@ private struct KeyField: View {
             }
             .onAppear { focused = true }
         Button("Sign in", action: submit)
-            .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+            .smallButton(prominent: true)
             .disabled(key.value.isEmpty)
             .storyID(id.part(.signIn))
         Button("Cancel") {
             key.value = ""
             state.closeEditor()
         }
-        .buttonStyle(SubtleButtonStyle(small: true))
+        .smallButton()
         .storyID(id.part(.cancel))
     }
 

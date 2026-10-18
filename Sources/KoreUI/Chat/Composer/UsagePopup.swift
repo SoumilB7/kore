@@ -783,12 +783,12 @@ private struct ResetRowView: View {
                 Text("Use this reset?").foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
                 Button("Yes, use reset") { state.useReset() }
-                    .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                    .smallButton(prominent: true)
                     .storyID(id.part(.allow))
                     .tabStop(id.part(.allow)) { state.useReset() }
                 // Asked from the keys, the ring lands here: a second Return goes back.
                 Button("No, go back") { state.cancelReset() }
-                    .buttonStyle(SubtleButtonStyle(small: true))
+                    .smallButton()
                     .storyID(id.part(.cancel))
                     .tabStop(id.part(.cancel), after: id.part(.use)) { state.cancelReset() }
             case .using:
@@ -866,7 +866,7 @@ private struct ResetRowView: View {
     /// Never truncated, at the row's trailing edge.
     private func use(_ id: StoryID) -> some View {
         Button("Use reset") { state.askReset(row.id) }
-            .buttonStyle(SubtleButtonStyle(small: true))
+            .smallButton()
             .accessibilityLabel("Use \(row.title.lowercased()), \(expiry.prefix(1).lowercased() + expiry.dropFirst())")
             .storyID(id.part(.use))
             .tabStop(id.part(.use), after: id.part(.cancel)) { state.askReset(row.id) }

@@ -123,8 +123,10 @@ struct CommandChip: View {
                 .lineLimit(1)
                 .padding(.horizontal, Space.sm)
                 .background(Theme.commandFill, in: RoundedRectangle(cornerRadius: Radius.chip))
+                .hitTarget(Size.commandChipReach)
         }
         .buttonStyle(.plain)
+        .hitTargetRoom(Size.commandChipReach)
         .help(command.description)
         .storyID(StoryID.Composer.chip, press: { open() })
     }

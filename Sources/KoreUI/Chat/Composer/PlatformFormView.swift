@@ -195,7 +195,7 @@ struct PlatformFormView: View {
         }
         Spacer(minLength: 0)
         Button("Choose…", action: choose)
-            .buttonStyle(SubtleButtonStyle(small: true))
+            .smallButton()
             .storyID(StoryID.Composer.account.part(.choose))
     }
 
@@ -242,11 +242,11 @@ struct PlatformFormView: View {
                     .help(words)
                 Spacer(minLength: 0)
                 Button("Save", action: save)
-                    .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                    .smallButton(prominent: true)
                     .disabled(!canSave)
                     .storyID(StoryID.Composer.account.part(.save))
                 Button("Cancel") { state.closeEditor() }
-                    .buttonStyle(SubtleButtonStyle(small: true))
+                    .smallButton()
                     .storyID(StoryID.Composer.account.part(.cancel))
             }
         }

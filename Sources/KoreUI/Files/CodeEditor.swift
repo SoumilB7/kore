@@ -879,40 +879,47 @@ final class GutterView: NSRulerView {
     /// A bar answers the first click, as the text beside it does.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// A click near the right edge on a changed line, or a deletion's triangle, opens its peek.
+    /// A click near the right edge on a changed line, or a deletion's triangle, opens its peek;
+    /// left of the bars, a fold chevron folds or unfolds its line. Each reaches `Size.hitTarget`
+    /// into the gutter: the bars across a line with no chevron, and the chevron over the line's
+    /// number, the bars keeping their own strip at the edge.
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        let opened = MainActor.assumeIsolated { () -> Bool in
-            guard let controller, point.x >= ruleThickness - Size.Editor.changeBar - Size.Editor.changeBarGap,
-                let line = line(at: point.y)
-            else { return false }
-            let changes = controller.changes
-            let top = lineTop(line) ?? point.y
-            // Near a line's top edge, a deletion above it wins.
-            let target: Int? =
-                changes.deletions.contains(line) && point.y - top < Size.Editor.deletionMark * 2 ? line
-                : changes.marks[line] != nil ? line
-                : changes.deletions.contains(line + 1) ? line + 1
-                : nil
-            guard let target else { return false }
-            controller.togglePeek(at: target)
-            return true
-        }
-        if opened { return }
-        // Left of the bars, in the trailing space: a fold chevron.
-        let folded = MainActor.assumeIsolated { () -> Bool in
-            guard let controller, point.x >= ruleThickness - Size.Editor.gutterTrailing - Size.Editor.changeBarGap,
-                var line = line(at: point.y)
-            else { return false }
-            // A folded row's hidden lines are its first line's.
-            if let fold = controller.hiddenFold(line: line) ?? controller.fold(containing: controller.lines.start(of: line)) {
-                line = controller.lines.line(at: fold.location)
+        let handled = MainActor.assumeIsolated { () -> Bool in
+            guard let controller, let line = line(at: point.y) else { return false }
+            let fromEdge = ruleThickness - point.x
+            let bars = Size.Editor.changeBar + Size.Editor.changeBarGap
+            let chevron = chevronLine(line)
+            if fromEdge <= (chevron == nil ? Size.hitTarget : bars), let target = peekTarget(line, at: point.y) {
+                controller.togglePeek(at: target)
+                return true
             }
-            guard controller.regions.end(of: line) != nil || controller.fold(startingOn: line) != nil else { return false }
-            controller.toggleFold(line: line)
+            guard let chevron, fromEdge <= bars + Size.hitTarget else { return false }
+            controller.toggleFold(line: chevron)
             return true
         }
-        if !folded { super.mouseDown(with: event) }
+        if !handled { super.mouseDown(with: event) }
+    }
+
+    /// The changed line a click on a line's bars opens: near the line's top edge, a deletion
+    /// above it wins.
+    @MainActor private func peekTarget(_ line: Int, at y: CGFloat) -> Int? {
+        guard let changes = controller?.changes else { return nil }
+        let top = lineTop(line) ?? y
+        if changes.deletions.contains(line) && y - top < Size.Editor.deletionMark * 2 { return line }
+        if changes.marks[line] != nil { return line }
+        return changes.deletions.contains(line + 1) ? line + 1 : nil
+    }
+
+    /// The line whose fold chevron is on a line's row, if there's one: a folded row's hidden
+    /// lines are its first line's.
+    @MainActor private func chevronLine(_ line: Int) -> Int? {
+        guard let controller else { return nil }
+        var line = line
+        if let fold = controller.hiddenFold(line: line) ?? controller.fold(containing: controller.lines.start(of: line)) {
+            line = controller.lines.line(at: fold.location)
+        }
+        return controller.regions.end(of: line) != nil || controller.fold(startingOn: line) != nil ? line : nil
     }
 
     /// The 0-based line at a height in the gutter.

@@ -73,8 +73,10 @@ struct AttachmentChip: View {
                     Image(systemName: "xmark.circle.fill")
                         .font(Glyph.remove)
                         .foregroundStyle(Theme.text, Theme.surfaceHover)
+                        .hitTarget(Size.chipBadgeReach)
                 }
                 .buttonStyle(.plain)
+                .hitTargetRoom(Size.chipBadgeReach)
                 .offset(x: Size.chipBadge.width, y: Size.chipBadge.height)
                 .help("Remove")
             }

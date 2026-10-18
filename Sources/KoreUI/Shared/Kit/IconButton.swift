@@ -32,15 +32,18 @@ struct IconButton: View {
     @StateObject private var hovered = Local(false)
 
     var body: some View {
+        // `.mini` is drawn 22: its neighbours sit at least 2 away.
+        let reach = HitTarget.reach(width: kind.size, height: kind.size)
         Button(action: action) {
             Image(systemName: symbol)
                 .font(font)
                 .foregroundStyle(isOn ? Theme.text : (isEnabled ? Theme.secondary : Theme.tertiary))
                 .frame(width: kind.size, height: kind.size)
                 .hoverFill(isOn || (highlightsOnHover && hovered.value && isEnabled), isOn ? Theme.surfaceHover : Theme.toolHover)
-                .contentShape(Rectangle())
+                .hitTarget(reach)
         }
         .buttonStyle(.plain)
+        .hitTargetRoom(reach)
         .onHover { hovered.value = $0 }
         .help(help)
         .accessibilityLabel(Text(help))

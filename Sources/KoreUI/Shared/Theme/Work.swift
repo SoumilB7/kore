@@ -227,6 +227,11 @@ extension Inset {
     static let messageToggle = EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6)
 }
 
+extension Size {
+    /// "Show full message" is a line of label text in its inset, 19 tall at 100%.
+    static let messageToggleReach = HitTarget.reach(height: 19)
+}
+
 // The agent map's tree (phase 10 §6): every agent is an O, and each wire drops from the bottom
 // of its parent's O, runs down the parent's spine and curves right into the child's.
 
