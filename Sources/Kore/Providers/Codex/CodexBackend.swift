@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import os
 
 /// A Codex chat: one `codex app-server` process (JSON-RPC), one thread.
 @MainActor
@@ -15,6 +16,12 @@ final class CodexBackend: ChatBackend {
     private var resumeId: String?
     /// A fork not opened yet: its first launch forks `resumeId` through this turn.
     private var forkAt: String?
+    /// A thread Kore starts has no name until a client sets one. After its first turn Kore saves
+    /// the first prompt's `FallbackTitle` as its name (what the Codex extension saves when it
+    /// can't generate a title), unless a name came from anywhere first: Kore never replaces one.
+    private var mayTitle: Bool
+    private var titlePrompt: String?
+    private static let log = Logger(subsystem: "Kore", category: "codex")
 
     var sessionId: String? { translator.threadId ?? resumeId }
 
@@ -26,6 +33,7 @@ final class CodexBackend: ChatBackend {
         replayPending = options.resume != nil
         resumeId = options.resume?.id
         forkAt = options.fork?.at
+        mayTitle = options.resume == nil && options.fork == nil
     }
 
     func start() async throws {
@@ -120,6 +128,7 @@ final class CodexBackend: ChatBackend {
     private func handle(_ event: CodexEvent) {
         translator.translate(event)
         flush()
+        if case .turnCompleted = event { saveTitle() }
         if case .exited = event {
             resumeId = sessionId
             session = nil
@@ -129,7 +138,10 @@ final class CodexBackend: ChatBackend {
 
     private func flush() {
         let (events, changes) = translator.take()
-        for event in events { yield(event) }
+        for event in events {
+            if case .titleChanged = event { mayTitle = false }
+            yield(event)
+        }
         let folder = options.folder
         for (turn, task) in changes {
             Task {
@@ -170,6 +182,7 @@ final class CodexBackend: ChatBackend {
             yield(.notice("Goal set"))
             return false
         }
+        if mayTitle, titlePrompt == nil { titlePrompt = FallbackTitle.from(text) }
         // Snapshot before Codex can edit anything; the turn itself opens on turn/started.
         translator.files.begin()
         await translator.files.ready()
@@ -229,8 +242,25 @@ final class CodexBackend: ChatBackend {
     }
 
     func rename(_ title: String) async throws {
+        mayTitle = false
         try await start()
         try await session?.rename(title)
+    }
+
+    /// Once, with one retry (the extension's: a thread just started can say its rollout is empty).
+    private func saveTitle() {
+        guard mayTitle, let name = titlePrompt, let session else { return }
+        mayTitle = false
+        Task {
+            do {
+                try await session.rename(name)
+            } catch {
+                try? await Task.sleep(for: .milliseconds(500))
+                do { try await session.rename(name) } catch {
+                    Self.log.warning("Couldn't save the thread's name: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
     }
 
     func stopAgent(_ id: String) async {
