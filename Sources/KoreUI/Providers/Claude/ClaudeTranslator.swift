@@ -768,6 +768,17 @@ package final class ClaudeTranslator {
     /// A transcript (`ClaudeHistory.messages`) as events: turns open at each prompt (or peer
     /// message, cron firing, finished agent) and close before the next one, timed from the
     /// entries' timestamps.
+    /// The mode a prompt of the user's was sent in. Prompts the CLI writes for itself (a
+    /// background task's notification, a peer's message) record the mode the CLI was launched in,
+    /// not one anybody picked, so they say nothing about it.
+    static func promptMode(_ message: JSONValue) -> String? {
+        guard message["type"]?.string == "user", let mode = message["permissionMode"]?.string else { return nil }
+        if let origin = message["origin"]?["kind"]?.string { return origin == "human" ? mode : nil }
+        if message["isMeta"]?.bool == true { return nil }
+        if message["message"]?["content"]?.string?.hasPrefix("<task-notification>") == true { return nil }
+        return mode
+    }
+
     package func replay(_ messages: [JSONValue]) -> [ChatEvent] {
         replaying = true
         defer {
@@ -779,9 +790,7 @@ package final class ClaudeTranslator {
         var upcoming: String?
         for index in messages.indices.reversed() {
             nextPromptMode[index] = upcoming
-            if messages[index]["type"]?.string == "user", let mode = messages[index]["permissionMode"]?.string {
-                upcoming = mode
-            }
+            if let mode = Self.promptMode(messages[index]) { upcoming = mode }
         }
         var lastAnswer: Date?
         // The turn was stopped: the CLI wrote its marker after the cut-off call.
@@ -798,7 +807,7 @@ package final class ClaudeTranslator {
             let time = Self.date(message["timestamp"]) ?? .now
             replayTime = time
             replayExitMode = nextPromptMode[index]
-            if message["type"]?.string == "user", let prompted = message["permissionMode"]?.string, prompted != mode {
+            if let prompted = Self.promptMode(message), prompted != mode {
                 // Each prompt records the mode it was sent in: a difference is a change between
                 // turns (Kore's menu, or another client). Placed before the turn it applies to.
                 close()

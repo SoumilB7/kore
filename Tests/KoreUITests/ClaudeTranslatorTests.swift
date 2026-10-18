@@ -20,6 +20,24 @@ struct ClaudeTranslatorTests {
     }
 
     /// Stop during a Bash call: the call shows stopped, not failed, and the turn interrupted.
+    /// The mode a session reads back in is the one the user's last prompt was sent in: a
+    /// background task's notification or a peer's message records the mode the CLI was launched
+    /// in, and doesn't count.
+    @Test func theModeReadBackIsTheUsersLastPrompts() async throws {
+        let lines = [
+            #"{"type":"user","uuid":"u1","timestamp":"2026-10-21T10:00:00Z","permissionMode":"auto","origin":{"kind":"human"},"message":{"role":"user","content":[{"type":"text","text":"Go on."}]}}"#,
+            #"{"type":"assistant","uuid":"a1","timestamp":"2026-10-21T10:00:01Z","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"OK"}]}}"#,
+            #"{"type":"user","uuid":"p1","timestamp":"2026-10-21T10:01:00Z","permissionMode":"default","isMeta":true,"origin":{"kind":"peer"},"message":{"role":"user","content":"A peer's report."}}"#,
+            #"{"type":"user","uuid":"n1","timestamp":"2026-10-21T10:02:00Z","permissionMode":"default","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification> <task-id>b1</task-id> </task-notification>"}}"#,
+            #"{"type":"user","uuid":"n2","timestamp":"2026-10-21T10:03:00Z","permissionMode":"default","message":{"role":"user","content":"<task-notification> <task-id>b2</task-id> </task-notification>"}}"#,
+        ]
+        let messages = try lines.map { try JSONValue.parse(Data($0.utf8)) }
+        let replayed = await ClaudeTranslator.replayed(messages, folder: URL(fileURLWithPath: "/tmp"), sessionId: "s")
+        let modes = replayed.events.compactMap { if case .modeChanged(let change) = $0 { change.mode } else { nil } }
+        #expect(modes == ["auto"])
+        #expect(replayed.carried.mode == "auto")
+    }
+
     @Test func aStoppedTurn() throws {
         let shape = shape(try Drive.claude("claude-stop"))
         #expect(shape.contains("toolStopped"))
