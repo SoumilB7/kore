@@ -349,10 +349,11 @@ final class ClaudeBackend: ChatBackend {
             forkNamed = true
             try? await session.rename(title)
         }
-        // Headless sessions don't name themselves; ask, as the VS Code extension does.
+        // Headless sessions don't name themselves; ask, as the VS Code extension does. Not
+        // awaited: the next message (sent mid-turn) shouldn't wait on it.
         if !titled && !text.isEmpty && !text.hasPrefix("/") {
             titled = true
-            if let title = try? await session.generateTitle(from: text) { yield(.titleChanged(title)) }
+            Task { if let title = try? await session.generateTitle(from: text) { yield(.titleChanged(title)) } }
         }
         return true
     }

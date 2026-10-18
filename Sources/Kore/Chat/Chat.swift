@@ -31,6 +31,9 @@ final class Chat: Identifiable {
 
     @ObservationIgnored private var backend: (any ChatBackend)?
     @ObservationIgnored private var pump: Task<Void, Never>?
+    /// The latest send: each waits for the one before to reach the CLI, so a message sent while
+    /// the CLI is still starting can't overtake the first.
+    @ObservationIgnored private var sending: Task<Void, Never>?
     @ObservationIgnored private let resume: SessionSummary?
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude).
     @ObservationIgnored private let fork: ForkPoint?
@@ -192,7 +195,9 @@ final class Chat: Identifiable {
         if awaitingHistory { held.append(message) } else { dispatch(message) }
         status.setRunning(true)
         let backend = connect()
-        Task {
+        let previous = sending
+        sending = Task {
+            await previous?.value
             do {
                 try await backend.start()
                 if try await !backend.send(text, files: Attachments.files(sent)) { status.setRunning(false) }

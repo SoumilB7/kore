@@ -91,6 +91,7 @@ public actor CodexSession {
 
     public private(set) var threadId = ""
     public private(set) var activeTurnId: String?
+    private var finishedTurnId: String?
     /// Model the thread runs on; updated by `setModel`.
     public private(set) var model: String?
     /// Turns of a resumed thread (each with its `items`), oldest first.
@@ -156,7 +157,10 @@ public actor CodexSession {
             if let effort { settings["reasoning_effort"] = .string(effort) }
             params["collaborationMode"] = ["mode": plan ? "plan" : "default", "settings": .object(settings)]
         }
-        _ = try await server.request("turn/start", .object(params))
+        let started = try await server.request("turn/start", .object(params))
+        // The reply names the turn before `turn/started` does, so a message sent right after
+        // can steer it; unless the turn already finished meanwhile.
+        if let id = started["turn"]?["id"]?.string, id != finishedTurnId { activeTurnId = id }
     }
 
     public func respond(to approval: CodexApproval, _ decision: CodexDecision) async throws {
@@ -297,7 +301,9 @@ public actor CodexSession {
     private func event(method: String, params: JSONValue) -> CodexEvent {
         switch method {
         case "turn/started": activeTurnId = params["turn"]?["id"]?.string
-        case "turn/completed": activeTurnId = nil
+        case "turn/completed":
+            activeTurnId = nil
+            finishedTurnId = params["turn"]?["id"]?.string
         default: break
         }
         return CodexEvent(notification: method, params: params)
