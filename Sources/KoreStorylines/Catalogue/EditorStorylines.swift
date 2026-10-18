@@ -98,8 +98,8 @@ final class EditorFindReplace: EditorStoryline {
     }
 }
 
-/// Go to File with a fuzzy query opens a kept tab; Search finds a line, and its result opens
-/// the file there in a preview tab.
+/// Go to File with a fuzzy query opens a kept tab with the caret in it; Search finds a line, and
+/// its result opens the file there in a preview tab.
 final class QuickOpenAndSearch: FilesStoryline {
     override class var tags: Set<Tag> { [.files, .gate] }
     override class var files: [(path: String, text: String)] {
@@ -121,6 +121,10 @@ final class QuickOpenAndSearch: FilesStoryline {
             Key(.returnKey),
             Expect("quick open closed") { $0.app.workspace?.storyQuickOpenShown == false },
             Expect.fileTabs("Greet.swift in a kept tab") { $0 == [StoryFileTab(path: "Sources/Greet.swift", preview: false, active: true)] },
+            // The caret goes to the file, as its editor comes up: typing lands in it.
+            WaitForFocus(.editor),
+            TypeText("@"),
+            Expect.editor("“@” typed into Greet.swift") { $0.path == "Sources/Greet.swift" && $0.text.hasPrefix("@func greet()") },
 
             Command(.search),
             WaitForFocus(.id(StoryID.Search.field)),
@@ -138,6 +142,24 @@ final class QuickOpenAndSearch: FilesStoryline {
                 ]
             },
             Expect.editor("the caret on the TODO's line") { $0.path == "Tests/GreetTests.swift" && $0.caretLine == 3 },
+        ]
+    }
+}
+
+/// A double click on a file in the explorer keeps its tab and puts the caret in it, though both
+/// clicks come before the file's editor is built.
+final class ExplorerDoubleClick: FilesStoryline {
+    override class var tags: Set<Tag> { [.files] }
+    override class var files: [(path: String, text: String)] { [("Notes.txt", "first line\nsecond line\n")] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            Click(.treeRow("Notes.txt"), count: 2),
+            Expect.fileTabs("Notes.txt in a kept tab") { $0 == [StoryFileTab(path: "Notes.txt", preview: false, active: true)] },
+            WaitForFocus(.editor),
+            TypeText("@"),
+            Expect.editor("“@” typed into Notes.txt") { $0.path == "Notes.txt" && $0.text == "@first line\nsecond line\n" },
         ]
     }
 }

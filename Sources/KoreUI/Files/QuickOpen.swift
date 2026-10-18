@@ -147,8 +147,8 @@ struct QuickOpenView: View {
     private func open(_ match: Match) {
         close()
         workspace.openFile(URL(fileURLWithPath: root + "/" + match.path))
-        let document = workspace.activeFile
-        DispatchQueue.main.async { document?.editor.focus() }
+        // Its editor isn't in the window yet: it takes the caret as it comes up.
+        workspace.activeFile?.editor.focus()
     }
 
     private func close() { workspace.quickOpen = nil }

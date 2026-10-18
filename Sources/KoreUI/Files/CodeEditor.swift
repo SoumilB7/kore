@@ -344,7 +344,26 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         textView.window?.makeFirstResponder(textView)
     }
 
-    func focus() { textView.window?.makeFirstResponder(textView) }
+    /// The caret was asked for before the text view was in a window (a file just opened, its
+    /// view not built yet): the text view takes it as it moves into one.
+    private var focusPending = false
+
+    /// Puts the caret in the editor: now when its text view is in a window, else as it moves
+    /// into one.
+    func focus() {
+        guard let window = textView.window else {
+            focusPending = true
+            return
+        }
+        focusPending = false
+        window.makeFirstResponder(textView)
+    }
+
+    /// The text view is in a window now: it takes the caret if that was asked for meanwhile.
+    func movedToWindow() {
+        guard focusPending, textView.window != nil else { return }
+        focus()
+    }
 
     func gutterNeedsDisplay() { gutter.needsDisplay = true }
 
@@ -1460,6 +1479,7 @@ final class EditorTextView: NSTextView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        MainActor.assumeIsolated { controller?.movedToWindow() }
         guard Self.keys == nil else { return }
         Self.keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard let text = event.window?.firstResponder as? EditorTextView, text.shortcut(event) else { return event }
