@@ -78,10 +78,15 @@ public enum CLIExecutable {
     public static func environment() async -> [String: String] { await loading.value }
 
     private static let loading = Task.detached(priority: .userInitiated) { () -> [String: String] in
-        let path = loginShellPATH()
-        let env = cleaned(path: path)
+        let env: [String: String]
+        if let path = loginShellPATH() {
+            env = cleaned(path: path)
+            UserDefaults.standard.set(path, forKey: cacheKey)
+        } else {
+            // Timed out or failed: last run's PATH stands in for this run's, and stays cached.
+            env = cachedEnvironment ?? cleaned(path: nil)
+        }
         shellResult.set(env)
-        if let path { UserDefaults.standard.set(path, forKey: cacheKey) }
         return env
     }
 
@@ -116,10 +121,11 @@ public enum CLIExecutable {
         process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
 
-        // A broken rc file shouldn't hang app launch.
+        // A broken rc file shouldn't hang app launch. With last run's PATH to start CLIs with,
+        // nothing waits on the shell, so a slow one (a busy machine) gets longer.
         let pid = process.processIdentifier
         let killer = DispatchWorkItem { kill(pid, SIGKILL) }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: killer)
+        DispatchQueue.global().asyncAfter(deadline: .now() + (cachedEnvironment == nil ? 5 : 10), execute: killer)
 
         let output = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         process.waitUntilExit()
