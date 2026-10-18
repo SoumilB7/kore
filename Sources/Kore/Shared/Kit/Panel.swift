@@ -6,6 +6,7 @@ struct PanelStyle {
     var fill: Color?
     var radius: CGFloat
     var line: Color?
+    var width: CGFloat = Stroke.hairline
 
     /// Approval cards.
     static let card = PanelStyle(fill: Theme.surface, radius: Radius.card, line: Theme.border)
@@ -29,7 +30,7 @@ extension View {
             .background(style.fill ?? .clear, in: RoundedRectangle(cornerRadius: style.radius))
             .overlay {
                 if let line = style.line {
-                    RoundedRectangle(cornerRadius: style.radius).strokeBorder(line, lineWidth: Stroke.hairline)
+                    RoundedRectangle(cornerRadius: style.radius).strokeBorder(line, lineWidth: style.width)
                 }
             }
     }
