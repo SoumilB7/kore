@@ -104,6 +104,36 @@ public enum CLIProfiles {
         return [name: folder(cli, id).path]
     }
 
+    enum LaunchFailure: Error, CustomStringConvertible {
+        case sharedFilesUnavailable
+        var description: String {
+            "Claude's shared chat history or settings aren't available for this login. Try switching accounts again."
+        }
+    }
+
+    /// Fixes older/partially created logins before a resumed process reads its history.
+    /// Healthy launches only check paths; directory enumeration happens only on repair.
+    /// The sign-in task's pin takes precedence over the active login, including a pinned main.
+    static func repairForLaunch(_ cli: String) throws {
+        guard cli == "claude" else { return }
+        let id: String?
+        if let pin = pinned, pin.cli == cli { id = pin.id } else { id = saved.active[cli] }
+        guard let id else { return }
+        let files = FileManager.default
+        let main = mainFolder(cli)
+        let dir = folder(cli, id)
+        let required = ["projects", "settings.json"].filter { name in
+            !files.fileExists(atPath: dir.appendingPathComponent(name).path)
+                && files.fileExists(atPath: main.appendingPathComponent(name).path)
+        }
+        guard !required.isEmpty else { return }
+        // `link` never replaces an existing file/directory, nor any login's auth files.
+        link(cli, id)
+        guard required.allSatisfy({ files.fileExists(atPath: dir.appendingPathComponent($0).path) }) else {
+            throw LaunchFailure.sharedFilesUnavailable
+        }
+    }
+
     /// Kore's environment with `id`'s folder (nil: main's) for `cli`, for reading that login's
     /// files whichever is active.
     public static func environment(_ cli: String, login id: String?) -> [String: String] {
@@ -132,6 +162,9 @@ public enum CLIProfiles {
 
     /// A prepared login, signed in: listed, and active from now on.
     public static func adopt(_ cli: String, _ id: String, email: String?, workspace: String? = nil) {
+        // A browser/Terminal login can replace its fresh config folder while signing in.
+        // Re-establish missing shared entries after it finishes, before chats resume there.
+        link(cli, id)
         change {
             $0.added[cli, default: []].append(Profile(id: id, email: email, workspace: workspace))
             $0.active[cli] = id

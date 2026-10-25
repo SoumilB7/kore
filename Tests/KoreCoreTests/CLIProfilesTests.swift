@@ -143,3 +143,82 @@ import Testing
         #expect(CLIProfiles.mainWorkspace("claude") == nil)
     }
 }
+
+extension CLIProfilesTests {
+    private func withRepairProfiles(_ check: (URL, URL) throws -> Void) throws {
+        let files = FileManager.default
+        let base = files.temporaryDirectory.appendingPathComponent("login-links-\(UUID().uuidString)", isDirectory: true)
+        let main = base.appendingPathComponent("main", isDirectory: true)
+        try files.createDirectory(at: main.appendingPathComponent("projects"), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: main.appendingPathComponent("settings.json"))
+        CLIProfiles.root.value = base.appendingPathComponent("accounts")
+        CLIProfiles.mains.value = ["claude": main]
+        CLIProfiles.reload()
+        defer {
+            CLIProfiles.root.value = nil
+            CLIProfiles.mains.value = [:]
+            CLIProfiles.reload()
+            try? files.removeItem(at: base)
+        }
+        try check(base, main)
+    }
+
+    @Test func adoptingAFinishedLoginRepairsTheHistoryLinksItRemoved() throws {
+        try withRepairProfiles { _, main in
+            let id = try CLIProfiles.prepare("claude")
+            let dir = CLIProfiles.folder("claude", id)
+            for name in ["projects", "settings.json"] { try FileManager.default.removeItem(at: dir.appendingPathComponent(name)) }
+            let auth = Data("login-owned-credential".utf8)
+            try auth.write(to: dir.appendingPathComponent(".credentials.json"))
+            CLIProfiles.adopt("claude", id, email: "new@example.test")
+            for name in ["projects", "settings.json"] {
+                #expect(try FileManager.default.destinationOfSymbolicLink(atPath: dir.appendingPathComponent(name).path) == main.appendingPathComponent(name).path)
+            }
+            #expect(try Data(contentsOf: dir.appendingPathComponent(".credentials.json")) == auth)
+        }
+    }
+
+    @Test func launchesRepairTheSelectedLoginAndRespectPinnedMainWithoutTouchingAuth() throws {
+        try withRepairProfiles { _, main in
+            let first = try CLIProfiles.prepare("claude"), second = try CLIProfiles.prepare("claude")
+            CLIProfiles.adopt("claude", first, email: "first@example.test")
+            let firstProjects = CLIProfiles.folder("claude", first).appendingPathComponent("projects")
+            let secondProjects = CLIProfiles.folder("claude", second).appendingPathComponent("projects")
+            try FileManager.default.removeItem(at: firstProjects)
+            try FileManager.default.removeItem(at: secondProjects)
+            try CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: "claude", id: nil)) {
+                try CLIProfiles.repairForLaunch("claude")
+            }
+            #expect(!FileManager.default.fileExists(atPath: firstProjects.path))
+            try CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: "claude", id: second)) {
+                try CLIProfiles.repairForLaunch("claude")
+            }
+            #expect(try FileManager.default.destinationOfSymbolicLink(atPath: secondProjects.path) == main.appendingPathComponent("projects").path)
+            #expect(!FileManager.default.fileExists(atPath: firstProjects.path))
+            try CLIProfiles.repairForLaunch("claude")
+            #expect(try FileManager.default.destinationOfSymbolicLink(atPath: firstProjects.path) == main.appendingPathComponent("projects").path)
+        }
+    }
+
+    @Test func repairPreservesExistingLocalDataAndRefusesAnUnrepairableHistoryLink() throws {
+        try withRepairProfiles { base, _ in
+            let id = try CLIProfiles.prepare("claude")
+            CLIProfiles.adopt("claude", id, email: "new@example.test")
+            let dir = CLIProfiles.folder("claude", id)
+            let projects = dir.appendingPathComponent("projects")
+            try FileManager.default.removeItem(at: projects)
+            try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+            let local = projects.appendingPathComponent("local-session.jsonl")
+            try Data("local history".utf8).write(to: local)
+            try FileManager.default.removeItem(at: dir.appendingPathComponent("settings.json"))
+            try CLIProfiles.repairForLaunch("claude")
+            #expect(try Data(contentsOf: local) == Data("local history".utf8))
+            #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: projects.path)) == nil)
+            try FileManager.default.removeItem(at: projects)
+            let destination = base.appendingPathComponent("missing-projects")
+            try FileManager.default.createSymbolicLink(at: projects, withDestinationURL: destination)
+            #expect(throws: CLIProfiles.LaunchFailure.self) { try CLIProfiles.repairForLaunch("claude") }
+            #expect(try FileManager.default.destinationOfSymbolicLink(atPath: projects.path) == destination.path)
+        }
+    }
+}

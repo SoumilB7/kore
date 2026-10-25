@@ -44,7 +44,11 @@ public enum CLIExecutable {
         let standIn = override == nil ? standIns.value[name] : nil
         let launch = try await locate(name, override: override ?? standIn?.executable)
         // The active login's folder (`CLIProfiles`); a storyline host's stand-in sets its own.
-        guard let standIn else { return Launch(url: launch.url, environment: launch.environment.merging(CLIProfiles.overrides(name)) { $1 }) }
+        guard let standIn else {
+            // Explicit executable overrides are isolated tools/tests with their own environment.
+            if override == nil { try CLIProfiles.repairForLaunch(name) }
+            return Launch(url: launch.url, environment: launch.environment.merging(CLIProfiles.overrides(name)) { $1 })
+        }
         return Launch(url: launch.url, environment: launch.environment.merging(standIn.environment) { $1 })
     }
 
