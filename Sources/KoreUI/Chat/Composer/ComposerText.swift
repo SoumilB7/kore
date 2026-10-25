@@ -251,5 +251,10 @@ final class ComposerScrollView: NSScrollView {
         if abs(old.height - newSize.height) > 0.5, window?.firstResponder === textView {
             textView.scrollRangeToVisible(textView.selectedRange())
         }
+        // A new width wraps the text into more lines or fewer: the box's height is asked again
+        // for it, or it keeps the last width's (lines under the box, or empty ones in it).
+        if abs(old.width - newSize.width) > 0.5, abs(fittingHeight(width: newSize.width) - newSize.height) > 0.5 {
+            invalidateIntrinsicContentSize()
+        }
     }
 }
