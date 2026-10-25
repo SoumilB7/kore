@@ -179,6 +179,10 @@ extension Chat {
     /// then the action row's words ("Waiting for the browser…"), or the signed-out row alone.
     package var isAccountOpen: Bool { account.isOpen }
     package var storyAccount: [String] { account.lines(product: provider.usage.product) }
+    /// The Account popup's logins as listed, "✓ " before the active one's email.
+    package var storyLogins: [String] {
+        AccountStore.shared.logins(provider.id).map { ($0.active ? "✓ " : "") + ($0.email ?? "?") }
+    }
     /// The caption under the action row ("Also signs out Terminal and VS Code on this Mac.",
     /// "Stored in your Keychain.", "Pick Console account, then …").
     package var storyAccountCaption: String? {

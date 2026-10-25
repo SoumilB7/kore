@@ -109,7 +109,7 @@ package final class AccountStore {
 
     // MARK: Reading
 
-    func status(_ provider: String) -> Status { statuses[provider] ?? .unknown }
+    package func status(_ provider: String) -> Status { statuses[provider] ?? .unknown }
     func flow(_ provider: String) -> Flow? { flows[provider] }
     func generation(_ provider: String) -> Int { generations[provider] ?? 0 }
     func isReading(_ provider: String) -> Bool { reading.contains(provider) }
@@ -409,7 +409,8 @@ package final class AccountStore {
     /// Main and the added logins, once there's more than main.
     func logins(_ provider: String) -> [Login] {
         _ = loginsVersion
-        guard CLIProfiles.supports(provider), !StoryHost.installed else { return [] }
+        // Under a storyline host, only where it gave the logins a folder of their own.
+        guard CLIProfiles.supports(provider), !StoryHost.installed || CLIProfiles.root.value != nil else { return [] }
         let active = CLIProfiles.active(provider)
         return [Login(id: nil, email: CLIProfiles.mainEmail(provider), active: active == nil)]
             + CLIProfiles.added(provider).map { Login(id: $0.id, email: $0.email, active: active == $0.id) }
@@ -429,6 +430,7 @@ package final class AccountStore {
     func switchLogin(_ provider: String, to id: String?) {
         guard flows[provider]?.step.live != true, CLIProfiles.active(provider) != id else { return }
         CLIProfiles.activate(provider, id)
+        dismissOutcome(provider)
         loginsVersion += 1
         rewatch(provider)
         // A read of the old login still under way is dropped.

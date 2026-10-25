@@ -83,6 +83,10 @@ package final class ScriptedAccounts {
         // The run's Claude settings start empty for each storyline.
         try? FileManager.default.removeItem(at: ClaudeSettings.userFile())
         try? FileManager.default.removeItem(at: SettingsFile.backup(of: ClaudeSettings.userFile()))
+        // Logins side by side only where a storyline gives them a folder (`SeedLogins`).
+        CLIProfiles.root.value = nil
+        CLIProfiles.mains.value = [:]
+        CLIProfiles.reload()
         AccountStore.shared.reset()
     }
 

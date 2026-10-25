@@ -119,23 +119,26 @@ final class AccountState {
         store.signOut(provider)
     }
 
-    /// Sign in, Switch account, Try again: the current method, or the one picked. A key or a
-    /// platform opens its field or form, filled in with what's saved.
+    /// Sign in, Switch account (Add account), Try again: the current method, or the one picked.
+    /// Signed in where the CLI keeps several logins, it adds one. A key or a platform opens its
+    /// field or form, filled in with what's saved (Claude's settings, one for every login).
     func signIn(_ method: SignInMethod? = nil) {
         askingSignOut = false
         methodsOpen = false
         guard let method = method ?? store.currentMethod(provider) else { return }
         if method.opensEditor { return openEditor(method) }
         closeEditor()
-        store.signIn(provider, method: method, in: folder)
+        if addsLogins {
+            store.addLogin(provider, method: method, in: folder)
+        } else {
+            store.signIn(provider, method: method, in: folder)
+        }
     }
 
-    /// Add account: a sign-in by the current method into a login of its own.
-    func addLogin() {
-        askingSignOut = false
-        methodsOpen = false
-        closeEditor()
-        store.addLogin(provider, method: store.currentMethod(provider).flatMap { $0.opensEditor ? nil : $0 }, in: folder)
+    /// Signed in, with logins Kore can keep side by side: the row's sign-in adds one.
+    var addsLogins: Bool {
+        guard case .signedIn = store.status(provider) else { return false }
+        return !store.logins(provider).isEmpty
     }
 
     func switchLogin(_ id: String?) { store.switchLogin(provider, to: id) }
@@ -317,7 +320,6 @@ struct AccountPopup: View {
                         Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
                     }
                     content
-                    LoginList(state: state, provider: chat.provider.id)
                 }
                 .transition(.opacity.animation(Motion.fade))
             }
@@ -327,6 +329,11 @@ struct AccountPopup: View {
     @ViewBuilder private var content: some View {
         let provider = chat.provider.id
         switch store.status(provider) {
+        case .signedIn(let identity) where store.logins(provider).count > 1:
+            loginList(identity)
+        case .unknown where store.logins(provider).count > 1:
+            // Just switched: the list stays, the new login's caption to come.
+            loginList(nil)
         case .signedIn(let identity):
             VStack(alignment: .leading, spacing: 0) {
                 header(AccountText.header(identity))
@@ -366,6 +373,15 @@ struct AccountPopup: View {
                 .font(TextStyle.label)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// With more than main: the logins in the header's place, then the row.
+    private func loginList(_ identity: AccountIdentity?) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            LoginList(state: state, provider: chat.provider.id, identity: identity)
+            Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
+            row(signedIn: true)
         }
     }
 
@@ -415,8 +431,8 @@ struct AccountPopup: View {
     private func caption(_ flow: AccountStore.Flow?, signedIn: Bool) -> (words: String, danger: Bool)? {
         let provider = chat.provider.id
         if state.askingSignOut {
-            // Signed in, it's in the header's caption line instead.
-            return signedIn ? nil : (signOutReach, false)
+            // Signed in, it's in the header's caption line instead (the list has none).
+            return signedIn && store.logins(provider).count < 2 ? nil : (signOutReach, false)
         }
         if state.showsKeyField {
             if case .keyFailed(let reason) = flow?.step { return (AccountText.signInFailed(reason), true) }
@@ -496,7 +512,7 @@ private struct AccountRow: View {
                 Spacer(minLength: 0)
                 // Apart enough that each one's clicks stay its own.
                 HStack(spacing: Space.sm) {
-                    Button("Switch account") { state.signIn() }
+                    Button(state.addsLogins ? "Add account" : "Switch account") { state.signIn() }
                         .smallButton()
                         .storyID(id.part(.switch))
                         .tabStop(id.part(.switch)) { state.signIn() }
@@ -724,67 +740,73 @@ private struct MethodRow: View {
     }
 }
 
-/// Under the account: the CLI's logins (main and the added ones, the active one checked, the
-/// others with Switch and a remove ×), and Add account. Shown once signed in, or with more than
-/// main.
+/// With more than main, the CLI's logins in place of the header: a row each, the active one's
+/// caption its plan and method and a ✓, main's "Main". A row switches to its login; an added
+/// one's × (on hover) removes it.
 private struct LoginList: View {
     let state: AccountState
     let provider: String
+    let identity: AccountIdentity?
     private var store: AccountStore { .shared }
 
     var body: some View {
-        let logins = store.logins(provider)
-        let signedIn: Bool = if case .signedIn = store.status(provider) { true } else { false }
-        if !logins.isEmpty, signedIn || logins.count > 1, store.flow(provider)?.step.live != true, !state.askingSignOut, state.editor == nil {
-            VStack(alignment: .leading, spacing: 0) {
-                Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
-                if logins.count > 1 {
-                    ForEach(logins) { login in LoginRow(state: state, login: login) }
-                }
-                let add = StoryID.Composer.accountLogin("add")
-                Button { state.addLogin() } label: {
-                    Label("Add account", systemImage: "plus").font(TextStyle.label)
-                }
-                .smallButton()
-                .storyID(add)
-                .tabStop(add) { state.addLogin() }
-                .padding(.top, logins.count > 1 ? Space.sm : 0)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(store.logins(provider)) { login in
+                LoginRow(state: state, login: login, caption: caption(login), reading: login.active && identity == nil)
             }
-            .transition(.opacity.animation(Motion.fade))
         }
+        .padding(.horizontal, -Space.sm)
+    }
+
+    private func caption(_ login: AccountStore.Login) -> String? {
+        let main = login.id == nil ? "Main" : nil
+        guard login.active else { return main }
+        return [main, identity.map(AccountText.caption)].compactMap { $0 }.joined(separator: " · ")
     }
 }
 
 private struct LoginRow: View {
     let state: AccountState
     let login: AccountStore.Login
+    let caption: String?
+    /// Its account being read, just switched to: the spinner in the ✓'s place.
+    let reading: Bool
+    @StateObject private var hovered = Local(false)
 
     var body: some View {
         let id = StoryID.Composer.accountLogin(login.id ?? "main")
-        HStack(spacing: Space.md) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(login.email ?? (login.id == nil ? "Main account" : "Added account"))
-                    .font(TextStyle.body).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                if login.id == nil, login.email != nil {
-                    Text("Main").font(TextStyle.caption).foregroundStyle(Theme.secondary)
+        let title = login.email ?? (login.id == nil ? "Main account" : "Account")
+        Button { if !login.active { state.switchLogin(login.id) } } label: {
+            HStack(spacing: Space.md) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title)
+                        .font(login.active ? TextStyle.title : TextStyle.body)
+                        .foregroundStyle(login.active ? Theme.text : Theme.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(title)
+                    if let caption {
+                        Text(caption).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
+                    }
                 }
-            }
-            Spacer(minLength: Space.md)
-            if login.active {
-                Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
-            } else {
-                Button(login.id == nil ? "Switch to main" : "Switch") { state.switchLogin(login.id) }
-                    .smallButton()
-                    .storyID(id.part(.switch))
-                    .tabStop(id.part(.switch)) { state.switchLogin(login.id) }
-                if let added = login.id {
+                Spacer(minLength: Space.md)
+                if reading {
+                    SpinningArc().frame(width: Size.spinner, height: Size.spinner)
+                } else if login.active {
+                    Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
+                } else if let added = login.id, hovered.value {
                     IconButton(symbol: "xmark", kind: .mini, font: Glyph.chevron, help: "Remove account") { state.removeLogin(added) }
                         .storyID(id.part(.cancel))
                 }
             }
+            .padding(.horizontal, Space.sm)
+            .frame(maxWidth: .infinity, minHeight: Size.Picker.method, alignment: .leading)
+            .hoverFill(hovered.value && !login.active, Theme.Row.hover(.surface))
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, minHeight: Size.Picker.method, alignment: .leading)
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
         .storyID(id)
+        .tabStop(id) { state.switchLogin(login.id) }
         .accessibilityAddTraits(login.active ? .isSelected : [])
     }
 }
