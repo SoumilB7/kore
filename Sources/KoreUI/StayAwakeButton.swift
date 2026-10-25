@@ -11,6 +11,8 @@ struct StayAwakeButton: View {
 
     var body: some View {
         let state = awake.state
+        // Worked out each time it's drawn: the pointer coming over it (`hovered`) does, so the
+        // minutes it says are now's.
         let line = awake.line
         Button {
             awake.toggle()

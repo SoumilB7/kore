@@ -63,8 +63,6 @@ final class StayAwake {
     /// The two minutes after the last agent ended, while it still holds.
     private(set) var idleUntil: Date?
     private(set) var battery = PowerState(onBattery: false, percent: nil)
-    /// Bumped each minute while a time is counting down, so the hover line follows it.
-    private(set) var tick = 0
 
     /// How long it holds after the last agent ends; a storyline shortens it.
     var grace: TimeInterval = 120
@@ -77,7 +75,6 @@ final class StayAwake {
     @ObservationIgnored private var held: String?
     @ObservationIgnored private var timer: AwakeTimer?
     @ObservationIgnored private var idleTimer: AwakeTimer?
-    @ObservationIgnored private var ticker: AwakeTimer?
     /// The last system sleep: when it began, and when the Mac woke (nil while asleep).
     @ObservationIgnored private(set) var slept: (from: Date, woke: Date?)?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -213,7 +210,6 @@ final class StayAwake {
 
     /// The cup's one line.
     var line: String {
-        _ = tick
         let now = clock.now
         switch state {
         case .off: return "Stay awake"
@@ -233,7 +229,6 @@ final class StayAwake {
 
     /// The running timer's time left, for its menu item.
     var timeLeft: String? {
-        _ = tick
         guard isOn, let endsAt else { return nil }
         return Self.left(until: endsAt, now: clock.now)
     }
@@ -259,28 +254,14 @@ final class StayAwake {
         return date.formatted(.dateTime.weekday(.abbreviated).locale(locale)) + " " + clock
     }
 
-    /// Takes, changes or lets go of the hold to match the state, and keeps a minute ticker while
-    /// a time counts down.
+    /// Takes, changes or lets go of the hold to match the state. Nothing ticks while a time counts
+    /// down: its end has a timer of its own, and the cup's line is worked out when it's drawn,
+    /// which a pointer over it does.
     private func apply() {
         let want = reason
         if want != held {
             held = want
             hold.hold(want)
-        }
-        let counting = isOn && (endsAt != nil || idleUntil != nil)
-        if counting, ticker == nil {
-            scheduleTick()
-        } else if !counting {
-            ticker = nil
-        }
-    }
-
-    private func scheduleTick() {
-        ticker = clock.at(clock.now.addingTimeInterval(60)) { [weak self] in
-            guard let self else { return }
-            self.tick &+= 1
-            self.ticker = nil
-            self.apply()
         }
     }
 
