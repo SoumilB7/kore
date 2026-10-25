@@ -68,11 +68,12 @@ struct RunningTrack: View {
         }
 
         var body: some View {
-            TimelineView(.animation(minimumInterval: nil, paused: still)) { context in
+            // Its frames render it alone, not the window around it.
+            OwnLayer(content: TimelineView(.animation(minimumInterval: nil, paused: still)) { context in
                 Canvas { graphics, size in
                     draw(&graphics, size, at: dash.value.advance(to: context.date, perimeter: Self.perimeter(size), still: still))
                 }
-            }
+            })
             .frame(width: width, height: Size.agentTrack + Stroke.emphasis)
         }
 

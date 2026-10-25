@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Under another tab (a kept chat's transcript, the chats under a file): live marks hold still
@@ -34,37 +35,39 @@ final class Frozen<Value>: ObservableObject {
 
 extension View {
     /// Fades between full and `low` opacity for as long as it shows, unless motion is reduced.
-    /// Under another tab it holds still: a repeating animation runs on at opacity 0 until its
-    /// view goes, so the pulse goes, and a new one starts as the tab shows.
-    func pulse(low: Double, _ animation: Animation) -> some View {
-        modifier(Pulse(low: low, animation: animation))
+    /// Under another tab it holds still. Core Animation runs the fade, on a layer of its own: a
+    /// repeating SwiftUI animation renders the whole window at the display's rate for as long
+    /// as it runs (three quarters of a core while a chat worked); this costs the app nothing per
+    /// frame. The view doesn't take this one's environment: style it fully (font, colour) first.
+    func pulse(low: Double, period: TimeInterval, easing: CAMediaTimingFunctionName = .linear) -> some View {
+        Pulse(content: self, low: low, period: period, easing: easing)
     }
 }
 
-private struct Pulse: ViewModifier {
+private struct Pulse<Content: View>: View {
+    let content: Content
     let low: Double
-    let animation: Animation
+    let period: TimeInterval
+    let easing: CAMediaTimingFunctionName
     @Environment(\.hiddenTab) private var hidden
-
-    func body(content: Content) -> some View {
-        if hidden {
-            content
-        } else {
-            content.modifier(Pulsing(low: low, animation: animation))
-        }
-    }
-}
-
-private struct Pulsing: ViewModifier {
-    let low: Double
-    let animation: Animation
-    @StateObject private var dim = Local(false)
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    func body(content: Content) -> some View {
-        content
-            .opacity(dim.value ? low : 1)
-            .animation(reduceMotion ? nil : animation, value: dim.value)
-            .onAppear { if !reduceMotion { dim.value = true } }
+    var body: some View {
+        if hidden || reduceMotion {
+            content
+        } else {
+            OwnLayer(content: content, animation: fade)
+        }
+    }
+
+    private var fade: CABasicAnimation {
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = low
+        fade.duration = period
+        fade.autoreverses = true
+        fade.repeatCount = .infinity
+        fade.timingFunction = CAMediaTimingFunction(name: easing)
+        return fade
     }
 }

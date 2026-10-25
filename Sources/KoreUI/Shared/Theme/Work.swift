@@ -130,11 +130,10 @@ extension Size {
 
 extension Motion {
     /// An in-progress dot: opacity 1 ↔ 0.35 over 1s.
-    static let blink = Animation.linear(duration: 0.5).repeatForever(autoreverses: true)
+    static let blinkPeriod: TimeInterval = 0.5
     static let blinkLow: Double = 0.35
     /// A running agent's ring: once round per lap.
     static let ringLap: Double = 1.1
-    static let ring = Animation.linear(duration: ringLap).repeatForever(autoreverses: false)
 }
 
 extension PanelStyle {
@@ -195,7 +194,7 @@ extension Motion {
     /// The spinner row fading in.
     static let rowFadeIn = Animation.easeInOut(duration: 0.3)
     /// The live fold label: opacity 1 ↔ 0.55 over 1.6s.
-    static let livePulse = Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+    static let livePulsePeriod: TimeInterval = 0.8
     static let livePulseLow: Double = 0.55
 }
 

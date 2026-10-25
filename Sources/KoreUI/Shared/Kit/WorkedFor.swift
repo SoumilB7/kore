@@ -26,9 +26,10 @@ struct WorkedFor: View {
             HStack(spacing: Space.xs) {
                 if live {
                     Text(label)
+                        .font(TextStyle.body)
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
-                        .pulse(low: Motion.livePulseLow, Motion.livePulse)
+                        .pulse(low: Motion.livePulseLow, period: Motion.livePulsePeriod, easing: .easeInEaseOut)
                     if let count {
                         Text(count).font(TextStyle.toolName).foregroundStyle(Theme.liveCount).lineLimit(1)
                             .padding(.leading, Space.sm - Space.xs)

@@ -105,7 +105,7 @@ struct BlinkingDot: View {
         Circle()
             .fill(Theme.dot)
             .frame(width: size, height: size)
-            .pulse(low: Motion.blinkLow, Motion.blink)
+            .pulse(low: Motion.blinkLow, period: Motion.blinkPeriod)
     }
 }
 
