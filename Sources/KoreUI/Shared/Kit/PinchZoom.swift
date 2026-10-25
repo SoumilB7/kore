@@ -25,7 +25,8 @@ package final class PinchZoom {
         package var verticalClamped: Bool { abs(unavoidableDrift.dy) > 0.5 }
     }
 
-    private static let minimum: CGFloat = 0.5
+    /// A pinch only zooms in: the page never goes below the size ⌘+ / ⌘− set (110%, say).
+    private static let minimum: CGFloat = 1
     private static let maximum: CGFloat = 3
     private static let windows = NSMapTable<NSWindow, PinchZoom>(keyOptions: .weakMemory, valueOptions: .weakMemory)
     private weak var window: NSWindow?

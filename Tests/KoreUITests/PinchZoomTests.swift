@@ -135,7 +135,8 @@ struct PinchZoomTests {
         #expect(scroll.magnification == 3)
         #expect(pinch.receive(-100, phase: .began, at: point))
         #expect(pinch.receive(0, phase: .ended, at: point))
-        #expect(scroll.magnification == 0.5 && zoom.scale == 1 && zoom.commits == 0)
+        // Pinching out stops at the page's own size: never below what ⌘+ / ⌘− set.
+        #expect(scroll.magnification == 1 && zoom.scale == 1 && zoom.commits == 0)
     }
 
     @Test func resizeFocusAndKeyboardChangesCancelOnlyTheGesture() {
