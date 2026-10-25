@@ -180,8 +180,8 @@ final class CLITurnsShowWorking: ChatStoryline {
     }
 }
 
-/// A working chat's tab shows its provider's mark with the wave running through it (in place of
-/// the generic spinner), and the plain mark again once the turn ends.
+/// A working chat's tab shows the spinner in its CLI's colour in place of its mark, and the
+/// plain mark again once the turn ends.
 final class WorkingMarkShows: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
     override class var script: CLIScript {
@@ -196,7 +196,6 @@ final class WorkingMarkShows: ChatStoryline {
         return super.steps() + [
             Send("Work on it"),
             ExpectElement(mark),
-            Expect("the wave running in it") { _ in StoryWorkingMarks.running > 0 },
             Snapshot("working-mark"),
             Release(), TurnFinished(1),
             ExpectElement(mark, .absent),

@@ -307,8 +307,9 @@ private struct TabItem: View {
                             index: info.index, name: info.name, status: info.status, background: info.background, place: .tab)
                     } else if let chat = tab.chat {
                         if chat.isBusy {
-                            WorkingMark(provider: chat.provider, size: Size.logoTab, slow: chat.context.compacting)
-                                .frame(width: Size.logoTab, height: Size.logoTab)
+                            // The system spinner is grey: multiplied, it takes the CLI's colour.
+                            ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
+                                .colorMultiply(WorkingSpinner.tint(chat.provider))
                                 .storyMark(StoryID.Tabs.tab(tab.id).part(.working))
                         } else {
                             ProviderLogo(provider: chat.provider, size: Size.logoTab)

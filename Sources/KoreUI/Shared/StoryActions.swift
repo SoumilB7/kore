@@ -321,9 +321,3 @@ extension Chat {
     /// The context ring's tokens as it words them ("~80k"), "" with no reading.
     package var storyContextUsed: String { context.usedText }
 }
-
-/// Chat tabs' working marks, for a storyline host: how many have the wave running.
-@MainActor
-package enum StoryWorkingMarks {
-    package static var running: Int { WorkingMarkView.storyRunning }
-}
