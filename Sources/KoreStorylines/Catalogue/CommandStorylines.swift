@@ -130,3 +130,39 @@ final class ReplayedCommandsEnded: ChatStoryline {
         ]
     }
 }
+
+/// The account changes while a command the chat left runs (a dev server): the CLI isn't started
+/// again under it, so it keeps running; once it ends, the CLI starts again as the new account.
+final class AccountChangeWaitsForCommands: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents] }
+
+    override class var script: CLIScript {
+        let command = ActiveCommand(
+            id: "dev", kind: .shell, title: "Run the dev server", command: "npm run dev", folder: "/tmp", startedAt: Date(), owner: .main)
+        return CLIScript(turns: [
+            [
+                .startTurn, .event(.commandStarted(command)), .stream(.answer, "The dev server runs."), .finishTurn(.completed),
+                .wait(.release), .event(.commandEnded(id: "dev", .completed, at: Date())),
+            ]
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        let relaunches = { (story: StoryContext) in try story.scriptedBackend().log.filter { $0 == .relaunch }.count }
+        return super.steps() + [
+            Send("Start the dev server"), TurnFinished(1), WaitIdle(),
+            Expect("one live command") { try $0.activeChat().storyLiveCommands == 1 },
+            Expect("the account changes elsewhere") { story in
+                try story.activeChat().storyAccountChanged()
+                return true
+            },
+            WaitIdle(),
+            Expect("no start again while it runs", found: { try? "\(relaunches($0)) relaunches" }) { try relaunches($0) == 0 },
+            Expect("still running") { try $0.activeChat().storyLiveCommands == 1 },
+            Release(),
+            Expect("the CLI started again once it ended", found: { try? "\(relaunches($0)) relaunches" }) { story in
+                try story.activeChat().storyLiveCommands == 0 && relaunches(story) == 1
+            },
+        ]
+    }
+}

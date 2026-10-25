@@ -361,8 +361,13 @@ package final class Chat: Identifiable {
     /// A turn or a background agent is running.
     var isWorking: Bool { status.isRunning || !transcript.agentSummary.running.isEmpty }
 
+    /// Starting the CLI again would end something: a turn, a background agent, or a command left
+    /// live (a dev server, a port-forward, an armed scheduled job), which dies with its process.
+    private var holdsCLI: Bool { isWorking || commands.summary.total > 0 }
+
     /// The account changed (a sign-in, a sign-out, a change outside Kore): the CLI starts again
-    /// at the next turn boundary, at once when nothing runs.
+    /// at the next turn boundary with nothing live, at once when nothing is. Commands left
+    /// running hold it as running agents do, until the last one ends.
     func accountChanged() {
         guard backend != nil else { return }
         relaunchDue = true
@@ -372,7 +377,7 @@ package final class Chat: Identifiable {
     /// Ends the CLI's process between turns, so the next send starts it again as the new
     /// account. It waits behind any send under way, and the next send waits for it.
     private func relaunchIfDue() {
-        guard relaunchDue, !isWorking, let backend else { return }
+        guard relaunchDue, !holdsCLI, let backend else { return }
         relaunchDue = false
         let previous = sending
         sending = Task {
@@ -388,7 +393,7 @@ package final class Chat: Identifiable {
             let provider = provider.id
             Task { await AccountStore.shared.refresh(provider) }
             relaunchIfDue()
-        case .turnFinished, .agentFinished:
+        case .turnFinished, .agentFinished, .commandEnded:
             relaunchIfDue()
         case .exited:
             // Its process is gone: the next send starts a new one anyway.

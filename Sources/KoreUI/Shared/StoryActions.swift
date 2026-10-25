@@ -137,6 +137,8 @@ extension Chat {
         .sorted()
     }
     package var storyLiveCommands: Int { commands.summary.total }
+    /// The CLI's account changed elsewhere (as `AccountStore` tells each of its chats).
+    package func storyAccountChanged() { accountChanged() }
     package var storyOutlivedCommands: Int { commands.summary.outlived }
 
     /// Whether the usage popup is open, its account ("Claude Max · you@example.com · Example Org",
