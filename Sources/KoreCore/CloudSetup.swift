@@ -152,7 +152,9 @@ package enum TerminalLogin {
     /// The file's text. `claude` is the CLI's full path; `arguments` follow it.
     package static func script(claude: String, arguments: [String], folder: URL) -> String {
         let words = ([claude] + arguments).map(quoted).joined(separator: " ")
-        return "#!/bin/zsh -l\nrm -f -- \"$0\"\ncd -- \(quoted(folder.path)) 2>/dev/null\nexec \(words)\n"
+        // The active login's folder (`CLIProfiles`), so the sign-in lands in it.
+        let env = CLIProfiles.overrides("claude").map { "export \($0.key)=\(quoted($0.value))\n" }.joined()
+        return "#!/bin/zsh -l\nrm -f -- \"$0\"\ncd -- \(quoted(folder.path)) 2>/dev/null\n\(env)exec \(words)\n"
     }
 
     /// Writes it, executable, in a folder of Kore's own; its location.

@@ -43,7 +43,8 @@ public enum CLIExecutable {
     public static func resolve(_ name: String, override: URL? = nil) async throws -> Launch {
         let standIn = override == nil ? standIns.value[name] : nil
         let launch = try await locate(name, override: override ?? standIn?.executable)
-        guard let standIn else { return launch }
+        // The active login's folder (`CLIProfiles`); a storyline host's stand-in sets its own.
+        guard let standIn else { return Launch(url: launch.url, environment: launch.environment.merging(CLIProfiles.overrides(name)) { $1 }) }
         return Launch(url: launch.url, environment: launch.environment.merging(standIn.environment) { $1 })
     }
 

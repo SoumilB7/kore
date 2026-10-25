@@ -130,6 +130,18 @@ final class AccountState {
         store.signIn(provider, method: method, in: folder)
     }
 
+    /// Add account: a sign-in by the current method into a login of its own.
+    func addLogin() {
+        askingSignOut = false
+        methodsOpen = false
+        closeEditor()
+        store.addLogin(provider, method: store.currentMethod(provider).flatMap { $0.opensEditor ? nil : $0 }, in: folder)
+    }
+
+    func switchLogin(_ id: String?) { store.switchLogin(provider, to: id) }
+
+    func removeLogin(_ id: String) { store.removeLogin(provider, id) }
+
     private func openEditor(_ method: SignInMethod) {
         guard store.flow(provider)?.step.live != true else { return }
         store.dismissOutcome(provider)
@@ -305,6 +317,7 @@ struct AccountPopup: View {
                         Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
                     }
                     content
+                    LoginList(state: state, provider: chat.provider.id)
                 }
                 .transition(.opacity.animation(Motion.fade))
             }
@@ -708,5 +721,70 @@ private struct MethodRow: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .accessibilityAddTraits(item.checked && item.method != nil ? .isSelected : [])
+    }
+}
+
+/// Under the account: the CLI's logins (main and the added ones, the active one checked, the
+/// others with Switch and a remove ×), and Add account. Shown once signed in, or with more than
+/// main.
+private struct LoginList: View {
+    let state: AccountState
+    let provider: String
+    private var store: AccountStore { .shared }
+
+    var body: some View {
+        let logins = store.logins(provider)
+        let signedIn: Bool = if case .signedIn = store.status(provider) { true } else { false }
+        if !logins.isEmpty, signedIn || logins.count > 1, store.flow(provider)?.step.live != true, !state.askingSignOut, state.editor == nil {
+            VStack(alignment: .leading, spacing: 0) {
+                Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
+                if logins.count > 1 {
+                    ForEach(logins) { login in LoginRow(state: state, login: login) }
+                }
+                let add = StoryID.Composer.accountLogin("add")
+                Button { state.addLogin() } label: {
+                    Label("Add account", systemImage: "plus").font(TextStyle.label)
+                }
+                .smallButton()
+                .storyID(add)
+                .tabStop(add) { state.addLogin() }
+                .padding(.top, logins.count > 1 ? Space.sm : 0)
+            }
+            .transition(.opacity.animation(Motion.fade))
+        }
+    }
+}
+
+private struct LoginRow: View {
+    let state: AccountState
+    let login: AccountStore.Login
+
+    var body: some View {
+        let id = StoryID.Composer.accountLogin(login.id ?? "main")
+        HStack(spacing: Space.md) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(login.email ?? (login.id == nil ? "Main account" : "Added account"))
+                    .font(TextStyle.body).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                if login.id == nil, login.email != nil {
+                    Text("Main").font(TextStyle.caption).foregroundStyle(Theme.secondary)
+                }
+            }
+            Spacer(minLength: Space.md)
+            if login.active {
+                Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
+            } else {
+                Button(login.id == nil ? "Switch to main" : "Switch") { state.switchLogin(login.id) }
+                    .smallButton()
+                    .storyID(id.part(.switch))
+                    .tabStop(id.part(.switch)) { state.switchLogin(login.id) }
+                if let added = login.id {
+                    IconButton(symbol: "xmark", kind: .mini, font: Glyph.chevron, help: "Remove account") { state.removeLogin(added) }
+                        .storyID(id.part(.cancel))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: Size.Picker.method, alignment: .leading)
+        .storyID(id)
+        .accessibilityAddTraits(login.active ? .isSelected : [])
     }
 }

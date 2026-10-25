@@ -112,6 +112,9 @@ extension StoryID {
         /// A row of the methods the ⌄ unfolds in the card, by its path ("3rd-party platform",
         /// "3rd-party platform/Amazon Bedrock…"); a group's row discloses its own.
         package static func accountMethod(_ path: String) -> StoryID { StoryID(.composer, "account.method", key: path) }
+        /// A login in the card's list, by its id ("main" for main): Switch is `.part(.switch)`,
+        /// Remove `.part(.cancel)`; "add" is Add account.
+        package static func accountLogin(_ id: String) -> StoryID { StoryID(.composer, "account.login", key: id) }
         /// A choice a form's picker unfolds, by the picker and the choice ("credentials/apiKey",
         /// "profile/dev").
         package static func accountChoice(_ picker: String, _ value: String) -> StoryID {

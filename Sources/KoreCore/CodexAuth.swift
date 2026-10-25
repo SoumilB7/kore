@@ -42,7 +42,7 @@ public enum CodexAuth {
 
     /// The file Codex keeps its login in: `auth.json` in `CODEX_HOME`, else in `~/.codex`. Kore
     /// only watches it for changes and never reads it: it holds the tokens.
-    public static func authFile(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+    public static func authFile(environment: [String: String] = CLIProfiles.environment) -> URL {
         if let dir = environment["CODEX_HOME"], !dir.isEmpty {
             return URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent("auth.json")
         }

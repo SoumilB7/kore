@@ -46,7 +46,7 @@ public enum ClaudeAuth {
 
     /// The file the CLI keeps its account in: `.claude.json` in `CLAUDE_CONFIG_DIR`, else in the
     /// home folder.
-    public static func configFile(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+    public static func configFile(environment: [String: String] = CLIProfiles.environment) -> URL {
         if let dir = environment["CLAUDE_CONFIG_DIR"], !dir.isEmpty {
             return URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent(".claude.json")
         }

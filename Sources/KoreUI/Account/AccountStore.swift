@@ -102,6 +102,10 @@ package final class AccountStore {
     @ObservationIgnored private var activeObserver: NSObjectProtocol?
     /// Goes up with each `reset()`: a read begun before it is dropped.
     @ObservationIgnored private var epoch = 0
+    /// An added login's folder while its sign-in runs: kept only if it signs in as someone new.
+    @ObservationIgnored private var adding: [String: String] = [:]
+    /// Goes up when a CLI's list of logins changes.
+    private(set) var loginsVersion = 0
 
     // MARK: Reading
 
@@ -175,6 +179,7 @@ package final class AccountStore {
         switch reading {
         case .signedIn(let identity):
             statuses[provider] = .signedIn(identity)
+            if CLIProfiles.note(provider, email: identity.email) { loginsVersion += 1 }
             key = [identity.email?.lowercased() ?? "", identity.organization ?? "", identity.method].joined(separator: "\u{1F}")
         case .signedOut:
             statuses[provider] = .signedOut
@@ -213,7 +218,9 @@ package final class AccountStore {
         lastMethod[provider] = method.id
         let refreshing = method.mechanism == .awsRefresh
         flows[provider] = Flow(method: method.id, step: refreshing ? .refreshing : .starting, switching: before != nil && !refreshing)
-        Task {
+        // Adding a login: its CLIs run in its folder until it's kept.
+        let pin = adding[provider].map { CLIProfiles.Pin(cli: provider, id: $0) }
+        Task { await CLIProfiles.$pinned.withValue(pin) {
             do {
                 let handle = try await ops.calls.signIn(method.mechanism, SignInContext(folder: folder))
                 guard serials[provider] == serial else { return await handle.cancel() }
@@ -241,6 +248,16 @@ package final class AccountStore {
                 let reading: AccountReading
                 if let reply { reading = ops.parse(reply) } else { reading = ops.parse(try await ops.calls.status()) }
                 guard serials[provider] == serial else { return }
+                if let pin {
+                    adding[provider] = nil
+                    guard case .signedIn(let now) = reading, !isListed(provider, now, before) else {
+                        flows[provider]?.step = .same
+                        return await discard(pin, signOut: ops)
+                    }
+                    CLIProfiles.adopt(provider, pin.id, email: now.email)
+                    loginsVersion += 1
+                    rewatch(provider)
+                }
                 note(provider, reading)
                 let step: Step
                 if let before {
@@ -252,9 +269,10 @@ package final class AccountStore {
             } catch {
                 guard serials[provider] == serial else { return }
                 end(provider)
+                dropAdding(provider)
                 flows[provider]?.step = refreshing ? .refreshFailed(AccountReason.of(error)) : .failed(AccountReason.of(error))
             }
-        }
+        } }
     }
 
     /// A typed key, sent once: the CLI takes it (Codex), or Kore keeps it in the Keychain for
@@ -321,6 +339,7 @@ package final class AccountStore {
         serials[provider, default: 0] += 1
         let handle = end(provider)
         flows[provider] = nil
+        dropAdding(provider)
         Task { await handle?.cancel() }
     }
 
@@ -329,6 +348,7 @@ package final class AccountStore {
         serials[provider, default: 0] += 1
         let handle = end(provider)
         flows[provider]?.step = .timedOut
+        dropAdding(provider)
         Task { await handle?.cancel() }
     }
 
@@ -375,6 +395,83 @@ package final class AccountStore {
                 flows[provider]?.step = .signOutFailed(AccountReason.of(error))
             }
         }
+    }
+
+    // MARK: Logins
+
+    /// One of a CLI's logins in the Account popup: main (`id` nil) or an added one.
+    package struct Login: Identifiable, Equatable {
+        package let id: String?
+        package let email: String?
+        package let active: Bool
+    }
+
+    /// Main and the added logins, once there's more than main.
+    func logins(_ provider: String) -> [Login] {
+        _ = loginsVersion
+        guard CLIProfiles.supports(provider), !StoryHost.installed else { return [] }
+        let active = CLIProfiles.active(provider)
+        return [Login(id: nil, email: CLIProfiles.mainEmail(provider), active: active == nil)]
+            + CLIProfiles.added(provider).map { Login(id: $0.id, email: $0.email, active: active == $0.id) }
+    }
+
+    /// Adds a login: a sign-in in a folder of its own, kept and switched to if it lands on an
+    /// account not listed yet.
+    func addLogin(_ provider: String, method: SignInMethod? = nil, in folder: URL) {
+        guard flows[provider]?.step.live != true, let id = try? CLIProfiles.prepare(provider) else { return }
+        adding[provider] = id
+        signIn(provider, method: method, in: folder)
+        if flows[provider]?.step.live != true { dropAdding(provider) }
+    }
+
+    /// Every chat of the CLI moves to `id`'s login (nil: main) at its next turn boundary, as a
+    /// sign-in's switch does, without signing in again.
+    func switchLogin(_ provider: String, to id: String?) {
+        guard flows[provider]?.step.live != true, CLIProfiles.active(provider) != id else { return }
+        CLIProfiles.activate(provider, id)
+        loginsVersion += 1
+        rewatch(provider)
+        // A read of the old login still under way is dropped.
+        epoch += 1
+        reads = [:]
+        reading = []
+        statuses[provider] = .unknown
+        known[provider] = nil
+        bump(provider)
+        Task { await refresh(provider) }
+    }
+
+    /// Signs an added login out (its folder's only) and forgets it.
+    func removeLogin(_ provider: String, _ id: String) {
+        guard CLIProfiles.active(provider) != id, let ops = ops(provider) else { return }
+        Task { await discard(CLIProfiles.Pin(cli: provider, id: id), signOut: ops) }
+    }
+
+    private func discard(_ pin: CLIProfiles.Pin, signOut ops: AccountOps) async {
+        await CLIProfiles.$pinned.withValue(pin) { try? await ops.calls.signOut() }
+        CLIProfiles.remove(pin.cli, pin.id)
+        loginsVersion += 1
+    }
+
+    /// A sign-in that didn't finish: its folder goes.
+    private func dropAdding(_ provider: String) {
+        guard let id = adding.removeValue(forKey: provider) else { return }
+        CLIProfiles.remove(provider, id)
+    }
+
+    /// The account is one listed already: main's, an added login's, or the one it was over.
+    private func isListed(_ provider: String, _ identity: AccountIdentity, _ before: AccountIdentity?) -> Bool {
+        if let before, identity.isSameAccount(as: before) { return true }
+        guard let email = identity.email?.lowercased() else { return false }
+        return logins(provider).contains { $0.email?.lowercased() == email }
+    }
+
+    /// The login file to watch is the active login's.
+    private func rewatch(_ provider: String) {
+        guard watches[provider] != nil, let ops = ops(provider) else { return }
+        let file = ops.loginFile()
+        stamps[provider] = ops.stamp.flatMap { stamp in (try? Data(contentsOf: file)).flatMap(stamp) }
+        watches[provider] = FileWatch(file) { [weak self] in self?.fileChanged(provider) }
     }
 
     /// The popup closed: an outcome goes, and the next open shows rest. A flow under way goes on.
