@@ -201,6 +201,50 @@ final class EndedCommandHistory: ChatStoryline {
     }
 }
 
+/// A running command's row in the terminal list carries the pulsing dot the header shows for
+/// the selected one; it goes once the command ends.
+final class RunningTerminalCue: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents] }
+    static let id = "terminal-cue"
+    override class var script: CLIScript {
+        let live = ActiveCommand(id: id, kind: .shell, title: "Watch the logs", command: "tail -f server.log", startedAt: .now,
+                                 owner: .main, output: .stream)
+        return CLIScript(turns: [[.startTurn, .event(.commandStarted(live)), .event(.commandOutput(id: id, "listening on 5173\n")),
+                                 .stream(.answer, "The logs are streaming."), .finishTurn(.completed)]])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Do("Use an isolated shell home") { try $0.app.workspace?.storyPrepareTerminals() },
+            Send("Watch the logs"), TurnFinished(1),
+            Press(.id(StoryID.Titlebar.commands)),
+            Press(.id(StoryID.AgentMap.command(Self.id).part(.open))),
+            ExpectElement(.id(StoryID.Terminal.panel), .visible),
+            Press(.id(StoryID.Terminal.newShell)),
+            Expect("two terminals, the shell shown") {
+                $0.app.workspace?.storyTerminal.count == 2 && $0.app.workspace?.storyTerminal.shell == true
+            },
+            ExpectElement(.id(StoryID.Terminal.running(Self.id)), .visible),
+            Snapshot("running-terminal-cue"),
+            PressTerminalRow(index: 0),
+            Expect("the running command shown") { $0.app.workspace?.storyTerminal.shell == false },
+            Press(.id(StoryID.Terminal.stop)),
+            Expect("stop goes to the owning CLI") { try $0.scriptedBackend().log.contains(.stopCommand(Self.id)) },
+            ExpectElement(.id(StoryID.Terminal.running(Self.id)), .absent),
+        ]
+    }
+}
+
+private struct PressTerminalRow: Step {
+    let index: Int
+    var label: String { "Press terminal row \(index)" }
+    func run(_ story: StoryContext) async throws {
+        let ids = story.app.workspace?.storyTerminalIDs ?? []
+        guard ids.indices.contains(index) else { throw StoryFailure.other("no terminal row \(index)") }
+        try await story.input.press(try await story.element(.id(StoryID.Terminal.entry(ids[index]))))
+    }
+}
+
 private struct TerminalWindowCloses: Step {
     var label: String { "Closing the window ends even hidden shells" }
     func run(_ story: StoryContext) async throws {

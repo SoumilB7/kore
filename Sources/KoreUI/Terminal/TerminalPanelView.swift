@@ -140,6 +140,10 @@ private struct TerminalListRow: View {
                 HStack(spacing: Space.sm) {
                     Image(systemName: entry.shell == nil ? "doc.text" : "terminal").font(Chrome.label)
                     Text(entry.title).font(Chrome.label).lineLimit(1).truncationMode(.middle)
+                    // The header says it for the shown one; a row says it for the rest.
+                    if let command = entry.command, command.isLive {
+                        BlinkingDot().storyMark(StoryID.Terminal.running(command.id))
+                    }
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(panel.selected == entry.id ? Theme.text : Theme.secondary)

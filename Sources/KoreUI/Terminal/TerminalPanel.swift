@@ -294,5 +294,6 @@ extension StoryID {
         package static let nameField = StoryID(.terminal, "name")
         package static let stop = StoryID(.terminal, "stop")
         package static func entry(_ id: UUID) -> StoryID { StoryID(.terminal, "entry", key: id.uuidString) }
+        package static func running(_ command: String) -> StoryID { StoryID(.terminal, "running", key: command) }
     }
 }

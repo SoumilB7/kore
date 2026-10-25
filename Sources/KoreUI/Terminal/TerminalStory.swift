@@ -19,6 +19,7 @@ extension Workspace {
                 entry.map { window?.firstResponder === $0.view } ?? false, terminals.workingCount, entry?.id)
     }
     package var storyTerminalTitle: String? { terminals.active?.title }
+    package var storyTerminalIDs: [UUID] { terminals.entries.map(\.id) }
 
     package func storyPaintTerminal() {
         guard let view = terminals.active?.view else { return }
