@@ -158,12 +158,22 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
             let prompt = texts.filter { !HandoffHarness.isHarness($0) }
             var images: [HandoffImage] = []
             var files: [String] = []
+            var pdfs: [HandoffImage] = []
             for block in blocks {
                 switch block["type"]?.string {
                 case "image": if let image = Self.image(block) { images.append(image) }
                 case "document":
-                    let pages = block["source"]?["media_type"]?.string == "application/pdf" ? ", PDF" : ""
-                    files.append("[document: \(block["title"]?.string ?? "untitled")\(pages)]")
+                    let title = block["title"]?.string ?? "untitled"
+                    let source = block["source"]
+                    if source?["media_type"]?.string == "application/pdf" {
+                        files.append("[document: \(title), PDF]")
+                        if let data = source?["data"]?.string { pdfs.append(HandoffImage(mediaType: "application/pdf", data: data)) }
+                    } else if let text = source?["data"]?.string, source?["type"]?.string == "text" {
+                        // Its text, cut: a full turn carries it, shorter ones its first line.
+                        files.append("[document: \(title)]\n\(HandoffRender.cut(text, to: HandoffRender.documentChars))\n[/document]")
+                    } else {
+                        files.append("[document: \(title)]")
+                    }
                 default: break
                 }
             }
@@ -173,6 +183,7 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
             open(entry, prompt: prompt.joined(separator: "\n\n"))
             current?.images = images
             current?.files = files
+            if !pdfs.isEmpty { current?.pdfs = pdfs }
         }
 
         mutating func assistant(_ entry: JSONValue) {

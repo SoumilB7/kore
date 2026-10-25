@@ -122,6 +122,7 @@ public enum HandoffRecords {
             var turn = turn
             // Small thumbnails, so the chat shows its images again when it opens.
             turn.images = turn.images.compactMap { ImageFit.thumbnail($0) }
+            turn.pdfs = nil
             for index in turn.steps.indices { turn.steps[index].images = [] }
             return turn
         }

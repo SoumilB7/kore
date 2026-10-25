@@ -140,7 +140,9 @@ public struct HandoffBudget: Sendable {
     static func estimate(_ text: String) -> Int { (text.utf8.count + charsPerToken - 1) / charsPerToken }
 
     static func cost(_ turn: HandoffRender.Turn) -> Int {
-        estimate(turn.user) + turn.images.count * imageTokens + turn.assistant.reduce(0) { $0 + estimate($1) }
+        // A PDF at roughly a token per 30 bytes of its base64 (pages run 1.5–3k tokens).
+        estimate(turn.user) + turn.images.count * imageTokens + turn.pdfs.reduce(0) { $0 + $1.data.utf8.count / 30 }
+            + turn.assistant.reduce(0) { $0 + estimate($1) }
     }
 }
 
@@ -151,6 +153,8 @@ public enum HandoffRender {
     public struct Turn: Sendable, Equatable {
         public let user: String
         public let images: [HandoffImage]
+        /// Documents a Claude target takes as they were (PDFs); others have their line.
+        public var pdfs: [HandoffImage] = []
         public let assistant: [String]
     }
 
@@ -161,10 +165,14 @@ public enum HandoffRender {
     /// One message (a prompt, a text, a reply) is cut to about this many characters, a fifth of
     /// the smallest budget (Claude's 200k window), so no one message can overflow the target.
     static let messageChars = 80_000
+    /// A text document sent with a prompt keeps about this much of itself.
+    public static let documentChars = 20_000
 
     public static func turn(_ turn: HandoffTurn, _ level: HandoffPlan.Level) -> Turn {
         var user = cut(turn.prompt, to: messageChars)
-        let extras = turn.files + (level == .full ? [] : turn.images.map { _ in "[image]" })
+        // A document's text only in full; shorter levels keep its "[document: …]" line.
+        let files = level == .full ? turn.files : turn.files.map { String($0.prefix { $0 != "\n" }) }
+        let extras = files + (level == .full ? [] : turn.images.map { _ in "[image]" })
         if !extras.isEmpty { user += (user.isEmpty ? "" : "\n\n") + extras.joined(separator: "\n") }
         if user.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (level != .full || turn.images.isEmpty) {
             user = "(continued)"
@@ -183,7 +191,7 @@ public enum HandoffRender {
         } else {
             blocks.append(cut(reply(turn, full: level == .full), to: messageChars))
         }
-        return Turn(user: user, images: level == .full ? turn.images : [], assistant: blocks)
+        return Turn(user: user, images: level == .full ? turn.images : [], pdfs: level == .full ? turn.pdfs ?? [] : [], assistant: blocks)
     }
 
     /// One step in full: its call, then its result.

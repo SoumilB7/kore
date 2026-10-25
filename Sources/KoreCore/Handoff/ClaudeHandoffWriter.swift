@@ -119,10 +119,11 @@ public struct ClaudeHandoffWriter: HandoffWriter {
     static func userContent(_ turn: HandoffRender.Turn) -> JSONValue {
         // Scaled as Claude takes them (≤2000 px, 5 MB in base64), the latest `maxImages` of them.
         let images = turn.images.suffix(ImageFit.maxImages).compactMap(ImageFit.fit)
-        guard !turn.images.isEmpty else { return .string(turn.user) }
+        guard !turn.images.isEmpty || !turn.pdfs.isEmpty else { return .string(turn.user) }
         var blocks: [JSONValue] = [["type": "text", "text": .string(turn.user)]]
         blocks += images.map { ["type": "image", "source": ["type": "base64", "media_type": .string($0.mediaType), "data": .string($0.data)]] }
         if images.count < turn.images.count { blocks.append(["type": "text", "text": "[an image too large to carry]"]) }
+        blocks += turn.pdfs.map { ["type": "document", "source": ["type": "base64", "media_type": "application/pdf", "data": .string($0.data)]] }
         return .array(blocks)
     }
 }

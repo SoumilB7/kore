@@ -92,6 +92,8 @@ public struct HandoffTurn: Sendable, Hashable, Codable {
     public var at: Date?
     /// The last source item of the turn (the cutoff, when it's the newest).
     public var lastItem: String
+    /// PDFs sent with the prompt, carried as documents into a target that takes them (Claude).
+    public var pdfs: [HandoffImage]?
     /// How the target was given it, in the history Kore keeps of an import (nil before).
     public var carriedAs: HandoffPlan.Level?
 
