@@ -28,7 +28,7 @@ package struct KoreApp: App {
     }
 
     package var body: some Scene {
-        Window("Welcome to Kore", id: Self.welcomeID) {
+        Window("New Window", id: Self.welcomeID) {
             WelcomeView()
                 .environment(app)
                 .modifier(WindowActions(app: app))
@@ -222,7 +222,7 @@ private struct FileCommands: View {
         .keyboardShortcut("o")
 
         // ⇧⌘1 is the editor's Replace.
-        Button("Welcome Window") { openWindow(id: KoreApp.welcomeID) }
+        Button("New Window") { openWindow(id: KoreApp.welcomeID) }
             .keyboardShortcut("1", modifiers: [.command, .option])
     }
 }

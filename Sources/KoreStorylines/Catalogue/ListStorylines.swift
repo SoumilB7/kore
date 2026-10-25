@@ -120,7 +120,7 @@ final class ListKeys: ChatStoryline {
 
     /// This folder's Claude Code chats, by session id: their titles.
     static let chats = ["5e55-0001": "Check the build number.", "5e55-0002": "Tidy the tests."]
-    static let welcome = "Welcome to Kore"
+    static let welcome = "New Window"
 
     override func steps() -> [any Step] {
         let other = ImportFixtures.other(than: variant.provider)

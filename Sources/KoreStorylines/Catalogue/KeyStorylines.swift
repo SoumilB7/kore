@@ -42,7 +42,7 @@ final class TabKeys: ChatStoryline {
         return NSApp.mainMenu.map(walk) ?? []
     }
 
-    static let welcome = "Welcome to Kore"
+    static let welcome = "New Window"
 
     override func steps() -> [any Step] {
         let question = { [unowned self] (part: StoryID.Part) in
@@ -100,7 +100,7 @@ final class TabKeys: ChatStoryline {
             Expect("⌥⌘1 Welcome Window, nothing on ⇧⌘1, ⌘W Close Tab", found: { _ in
                 "⌥⌘1 \(Self.items("1", [.command, .option])), ⇧⌘1 \(Self.items("1", [.command, .shift])), ⌘W \(Self.items("w", .command))"
             }) { _ in
-                Self.items("1", [.command, .option]) == ["Welcome Window"] && Self.items("1", [.command, .shift]).isEmpty
+                Self.items("1", [.command, .option]) == ["New Window"] && Self.items("1", [.command, .shift]).isEmpty
                     && Self.items("w", .command) == ["Close Tab"]
             },
             Expect("no Welcome window yet") { _ in !NSApp.windows.contains { $0.title == Self.welcome && $0.isVisible } },
