@@ -767,6 +767,18 @@ final class TranscriptStore {
 
     func changes(ofTurn id: String) -> [FileChange] { turns[id]?.changes ?? [] }
 
+    /// Why the latest turn failed, or the chat's last word was an error; nil when it didn't (a
+    /// board tile's red mark). Follows the drawn rows.
+    var lastTurnFailed: String? {
+        _ = tail
+        if let last = entries.last, last.kind == .notice, last.isError { return last.text }
+        guard let id = latestTurn, let turn = turns[id], turn.finished else { return nil }
+        switch turn.outcome {
+        case .failed(let message), .authFailed(let message): return message
+        default: return nil
+        }
+    }
+
     /// The files the running turn changed, or else the latest finished turn's, by path; reading
     /// it from a view follows it.
     func turnChanges() -> [String: FileTouch] { fileTouches }

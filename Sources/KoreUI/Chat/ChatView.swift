@@ -186,43 +186,12 @@ struct ChatView: View {
 
     /// What the rows of a chat's transcript do.
     private func actions(_ chat: Chat) -> TranscriptActions {
-        let workspace = workspace
-        var actions = TranscriptActions()
-        actions.toggleTurn = { chat.transcript.toggle(turn: $0) }
-        actions.retry = { chat.retryStalled() }
-        actions.retryTurn = { chat.retryTurn($0) }
-        actions.stop = { chat.stop() }
-        actions.toggle = { key in
-            chat.transcript.toggle(key)
-            if let agent = chat.transcript.agentID(forCard: key) { chat.loadAgentIfNeeded(agent) }
-        }
+        var actions = TranscriptActions.board(chat, workspace: workspace)
         actions.openImage = { view($0, of: chat, pending: false) }
         actions.viewChanges = { turn in
             changesTurn.value = (chat.id, turn)
             composerFocused = false
         }
-        actions.stopAgent = { chat.stopAgent($0) }
-        actions.openAgent = { workspace.openAgent($0, of: chat) }
-        actions.fork = { entry in
-            Task {
-                if let start = await chat.forkStart(entry) { workspace.fork(chat, start, text: entry.text) }
-            }
-        }
-        actions.forkAfter = { entry in
-            Task {
-                if let start = await chat.forkStart(after: entry) { workspace.fork(chat, start, text: "") }
-            }
-        }
-        actions.loadEarlierConversation = { chat.loadEarlierConversation() }
-        actions.openOriginal = workspace.openOriginal(of: chat)
-        // Held by the chat's selection: neither the chat nor the window is kept by it.
-        let folder = chat.folder
-        actions.openLink = { [weak workspace] in workspace?.openLink($0, from: folder) }
-        actions.folder = chat.folder
-        actions.provider = chat.provider
-        actions.signIn = { chat.signInAgain() }
-        actions.cancelContinue = { chat.cancelContinue() }
-        actions.continueTurn = { chat.continueTurn() }
         return actions
     }
 
@@ -367,5 +336,44 @@ final class KeptChats: ObservableObject {
             shownAt[oldest.id] = nil
         }
         return chats
+    }
+}
+
+extension TranscriptActions {
+    /// What a chat's rows do wherever its transcript shows (a tab, a board's full tile): all
+    /// but the image viewer and the changes modal, which the chat tab adds over its own view.
+    @MainActor static func board(_ chat: Chat, workspace: Workspace) -> TranscriptActions {
+        var actions = TranscriptActions()
+        actions.toggleTurn = { chat.transcript.toggle(turn: $0) }
+        actions.retry = { chat.retryStalled() }
+        actions.retryTurn = { chat.retryTurn($0) }
+        actions.stop = { chat.stop() }
+        actions.toggle = { key in
+            chat.transcript.toggle(key)
+            if let agent = chat.transcript.agentID(forCard: key) { chat.loadAgentIfNeeded(agent) }
+        }
+        actions.stopAgent = { chat.stopAgent($0) }
+        actions.openAgent = { workspace.openAgent($0, of: chat) }
+        actions.fork = { entry in
+            Task {
+                if let start = await chat.forkStart(entry) { workspace.fork(chat, start, text: entry.text) }
+            }
+        }
+        actions.forkAfter = { entry in
+            Task {
+                if let start = await chat.forkStart(after: entry) { workspace.fork(chat, start, text: "") }
+            }
+        }
+        actions.loadEarlierConversation = { chat.loadEarlierConversation() }
+        actions.openOriginal = workspace.openOriginal(of: chat)
+        // Held by the chat's selection: neither the chat nor the window is kept by it.
+        let folder = chat.folder
+        actions.openLink = { [weak workspace] in workspace?.openLink($0, from: folder) }
+        actions.folder = chat.folder
+        actions.provider = chat.provider
+        actions.signIn = { chat.signInAgain() }
+        actions.cancelContinue = { chat.cancelContinue() }
+        actions.continueTurn = { chat.continueTurn() }
+        return actions
     }
 }

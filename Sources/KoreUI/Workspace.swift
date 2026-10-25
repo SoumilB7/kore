@@ -3,7 +3,8 @@ import Foundation
 import KoreCore
 import Observation
 
-/// A tab: empty (provider picker), showing a chat, one of a chat's sub-agents, or a file.
+/// A tab: empty (provider picker), showing a chat, one of a chat's sub-agents, a file, or a
+/// board of chats.
 /// An agent tab holds its parent's chat and reads its stores, so it can't drift from it.
 @MainActor @Observable
 package final class ChatTab: Identifiable {
@@ -18,10 +19,13 @@ package final class ChatTab: Identifiable {
     var file: FileDocument?
     /// A file opened by a single click in the tree: the next one replaces it (italic title).
     var isPreview = false
+    /// Set for a board tab: its sections and the chats in them.
+    package var board: BoardModel?
 
-    var isEmpty: Bool { chat == nil && file == nil }
+    var isEmpty: Bool { chat == nil && file == nil && board == nil }
 
     package var title: String {
+        if let board { return board.name }
         if let file { return file.name }
         if let agent, let name = chat?.transcript.agent(agent)?.name { return name }
         return chat?.title ?? "New tab"
@@ -335,7 +339,14 @@ package final class Workspace {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         tab.file?.flushAutoSave()
         if let file = tab.file, file.isDirty, !Self.confirmClose(file) { return }
-        if remember { rememberClosed(tab, at: index) }
+        // Closing a board gives its chats back to the strip, where it was.
+        if let board = tab.board {
+            let chats = board.orderedChats
+            board.close()
+            returnToStrip(chats, after: tab, select: false)
+        } else if remember {
+            rememberClosed(tab, at: index)
+        }
         if tab.agent == nil, let chat = tab.chat {
             for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
         }
@@ -483,6 +494,7 @@ package final class Workspace {
         terminals.shutdown()
         for tab in tabs {
             tab.onChatChanged = nil
+            for chat in tab.board?.orderedChats ?? [] { chat.close(reason: "window closed") }
             if tab.agent == nil, tab.file == nil {
                 tab.chat?.onDraftChanged = nil
                 tab.chat?.close(reason: "window closed")
@@ -690,7 +702,8 @@ package final class Workspace {
     /// Chats with work a quit would end: a turn or an agent running, or a background command
     /// (or an armed scheduled job) live.
     package var workingChats: Int {
-        tabs.filter { $0.agent == nil }.compactMap(\.chat).filter { $0.isWorking || $0.commands.summary.total > 0 }.count
+        (tabs.filter { $0.agent == nil }.compactMap(\.chat) + tabs.flatMap { $0.board?.orderedChats ?? [] })
+            .filter { $0.isWorking || $0.commands.summary.total > 0 }.count
     }
 
     /// Every open folder window's workspace, for the quit check.
@@ -891,6 +904,8 @@ package final class Workspace {
             /// A file tab's path.
             var file: String?
             var draft: ChatDraft? = nil
+            /// A board tab's layout and chats.
+            var board: SavedBoard? = nil
         }
 
         struct Closed: Codable, Equatable {
@@ -913,6 +928,7 @@ package final class Workspace {
         return Saved(
             tabs: kept.map { tab in
                 if let file = tab.file { return Saved.Tab(file: file.path) }
+                if let board = tab.board { return Saved.Tab(board: board.saved(Self.savedChat)) }
                 guard let chat = tab.chat else { return Saved.Tab() }
                 let resumable = chat.hasConversation ? chat.listedId : nil
                 return Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title })
@@ -960,6 +976,7 @@ package final class Workspace {
             if tab.agent == nil { tab.chat?.onDraftChanged = nil }
         }
         for tab in tabs {
+            if tab.board != nil { bindBoard(tab) }
             tab.onChatChanged = { [weak self] old, _ in
                 guard let self else { return }
                 old?.onDraftChanged = nil
@@ -1099,6 +1116,16 @@ package final class Workspace {
 
     private static func tab(_ saved: Saved.Tab, in folder: URL) -> ChatTab {
         let tab = ChatTab()
+        if let board = saved.board {
+            // Its chats come back as tabs' do, each starting its CLI once it shows.
+            var chats: [UUID: Chat] = [:]
+            for (key, value) in board.chats {
+                guard let id = UUID(uuidString: key), let chat = Self.tab(value, in: folder).chat else { continue }
+                chats[id] = chat
+            }
+            tab.board = BoardModel(board.history, chats: chats)
+            return tab
+        }
         if let file = saved.file {
             tab.file = FileDocument(url: URL(fileURLWithPath: file))
             return tab
@@ -1127,5 +1154,115 @@ package final class Workspace {
             provider: provider, folder: folder,
             resume: SessionSummary(id: fork.from, agent: provider.historyAgent, title: fork.title, updated: .now),
             fork: ForkPoint(from: fork.from, at: fork.at, id: fork.key), forkedFrom: fork.source)
+    }
+}
+
+// MARK: - Boards
+
+extension Workspace {
+    /// A new board after the tabs: one empty section, its name field up and its picker below.
+    func newBoard() {
+        let tab = ChatTab()
+        tab.board = BoardModel()
+        bindBoard(tab)
+        if tabs.count == 1, tabs[0].isEmpty {
+            tabs = [tab]
+        } else {
+            tabs.append(tab)
+        }
+        activeID = tab.id
+        UILog.event("board-new", [:])
+        save()
+    }
+
+    /// The window's chat tabs (not agents), which a board can take in.
+    package var stripChats: [ChatTab] { tabs.filter { $0.chat != nil && $0.agent == nil } }
+
+    /// The window's boards.
+    package var boardTabs: [ChatTab] { tabs.filter { $0.board != nil } }
+
+    /// Moves a strip tab's chat onto a board: its tab closes (its agents' tabs with it) and the
+    /// chat goes on as it was, its draft and turn with it. Into a slot, beside a drop point, or
+    /// into a section by auto placement.
+    package func attach(_ tab: ChatTab, to boardTab: ChatTab, section: UUID? = nil, slot: UUID? = nil, drop: BoardDrop? = nil) {
+        guard let board = boardTab.board, let chat = tab.chat, tab.agent == nil, tab !== boardTab else { return }
+        place(chat, on: board, section: section, slot: slot, drop: drop)
+        for other in tabs where other.chat === chat && other.agent != nil { tabs.removeAll { $0 === other } }
+        tab.onChatChanged = nil
+        chat.onDraftChanged = nil
+        tabs.removeAll { $0 === tab }
+        if tabs.isEmpty { tabs = [ChatTab()] }
+        if activeID == tab.id || !tabs.contains(where: { $0.id == activeID }) { activeID = boardTab.id }
+        UILog.event("board-attach", ["provider": chat.provider.id])
+        save()
+    }
+
+    /// A new chat of the provider on a board.
+    func startChat(_ provider: Provider, on boardTab: ChatTab, section: UUID?, slot: UUID?, drop: BoardDrop? = nil) {
+        guard let board = boardTab.board else { return }
+        place(Chat(provider: provider, folder: folder), on: board, section: section, slot: slot, drop: drop)
+        save()
+    }
+
+    private func place(_ chat: Chat, on board: BoardModel, section: UUID?, slot: UUID?, drop: BoardDrop?) {
+        if let slot, board.board.tiles.contains(where: { $0.id == slot }), board.chats[slot] == nil {
+            board.place(chat, in: slot)
+            board.focus(slot)
+            return
+        }
+        let tile = UUID()
+        let size = board.size
+        board.edit { $0.put(tile, section: section, drop: drop, in: size) }
+        board.place(chat, in: tile)
+        board.focus(tile)
+    }
+
+    /// A tile's chat back in the strip as its own tab, right after the board: the tile goes and
+    /// its neighbour takes the room. `select`: the tab shows (Move to Its Own Tab).
+    func detach(_ tile: UUID, from boardTab: ChatTab, select: Bool = true) {
+        guard let board = boardTab.board else { return }
+        let chats = board.edit { $0.remove(tile) }
+        returnToStrip(chats, after: boardTab, select: select)
+    }
+
+    /// A section out: its chats merge into its neighbour; the last section's go to the strip.
+    func removeSection(_ id: UUID, from boardTab: ChatTab) {
+        guard let board = boardTab.board else { return }
+        returnToStrip(board.edit { $0.removeSection(id) }, after: boardTab, select: false)
+    }
+
+    /// Chats a board let go of, as strip tabs after it: a running chat never disappears.
+    func returnToStrip(_ chats: [Chat], after boardTab: ChatTab, select: Bool = false) {
+        guard !chats.isEmpty else { return }
+        var index = (tabs.firstIndex { $0 === boardTab } ?? tabs.count - 1) + 1
+        for chat in chats {
+            let tab = ChatTab()
+            tab.chat = chat
+            tabs.insert(tab, at: min(index, tabs.count))
+            index += 1
+            if select { activeID = tab.id }
+        }
+        save()
+    }
+
+    /// Storylines: what the window saves, in its saved form, and the folder opened from it again
+    /// as a relaunch opens it.
+    package func storySaved() throws -> Data { try JSONEncoder().encode(persistenceSnapshot()) }
+
+    package static func storyRestore(folder: URL, saved: Data) -> Bool {
+        guard let snapshot = try? JSONDecoder().decode(Saved.self, from: saved) else { return false }
+        return restoreOnNextOpen(folder: folder, snapshot: snapshot)
+    }
+
+    /// Saving follows the board's edits and its chats' drafts.
+    func bindBoard(_ tab: ChatTab) {
+        tab.board?.onChange = { [weak self] in self?.save() }
+    }
+
+    /// A chat as a saved tab, with its draft.
+    static func savedChat(_ chat: Chat) -> Saved.Tab {
+        let resumable = chat.hasConversation ? chat.listedId : nil
+        let draft = chat.composerDraft
+        return Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title }, draft: draft.isEmpty ? nil : draft)
     }
 }

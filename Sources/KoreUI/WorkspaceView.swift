@@ -16,6 +16,8 @@ struct WorkspaceView: View {
                 FileEditorView(document: file, tab: tab, workspace: workspace).id(file.id)
             } else if let chat = tab.chat, let agent = tab.agent {
                 AgentTabView(chat: chat, id: agent, workspace: workspace).id(tab.id)
+            } else if let board = tab.board {
+                BoardView(workspace: workspace, tab: tab, model: board).id(tab.id)
             } else if tab.chat == nil {
                 EmptyTab(tab: tab, workspace: workspace).id(tab.id)
             }
@@ -92,8 +94,13 @@ struct TabBar: View {
     private func reorder(_ tab: ChatTab, at index: Int) -> some Gesture {
         DragGesture(minimumDistance: Size.tabDragStart, coordinateSpace: .global)
             .onChanged { value in
-                if drag.value?.id != tab.id {
+                // Over a board, a chat's tab can be dragged down onto it: the board stays shown.
+                let board = boardUnder(tab)
+                if drag.value?.id != tab.id, board == nil {
                     workspace.select(tab)
+                }
+                if let board = board?.board {
+                    board.incoming = value.translation.height > tabHeight ? board.drop(atGlobal: value.location) : nil
                 }
                 let count = workspace.tabs.count
                 let slot = strip.slot
@@ -101,14 +108,28 @@ struct TabBar: View {
                 let dx = min(max(value.translation.width, -CGFloat(index) * slot), CGFloat(count - 1 - index) * slot)
                 drag.value = TabDrag(id: tab.id, from: index, dx: dx)
             }
-            .onEnded { _ in
+            .onEnded { value in
                 guard let ended = drag.value else { return }
+                if let boardTab = boardUnder(tab), let board = boardTab.board {
+                    board.incoming = nil
+                    if value.translation.height > tabHeight {
+                        drag.value = nil
+                        workspace.attach(tab, to: boardTab, drop: board.drop(atGlobal: value.location)?.drop)
+                        return
+                    }
+                }
                 let to = target(ended)
                 withAnimation(reduceMotion ? nil : Motion.fade) {
                     workspace.moveTab(tab, to: to)
                     drag.value = nil
                 }
             }
+    }
+
+    /// The board shown while a chat's tab is dragged: it can take the chat in.
+    private func boardUnder(_ tab: ChatTab) -> ChatTab? {
+        let active = workspace.activeTab
+        return active.board != nil && tab.chat != nil && tab.agent == nil && active !== tab ? active : nil
     }
 
     var body: some View {
@@ -139,7 +160,11 @@ struct TabBar: View {
             .onChange(of: strip.overflows) { _, overflows in
                 if !overflows { list.value = nil }
             }
-            NewTabButton(size: tabHeight) { workspace.newTab() }.storyID(StoryID.Titlebar.newtab)
+            NewTabButton(size: tabHeight) { workspace.newTab() }
+                .koreContextMenu("newtab") {
+                    [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }]
+                }
+                .storyID(StoryID.Titlebar.newtab)
             Spacer(minLength: Space.xl)
             Text(workspace.folder.lastPathComponent)
                 .font(Chrome.label)
@@ -733,8 +758,22 @@ private struct TabItem: View {
         .koreContextMenu("tab") {
             var items: [OptionItem] = []
             if tab.isPreview { items.append(OptionItem("Keep Open") { workspace.keep(tab) }) }
-            items += [OptionItem("Rename…", enabled: tab.chat != nil && tab.agent == nil) { startRename() },
-                      OptionItem("Close Tab") { workspace.requestClose(tab) }]
+            items += [OptionItem("Rename…", enabled: tab.chat != nil && tab.agent == nil) { startRename() }]
+            // A chat moves onto a board: into one of its sections, or a new one.
+            if tab.chat != nil, tab.agent == nil {
+                for boardTab in workspace.boardTabs {
+                    guard let board = boardTab.board else { continue }
+                    let size = board.size
+                    let sections = board.board.sections.map { section in
+                        OptionItem(section.name) { workspace.attach(tab, to: boardTab, section: section.id) }
+                    }
+                    let new = OptionItem("New Section") {
+                        workspace.attach(tab, to: boardTab, drop: .newSection(size.width >= size.height ? .right : .bottom))
+                    }
+                    items.append(OptionItem("Attach to \(board.name)", children: sections + [.rule, new]))
+                }
+            }
+            items.append(OptionItem("Close Tab") { workspace.requestClose(tab) })
             return items
         }
         .alert("Rename chat", isPresented: $renaming.value) {
@@ -942,11 +981,47 @@ private struct TabMark: View {
             } else {
                 ProviderLogo(provider: chat.provider, size: Size.logoTab)
             }
+        } else if let board = tab.board {
+            BoardMark(board: board, active: active, story: story)
         } else {
             BrandMark(height: Size.logoTab, monochrome: true)
                 .opacity(Theme.dimmed)
                 .frame(width: Size.logoTab, height: Size.logoTab)
                 .storyMark(StoryID(.tabs, "empty", key: tab.id.uuidString))
+        }
+    }
+}
+
+/// A board's mark: the grid glyph, taking its chats' most urgent state (a spinner while one
+/// works, the accent while one waits, red if one failed, ⚠ when stuck, an accent dot for a
+/// finished one not yet seen).
+private struct BoardMark: View {
+    let board: BoardModel
+    let active: Bool
+    let story: StoryID
+
+    var body: some View {
+        let state = board.urgent
+        switch state {
+        case .working:
+            let provider = board.orderedChats.first { TabWork.running($0) }?.provider ?? .claude
+            ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
+                .colorMultiply(WorkingSpinner.tint(provider))
+                .storyMark(story.part(.working))
+        case .stuck:
+            TabWarning().storyMark(story.part(.stuck))
+        default:
+            Image(systemName: "square.grid.2x2")
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(state == .waiting ? Theme.accent : state == .failed ? Theme.danger : active ? Theme.text : Theme.secondary)
+                .frame(width: Size.logoTab, height: Size.logoTab)
+                .overlay(alignment: .topTrailing) {
+                    if state == .unseen {
+                        Circle().fill(Theme.accent).frame(width: Size.dot, height: Size.dot).offset(x: Size.chipBadge.width, y: Size.chipBadge.height)
+                    }
+                }
+                .storyMark(StoryID(.tabs, "board.\(state)", key: story.raw))
         }
     }
 }

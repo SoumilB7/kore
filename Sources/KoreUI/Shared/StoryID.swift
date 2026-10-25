@@ -27,7 +27,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
 
     package enum Area: String, Sendable, CaseIterable {
         case titlebar, tabs, newtab, composer, transcript, approval, agentmap, history, explorer, editor, quickopen,
-            search, changes, viewer, usage, welcome, terminal
+            search, changes, viewer, usage, welcome, terminal, board
     }
 
     package enum Part: String, Sendable, CaseIterable {

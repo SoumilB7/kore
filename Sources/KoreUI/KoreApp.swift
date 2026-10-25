@@ -174,6 +174,9 @@ private struct FileCommands: View {
         Button("New Tab") { workspace?.perform(.newTab) }
             .keyboardShortcut("t")
             .disabled(workspace?.can(.newTab) != true)
+        Button("New Board") { workspace?.perform(.newBoard) }
+            .keyboardShortcut("b", modifiers: [.command, .shift])
+            .disabled(workspace?.can(.newBoard) != true)
 
         // Safari's tab keys. A folder window takes them before the menu (`TabKeys`); the
         // Welcome window has no tabs, so Close Tab closes it.

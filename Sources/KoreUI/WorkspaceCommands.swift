@@ -4,7 +4,7 @@ import Foundation
 /// focused window, and storylines run the same ones for theirs (a window that isn't focused
 /// has no focused value, so the menu can't reach it).
 package enum WorkspaceCommand: String, CaseIterable, Sendable {
-    case newTab, closeTab, nextTab, previousTab, moveTabRight, moveTabLeft, save, saveAll, goToFile, goToLine, toggleExplorer, search
+    case newTab, newBoard, closeTab, nextTab, previousTab, moveTabRight, moveTabLeft, save, saveAll, goToFile, goToLine, toggleExplorer, search
     case reload, stop, reopenClosedTab
 }
 
@@ -12,7 +12,7 @@ extension Workspace {
     /// Whether the command does anything here (the menu item's enabled state).
     package func can(_ command: WorkspaceCommand) -> Bool {
         switch command {
-        case .newTab, .closeTab, .nextTab, .previousTab, .moveTabRight, .moveTabLeft, .goToFile, .toggleExplorer, .search, .reload: true
+        case .newTab, .newBoard, .closeTab, .nextTab, .previousTab, .moveTabRight, .moveTabLeft, .goToFile, .toggleExplorer, .search, .reload: true
         case .reopenClosedTab: canReopenClosedTab
         case .stop: activeTab.chat?.isBusy == true
         case .save, .goToLine: activeFile?.isText == true
@@ -25,6 +25,7 @@ extension Workspace {
         switch command {
         case .reopenClosedTab: reopenClosedTab()
         case .newTab: newTab()
+        case .newBoard: newBoard()
         case .closeTab: requestClose(activeTab, window: isLast(activeTab))
         case .nextTab: selectAdjacent(1)
         case .previousTab: selectAdjacent(-1)
