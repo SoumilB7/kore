@@ -158,6 +158,28 @@ public enum HandoffRecords {
         return record
     }
 
+    /// The record (and the history and summary kept with it) for a fork of the session it made:
+    /// the fork shows the same carried part and hides the same rows. Nothing when there is one.
+    public static func alias(_ record: HandoffRecord, session: String) {
+        let directory = directory
+        let from = record.target.session
+        guard Self.record(target: session) == nil, let data = try? Data(contentsOf: file(from, in: directory)),
+            var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            var target = object["target"] as? [String: Any]
+        else { return }
+        target["session"] = session
+        object["target"] = target
+        guard let copy = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        else { return }
+        for (suffix, type) in [(".history", "json"), (".summary", "txt")] {
+            if let kept = try? Data(contentsOf: file(from, in: directory, suffix: suffix, type: type)) {
+                try? ClaudeHandoffWriter.create(file(session, in: directory, suffix: suffix, type: type), kept)
+            }
+        }
+        try? ClaudeHandoffWriter.create(file(session, in: directory), copy)
+        lock.withLock { if listed?.directory == directory { listed?.names.insert(session) } }
+    }
+
     /// A turn a Codex rollout names no turn for: in a thread Kore made, the history it injected.
     static let untracked = "untracked-"
 

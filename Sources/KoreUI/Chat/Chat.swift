@@ -104,8 +104,9 @@ package final class Chat: Identifiable {
         resume = session
         self.fork = fork
         self.forkedFrom = forkedFrom
-        // A reopened chat Kore made by an import has its record.
-        self.imported = imported ?? (fork == nil ? session.flatMap { ImportedHistory.of(session: $0.id) } : nil)
+        // A reopened chat Kore made by an import has its record, and so does a fork of one (its
+        // session is the original's until its own comes, when the record is kept for that too).
+        self.imported = imported ?? session.flatMap { ImportedHistory.of(session: $0.id) }
         awaitingHistory = session != nil
         controls = ControlsStore(provider: provider, memory: modeMemory)
         self.compactMemory = compactMemory
@@ -175,6 +176,9 @@ package final class Chat: Identifiable {
         // A new chat's (or a fork's) session id comes with its first turn: its point is kept under it.
         if case .sessionIdentified(let id) = event, ownAutoCompact, id != status.sessionId {
             compactMemory.remember(context.autoCompactAt, chat: id)
+        }
+        if case .sessionIdentified(let id) = event, let record = imported?.record, record.target.session != id {
+            Task.detached { HandoffRecords.alias(record, session: id) }
         }
         status.apply(event)
         context.apply(event)

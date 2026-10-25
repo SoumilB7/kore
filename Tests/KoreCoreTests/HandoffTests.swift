@@ -256,6 +256,11 @@ struct HandoffTests {
         #expect(HandoffRecords.history(target: "thread-new")?.map(\.prompt) == ["Check the build.", "Now run the tests."])
         #expect(HandoffRecords.record(target: "another") == nil)
         #expect(throws: HandoffError.self) { try HandoffRecords.save(record, history: []) }
+        // A fork of the chat it made gets the same record, history and summary under its own session.
+        HandoffRecords.alias(record, session: "thread-fork")
+        #expect(HandoffRecords.record(target: "thread-fork")?.written == ["w1"])
+        #expect(HandoffRecords.record(target: "thread-fork")?.target.session == "thread-fork")
+        #expect(HandoffRecords.history(target: "thread-fork")?.count == 2)
     }
 
     @Test func rowsKoreWroteArentReadBackAsTheChatsOwn() throws {
