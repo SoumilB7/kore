@@ -45,6 +45,9 @@ enum Theme {
     static let commandHalo = accent.opacity(0.15)
     /// A small button under the pointer: a step above `surfaceHover`.
     static let surfaceRaised = Color(hex: 0x263036)
+    /// Send with nothing to send: the raised fill and a secondary arrow.
+    static let sendOff = surfaceRaised
+    static let sendOffGlyph = secondary
     /// Finished tool dot.
     static let toolDone = text.opacity(0.7)
     /// Opacity for a secondary line under an option.

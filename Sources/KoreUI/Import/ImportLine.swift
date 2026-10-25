@@ -33,7 +33,6 @@ struct ImportLine: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("Import a chat from another agent or a .jsonl file")
         .storyID(StoryID.Composer.importLine, press: open)
         .opacity(state.isOpen ? 0 : 1)
         .allowsHitTesting(!state.isOpen)

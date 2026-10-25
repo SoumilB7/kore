@@ -115,7 +115,7 @@ private struct OutcomeLine: View {
                 Button("Retry", action: retry)
                     .smallButton(prominent: true)
                     .storyID(StoryID.Transcript.retry(turn))
-                    .help("Asks this chat to continue")
+                    .help("Continue")
             }
         }
     }
@@ -139,7 +139,7 @@ private struct OutcomeLine: View {
                     .font(TextStyle.body)
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
-                    .help("Sends Continue when the limit resets")
+                    .help("Continue at reset")
             }
             IconButton(symbol: "xmark", kind: .mini, font: TextStyle.caption, help: sends == nil ? "Don't continue" : "Don't send it, back to the draft", action: cancel)
                 .storyID(StoryID.Transcript.continues(turn).part(.cancel))

@@ -78,7 +78,7 @@ struct SpinnerRow: View {
             if connection == .quietWork {
                 Button("Retry", action: retry).smallButton()
                     .storyID(StoryID.Transcript.stalledRetry)
-                    .help("Stops this attempt and asks the chat to continue")
+                    .help("Retry")
                     .padding(.leading, Space.md)
             }
         }

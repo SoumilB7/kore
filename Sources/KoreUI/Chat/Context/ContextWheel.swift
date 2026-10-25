@@ -160,7 +160,7 @@ private struct ContextRing: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(Theme.contextTrack, lineWidth: Size.contextRingStroke)
+            Circle().stroke(Theme.contextRingTrack, lineWidth: Size.contextRingTrack)
             Circle()
                 .trim(from: 0, to: fraction)
                 .stroke(

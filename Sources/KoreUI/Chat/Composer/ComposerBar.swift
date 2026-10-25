@@ -85,19 +85,19 @@ struct ComposerBar: View {
     }
 
     private var sendButton: some View {
-        Button {
+        let off = !chat.status.isRunning && !chat.canSend
+        return Button {
             chat.status.isRunning ? chat.stop() : chat.send()
         } label: {
             Image(systemName: chat.status.isRunning ? "stop.fill" : "arrow.up")
                 .font(Glyph.send)
-                .foregroundStyle(Theme.background)
+                .foregroundStyle(off ? Theme.sendOffGlyph : Theme.background)
                 .frame(width: Size.iconButton, height: Size.iconButton)
-                .background(Theme.text, in: RoundedRectangle(cornerRadius: Radius.chip))
+                .background(off ? Theme.sendOff : Theme.text, in: RoundedRectangle(cornerRadius: Radius.chip))
         }
         .buttonStyle(.plain)
-        .disabled(!chat.status.isRunning && !chat.canSend)
-        .opacity(!chat.status.isRunning && !chat.canSend ? 0.3 : 1)
-        .help(chat.status.isRunning ? "Stop (Esc)" : "")
+        .disabled(off)
+        .help(chat.status.isRunning ? "Stop (Esc)" : "Send (↩)")
         .accessibilityLabel(Text(chat.status.isRunning ? "Stop" : "Send"))
         // One button: Stop while a turn runs, else Send.
         .storyID(chat.status.isRunning ? StoryID.Composer.stop : StoryID.Composer.send)
@@ -154,20 +154,29 @@ struct ModeMenu: View {
         Button {
             chat.togglePicker(.mode)
         } label: {
-            HStack(spacing: Space.xs) {
-                ModeIcon(mode: mode)
-                if showLabel {
-                    Text(mode.label).font(mode.tint == nil ? TextStyle.label : TextStyle.labelMedium).lineLimit(1)
+            // The icon's box is padded past its ink, so the line takes the label's height (a hidden
+            // one when icons only): the capsule is as tall as the model pill's.
+            ZStack {
+                Text(verbatim: " ").font(TextStyle.labelMedium).hidden()
+                HStack(spacing: Space.xs) {
+                    ModeIcon(mode: mode).frame(height: 0) // lint:allow takes no height, drawn over it
+                    if showLabel {
+                        Text(mode.label).font(mode.tint == nil ? TextStyle.label : TextStyle.labelMedium).lineLimit(1)
+                    }
                 }
             }
             .foregroundStyle(mode.tint ?? (open ? Theme.text : Theme.secondary))
-            .padding(.horizontal, Space.xs)
-            .background(
-                open ? Theme.surfaceHover : Theme.modeFlash(mode.rung).opacity(flash.value),
-                in: RoundedRectangle(cornerRadius: Radius.chip)
-            )
+            // The model pill's capsule, so the row's two pickers match at rest.
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.xs)
+            .background {
+                ZStack {
+                    Capsule().fill(open ? Theme.surfaceRaised : Theme.surfaceHover)
+                    Capsule().fill(Theme.modeFlash(mode.rung).opacity(flash.value))
+                }
+            }
             .padding(.horizontal, -Space.xs)
-            .contentShape(Rectangle())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .fixedSize()

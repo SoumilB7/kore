@@ -23,7 +23,7 @@ struct PlanAllowLine: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(on ? "Commands run without asking until you turn this off" : "Runs every command without asking while planning")
+        .help("Allow commands in Plan")
         .storyID(StoryID.Composer.planAllow, press: { chat.setPlanAllow(!on) })
         .accessibilityLabel(Text("Allow commands while planning"))
         .accessibilityValue(Text(on ? "On" : "Off"))

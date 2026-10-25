@@ -5,6 +5,9 @@ import SwiftUI
 
 extension Theme {
     static let contextTrack = timelineLine
+    /// The wheel's track: a hairline, so a ring with little in it reads as a meter, not an
+    /// empty option.
+    static let contextRingTrack = border
 
     /// Quiet while there's room; amber from 75%, red from 90%. With an auto-compact point,
     /// amber from 10 points before it.
@@ -20,6 +23,8 @@ extension Theme {
 extension Size {
     static let contextRing: CGFloat = 16
     static let contextRingStroke: CGFloat = 2
+    /// The track under the arc.
+    static let contextRingTrack: CGFloat = 1
     /// The card's left edge, from the wheel's.
     static let contextCardLead: CGFloat = -6
     /// The card's gap above the wheel.
