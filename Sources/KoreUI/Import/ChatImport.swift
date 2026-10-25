@@ -28,7 +28,7 @@ package enum ImportRefusal: Equatable, Sendable {
 }
 
 /// The settings an imported chat runs with: the new chat's own unless the picker chose others
-/// (`ImportMapping.settings` gives the source's, in the target's terms).
+/// (`ImportMapping.settings` gives the source's mode, in the target's terms).
 package struct ImportSettings: Equatable, Sendable {
     package var mode: String
     package var planMode: Bool
@@ -170,19 +170,6 @@ enum ImportMapping {
                 }
             if let mode = ladder.lazy.compactMap({ step in available.first { $0.rung == step } }).first { settings.mode = mode.id }
         }
-        settings.effort = effort(preview.effort, offered: model?.efforts ?? [])
         return settings
-    }
-
-    /// Codex's `minimal` is Claude's `low` and `ultra` its `max`; a level the model doesn't offer
-    /// becomes the highest it does below it.
-    static func effort(_ effort: String?, offered: [String]) -> String? {
-        guard var effort else { return nil }
-        effort = ["minimal": "low", "ultra": "max"][effort] ?? effort
-        guard !offered.isEmpty, !offered.contains(effort) else { return effort }
-        let order = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-        let rank = order.firstIndex(of: effort) ?? 0
-        return offered.filter { (order.firstIndex(of: $0) ?? 0) <= rank }.max { (order.firstIndex(of: $0) ?? 0) < (order.firstIndex(of: $1) ?? 0) }
-            ?? offered.first
     }
 }

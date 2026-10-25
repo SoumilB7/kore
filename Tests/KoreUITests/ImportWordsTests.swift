@@ -32,13 +32,6 @@ struct ImportWordsTests {
         #expect(ImportMapping.settings(preview(format: "codex", mode: "askForApproval"), into: .claude, model: nil)?.mode == "default")
     }
 
-    @Test func effortsMeetWhatTheModelOffers() {
-        #expect(ImportMapping.effort("minimal", offered: []) == "low")
-        #expect(ImportMapping.effort("ultra", offered: ["low", "medium", "high", "xhigh", "max"]) == "max")
-        #expect(ImportMapping.effort("max", offered: ["low", "medium", "high", "xhigh"]) == "xhigh")
-        #expect(ImportMapping.effort(nil, offered: ["low"]) == nil)
-    }
-
     @Test func theFooterCountsWhatIsCarried() {
         #expect(ImportState.count(preview(format: "claude")) == "23 turns")
         let big = preview(format: "claude", carried: 0)

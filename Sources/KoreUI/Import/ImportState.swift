@@ -149,6 +149,7 @@ final class ImportState {
             switch result {
             case .success(let preview):
                 line = workspace.busy(preview.sessionId) ? .sourceBusy : .ready(preview)
+                presetMode(from: preview, row: row.id, chat: chat)
             case .failure(let error):
                 line = .notImportable(error.description)
             }
@@ -169,6 +170,21 @@ final class ImportState {
             rows.insert(row, at: 0)
             pick(row)
         }
+    }
+
+    /// The row whose source last set the composer's mode: once per pick, so a mode the user
+    /// changes after isn't set back.
+    private var presetFor: String?
+
+    /// The composer's mode (and plan) as the source last ran, in this CLI's terms: the pill
+    /// shows it before the import, to change if wanted.
+    private func presetMode(from preview: HandoffPreview, row: String, chat: Chat) {
+        guard presetFor != row else { return }
+        presetFor = row
+        let model = chat.controls.models.first { $0.id == (chat.controls.modelId ?? chat.launchModel) }
+        guard let settings = ImportMapping.settings(preview, into: chat.provider, model: model) else { return }
+        chat.controls.mode = settings.mode
+        chat.controls.planMode = settings.planMode
     }
 
     var canImport: Bool { if case .ready = line { true } else { false } }
