@@ -268,6 +268,8 @@ final class ChatFileLink: ChatStoryline {
     static let shown = "Open the page or the docs."
     static let docs = "https://example.com/docs"
 
+    /// The links noted before the click: a run's earlier storylines noted theirs.
+    @MainActor private static var notedBefore = 0
     override class var tags: Set<Tag> { [.chat] }
 
     override func steps() -> [any Step] {
@@ -282,9 +284,10 @@ final class ChatFileLink: ChatStoryline {
             StartChat(),
             Send("Where is the page?"),
             TurnFinished(1),
+            Do("count the links noted so far") { _ in Self.notedBefore = StoryTranscript.openedLinks.count },
             ClickText(.answer(1, [0], at: Self.shown, "docs")),
-            Expect("the web link noted for the system, not opened in Kore") { _ in
-                StoryTranscript.openedLinks.last?.absoluteString == Self.docs
+            Expect("the web link noted for the system once, not opened in Kore") { _ in
+                StoryTranscript.openedLinks.dropFirst(Self.notedBefore).map(\.absoluteString) == [Self.docs]
                     && !StoryTranscript.linksOpenedInKore.contains { $0.absoluteString == Self.docs }
             },
             Expect.fileTabs("no file tab for it") { $0.isEmpty },

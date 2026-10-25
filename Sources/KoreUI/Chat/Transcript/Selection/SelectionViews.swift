@@ -300,6 +300,9 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
             press = nil
             stopAutoscroll()
             if done.onText {
+                // Taken, like its press: the same release sent again (a window that isn't key)
+                // would open the link a second time.
+                takenAt = event.timestamp
                 // A click on a link that didn't drag opens it.
                 if !done.dragging, done.clicks == 1, !event.modifierFlags.contains(.shift), let url = selection.link(at: point(event)) {
                     selection.open(url)
