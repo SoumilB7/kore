@@ -54,7 +54,7 @@ struct SlashMenu: View {
                     .lineLimit(1)
             }
             Spacer(minLength: Space.xl)
-            Text(command.description)
+            Text(command.summary)
                 .font(TextStyle.label)
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)

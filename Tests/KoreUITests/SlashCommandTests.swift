@@ -56,4 +56,24 @@ struct SlashCommandTests {
         #expect(Chat.split("/pdf this", commands: commands) == (nil, "/pdf this"))
         #expect(Chat.split("say /review", commands: commands) == (nil, "say /review"))
     }
+
+    @Test func summariesSayWhatACommandDoesInAFewWords() {
+        let cases = [
+            ("Pre-commit/ship code review: Codex default; optional Claude or Pi. (user)", "Pre-commit/ship code review"),
+            ("Logging best practices focused on wide events (canonical log lines) for powerful debugging and analytics", "Logging best practices"),
+            ("Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize", "Deep research harness"),
+            ("(human-resources) Analyze compensation — benchmarking, band placement, and equity modeling.", "Analyze compensation"),
+            ("(human-resources) Draft an offer letter with comp details and terms. Use when a candidate is ready.", "Draft an offer letter"),
+            ("(human-resources) Create structured interview plans with competency-based questions and scorecards.", "Create structured interview plans"),
+            ("Generate an onboarding checklist and first-week plan for a new hire.", "Generate an onboarding checklist"),
+            ("Clear conversation history but keep a summary in context. Optional: /compact [instructions]", "Clear conversation history"),
+            ("Set the model for this session", "Set the model for this session"),
+            ("Plan limits", "Plan limits"),
+            ("", ""),
+        ]
+        for (description, summary) in cases {
+            #expect(SlashCommand.summary(of: description) == summary, "\(description)")
+        }
+    }
 }
+

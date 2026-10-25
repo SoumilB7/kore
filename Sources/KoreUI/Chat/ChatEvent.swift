@@ -327,6 +327,36 @@ package struct SlashCommand: Identifiable, Hashable, Sendable {
         self.kind = kind
         self.glyph = glyph
     }
+
+    /// What the command does in a few words, for the menu's row; the whole description is its
+    /// tooltip. The CLIs' descriptions run to sentences ("Deep research harness — fan-out web
+    /// searches, …"): the source tag goes, then everything after the first clause, then, while
+    /// it is still long, everything from the first joining word.
+    package var summary: String { Self.summary(of: description) }
+
+    package static func summary(of description: String) -> String {
+        var text = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "(plugin) Analyze …" and "… (user)": where it comes from, not what it does.
+        if text.hasPrefix("("), let close = text.firstIndex(of: ")") {
+            text = String(text[text.index(after: close)...]).trimmingCharacters(in: .whitespaces)
+        }
+        if text.hasSuffix(")"), let open = text.lastIndex(of: "(") {
+            text = String(text[..<open]).trimmingCharacters(in: .whitespaces)
+        }
+        for stop in [" — ", " – ", " - ", ": ", "; ", ". ", " (", "\n"] {
+            if let range = text.range(of: stop) { text = String(text[..<range.lowerBound]) }
+        }
+        if text.count > summaryLength {
+            let joins = [" focused on ", " with ", " for ", " that ", " using ", " and ", " but ", " to ", " of ", " as ", " on ", " in ", " via ", " from ", ", "]
+            let cuts = joins.compactMap { text.range(of: $0) }.filter { text.distance(from: text.startIndex, to: $0.lowerBound) >= 14 }
+            if let first = cuts.min(by: { $0.lowerBound < $1.lowerBound }) { text = String(text[..<first.lowerBound]) }
+        }
+        while let last = text.last, ".,;:".contains(last) { text.removeLast() }
+        return text.isEmpty ? description : text.prefix(1).uppercased() + text.dropFirst()
+    }
+
+    /// Longer than this, a summary is cut at its first joining word.
+    static let summaryLength = 32
 }
 
 // MARK: - Sub-agents
