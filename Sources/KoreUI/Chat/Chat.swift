@@ -170,6 +170,7 @@ package final class Chat: Identifiable {
             context.autoCompactAt = own
             ownAutoCompact = true
         }
+        if fork == nil, let id = session?.id { controls.restorePlanAllow(chat: id) }
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
         transcript.providerName = provider.name
@@ -225,7 +226,12 @@ package final class Chat: Identifiable {
             forkedFrom = nil
             transcript.forkedFrom(original)
         }
-        approvals.apply(event)
+        if case .approvalRequested(let ask) = event, controls.autoAllows(ask) {
+            // Allow commands in Plan: answered at once, no card; the tool's row still shows what ran.
+            answer(ask, .allow)
+        } else {
+            approvals.apply(event)
+        }
         controls.apply(event)
         noteAgentModeChange(event)
         dropUnofferedMode(event)
@@ -233,6 +239,9 @@ package final class Chat: Identifiable {
         // A new chat's (or a fork's) session id comes with its first turn: its point is kept under it.
         if case .sessionIdentified(let id) = event, ownAutoCompact, id != status.sessionId {
             compactMemory.remember(context.autoCompactAt, chat: id)
+        }
+        if case .sessionIdentified(let id) = event, controls.planAllow, id != status.sessionId {
+            controls.keepPlanAllow(chat: id)
         }
         if case .sessionIdentified(let id) = event, let record = imported?.record, record.target.session != id {
             Task.detached { HandoffRecords.alias(record, session: id) }
@@ -1378,6 +1387,7 @@ package final class Chat: Identifiable {
         controls.changedBy = nil
         let previous = controls.mode
         controls.mode = id
+        allowWaitingInPlan()
         let backend = backend
         Task {
             do {
@@ -1395,6 +1405,20 @@ package final class Chat: Identifiable {
         controls.planMode = on
         let backend = backend
         Task { await backend?.setPlanMode(on) }
+        allowWaitingInPlan()
+    }
+
+    /// "Allow commands in Plan", kept for this chat.
+    func setPlanAllow(_ on: Bool) {
+        controls.planAllow = on
+        if let id = status.sessionId { controls.keepPlanAllow(chat: id) }
+        UILog.event("plan-allow", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
+        allowWaitingInPlan()
+    }
+
+    /// Permissions already waiting when planning with the switch on starts: answered as later ones are.
+    private func allowWaitingInPlan() {
+        for ask in approvals.pending where controls.autoAllows(ask) { answer(ask, .allow) }
     }
 
     /// A new chat's mode (the one last picked) that its model doesn't offer gives way to the first.

@@ -725,7 +725,9 @@ package final class CodexTranslator {
         case .permissions:
             return make("Grant extra permissions?", body: a.params["permissions"]?.compact)
         case .mcpElicitation:
-            return make("Allow MCP request?")
+            var ask = make("Allow MCP request?")
+            ask.signIn = true
+            return ask
         case .userInput:
             let questions = a.questions.map { q in
                 Approval.Question(

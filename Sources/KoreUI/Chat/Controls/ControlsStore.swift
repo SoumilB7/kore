@@ -10,6 +10,8 @@ final class ControlsStore {
     var mode: String
     /// The provider's plan toggle (Codex); Claude's plan is a mode.
     var planMode = false
+    /// "Allow commands in Plan": while planning, Kore answers each permission with allow.
+    var planAllow = false
     private(set) var models: [ModelOption] = []
     var modelId: String?
     var effort: String?
@@ -88,6 +90,16 @@ final class ControlsStore {
         return permissionsMode
     }
 
+    /// Planning: Claude's Plan mode, or Codex's Plan switch on.
+    var planning: Bool { activeMode.id == "plan" }
+
+    /// Kore answers it with allow itself, no card: a plain permission while planning with the switch on.
+    func autoAllows(_ approval: Approval) -> Bool { planAllow && planning && approval.isPermission }
+
+    /// The chat's own switch, kept under its session id.
+    func restorePlanAllow(chat session: String) { planAllow = memory.planAllow(chat: session) }
+    func keepPlanAllow(chat session: String) { memory.remember(planAllow: planAllow, chat: session) }
+
     /// The mode apart from a plan toggle.
     var permissionsMode: ModeOption { provider.modes.first { $0.id == mode } ?? provider.modes[0] }
 
@@ -130,6 +142,15 @@ struct ModeMemory {
     func mode(for provider: ProviderDescriptor) -> String? { defaults?.string(forKey: Self.key + provider.id) }
 
     func remember(_ id: String, for provider: ProviderDescriptor) { defaults?.set(id, forKey: Self.key + provider.id) }
+
+    /// Each chat's "Allow commands in Plan", by its session id ("planAllow.chat.<id>"); only kept while on.
+    private static let planAllowKey = "planAllow.chat."
+
+    func planAllow(chat session: String) -> Bool { defaults?.bool(forKey: Self.planAllowKey + session) ?? false }
+
+    func remember(planAllow on: Bool, chat session: String) {
+        if on { defaults?.set(true, forKey: Self.planAllowKey + session) } else { defaults?.removeObject(forKey: Self.planAllowKey + session) }
+    }
 }
 
 /// Each chat's auto-compact point, by its session id ("autoCompact.chat.<id>", one small entry

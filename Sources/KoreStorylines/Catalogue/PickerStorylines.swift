@@ -393,6 +393,69 @@ final class FastModeSwitch: ChatStoryline {
     }
 }
 
+/// "Allow commands in Plan", under the mode popup's modes: a click flips it and the popup stays.
+/// Planning with it on, a command's permission is answered allow at once, with no card, and its
+/// row still shows what ran; a question still waits for its card.
+final class PlanAllowSwitch: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .approvals] }
+    override class var script: CLIScript {
+        let ask = Approval(id: "p1", title: "Allow Bash?", detail: "Bash", body: "ls", canAlwaysAllow: true, questions: [])
+        let question = Approval(
+            id: "q1", title: "", detail: nil, body: nil, canAlwaysAllow: false,
+            questions: [.init(id: "Which?", text: "Which?", options: [.init(label: "Grid", description: ""), .init(label: "List", description: "")])])
+        return CLIScript(turns: [
+            [.startTurn, .approval(ask, allow: [.tool(name: "Bash", detail: "ls", output: "a.txt")], deny: Beat.answer("Skipped.")), .finishTurn(.completed)],
+            [.startTurn, .approval(question, allow: Beat.answer("Got it."), deny: []), .finishTurn(.completed)],
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        let codex = variant == .codex
+        let pill = Locator.id(StoryID.Composer.mode)
+        let popup = Locator.id(StoryID.Composer.modes)
+        let row = Locator.id(StoryID.Composer.planAllow)
+        let open: [any Step] = [Press(pill), WaitForElement(popup)]
+        let reads = { (what: String, _ want: String) in
+            Expect(what, found: { $0.app.chat?.storyPlanAllow }) { $0.app.chat?.storyPlanAllow == want }
+        }
+        let submit = StoryID.Approval.card("q1").part(.submit)
+        var steps: [any Step] = super.steps() + [WaitForFocus(.id(StoryID.Composer.field))]
+        // 1 · Plan on (Claude's mode closes the popup; Codex's switch stays), then the switch.
+        steps += open + [Press(.id(StoryID.Composer.modeRow("plan")))]
+        if !codex { steps += [ExpectElement(popup, .absent)] + open }
+        steps += [
+            Expect("planning") { $0.app.chat?.storyPlanning == true },
+            reads("the switch, off", "off"),
+            Press(row),
+            reads("on", "on"),
+            Expect("the popup still open") { $0.app.chat?.isModePickerOpen == true },
+            FadesEnd(),
+            Snapshot("mode-picker-plan-allow"),
+            Key(.escape),
+            ExpectElement(popup, .absent),
+        ]
+        // 2 · A command's permission: allowed at once, no card; its row shows it ran.
+        steps += [
+            Send("List the files"),
+            TurnFinished(1),
+            Expect("allowed by Kore") { try $0.scriptedBackend().log.contains(.respond(approval: "p1", allowed: true)) },
+            Expect("no card left") { try $0.activeChat().pendingApprovals.isEmpty },
+            ExpectElement(.id(StoryID.Approval.card("p1").part(.allow)), .absent),
+            Expect.rows("the command's row, done") { $0.contains { $0.kind == "tool" && $0.tool == "Bash" && $0.result == "a.txt" && $0.done } },
+        ]
+        // 3 · A question still waits for its card.
+        steps += [
+            Send("Ask me"),
+            WaitForElement(.id(submit)),
+            Expect("the question waits") { try $0.activeChat().pendingApprovals.map(\.id) == ["q1"] },
+            Press(.id(StoryID.Approval.option("Which?", "List"))),
+            Press(.id(submit)),
+            TurnFinished(2),
+        ]
+        return steps
+    }
+}
+
 /// Gives the window back the run's size.
 struct RestoreWindow: Step {
     var label: String { "Size the window back" }

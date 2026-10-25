@@ -108,6 +108,8 @@ extension StoryID {
         /// The mode popup, and its rows by the mode's id (Codex's Plan switch by "plan").
         package static let modes = StoryID(.composer, "modes")
         package static func modeRow(_ id: String) -> StoryID { StoryID(.composer, "modes.row", key: id) }
+        /// The mode popup's "Allow commands in Plan" switch.
+        package static let planAllow = StoryID(.composer, "modes.planallow")
         package static let context = StoryID(.composer, "context")
         /// The command chip before the text.
         package static let chip = StoryID(.composer, "chip")
@@ -316,7 +318,7 @@ extension StoryID {
             Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab, Titlebar.awake, Titlebar.overflow,
             Titlebar.hiddenTabs, Titlebar.tabName, Tabs.strip,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
-            Composer.model, Composer.models, Composer.effort, Composer.modes, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
+            Composer.model, Composer.models, Composer.effort, Composer.modes, Composer.planAllow, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
             Composer.usage.part(.reset), Composer.account, Composer.account.part(.signIn), Composer.account.part(.method),
             Composer.account.part(.switch), Composer.account.part(.signOut), Composer.account.part(.allow),
             Composer.account.part(.cancel), Composer.account.part(.copy), Composer.account.part(.credentials),

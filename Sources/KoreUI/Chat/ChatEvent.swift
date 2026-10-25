@@ -487,6 +487,8 @@ package struct Approval: Identifiable, Sendable {
     package var changes: [FileChange] = []
     /// A sub-agent asking, for the card's header.
     package var agent: AgentID = .main
+    /// A sign-in or an MCP server's own request: Kore never answers it for the user.
+    package var signIn = false
 
     package init(id: String, title: String, detail: String?, body: String?, canAlwaysAllow: Bool, questions: [Question], plan: String? = nil, changes: [FileChange] = [], agent: AgentID = .main) {
         self.id = id
@@ -499,6 +501,9 @@ package struct Approval: Identifiable, Sendable {
         self.changes = changes
         self.agent = agent
     }
+
+    /// A plain permission (a command, tool, file or web access): not a plan, questions or a sign-in.
+    package var isPermission: Bool { plan == nil && questions.isEmpty && !signIn }
 }
 
 package enum Decision: Sendable {

@@ -58,6 +58,8 @@ extension Chat {
     package func storySetMode(_ id: String) { setMode(id) }
     /// Codex's plan switch.
     package var storyPlanMode: Bool { controls.planMode }
+    /// Claude's Plan mode, or Codex's Plan switch on.
+    package var storyPlanning: Bool { controls.planning }
     /// The session it forks, while its own hasn't come.
     package var storyForkOf: String? { fork?.from }
 
@@ -115,6 +117,12 @@ extension Chat {
             rows.append((picker.lit == .row(modes.count) ? "*" : "") + plan.label + (controls.planMode ? ": on" : ": off"))
         }
         return rows
+    }
+
+    /// The mode popup's "Allow commands in Plan" switch: "on" or "off", "*" first when the keys are on it.
+    package var storyPlanAllow: String {
+        let at = controls.availableModes.count + (provider.planToggle == nil ? 0 : 1)
+        return (picker.lit == .row(at) ? "*" : "") + (controls.planAllow ? "on" : "off")
     }
 
     /// The `/` menu's names, and the command chip's.

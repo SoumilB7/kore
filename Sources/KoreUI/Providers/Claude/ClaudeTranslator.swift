@@ -759,10 +759,13 @@ package final class ClaudeTranslator {
             return Approval(
                 id: r.id, title: "", detail: nil, body: nil, canAlwaysAllow: false, questions: questions, agent: agent)
         }
-        return Approval(
+        var ask = Approval(
             id: r.id, title: "Allow \(r.toolName)?", detail: r.description,
             body: Self.summary(of: r.input, in: folder), canAlwaysAllow: !r.suggestions.isEmpty,
             questions: [], changes: Self.proposedChange(r.toolName, r.input).map { [$0] } ?? [], agent: agent)
+        // An MCP server's sign-in (`mcp__<server>__authenticate`).
+        ask.signIn = r.toolName.hasPrefix("mcp__") && r.toolName.hasSuffix("__authenticate")
+        return ask
     }
 
     /// The edit an Edit / Write approval asks about, shaped as the tool's own result would be.
