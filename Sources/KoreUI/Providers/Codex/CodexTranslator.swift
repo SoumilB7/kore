@@ -4,7 +4,7 @@ import KoreCore
 /// Turns Codex app-server notifications into `ChatEvent`s. A turn is a list of items, each
 /// started → deltas → completed; sub-agents are child threads on the same connection, mapped
 /// with `agent: .sub(threadId)`. A resumed thread's turns replay through the same item mapping.
-final class CodexTranslator {
+package final class CodexTranslator {
     let files: TurnFiles
     private let folder: URL
     private(set) var threadId: String?
@@ -76,7 +76,7 @@ final class CodexTranslator {
     /// Terminals that outlived their turn (`ActiveCommand`).
     private(set) var commands = CodexCommands()
 
-    init(folder: URL) {
+    package init(folder: URL) {
         self.folder = folder
         files = TurnFiles(folder: folder)
     }
@@ -741,7 +741,7 @@ final class CodexTranslator {
     /// Turns (`thread/turns/list`, oldest first) as events.
     /// `settings`: each turn's settings from the rollout (`CodexRolloutReader`), for the
     /// mode changes between turns.
-    func replay(_ turns: [JSONValue], settings: [String: CodexTurnSettings] = [:], context: (used: Int, window: Int?)? = nil) -> [ChatEvent] {
+    package func replay(_ turns: [JSONValue], settings: [String: CodexTurnSettings] = [:], context: (used: Int, window: Int?)? = nil) -> [ChatEvent] {
         replaying = true
         defer { replaying = false }
         for turn in turns {

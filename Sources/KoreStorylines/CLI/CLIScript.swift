@@ -112,6 +112,9 @@ package enum Call: Sendable, Equatable {
     case setEffort(String)
     case rename(String)
     case stopAgent(String)
+    /// Stop on a command's row (after its confirm), and its Run in background.
+    case stopCommand(String)
+    case backgroundCommand(String)
     case compact
     /// The usage popup read the account's limits.
     case usage

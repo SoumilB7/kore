@@ -128,6 +128,17 @@ extension Chat {
         }
     }
 
+    /// The chat's background commands as their rows read ("Run the dev server · running ·
+    /// main"), and how many are live and how many outlived their agents.
+    package var storyBackground: [String] {
+        commands.all.map { row in
+            [row.title, CommandText.word(row.state) ?? (row.isLive ? "running" : "done"), row.owner.sub ?? "main"].joined(separator: " · ")
+        }
+        .sorted()
+    }
+    package var storyLiveCommands: Int { commands.summary.total }
+    package var storyOutlivedCommands: Int { commands.summary.outlived }
+
     /// Whether the usage popup is open, its account ("Claude Max · you@example.com · Example Org",
     /// the plan name and its tooltip), its bars as they read ("Weekly limit · 6% · Resets in 4d")
     /// and its extras line.

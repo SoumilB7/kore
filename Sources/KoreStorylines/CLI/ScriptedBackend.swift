@@ -137,6 +137,19 @@ package final class ScriptedBackend: ChatBackend {
         sink.yield(.agentFinished(id: id, .stopped, result: nil))
     }
 
+    /// As both CLIs answer: the command ends, stopped by Kore.
+    package func stopCommand(_ id: String) async throws {
+        log.append(.stopCommand(id))
+        if offer(.stopCommand(id)) { return }
+        sink.yield(.commandEnded(id: id, .stopped(by: .user), at: Date()))
+    }
+
+    package func backgroundCommand(_ id: String) async throws {
+        log.append(.backgroundCommand(id))
+        if offer(.backgroundCommand(id)) { return }
+        sink.yield(.commandChanged(id: id, .backgrounded(at: Date())))
+    }
+
     package func agentHistory(_ id: String) async -> [ChatEvent] { script.agents[id] ?? agentEvents[id] ?? [] }
 
     package func fork(message id: String?, text: String) async throws -> ForkStart {
