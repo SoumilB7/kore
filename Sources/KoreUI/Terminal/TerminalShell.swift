@@ -66,7 +66,8 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate {
     func start() {
         guard !started, !closed, !ended else { return }
         started = true
-        view.startProcess(executable: executable, args: arguments,
+        let started = Disclaim.wrap(executable, arguments)
+        view.startProcess(executable: started.executable, args: started.arguments,
                           environment: environment.map { "\($0.key)=\($0.value)" }, currentDirectory: folder.path)
         if view.process.shellPid > 1 { child = ProcessChild(view.process.shellPid) }
         UILog.event("terminal-start", ["id": id.uuidString, "pid": child.map { String($0.pid) }])

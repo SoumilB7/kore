@@ -1,6 +1,9 @@
 import Foundation
 import KoreCore
 
+// A test's trampoline (`Disclaim`), as Kore's binary is the app's.
+Disclaim.execIfAsked()
+
 // Plays a recorded CLI session (a cassette, `Cassette`) in place of `claude` or `codex`, so Kore's
 // sessions, translators and process handling run end to end with no model (phase 12's process
 // mode). Kore launches it through `CLIExecutable.standIns` with the real CLI's arguments, in the

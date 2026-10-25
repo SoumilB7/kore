@@ -55,8 +55,9 @@ package final class StdioProcess: @unchecked Sendable {
         signal(SIGPIPE, SIG_IGN)
 
         let stdinPipe = Pipe(), stdoutPipe = Pipe(), stderrPipe = Pipe()
-        process.executableURL = executable
-        process.arguments = arguments
+        let started = Disclaim.wrap(executable.path, arguments)
+        process.executableURL = URL(fileURLWithPath: started.executable)
+        process.arguments = started.arguments
         process.currentDirectoryURL = cwd
         process.environment = environment
         process.standardInput = stdinPipe
