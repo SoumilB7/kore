@@ -192,6 +192,8 @@ package final class Chat: Identifiable {
     var resumed: Bool { status.resumed }
     var hasConversation: Bool { status.hasConversation }
     var title: String { status.title(fallback: provider.name) }
+    /// Its CLI's id ("claude", "codex"), for storylines.
+    package var providerID: String { provider.id }
 
     /// The CLI's current name for a past session (it may have been renamed elsewhere).
     func adoptName(_ newName: String) { status.name = newName }

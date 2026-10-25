@@ -53,6 +53,7 @@ public enum CLIExecutable {
     }
 
     private static func locate(_ name: String, override: URL?) async throws -> Launch {
+        if override == nil, CLILocator.known.contains(name) { return try await locateKnown(name) }
         // Last run's PATH counts only if the CLI is in it, not just in the usual folders below:
         // a CLI found there with a stale PATH would run its own tools without theirs.
         if shellResult.value == nil, let cached = cachedEnvironment,
@@ -64,6 +65,170 @@ public enum CLIExecutable {
         if let override { return Launch(url: override, environment: env) }
         if let launch = find(name, nil, in: env, usualFolders: true) { return launch }
         throw Failure.notFound(name: name, searched: searchPath(env, usualFolders: true))
+    }
+
+    // MARK: the claude and codex CLIs
+
+    /// The places `CLILocator` looks in; a storyline host's own tree in place of the Mac's
+    /// (`look(in:)`).
+    package static let places = HostSetting<CLILocator.Places?>(nil)
+
+    /// Looks in `custom` from now on (nil: the Mac's own places), forgetting what was found.
+    package static func look(in custom: CLILocator.Places?) {
+        places.value = custom
+        winners.set([:])
+        checks.set([:])
+    }
+
+    /// Each CLI's binary that answered, this run, with where it came from.
+    private static let winners = Locked<[String: CLILocator.Candidate]>([:])
+    /// Each path's `--version` check, run once and shared by everyone waiting on it.
+    private static let checks = Locked<[String: Task<Bool, Never>]>([:])
+
+    /// A known CLI by the fixed list, the first that answers. Before this run's shell answers,
+    /// only Locate…'s pick and last run's PATH are tried, as for any other program.
+    private static func locateKnown(_ name: String) async throws -> Launch {
+        if let won = winners.value[name], FileManager.default.isExecutableFile(atPath: won.url.path) {
+            let env: [String: String]
+            if let shell = shellResult.value { env = shell } else if won.source == "chosen" || won.source == "path", let cached = cachedEnvironment {
+                env = cached
+            } else { env = await environment() }
+            return launch(won, env)
+        }
+        if places.value == nil, shellResult.value == nil, let cached = cachedEnvironment {
+            let early = candidates(name, env: cached).filter { $0.source == "chosen" || $0.source == "path" }
+            if let won = await firstAnswering(early, env: cached) { return launch(record(name, won), cached) }
+        }
+        let env = await environment()
+        let list = candidates(name, env: env)
+        if let won = await firstAnswering(list, env: env) { return launch(record(name, won), env) }
+        log.write("cli-missing", ["cli": name, "tried": String(list.count)])
+        throw Failure.notFound(name: name, searched: searchPath(env, usualFolders: true))
+    }
+
+    /// The binary Kore would run for a known CLI (`claude`, `codex`), or nil when none on the list
+    /// answers. Stand-ins don't count: this is the Mac's own (`--locate-cli`, after an install).
+    public static func located(_ name: String) async -> URL? {
+        guard CLILocator.known.contains(name) else { return nil }
+        return try? await locateKnown(name).url
+    }
+
+    private static func candidates(_ name: String, env: [String: String]) -> [CLILocator.Candidate] {
+        if let custom = places.value { return CLILocator.candidates(name, in: custom) }
+        let path = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        return CLILocator.candidates(
+            name, in: CLILocator.Places(home: FileManager.default.homeDirectoryForCurrentUser, path: path, chosen: chosen(name)))
+    }
+
+    private static func firstAnswering(_ list: [CLILocator.Candidate], env: [String: String]) async -> CLILocator.Candidate? {
+        for candidate in list where await answers(candidate, env: env) { return candidate }
+        return nil
+    }
+
+    private static func record(_ name: String, _ won: CLILocator.Candidate) -> CLILocator.Candidate {
+        winners.withLock { $0[name] = won }
+        log.write("cli-found", ["cli": name, "source": won.source])
+        return won
+    }
+
+    /// The launch for a candidate: a bin folder's own tools (an npm install's `node`) on PATH,
+    /// after the shell's.
+    private static func launch(_ won: CLILocator.Candidate, _ env: [String: String]) -> Launch {
+        guard won.inBinFolder else { return Launch(url: won.url, environment: env) }
+        var env = env
+        let dir = won.url.deletingLastPathComponent().path
+        let path = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        if !path.contains(dir) { env["PATH"] = (path + [dir]).joined(separator: ":") }
+        return Launch(url: won.url, environment: env)
+    }
+
+    /// Its `--version` answers (exits 0) within 3 s. Each path is asked once a run, off the main
+    /// thread; a second caller waits on the first's answer.
+    private static func answers(_ candidate: CLILocator.Candidate, env: [String: String]) async -> Bool {
+        let environment = launch(candidate, env).environment
+        let url = candidate.url
+        let check = checks.withLock { checks -> Task<Bool, Never> in
+            if let running = checks[url.path] { return running }
+            // On a dispatch thread: the check waits up to 3 s, not on Swift's few shared ones.
+            let task = Task.detached(priority: .userInitiated) {
+                await withCheckedContinuation { done in
+                    DispatchQueue.global(qos: .userInitiated).async { done.resume(returning: versionAnswers(url, environment: environment)) }
+                }
+            }
+            checks[url.path] = task
+            return task
+        }
+        return await check.value
+    }
+
+    private static func versionAnswers(_ url: URL, environment: [String: String]) -> Bool {
+        let process = Process()
+        process.executableURL = url
+        process.arguments = ["--version"]
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let ended = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in ended.signal() }
+        do { try process.run() } catch { return false }
+        let pid = process.processIdentifier
+        ChildReaper.shared.watch(pid)
+        defer { ChildReaper.shared.forget(pid) }
+        guard ended.wait(timeout: .now() + 3) == .success else {
+            kill(pid, SIGKILL)
+            process.waitUntilExit()
+            return false
+        }
+        return process.terminationReason == .exit && process.terminationStatus == 0
+    }
+
+    /// The binary picked with Locate…, kept across runs.
+    public static func chosen(_ name: String) -> URL? {
+        UserDefaults.standard.string(forKey: chosenKey(name)).map { URL(fileURLWithPath: $0) }
+    }
+
+    /// Remembers (or, with nil, forgets) Locate…'s pick, and looks again from scratch.
+    public static func choose(_ name: String, _ url: URL?) {
+        if let url { UserDefaults.standard.set(url.path, forKey: chosenKey(name)) } else {
+            UserDefaults.standard.removeObject(forKey: chosenKey(name))
+        }
+        invalidate()
+    }
+
+    private static func chosenKey(_ name: String) -> String { "cliChosen." + name }
+
+    /// Forgets every answer: the winners, the `--version` checks and this run's shell PATH (read
+    /// again in the background), so a CLI installed since is found with no restart.
+    public static func invalidate() {
+        winners.set([:])
+        checks.set([:])
+        guard places.value == nil else { return }
+        shellResult.set(nil)
+        loading.set(Task.detached(priority: .userInitiated) { readShell() })
+    }
+
+    private static let log = KoreLog.named("cli")
+
+    /// `--locate-cli claude|codex`, before the app starts: prints the binary Kore would run and
+    /// exits 0, or exits 1 when there is none (2: not a CLI it knows). Nil for any other launch.
+    public static func headless(_ arguments: [String]) -> Int32? {
+        guard let flag = arguments.firstIndex(of: "--locate-cli") else { return nil }
+        let name = arguments.indices.contains(flag + 1) ? arguments[flag + 1] : ""
+        guard CLILocator.known.contains(name) else {
+            FileHandle.standardError.write(Data("usage: --locate-cli claude|codex\n".utf8))
+            return 2
+        }
+        let answer = Locked<URL?>(nil)
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            answer.set(await located(name))
+            done.signal()
+        }
+        done.wait()
+        guard let url = answer.value else { return 1 }
+        FileHandle.standardOutput.write(Data((url.path + "\n").utf8))
+        return 0
     }
 
     private static func find(_ name: String, _ override: URL?, in env: [String: String], usualFolders: Bool) -> Launch? {
@@ -133,14 +298,23 @@ public enum CLIExecutable {
         return env
     }
 
-    /// Starts reading the login shell's PATH, once per run. Called at app launch.
-    public static func prepare() { _ = loading }
+    /// Starts reading the login shell's PATH, once per run, then finds the claude and codex CLIs in
+    /// the background, so a first chat doesn't wait on their checks. Called at app launch.
+    public static func prepare() {
+        let shell = loading.value
+        Task.detached(priority: .utility) {
+            _ = await shell.value
+            for name in CLILocator.known.sorted() { _ = try? await locateKnown(name) }
+        }
+    }
 
     /// Process environment with PATH taken from the login shell. Read once; callers wait
     /// for it without holding a thread.
-    public static func environment() async -> [String: String] { await loading.value }
+    public static func environment() async -> [String: String] { await loading.value.value }
 
-    private static let loading = Task.detached(priority: .userInitiated) { () -> [String: String] in
+    private static let loading = Locked(Task.detached(priority: .userInitiated) { readShell() })
+
+    private static func readShell() -> [String: String] {
         let env: [String: String]
         if let path = loginShellPATH() {
             env = cleaned(path: path)

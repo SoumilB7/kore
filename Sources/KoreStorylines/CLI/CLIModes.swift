@@ -122,6 +122,8 @@ package final class CLIModes {
     package func finishRun() {
         StdioProcess.recorder.value = nil
         CLIExecutable.standIns.value = [:]
+        if CLIExecutable.places.value != nil { CLIExecutable.look(in: nil) }
+        CLIInstaller.standIn.value = nil
         TurnChangeLog.root.value = nil
         UsagePaths.host.value = nil
         HandoffRecords.root.value = nil

@@ -10,4 +10,6 @@ enum Motion {
     static let glide = Animation.easeOut(duration: 0.25)
     /// Corner marks drawing in as their popup opens.
     static let drawIn = Animation.easeOut(duration: 0.18)
+    /// An install's progress line filling along the bar's top edge.
+    static let progress = Animation.easeOut(duration: 0.3)
 }

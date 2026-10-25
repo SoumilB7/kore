@@ -38,10 +38,11 @@ extension ProviderDescriptor {
         usage: UsageWording(product: "Claude Code", rows: ["Session (5hr)", "Weekly (7 day)"], resetsCaption: nil,
             // Opus 5.5 fast: $8/$40 per MTok against $4/$20; paid from usage credits, not the plan.
             fastCost: FastCost(times: "2×", detail: "Fast mode: 2× the price per token, paid from usage credits")),
-        account: .claude)
+        account: .claude,
+        install: InstallWording(maker: "Anthropic", source: "claude.ai · into ~/.local/bin · about a minute · no Node needed"))
 }
 
-/// Claude Code's permission modes as its VS Code extension's picker shows them (labels, icons,
+/// the claude CLI's permission modes as its VS Code extension's picker shows them (labels, icons,
 /// order).
 enum ClaudeModes {
     static let all: [ModeOption] = [

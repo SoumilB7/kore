@@ -35,6 +35,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
         case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track, outside, extended
         case signIn = "signin", signOut = "signout"
+        /// The install card's Install, Try again and Locate….
+        case install, retry, locate
         case `continue`, background, submit, other
         /// A chat tab's spinner: its turn runs, or it compacts.
         case working
@@ -83,6 +85,12 @@ extension StoryID {
 
     package enum NewTab {
         package static func provider(_ id: String) -> StoryID { StoryID(.newtab, "provider", key: id) }
+        /// A provider's not-installed mark, by its id.
+        package static func missing(_ id: String) -> StoryID { StoryID(.newtab, "missing", key: id) }
+        /// The install card the bar grows into; its Install (`.install`), ⌄ (`.method`), Locate…
+        /// (`.locate`), Cancel, Try again (`.retry`) and Copy command (`.copy`); while it runs,
+        /// the progress line (`.working`); once done, "✓ … installed" (`.done`).
+        package static let install = StoryID(.newtab, "install")
     }
 
     package enum Composer {
@@ -353,11 +361,14 @@ extension StoryID {
             Editor.Find.toggleReplace, Editor.Find.replace, Editor.Find.replaceAll, Editor.Find.ticks,
             Editor.Status.indent, Editor.Status.lineEndings, Editor.Status.language,
             Editor.Notice.reload, Editor.Notice.keep, Editor.Notice.compare, Editor.Notice.retry, Editor.rendererToggle, Editor.rows,
+            NewTab.install, NewTab.install.part(.install), NewTab.install.part(.method), NewTab.install.part(.locate),
+            NewTab.install.part(.cancel), NewTab.install.part(.retry), NewTab.install.part(.copy), NewTab.install.part(.working),
+            NewTab.install.part(.done),
             QuickOpen.field, Search.field, Search.include, Search.exclude, Changes.done, Viewer.close, Viewer.add,
         ]
         let keyed: [StoryID] = [
             StoryID(.tabs, "tab", key: k), StoryID(.tabs, "tab", key: k).part(.close), StoryID(.tabs, "file", key: k),
-            StoryID(.newtab, "provider", key: k), StoryID(.composer, "queued", key: k),
+            StoryID(.newtab, "provider", key: k), StoryID(.newtab, "missing", key: k), StoryID(.composer, "queued", key: k),
             StoryID(.composer, "queued", key: k).part(.cancel),
             StoryID(.composer, "command", key: k), StoryID(.composer, "usage.limit", key: k), StoryID(.composer, "account.field", key: k),
             StoryID(.composer, "account.method", key: k), StoryID(.composer, "account.choice", key: k),

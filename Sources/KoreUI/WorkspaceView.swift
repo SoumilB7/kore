@@ -1097,23 +1097,46 @@ private struct NewTabButton: View {
 
 /// The clock at the end of the tab bar: every chat the CLIs have for this folder, where chats
 /// are opened, archived and brought back.
-/// Provider picker sitting where the composer will appear.
+/// Provider picker sitting where the composer will appear. A CLI that isn't on the Mac shows the
+/// not-installed mark; a click grows the bar upward into its install card (cli-install.html).
 private struct EmptyTab: View {
     let tab: ChatTab
     let workspace: Workspace
     @Environment(\.chatColumn) private var column
 
     var body: some View {
+        let accounts = AccountStore.shared
+        let installs = CLIInstalls.shared
+        let card = installs.card(for: tab.id)
+        let providers = Provider.allCases
         VStack(spacing: 0) {
             Spacer()
-            HStack(spacing: Space.md) {
-                ForEach(Provider.allCases) { provider in
-                    ProviderButton(provider: provider) { workspace.start(provider, in: tab) }
-                        .storyID(StoryID.NewTab.provider(provider.id))
-                }
+            if card == nil, providers.allSatisfy({ accounts.isMissing($0.id) }) {
+                Text("Pick one to install, either works")
+                    .font(TextStyle.body)
+                    .foregroundStyle(Theme.secondary)
+                    .padding(.bottom, Space.xxxl)
             }
-            .padding(Space.md)
-            .frame(maxWidth: .infinity)
+            VStack(spacing: 0) {
+                if let card, let provider = Registry.provider(card.provider) {
+                    InstallCard(provider: provider, card: card)
+                    Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
+                }
+                HStack(spacing: Space.md) {
+                    ForEach(providers) { provider in
+                        let missing = accounts.isMissing(provider.id)
+                        ProviderButton(provider: provider, missing: missing) {
+                            if missing { installs.offer(provider.id, in: tab.id) } else { workspace.start(provider, in: tab) }
+                        }
+                        .storyID(StoryID.NewTab.provider(provider.id))
+                    }
+                }
+                .padding(Space.md)
+                .frame(maxWidth: .infinity)
+            }
+            .overlay(alignment: .top) {
+                if case .installing(let progress) = card?.phase { InstallProgressLine(fraction: progress.fraction) }
+            }
             .panel(.panel)
             .padding(.horizontal, column.composerPadding)
             .padding(.bottom, Space.xxxl)
@@ -1125,16 +1148,23 @@ private struct EmptyTab: View {
 
 private struct ProviderButton: View {
     let provider: Provider
+    /// Not on the Mac: the not-installed mark, and a click offers to install it.
+    var missing = false
     let action: () -> Void
     @StateObject private var hovered = Local(false)
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.md) {
-                ProviderLogo(provider: provider, size: Size.logoPicker * Zoom.shared.scale)
+                if missing {
+                    MissingLogo(provider: provider, size: Size.logoPicker * Zoom.shared.scale, hovered: hovered.value)
+                        .storyMark(StoryID.NewTab.missing(provider.id))
+                } else {
+                    ProviderLogo(provider: provider, size: Size.logoPicker * Zoom.shared.scale)
+                }
                 Text(provider.name)
                     .font(TextStyle.body)
-                    .foregroundStyle(Theme.text)
+                    .foregroundStyle(missing && !hovered.value ? Theme.tertiary : Theme.text)
             }
             .padding(.horizontal, Space.xxl)
             .padding(.vertical, Space.md)
@@ -1143,6 +1173,7 @@ private struct ProviderButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
+        .help(missing ? "Not installed · click to install" : "")
     }
 }
 

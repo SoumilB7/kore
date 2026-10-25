@@ -93,6 +93,9 @@ package final class AccountStore {
     private(set) var generations: [String: Int] = [:]
     /// Providers being read now.
     private(set) var reading: Set<String> = []
+    /// CLIs whose last status read found no binary on the Mac (`CLIExecutable`'s lookup): New
+    /// tab offers to install them.
+    private(set) var missing: Set<String> = []
 
     /// The method each CLI last ran from Kore, for the ⌄ menu's ✓ and a plain Sign in.
     @ObservationIgnored private var lastMethod: [String: String] = [:]
@@ -126,6 +129,7 @@ package final class AccountStore {
     func flow(_ provider: String) -> Flow? { flows[provider] }
     func generation(_ provider: String) -> Int { generations[provider] ?? 0 }
     func isReading(_ provider: String) -> Bool { reading.contains(provider) }
+    package func isMissing(_ provider: String) -> Bool { missing.contains(provider) }
 
     /// The CLI's login operations: a storyline host's scripted ones, else the CLI's own.
     private func ops(_ provider: String) -> AccountOps? {
@@ -174,7 +178,7 @@ package final class AccountStore {
     }
 
     /// Reads the CLI's status once (a read already under way is waited for).
-    func refresh(_ provider: String) async {
+    package func refresh(_ provider: String) async {
         if let read = reads[provider] { return await read.value }
         guard let ops = ops(provider) else { return }
         reading.insert(provider)
@@ -185,15 +189,24 @@ package final class AccountStore {
             guard self.epoch == epoch else { return }
             switch result {
             case .success(let reply):
+                noteMissing(provider, false)
                 policies[provider] = LoginPolicy(reply)
                 note(provider, ops.parse(reply))
-            case .failure(let error): statuses[provider] = .unreadable(AccountReason.of(error))
+            case .failure(let error):
+                if case CLIExecutable.Failure.notFound = error { noteMissing(provider, true) } else { noteMissing(provider, false) }
+                statuses[provider] = .unreadable(AccountReason.of(error))
             }
             reading.remove(provider)
             reads[provider] = nil
         }
         reads[provider] = read
         await read.value
+    }
+
+    /// Changed only when it changes: New tab's bar reads it.
+    private func noteMissing(_ provider: String, _ isMissing: Bool) {
+        guard missing.contains(provider) != isMissing else { return }
+        if isMissing { missing.insert(provider) } else { missing.remove(provider) }
     }
 
     /// What a read found. A new account (or a sign-out) raises the generation, and the CLI's
@@ -807,6 +820,8 @@ package final class AccountStore {
         lastMethod = [:]
         reads = [:]
         reading = []
+        missing = []
+        CLIInstalls.shared.reset()
         lapsed = [:]
         aimed = [:]
     }

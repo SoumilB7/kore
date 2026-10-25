@@ -56,6 +56,9 @@ package final class ScriptedAccounts {
     package private(set) var keys: [String: String] = [:]
     /// What an open panel picks.
     package var chosenFile: URL?
+    /// CLIs whose status first looks for the binary, as the real CLIs' does (`CLIExecutable`,
+    /// in a storyline's own `places`): not found, the status read fails as the real one would.
+    package var lookup: Set<String> = []
     /// Kore's Keychain while storylines run.
     package let keychain = MemoryKeychain()
     /// The sign-in waiting for the browser, by provider.
@@ -81,6 +84,9 @@ package final class ScriptedAccounts {
         keyFails = [:]
         keys = [:]
         chosenFile = nil
+        lookup = []
+        if CLIExecutable.places.value != nil { CLIExecutable.look(in: nil) }
+        CLIInstaller.standIn.value = nil
         StorylineSeams.loginUsage = nil
         keychain.removeAll()
         // The run's Claude settings start empty for each storyline.
@@ -113,6 +119,9 @@ package final class ScriptedAccounts {
         AccountCalls(
             status: { @MainActor [unowned self] in
                 log.append(.status(provider))
+                if lookup.contains(provider), await CLIExecutable.located(provider) == nil {
+                    throw CLIExecutable.Failure.notFound(name: provider, searched: [])
+                }
                 return reply(provider)
             },
             signIn: { @MainActor [unowned self] mechanism, _ in
@@ -228,7 +237,7 @@ package final class ScriptedAccounts {
         return value.string ?? "?"
     }
 
-    /// Claude Code's `auth status --json` for a Claude.ai login.
+    /// the claude CLI's `auth status --json` for a Claude.ai login.
     package static func claude(
         email: String = "you@example.com", org: String = "you@example.com's Organization", plan: String = "max"
     ) -> JSONValue {

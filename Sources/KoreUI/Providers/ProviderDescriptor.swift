@@ -30,11 +30,21 @@ struct ProviderDescriptor: Identifiable, Sendable {
     let usage: UsageWording
     /// Its login: the sign-in methods, the status, the file it's kept in.
     let account: AccountOps
+    /// What New tab's install card says of its official installer.
+    var install = InstallWording(maker: "", source: "")
+}
+
+/// The install card's words for one CLI's official installer.
+struct InstallWording: Sendable {
+    /// Whose installer it is ("Anthropic's official installer").
+    let maker: String
+    /// Where it comes from and goes, in one line.
+    let source: String
 }
 
 /// The usage popup's words for one CLI.
 struct UsageWording: Sendable {
-    /// What it's called, in Kore's lines about it ("Claude Code").
+    /// What it's called, in Kore's lines about it ("the claude CLI").
     let product: String
     /// The limits it usually has, drawn empty while the first reading loads.
     let rows: [String]

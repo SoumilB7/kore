@@ -58,6 +58,10 @@ enum Theme {
     static let toolDone = text.opacity(0.7)
     /// Opacity for a secondary line under an option.
     static let dimmed: Double = 0.7
+    /// A CLI that isn't installed: its logo, in its own colour (cli-missing-mark.html).
+    static let missingLogo: Double = 0.55
+    /// The rule between a split accent button's halves.
+    static let onAccentRule = background.opacity(0.3)
     /// Opacity for a control with nothing to set (a model without efforts: the slider's track).
     static let off: Double = 0.4
     /// Opacity for a reading not taken yet (another login's usage before its row is hovered).
