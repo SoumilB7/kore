@@ -29,8 +29,8 @@ final class ComposerCopyWholeDraft: ChatStoryline {
             Expect("both attached, in their order") { story in try Self.names(story) == Self.names },
             TypeText(Self.text),
             Key(.cmd("a")),
-            Expect("⌘A takes the whole draft, the chips with the text") { _ in
-                guard let view = Self.focusedView() else { return false }
+            Expect("⌘A takes the whole draft, the chips with the text") { story in
+                guard let view = Self.focusedView(story) else { return false }
                 return view.wholeDraft && view.selectedRange() == NSRange(location: 0, length: (view.string as NSString).length)
             },
             Snapshot("composer-whole-draft"),
@@ -55,7 +55,7 @@ final class ComposerCopyWholeDraft: ChatStoryline {
             Command(.newTab), StartChat(),
             Click(.id(StoryID.Composer.field)),
             Expect("the new chat's composer has the keys") { story in
-                try story.activeChat().draft.isEmpty && Self.focusedView() != nil
+                try story.activeChat().draft.isEmpty && Self.focusedView(story) != nil
             },
             Key(.cmd("v")),
             Expect("⌘V in the new chat puts back the text and both files, in their order") { story in
@@ -76,9 +76,10 @@ final class ComposerCopyWholeDraft: ChatStoryline {
         try story.activeChat().attachments.map(\.name)
     }
 
-    /// The composer text view with the keys (a hidden tab keeps its own).
-    @MainActor static func focusedView() -> ComposerTextView? {
-        NSApp.windows.lazy.compactMap { $0.firstResponder as? ComposerTextView }.first
+    /// The composer text view with the keys (a hidden tab keeps its own), in the storyline's own
+    /// window: one an earlier storyline closed still holds its composer as first responder.
+    @MainActor static func focusedView(_ story: StoryContext) -> ComposerTextView? {
+        story.window?.firstResponder as? ComposerTextView
     }
 
 }

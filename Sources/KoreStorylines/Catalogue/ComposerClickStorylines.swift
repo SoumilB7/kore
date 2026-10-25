@@ -14,7 +14,7 @@ final class ComposerClickLastLine: ChatStoryline {
         super.steps() + [
             Send("Hello"), TurnFinished(1),
             SetDraft(Self.draft),
-            Expect("a click on each line reaches the text, the last one too") { _ in Self.unreached().isEmpty },
+            Expect("a click on each line reaches the text, the last one too") { story in Self.unreached(story).isEmpty },
             Snapshot("composer-3-lines"),
             // As typed: Shift+Return between lines, then a pause, as a person's.
             SetDraft(""),
@@ -22,8 +22,8 @@ final class ComposerClickLastLine: ChatStoryline {
             TypeText("Is the box sized to its text?"), Key(KeyChord(.returnKey, .shift)),
             TypeText("Or does something sit over it,"), Key(KeyChord(.returnKey, .shift)),
             TypeText("if not, what decides"),
-            Expect("typed, a click on each line reaches the text, the last one too") { _ in
-                ComposerClickLastLine.settled() && Self.unreached().isEmpty
+            Expect("typed, a click on each line reaches the text, the last one too") { story in
+                ComposerClickLastLine.settled(story) && Self.unreached(story).isEmpty
             },
             Snapshot("composer-typed"),
             // Longer first, then back to three lines: the box shrinks under a scrolled text.
@@ -35,39 +35,40 @@ final class ComposerClickLastLine: ChatStoryline {
             TypeText("if not, what decides"), Key(KeyChord(.returnKey, .shift)),
             TypeText("and one more line"),
         ] + Array(repeating: Key(KeyChord(.backspace)), count: "and one more line".count + 1) + [
-            Expect("shrunk, a click on each line reaches the text, the last one too") { _ in
-                ComposerClickLastLine.settled() && Self.unreached().isEmpty
+            Expect("shrunk, a click on each line reaches the text, the last one too") { story in
+                ComposerClickLastLine.settled(story) && Self.unreached(story).isEmpty
             },
             Snapshot("composer-shrunk"),
             // Wrapped in a narrow window, then the window widens: the box shrinks to three lines
             // with the text unchanged, and the text view goes with it.
             SetDraft(Self.wrapping), SizeWindow(width: 380), WaitIdle(),
-            Expect("narrow, the box as tall as the wrapped text, a click on each line reaching it") { _ in
-                ComposerClickLastLine.settled() && Self.unreached().isEmpty
+            Expect("narrow, the box as tall as the wrapped text, a click on each line reaching it") { story in
+                ComposerClickLastLine.settled(story) && Self.unreached(story).isEmpty
             },
             Snapshot("composer-narrow"),
             SizeWindow(width: 1000), WaitIdle(),
-            Expect("widened, the text from the top, a click on each line reaching it") { _ in
-                ComposerClickLastLine.textView()?.enclosingScrollView?.contentView.bounds.origin.y == 0
-                    && ComposerClickLastLine.settled() && Self.unreached().isEmpty
+            Expect("widened, the text from the top, a click on each line reaching it") { story in
+                ComposerClickLastLine.textView(story)?.enclosingScrollView?.contentView.bounds.origin.y == 0
+                    && ComposerClickLastLine.settled(story) && Self.unreached(story).isEmpty
             },
             Snapshot("composer-widened"),
         ]
     }
 
-    /// The composer's text view, found by its class in the storyline window.
-    @MainActor static func textView() -> NSTextView? {
+    /// The composer's text view, found by its class in the storyline's own window: a window an
+    /// earlier storyline closed keeps its views until it's freed, and its composer would answer.
+    @MainActor static func textView(_ story: StoryContext) -> NSTextView? {
         func find(_ view: NSView) -> NSTextView? {
             if let text = view as? NSTextView, String(describing: type(of: text)) == "ComposerTextView" { return text }
             for sub in view.subviews { if let found = find(sub) { return found } }
             return nil
         }
-        return NSApp.windows.lazy.compactMap { $0.contentView.flatMap(find) }.first
+        return story.window?.contentView.flatMap(find)
     }
 
     /// The box has its text's height (under the ten-line cap): no line under it, none empty in it.
-    @MainActor static func settled() -> Bool {
-        guard let view = textView(), let scroll = view.enclosingScrollView, let layout = view.layoutManager,
+    @MainActor static func settled(_ story: StoryContext) -> Bool {
+        guard let view = textView(story), let scroll = view.enclosingScrollView, let layout = view.layoutManager,
             let container = view.textContainer
         else { return false }
         layout.ensureLayout(for: container)
@@ -77,8 +78,8 @@ final class ComposerClickLastLine: ChatStoryline {
 
     /// The lines (from 0) whose text a click in the middle of doesn't reach the text view, with
     /// what took it instead.
-    @MainActor static func unreached() -> [String] {
-        guard let view = textView(), let layout = view.layoutManager, let container = view.textContainer, let window = view.window,
+    @MainActor static func unreached(_ story: StoryContext) -> [String] {
+        guard let view = textView(story), let layout = view.layoutManager, let container = view.textContainer, let window = view.window,
             let root = window.contentView?.superview ?? window.contentView
         else { return ["no composer text view"] }
         let text = view.string as NSString
@@ -109,7 +110,7 @@ struct SetDraft: Step {
     func run(_ story: StoryContext) async throws {
         try story.activeChat().draft = text
         try await story.until("the composer showing it, at its height") {
-            ComposerClickLastLine.textView()?.string == text && (text.isEmpty || ComposerClickLastLine.settled())
+            ComposerClickLastLine.textView(story)?.string == text && (text.isEmpty || ComposerClickLastLine.settled(story))
         }
     }
 }
