@@ -132,6 +132,7 @@ struct ExplorerSidebar: View {
         let active = activeGuide(rows)
         let touches = workspace.turnTouches
         let touchedFolders = Workspace.folders(of: touches)
+        let marked = store.markedFolder
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -142,6 +143,7 @@ struct ExplorerSidebar: View {
                             touch: row.isFolder ? nil : touches[row.id],
                             folderTouched: row.isFolder && touchedFolders.contains(row.id),
                             typed: store.selection == row.id ? typed.value : "",
+                            marked: marked,
                             // Focus with nothing selected marks where the keys start (look §3).
                             outlined: focused && store.selection == nil && row.id == rows.first?.id,
                             focus: { focused = true }
@@ -172,14 +174,14 @@ struct ExplorerSidebar: View {
             .onKeyPress(phases: .down) { press in key(press, rows: rows) }
             .onAppear { DevFileHooks.explorerShown(store: store, workspace: workspace, undo: undoManager) }
             .onChange(of: store.selection) { _, selection in
-                if let selection { withAnimation(Motion.fade) { proxy.scrollTo(selection) } }
+                if let selection { withAnimation(Motion.fade) { proxy.scrollTo(store.row(showing: selection)?.id ?? selection) } }
             }
         }
     }
 
     /// The selected row's parent folder, whose guide is brighter.
     private func activeGuide(_ rows: [FilesStore.Row]) -> (path: String, depth: Int)? {
-        guard let selection = store.selection, let row = rows.first(where: { $0.id == selection }) else { return nil }
+        guard let selection = store.selection, let row = rows.first(where: { $0.shows(selection) }) else { return nil }
         let parent = row.isFolder && row.isOpen ? row.id : store.parent(of: row.id)
         guard parent != store.root, let folder = rows.first(where: { $0.id == parent }) else { return nil }
         return (parent, folder.depth)
@@ -189,7 +191,7 @@ struct ExplorerSidebar: View {
 
     private func key(_ press: KeyPress, rows: [FilesStore.Row]) -> KeyPress.Result {
         guard store.edit == nil else { return .ignored }
-        let index = store.selection.flatMap { selection in rows.firstIndex { $0.id == selection } }
+        let index = store.selection.flatMap { selection in rows.firstIndex { $0.shows(selection) } }
         func select(_ i: Int) {
             guard rows.indices.contains(i) else { return }
             store.selection = rows[i].id
@@ -215,10 +217,10 @@ struct ExplorerSidebar: View {
             let row = rows[index]
             if row.isFolder { store.toggle(row.id) } else { workspace.openFile(URL(fileURLWithPath: row.id), preview: true) }
         case .return:
-            // VS Code: Return renames.
-            if let index { store.edit = .rename(rows[index].id) }
+            // VS Code: Return renames (a chain's selected folder, not just its last).
+            if index != nil, let selection = store.selection { store.edit = .rename(selection) }
         case .delete where press.modifiers.contains(.command):
-            if let index { TreeActions.trash(rows[index].id, store: store) }
+            if index != nil, let selection = store.selection { TreeActions.trash(selection, store: store) }
         case .escape where !typed.value.isEmpty:
             typed.value = ""
         default:
@@ -319,6 +321,8 @@ private struct TreeRow: View {
     let folderTouched: Bool
     /// Type to find's text, shown on the selected row's name.
     let typed: String
+    /// The folder whose name is underlined (`FilesStore.markedFolder`).
+    let marked: String?
     /// The tree has focus and nothing is selected: this first row gets the focus line.
     var outlined = false
     /// A click puts the keyboard in the tree, as in VS Code.
@@ -327,7 +331,8 @@ private struct TreeRow: View {
     @Environment(\.undoManager) private var undoManager
     @Environment(\.listGround) private var ground
 
-    private var isSelected: Bool { store.selection == row.id }
+    /// The row, or one of its chain's folders, is the selection.
+    private var isSelected: Bool { store.selection.map(row.shows) ?? false }
 
     /// Where a drop on this row goes: into it if it's a folder, else beside it.
     private var dropFolder: String { row.isFolder ? row.id : (row.id as NSString).deletingLastPathComponent }
@@ -413,30 +418,50 @@ private struct TreeRow: View {
         .frame(width: Size.Tree.chevronBox, height: Size.Tree.chevronBox)
     }
 
-    private func name(state: GitStatus.State?) -> some View {
+    /// The name; a chain's names each select their own folder, as VS Code's compact folders do,
+    /// and the folder new items go in is underlined.
+    @ViewBuilder private func name(state: GitStatus.State?) -> some View {
         let tint = state.map(Theme.Git.color)
-        var text = AttributedString()
-        for (i, name) in row.names.enumerated() {
-            if i > 0 {
-                var separator = AttributedString(" / ")
-                separator.foregroundColor = Theme.tertiary
-                text += separator
+        if row.names.count == 1 {
+            Text(segment(0, tint: tint, marked: marked == row.id)).font(Chrome.body).lineLimit(1).truncationMode(.tail)
+        } else {
+            let paths = row.paths
+            HStack(spacing: 0) {
+                ForEach(paths.indices, id: \.self) { i in
+                    if i > 0 { Text(" / ").foregroundStyle(Theme.tertiary) }
+                    let text = Text(segment(i, tint: tint, marked: marked == paths[i])).lineLimit(1).truncationMode(.tail)
+                    if i == paths.count - 1 {
+                        // The last name is the row's: its clicks are the row's.
+                        text
+                    } else {
+                        text
+                            .contentShape(Rectangle())
+                            .onTapGesture { pick(paths[i]) }
+                            .koreContextMenu("explorer") { TreeMenu(path: paths[i], isFolder: true, store: store, workspace: workspace).items }
+                            .storyID(StoryID.Explorer.segment(store.relative(paths[i])), press: { pick(paths[i]) })
+                    }
+                }
             }
-            let last = i == row.names.count - 1
-            if last, !typed.isEmpty, name.lowercased().hasPrefix(typed.lowercased()) {
-                var matched = AttributedString(String(name.prefix(typed.count)))
-                matched.foregroundColor = tint ?? Theme.accent
-                matched.font = Chrome.bodySemibold
-                var rest = AttributedString(String(name.dropFirst(typed.count)))
-                rest.foregroundColor = tint ?? Theme.text
-                text += matched + rest
-            } else {
-                var part = AttributedString(name)
-                part.foregroundColor = tint ?? Theme.text
-                text += part
-            }
+            .font(Chrome.body)
         }
-        return Text(text).font(Chrome.body).lineLimit(1).truncationMode(.tail)
+    }
+
+    private func segment(_ i: Int, tint: Color?, marked: Bool) -> AttributedString {
+        let name = row.names[i]
+        var text: AttributedString
+        if i == row.names.count - 1, !typed.isEmpty, name.lowercased().hasPrefix(typed.lowercased()) {
+            var matched = AttributedString(String(name.prefix(typed.count)))
+            matched.foregroundColor = tint ?? Theme.accent
+            matched.font = Chrome.bodySemibold
+            var rest = AttributedString(String(name.dropFirst(typed.count)))
+            rest.foregroundColor = tint ?? Theme.text
+            text = matched + rest
+        } else {
+            text = AttributedString(name)
+            text.foregroundColor = tint ?? Theme.text
+        }
+        if marked { text.underlineStyle = Text.LineStyle(pattern: .solid, color: Theme.accent) }
+        return text
     }
 
     @ViewBuilder private func trailing(_ state: GitStatus.State?) -> some View {
@@ -484,6 +509,13 @@ private struct TreeRow: View {
     /// second click of a double click keeps the file's tab and puts the caret in it. The count
     /// comes from the event, as AppKit sends both clicks.
     private func click() { click(double: NSApp.mouseClickCount >= 2) }
+
+    /// A chain's upper folder: selected, the row left open as it is.
+    private func pick(_ path: String) {
+        guard !editing else { return }
+        focus()
+        store.selection = path
+    }
 
     private func click(double: Bool) {
         guard !editing else { return }

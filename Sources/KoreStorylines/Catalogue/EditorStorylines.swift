@@ -207,3 +207,39 @@ final class ExplorerDoubleClick: FilesStoryline {
         ]
     }
 }
+
+/// A chain's row ("a / b") picks the folder a new item goes in, as VS Code's compact folders do:
+/// a click on "a" selects it and underlines it, and New File lands in "a", not in "b". A right
+/// click on another chain's upper name targets it too.
+final class ExplorerChainSegment: FilesStoryline {
+    override class var tags: Set<Tag> { [.files] }
+    override class var files: [(path: String, text: String)] { [("a/b/inner.txt", ""), ("x/y/inner.txt", "")] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            RevealInTree("a/b/inner.txt"),
+            RevealInTree("x/y/inner.txt"),
+            Click(.id(StoryID.Explorer.segment("a"))),
+            Expect("“a” selected and underlined", found: { "\($0.app.workspace?.storyTreeMark ?? "nothing") underlined" }) {
+                $0.app.workspace?.storyTreeSelection == "a" && $0.app.workspace?.storyTreeMark == "a"
+            },
+            ExpectElement(.id(StoryID.Explorer.row("a/b"))),
+            Press(.id(StoryID.Explorer.newfile)),
+            WaitForFocus(.id(StoryID.Explorer.namefield)),
+            Expect("“a” underlined over the name field") { $0.app.workspace?.storyTreeMark == "a" },
+            TypeText("new.txt"),
+            Key(.returnKey),
+            Expect("new.txt made in “a”") { $0.app.workspace?.storyHasFile("a/new.txt") == true },
+            Expect("and not in “b”") { $0.app.workspace?.storyHasFile("a/b/new.txt") == false },
+
+            RightClick(.id(StoryID.Explorer.segment("x"))), WaitForElement(.id(StoryID.Options.panel)),
+            // New Folder…
+            Press(.id(StoryID.Options.item(1))),
+            WaitForFocus(.id(StoryID.Explorer.namefield)),
+            TypeText("made"),
+            Key(.returnKey),
+            Expect("the folder made in “x”") { $0.app.workspace?.storyHasFile("x/made") == true },
+        ]
+    }
+}

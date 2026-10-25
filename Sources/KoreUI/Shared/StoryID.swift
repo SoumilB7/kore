@@ -258,6 +258,8 @@ extension StoryID {
 
     package enum Explorer {
         package static func row(_ relativePath: String) -> StoryID { StoryID(.explorer, "row", key: relativePath) }
+        /// A folder's name in a chain's row ("a / b"), but the last.
+        package static func segment(_ relativePath: String) -> StoryID { StoryID(.explorer, "segment", key: relativePath) }
         package static let newfile = StoryID(.explorer, "newfile")
         package static let newfolder = StoryID(.explorer, "newfolder")
         package static let refresh = StoryID(.explorer, "refresh")
@@ -393,6 +395,7 @@ extension StoryID {
             StoryID(.terminal, "entry", key: k), StoryID(.terminal, "entry", key: k).part(.close),
             StoryID(.history, "row", key: k),
             StoryID(.history, "row", key: k).part(.archive), StoryID(.explorer, "row", key: k),
+            StoryID(.explorer, "segment", key: k),
             StoryID(.editor, key: k), StoryID(.editor, "gutter.fold", key: k), StoryID(.editor, "foldchip", key: k),
             StoryID(.quickopen, "row", key: k), StoryID(.search, "result", key: k), StoryID(.changes, "file", key: k),
         ]

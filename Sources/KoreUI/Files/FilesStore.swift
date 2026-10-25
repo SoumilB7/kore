@@ -26,6 +26,16 @@ final class FilesStore {
         let isFolder: Bool
         let isOpen: Bool
         var kind = Kind.node
+
+        /// The folder each name stands for, root-most first; the last is `id`.
+        var paths: [String] {
+            var paths = [id]
+            for _ in names.dropLast() { paths.insert((paths[0] as NSString).deletingLastPathComponent, at: 0) }
+            return paths
+        }
+
+        /// The row is `path`, or a chain with `path` as one of its folders.
+        func shows(_ path: String) -> Bool { id == path || (names.count > 1 && paths.contains(path)) }
     }
 
     enum Edit: Equatable {
@@ -201,7 +211,7 @@ final class FilesStore {
             var names = [node.name]
             var path = node.path
             while expanded.contains(path), let inner = children[path], inner.count == 1, let only = inner.first, only.isFolder,
-                edit != .rename(only.path), edit != .newFile(parent: path), edit != .newFolder(parent: path)
+                edit != .rename(path), edit != .rename(only.path), edit != .newFile(parent: path), edit != .newFolder(parent: path)
             {
                 names.append(only.name)
                 path = only.path
@@ -214,6 +224,23 @@ final class FilesStore {
 
     /// The parent folder rows show their guide brighter for (the selection's folder).
     func parent(of path: String) -> String { (path as NSString).deletingLastPathComponent }
+
+    /// The row showing `path`: its own, or the chain it's a folder of.
+    func row(showing path: String) -> Row? { rows.first { $0.shows(path) } }
+
+    /// The folder whose name is underlined: a chain's upper folder while it's the selection,
+    /// or the folder a new item's field goes in when that field split it from its chain.
+    var markedFolder: String? {
+        switch edit {
+        case .newFile(let parent), .newFolder(let parent):
+            guard parent != root, let inner = children[parent], inner.count == 1, inner[0].isFolder else { return nil }
+            return parent
+        case .rename: return nil
+        case nil:
+            guard let selection, let row = row(showing: selection), row.id != selection else { return nil }
+            return selection
+        }
+    }
 
     // MARK: - Changes on disk
 
@@ -526,7 +553,7 @@ final class FilesStore {
     /// The folder new items go in: the selection's folder, or the root.
     func targetFolder() -> String {
         guard let selection else { return root }
-        if rows.first(where: { $0.id == selection })?.isFolder == true { return selection }
+        if row(showing: selection)?.isFolder == true { return selection }
         return (selection as NSString).deletingLastPathComponent
     }
 
