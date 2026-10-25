@@ -72,6 +72,9 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
         let folder: URL
         var turns: [HandoffTurn] = []
         var current: HandoffTurn?
+        /// A slash command's echo, "/name args": its turn opens when the model answers it, so a
+        /// command the CLI ran itself (a `<synthetic>` reply: /model, /clear) makes none.
+        var command: (entry: JSONValue, prompt: String)?
         /// Tool calls waiting for their results, by id: the step's index in `current`.
         var pending: [String: Int] = [:]
         var summary: String?
@@ -118,8 +121,11 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
             // Turns the CLI starts itself (a cron firing, a finished agent's notice): its words
             // go on in the turn they belong to.
             if ClaudeHistory.cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? "") { return }
-            // A slash command's echo is its turn's prompt, "/name args".
-            let prompt = texts.lazy.compactMap(HandoffHarness.command).first.map { [$0] } ?? texts.filter { !HandoffHarness.isHarness($0) }
+            if let echo = texts.lazy.compactMap(HandoffHarness.command).first {
+                command = (entry, echo)
+                return
+            }
+            let prompt = texts.filter { !HandoffHarness.isHarness($0) }
             var images: [HandoffImage] = []
             var files: [String] = []
             for block in blocks {
@@ -147,7 +153,14 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
                 return
             }
             let name = message?["model"]?.string
-            if name == "<synthetic>" { return }
+            if name == "<synthetic>" {
+                command = nil
+                return
+            }
+            if let pending = command {
+                command = nil
+                open(pending.entry, prompt: pending.prompt)
+            }
             if let name { model = name }
             ensureTurn(entry)
             for block in message?["content"]?.array ?? [] {
@@ -188,6 +201,7 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
         }
 
         mutating func open(_ entry: JSONValue, prompt: String) {
+            command = nil
             close()
             let id = entry["uuid"]?.string ?? UUID().uuidString
             current = HandoffTurn(id: id, prompt: prompt, at: Self.date(entry))
