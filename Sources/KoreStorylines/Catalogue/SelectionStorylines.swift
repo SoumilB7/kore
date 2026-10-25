@@ -625,7 +625,13 @@ struct DragPastTop: Step {
         let t = try story.activeChat().storyTranscript
         let before = t.selectionAnchorY
         guard let content = window.contentView else { return }
-        await story.input.drag(from: a, to: CGPoint(x: a.x, y: content.bounds.height - 8), in: window, hold: .milliseconds(400))
+        // Autoscroll is timer-driven; a fixed 400 ms assumes enough frames under load.
+        // Keep the pointer held until both observable effects arrive, with a bounded deadline.
+        await story.input.drag(from: a, to: CGPoint(x: a.x, y: content.bounds.height - 8), in: window, hold: .seconds(2), until: {
+            guard let after = t.selectionAnchorY, let before else { return false }
+            return abs(after - before) > 100 && t.hasSelection
+                && !t.selectionMarkdown.hasPrefix("Answer \(SelectAllLongChat.turns)")
+        })
         guard let after = t.selectionAnchorY, let before, abs(after - before) > 100 else {
             throw StoryFailure.expectation("the transcript to scroll under the drag (moved \((t.selectionAnchorY ?? 0) - (before ?? 0)) pt)")
         }

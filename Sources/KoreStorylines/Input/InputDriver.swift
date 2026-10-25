@@ -130,9 +130,11 @@ package final class InputDriver {
     /// A press at one window point, the pointer moved there in steps (a run-loop pass between
     /// each), and a release at another: a drag between two places that aren't elements.
     /// `hold`: how long the button stays down at the end before the release (a person holding a
-    /// drag past an edge while the view scrolls).
+    /// drag past an edge while the view scrolls). With `until`, release once that condition holds,
+    /// or after `hold` at most; the button stays pressed while the app makes progress.
     package func drag(
-        from start: CGPoint, to end: CGPoint, in window: NSWindow, steps: Int = 12, clicks: Int = 1, hold: Duration = .zero
+        from start: CGPoint, to end: CGPoint, in window: NSWindow, steps: Int = 12, clicks: Int = 1, hold: Duration = .zero,
+        until held: (@MainActor () -> Bool)? = nil
     ) async {
         if let down = mouseEvent(.leftMouseDown, at: start, in: window, clickCount: clicks) { NSApp.sendEvent(down) }
         for i in 1...max(steps, 1) {
@@ -142,7 +144,10 @@ package final class InputDriver {
         }
         await pass()
         let release = ContinuousClock.now + hold
-        while ContinuousClock.now < release { await pass() }
+        while ContinuousClock.now < release {
+            if held?() == true { break }
+            await pass()
+        }
         if let up = mouseEvent(.leftMouseUp, at: end, in: window, clickCount: clicks) { NSApp.sendEvent(up) }
         await pass()
     }

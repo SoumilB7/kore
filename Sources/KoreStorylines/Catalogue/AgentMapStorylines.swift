@@ -729,8 +729,29 @@ struct RememberChat: Step {
 
     func run(_ story: StoryContext) async throws {
         let chat = try story.activeChat()
-        let left = TabMemory.Left(chat)
+        var left = TabMemory.Left(chat)
+        let initialTop = left.place?.top
+        var changed = false
+        var stableSince = ContinuousClock.now
+        // Chat-event quiet does not mean layout has settled: scrolling a lazy transcript
+        // can still measure rows and finish a glide after the last event arrived.
+        try await story.until("the transcript's rows and place to settle", timeout: .seconds(2)) {
+            let now = TabMemory.Left(chat)
+            let samePlace = now.place.flatMap { place in
+                left.place.map { $0.id == place.id && abs($0.top - place.top) < 0.5 }
+            } ?? false
+            if now.rows != left.rows || now.draft != left.draft || !samePlace {
+                left = now
+                stableSince = .now
+                changed = true
+                return false
+            }
+            return stableSince.duration(to: .now) >= .milliseconds(200)
+        }
         guard left.place != nil else { throw StoryFailure.expectation("a transcript row in view") }
+        if changed, let initialTop, let top = left.place?.top {
+            FileHandle.standardError.write(Data("chat-place-settled before=\(initialTop) after=\(top)\n".utf8))
+        }
         story.stash(TabMemory.self) { TabMemory() }.left[chat.id] = left
     }
 }
