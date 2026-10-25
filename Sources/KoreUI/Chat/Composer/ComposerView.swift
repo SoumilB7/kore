@@ -351,7 +351,7 @@ struct ComposerView: View {
         let selection = chat.transcript.selection
         switch EscStep.next(
             overlay: workspace.hasOverlay, slashMenu: !slashMatches.isEmpty || mentionShown, popup: chat.hasPopup, selection: selection.hasSelection,
-            running: chat.status.isRunning, sheet: view.window?.attachedSheet != nil || NSApp.modalWindow != nil)
+            running: chat.isBusy, sheet: view.window?.attachedSheet != nil || NSApp.modalWindow != nil)
         {
         case .closeOverlay: workspace.closeOverlay()
         case .closeSlashMenu: chat.slashClosed = true

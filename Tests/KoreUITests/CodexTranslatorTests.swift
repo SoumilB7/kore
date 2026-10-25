@@ -56,6 +56,24 @@ struct CodexTranslatorTests {
         let used = events.compactMap { if case .contextUsage(let usage) = $0 { usage.used } else { nil } }
         #expect(used.last == 5482)
     }
+    /// `turn/interrupt` during a compaction: its turn ends "interrupted" with the item never
+    /// completed. Kore's own compaction turn adds no line; one Codex ran in the user's turn
+    /// stops that turn.
+    @Test(arguments: [true, false])
+    func anInterruptedCompaction(requested: Bool) {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp/compact-stop"))
+        translator.compactRequested = requested
+        for (method, params) in [
+            ("turn/started", ["turn": ["id": "t1", "status": "inProgress"]]),
+            ("item/started", ["item": ["type": "contextCompaction", "id": "c1"]]),
+            ("turn/completed", ["turn": ["id": "t1", "status": "interrupted"]]),
+        ] as [(String, KoreCore.JSONValue)] {
+            translator.translate(CodexEvent(notification: method, params: params))
+        }
+        let ending = shape(translator.take().events).suffix(3)
+        #expect(ending == ["compactionStarted \(!requested)", "compactionFailed", requested ? "turnFinished completed" : "turnFinished interrupted"])
+    }
+
     @Test(arguments: [true, false])
     func completedUserMessageClearsQueuedOnce(usingClientId: Bool) {
         let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp/steer-receipt"))

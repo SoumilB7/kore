@@ -14,7 +14,7 @@ extension Workspace {
         switch command {
         case .newTab, .closeTab, .nextTab, .previousTab, .moveTabRight, .moveTabLeft, .goToFile, .toggleExplorer, .search, .reload: true
         case .reopenClosedTab: canReopenClosedTab
-        case .stop: activeTab.chat?.status.isRunning == true
+        case .stop: activeTab.chat?.isBusy == true
         case .save, .goToLine: activeFile?.isText == true
         case .saveAll: hasUnsavedFiles
         }

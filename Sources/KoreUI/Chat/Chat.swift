@@ -105,6 +105,9 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var continueAfterCompaction = false
     @ObservationIgnored private var lastTurnCompleted = false
     @ObservationIgnored private var compactedInTurn = false
+    /// Stop came while a compaction ran: however it ends short of done is said as stopped, not
+    /// failed. Both CLIs report the cancel as a failure (`compactionFailed`).
+    @ObservationIgnored private var stoppingCompaction = false
     /// The turn the next starts is Kore's own Continue, and the one running is: neither counts
     /// as the user's, so it neither compacts at the point nor continues again (no loop).
     @ObservationIgnored private var continueSent = false
@@ -211,7 +214,7 @@ package final class Chat: Identifiable {
 
     /// Every event goes to every store; each takes what it shows.
     private func dispatch(_ event: ChatEvent) {
-        let event = sleptOutcome(event)
+        let event = stoppedCompaction(sleptOutcome(event))
         if case .historyReplaced(let events) = event {
             replaceHistory(events)
             StorylineSeams.events?(self, event)
@@ -265,6 +268,8 @@ package final class Chat: Identifiable {
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
         StorylineSeams.events?(self, event)
+        // A stopped turn took the compaction in it along, whether or not the CLI said so.
+        if case .turnFinished = event, stoppingCompaction, context.compacting { dispatch(.compactionStopped) }
     }
 
     /// Kore's record of a fork it lists follows its CLI: the id the CLI names it by, and that a
@@ -1081,9 +1086,33 @@ package final class Chat: Identifiable {
         return event
     }
 
+    /// A compaction the user stopped ends as stopped, whatever the CLI calls its end.
+    private func stoppedCompaction(_ event: ChatEvent) -> ChatEvent {
+        switch event {
+        case .compactionFailed where stoppingCompaction:
+            stoppingCompaction = false
+            return .compactionStopped
+        case .compacted, .compactionFailed, .compactionStopped, .exited:
+            // Done before the Stop reached it: it stands, as any finished compaction does.
+            stoppingCompaction = false
+        default:
+            break
+        }
+        return event
+    }
+
     // MARK: Actions
 
+    /// Stops the turn, or the compaction (the wheel's, /compact, Kore's own, or one the CLI
+    /// started by itself): both CLIs cancel a compaction as they stop a turn. Claude's
+    /// `interrupt` aborts the controller its compaction runs on: it says `compact_result`
+    /// "failed", writes no `compact_boundary`, and keeps the conversation as it was. Codex runs
+    /// a compaction as a turn (`thread/compact/start`, or within the user's): `turn/interrupt`
+    /// ends it "interrupted" before its history is replaced. With nothing at work (the
+    /// compaction finished as Stop was pressed) it does nothing.
     func stop() {
+        guard isBusy || waitingForNetwork || transcript.pendingSendSince != nil else { return }
+        if context.compacting { stoppingCompaction = true }
         if transcript.pendingSendSince != nil {
             sending?.cancel()
             transcript.sending(false)
@@ -1106,9 +1135,11 @@ package final class Chat: Identifiable {
         stopFallback?.cancel()
         stopFallback = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
-            guard let self, !Task.isCancelled, self.currentWork(epoch), self.status.isRunning, self.turnSerial == serial else { return }
+            guard let self, !Task.isCancelled, self.currentWork(epoch), self.isBusy, self.turnSerial == serial else { return }
             SessionLog.shared.rescue(self.provider.id, chat: self.sessionId, action: "stop-unanswered")
             self.restartCLI(reason: "stop unanswered")
+            // A compaction no turn shows ends with its process, unfinished.
+            if self.context.compacting { self.dispatch(.compactionStopped) }
         }
     }
 
@@ -1121,6 +1152,7 @@ package final class Chat: Identifiable {
     func compact(instructions: String = "", at point: Int? = nil) {
         guard canCompact else { return }
         autoCompactDue = false
+        stoppingCompaction = false
         // Kore's own, after a turn that ran to its end: the work goes on after it.
         continueAfterCompaction = point != nil && lastTurnCompleted
         context.begin()
@@ -1133,7 +1165,13 @@ package final class Chat: Identifiable {
                 // The CLI didn't start: no compaction was asked of it, so it's said as any start's.
                 context.end()
                 transcript.compacting(false)
+                stoppingCompaction = false
                 fail(Self.reason(error))
+                return
+            }
+            // Stopped while the CLI started: it's never asked.
+            guard !stoppingCompaction else {
+                dispatch(.compactionStopped)
                 return
             }
             do {
@@ -1182,7 +1220,7 @@ package final class Chat: Identifiable {
             compactedInTurn = false
         case .compactionStarted:
             autoCompactDue = false
-        case .compactionFailed, .exited:
+        case .compactionFailed, .compactionStopped, .exited:
             autoCompactDue = false
             continueAfterCompaction = false
             compactedInTurn = false

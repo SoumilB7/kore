@@ -253,11 +253,15 @@ package final class CodexTranslator {
             if compacting {
                 // A compaction runs as a turn of its own: ending without its item completing is a
                 // failure, said once, as "Couldn't compact: …" (its turn adds no line of its own).
+                // `turn/interrupt` ends it "interrupted", its history not yet replaced (the
+                // chat's Stop says it as stopped); one Codex started in the user's turn stops
+                // that turn too.
+                let ownTurn = compactRequested
                 compacting = false
                 compactRequested = false
                 if result.status != "completed" {
                     out.append(.compactionFailed(Self.cleanError(result.errorMessage ?? "Compaction \(result.status)")))
-                    outcome = .completed
+                    if ownTurn || result.status != "interrupted" { outcome = .completed }
                 }
             }
             finishTurn(turn ?? result.turnId, outcome, duration: result.durationMs.map { .milliseconds($0) })

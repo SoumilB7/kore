@@ -93,6 +93,9 @@ extension TranscriptStore {
             compacting(true)
         case .compactionFailed(let reason):
             compactionFailed(reason)
+        case .compactionStopped:
+            // Stopped by the user: the live row goes, and nothing takes its place.
+            compacting(false)
         case .connection(let state):
             connected(state)
         case .compacted(let at, _, let auto):

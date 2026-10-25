@@ -40,6 +40,150 @@ final class AutoCompactContinues: ChatStoryline {
     }
 }
 
+/// A compaction can be stopped as a turn can: while it runs, Send is Stop, and pressing it
+/// leaves the chat as it was before (no divider, no summary, no error, the same context), the
+/// composer free for the next send. The wheel's is stopped with the button, a typed /compact's
+/// with Esc.
+final class StopCompaction: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(
+            turns: [[.startTurn] + Beat.answer("First answer") + [.context(used: 50_000), .finishTurn(.completed)], CLIScript.reply("Went on")],
+            compact: CLIScript.heldCompaction)
+    }
+
+    /// Nothing says the conversation was compacted, or that compacting failed.
+    static func unchanged(_ story: StoryContext, context: String) throws -> Bool {
+        let chat = try story.activeChat()
+        let rows = chat.rows
+        let compacted = story.chatEvents().contains { if case .compacted = $0 { true } else { false } }
+        return !chat.isCompacting && !compacted && chat.storyContextUsed == context
+            && !rows.contains { $0.kind == "divider" || $0.kind == "summary" || $0.kind == "notice" }
+    }
+
+    static func stopped(_ story: StoryContext) -> Int {
+        story.chatEvents().filter { if case .compactionStopped = $0 { true } else { false } }.count
+    }
+
+    /// The context ring's reading before the compaction.
+    private final class Before {
+        var context = ""
+    }
+
+    static func before(_ story: StoryContext) -> String { story.stash(Before.self) { Before() }.context }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Say something"), TurnFinished(1),
+            Do("Note the context") { story in story.stash(Before.self) { Before() }.context = try story.activeChat().storyContextUsed },
+            // The wheel's, stopped with the button.
+            StartCompact(),
+            ExpectElement(.id(StoryID.Composer.stop)),
+            Snapshot("compacting-stop"),
+            Press(.id(StoryID.Composer.stop)),
+            Expect("the compaction stopped, the chat as it was", timeout: .seconds(5), found: { story in
+                "rows \((try? story.activeChat().rows.map(\.kind)) ?? []), stopped \(Self.stopped(story))"
+            }) { story in
+                try story.scriptedBackend().log.contains(.interrupt) && Self.stopped(story) == 1
+                    && Self.unchanged(story, context: Self.before(story))
+            },
+            ExpectElement(.id(StoryID.Composer.send)),
+            // A typed /compact, stopped with Esc.
+            Send("/compact"),
+            Expect("compacting again", timeout: .seconds(5)) { try $0.activeChat().isCompacting },
+            ExpectElement(.id(StoryID.Composer.stop)),
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Key(.escape),
+            Expect("stopped again, still as it was", timeout: .seconds(5)) { story in
+                try Self.stopped(story) == 2 && Self.unchanged(story, context: Self.before(story))
+            },
+            // Nothing in the way of the next send.
+            Send("Carry on"), TurnFinished(2),
+            Expect.rows("its answer") { $0.last?.kind == "assistant" && $0.last?.text == "Went on" },
+        ]
+    }
+}
+
+/// A compaction the CLI starts by itself in a turn, and Kore's own at its point, are stopped
+/// the same way: the turn ends stopped, nothing is compacted, and no "Continue" follows.
+final class StopAutoCompaction: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(
+            turns: [
+                [.startTurn] + Beat.answer("Halfway") + [.compaction(auto: true, hold: true)] + Beat.answer("Never said") + [.finishTurn(.completed)],
+                [.startTurn] + Beat.answer("Working on it") + [.context(used: 180_000), .finishTurn(.completed)],
+                CLIScript.reply("Went on"),
+            ],
+            compact: CLIScript.heldCompaction)
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            // The CLI's own, in the turn.
+            Send("Do the work"),
+            Expect("compacting in the turn", timeout: .seconds(5)) { story in
+                let chat = try story.activeChat()
+                return chat.isCompacting && chat.isRunning
+            },
+            Press(.id(StoryID.Composer.stop)),
+            TurnFinished(1),
+            Expect("the turn stopped, nothing compacted", timeout: .seconds(5)) { story in
+                let events = story.chatEvents()
+                let chat = try story.activeChat()
+                return !chat.isCompacting && !chat.isRunning
+                    && events.contains { if case .turnFinished(_, .interrupted, _) = $0 { true } else { false } }
+                    && events.contains { if case .compactionStopped = $0 { true } else { false } }
+                    && !events.contains { if case .compacted = $0 { true } else { false } }
+                    && !chat.rows.contains { $0.kind == "divider" || $0.kind == "summary" || ($0.kind == "notice" && $0.isError) }
+            },
+            // Kore's own, at its point after a turn that ran to its end.
+            SetAutoCompactPoint(70),
+            Send("Next part"), TurnFinished(2),
+            Expect("Kore compacting at its point", timeout: .seconds(5)) { try $0.activeChat().isCompacting },
+            Press(.id(StoryID.Composer.stop)),
+            Expect("stopped, and no Continue after it", timeout: .seconds(5)) { story in
+                let log = try story.scriptedBackend().log
+                return try !story.activeChat().isCompacting && !log.contains(.send("Continue"))
+                    && !story.chatEvents().contains { if case .compacted = $0 { true } else { false } }
+            },
+            SetAutoCompactPoint(nil),
+            Send("Carry on"), TurnFinished(3),
+            Expect.rows("its answer") { $0.last?.kind == "assistant" && $0.last?.text == "Went on" },
+        ]
+    }
+}
+
+/// A Stop that lands once the compaction is done does nothing: the compaction stands, the CLI
+/// isn't interrupted, and the next send goes as usual.
+final class StopAfterCompaction: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Went on")], compact: CLIScript.heldCompaction)
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Say something"), TurnFinished(1),
+            StartCompact(),
+            Release(),
+            Expect("the compaction done") { try !$0.activeChat().isCompacting },
+            // As the button's press does when it shows Stop a moment too long.
+            Stop(),
+            Expect("still compacted, nothing stopped", timeout: .seconds(2)) { story in
+                let rows = try story.activeChat().rows
+                let events = story.chatEvents()
+                return try !story.scriptedBackend().log.contains(.interrupt)
+                    && rows.contains { $0.kind == "divider" } && rows.contains { $0.kind == "summary" }
+                    && !events.contains { if case .compactionStopped = $0 { true } else { false } }
+            },
+            ExpectElement(.id(StoryID.Composer.send)),
+            Send("Carry on"), TurnFinished(2),
+            Expect.rows("its answer") { $0.last?.kind == "assistant" && $0.last?.text == "Went on" },
+        ]
+    }
+}
+
 /// Sets the chat's auto-compact point, as the context card's notch does.
 struct SetAutoCompactPoint: Step {
     let point: Int?

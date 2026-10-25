@@ -100,12 +100,16 @@ package enum ChatEvent: Sendable {
     /// `compactionStarted`.
     case compacted(at: Date, from: Int? = nil, auto: Bool? = nil)
     /// The CLI started compacting: on `ChatBackend.compact()` (`auto` false), or by itself when
-    /// the context ran full (`auto` true). `compacted` or `compactionFailed` follows.
+    /// the context ran full (`auto` true). `compacted`, `compactionFailed` or `compactionStopped`
+    /// follows.
     case compactionStarted(auto: Bool)
     /// The summary a compaction left; the conversation goes on from it. Claude only (Codex's is
     /// encrypted), right after `.compacted`, live and in replay alike.
     case compactionSummary(String)
     case compactionFailed(String)
+    /// The user's Stop ended the compaction before it was done: the conversation is as it was
+    /// before it (no divider, no summary, the same context). Kore's, from how the CLI ended it.
+    case compactionStopped
     /// The connection to the model, while a turn waits on it: offline (no network path), the
     /// CLI retrying a request that failed, or fine again.
     case connection(Connection)

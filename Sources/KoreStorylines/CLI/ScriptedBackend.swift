@@ -37,6 +37,8 @@ package final class ScriptedBackend: ChatBackend {
     private var lastItem: String?
     private var openTools: [String] = []
     private var interrupted = false
+    /// A `compact()` is playing: a Stop ends it as it ends a turn.
+    private var compacting = false
     /// The process under the playing turn was ended (`relaunch`): what it would still say is lost.
     private var silenced = false
     /// Sends made while a turn ran, not yet taken into one.
@@ -117,7 +119,7 @@ package final class ScriptedBackend: ChatBackend {
     /// Ends the playing turn at its next beat, or at once when it's waiting.
     package func interrupt() async {
         log.append(.interrupt)
-        guard turn != nil, !script.deaf else { return }
+        guard turn != nil || compacting, !script.deaf else { return }
         interrupted = true
         offer(.interrupt)
     }
@@ -241,7 +243,13 @@ package final class ScriptedBackend: ChatBackend {
     package func compact(instructions: String) async throws {
         log.append(.compact)
         let beats = script.compact
-        enqueue { await $0.play(beats) }
+        enqueue { backend in
+            backend.compacting = true
+            backend.interrupted = false
+            await backend.play(beats)
+            backend.compacting = false
+            backend.interrupted = false
+        }
     }
 
     /// The account changed: the process would end here and start again at the next send.
@@ -385,6 +393,15 @@ package final class ScriptedBackend: ChatBackend {
                 await emit(.agentFinished(id: id, .completed, result: result))
             case .context(let used, let window):
                 await emit(.contextUsage(ContextUsage(used: used, window: window, autoCompacts: true, at: Date())))
+            case .compaction(let auto, let summary, let hold):
+                await emit(.compactionStarted(auto: auto))
+                if hold, await waitFor(.release) == .interrupt {
+                    // Cancelled as both CLIs report it: a failure, nothing compacted.
+                    await emit(.compactionFailed("Compaction canceled."))
+                    return false
+                }
+                await emit(.compacted(at: Date(), auto: auto))
+                await emit(.compactionSummary(summary))
             }
         }
         return !interrupted

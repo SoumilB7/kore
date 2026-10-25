@@ -124,15 +124,15 @@ struct ChatView: View {
         }
     }
 
-    /// ⌘. stops the turn, wherever the keys are in the window (the composer, the transcript, a
-    /// popup), as Stop does: Claude's interrupt, Codex's turn interrupt.
+    /// ⌘. stops the turn or the compaction, wherever the keys are in the window (the composer,
+    /// the transcript, a popup), as Stop does: Claude's interrupt, Codex's turn interrupt.
     private func watchStopKey() {
         guard stopKey.value == nil else { return }
         let workspace = workspace, shown = shown
         stopKey.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard let window = workspace.window, event.window === window,
                 event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
-                event.charactersIgnoringModifiers == ".", let chat = shown.value, chat.status.isRunning
+                event.charactersIgnoringModifiers == ".", let chat = shown.value, chat.isBusy
             else { return event }
             chat.stop()
             return nil

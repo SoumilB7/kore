@@ -41,6 +41,9 @@ package struct CLIScript: Sendable {
     package static func compaction(summary: String = "The conversation so far, in brief.") -> [Beat] {
         [.event(.compactionStarted(auto: false)), .event(.compacted(at: Date(), auto: false)), .event(.compactionSummary(summary))]
     }
+
+    /// One asked for, held until the test lets it go (`Release`), or stopped meanwhile.
+    package static let heldCompaction: [Beat] = [.compaction(auto: false, hold: true)]
 }
 
 /// The replies a CLI sends when Kore reads the account and its limits, as it sends them: Kore
@@ -82,6 +85,11 @@ package enum Beat: Sendable {
     case agent(id: String, name: String, says: String, result: String? = "Done")
     /// How full the context is.
     case context(used: Int, window: Int? = 200_000)
+    /// A compaction, the CLI's own (`auto`) or asked for: it starts, waits for the test's
+    /// go-ahead when `hold`, then ends compacted with its summary. A Stop while it waits cancels
+    /// it as both CLIs do (Claude's `interrupt`, Codex's `turn/interrupt`): `compactionFailed`,
+    /// no boundary, the conversation as it was.
+    case compaction(auto: Bool, summary: String = "The conversation so far, in brief.", hold: Bool = false)
 
     /// The answer, streamed, marked final.
     package static func answer(_ text: String) -> [Beat] {

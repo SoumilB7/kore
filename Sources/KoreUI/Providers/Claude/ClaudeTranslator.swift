@@ -480,6 +480,9 @@ package final class ClaudeTranslator {
             case "status" where json["status"]?.string == "compacting":
                 out.append(.compactionStarted(auto: !compactRequested))
             case "status" where json["compact_result"]?.string.map({ $0 != "success" }) == true:
+                // Also how an `interrupt` ends one: the CLI's compaction runs on the turn's abort
+                // controller ("Compaction canceled."), no boundary follows, and the conversation
+                // stays as it was (the chat's Stop says it as stopped).
                 compactRequested = false
                 out.append(.compactionFailed(json["compact_error"]?.string ?? "Compaction \(json["compact_result"]?.string ?? "failed")"))
             case "task_started" where json["task_type"]?.string.map { !$0.contains("agent") } ?? false:

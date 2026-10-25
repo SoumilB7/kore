@@ -50,6 +50,7 @@ func tag(_ event: ChatEvent) -> String {
     case .compactionStarted(let auto): "compactionStarted \(auto)"
     case .compactionSummary: "summary"
     case .compactionFailed: "compactionFailed"
+    case .compactionStopped: "compactionStopped"
     case .connection(let state): "connection \(state)"
     case .contextUsage: "context"
     case .earlierHistory: "earlier"

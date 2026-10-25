@@ -21,7 +21,7 @@ final class ContextStore {
             usage = next
         case .compactionStarted:
             compacting = true
-        case .compacted, .compactionFailed, .exited:
+        case .compacted, .compactionFailed, .compactionStopped, .exited:
             compacting = false
         case .replayed(let events):
             events.forEach(apply)

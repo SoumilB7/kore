@@ -85,11 +85,14 @@ struct ComposerBar: View {
     }
 
     private var sendButton: some View {
-        let off = !chat.status.isRunning && !chat.canSend
+        // Stop while a turn runs or the chat compacts. The press does what it showed: a Stop
+        // that lands just after the work ended does nothing, never a send.
+        let stops = chat.isBusy
+        let off = !stops && !chat.canSend
         return Button {
-            chat.status.isRunning ? chat.stop() : chat.send()
+            stops ? chat.stop() : chat.send()
         } label: {
-            Image(systemName: chat.status.isRunning ? "stop.fill" : "arrow.up")
+            Image(systemName: stops ? "stop.fill" : "arrow.up")
                 .font(Glyph.send)
                 .foregroundStyle(off ? Theme.sendOffGlyph : Theme.background)
                 .frame(width: Size.iconButton, height: Size.iconButton)
@@ -97,10 +100,10 @@ struct ComposerBar: View {
         }
         .buttonStyle(.plain)
         .disabled(off)
-        .help(chat.status.isRunning ? "Stop (Esc)" : "Send (↩)")
-        .accessibilityLabel(Text(chat.status.isRunning ? "Stop" : "Send"))
-        // One button: Stop while a turn runs, else Send.
-        .storyID(chat.status.isRunning ? StoryID.Composer.stop : StoryID.Composer.send)
+        .help(stops ? "Stop (Esc)" : "Send (↩)")
+        .accessibilityLabel(Text(stops ? "Stop" : "Send"))
+        // One button: Stop while a turn runs or a compaction does, else Send.
+        .storyID(stops ? StoryID.Composer.stop : StoryID.Composer.send)
     }
 }
 
