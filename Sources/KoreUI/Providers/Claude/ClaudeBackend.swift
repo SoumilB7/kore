@@ -222,7 +222,7 @@ final class ClaudeBackend: ChatBackend {
     }
 
     private func controls(_ session: ClaudeSession) async -> ChatControls {
-        let models = (await session.capabilities["models"]?.array ?? []).compactMap { json -> ModelOption? in
+        let listed = (await session.capabilities["models"]?.array ?? []).compactMap { json -> ModelOption? in
             guard let value = json["value"]?.string, value != "default" else { return nil }
             return ModelOption(
                 id: value, name: json["displayName"]?.string ?? value,
@@ -230,6 +230,8 @@ final class ClaudeBackend: ChatBackend {
                 efforts: json["supportedEffortLevels"]?.array?.compactMap(\.string) ?? [],
                 supportsAutoMode: json["supportsAutoMode"]?.bool ?? false)
         }
+        let applied = try? await session.settings()["applied"]
+        let models = Self.withLongContext(listed, applied: applied?["model"]?.string)
         let commands = (await session.capabilities["commands"]?.array ?? []).compactMap { json -> SlashCommand? in
             guard let name = json["name"]?.string else { return nil }
             return SlashCommand(
@@ -237,13 +239,29 @@ final class ClaudeBackend: ChatBackend {
                 hint: json["argumentHint"]?.string ?? "", kind: .command)
         }
         var controls = ChatControls(models: models, model: nil, effort: nil, commands: commands)
-        if let applied = try? await session.settings()["applied"] {
+        if let applied {
             if let model = applied["model"]?.string {
                 controls.model = models.first { $0.resolved == model }?.id ?? model
             }
             controls.effort = applied["effort"]?.string
         }
         return controls
+    }
+
+    /// The CLI lists no 1M-context models, though it takes `opus[1m]` and `sonnet[1m]` (and a
+    /// settings file may start a chat on one): each listed beside its model, "Opus 5.5 · 1M",
+    /// and the one a chat runs on when it's another's.
+    nonisolated static func withLongContext(_ models: [ModelOption], applied: String?) -> [ModelOption] {
+        let suffix = "[1m]"
+        var bases: Set<String> = ["opus", "sonnet"]
+        if let applied, applied.hasSuffix(suffix), let base = models.first(where: { $0.resolved + suffix == applied }) { bases.insert(base.id) }
+        return models.flatMap { model -> [ModelOption] in
+            guard bases.contains(model.id), !model.id.hasSuffix(suffix) else { return [model] }
+            let long = ModelOption(
+                id: model.id + suffix, name: model.name + " · 1M", resolved: model.resolved + suffix, efforts: model.efforts,
+                supportsAutoMode: model.supportsAutoMode)
+            return [model, long]
+        }
     }
 
     // MARK: - Events
