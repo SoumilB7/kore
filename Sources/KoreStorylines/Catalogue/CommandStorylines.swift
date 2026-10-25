@@ -26,8 +26,8 @@ final class BackgroundCommandStopped: ChatStoryline {
         return [UseScript(Self.script(title: "npm run dev -- --port 5173"), for: "codex")] + super.steps() + [
             Send("Start the dev server"), TurnFinished(1), WaitIdle(),
             Expect("one live command", found: Self.found) { try $0.activeChat().storyLiveCommands == 1 },
-            ExpectElement(.id(StoryID.Titlebar.agents), .visible),
-            Press(.id(StoryID.Titlebar.agents)),
+            ExpectElement(.id(StoryID.Titlebar.commands), .visible),
+            Press(.id(StoryID.Titlebar.commands)),
             Expect("the agent map open") { try $0.activeChat().isAgentMapOpen },
             ExpectElement(.id(row), .visible),
             Press(.id(row)),
@@ -76,7 +76,7 @@ final class CommandOutlivesItsAgent: ChatStoryline {
         [UseScript(Self.script(title: "tail -F logs/staging.err"), for: "codex")] + super.steps() + [
             Send("Watch the logs"), TurnFinished(1), WaitIdle(),
             Expect("one command outlived its agent", found: BackgroundCommandStopped.found) { try $0.activeChat().storyOutlivedCommands == 1 },
-            Press(.id(StoryID.Titlebar.agents)),
+            Press(.id(StoryID.Titlebar.commands)),
             ExpectElement(.id(StoryID.AgentMap.outlived), .visible),
             Press(.id(StoryID.AgentMap.outlived)),
             ExpectElement(.id(StoryID.AgentMap.command("watch")), .visible),
@@ -126,7 +126,7 @@ final class ReplayedCommandsEnded: ChatStoryline {
                 return !chat.storyBackground.isEmpty && chat.storyBackground.allSatisfy { !$0.contains(" · running · ") }
             },
             Expect("nothing live") { try $0.activeChat().storyLiveCommands == 0 },
-            ExpectElement(.id(StoryID.Titlebar.agents), .absent),
+            ExpectElement(.id(StoryID.Titlebar.commands), .absent),
         ]
     }
 }

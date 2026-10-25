@@ -145,6 +145,7 @@ struct TabBar: View {
                 .help(workspace.folder.path)
             if let chat = workspace.activeTab.chat {
                 AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents, press: chat.agentMap.toggle)
+                CommandsButton(chat: chat, height: tabHeight)
             }
             if let awake = StayAwake.current {
                 StayAwakeButton(awake: awake, size: tabHeight).storyID(StoryID.Titlebar.awake)

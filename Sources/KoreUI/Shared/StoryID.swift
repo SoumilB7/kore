@@ -49,6 +49,8 @@ extension StoryID {
         package static let explorer = StoryID(.titlebar, "explorer")
         package static let history = StoryID(.titlebar, "history")
         package static let agents = StoryID(.titlebar, "agents")
+        /// ">_ 2": the chat's live background commands; opens the map at them.
+        package static let commands = StoryID(.titlebar, "commands")
         package static let newtab = StoryID(.titlebar, "newtab")
         /// The Stay awake cup; its click turns it on or off.
         package static let awake = StoryID(.titlebar, "awake")

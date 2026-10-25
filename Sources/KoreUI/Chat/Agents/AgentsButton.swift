@@ -3,9 +3,8 @@ import SwiftUI
 /// The title row's Agents button (look.md §10, §11): the chat's agents as a stack of avatars, or
 /// one track round the running ones, a count, and a point when one waits for the user (amber) or
 /// has failed unseen (red). It counts every agent, the stopped ones too, as the map's header
-/// does. Hidden until the chat has spawned an agent, unless commands it left run in the
-/// background with no agent at all (a port-forward): then ">_ 2" alone. Opens and closes the
-/// agent map (⇧⌘A).
+/// does. Hidden until the chat has spawned an agent; its background commands have their own
+/// button beside it (`CommandsButton`). Opens and closes the agent map (⇧⌘A).
 struct AgentsButton: View {
     let chat: Chat
     let height: CGFloat
@@ -13,9 +12,8 @@ struct AgentsButton: View {
 
     var body: some View {
         let summary = chat.transcript.agentSummary
-        let commands = chat.commands.summary.total
         let agents = summary.total > 0
-        if agents || commands > 0 {
+        if agents {
             let running = !summary.running.isEmpty
             let stack = Array((running ? summary.running : summary.first).prefix(3))
             Button {
@@ -24,8 +22,6 @@ struct AgentsButton: View {
                 HStack(spacing: Space.sm) {
                     if running {
                         RunningTrack(indexes: stack.map(\.index), background: stack.allSatisfy(\.background))
-                    } else if !agents {
-                        CommandCue(count: commands, dot: false)
                     } else {
                         HStack(spacing: -Size.avatarOverlap) {
                             ForEach(stack) { agent in
@@ -36,12 +32,10 @@ struct AgentsButton: View {
                             }
                         }
                     }
-                    if agents {
-                        Text(Self.label(summary))
-                            .font(Chrome.labelDigits)
-                            .foregroundStyle(running ? Theme.text : Theme.secondary)
-                            .lineLimit(1)
-                    }
+                    Text(Self.label(summary))
+                        .font(Chrome.labelDigits)
+                        .foregroundStyle(running ? Theme.text : Theme.secondary)
+                        .lineLimit(1)
                 }
                 .padding(.horizontal, Space.md)
                 .frame(height: height)
@@ -60,7 +54,7 @@ struct AgentsButton: View {
             .keyboardShortcut("a", modifiers: [.command, .shift])
             .help("Agent map (⇧⌘A)")
             .accessibilityLabel(Text("Agent map"))
-            .accessibilityValue(Text(help(summary, commands: commands)))
+            .accessibilityValue(Text(help(summary)))
         }
     }
 
@@ -75,10 +69,9 @@ struct AgentsButton: View {
     }
 
     /// The Claude extension's indicator wording.
-    private func help(_ summary: TranscriptStore.AgentSummary, commands: Int) -> String {
+    private func help(_ summary: TranscriptStore.AgentSummary) -> String {
         if summary.waiting { return "An agent is waiting for your permission" }
         if unseenFailure(summary) { return "An agent failed" }
-        if summary.total == 0 { return commands == 1 ? "1 command in background" : "\(commands) commands in background" }
         return summary.running.isEmpty ? Self.label(summary) : "Agents are working"
     }
 
