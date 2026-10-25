@@ -50,6 +50,12 @@ final class CodexBackend: ChatBackend {
     private static let log = Logger(subsystem: "Kore", category: "codex")
     /// Reads the threads' background terminals while any outlived its turn (`pollTerminals`).
     private var terminalPoll: Task<Void, Never>?
+    /// Lists in a row that changed nothing: the next waits longer (`pollBackoff`).
+    private var terminalPollStep = 0
+    private var terminalPollRun = 0
+    /// Seconds between lists while nothing changes. A terminal's end comes as its item's event
+    /// anyway: a list only catches what no event said (a process's id, one that ended unheard).
+    static let pollBackoff: [Int] = [10, 30, 60, 120]
     /// A pane listing commands is open: they're read more often.
     private var watching = false
 
@@ -340,6 +346,11 @@ final class CodexBackend: ChatBackend {
         let (events, changes) = translator.take()
         for event in events {
             if case .titleChanged = event { mayTitle = false }
+            switch event {
+            // A command's own news: the lists after it start again from the shortest wait.
+            case .commandStarted, .commandChanged, .commandEnded: terminalPollStep = 0
+            default: break
+            }
             yield(event)
         }
         pollTerminals()
@@ -492,11 +503,19 @@ final class CodexBackend: ChatBackend {
 
     // MARK: - Commands
 
-    /// While a terminal that outlived its turn runs: each owning thread's list, at once and then
-    /// every 10 s (2 s while a pane shows them), for the rows' processes and the ones that ended
-    /// unheard. Nothing is read while nothing runs.
-    private func pollTerminals() {
+    /// While a terminal that outlived its turn runs: each owning thread's list, at once, then
+    /// every 2 s while a pane shows them, else 10 s, 30 s, 60 s and at most 2 min apart while
+    /// nothing changes (a change, a command's event or the pane opening starts over at 10 s).
+    /// Nothing is read while nothing runs.
+    private func pollTerminals(restart: Bool = false) {
+        if restart {
+            terminalPollStep = 0
+            terminalPoll?.cancel()
+            terminalPoll = nil
+        }
         guard terminalPoll == nil, translator.commands.hasLive, session != nil else { return }
+        terminalPollRun += 1
+        let run = terminalPollRun
         terminalPoll = Task {
             while !Task.isCancelled, translator.commands.hasLive, let session {
                 for owner in translator.commands.liveOwners {
@@ -504,10 +523,12 @@ final class CodexBackend: ChatBackend {
                     guard let terminals = try? await session.backgroundTerminals(of: owner.sub) else { continue }
                     translator.terminalsListed(terminals, owner: owner)
                 }
+                terminalPollStep = translator.hasPending ? 0 : terminalPollStep + 1
                 flush()
-                try? await Task.sleep(for: watching ? .seconds(2) : .seconds(10))
+                let wait = watching ? 2 : Self.pollBackoff[min(terminalPollStep, Self.pollBackoff.count - 1)]
+                try? await Task.sleep(for: .seconds(wait))
             }
-            terminalPoll = nil
+            if terminalPollRun == run { terminalPoll = nil }
         }
     }
 
@@ -531,8 +552,10 @@ final class CodexBackend: ChatBackend {
     }
 
     func watchCommands(_ closely: Bool) async {
+        let opened = closely && !watching
         watching = closely
-        pollTerminals()
+        // A pane opening reads at once, whatever the wait was.
+        pollTerminals(restart: opened)
     }
 
     func stopAgent(_ id: String) async {

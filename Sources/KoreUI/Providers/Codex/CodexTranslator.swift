@@ -85,6 +85,9 @@ package final class CodexTranslator {
         files = TurnFiles(folder: folder)
     }
 
+    /// Events waiting for `take`.
+    var hasPending: Bool { !out.isEmpty }
+
     func take() -> (events: [ChatEvent], changes: [(TurnID, Task<[FileChange], Never>)]) {
         defer {
             out = []
