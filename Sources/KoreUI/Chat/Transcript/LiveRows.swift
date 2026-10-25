@@ -1,9 +1,11 @@
+import AppKit
+import Combine
 import SwiftUI
 
 /// The running turn's last row, as in the Claude Code extension (look.md §12): a glyph cycling
 /// `· ✢ * ✶ ✻ ✽` and back, and a random verb that changes at 2s, 3s, 5s and then every 5s,
 /// decoding into place one character at a time. Everything follows from the time since the turn
-/// began, so the row keeps no state, and it redraws only on its own schedule.
+/// began. One-shot sleeps update its text only at the next glyph, decode or word boundary.
 struct SpinnerRow: View {
     let since: Date
     /// Claude's list includes "Clauding"; a Codex chat leaves it out.
@@ -18,6 +20,8 @@ struct SpinnerRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hiddenTab) private var hidden
     @StateObject private var shown = Local(false)
+    @StateObject private var visible = Local(false)
+    @StateObject private var clock = SpinnerClock()
 
     var body: some View {
         if connection.stuck {
@@ -55,29 +59,28 @@ struct SpinnerRow: View {
     }
 
     private var moving: some View {
-        TimelineView(Schedule(since: since, still: reduceMotion, paused: hidden, verbs: verbs)) { context in
-            let t = max(0, context.date.timeIntervalSince(since))
-            HStack(spacing: 0) {
-                Text(reduceMotion ? "✻" : Self.glyph(t))
-                    .font(TextStyle.spinnerGlyph)
-                    .foregroundStyle(Theme.spinnerGlyph(tint))
-                    .frame(width: Size.spinnerGlyphBox)
-                Text((word ?? Self.word(t, verbs: verbs, seed: seed, decode: !reduceMotion)) + "...")
-                    .font(TextStyle.spinnerVerb)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                    .padding(.leading, Layout.Timeline.indent - Size.spinnerGlyphBox)
-            }
+        let configuration = SpinnerConfiguration(since: since, claude: claude, word: word,
+                                                 reducedMotion: reduceMotion, paused: hidden || !visible.value)
+        let frame = clock.frame(for: configuration)
+        return HStack(spacing: 0) {
+            Text(frame.glyph)
+                .font(TextStyle.spinnerGlyph)
+                .foregroundStyle(Theme.spinnerGlyph(tint))
+                .frame(width: Size.spinnerGlyphBox)
+            Text(frame.word)
+                .font(TextStyle.spinnerVerb)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .padding(.leading, Layout.Timeline.indent - Size.spinnerGlyphBox)
         }
         .frame(height: Size.spinnerRow)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, Space.spinnerTop)
         .opacity(shown.value ? 1 : 0)
         .onAppear { withAnimation(Motion.rowFadeIn) { shown.value = true } }
+        .background(SpinnerVisibility { visible.value = $0 })
+        .task(id: configuration) { await clock.run(configuration) }
     }
-
-    private var verbs: [String] { claude ? Self.verbs : Self.verbs.filter { $0 != "Clauding" } }
-    private var seed: Int { Int(since.timeIntervalSinceReferenceDate * 1000) }
 
     // MARK: Glyph
 
@@ -167,33 +170,133 @@ struct SpinnerRow: View {
         return Int(x % UInt64(Int.max))
     }
 
-    /// Redraws every `decodeFrame` while a word decodes, else every `spinnerFrame` for the glyph;
-    /// under reduced motion, only when the word changes.
-    private struct Schedule: TimelineSchedule {
-        let since: Date
-        let still: Bool
-        /// Under another tab: no frames at all.
-        let paused: Bool
-        let verbs: [String]
+}
 
-        func entries(from start: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
-            var date = start
-            return AnyIterator {
-                if paused { return nil }
-                let t = date.timeIntervalSince(since)
-                let step: TimeInterval
-                if still {
-                    let k = SpinnerRow.swapIndex(t)
-                    step = max(0.05, SpinnerRow.swapTime(k + 1) - t)
-                } else {
-                    let k = SpinnerRow.swapIndex(t)
-                    let decoding = k > 0 && t - SpinnerRow.swapTime(k) < Double(20) * Motion.decodeFrame
-                    step = decoding ? Motion.decodeFrame : Motion.spinnerFrame
+struct SpinnerFrame: Equatable, Sendable {
+    let glyph: String
+    let word: String
+}
+
+struct SpinnerConfiguration: Equatable, Sendable {
+    let since: Date
+    let claude: Bool
+    var word: String?
+    var reducedMotion = false
+    var paused = false
+
+    @MainActor private var verbs: [String] {
+        claude ? SpinnerRow.verbs : SpinnerRow.verbs.filter { $0 != "Clauding" }
+    }
+    private var seed: Int { Int(since.timeIntervalSinceReferenceDate * 1000) }
+
+    @MainActor func frame(at date: Date) -> SpinnerFrame {
+        let time = max(0, date.timeIntervalSince(since))
+        return SpinnerFrame(glyph: reducedMotion ? "✻" : SpinnerRow.glyph(time),
+                            word: (word ?? SpinnerRow.word(time, verbs: verbs, seed: seed, decode: !reducedMotion)) + "...")
+    }
+
+    /// Absolute deadlines avoid drift, and a late wake renders the current frame instead of
+    /// replaying missed frames. Reduce Motion with a fixed word has nothing left to schedule.
+    @MainActor func nextUpdate(after date: Date) -> Date? {
+        guard !paused else { return nil }
+        let time = max(0, date.timeIntervalSince(since))
+        let index = SpinnerRow.swapIndex(time)
+        var next = word == nil ? SpinnerRow.swapTime(index + 1) : .infinity
+        if !reducedMotion {
+            func boundary(_ step: TimeInterval, from origin: TimeInterval = 0) -> TimeInterval {
+                // Roundoff at an exact boundary must not schedule the same instant again.
+                origin + (floor((time - origin) / step + 0.000_001) + 1) * step
+            }
+            next = min(next, boundary(Motion.spinnerFrame))
+            if word == nil, index > 0 {
+                let start = SpinnerRow.swapTime(index)
+                let width = max(SpinnerRow.verb(index, verbs: verbs, seed: seed).count,
+                                SpinnerRow.verb(index - 1, verbs: verbs, seed: seed).count)
+                // Match the decoder's final guard, including its trailing completion steps.
+                // Equal settled frames are not republished by SpinnerClock.
+                if time < start + Double(width + 3) * Motion.decodeFrame {
+                    next = min(next, boundary(Motion.decodeFrame, from: start))
                 }
-                date = date.addingTimeInterval(step)
-                return date
             }
         }
+        guard next.isFinite else { return nil }
+        return max(since.addingTimeInterval(next), date.addingTimeInterval(0.001))
+    }
+}
+
+/// SwiftUI owns the task lifetime. Only distinct visible text is published; no display-link
+/// or TimelineView remains active between these cancellable sleeps.
+@MainActor
+final class SpinnerClock: ObservableObject {
+    @Published private(set) var current: SpinnerFrame?
+    private var configuration: SpinnerConfiguration?
+    private var generation = 0
+
+    func frame(for configuration: SpinnerConfiguration) -> SpinnerFrame {
+        self.configuration == configuration ? (current ?? configuration.frame(at: .now)) : configuration.frame(at: .now)
+    }
+
+    func run(_ configuration: SpinnerConfiguration, now: () -> Date = Date.init,
+             sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) async {
+        guard !Task.isCancelled else { return }
+        generation &+= 1
+        let own = generation
+        self.configuration = configuration
+        while !Task.isCancelled, generation == own {
+            let date = now()
+            let frame = configuration.frame(at: date)
+            if current != frame { current = frame }
+            guard let next = configuration.nextUpdate(after: date) else { return }
+            do { try await sleep(.seconds(max(next.timeIntervalSince(date), 0.001))) }
+            catch { return }
+        }
+    }
+}
+
+/// Window visibility changes are rare events. Reporting on the next main turn avoids changing
+/// SwiftUI state during native-view attachment; teardown cancels any queued report.
+private struct SpinnerVisibility: NSViewRepresentable {
+    let changed: (Bool) -> Void
+    func makeNSView(context: Context) -> SpinnerVisibilityView { SpinnerVisibilityView(changed: changed) }
+    func updateNSView(_ view: SpinnerVisibilityView, context: Context) { view.changed = changed }
+    static func dismantleNSView(_ view: SpinnerVisibilityView, coordinator: ()) { view.stop() }
+}
+
+final class SpinnerVisibilityView: NSView {
+    var changed: (Bool) -> Void
+    private var stopped = false
+
+    init(changed: @escaping (Bool) -> Void) {
+        self.changed = changed
+        super.init(frame: .zero)
+        setAccessibilityElement(false)
+        setAccessibilityChildren([])
+    }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self)
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowChanged),
+                                                  name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        }
+        reportLater()
+    }
+    override func viewDidHide() { super.viewDidHide(); reportLater() }
+    override func viewDidUnhide() { super.viewDidUnhide(); reportLater() }
+    @objc private func windowChanged(_ note: Notification) { reportLater() }
+
+    private func reportLater() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.changed(self.window?.occlusionState.contains(.visible) == true && !self.isHiddenOrHasHiddenAncestor)
+        }
+    }
+
+    func stop() {
+        stopped = true
+        NotificationCenter.default.removeObserver(self)
     }
 }
 
