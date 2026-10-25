@@ -174,9 +174,28 @@ public actor ClaudeSession {
         try await control("rename_session", ["title": .string(title), "source": "host"])
     }
 
-    /// Stops one sub-agent (its `task_started` task id).
+    /// Stops one task (its `task_started` task id): a sub-agent, a shell, a monitor, also one in
+    /// the foreground.
     public func stopTask(_ taskId: String) async throws {
         try await control("stop_task", ["task_id": .string(taskId)])
+    }
+
+    /// Whether a `stop_task` refusal says the task had already ended ("Task … is not running
+    /// (status: completed)", "No task found with ID: …").
+    public nonisolated static func alreadyEnded(_ error: any Error) -> Bool {
+        guard case Failure.controlError(let message) = error else { return false }
+        return message.contains("is not running") || message.hasPrefix("No task found")
+    }
+
+    /// Sends the foreground task started by the call `toolUseId` to the background (Ctrl+B): the
+    /// call returns, the task runs on. False when nothing of it ran in the foreground.
+    public func backgroundTask(toolUseId: String) async throws -> Bool {
+        try await control("background_tasks", ["tool_use_id": .string(toolUseId)])["backgrounded"]?.bool ?? false
+    }
+
+    /// The end of a shell's or a Monitor's output, at most its last 8 KiB, running or ended.
+    public func taskOutput(_ taskId: String) async throws -> String {
+        try await control("get_task_output", ["task_id": .string(taskId)])["output"]?.string ?? ""
     }
 
     /// Effective settings; `applied.model` and `applied.effort` are what the next turn uses.

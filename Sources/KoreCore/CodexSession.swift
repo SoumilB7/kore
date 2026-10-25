@@ -260,6 +260,20 @@ public actor CodexSession {
         _ = try await server.request("turn/interrupt", ["threadId": .string(thread), "turnId": .string(turn)])
     }
 
+    /// A thread's processes still running (this one by default), from its commands in a turn and
+    /// those that outlived one: `[{itemId, processId, command, cwd, osPid, cpuPercent, rssKb}]`.
+    /// Experimental.
+    public func backgroundTerminals(of thread: String? = nil) async throws -> [JSONValue] {
+        try await server.request("thread/backgroundTerminals/list", ["threadId": .string(thread ?? threadId)])["data"]?.array ?? []
+    }
+
+    /// Ends one of them; its item completes as failed (exit -1). False when it had already ended.
+    public func terminate(process: String, in thread: String? = nil) async throws -> Bool {
+        let result = try await server.request(
+            "thread/backgroundTerminals/terminate", ["threadId": .string(thread ?? threadId), "processId": .string(process)])
+        return result["terminated"]?.bool ?? false
+    }
+
     /// Takes effect from the next turn.
     public func setPermissions(_ permissions: Permissions) {
         self.permissions = permissions

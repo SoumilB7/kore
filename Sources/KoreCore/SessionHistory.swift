@@ -557,10 +557,22 @@ public enum ClaudeHistory {
     }
 
     static func projectDirectory(for folder: URL) -> URL {
+        projectsDirectory.appendingPathComponent(projectKey(for: folder))
+    }
+
+    /// The folder as the CLI names it in its paths: every character but ASCII letters and digits
+    /// made "-".
+    public static func projectKey(for folder: URL) -> String {
         // realpath, like the CLI: Foundation's resolvingSymlinksInPath turns /private/tmp into /tmp.
         let path = realpath(folder.path, nil).map { defer { free($0) }; return String(cString: $0) } ?? folder.path
-        let name = String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
-        return projectsDirectory.appendingPathComponent(name)
+        return String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
+    }
+
+    /// Where the CLI writes a background task's output (a shell's or a Monitor's) when it doesn't
+    /// say: `claude-<uid>/<project key>/<session>/tasks/<task id>.output` in its temp folder. Its
+    /// Bash result and the task's notification name it.
+    public static func taskOutput(task: String, sessionId: String, in folder: URL) -> URL {
+        URL(fileURLWithPath: "/private/tmp/claude-\(getuid())/\(projectKey(for: folder))/\(sessionId)/tasks/\(task).output")
     }
 
     /// A transcript's title as the history list shows it: the newest rename, else the newest AI
