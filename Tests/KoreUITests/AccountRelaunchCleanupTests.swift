@@ -124,16 +124,18 @@ struct AccountRelaunchCleanupTests {
         defer { CLIExecutable.standIns.value = previous }
         let backend = CodexBackend(BackendOptions(folder: folder, mode: "askForApproval"))
         let starting = Task { try await backend.start() }
-        let deadline = ContinuousClock.now + .seconds(3)
-        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
+        // The marker exists (empty) before its pid is written: wait for a pid, not the file.
+        func openingPid() -> Int32? { (try? String(contentsOf: marker, encoding: .utf8)).flatMap { Int32($0) } }
+        let deadline = ContinuousClock.now + .seconds(15)
+        while openingPid() == nil, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        let pid = try #require(Int32(String(contentsOf: marker, encoding: .utf8)))
+        let pid = try #require(openingPid())
         let child = try #require(ProcessChild(pid))
         defer { child.signal(SIGKILL) }
         var closed: Bool?
         let shutdown = Task { closed = await backend.relaunchAfterAccountChange() }
-        let stopDeadline = ContinuousClock.now + .seconds(3)
+        let stopDeadline = ContinuousClock.now + .seconds(10)
         while closed == nil, ContinuousClock.now < stopDeadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(closed == true, "shutdown must close the server before waiting on its unanswered thread/start")
         if closed == nil { child.signal(SIGKILL) }

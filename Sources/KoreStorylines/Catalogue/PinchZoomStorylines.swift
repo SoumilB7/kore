@@ -16,11 +16,14 @@ final class PinchZoomGesture: ChatStoryline {
 
 /// Starts at the followed end, then keeps adding lines while fingers hold a pinch. Nothing
 /// reveals or scrolls a row before beginning: the test retains the normal follow state.
+/// The first page lands in one delta, so a scrollable answer never waits on the paced rate.
 final class PinchZoomWhileStreaming: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .gate] }
-    static let answer = (1...150).map { "Paragraph \($0). More text arrives while the viewport stays still under the pinch. Following resumes after the gesture, without discarding any streamed words." }.joined(separator: "\n\n")
+    static func paragraph(_ n: Int) -> String { "Paragraph \(n). More text arrives while the viewport stays still under the pinch. Following resumes after the gesture, without discarding any streamed words." }
+    static let page = (1...12).map { paragraph($0) + "\n\n" }.joined()
+    static let rest = (13...150).map { paragraph($0) }.joined(separator: "\n\n")
     override class var script: CLIScript {
-        CLIScript(turns: [[.startTurn, .stream(.answer, answer, chunk: 8), .finishTurn(.completed)]])
+        CLIScript(turns: [[.startTurn, .stream(.answer, page, chunk: page.count), .stream(.answer, rest, chunk: 8), .finishTurn(.completed)]])
     }
     override func steps() -> [any Step] {
         super.steps() + [Pace(240), Send("Keep writing"), ExerciseStreamingPinch(), Snapshot("pinch-streaming-stopped")]
@@ -35,8 +38,8 @@ private struct ExerciseStreamingPinch: Step {
         let chat = try story.activeChat()
         defer { chat.storyStop() }
         let (window, scroll) = try await story.wait("a scrollable answer still arriving") { () -> (NSWindow, NSScrollView)? in
-            guard chat.isRunning,
-                  let answer = chat.storyTranscript.entries.last(where: { $0.kind == .answer }), answer.text.count > 1500,
+            guard chat.isRunning, count(chat) > 1500,
+                  let answer = chat.storyTranscript.entries.last(where: { $0.kind == .answer }),
                   let row = StoryElement(StoryID.Transcript.answer(answer.id)),
                   let scroll = row.registeredView?.enclosingScrollView, let document = scroll.documentView,
                   let window = scroll.window, document.bounds.height > scroll.contentView.bounds.height + 100
@@ -69,7 +72,9 @@ private struct ExerciseStreamingPinch: Step {
             guard PinchZoom.storySample(in: window, amount: 0, phase: .changed, at: point) else {
                 throw StoryFailure.other("streaming interrupted the pinch")
             }
-            try await Task.sleep(for: .milliseconds(8))
+            // Each held sample sees one more delta land, however fast the stream runs.
+            let seen = count(chat)
+            try await story.until("more text to stream in under the pinch") { count(chat) > seen }
             guard let offset = PinchZoom.storyOffset(in: window),
                   PinchZoom.storyScale() == globalScale,
                   PinchZoom.storyPageScale(in: window) == magnified
