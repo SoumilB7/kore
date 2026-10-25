@@ -240,4 +240,57 @@ struct QueueReceiptTests {
         translator.take().events.forEach(script.store.apply)
         #expect(script.lines.contains("answer Received\n\n"))
     }
+
+    // MARK: Taken messages leave no "Queued" (the owner's Codex chat, 2026-10-27)
+
+    /// Two sent while one turn runs, taken one after the other: each sits where it went in, as a
+    /// plain message, its row a new view (sharing the waiting row's id, SwiftUI kept drawing it
+    /// with "Queued"); one sent after them waits until the turn ends without
+    /// taking it, and goes back to the composer (`dropped`).
+    @Test func codexTwoTakenInOrderThenOneLeftWaiting() {
+        let translator = CodexTranslator(folder: Drive.folder)
+        let script = Script(.codex)
+        func pump() { translator.take().events.forEach(script.store.apply) }
+        func received(_ id: String, server: String) {
+            let item = CodexItem(["type": "userMessage", "id": .string(server), "clientId": .string(id), "content": []])
+            translator.translate(.itemStarted(item))
+            translator.translate(.itemCompleted(item))
+        }
+        func answer(_ id: String, _ text: String) {
+            translator.translate(.itemStarted(CodexItem(["type": "agentMessage", "id": .string(id), "phase": "commentary"])))
+            translator.translate(.textDelta(itemId: id, text))
+        }
+        script.send("Start the job")
+        translator.translate(.turnStarted(turnId: "turn"))
+        answer("m1", "Working on it.\n\n")
+        pump()
+        script.on(.messageQueued(id: "A", text: "please complete it now", attachments: []))
+        script.on(.messageQueued(id: "B", text: "its taking too long", attachments: []))
+        translator.queuedRequest("A")
+        translator.queuedRequest("B")
+        let waiting = script.items.filter { if case .queued = $0.row { true } else { false } }.map(\.id)
+        #expect(waiting.count == 2)
+        received("A", server: "sA")
+        answer("m2", "On it.\n\n")
+        received("B", server: "sB")
+        answer("m3", "Nearly there.\n\n")
+        pump()
+        #expect(script.lines == [
+            "§ Start the job", "message Start the job", "answer Working on it.\n\n",
+            "§ please complete it now", "user please complete it now", "answer On it.\n\n",
+            "§ its taking too long", "user its taking too long", "answer Nearly there.\n\n", "spinner",
+        ])
+        #expect(Set(script.items.map(\.id)).isDisjoint(with: waiting))
+
+        script.on(.messageQueued(id: "C", text: "wrap up", attachments: []))
+        translator.queuedRequest("C")
+        translator.queuedAccepted("C", turn: "turn")
+        #expect(script.lines.last == "queued wrap up")
+        translator.translate(.turnCompleted(CodexTurnResult(["turn": ["id": "turn", "status": "completed"]])))
+        let ended = translator.take().events
+        ended.forEach(script.store.apply)
+        #expect(ended.filter { if case .queuedMessage("C", .dropped) = $0 { true } else { false } }.count == 1)
+        #expect(!script.lines.contains { $0.hasPrefix("queued") || $0 == "user wrap up" })
+        #expect(translator.pendingSteer.isEmpty)
+    }
 }

@@ -161,8 +161,11 @@ final class TranscriptStore {
         var id: String {
             switch self {
             case .entry(let e), .tool(let e, _), .thinking(let e, _), .file(let e, _, _), .agent(let e, _, _),
-                .message(let e, _, _), .summary(let e, _), .queued(let e):
+                .message(let e, _, _), .summary(let e, _):
                 e.id.uuidString
+            // Not the message's own id: once the CLI takes it, the row that shows it in the turn
+            // is another view, and the waiting one (with its "Queued") goes.
+            case .queued(let e): "queued-\(e.id.uuidString)"
             case .fold(let f): "fold-\(f.turn)"
             case .rule(let t): "rule-\(t)"
             case .outcome(let t, _, _, _, _), .signIn(let t, _), .slept(let t, _): "outcome-\(t)"

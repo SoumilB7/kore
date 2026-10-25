@@ -50,26 +50,52 @@ final class StopMidTurn: ChatStoryline {
     }
 }
 
-/// A message sent while a turn runs waits as queued, then the CLI takes it into that turn.
+/// Messages sent while a turn runs wait below the chat as queued. The CLI takes two into that
+/// turn, one after the other: each becomes a plain message where it went in, with no "Queued"
+/// left on screen. One it never takes there starts the next turn.
 final class QueuedMessage: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
     override class var script: CLIScript {
-        CLIScript(turns: [[
-            .startTurn, .stream(.answer, "Working on it."), .takeQueued, .stream(.answer, "And that too."),
-            .finishTurn(.completed),
-        ]])
+        CLIScript(turns: [
+            [
+                .startTurn, .stream(.answer, "Working on it.\n\n"), .takeQueued, .stream(.answer, "On it.\n\n"),
+                .takeQueued, .stream(.answer, "Nearly there.\n\n"), .wait(.queued("wrap up")), .finishTurn(.completed),
+            ],
+            CLIScript.reply("Wrapped."),
+        ])
+    }
+
+    /// The "Queued" captions on screen.
+    @MainActor static func captions() -> [String] {
+        let prefix = StoryID(.composer, "queued").raw + "["
+        return StoryRegistry.ids.filter { $0.hasPrefix(prefix) }
     }
 
     override func steps() -> [any Step] {
-        super.steps() + [
+        let taken = { (text: String) in
+            Expect.rows("“\(text)” shown inside the turn") { $0.contains { $0.kind == "user" && $0.text == text && $0.inTurn } }
+        }
+        return super.steps() + [
             Send("Start the job"),
             WaitForEvent("the turn to start") { if case .turnStarted = $0 { true } else { false } },
-            Queue("and also this"),
-            WaitForEvent("the CLI to take it into the turn") {
-                if case .queuedMessage(_, .inTurn) = $0 { true } else { false }
+            Queue("please complete it now"),
+            Queue("its taking too long"),
+            Expect("the CLI to take both into the turn") { story in
+                story.chatEvents().filter { if case .queuedMessage(_, .inTurn) = $0 { true } else { false } }.count == 2
             },
-            TurnFinished(1),
-            Expect.rows("it shown inside the turn") { $0.contains { $0.kind == "user" && $0.text == "and also this" && $0.inTurn } },
+            taken("please complete it now"),
+            taken("its taking too long"),
+            Expect("no “Queued” left on screen", found: { _ in Self.captions().joined(separator: ", ") }) { _ in
+                Self.captions().isEmpty
+            },
+            Queue("wrap up"),
+            TurnFinished(2),
+            Expect.rows("“wrap up” the next turn's own message") {
+                $0.contains { $0.kind == "user" && $0.text == "wrap up" && !$0.inTurn }
+            },
+            Expect("no “Queued” left once it went", found: { _ in Self.captions().joined(separator: ", ") }) { _ in
+                Self.captions().isEmpty
+            },
         ]
     }
 }
