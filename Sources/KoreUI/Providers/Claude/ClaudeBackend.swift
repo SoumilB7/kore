@@ -969,17 +969,10 @@ final class ClaudeBackend: ChatBackend {
         logExit(session)
     }
 
-    /// The CLI's process is gone: the agents it ran end, and their transcripts aren't read
-    /// again. Another client's agents (`alone`) go on being followed.
+    /// The CLI's process is gone: the agents it ran end. Each one's tail reads what it wrote
+    /// last, then stops, as for any finished agent. Another client's agents, and theirs, go on.
     private func endOwnAgents() {
-        translator.cliExited(observed: alone)
-        for (id, tail) in tails where !alone.contains(id) {
-            tail.cancel()
-            tails[id] = nil
-            tailFiles[id] = nil
-            tailsSince[id] = nil
-            tailsWrote.remove(id)
-        }
+        translator.cliExited(observed: observed)
         flush()
     }
 

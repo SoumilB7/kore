@@ -325,15 +325,20 @@ public actor ClaudeSession {
 
     /// Stream deltas Kore has no use for: a tool's input streaming in (a long Write sends
     /// thousands) and thinking signatures. Matched on the raw line, with the quotes JSON never
-    /// leaves unescaped inside a string, so no text can match.
+    /// leaves unescaped inside a string, so no text can match; and only on a delta's own line,
+    /// as a tool's input object (a permission request's) could hold the same keys.
+    private static let deltaLine = Data(#"{"type":"stream_event","event":{"type":"content_block_delta","#.utf8)
     private static let quietDeltas = ["\"delta\":{\"type\":\"input_json_delta\"", "\"delta\":{\"type\":\"signature_delta\""]
         .map { Data($0.utf8) }
+    nonisolated static func isQuietDelta(_ line: Data) -> Bool {
+        line.starts(with: deltaLine) && quietDeltas.contains { line.range(of: $0) != nil }
+    }
     /// The last one passed on: one each half second still says the CLI is working (the stall
     /// watchdog, a retry clearing); the rest are dropped before they're parsed.
     private var quietDeltaAt: ContinuousClock.Instant?
 
     private func handle(line: Data) {
-        if Self.quietDeltas.contains(where: { line.range(of: $0) != nil }) {
+        if Self.isQuietDelta(line) {
             let now = ContinuousClock.now
             if let last = quietDeltaAt, now - last < .milliseconds(500) { return }
             quietDeltaAt = now
