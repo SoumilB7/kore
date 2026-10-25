@@ -161,6 +161,16 @@ package final class ClaudeTranslator {
         out.append(.turnStarted(id, origin: origin, at: date))
     }
 
+    /// The CLI is in a turn Kore saw no start of (a peer's message, a task's notification, a cron
+    /// firing, one it began before Kore was listening): its own agent's output, or its model
+    /// request, with none open. One opens, its origin read from the transcript, so the chat is at
+    /// work until the CLI's result ends it, whatever started it.
+    func openCLITurn() {
+        guard turn == nil, !replaying else { return }
+        openTurn(.cli)
+        if let turn { followups.append(.cliTurn(turn, startedAt: turnStart)) }
+    }
+
     /// A queued message that starts the next turn: says so, then opens it (origin `.user`).
     func startQueuedTurn(_ queued: String) {
         let id = ToolText.newID()
@@ -241,13 +251,16 @@ package final class ClaudeTranslator {
         case .permissionModeChanged(let reported):
             modeReported(reported)
         case .textDelta(let text, nil):
+            openCLITurn()
             stream(.answer, text)
         case .thinkingDelta(let text, nil):
+            openCLITurn()
             stream(.thinking, text)
         case .authFailed(let said):
             // In a past session's history it stays what it was: the CLI's line, as its answer.
             if replaying { assistant([.text(said)], agent: .main) } else { authRefused = said }
         case .assistant(let messageId, let blocks, let parent, let usage):
+            if parent == nil { openCLITurn() }
             if parent == nil, turn != nil, turnKey == nil { turnKey = messageId }
             assistant(blocks, agent: agentID(parent))
             if parent == nil, let usage { context(usage) }
@@ -456,8 +469,7 @@ package final class ClaudeTranslator {
                 out.append(.connection(.retrying(attempt: json["attempt"]?.int, of: json["max_retries"]?.int)))
             case "status" where json["status"]?.string == "requesting" && turn == nil:
                 // Sent before every model request; with no turn open, the CLI started one itself.
-                openTurn(.cli)
-                if let turn { followups.append(.cliTurn(turn, startedAt: turnStart)) }
+                openCLITurn()
             case "compact_boundary":
                 // /compact live: the divider goes above the summary that follows. The context's
                 // new size is asked for (it isn't on the boundary).

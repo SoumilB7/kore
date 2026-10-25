@@ -105,6 +105,14 @@ package final class CodexTranslator {
 
     // MARK: - Turns
 
+    /// What only a running turn makes: an item, or streamed text.
+    private static func isTurnWork(_ event: CodexEvent) -> Bool {
+        switch event {
+        case .itemStarted, .textDelta, .reasoningDelta, .planDelta: true
+        default: false
+        }
+    }
+
     private func openTurn(_ id: TurnID, at date: Date) {
         turn = id
         lastItem = nil
@@ -153,6 +161,9 @@ package final class CodexTranslator {
             default: break
             }
         }
+        // The thread's work with no turn open: a turn Kore saw no start of (one already running
+        // when Kore attached). One opens, so the chat is at work until turn/completed ends it.
+        if agent == .main, turn == nil, !replaying, Self.isTurnWork(event) { openTurn(ToolText.newID(), at: .now) }
         switch event {
         case .threadStarted(let id, _, let raw):
             threadId = id

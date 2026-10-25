@@ -139,3 +139,43 @@ struct StartCompact: Step {
         try await story.until("the compaction to start") { try story.activeChat().isCompacting }
     }
 }
+
+/// Turns the CLI starts by itself (a peer's message, a finished agent's notification, a cron
+/// firing, one already running when Kore attached) show as work as the user's do: the tab's
+/// spinner and a working chat, from the CLI's turn start to its end.
+final class CLITurnsShowWorking: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    static let origins: [(name: String, origin: TurnOrigin)] = [
+        ("a peer's message", .peer), ("an agent's notification", .agentFinished), ("a cron firing", .schedule), ("its own", .cli),
+    ]
+    override class var script: CLIScript {
+        // After the user's first turn, the CLI's own, each held open until the storyline looks.
+        CLIScript(turns: [
+            [.startTurn, .stream(.answer, "OK"), .finishTurn(.completed)]
+                + origins.enumerated().flatMap { n, turn -> [Beat] in
+                    let id = "cli-\(n)"
+                    var beats: [Beat] = [.wait(.release), .event(.turnStarted(id, origin: turn.origin, at: Date()))]
+                    if turn.origin == .peer { beats.append(.event(.peerMessage(from: "kore-2f", text: "A message from a peer", turn: id))) }
+                    return beats + [.wait(.release), .event(.turnFinished(id, .completed, duration: nil))]
+                }
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        let spinner = Locator("the chat tab's spinner") { app in
+            guard let tab = app.workspace?.activeTab else { return .failure(LocatorMiss("no tab", pending: true)) }
+            return .success(StoryID.Tabs.tab(tab.id).part(.working))
+        }
+        return super.steps() + [Send("Hello"), TurnFinished(1), ExpectElement(spinner, .absent)]
+            + Self.origins.flatMap { turn -> [any Step] in
+                [
+                    Release(),
+                    ExpectElement(spinner),
+                    Expect("\(turn.name): a working chat") { $0.app.workspace?.workingChats == 1 },
+                    Release(),
+                    ExpectElement(spinner, .absent),
+                    Expect("\(turn.name) ended: none working") { $0.app.workspace?.workingChats == 0 },
+                ]
+            }
+    }
+}
