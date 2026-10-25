@@ -3,7 +3,8 @@ import SwiftUI
 extension View {
     /// Four heavier arcs at a panel's corners (corner-marks-before-after.html): an open option
     /// popup's frame in `Theme.cornerOption`, or the mode's colour where the mode governs. Each
-    /// arm runs `Size.cornerMark` from the outer corner and follows the panel's `radius`, its
+    /// arm runs up to `Size.cornerMark` from the outer corner (less on a small panel, by its
+    /// shorter side) and follows the panel's `radius`, its
     /// outer edge on the panel's own. Shown, the arms grow out of each arc's middle (instantly
     /// under Reduce Motion); a new colour fades in. Nil draws nothing.
     func cornerMarks(_ color: Color?, radius: CGFloat = Radius.panel, shown: Bool = true) -> some View {
@@ -55,7 +56,10 @@ private struct CornerArm: Shape {
         // Stroked down the middle: inset by half the line so its outer edge is the panel's.
         let box = rect.insetBy(dx: Stroke.cornerMark / 2, dy: Stroke.cornerMark / 2)
         let r = max(radius - Stroke.cornerMark / 2, 0)
-        let arm = min(Size.cornerMark, box.width / 2, box.height / 2)
+        // Sized by the panel on every layout, so the arms follow a resize or a zoom: a share of
+        // the shorter side between the arc (plus a little straight edge) and the full arm.
+        let short = min(box.width, box.height)
+        let arm = min(max(short * Size.cornerMarkShare, r + Size.cornerMarkMinStraight), Size.cornerMark, short / 2)
         let (c, h, v): (CGPoint, CGFloat, CGFloat) =
             switch corner {
             case .topLeading: (CGPoint(x: box.minX, y: box.minY), 1, 1)

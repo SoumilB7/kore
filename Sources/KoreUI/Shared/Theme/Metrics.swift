@@ -125,8 +125,12 @@ enum Size {
     static let dropZone: CGFloat = 56
     static let dropDash: [CGFloat] = [4, 3]
     static let menuMax: CGFloat = 260
-    /// Each arm of a corner mark, from the outer corner along either edge.
+    /// Each arm of a corner mark, from the outer corner along either edge: at most this…
     static let cornerMark: CGFloat = 20
+    /// …else this share of the panel's shorter side (a 42pt card gets about 14)…
+    static let cornerMarkShare: CGFloat = 0.3
+    /// …and at least the corner's arc plus this much straight edge.
+    static let cornerMarkMinStraight: CGFloat = 2
     static let planScrollMax: CGFloat = 320
     static let chipBadge = CGSize(width: 5, height: -5)
     /// The remove badge (15 across, 5 past its chip's corner) takes clicks 24 across: back over
