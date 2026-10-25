@@ -1207,9 +1207,20 @@ final class EditorTextView: NSTextView {
         return nil
     }
 
+    /// A resize can come inside the window's layout pass (a tab switch with the page zoomed),
+    /// where laying out text for the decorations resizes this view again and AppKit throws.
+    /// The caret's line takes the new width now; the rest follows on the next turn.
+    private var decorationsPending = false
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        updateDecorations()
+        if !lineLayer.isHidden { lineLayer.frame.size.width = bounds.width }
+        guard !decorationsPending else { return }
+        decorationsPending = true
+        DispatchQueue.main.async { [weak self] in
+            self?.decorationsPending = false
+            self?.updateDecorations()
+        }
     }
 
     override func becomeFirstResponder() -> Bool {

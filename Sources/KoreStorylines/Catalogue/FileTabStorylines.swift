@@ -288,3 +288,54 @@ private struct CopySelectionNothing: Step {
         if let copied = StoryTranscript.copied { throw StoryFailure.expectation("nothing copied — it copied:\n\(copied)") }
     }
 }
+
+/// A code file magnified by a pinch and by ⌘+ / ⌘−, its tab left and shown again while the
+/// text size changes: the editor comes back in the window each time, at its own magnification.
+final class EditorZoomTabSwitch: ChatStoryline {
+    override class var tags: Set<Tag> { [.files] }
+
+    override func steps() -> [any Step] {
+        [WriteFiles([FileTabState.files[2]])] + super.steps() + FileTabState.open(FileTabState.code) + [
+            Expect.editor("the code in the editor") { $0.path == FileTabState.code },
+            Scroll(.editor, to: .by(2000)),
+            ZoomedEditorSwitches(),
+        ]
+    }
+}
+
+/// Pinches the editor, then goes to the chat's tab and back with the text size changed in
+/// between, and once on the editor's own tab.
+private struct ZoomedEditorSwitches: Step {
+    var label: String { "Switch tabs with the editor zoomed" }
+    var timeout: Duration? { .seconds(30) }
+
+    func run(_ story: StoryContext) async throws {
+        let element = try await story.element(.editor)
+        guard let window = element.window, let text = element.registeredView,
+              let workspace = story.app.workspace else { throw StoryFailure.other("the editor is not in a window") }
+        let start = PinchZoom.storyScale()
+        defer { PinchZoom.storyRestoreScale(start) }
+        let point = text.convert(NSPoint(x: text.visibleRect.midX, y: text.visibleRect.midY), to: nil)
+        guard PinchZoom.storySample(in: window, amount: 0, phase: .began, at: point),
+              PinchZoom.storySample(in: window, amount: 0.3, phase: .changed, at: point),
+              PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point) else {
+            throw StoryFailure.other("the editor did not take the pinch")
+        }
+        try await story.until("the editor magnified") { (PinchZoom.storyPageScale(in: window) ?? 1) > 1.1 }
+        let pinched = PinchZoom.storyPageScale(in: window)
+        for (n, scale) in [start + 0.1, start + 0.2, start].enumerated() {
+            workspace.storySelect(tabAt: 0)
+            try await story.until("the chat's tab shown (\(n))") { workspace.activeTab === workspace.tabs[0] }
+            try await story.idle()
+            PinchZoom.storyRestoreScale(scale)
+            try await story.idle()
+            workspace.storySelect(tabAt: 1)
+            try await story.until("the editor back in the window (\(n))") {
+                element.window != nil && PinchZoom.storyPageScale(in: window) == pinched
+            }
+            try await story.idle()
+            PinchZoom.storyRestoreScale(scale + 0.1)
+            try await story.idle()
+        }
+    }
+}
