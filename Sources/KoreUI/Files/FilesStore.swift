@@ -36,6 +36,14 @@ final class FilesStore {
 
         /// The row is `path`, or a chain with `path` as one of its folders.
         func shows(_ path: String) -> Bool { id == path || (names.count > 1 && paths.contains(path)) }
+
+        /// The chain's folder `offset` names on from `path` (← and → step through them), if there's one.
+        func path(_ offset: Int, from path: String) -> String? {
+            guard names.count > 1 else { return nil }
+            let paths = self.paths
+            guard let i = paths.firstIndex(of: path), paths.indices.contains(i + offset) else { return nil }
+            return paths[i + offset]
+        }
     }
 
     enum Edit: Equatable {
@@ -228,16 +236,18 @@ final class FilesStore {
     /// The row showing `path`: its own, or the chain it's a folder of.
     func row(showing path: String) -> Row? { rows.first { $0.shows(path) } }
 
-    /// The folder whose name is underlined: a chain's upper folder while it's the selection,
-    /// or the folder a new item's field goes in when that field split it from its chain.
+    /// The folder whose name is underlined: a chain's selected folder (its last when the row
+    /// is picked as a whole), or the folder a new item's field goes in when that field split it
+    /// from its chain or sits under it.
     var markedFolder: String? {
         switch edit {
         case .newFile(let parent), .newFolder(let parent):
-            guard parent != root, let inner = children[parent], inner.count == 1, inner[0].isFolder else { return nil }
-            return parent
+            guard parent != root else { return nil }
+            if let inner = children[parent], inner.count == 1, inner[0].isFolder { return parent }
+            return (row(showing: parent)?.names.count ?? 0) > 1 ? parent : nil
         case .rename: return nil
         case nil:
-            guard let selection, let row = row(showing: selection), row.id != selection else { return nil }
+            guard let selection, let row = row(showing: selection), row.names.count > 1 else { return nil }
             return selection
         }
     }
@@ -376,6 +386,96 @@ final class FilesStore {
         }
         Task { await reload((path as NSString).deletingLastPathComponent) }
         return nil
+    }
+
+    // MARK: - Compressing (Finder's Compress)
+
+    /// Where Finder's Compress puts the zip of `paths`: "X.zip" beside one item X ("X 2.zip",
+    /// "X 3.zip"… when that's taken), "Archive.zip" in the common folder of several.
+    nonisolated static func zipPath(for paths: [String]) -> String {
+        let folder: String
+        let base: String
+        if paths.count == 1 {
+            folder = (paths[0] as NSString).deletingLastPathComponent
+            base = (paths[0] as NSString).lastPathComponent
+        } else {
+            var common = (paths[0] as NSString).deletingLastPathComponent
+            while !paths.allSatisfy({ $0.hasPrefix(common + "/") }), common.count > 1 {
+                common = (common as NSString).deletingLastPathComponent
+            }
+            folder = common
+            base = "Archive"
+        }
+        var n = 1
+        while true {
+            let path = folder + "/" + base + (n == 1 ? "" : " \(n)") + ".zip"
+            if !FileManager.default.fileExists(atPath: path) { return path }
+            n += 1
+        }
+    }
+
+    /// Zips `paths` as Finder's Compress does. ditto runs off the main thread into a scratch
+    /// folder on the same disk, and the zip is renamed into place when it's done, then shown and
+    /// selected; a failure leaves nothing behind.
+    func compress(_ paths: [String]) async -> Failure? {
+        guard !paths.isEmpty else { return nil }
+        let id = String(UUID().uuidString.prefix(8))
+        UILog.event("files-compress", ["id": id, "items": "\(paths.count)", "result": "started"])
+        let result = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(returning: Self.zip(paths)) }
+        }
+        switch result {
+        case .success(let zip):
+            UILog.event("files-compress", ["id": id, "result": "done"])
+            await reload((zip as NSString).deletingLastPathComponent)
+            selection = zip
+            return nil
+        case .failure(let failure):
+            UILog.event("files-compress", ["id": id, "result": "failed"])
+            return failure
+        }
+    }
+
+    nonisolated private static func zip(_ paths: [String]) -> Result<String, Failure> {
+        let files = FileManager.default
+        let name = paths.count == 1 ? (paths[0] as NSString).lastPathComponent : "these items"
+        let failed = Failure.system("Kore couldn't compress “\(name)”.")
+        let scratch: URL
+        do {
+            scratch = try files.url(
+                for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: URL(fileURLWithPath: zipPath(for: paths)), create: true)
+        } catch {
+            return .failure(failed)
+        }
+        defer { try? files.removeItem(at: scratch) }
+        var source = paths[0]
+        var keepParent = true
+        if paths.count > 1 {
+            // Several: copies (clones on APFS) in one folder, zipped without it.
+            let staged = scratch.appendingPathComponent("Archive").path
+            do {
+                try files.createDirectory(atPath: staged, withIntermediateDirectories: false)
+                for path in paths { try files.copyItem(atPath: path, toPath: staged + "/" + (path as NSString).lastPathComponent) }
+            } catch {
+                return .failure(failed)
+            }
+            source = staged
+            keepParent = false
+        }
+        let temp = scratch.appendingPathComponent("archive.zip").path
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-c", "-k", "--sequesterRsrc"] + (keepParent ? ["--keepParent"] : []) + [source, temp]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return .failure(failed) }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return .failure(failed) }
+        // The name again: another zip may have taken it meanwhile.
+        let target = zipPath(for: paths)
+        do { try files.moveItem(atPath: temp, toPath: target) } catch { return .failure(failed) }
+        return .success(target)
     }
 
     // MARK: - Moving and copying (drag in the tree)

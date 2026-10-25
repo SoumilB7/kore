@@ -258,7 +258,7 @@ extension StoryID {
 
     package enum Explorer {
         package static func row(_ relativePath: String) -> StoryID { StoryID(.explorer, "row", key: relativePath) }
-        /// A folder's name in a chain's row ("a / b"), but the last.
+        /// A folder's name in a chain's row ("a / b").
         package static func segment(_ relativePath: String) -> StoryID { StoryID(.explorer, "segment", key: relativePath) }
         package static let newfile = StoryID(.explorer, "newfile")
         package static let newfolder = StoryID(.explorer, "newfolder")

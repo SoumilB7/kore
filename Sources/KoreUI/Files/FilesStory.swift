@@ -31,6 +31,11 @@ extension Workspace {
     /// The folder the tree underlines (a chain's chosen folder), relative to the folder.
     package var storyTreeMark: String? { files.flatMap { store in store.markedFolder.map(store.relative) } }
 
+    /// The file's size in bytes; nil when there's no such file.
+    package func storyFileSize(_ relativePath: String) -> Int? {
+        (try? FileManager.default.attributesOfItem(atPath: folder.appendingPathComponent(relativePath).path))?[.size] as? Int
+    }
+
     /// Opens the tree's folders down to the item and selects it, as Reveal in Explorer does.
     package func storyRevealInTree(_ relativePath: String) {
         let store = filesStore()

@@ -11,7 +11,7 @@ final class ThemedOptions: ChatStoryline {
             RightClick(.treeRow("menu.txt")), WaitForElement(.id(StoryID.Options.panel)),
             Snapshot("explorer-options"),
             LeadingContextClick(StoryID.Explorer.row("other.txt")), WaitForElement(.id(StoryID.Options.panel)),
-            Press(.id(StoryID.Options.item(8))),
+            Press(.id(StoryID.Options.item(9))),
             Expect("the second row owns the replacement menu") { _ in NSPasteboard.general.string(forType: .string) == "other.txt" },
             RightClick(.treeRow("menu.txt")), WaitForElement(.id(StoryID.Options.panel)),
             Key(.down), Key(.down), Key(.down), Key(.returnKey),

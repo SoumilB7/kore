@@ -243,3 +243,51 @@ final class ExplorerChainSegment: FilesStoryline {
         ]
     }
 }
+
+/// A ten-folder chain picks any of its names, the last too, as VS Code's compact folders do: a
+/// click underlines the name it hits, ← and → step the underline along the chain, and New File
+/// lands in the underlined folder. Compress on a name zips that folder beside it.
+final class ExplorerChainDeep: FilesStoryline {
+    override class var tags: Set<Tag> { [.files] }
+    static let chain = (1...10).map { "d\($0)" }
+    /// The chain's folder `depth` names down: "d1/d2/…".
+    static func folder(_ depth: Int) -> String { chain.prefix(depth).joined(separator: "/") }
+    override class var files: [(path: String, text: String)] { [(folder(10) + "/f.txt", "")] }
+
+    private static func marked(_ depth: Int, _ what: String) -> Expect {
+        Expect(what, found: { "\($0.app.workspace?.storyTreeSelection ?? "nothing") selected, \($0.app.workspace?.storyTreeMark ?? "nothing") underlined" }) {
+            $0.app.workspace?.storyTreeSelection == folder(depth) && $0.app.workspace?.storyTreeMark == folder(depth)
+        }
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            RevealInTree(Self.folder(10) + "/f.txt"),
+            ExpectElement(.id(StoryID.Explorer.row(Self.folder(10)))),
+            Click(.id(StoryID.Explorer.segment(Self.folder(10)))),
+            Self.marked(10, "“d10”, the last name, selected and underlined"),
+            Click(.id(StoryID.Explorer.segment(Self.folder(5)))),
+            Self.marked(5, "“d5” selected and underlined"),
+            Key(.left),
+            Self.marked(4, "← steps up to “d4”"),
+            Key(.right),
+            Self.marked(5, "→ steps back down to “d5”"),
+            Press(.id(StoryID.Explorer.newfile)),
+            WaitForFocus(.id(StoryID.Explorer.namefield)),
+            Self.marked(5, "“d5” underlined over the name field"),
+            TypeText("new.txt"),
+            Key(.returnKey),
+            Expect("new.txt made in “d5”") { $0.app.workspace?.storyHasFile(Self.folder(5) + "/new.txt") == true },
+            Expect("and not in “d10”") { $0.app.workspace?.storyHasFile(Self.folder(10) + "/new.txt") == false },
+
+            // Compress on a chain's name zips that folder beside it, as Finder does.
+            RightClick(.id(StoryID.Explorer.segment(Self.folder(3)))), WaitForElement(.id(StoryID.Options.panel)),
+            Press(.id(StoryID.Options.item(4))),
+            Expect("d3.zip made beside “d3”, not empty", found: { "\($0.app.workspace?.storyFileSize(Self.folder(2) + "/d3.zip") ?? 0) bytes" }) {
+                ($0.app.workspace?.storyFileSize(Self.folder(2) + "/d3.zip") ?? 0) > 0
+            },
+            Expect("and selected") { $0.app.workspace?.storyTreeSelection == Self.folder(2) + "/d3.zip" },
+        ]
+    }
+}

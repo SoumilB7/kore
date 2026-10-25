@@ -133,6 +133,9 @@ struct ExplorerSidebar: View {
         let touches = workspace.turnTouches
         let touchedFolders = Workspace.folders(of: touches)
         let marked = store.markedFolder
+        // A drag over a chain's upper name fills that name, not the rows under it.
+        let drop = store.dropTarget
+        let dropSegment = drop.flatMap { target in store.row(showing: target).flatMap { $0.id == target ? nil : target } }
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -144,6 +147,8 @@ struct ExplorerSidebar: View {
                             folderTouched: row.isFolder && touchedFolders.contains(row.id),
                             typed: store.selection == row.id ? typed.value : "",
                             marked: marked,
+                            drop: dropSegment == nil ? drop : nil,
+                            dropSegment: dropSegment,
                             // Focus with nothing selected marks where the keys start (look §3).
                             outlined: focused && store.selection == nil && row.id == rows.first?.id,
                             focus: { focused = true }
@@ -203,11 +208,16 @@ struct ExplorerSidebar: View {
         case .upArrow: select((index ?? rows.count) - 1)
         case .rightArrow:
             guard let index, rows[index].isFolder else { return .handled }
-            if rows[index].isOpen { select(index + 1) } else { store.expand(rows[index].id) }
+            // A chain's next name first, as VS Code steps through compact folders.
+            if let selection = store.selection, let next = rows[index].path(1, from: selection) {
+                store.selection = next
+            } else if rows[index].isOpen { select(index + 1) } else { store.expand(rows[index].id) }
         case .leftArrow:
             guard let index else { return .handled }
             let row = rows[index]
-            if row.isFolder, row.isOpen {
+            if let selection = store.selection, let previous = row.path(-1, from: selection) {
+                store.selection = previous
+            } else if row.isFolder, row.isOpen {
                 store.collapse(row.id)
             } else if let parent = rows[..<index].lastIndex(where: { $0.depth < row.depth }) {
                 select(parent)
@@ -217,7 +227,7 @@ struct ExplorerSidebar: View {
             let row = rows[index]
             if row.isFolder { store.toggle(row.id) } else { workspace.openFile(URL(fileURLWithPath: row.id), preview: true) }
         case .return:
-            // VS Code: Return renames (a chain's selected folder, not just its last).
+            // VS Code: Return renames (a chain's chosen folder, not just its last).
             if index != nil, let selection = store.selection { store.edit = .rename(selection) }
         case .delete where press.modifiers.contains(.command):
             if index != nil, let selection = store.selection { TreeActions.trash(selection, store: store) }
@@ -323,6 +333,10 @@ private struct TreeRow: View {
     let typed: String
     /// The folder whose name is underlined (`FilesStore.markedFolder`).
     let marked: String?
+    /// The folder a drag is over, unless it's a chain's upper name (`dropSegment`).
+    let drop: String?
+    /// The chain's upper folder a drag is over: only its name fills.
+    let dropSegment: String?
     /// The tree has focus and nothing is selected: this first row gets the focus line.
     var outlined = false
     /// A click puts the keyboard in the tree, as in VS Code.
@@ -339,7 +353,7 @@ private struct TreeRow: View {
 
     /// Under a drag: the target folder, or a row inside it.
     private var inDropTarget: Bool {
-        guard let target = store.dropTarget else { return false }
+        guard let target = drop else { return false }
         return row.id == target || row.id.hasPrefix(target + "/")
     }
     private var editing: Bool {
@@ -394,7 +408,6 @@ private struct TreeRow: View {
         }
         .onDrop(of: [.fileURL], delegate: TreeDrop(folder: dropFolder, store: store, workspace: workspace, undo: undoManager))
         .koreContextMenu("explorer") { TreeMenu(path: row.id, isFolder: row.isFolder, store: store, workspace: workspace).items }
-        .help(row.names.count > 1 ? row.names.joined(separator: "/") : "")
     }
 
     private var fill: Color {
@@ -419,7 +432,7 @@ private struct TreeRow: View {
     }
 
     /// The name; a chain's names each select their own folder, as VS Code's compact folders do,
-    /// and the folder new items go in is underlined.
+    /// take a drop into it and show its path, and the chosen one is underlined.
     @ViewBuilder private func name(state: GitStatus.State?) -> some View {
         let tint = state.map(Theme.Git.color)
         if row.names.count == 1 {
@@ -429,16 +442,21 @@ private struct TreeRow: View {
             HStack(spacing: 0) {
                 ForEach(paths.indices, id: \.self) { i in
                     if i > 0 { Text(" / ").foregroundStyle(Theme.tertiary) }
-                    let text = Text(segment(i, tint: tint, marked: marked == paths[i])).lineLimit(1).truncationMode(.tail)
+                    let path = paths[i]
+                    let text = Text(segment(i, tint: tint, marked: marked == path)).lineLimit(1).truncationMode(.tail)
+                        .background(dropSegment == path ? Theme.Tree.dropTarget : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+                        .contentShape(Rectangle())
+                        .pointerStyle(.link)
+                        .help(store.relative(path))
                     if i == paths.count - 1 {
-                        // The last name is the row's: its clicks are the row's.
-                        text
+                        // The last name is the row's: its clicks, menu and drops are the row's.
+                        text.storyID(StoryID.Explorer.segment(store.relative(path)), press: click)
                     } else {
                         text
-                            .contentShape(Rectangle())
-                            .onTapGesture { pick(paths[i]) }
-                            .koreContextMenu("explorer") { TreeMenu(path: paths[i], isFolder: true, store: store, workspace: workspace).items }
-                            .storyID(StoryID.Explorer.segment(store.relative(paths[i])), press: { pick(paths[i]) })
+                            .onTapGesture { pick(path) }
+                            .onDrop(of: [.fileURL], delegate: TreeDrop(folder: path, store: store, workspace: workspace, undo: undoManager))
+                            .koreContextMenu("explorer") { TreeMenu(path: path, isFolder: true, store: store, workspace: workspace).items }
+                            .storyID(StoryID.Explorer.segment(store.relative(path)), press: { pick(path) })
                     }
                 }
             }
@@ -510,7 +528,7 @@ private struct TreeRow: View {
     /// comes from the event, as AppKit sends both clicks.
     private func click() { click(double: NSApp.mouseClickCount >= 2) }
 
-    /// A chain's upper folder: selected, the row left open as it is.
+    /// A chain's upper folder: selected (underlined), the row left open as it is.
     private func pick(_ path: String) {
         guard !editing else { return }
         focus()
@@ -651,7 +669,8 @@ private struct InlineNameField: View {
                       OptionItem("Open with Default App") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }]
         }
         items += [
-            OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }, .rule,
+            OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) },
+            OptionItem("Compress") { Task { if let failure = await store.compress([path]) { TreeActions.show(failure) } } }, .rule,
             OptionItem("Copy Path") { TreeActions.copy(path) },
             OptionItem("Copy Relative Path") { TreeActions.copy(store.relative(path)) }, .rule,
             OptionItem("Rename…") { store.edit = .rename(path) },
