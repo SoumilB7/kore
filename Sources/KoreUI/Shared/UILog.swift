@@ -78,14 +78,15 @@ enum UILog {
     nonisolated(unsafe) private static var memoryTimer: DispatchSourceTimer?
 
     private static func watchMemory() {
-        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        // On the main queue: the handler is main-actor code, and one task_info call is cheap.
+        let timer = DispatchSource.makeTimerSource(queue: .main)
         var logged = footprint()?.peak ?? 0
         timer.schedule(deadline: .now() + 30, repeating: 30, leeway: .seconds(10))
         timer.setEventHandler {
-            guard let (now, peak) = footprint(), peak >= logged + peakStep else { return }
-            logged = peak
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated { UILog.event("mem-peak", ["mb": String(peak >> 20), "now": String(now >> 20)]) }
+            MainActor.assumeIsolated {
+                guard let (now, peak) = footprint(), peak >= logged + peakStep else { return }
+                logged = peak
+                UILog.event("mem-peak", ["mb": String(peak >> 20), "now": String(now >> 20)])
             }
         }
         timer.resume()
