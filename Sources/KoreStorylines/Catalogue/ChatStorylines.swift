@@ -583,3 +583,67 @@ final class SlashChipLive: Storyline {
         ]
     }
 }
+
+/// A code block's Copy shows on hover just below the block at its right edge, in the row kept
+/// for it, covering none of the code: on a short command and on one longer than the column.
+final class CodeBlockCopyBelow: ChatStoryline {
+    static let reply = """
+        Run this:
+
+        ```sh
+        swift build
+        ```
+
+        Then this one:
+
+        ```sh
+        scripts/storylines.sh --cli scripted --provider claude --name CodeBlockCopyBelow --out ~/Library/Application\\ Support/KoreDev/scratch/code-copy
+        ```
+
+        Then open the app.
+        """
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(reply)]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("How do I build it?"), TurnFinished(1), WaitIdle(),
+            HoverCode(0), Expect("Copy under the short block, at its right edge") { _ in Self.copyBelow(0) }, Snapshot("code-copy-short"),
+            HoverCode(1), Expect("Copy under the long block, at its right edge") { _ in Self.copyBelow(1) }, Snapshot("code-copy-long"),
+        ]
+    }
+
+    /// The code blocks on screen, in the answer's order.
+    @MainActor static func blocks() -> [String] {
+        StoryRegistry.ids.filter { $0.hasPrefix("transcript.code[") && $0.hasSuffix("]") }
+            .sorted { path($0).lexicographicallyPrecedes(path($1)) }
+    }
+
+    /// "transcript.code[0.3]" back to its path in the answer's markdown.
+    static func path(_ id: String) -> [Int] {
+        id.dropFirst("transcript.code[".count).dropLast().split(separator: ".").compactMap { Int($0) }
+    }
+
+    /// The nth block's Copy lies in its bottom row, below the well, and ends at its right edge.
+    @MainActor static func copyBelow(_ n: Int) -> Bool {
+        let ids = blocks()
+        guard ids.indices.contains(n), let block = StoryRegistry.entry(ids[n])?.frame,
+            let copy = StoryRegistry.entry(ids[n] + ".copy")?.frame
+        else { return false }
+        // Frames are the window's, y up: the block's bottom is its minY.
+        return abs(copy.minY - block.minY) < 0.5 && copy.height <= 22.5 && abs(copy.maxX - block.maxX) < 1
+    }
+}
+
+/// The nth code block on screen as under the pointer (its hover stand-in).
+struct HoverCode: Step {
+    let n: Int
+    var label: String { "Hover code block \(n + 1)" }
+    init(_ n: Int) { self.n = n }
+    func run(_ story: StoryContext) async throws {
+        // The answer's markdown is laid out after the turn ends: wait for the block.
+        try await story.until("code block \(n + 1) on screen") { CodeBlockCopyBelow.blocks().count > n }
+        let ids = await CodeBlockCopyBelow.blocks()
+        try await Press(.id(StoryID.Transcript.code(CodeBlockCopyBelow.path(ids[n])).part(.hover))).run(story)
+    }
+}

@@ -56,8 +56,6 @@ extension Inset {
     static let codeBlock = EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8)
     static let tableCell = EdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2)
     static let quote = EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8)
-    /// The copy button's distance from a code block's top-right corner.
-    static let codeCopy = EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
 }
 
 extension Size {

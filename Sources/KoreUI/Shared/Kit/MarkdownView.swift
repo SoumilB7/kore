@@ -98,37 +98,49 @@ private struct MarkdownBlockView: View {
     }
 }
 
-/// A fenced code block: a well that scrolls sideways (no wrap), with a copy button on hover.
+/// A fenced code block: a well that scrolls sideways (no wrap), with Copy just below it at its
+/// right edge on hover, in a row kept for it as under a message, so it covers none of the code.
 private struct MarkdownCodeBlock: View {
     let text: String
     let path: [Int]
     @StateObject private var hovered = Local(false)
+    @StateObject private var copied = Local(false)
 
     var body: some View {
-        SidewaysWhenWide {
-            Text(text)
-                .font(TextStyle.code)
-                .foregroundStyle(Theme.text)
-                .selectableText(path, text, .code)
-                .fixedSize()
-                .padding(Inset.codeBlock)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.codeBlock, in: RoundedRectangle(cornerRadius: Radius.chip))
-        .overlay(alignment: .topTrailing) {
-            if hovered.value {
-                IconButton(symbol: "doc.on.doc", kind: .small, help: "Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                }
-                .padding(Inset.codeCopy)
+        VStack(alignment: .trailing, spacing: 0) {
+            SidewaysWhenWide {
+                Text(text)
+                    .font(TextStyle.code)
+                    .foregroundStyle(Theme.text)
+                    .selectableText(path, text, .code)
+                    .fixedSize()
+                    .padding(Inset.codeBlock)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.codeBlock, in: RoundedRectangle(cornerRadius: Radius.chip))
+            HStack(spacing: 0) {
+                if hovered.value {
+                    IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy", action: copy)
+                        .storyID(StoryID.Transcript.code(path).part(.copy))
+                }
+            }
+            .frame(height: Size.MessageActions.row)
         }
+        .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
+        .storyID(StoryID.Transcript.code(path))
+        .storyAction(StoryID.Transcript.code(path).part(.hover)) { hovered.value = true }
         // The copy button is built only on hover.
-        .accessibilityAction(named: "Copy") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+        .accessibilityAction(named: "Copy") { copy() }
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copied.value = true
+        Task {
+            try? await Task.sleep(for: .seconds(Motion.copied))
+            copied.value = false
         }
     }
 }

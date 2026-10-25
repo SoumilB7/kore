@@ -148,6 +148,8 @@ extension StoryID {
         /// `.part(.stop)` and `.part(.open)`.
         package static func agent(_ id: String) -> StoryID { StoryID(.transcript, "agent", key: id) }
         package static func changes(_ turn: String) -> StoryID { StoryID(.transcript, "changes", key: turn) }
+        /// A fenced code block, by its place in its markdown; `.part(.copy)` is its Copy.
+        package static func code(_ path: [Int]) -> StoryID { StoryID(.transcript, "code", key: path.map(String.init).joined(separator: ".")) }
         package static let earlier = StoryID(.transcript, "earlier")
         /// A refused login's notice, by its turn; `.part(.signIn)` is its Sign in.
         package static func signIn(_ turn: String) -> StoryID { StoryID(.transcript, "signin", key: turn) }
