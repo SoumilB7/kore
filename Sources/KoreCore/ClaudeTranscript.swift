@@ -39,9 +39,7 @@ public final class ClaudeTranscript: @unchecked Sendable {
     public func page(before: String? = nil, userTurns: Int? = nil) -> ClaudeHistory.Page {
         lock.withLock {
             refresh()
-            return ClaudeHistory.page(
-                byId: links.byId, order: links.order, index: links.index, leaf: links.leaf, before: before,
-                userTurns: userTurns, load: { lines($0, spans: links.spans) })
+            return ClaudeHistory.page(links, before: before, userTurns: userTurns, load: { lines($0, in: links) })
         }
     }
 
@@ -86,15 +84,13 @@ public final class ClaudeTranscript: @unchecked Sendable {
             }
             var tail = Links()
             for entry in read.reversed() { tail.add(entry.link, span: (entry.offset, entry.length)) }
-            let walk = ClaudeHistory.walk(
-                byId: tail.byId, order: tail.order, index: tail.index, leaf: tail.leaf, before: nil, userTurns: nil)
+            let walk = ClaudeHistory.walk(tail, before: nil, userTurns: nil)
             // Done once the branch ends inside what's read (at a compaction or the session's
             // first entry), or once the whole file is read.
             guard walk.reachedRoot || !boundary else { continue }
-            let spans = tail.spans
-            let page = ClaudeHistory.messages(walk.ids, earlier: walk.earlier, load: { self.lines($0, spans: spans) })
+            let page = ClaudeHistory.messages(walk.ids, earlier: walk.earlier, load: { self.lines($0, in: tail) })
             return Latest(
-                page: page, end: lines.end, from: lines.start, ids: walk.ids, offsets: walk.ids.map { spans[$0]?.offset ?? 0 })
+                page: page, end: lines.end, from: lines.start, ids: walk.ids, offsets: walk.ids.map { tail.span(of: $0)?.offset ?? 0 })
         }
     }
 
@@ -104,12 +100,11 @@ public final class ClaudeTranscript: @unchecked Sendable {
     public func confirm(_ latest: Latest) -> (earlier: String?, page: ClaudeHistory.Page?) {
         lock.withLock {
             refresh(upTo: latest.end)
-            let walk = ClaudeHistory.walk(
-                byId: links.byId, order: links.order, index: links.index, leaf: links.leaf, before: nil, userTurns: nil)
-            if walk.ids == latest.ids, walk.ids.map({ links.spans[$0]?.offset ?? 0 }) == latest.offsets {
+            let walk = ClaudeHistory.walk(links, before: nil, userTurns: nil)
+            if walk.ids == latest.ids, walk.ids.map({ links.span(of: $0)?.offset ?? 0 }) == latest.offsets {
                 return (walk.earlier, nil)
             }
-            return (walk.earlier, ClaudeHistory.messages(walk.ids, earlier: walk.earlier, load: { lines($0, spans: links.spans) }))
+            return (walk.earlier, ClaudeHistory.messages(walk.ids, earlier: walk.earlier, load: { lines($0, in: links) }))
         }
     }
 
@@ -173,43 +168,118 @@ public final class ClaudeTranscript: @unchecked Sendable {
     }
 
     /// The lines of `ids`, read by offset.
-    private func lines(_ ids: [String], spans: [String: (offset: UInt64, length: Int)]) -> [String: Data] {
+    private func lines(_ ids: [String], in links: Links) -> [String: Data] {
         guard let handle = try? FileHandle(forReadingFrom: file) else { return [:] }
         defer { try? handle.close() }
         var lines: [String: Data] = [:]
-        for id in ids.sorted(by: { (spans[$0]?.offset ?? 0) < (spans[$1]?.offset ?? 0) }) {
-            guard let span = spans[id], (try? handle.seek(toOffset: span.offset)) != nil,
-                let data = try? handle.read(upToCount: span.length)
-            else { continue }
+        let spans = ids.compactMap { id in links.span(of: id).map { (id, $0) } }.sorted { $0.1.offset < $1.1.offset }
+        for (id, span) in spans {
+            guard (try? handle.seek(toOffset: span.offset)) != nil, let data = try? handle.read(upToCount: span.length) else { continue }
             lines[id] = data
         }
         return lines
     }
 }
 
-/// The links of a transcript's entries (or of its last part), in file order.
-private struct Links {
-    var byId: [String: ClaudeHistory.Link] = [:]
-    var spans: [String: (offset: UInt64, length: Int)] = [:]
-    var order: [String] = []
-    var index: [String: Int] = [:]
-    var leaf: String?
+/// The links of a transcript's entries (or of its last part), in file order. A long session has
+/// tens of thousands, kept for as long as its chat is open: each uuid is held once and entries
+/// name each other by number; message and tool ids, only ever compared, are 64-bit hashes.
+struct Links {
+    enum Kind: UInt8 { case user, assistant, system, other }
+
+    struct Node {
+        fileprivate var parentId: Int32 = -1
+        fileprivate var logicalId: Int32 = -1
+        fileprivate var positionIndex: Int32 = -1
+        fileprivate var length: Int32 = 0
+        fileprivate var offset: UInt64 = 0
+        fileprivate var messageHash: UInt64 = 0
+        fileprivate var uses: Range<Int32> = 0..<0
+        fileprivate var results: Range<Int32> = 0..<0
+        var kind: Kind = .other
+        var isBoundary = false
+        var isPrompt = false
+        var isQueuedCommand = false
+
+        var parent: Int32? { parentId < 0 ? nil : parentId }
+        var logical: Int32? { logicalId < 0 ? nil : logicalId }
+        /// Where it is in `order`, for an entry on a branch.
+        var position: Int32? { positionIndex < 0 ? nil : positionIndex }
+        var message: UInt64? { messageHash == 0 ? nil : messageHash }
+    }
+
+    private var ids: [String: Int32] = [:]
+    private var keys: [String] = []
+    /// By id; nil for a uuid only named as a parent, not (yet) read.
+    private var nodes: [Node?] = []
+    private var tools: [UInt64] = []
+    /// Entries on a branch, in file order.
+    private(set) var order: [Int32] = []
+    private(set) var leaf: Int32?
+
+    subscript(id: Int32) -> Node? { nodes[Int(id)] }
+    func id(of key: String) -> Int32? { ids[key] }
+    func key(_ id: Int32) -> String { keys[Int(id)] }
+    func span(of key: String) -> (offset: UInt64, length: Int)? {
+        ids[key].flatMap { self[$0] }.map { ($0.offset, Int($0.length)) }
+    }
+    func toolUses(_ node: Node) -> ArraySlice<UInt64> { tools[Int(node.uses.lowerBound)..<Int(node.uses.upperBound)] }
+    func toolResults(_ node: Node) -> ArraySlice<UInt64> { tools[Int(node.results.lowerBound)..<Int(node.results.upperBound)] }
 
     mutating func add(_ link: ClaudeHistory.Link, span: (UInt64, Int)) {
-        let uuid = link.uuid
+        let id = intern(link.uuid)
         // The CLI writes history again (same uuids, other metadata) when a session is resumed or
         // forked: the first copy keeps its place.
-        guard byId[uuid] == nil else { return }
-        byId[uuid] = link
-        spans[uuid] = span
+        guard nodes[Int(id)] == nil else { return }
+        var node = Node()
+        node.parentId = link.parentUuid.map { intern($0) } ?? -1
+        node.logicalId = link.logicalParentUuid.map { intern($0) } ?? -1
+        node.offset = span.0
+        node.length = Int32(clamping: span.1)
+        node.messageHash = link.messageId.map(Self.hash) ?? 0
+        node.uses = pool(link.toolUses)
+        node.results = pool(link.toolResults)
+        node.kind =
+            switch link.type {
+            case "user": .user
+            case "assistant": .assistant
+            case "system": .system
+            default: .other
+            }
+        node.isBoundary = link.isBoundary
+        node.isPrompt = link.isPrompt
+        node.isQueuedCommand = link.isQueuedCommand
+        defer { nodes[Int(id)] = node }
         if link.isBoundary || link.isQueuedCommand {
-            index[uuid] = order.count
-            order.append(uuid)
+            node.positionIndex = Int32(order.count)
+            order.append(id)
             return
         }
-        guard (link.type == "user" || link.type == "assistant") && link.isSidechain != true else { return }
-        index[uuid] = order.count
-        order.append(uuid)
-        leaf = uuid
+        guard (node.kind == .user || node.kind == .assistant) && link.isSidechain != true else { return }
+        node.positionIndex = Int32(order.count)
+        order.append(id)
+        leaf = id
+    }
+
+    private mutating func intern(_ key: String) -> Int32 {
+        if let id = ids[key] { return id }
+        let id = Int32(keys.count)
+        ids[key] = id
+        keys.append(key)
+        nodes.append(nil)
+        return id
+    }
+
+    private mutating func pool(_ list: [String]) -> Range<Int32> {
+        let start = Int32(tools.count)
+        tools.append(contentsOf: list.map(Self.hash))
+        return start..<Int32(tools.count)
+    }
+
+    /// FNV-1a; never 0, which stands for none.
+    static func hash(_ text: String) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in text.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3 }
+        return hash == 0 ? 1 : hash
     }
 }

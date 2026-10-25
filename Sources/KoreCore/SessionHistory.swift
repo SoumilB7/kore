@@ -94,11 +94,8 @@ public enum ClaudeHistory {
 
     /// The page algorithm over an index of links (`ClaudeTranscript`); `load` reads the chosen
     /// entries' lines.
-    static func page(
-        byId: [String: Link], order: [String], index: [String: Int], leaf: String?, before: String?, userTurns: Int?,
-        load: ([String]) -> [String: Data]
-    ) -> Page {
-        let found = walk(byId: byId, order: order, index: index, leaf: leaf, before: before, userTurns: userTurns)
+    static func page(_ links: Links, before: String?, userTurns: Int?, load: ([String]) -> [String: Data]) -> Page {
+        let found = walk(links, before: before, userTurns: userTurns)
         return messages(found.ids, earlier: found.earlier, load: load)
     }
 
@@ -113,38 +110,36 @@ public enum ClaudeHistory {
         var rootIsBoundary: Bool
     }
 
-    static func walk(
-        byId: [String: Link], order: [String], index: [String: Int], leaf: String?, before: String?, userTurns: Int?
-    ) -> Walk {
+    static func walk(_ links: Links, before: String?, userTurns: Int?) -> Walk {
         /// Where history goes on before a compaction: its logical parent, or, when that entry
         /// isn't in the file (the compaction kept it under a new id), the last message before
         /// the boundary.
-        func continuation(of link: Link) -> String? {
-            if let logical = link.logicalParentUuid, byId[logical] != nil { return logical }
-            guard let at = index[link.uuid] else { return nil }
-            return order[..<at].last { byId[$0]?.type != "system" }
+        func continuation(of node: Links.Node) -> Int32? {
+            if let logical = node.logical, links[logical] != nil { return logical }
+            guard let at = node.position else { return nil }
+            return links.order[..<Int(at)].last { links[$0]?.kind != .system }
         }
-        var included: Set<String> = []
-        var earlier: String?
+        var included: Set<Int32> = []
+        var earlier: Int32?
         var prompts = 0
-        var cursor = before ?? leaf
+        var cursor = before.map { links.id(of: $0) } ?? links.leaf
         var reachedRoot = false
         var rootIsBoundary = false
-        while let id = cursor, let link = byId[id], included.insert(id).inserted {
-            if let limit = userTurns, link.isPrompt {
+        while let id = cursor, let node = links[id], included.insert(id).inserted {
+            if let limit = userTurns, node.isPrompt {
                 prompts += 1
                 if prompts == limit {
-                    earlier = link.parentUuid
+                    earlier = node.parent
                     break
                 }
             }
-            if let parent = link.parentUuid {
+            if let parent = node.parent {
                 cursor = parent
             } else {
                 // A compaction: the current branch stops here; a page of earlier turns goes on.
                 reachedRoot = true
-                rootIsBoundary = link.isBoundary
-                let logical = link.isBoundary ? continuation(of: link) : nil
+                rootIsBoundary = node.isBoundary
+                let logical = node.isBoundary ? continuation(of: node) : nil
                 if userTurns == nil {
                     earlier = logical
                     break
@@ -152,24 +147,28 @@ public enum ClaudeHistory {
                 cursor = logical
             }
         }
-        let span = included.compactMap { index[$0] }
+        let span = included.compactMap { links[$0]?.position }
         guard let first = span.min(), let last = span.max() else {
             return Walk(ids: [], earlier: nil, reachedRoot: reachedRoot, rootIsBoundary: rootIsBoundary)
         }
-        let window = order[first...last]
-        let messageIds = Set(included.compactMap { byId[$0].flatMap { $0.type == "assistant" ? $0.messageId : nil } })
-        for id in window where byId[id]?.type == "assistant" {
-            if let message = byId[id]?.messageId, messageIds.contains(message) { included.insert(id) }
+        let window = links.order[Int(first)...Int(last)]
+        let messageIds = Set(included.compactMap { links[$0].flatMap { $0.kind == .assistant ? $0.message : nil } })
+        for id in window {
+            if let node = links[id], node.kind == .assistant, let message = node.message, messageIds.contains(message) {
+                included.insert(id)
+            }
         }
-        let toolIds = Set(included.flatMap { id in byId[id]?.type == "assistant" ? byId[id]?.toolUses ?? [] : [] })
-        for id in window where byId[id]?.type == "user" {
-            if byId[id]?.toolResults.contains(where: toolIds.contains) == true { included.insert(id) }
+        let toolIds = Set(included.flatMap { id in links[id].map { $0.kind == .assistant ? links.toolUses($0) : [] } ?? [] })
+        for id in window {
+            if let node = links[id], node.kind == .user, links.toolResults(node).contains(where: toolIds.contains) { included.insert(id) }
         }
         // Queued messages taken mid-turn, hanging off an entry of the page.
-        for id in window where byId[id]?.isQueuedCommand == true {
-            if let parent = byId[id]?.parentUuid, included.contains(parent) { included.insert(id) }
+        for id in window {
+            if let node = links[id], node.isQueuedCommand, let parent = node.parent, included.contains(parent) { included.insert(id) }
         }
-        return Walk(ids: window.filter(included.contains), earlier: earlier, reachedRoot: reachedRoot, rootIsBoundary: rootIsBoundary)
+        return Walk(
+            ids: window.filter(included.contains).map(links.key), earlier: earlier.map(links.key), reachedRoot: reachedRoot,
+            rootIsBoundary: rootIsBoundary)
     }
 
     /// A walk's entries read and parsed: the conversation's, without other meta entries.

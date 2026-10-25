@@ -68,6 +68,38 @@ enum UILog {
             }
         }
         watchStalls()
+        watchMemory()
+    }
+
+    /// The kernel's own peak footprint since launch, read twice a minute: each rise of
+    /// `peakStep` or more is logged with what the footprint is now, so a spike, however short,
+    /// sits next to the events around it. One `task_info` call a read.
+    private static let peakStep: UInt64 = 200 << 20
+    nonisolated(unsafe) private static var memoryTimer: DispatchSourceTimer?
+
+    private static func watchMemory() {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        var logged = footprint()?.peak ?? 0
+        timer.schedule(deadline: .now() + 30, repeating: 30, leeway: .seconds(10))
+        timer.setEventHandler {
+            guard let (now, peak) = footprint(), peak >= logged + peakStep else { return }
+            logged = peak
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { UILog.event("mem-peak", ["mb": String(peak >> 20), "now": String(now >> 20)]) }
+            }
+        }
+        timer.resume()
+        memoryTimer = timer
+    }
+
+    nonisolated private static func footprint() -> (now: UInt64, peak: UInt64)? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        guard result == KERN_SUCCESS else { return nil }
+        return (info.phys_footprint, UInt64(info.ledger_phys_footprint_peak))
     }
 
     /// A pass of the main run loop that held it past `stallAfter`: the moment the interface
