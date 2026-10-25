@@ -369,7 +369,7 @@ final class AccountUsageMeters: ChatStoryline {
                     let unused = CLIProfiles.added(provider).first(where: { $0.email == "unused@example.com" }),
                     let mismatch = CLIProfiles.added(provider).first(where: { $0.email == "missing@example.com" })
                 else { return false }
-                return resets["main"] == ["Resets in 2h", "Resets in 3d"]
+                return resets["main"] == ["Session (2h)", "Weekly (3d)"]
                     && resets[unused.id] == [] && resets[mismatch.id] == []
             },
             FadesEnd(), Snapshot("account-usage-meters"),

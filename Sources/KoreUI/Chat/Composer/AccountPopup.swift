@@ -948,12 +948,16 @@ private struct LoginRow: View {
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: Space.md)
-                if hovered.value || menuOpen { LoginMenuButton(state: state, login: login.id) }
-                if reading {
-                    SpinningArc().frame(width: Size.spinner, height: Size.spinner)
-                } else if login.active {
-                    Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
+                // One slot in every row, hovered or not: every login's bars end in the same place.
+                HStack(spacing: Space.xs) {
+                    if hovered.value || menuOpen { LoginMenuButton(state: state, login: login.id) }
+                    if reading {
+                        SpinningArc().frame(width: Size.spinner, height: Size.spinner)
+                    } else if login.active {
+                        Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
+                    }
                 }
+                .frame(width: Size.iconButtonSmall + Space.xs + Size.spinner, alignment: .trailing)
             }
             .padding(.horizontal, Space.sm)
             .padding(.vertical, Space.xs)

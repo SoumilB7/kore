@@ -208,14 +208,15 @@ extension Chat {
             return (AccountStore.loginKey(login.id), lines)
         })
     }
-    /// Each login's reset countdowns, omitting windows whose provider supplied no reset time.
+    /// Each login's limits that show a reset, as their rows name them ("Session (2h)").
     package var storyLoginResets: [String: [String]] {
         let store = AccountStore.shared
         return Dictionary(uniqueKeysWithValues: store.logins(provider.id).map { login in
             let key = LoginUsage.Key(provider.id, login, generation: store.generation(provider.id))
             let lines: [String]
             if case .ready(let reading, _) = LoginUsage.shared.state(key) {
-                lines = LoginUsage.bars(reading).map { UsageText.resets($0.resetsAt, now: Date()) }.filter { !$0.isEmpty }
+                let now = Date()
+                lines = LoginUsage.bars(reading).filter { !UsageText.resetsShort($0.resetsAt, now: now).isEmpty }.map { LoginMeters.title($0, now: now) }
             } else { lines = [] }
             return (AccountStore.loginKey(login.id), lines)
         })
