@@ -31,6 +31,13 @@ extension Workspace {
         view.display()
     }
     package func storyTerminalVisible() { terminals.windowVisible = true }
+    /// The text's wanted side inset, and whether every column the terminal counts fits its view.
+    package var storyTerminalSide: CGFloat { Layout.Terminal.side }
+    package var storyTerminalColumnsFit: Bool {
+        guard let view = terminals.active?.view else { return false }
+        let used = view.getOptimalFrameSize().width
+        return used > 0 && used <= view.bounds.width + 0.5
+    }
     package var storyTerminalChildren: [ProcessChild] { terminals.entries.compactMap { $0.shell?.child } }
     package var storyTerminalHeight: CGFloat { terminals.height }
     package var storyTerminalMaximized: Bool { terminals.maximized }

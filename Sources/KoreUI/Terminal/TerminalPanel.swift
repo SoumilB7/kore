@@ -271,6 +271,9 @@ extension Layout {
         static let chatMinimum: CGFloat = 120
         static let header: CGFloat = 32
         static let listWidth: CGFloat = 150
+        /// The text's inset from the panel's sides and header.
+        static let side = Space.xxxl
+        static let top = Space.sm
         static let tailLines = 500
 
         static func fitting(_ wanted: CGFloat, available: CGFloat, maximized: Bool) -> CGFloat {

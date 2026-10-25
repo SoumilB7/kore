@@ -105,8 +105,9 @@ final class AgentCommandTerminal: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .agents, .gate] }
     static let liveID = "terminal-live"
     static let endedID = "terminal-ended"
+    static let longCommand = #"cd Sources && swift build --product kore 2>&1 | grep -E "error|warning: (unused|deprecated)" | head -40 && echo "built in $(pwd)" # then wait"#
     override class var script: CLIScript {
-        let live = ActiveCommand(id: liveID, kind: .shell, title: "Watch a command", command: "sleep 30", startedAt: .now,
+        let live = ActiveCommand(id: liveID, kind: .shell, title: "Watch a command", command: longCommand, startedAt: .now,
                                  owner: .main, output: .stream)
         let ended = ActiveCommand(id: endedID, kind: .shell, title: "Create a file", command: "/usr/bin/touch terminal-should-not-run",
                                   startedAt: .now, owner: .main, output: .stream)
@@ -129,6 +130,20 @@ final class AgentCommandTerminal: ChatStoryline {
                 try !$0.activeChat().isAgentMapOpen && $0.app.workspace?.storyTerminal.text.contains("Ready to watch") == true
             },
             Expect("the read-only terminal owns keyboard focus") { $0.app.workspace?.storyTerminal.focused == true },
+            Expect("the text sits inside the panel's side inset, every column inside the view") { story in
+                guard let panel = StoryElement(StoryID.Terminal.panel)?.frame, let output = StoryElement(StoryID.Terminal.output)?.frame,
+                      let side = story.app.workspace?.storyTerminalSide else { return false }
+                return output.minX - panel.minX >= side - 0.5 && panel.maxX - output.maxX >= side - 0.5
+                    && story.app.workspace?.storyTerminalColumnsFit == true
+            },
+            Expect("the long command reads as one step per line", found: { $0.app.workspace?.storyTerminal.text ?? "" }) {
+                let lines = ($0.app.workspace?.storyTerminal.text ?? "").components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                guard let first = lines.firstIndex(of: "$ cd Sources"), lines.count > first + 4 else { return false }
+                return lines[first + 1].hasPrefix("&& swift build") && lines[first + 2].hasPrefix("| grep -E")
+                    && lines[first + 3] == "| head -40" && lines[first + 4].hasPrefix("&& echo \"built in $(pwd)\"")
+            },
+            Do("Paint the offscreen native terminal") { $0.app.workspace?.storyPaintTerminal() },
+            Snapshot("agent-command-running"),
             TypeText("do not send"),
             Expect("typing never reaches the output") { $0.app.workspace?.storyTerminal.text.contains("do not send") == false },
             Press(.id(StoryID.Terminal.stop)),

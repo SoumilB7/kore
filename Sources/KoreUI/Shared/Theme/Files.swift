@@ -103,6 +103,17 @@ extension Theme {
             return color.map(NSColor.init)
         }
     }
+
+    /// A command line in the terminal: the editor's set, plus flags and `$…` parts.
+    enum Shell {
+        static let command = text
+        static let keyword = Syntax.keyword
+        static let flag = Blue.b200
+        static let string = Syntax.string
+        static let variable = Color(hex: 0x8CC4B4)
+        static let op = secondary
+        static let comment = Syntax.comment
+    }
 }
 
 extension Chrome {

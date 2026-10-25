@@ -57,7 +57,9 @@ private struct TerminalPanelView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, Space.sm)
+                    // The native view sits inside the inset, so its columns fit the inset width.
+                    .padding(.horizontal, Layout.Terminal.side)
+                    .padding(.top, Layout.Terminal.top)
                     .padding(.bottom, Space.xs)
                     .task(id: "\(active.id)-\(active.command?.isLive ?? false)-\(panel.windowVisible)") {
                         guard active.shell == nil, panel.windowVisible else { return }
