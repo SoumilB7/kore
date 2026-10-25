@@ -343,8 +343,8 @@ struct TranscriptTimeline: View, Equatable {
     }
 
     /// Two seconds after it shows, changes or its window comes back, a transcript with rows but
-    /// none on screen (none built, all below the visible area, scrolled past its end, AppKit's
-    /// content not under the visible part, or no layer drawing there) is logged with its geometry
+    /// nothing on screen (scrolled past its end, AppKit's content not under the visible part, or
+    /// no layer drawing there) is logged with its geometry
     /// in sessions.log ("blank"), and its scroll view is built again at the end, once. Never while
     /// its window is covered: macOS may drop what it drew until it shows again.
     private func checkBlank() {
@@ -355,13 +355,12 @@ struct TranscriptTimeline: View, Equatable {
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled, !store.sections.isEmpty, seen.value.count == 4, shift.windowVisible else { return }
             let (height, offset, visible) = (seen.value[0], seen.value[1], seen.value[2])
-            // Only where the end should show (opened, following) or past it: a reader up among
-            // a turn's tool rows has no message or answer on screen, and stays where they are.
-            let onScreen = tops.value.values.contains { $0 < visible }
             let frames = shift.frames
             let drawn = shift.drawn
             let unseen = (frames.map { $0.content.height < 1 || !$0.content.intersects($0.visible) } ?? false) || drawn == 0
-            guard (!onScreen && following.value) || offset > height || unseen else {
+            // By what's drawn, not by which rows reported: a new chat, or a turn showing only its
+            // tool rows, has no message or answer on screen and is fine.
+            guard offset > height || unseen else {
                 if remounts.value > 0 {
                     KoreLog.named("sessions").write("blank-recovered", ["cli": store.providerName])
                     remounts.value = 0
