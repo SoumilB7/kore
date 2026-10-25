@@ -432,6 +432,8 @@ final class CodexBackend: ChatBackend {
         guard let session else { return }
         translator.compactRequested = true
         try await session.compact()
+        // `thread/compact/start` takes no instructions: said, not dropped unseen.
+        if !instructions.isEmpty { yield(.notice("Codex compacts without instructions, so yours weren't used")) }
     }
 
     func setMode(_ id: String) async throws {
