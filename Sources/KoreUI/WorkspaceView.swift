@@ -677,11 +677,11 @@ private struct TabItem: View {
 
     private var help: String {
         if let file = tab.file {
-            if file.notice == .deleted { return "Deleted on disk" }
-            return file.path
+            if file.notice == .deleted { return "\(tab.title)\nDeleted on disk\n\(file.path)" }
+            return "\(tab.title)\n\(file.path)"
         }
         if tab.agent == nil, let imported = tab.chat?.imported { return "\(tab.title) · from \(imported.record.sourceProduct)" }
-        return tab.agent != nil ? "Sub-agent of “\(tab.chat?.title ?? "")”" : tab.title
+        return tab.agent != nil ? "\(tab.title)\nSub-agent of “\(tab.chat?.title ?? "")”" : tab.title
     }
 
     /// When file tabs share a name, each shows the nearest folder that tells it apart from
@@ -781,6 +781,9 @@ private struct TabItem: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // Attach to the selection button too: its hit area owns hover over a clipped name.
+            .help(help)
+            .accessibilityLabel(tab.title)
             .storyID(storyKey)
             Button {
                 workspace.requestClose(tab)
