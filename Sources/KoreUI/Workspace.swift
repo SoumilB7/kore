@@ -88,7 +88,13 @@ package final class Workspace {
     }
     private(set) var activeID: UUID {
         // A tab's close question goes with a switch.
-        didSet { if closing != nil, activeID != oldValue { closing = nil } }
+        didSet {
+            guard activeID != oldValue else { return }
+            // End a native pinch before SwiftUI hides the old page; the host restores
+            // the newly mounted page after layout.
+            PinchZoom.selectTab(in: window, id: activeID, openTabs: tabs.map(\.id))
+            if closing != nil { closing = nil }
+        }
     }
     /// Every chat the CLIs have for this folder, newest first, archived ones flagged.
     private(set) var chats: [SessionSummary] = []

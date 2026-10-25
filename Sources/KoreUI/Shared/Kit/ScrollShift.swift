@@ -13,6 +13,8 @@ final class ScrollShift: ObservableObject {
     var onReturn: (() -> Void)?
     /// A single absolute position replaces any retained edge/row scroll target at pinch begin.
     var onZoomBegin: ((CGFloat) -> Void)?
+    var onZoomEnd: ((Bool) -> Void)?
+    var onZoomInput: (() -> Void)?
 
     func attach(_ scroll: NSScrollView) {
         if let old = scrollView, Self.known.object(forKey: old) === self { Self.known.removeObject(forKey: old) }
@@ -25,6 +27,14 @@ final class ScrollShift: ObservableObject {
         guard let freeze = known.object(forKey: scroll)?.onZoomBegin else { return false }
         freeze(scroll.contentView.bounds.minY)
         return true
+    }
+
+    static func endZoom(in scroll: NSScrollView, resumeFollowing: Bool) {
+        known.object(forKey: scroll)?.onZoomEnd?(resumeFollowing)
+    }
+
+    static func interruptZoomRecovery(in scroll: NSScrollView) {
+        known.object(forKey: scroll)?.onZoomInput?()
     }
 
     /// AppKit's own geometry: the content's frame and the visible part of it.

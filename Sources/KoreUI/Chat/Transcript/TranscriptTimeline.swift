@@ -18,6 +18,8 @@ struct TranscriptTimeline: View, Equatable {
     /// The sections and the end as they were when the chat's tab hid.
     @StateObject private var frozen = Frozen<(sections: [TranscriptStore.SectionModel], tail: Int)>()
     @StateObject private var following = Local(true)
+    @StateObject private var zoomFollowing = Held(Bool?.none)
+    @StateObject private var zoomRejoining = Held(false)
     /// Written by the scroll view as the reader scrolls; held without re-rendering. `nudge`
     /// re-renders once, when the position has to be pushed back (after a fold).
     @StateObject private var position = Held(ScrollPosition(edge: .bottom))
@@ -138,6 +140,7 @@ struct TranscriptTimeline: View, Equatable {
                 gesturing.value = new != .idle
                 guard !shift.zoomAdjusting else { return }
                 if new == .interacting {
+                    zoomRejoining.value = false
                     following.value = false
                     // The reader took over: a place still being restored or kept is dropped.
                     restore.value = nil
@@ -166,6 +169,13 @@ struct TranscriptTimeline: View, Equatable {
                 // paging or folding replace the absolute position held during a pinch.
                 if shift.zoomAdjusting {
                     geometry.value = (height, offset)
+                    return
+                }
+                // Native reset geometry may arrive after the ending layout pass. It is not
+                // a reader scrolling away: wait for the explicit bottom target to land.
+                if zoomRejoining.value {
+                    geometry.value = (height, offset)
+                    if offset + new[2] >= height - Self.atBottom { zoomRejoining.value = false }
                     return
                 }
                 if let inRow = restoreInRow.value, height > 0 {
@@ -295,7 +305,9 @@ struct TranscriptTimeline: View, Equatable {
                 follow(proxy, showing: showing)
             }
             .onAppear {
-                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop] _ in
+                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop, following, zoomFollowing, zoomRejoining] _ in
+                    zoomFollowing.value = following.value
+                    zoomRejoining.value = false
                     glidingUntil.value = nil
                     glideCut.value = store.sentAt
                     var instant = Transaction()
@@ -306,6 +318,26 @@ struct TranscriptTimeline: View, Equatable {
                         position.value.scrollTo(y: geometry.value.offset + insetTop.value)
                         nudge.value &+= 1
                     }
+                }
+                shift.onZoomEnd = { [following, zoomFollowing, zoomRejoining, position, glidingUntil, glideCut, store] resume in
+                    guard let previous = zoomFollowing.value else { return }
+                    zoomFollowing.value = nil
+                    following.value = previous
+                    guard resume, previous, !hidden else { zoomRejoining.value = false; return }
+                    zoomRejoining.value = true
+                    glidingUntil.value = nil
+                    glideCut.value = store.sentAt
+                    var instant = Transaction()
+                    instant.disablesAnimations = true
+                    withTransaction(instant) {
+                        // Replace the absolute target frozen at begin, rather than leaving
+                        // it to compete with following when the next text arrives.
+                        position.value = ScrollPosition(edge: .bottom)
+                        proxy.scrollTo(Self.end, anchor: .bottom)
+                    }
+                }
+                shift.onZoomInput = { [zoomRejoining] in
+                    if zoomRejoining.value { zoomRejoining.value = false }
                 }
                 // Back from behind other windows, a scroll view has come back with nothing drawn.
                 shift.onReturn = { [shown] in if shown.value { checkBlank() } }
@@ -352,6 +384,8 @@ struct TranscriptTimeline: View, Equatable {
             }
             .onDisappear {
                 shift.onZoomBegin = nil
+                shift.onZoomEnd = nil
+                shift.onZoomInput = nil
                 // The row nearest the top of the visible area, and how far below its top that is
                 // (negative: above it). It comes back exactly, however the rows above it measure
                 // when they're built again.

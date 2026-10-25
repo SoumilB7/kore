@@ -29,8 +29,7 @@ final class Zoom {
         return min(max(value, range.lowerBound), range.upperBound)
     }
 
-    /// Pinching previews with Core Animation; its one semantic commit keeps the chosen size
-    /// rather than jumping back onto the keyboard's ten-percent steps.
+    /// Updates remembered text size. Optical page magnification never writes this setting.
     @discardableResult
     func commitPinch(_ value: CGFloat) -> Bool {
         guard let value = Self.bounded(value), abs(value - scale) > 0.0001 else { return false }
