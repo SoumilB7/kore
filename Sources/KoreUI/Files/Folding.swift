@@ -143,12 +143,15 @@ extension CodeEditorController: @preconcurrency NSLayoutManagerDelegate {
     /// Regions follow the text at idle; one keystroke doesn't re-scan a long file.
     func scheduleRegions() {
         regionsPending?.cancel()
-        regionsPending = Task { [weak self] in
+        let document = document
+        regionsPending = Task { [weak self, weak document] in
             try? await Task.sleep(for: Size.Editor.foldIdle)
-            guard !Task.isCancelled, let self else { return }
-            self.computeRegions()
-            self.regionsPending = nil
-            self.gutterNeedsDisplay()
+            guard !Task.isCancelled, let self, let document else { return }
+            withExtendedLifetime(document) {
+                self.computeRegions()
+                self.regionsPending = nil
+                self.gutterNeedsDisplay()
+            }
         }
     }
 

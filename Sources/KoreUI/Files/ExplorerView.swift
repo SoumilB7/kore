@@ -344,18 +344,18 @@ private struct TreeRow: View {
 
     var body: some View {
         let state = store.state(of: row.id)
-        let ignored = state == .ignored
+        let tint = state.map(Theme.Git.color)
         HStack(spacing: 0) {
             Spacer().frame(width: Size.Tree.leading + CGFloat(row.depth) * Size.Tree.indent)
             chevron
             if !row.isFolder {
-                FileIconView(name: editing ? "" : row.names[0], color: ignored ? Theme.tertiary : (isSelected ? Theme.text : Theme.secondary))
+                FileIconView(name: editing ? "" : row.names[0], color: tint ?? (isSelected ? Theme.text : Theme.secondary))
                 Spacer().frame(width: Size.Tree.iconGap)
             }
             if editing {
                 InlineNameField(row: row, store: store, workspace: workspace)
             } else {
-                name(ignored: ignored)
+                name(state: state)
                 Spacer(minLength: Space.md)
                 trailing(state)
             }
@@ -412,7 +412,8 @@ private struct TreeRow: View {
         .frame(width: Size.Tree.chevronBox, height: Size.Tree.chevronBox)
     }
 
-    private func name(ignored: Bool) -> some View {
+    private func name(state: GitStatus.State?) -> some View {
+        let tint = state.map(Theme.Git.color)
         var text = AttributedString()
         for (i, name) in row.names.enumerated() {
             if i > 0 {
@@ -423,14 +424,14 @@ private struct TreeRow: View {
             let last = i == row.names.count - 1
             if last, !typed.isEmpty, name.lowercased().hasPrefix(typed.lowercased()) {
                 var matched = AttributedString(String(name.prefix(typed.count)))
-                matched.foregroundColor = Theme.accent
+                matched.foregroundColor = tint ?? Theme.accent
                 matched.font = Chrome.bodySemibold
                 var rest = AttributedString(String(name.dropFirst(typed.count)))
-                rest.foregroundColor = ignored ? Theme.tertiary : Theme.text
+                rest.foregroundColor = tint ?? Theme.text
                 text += matched + rest
             } else {
                 var part = AttributedString(name)
-                part.foregroundColor = ignored ? Theme.tertiary : Theme.text
+                part.foregroundColor = tint ?? Theme.text
                 text += part
             }
         }
@@ -450,12 +451,12 @@ private struct TreeRow: View {
             .help("Changed by \(touch.help)")
         } else if row.isFolder, folderTouched || (state != nil && state != .ignored) {
             Circle()
-                .fill(state == .conflicted ? Theme.danger : Theme.accent)
+                .fill(state.map(Theme.Git.color) ?? Theme.Git.modified)
                 .frame(width: Size.Tree.point, height: Size.Tree.point)
         } else if let state, state != .ignored {
             if row.isFolder {
                 Circle()
-                    .fill(state == .conflicted ? Theme.danger : Theme.accent)
+                    .fill(Theme.Git.color(state))
                     .frame(width: Size.Tree.point, height: Size.Tree.point)
             } else if let letter = Theme.Git.letter(state) {
                 Text(letter)

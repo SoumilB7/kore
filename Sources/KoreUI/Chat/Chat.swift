@@ -26,11 +26,20 @@ package final class Chat: Identifiable {
     let commands = CommandsStore()
 
     /// Waiting in the composer, sent with the next message.
-    private(set) var attachments: [Attachment] = []
-    package var draft = ""
+    private(set) var attachments: [Attachment] = [] {
+        didSet { if attachments.map(\.id) != oldValue.map(\.id) { composerDraftChanged() } }
+    }
+    package var draft = "" {
+        didSet { if draft != oldValue { composerDraftChanged() } }
+    }
     /// The `/` command this message starts with, shown as a chip before the draft: one per
     /// message, as both CLIs run one.
-    package var command: SlashCommand?
+    package var command: SlashCommand? {
+        didSet { if command != oldValue { composerDraftChanged() } }
+    }
+    /// The window schedules its own debounced persistence, independently of SwiftUI bodies.
+    @ObservationIgnored var onDraftChanged: (() -> Void)?
+    @ObservationIgnored private var restoringComposerDraft = false
     /// The / menu was closed (Esc, a click away, another popup) for the "/word" at the caret;
     /// the next one opens it again.
     var slashClosed = false
@@ -698,6 +707,7 @@ package final class Chat: Identifiable {
     }
 
     func close(reason: String = "tab closed") {
+        onDraftChanged = nil
         if !closed, backend != nil { SessionLog.shared.closing(provider.id, chat: sessionId, reason: reason) }
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil
@@ -715,6 +725,37 @@ package final class Chat: Identifiable {
     }
 
     // MARK: Composer
+
+    /// A metadata-only snapshot: no trimming, command parsing, thumbnail reads or other IO.
+    package var composerDraft: ChatDraft {
+        ChatDraft(provider: provider.id, folder: folder, text: draft, command: command.map(ChatDraft.Command.init),
+                  attachmentURLs: attachments.compactMap(\.url))
+    }
+
+    /// A closed tab may retain its attachments in memory to reuse their IDs and thumbnails;
+    /// after relaunch, file URLs rebuild the chips. Metadata is sufficient before controls load.
+    @discardableResult
+    package func restoreComposerDraft(_ saved: ChatDraft, keeping files: [Attachment] = []) -> Bool {
+        guard saved.provider == provider.id, saved.folder.isFileURL,
+              saved.folder.standardizedFileURL == folder.standardizedFileURL else { return false }
+        let before = composerDraft
+        var available = files
+        let restored: [Attachment] = saved.attachmentURLs.filter { $0.isFileURL && $0.path.hasPrefix("/") }.map { url in
+            if let index = available.firstIndex(where: { $0.url == url }) { return available.remove(at: index) }
+            return Attachment(url: url)
+        }
+        restoringComposerDraft = true
+        draft = saved.text
+        command = saved.command?.slashCommand
+        attachments = restored
+        restoringComposerDraft = false
+        if composerDraft != before { composerDraftChanged() }
+        return true
+    }
+
+    private func composerDraftChanged() {
+        if !restoringComposerDraft { onDraftChanged?() }
+    }
 
     /// Something to send, and no compaction under way (sending waits until it's done).
     var canSend: Bool {

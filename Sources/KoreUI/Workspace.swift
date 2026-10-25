@@ -8,7 +8,10 @@ import Observation
 @MainActor @Observable
 package final class ChatTab: Identifiable {
     package let id = UUID()
-    package var chat: Chat?
+    package var chat: Chat? {
+        didSet { if chat !== oldValue { onChatChanged?(oldValue, chat) } }
+    }
+    @ObservationIgnored var onChatChanged: ((Chat?, Chat?) -> Void)?
     /// Set for an agent tab: the sub-agent of `chat` it shows.
     var agent: String?
     /// Set for a file tab.
@@ -32,7 +35,9 @@ package final class ChatTab: Identifiable {
 package final class Workspace {
     package let folder: URL
     let terminals: TerminalPanel
-    package private(set) var tabs: [ChatTab]
+    package private(set) var tabs: [ChatTab] {
+        didSet { bindTabs(previous: oldValue) }
+    }
     /// The folder's window, once it's on screen (a storyline host sizes and snapshots it). Its
     /// close, not its view's, ends the chats.
     @ObservationIgnored package weak var window: NSWindow? {
@@ -51,11 +56,21 @@ package final class Workspace {
     /// another app and back has), and the chats in it must outlive that: only the window's
     /// close ends them.
     private static var open: [String: Workspace] = [:]
+    private static var pendingRestores: [String: Saved] = [:]
+
+    /// A closed window's snapshot is consumed once; an existing window is never replaced.
+    @discardableResult
+    static func restoreOnNextOpen(folder: URL, snapshot: Saved) -> Bool {
+        let key = folder.standardizedFileURL.path
+        guard open[key]?.isClosed != false else { return false }
+        pendingRestores[key] = snapshot
+        return true
+    }
 
     /// The folder's workspace while its window is open, else a new one with its saved tabs.
     static func forWindow(_ folder: URL, restore: Bool) -> Workspace {
         let key = folder.standardizedFileURL.path
-        if let workspace = open[key] { return workspace }
+        if let workspace = open[key], !workspace.isClosed { return workspace }
         let workspace = Workspace(folder: folder, restore: restore)
         open[key] = workspace
         SessionLog.shared.window("opened", folder: folder, tabs: workspace.tabs.count)
@@ -66,6 +81,7 @@ package final class Workspace {
         if let closer { NotificationCenter.default.removeObserver(closer) }
         closer = nil
         SessionLog.shared.window("closed", folder: folder, tabs: tabs.count)
+        AppModel.shared?.rememberClosedWorkspace(folder: folder, snapshot: persistenceSnapshot())
         closeAll()
         let key = folder.standardizedFileURL.path
         if Self.open[key] === self { Self.open[key] = nil }
@@ -102,11 +118,19 @@ package final class Workspace {
     /// Files opened, most recent first (quick open's empty state).
     private(set) var recentFiles: [String] = []
     @ObservationIgnored private var saveQueued = false
+    @ObservationIgnored private var saveGeneration = 0
+    @ObservationIgnored private var isClosed = false
+    @ObservationIgnored private var drafts: [String: ChatDraft] = [:]
+    @ObservationIgnored private var retainedAttachments: [UUID: [Attachment]] = [:]
+    private(set) var closedTabs: [Saved.Closed] = []
 
     init(folder: URL, restore: Bool = true) {
         self.folder = folder
         terminals = TerminalPanel(folder: folder)
-        let saved = restore ? Self.saved(for: folder) : nil
+        let pending = Self.pendingRestores.removeValue(forKey: folder.standardizedFileURL.path)
+        let saved = pending ?? (restore ? Self.saved(for: folder) : nil)
+        drafts = saved?.drafts ?? [:]
+        closedTabs = Array((saved?.closed ?? []).suffix(20))
         var restored = saved?.tabs.map { Self.tab($0, in: folder) } ?? []
         // A file open twice (saved under two spellings of its path) comes back once.
         var seen: Set<String> = []
@@ -121,6 +145,8 @@ package final class Workspace {
             explorerWidth = explorer.width
             explorerOpen = explorer.open
         }
+        bindTabs(previous: [])
+        trimDrafts()
         Self.all.add(self)
         // Restored file tabs follow the disk too.
         if tabs.contains(where: { $0.file != nil }) { _ = filesStore() }
@@ -158,7 +184,7 @@ package final class Workspace {
 
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.
     package func open(_ session: SessionSummary) {
-        if let tab = tab(for: session.id) {
+        if let tab = tab(for: session.id, provider: Registry.provider(for: session.agent).id) {
             select(tab)
             return
         }
@@ -286,17 +312,21 @@ package final class Workspace {
 
     /// Ends the tab's chat, and closes its agents' tabs with it. Closing an agent tab only
     /// closes the view. Closing the last tab leaves a fresh empty one.
-    func close(_ tab: ChatTab) {
+    func close(_ tab: ChatTab, remember: Bool = true) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        tab.file?.flushAutoSave()
         if let file = tab.file, file.isDirty, !Self.confirmClose(file) { return }
+        if remember { rememberClosed(tab, at: index) }
         if tab.agent == nil, let chat = tab.chat {
             for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
         }
         remove(tab, at: tabs.firstIndex(where: { $0.id == tab.id }) ?? index)
+        save()
     }
 
     private func remove(_ tab: ChatTab, at index: Int? = nil) {
         guard let index = index ?? tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        tab.file?.closeAutoSave()
         if closing?.tab == tab.id { closing = nil }
         if tab.agent == nil, tab.file == nil, let chat = tab.chat {
             terminals.detach(chat)
@@ -334,7 +364,7 @@ package final class Workspace {
         guard tab.chat === chat, tabs.contains(where: { $0 === tab }) else { return }
         for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
         let fresh = Self.tab(Saved.Tab(provider: chat.provider.rawValue, session: chat.sessionId, title: chat.title), in: folder).chat
-        fresh?.draft = chat.draft
+        fresh?.restoreComposerDraft(chat.composerDraft, keeping: chat.attachments)
         fresh?.launchModel = chat.controls.modelId
         terminals.detach(chat)
         chat.close(reason: "reload")
@@ -427,12 +457,18 @@ package final class Workspace {
     }
 
     func closeAll() {
+        for tab in tabs { tab.file?.closeAutoSave() }
+        guard !isClosed else { return }
+        persistNow()
+        isClosed = true
         terminals.shutdown()
-        // A save still waiting goes now.
-        if saveQueued, Self.persists(folder) {
-            UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: Self.key(Self.savedKey, folder))
+        for tab in tabs {
+            tab.onChatChanged = nil
+            if tab.agent == nil, tab.file == nil {
+                tab.chat?.onDraftChanged = nil
+                tab.chat?.close(reason: "window closed")
+            }
         }
-        for tab in tabs where tab.agent == nil && tab.file == nil { tab.chat?.close(reason: "window closed") }
         files?.stop()
     }
 
@@ -612,6 +648,10 @@ package final class Workspace {
         return path
     }
 
+    func flushAutoSaves() {
+        for tab in tabs { tab.file?.flushAutoSave() }
+    }
+
     func saveAll() {
         for tab in tabs { if let file = tab.file, file.isDirty { file.save() } }
     }
@@ -721,13 +761,18 @@ package final class Workspace {
     /// time are dropped, and titles renamed elsewhere are taken up. (Tabs of a CLI whose list
     /// couldn't be read are left alone.)
     private func reconcileRestored(listed: Set<String>) {
-        let byId = Dictionary(chats.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let byId = Dictionary(chats.map { (Self.draftKey(Registry.provider(for: $0.agent).id, $0.id), $0) }, uniquingKeysWith: { first, _ in first })
+        for entry in closedTabs {
+            guard let provider = entry.tab.provider, let id = entry.tab.session, listed.contains(provider) else { continue }
+            if byId[Self.draftKey(provider, id)]?.archived != false { discardRecovery(provider: provider, session: id) }
+        }
         for tab in tabs where tab.agent == nil {
             guard let chat = tab.chat, chat.resumed, let id = chat.sessionId else { continue }
-            if let session = byId[id] {
-                if session.archived { close(tab) } else { chat.adoptName(session.title) }
+            if let session = byId[Self.draftKey(chat.provider.id, id)] {
+                if session.archived { discardRecovery(provider: chat.provider.id, session: id); close(tab, remember: false) } else { chat.adoptName(session.title) }
             } else if listed.contains(chat.provider.id) {
-                close(tab)
+                discardRecovery(provider: chat.provider.id, session: id)
+                close(tab, remember: false)
             }
         }
     }
@@ -735,7 +780,9 @@ package final class Workspace {
     /// Archives a chat in its CLI (Codex: `thread/archive`; Claude has no archive of its own, so
     /// Kore keeps a hidden list, as the Claude Code extension does) and closes its tab.
     func archive(_ session: SessionSummary) async {
-        if let tab = tab(for: session.id) { close(tab) }
+        let provider = Registry.provider(for: session.agent).id
+        discardRecovery(provider: provider, session: session.id)
+        if let tab = tab(for: session.id, provider: provider) { close(tab, remember: false) }
         await Registry.provider(for: session.agent).setArchived(session.id, true, folder)
         setArchived(session.id, true)
     }
@@ -770,12 +817,17 @@ package final class Workspace {
         chats[index].archived = archived
     }
 
-    private func tab(for sessionId: String) -> ChatTab? {
-        tabs.first { $0.chat?.sessionId == sessionId && $0.agent == nil }
+    private func tab(for sessionId: String, provider: String? = nil) -> ChatTab? {
+        tabs.first { $0.chat?.sessionId == sessionId && $0.agent == nil && (provider == nil || $0.chat?.provider.id == provider) }
     }
 
     private func chat(_ session: SessionSummary) -> Chat {
-        Chat(provider: Registry.provider(for: session.agent), folder: folder, resume: session)
+        let chat = Chat(provider: Registry.provider(for: session.agent), folder: folder, resume: session)
+        if let draft = drafts[Self.draftKey(chat.provider.id, session.id)] {
+            let closed = closedTabs.last { $0.tab.provider == chat.provider.id && $0.tab.session == session.id }
+            chat.restoreComposerDraft(draft, keeping: closed.flatMap { retainedAttachments[$0.id] } ?? [])
+        }
+        return chat
     }
 
     // MARK: - Open tabs
@@ -791,10 +843,21 @@ package final class Workspace {
             var title: String?
             /// A file tab's path.
             var file: String?
+            var draft: ChatDraft? = nil
+        }
+
+        struct Closed: Codable, Equatable {
+            var id = UUID()
+            var tab: Tab
+            var index: Int
+            var agent: String? = nil
+            var parent: UUID? = nil
         }
 
         var tabs: [Tab]
         var active: Int
+        var closed: [Closed]? = nil
+        var drafts: [String: ChatDraft]? = nil
     }
 
     /// Agent tabs and preview tabs aren't saved: they come back by opening them again.
@@ -810,15 +873,152 @@ package final class Workspace {
             active: kept.firstIndex { $0.id == activeID } ?? kept.firstIndex { $0.chat === activeTab.chat } ?? 0)
     }
 
+    /// Builds the persistence value outside SwiftUI observation: typing never changes `saved`.
+    func persistenceSnapshot() -> Saved {
+        var snapshot = saved
+        let kept = tabs.filter { $0.agent == nil && !$0.isPreview }
+        for (index, tab) in kept.enumerated() {
+            guard let chat = tab.chat else { continue }
+            rememberDraft(chat)
+            let draft = chat.composerDraft
+            snapshot.tabs[index].draft = draft.isEmpty ? nil : draft
+        }
+        snapshot.closed = closedTabs.isEmpty ? nil : closedTabs
+        snapshot.drafts = drafts.isEmpty ? nil : drafts
+        return snapshot
+    }
+
+    /// Quit and window close flush even when the debounce has not been queued yet.
+    func persistNow() {
+        saveGeneration += 1
+        saveQueued = false
+        guard !isClosed, Self.persists(folder) else { return }
+        UserDefaults.standard.set(try? JSONEncoder().encode(persistenceSnapshot()), forKey: Self.key(Self.savedKey, folder))
+    }
+
     /// Saves this folder's tabs, once for a burst of changes.
     func save() {
-        guard Self.persists(folder), !saveQueued else { return }
+        guard !isClosed, Self.persists(folder), !saveQueued else { return }
         saveQueued = true
+        let generation = saveGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self else { return }
-            saveQueued = false
-            UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: Self.key(Self.savedKey, folder))
+            guard let self, !isClosed, saveQueued, generation == saveGeneration else { return }
+            persistNow()
         }
+    }
+
+    private func bindTabs(previous: [ChatTab]) {
+        for tab in previous where !tabs.contains(where: { $0 === tab }) {
+            tab.onChatChanged = nil
+            if tab.agent == nil { tab.chat?.onDraftChanged = nil }
+        }
+        for tab in tabs {
+            tab.onChatChanged = { [weak self] old, _ in
+                guard let self else { return }
+                old?.onDraftChanged = nil
+                bindTabs(previous: [])
+                save()
+            }
+            guard tab.agent == nil, let chat = tab.chat else { continue }
+            chat.onDraftChanged = { [weak self, weak chat] in
+                guard let self, let chat else { return }
+                rememberDraft(chat)
+                save()
+            }
+        }
+    }
+
+    private static func draftKey(_ provider: String, _ session: String) -> String { provider + ":" + session }
+
+    private func rememberDraft(_ chat: Chat) {
+        guard let session = chat.sessionId else { return }
+        let key = Self.draftKey(chat.provider.id, session)
+        let draft = chat.composerDraft
+        // A clear supersedes an older closed snapshot, so sending a recovered draft cannot resurrect it.
+        let hasClosed = closedTabs.contains { $0.tab.provider == chat.provider.id && $0.tab.session == session }
+        drafts[key] = !draft.isEmpty || hasClosed ? draft : nil
+        trimDrafts()
+    }
+
+    private func trimDrafts() {
+        guard drafts.count > 100 else { return }
+        let protected = Set(tabs.compactMap { tab -> String? in
+            guard let chat = tab.chat, let id = chat.sessionId else { return nil }
+            return Self.draftKey(chat.provider.id, id)
+        } + closedTabs.compactMap { entry -> String? in
+            guard let provider = entry.tab.provider, let id = entry.tab.session else { return nil }
+            return Self.draftKey(provider, id)
+        })
+        for key in drafts.keys.sorted() where drafts.count > max(100, protected.count) && !protected.contains(key) {
+            drafts[key] = nil
+        }
+    }
+
+    private func rememberClosed(_ tab: ChatTab, at index: Int) {
+        var value = Saved.Tab()
+        if let file = tab.file { value.file = file.path }
+        if let chat = tab.chat {
+            value.provider = chat.provider.id
+            value.session = chat.hasConversation ? chat.sessionId : nil
+            value.title = chat.title
+            value.draft = chat.composerDraft
+        }
+        let parent = tab.agent == nil ? nil : tabs.first { $0.chat === tab.chat && $0.agent == nil }?.id
+        let entry = Saved.Closed(tab: value, index: index, agent: tab.agent, parent: parent)
+        closedTabs.append(entry)
+        if let chat = tab.chat, tab.agent == nil {
+            retainedAttachments[entry.id] = chat.attachments
+            rememberDraft(chat)
+        }
+        if closedTabs.count > 20 { closedTabs.removeFirst(closedTabs.count - 20) }
+        let ids = Set(closedTabs.map(\.id))
+        retainedAttachments = retainedAttachments.filter { ids.contains($0.key) }
+    }
+
+    var canReopenClosedTab: Bool {
+        closedTabs.contains { entry in
+            entry.agent == nil || tabs.contains { $0.agent == nil && $0.id == entry.parent }
+        }
+    }
+
+    /// Reopens the last closed tab at its old position without retaining its previous CLI or views.
+    func reopenClosedTab() {
+        while let entry = closedTabs.popLast() {
+            let attachments = retainedAttachments.removeValue(forKey: entry.id) ?? []
+            let tab: ChatTab
+            if let agent = entry.agent {
+                guard let parent = tabs.first(where: { $0.agent == nil && $0.id == entry.parent }), let chat = parent.chat else { continue }
+                if let existing = tabs.first(where: { $0.chat === chat && $0.agent == agent }) { select(existing); save(); return }
+                tab = ChatTab()
+                tab.agent = agent
+                tab.chat = chat
+            } else {
+                if let file = entry.tab.file, let existing = tabs.first(where: { $0.file?.path == realPath(file) }) {
+                    select(existing); save(); return
+                }
+                if let provider = entry.tab.provider, let id = entry.tab.session,
+                    let existing = self.tab(for: id, provider: provider) { select(existing); save(); return }
+                var value = entry.tab
+                if let provider = value.provider, let id = value.session,
+                    let latest = drafts[Self.draftKey(provider, id)] { value.draft = latest }
+                tab = Self.tab(value, in: folder)
+                if let draft = value.draft { tab.chat?.restoreComposerDraft(draft, keeping: attachments) }
+            }
+            if tabs.count == 1, tabs[0].isEmpty { tabs.removeAll() }
+            tabs.insert(tab, at: min(max(entry.index, 0), tabs.count))
+            activeID = tab.id
+            if tab.file != nil { _ = filesStore() }
+            save()
+            return
+        }
+        save()
+    }
+
+    private func discardRecovery(provider: String, session: String) {
+        closedTabs.removeAll { $0.tab.provider == provider && $0.tab.session == session }
+        let ids = Set(closedTabs.map(\.id))
+        retainedAttachments = retainedAttachments.filter { ids.contains($0.key) }
+        drafts[Self.draftKey(provider, session)] = nil
     }
 
     private static let savedKey = "openTabs"
@@ -862,6 +1062,7 @@ package final class Workspace {
                 id: $0, agent: provider.historyAgent, title: saved.title ?? provider.name, updated: .now)
         }
         tab.chat = Chat(provider: provider, folder: folder, resume: session)
+        if let draft = saved.draft { tab.chat?.restoreComposerDraft(draft) }
         return tab
     }
 }

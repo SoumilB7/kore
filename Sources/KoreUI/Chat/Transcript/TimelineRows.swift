@@ -854,6 +854,8 @@ struct ToolHeader: View {
     var nameColor = Theme.text
     /// `labelStrong` for a file inside a multi-file edit, a step quieter than its parent.
     var nameFont = TextStyle.toolName
+    /// File-change paths keep the same semantic hue as their operation.
+    var textColor = Theme.secondary
     var path: String?
     var text: String
     var folder: URL?
@@ -867,10 +869,10 @@ struct ToolHeader: View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
             // A file link opens in a Kore tab, through the transcript's openURL.
             if let selectionPath {
-                Text(line).lineLimit(2).tint(Theme.secondary).help(path ?? "")
+                Text(line).lineLimit(2).tint(textColor).help(path ?? "")
                     .selectableText(selectionPath, selectionLine, .toolHeader)
             } else {
-                Text(line).lineLimit(2).tint(Theme.secondary).help(path ?? "")
+                Text(line).lineLimit(2).tint(textColor).help(path ?? "")
             }
             if added > 0 || removed > 0 { ChangeCounts(added: added, removed: removed) }
         }
@@ -901,11 +903,11 @@ struct ToolHeader: View {
         if let status {
             var suffix = AttributedString(text.isEmpty && path == nil ? status.text : " · " + status.text)
             suffix.foregroundColor = status.color
-            rest.foregroundColor = Theme.secondary
+            rest.foregroundColor = textColor
             rest += suffix
         }
         rest.font = TextStyle.codeSmall
-        if status == nil { rest.foregroundColor = Theme.secondary }
+        if status == nil { rest.foregroundColor = textColor }
         guard !rest.characters.isEmpty else { return name }
         var gap = AttributedString(" ")
         gap.font = TextStyle.codeSmall
@@ -963,7 +965,8 @@ struct EditItem: View {
         VStack(alignment: .leading, spacing: 0) {
             if entry.changes.count == 1, let change = entry.changes[0] as FileChange? {
                 ToolHeader(
-                    name: Self.verb(change, tool: entry.toolName), path: change.path, text: Self.move(change),
+                    name: Self.verb(change, tool: entry.toolName), nameColor: Theme.Git.color(change.kind),
+                    textColor: Theme.Git.color(change.kind), path: change.path, text: Self.move(change),
                     folder: actions.folder, added: change.added, removed: change.removed)
                 if !Self.isPureMove(change) {
                     DiffView(change: change, folder: actions.folder).padding(.vertical, Space.bodyMargin)
@@ -974,7 +977,8 @@ struct EditItem: View {
                     added: entry.changes.reduce(0) { $0 + $1.added }, removed: entry.changes.reduce(0) { $0 + $1.removed })
                 ForEach(entry.changes) { change in
                     ToolHeader(
-                        name: Self.verb(change, tool: nil), nameFont: TextStyle.labelStrong, path: change.path,
+                        name: Self.verb(change, tool: nil), nameColor: Theme.Git.color(change.kind), nameFont: TextStyle.labelStrong,
+                        textColor: Theme.Git.color(change.kind), path: change.path,
                         text: Self.move(change), folder: actions.folder, added: change.added, removed: change.removed)
                         .padding(.top, Space.md)
                     if !Self.isPureMove(change) {

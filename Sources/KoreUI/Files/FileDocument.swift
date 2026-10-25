@@ -11,6 +11,8 @@ final class FileDocument: Identifiable {
         case deleted
         /// Changed on disk while there are unsaved edits.
         case changed
+        /// Automatic saves never open a modal alert; edits stay in the document.
+        case saveFailed(String)
     }
 
     private(set) var url: URL
@@ -66,12 +68,20 @@ final class FileDocument: Identifiable {
 
     @ObservationIgnored let storage = NSTextStorage()
     @ObservationIgnored private var saved = ""
+    /// Exact source bytes catch external edits even when size and modification date match.
+    @ObservationIgnored private var savedBytes: Data?
+    @ObservationIgnored private var savedLineEnding = TextFile.LineEnding.lf
+    @ObservationIgnored private let autoSave: FileAutoSave
+    @ObservationIgnored private var autoSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var autoSaveGeneration = 0
+    @ObservationIgnored private var closed = false
     @ObservationIgnored lazy var editor = CodeEditorController(document: self)
 
     let id = UUID()
     var name: String { url.lastPathComponent }
 
-    init(url: URL) {
+    init(url: URL, autoSave: FileAutoSave = .shared) {
+        self.autoSave = autoSave
         // The real path, as the watcher, the tree and other tabs see it.
         let url = URL(fileURLWithPath: realPath(url.path))
         self.url = url
@@ -79,6 +89,12 @@ final class FileDocument: Identifiable {
         self.language = language
         wrap = Self.wraps(language)
         diskStamp = TextFile.Stamp.of(url)
+        autoSave.register(self)
+    }
+
+    private func sourceBytesForLoading() -> Data? {
+        guard let size = TextFile.Stamp.of(url)?.size, size <= TextFile.editLimit else { return nil }
+        return try? Data(contentsOf: url)
     }
 
     private static func wraps(_ language: Language) -> Bool {
@@ -89,12 +105,19 @@ final class FileDocument: Identifiable {
 
     /// The file was renamed or moved in the explorer; the text and edits stay.
     func moved(to url: URL) {
+        cancelAutoSave()
         self.url = url
+        // A rename changes the path, not the source the edits were based on.
+        if let savedBytes, let bytes = try? Data(contentsOf: url), bytes == savedBytes {
+            file.stamp = TextFile.Stamp.of(url)
+            diskStamp = file.stamp
+        }
         let language = Language.of(url)
         if language != self.language {
             self.language = language
             editor.setLanguage(language)
         }
+        scheduleAutoSave()
     }
 
     func loadIfNeeded() {
@@ -103,8 +126,11 @@ final class FileDocument: Identifiable {
     }
 
     func load() {
+        cancelAutoSave()
         loaded = true
+        savedBytes = sourceBytesForLoading()
         file = TextFile.read(url)
+        diskStamp = file.stamp
         notice = nil
         if case .text(let text) = file.content {
             setText(text)
@@ -123,6 +149,7 @@ final class FileDocument: Identifiable {
 
     private func setText(_ text: String) {
         saved = text
+        savedLineEnding = file.lineEnding
         storage.beginEditing()
         storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
         storage.endEditing()
@@ -138,26 +165,118 @@ final class FileDocument: Identifiable {
 
     @discardableResult
     func save() -> Bool {
+        cancelAutoSave()
+        return write(automatically: false)
+    }
+
+    private func write(automatically: Bool) -> Bool {
         guard isText, !readOnly else { return false }
         let text = storage.string
         do {
             file.stamp = try file.write(text, to: url)
         } catch {
-            NSAlert(error: error).runModal()
+            if automatically { autoSaveFailed(error.localizedDescription) }
+            else { NSAlert(error: error).runModal() }
             return false
         }
         saved = text
+        savedLineEnding = file.lineEnding
+        savedBytes = try? Data(contentsOf: url)
+        diskStamp = file.stamp
         isDirty = false
         notice = nil
         editor.refreshChanges()
+        if automatically { UILog.event("file-auto-save", ["id": id.uuidString, "result": "saved"]) }
         return true
     }
 
     /// Called by the editor after each edit.
     func edited() {
-        // Back to the saved text by undo is clean again; compare only when the length matches.
-        let dirty = storage.length != (saved as NSString).length || storage.string != saved
+        // Retry a failed automatic save only after another edit, never on an idle timer.
+        if case .saveFailed = notice { notice = nil }
+        // Back to the saved text by undo is clean again; format changes remain unsaved.
+        let dirty = file.lineEnding != savedLineEnding || storage.length != (saved as NSString).length || storage.string != saved
         if dirty != isDirty { isDirty = dirty }
+        scheduleAutoSave()
+    }
+
+    // MARK: - Automatic saving
+
+    func autoSaveChanged() { scheduleAutoSave() }
+
+    private func cancelAutoSave() {
+        autoSaveGeneration &+= 1
+        autoSaveTask?.cancel()
+        autoSaveTask = nil
+    }
+
+    private func scheduleAutoSave() {
+        cancelAutoSave()
+        guard autoSave.isEnabled, !closed, loaded, isText, !readOnly, isDirty, notice == nil else { return }
+        let generation = autoSaveGeneration
+        let delay = autoSave.delay
+        let pause = autoSave.pause
+        autoSaveTask = Task { [weak self] in
+            do { try await pause(delay) } catch { return }
+            guard let self, !Task.isCancelled, self.autoSaveGeneration == generation else { return }
+            self.autoSaveTask = nil
+            self.saveAutomatically()
+        }
+    }
+
+    /// Before a close prompt, finish a safe pending save. Conflicts/errors stay dirty so the
+    /// existing Save/Discard/Cancel question can decide what happens to those edits.
+    @discardableResult func flushAutoSave() -> Bool {
+        cancelAutoSave()
+        return !isDirty || saveAutomatically()
+    }
+
+    /// A confirmed close/discard must not leave a delayed write behind.
+    func closeAutoSave() {
+        closed = true
+        cancelAutoSave()
+    }
+
+    /// A reopened tab can keep its document, undo, and caret without keeping a stale task.
+    func resumeAutoSave() {
+        closed = false
+        scheduleAutoSave()
+    }
+
+    private func autoSaveFailed(_ reason: String) {
+        notice = .saveFailed(reason)
+        UILog.event("file-auto-save", ["id": id.uuidString, "result": "failed"])
+    }
+
+    @discardableResult private func saveAutomatically() -> Bool {
+        guard autoSave.isEnabled, !closed, loaded, isText, !readOnly, isDirty, notice == nil else { return false }
+        guard let stamp = TextFile.Stamp.of(url) else {
+            if FileManager.default.fileExists(atPath: path) { autoSaveFailed("Kore can't read this file.") }
+            else {
+                notice = .deleted
+                UILog.event("file-auto-save", ["id": id.uuidString, "result": "deleted"])
+            }
+            return false
+        }
+        guard stamp == file.stamp else {
+            notice = .changed
+            UILog.event("file-auto-save", ["id": id.uuidString, "result": "changed"])
+            return false
+        }
+        guard FileManager.default.isWritableFile(atPath: path) else {
+            autoSaveFailed("This file is read-only. Your edits aren't saved.")
+            return false
+        }
+        guard let bytes = try? Data(contentsOf: url), let savedBytes else {
+            autoSaveFailed("Kore can't read this file. Your edits aren't saved.")
+            return false
+        }
+        guard bytes == savedBytes else {
+            notice = .changed
+            UILog.event("file-auto-save", ["id": id.uuidString, "result": "changed"])
+            return false
+        }
+        return write(automatically: true)
     }
 
     // MARK: - The disk
@@ -174,6 +293,7 @@ final class FileDocument: Identifiable {
         guard loaded else { return }
         guard let stamp else {
             if !FileManager.default.fileExists(atPath: path) { notice = .deleted }
+            cancelAutoSave()
             return
         }
         if notice == .deleted { notice = nil }
@@ -184,6 +304,7 @@ final class FileDocument: Identifiable {
         }
         if isDirty {
             notice = .changed
+            cancelAutoSave()
             return
         }
         reloadInPlace()
@@ -192,12 +313,16 @@ final class FileDocument: Identifiable {
     /// Replaces only what changed, so the caret and scroll stay, and remembers the changed
     /// lines for the flash.
     func reloadInPlace() {
+        cancelAutoSave()
+        savedBytes = sourceBytesForLoading()
         let next = TextFile.read(url)
         guard case .text(let text) = next.content else {
             file = next
             return
         }
         file = next
+        diskStamp = next.stamp
+        savedLineEnding = next.lineEnding
         let old = storage.string as NSString
         let new = text as NSString
         let prefix = Self.commonPrefix(old, new)
@@ -223,7 +348,10 @@ final class FileDocument: Identifiable {
     /// Keeps the edits; the next save overwrites the disk.
     func keepMine() {
         file.stamp = TextFile.Stamp.of(url)
+        diskStamp = file.stamp
+        savedBytes = try? Data(contentsOf: url)
         notice = nil
+        scheduleAutoSave()
     }
 
     private static func commonPrefix(_ a: NSString, _ b: NSString) -> Int {
@@ -305,7 +433,9 @@ final class FileDocument: Identifiable {
     func setLineEnding(_ ending: TextFile.LineEnding) {
         guard ending != file.lineEnding else { return }
         file.lineEnding = ending
-        isDirty = true
+        if case .saveFailed = notice { notice = nil }
+        isDirty = ending != savedLineEnding || storage.string != saved
+        scheduleAutoSave()
     }
 
     var encodingName: String {

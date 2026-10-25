@@ -73,13 +73,13 @@ struct ChangesView: View {
     private func fileMenu(_ proxy: ScrollViewProxy) -> some View {
         OptionMenuButton(source: "changes", items: {
             changes.enumerated().map { index, change in
-                OptionItem(Self.name(change.path), checked: selected.value == index) { selected.value = index }
+                OptionItem(Self.name(change.path), checked: selected.value == index, tint: Theme.Git.color(change.kind)) { selected.value = index }
             }
         }) {
             if changes.indices.contains(selected.value) {
                 let change = changes[selected.value]
                 HStack(spacing: Space.sm) {
-                    Text(Self.name(change.path)).font(TextStyle.label).foregroundStyle(Theme.text).lineLimit(1)
+                    Text(Self.name(change.path)).font(TextStyle.label).foregroundStyle(Theme.Git.color(change.kind)).lineLimit(1)
                     ChangeCounts(added: change.added, removed: change.removed)
                 }
             }
@@ -119,7 +119,7 @@ struct ChangesView: View {
             HStack(spacing: Space.md) {
                 Text(Self.relative(change.path, folder))
                     .font(TextStyle.codeSmall)
-                    .foregroundStyle(Theme.text)
+                    .foregroundStyle(Theme.Git.color(change.kind))
                     .lineLimit(1)
                     .truncationMode(.head)
                 ChangeCounts(added: change.added, removed: change.removed)
@@ -201,12 +201,12 @@ private struct FileListRow: View {
             HStack(spacing: Space.md) {
                 Image(systemName: glyph)
                     .font(Glyph.rowIcon)
-                    .foregroundStyle(Theme.secondary)
+                    .foregroundStyle(Theme.Git.color(change.kind))
                     .frame(width: Size.disclosure)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(ChangesView.name(change.path))
                         .font(TextStyle.label)
-                        .foregroundStyle(Theme.text)
+                        .foregroundStyle(Theme.Git.color(change.kind))
                         .lineLimit(1)
                     if !directory.isEmpty {
                         Text(directory)

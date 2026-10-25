@@ -125,7 +125,8 @@ struct QuickOpenView: View {
                             // One highlight: the pointer moves the selection, as in a menu.
                             ForEach(Array(list.enumerated()), id: \.element.id) { offset, match in
                                 Button { open(match) } label: {
-                                    QuickOpenRow(path: match.path, positions: match.positions, isSelected: offset == selected.value)
+                                    QuickOpenRow(path: match.path, positions: match.positions, isSelected: offset == selected.value,
+                                                 gitState: workspace.files?.state(of: root + "/" + match.path))
                                 }
                                 .buttonStyle(.plain)
                                 .highlightRow(StoryID.QuickOpen.row(match.path), lit: offset == selected.value) { selected.value = offset }
@@ -170,12 +171,13 @@ private struct QuickOpenRow: View {
     let path: String
     let positions: [Int]
     let isSelected: Bool
+    let gitState: GitStatus.State?
 
     var body: some View {
         let nameStart = path.utf16.count - (path as NSString).lastPathComponent.utf16.count
         HStack(spacing: Space.md) {
-            FileIconView(name: (path as NSString).lastPathComponent, color: Theme.secondary)
-            Text(highlighted(from: nameStart, to: path.utf16.count, base: Theme.text, strong: true))
+            FileIconView(name: (path as NSString).lastPathComponent, color: gitState.map(Theme.Git.color) ?? Theme.secondary)
+            Text(highlighted(from: nameStart, to: path.utf16.count, base: gitState.map(Theme.Git.color) ?? Theme.text, strong: true))
                 .font(Chrome.body)
                 .lineLimit(1)
             Text(highlighted(from: 0, to: max(0, nameStart - 1), base: Theme.tertiary, strong: false))
@@ -201,7 +203,7 @@ private struct QuickOpenRow: View {
             guard offset >= start, offset < end else { continue }
             var piece = AttributedString(String(character))
             if marked.contains(offset) {
-                piece.foregroundColor = Theme.accent
+                piece.foregroundColor = strong ? gitState.map(Theme.Git.color) ?? Theme.accent : Theme.accent
                 if strong { piece.font = Chrome.bodySemibold }
             } else {
                 piece.foregroundColor = base

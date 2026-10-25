@@ -9,16 +9,19 @@ struct OptionItem {
     var enabled = true
     var checked = false
     var destructive = false
+    /// Optional semantic text colour for file-status rows; ordinary menu actions stay neutral.
+    var tint: Color?
     var children: [OptionItem] = []
     var action: (() -> Void)?
     var separator: Bool { title.isEmpty && action == nil && children.isEmpty }
 
-    init(_ title: String, enabled: Bool = true, checked: Bool = false, destructive: Bool = false,
+    init(_ title: String, enabled: Bool = true, checked: Bool = false, destructive: Bool = false, tint: Color? = nil,
          children: [OptionItem] = [], action: (() -> Void)? = nil) {
         self.title = title
         self.enabled = enabled
         self.checked = checked
         self.destructive = destructive
+        self.tint = tint
         self.children = children
         self.action = action
     }
@@ -264,7 +267,7 @@ private struct OptionsList: View {
                         } else {
                             Button { menu.choose(index) } label: {
                                 label(item.title, symbol: item.checked ? "checkmark" : nil,
-                                      tint: !item.enabled ? Theme.tertiary : item.destructive ? Theme.danger : Theme.text,
+                                      tint: !item.enabled ? Theme.tertiary : item.destructive ? Theme.danger : item.tint ?? Theme.text,
                                       branch: !item.children.isEmpty)
                             }
                             .buttonStyle(.plain)

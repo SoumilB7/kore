@@ -86,8 +86,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let workspaces = Workspace.all.allObjects
         guard Self.confirmQuit(working: workspaces.reduce(0) { $0 + $1.workingChats },
                                terminals: workspaces.reduce(0) { $0 + $1.terminals.workingCount }) else { return .terminateCancel }
+        for workspace in workspaces { workspace.flushAutoSaves() }
         let files = workspaces.flatMap(\.unsavedFiles)
-        return UnsavedGuard.confirm(files) { workspaces.forEach { $0.saveAll() } } ? .terminateNow : .terminateCancel
+        guard UnsavedGuard.confirm(files, saveAll: { workspaces.forEach { $0.saveAll() } }) else { return .terminateCancel }
+        workspaces.forEach { $0.persistNow() }
+        return .terminateNow
     }
 
     /// Quitting ends every CLI, and with it what its chat is doing: asked once, Cancel the default.
@@ -169,6 +172,12 @@ private struct FileCommands: View {
             if let workspace { workspace.perform(.closeTab) } else { NSApp.keyWindow?.performClose(nil) }
         }
         .keyboardShortcut("w")
+        Button("Reopen Closed Tab") {
+            if let workspace, workspace.canReopenClosedTab { workspace.reopenClosedTab() }
+            else { app.reopenClosedWindow() }
+        }
+        .keyboardShortcut("t", modifiers: [.command, .shift])
+        .disabled(workspace?.canReopenClosedTab != true && !app.canReopenClosedWindow)
         Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
             .keyboardShortcut("w", modifiers: [.command, .shift])
         Divider()
@@ -214,12 +223,14 @@ private struct SaveCommands: View {
     @FocusedValue(\.workspace) private var workspace
 
     var body: some View {
+        @Bindable var autoSave = FileAutoSave.shared
         Button("Save") { workspace?.perform(.save) }
             .keyboardShortcut("s")
             .disabled(workspace?.can(.save) != true)
         Button("Save All") { workspace?.perform(.saveAll) }
             .keyboardShortcut("s", modifiers: [.command, .option])
             .disabled(workspace?.can(.saveAll) != true)
+        Toggle("Auto Save", isOn: $autoSave.isEnabled)
         Divider()
         Button("Go to File…") { workspace?.perform(.goToFile) }
             .keyboardShortcut("p")

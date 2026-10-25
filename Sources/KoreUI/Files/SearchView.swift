@@ -123,7 +123,7 @@ struct SearchView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(store.results) { file in
-                        SearchFileRow(file: file, store: store, focused: listFocused) {
+                        SearchFileRow(file: file, store: store, focused: listFocused, gitState: workspace.files?.state(of: file.path)) {
                             listFocused = true
                             store.selection = .file(file.path)
                             store.toggle(file.path)
@@ -200,6 +200,7 @@ private struct SearchFileRow: View {
     let file: SearchStore.FileResult
     let store: SearchStore
     let focused: Bool
+    let gitState: GitStatus.State?
     let action: () -> Void
     @StateObject private var hovered = Local(false)
     @Environment(\.listGround) private var ground
@@ -216,11 +217,11 @@ private struct SearchFileRow: View {
                 .rotationEffect(.degrees(open ? 90 : 0))
                 .animation(Motion.fade, value: open)
                 .frame(width: Size.Tree.chevronBox, height: Size.Tree.chevronBox)
-            FileIconView(name: file.path, color: selected ? Theme.text : Theme.secondary)
+            FileIconView(name: file.path, color: gitState.map(Theme.Git.color) ?? (selected ? Theme.text : Theme.secondary))
             Spacer().frame(width: Size.Tree.iconGap)
             Text((file.path as NSString).lastPathComponent)
                 .font(Chrome.body)
-                .foregroundStyle(Theme.text)
+                .foregroundStyle(gitState.map(Theme.Git.color) ?? Theme.text)
                 .lineLimit(1)
                 .layoutPriority(1)
             if !folder.isEmpty {

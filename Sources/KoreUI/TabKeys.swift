@@ -5,7 +5,7 @@ import SwiftUI
 /// the tab, ⌃⇥ and ⌃⇧⇥ show the next and previous, ⌘1–8 that tab and ⌘9 the last; and ⌘,
 /// opens the chat's Account popup, Kore's settings being in the / menu.
 enum TabKey: Equatable {
-    case close, next, previous, number(Int), account
+    case close, reopen, next, previous, number(Int), account
 
     /// The tab key a key press is, if any.
     static func of(_ characters: String?, keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> TabKey? {
@@ -18,6 +18,7 @@ enum TabKey: Equatable {
             default: return nil
             }
         }
+        if flags == [.command, .shift], characters?.lowercased() == "t" { return .reopen }
         guard flags == .command, let key = characters?.lowercased() else { return nil }
         if key == "w" { return .close }
         if key == "," { return .account }
@@ -45,6 +46,9 @@ struct TabKeys: ViewModifier {
                     switch key {
                     // Held down, ⌘W closes one tab: a repeat could answer its own question.
                     case .close: if !event.isARepeat { workspace.perform(.closeTab) }
+                    case .reopen:
+                        guard workspace.canReopenClosedTab else { return event }
+                        if !event.isARepeat { workspace.perform(.reopenClosedTab) }
                     case .next: workspace.perform(.nextTab)
                     case .previous: workspace.perform(.previousTab)
                     case .number(let n): workspace.selectNumber(n)

@@ -10,6 +10,7 @@ package struct Command: Step {
         switch command {
         case .newTab: "New tab"
         case .closeTab: "Close the tab"
+        case .reopenClosedTab: "Reopen the closed tab"
         case .nextTab: "Show the next tab"
         case .previousTab: "Show the previous tab"
         case .moveTabRight: "Move the tab right"

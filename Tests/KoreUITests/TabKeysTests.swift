@@ -17,6 +17,9 @@ struct TabKeysTests {
 
     @Test func theKeys() {
         #expect(TabKey.of("w", keyCode: 13, modifiers: .command) == .close)
+        #expect(TabKey.of("T", keyCode: 17, modifiers: [.command, .shift]) == .reopen)
+        #expect(TabKey.of("t", keyCode: 17, modifiers: .command) == nil)
+        #expect(TabKey.of("t", keyCode: 17, modifiers: [.command, .shift, .option]) == nil)
         #expect(TabKey.of("W", keyCode: 13, modifiers: .command) == .close)
         #expect(TabKey.of("\t", keyCode: 48, modifiers: .control) == .next)
         #expect(TabKey.of("\u{19}", keyCode: 48, modifiers: [.control, .shift]) == .previous)

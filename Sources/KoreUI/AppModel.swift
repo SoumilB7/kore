@@ -12,6 +12,30 @@ package final class AppModel {
     private static let recentsKey = "recentFolders"
     private static let recentsLimit = 8
 
+    private struct ClosedWindow {
+        var folder: URL
+        var snapshot: Workspace.Saved
+    }
+    private var closedWindows: [ClosedWindow] = []
+    var canReopenClosedWindow: Bool { windowActions != nil && !closedWindows.isEmpty }
+
+    func rememberClosedWorkspace(folder: URL, snapshot: Workspace.Saved) {
+        let folder = Self.canonical(folder)
+        closedWindows.removeAll { $0.folder == folder }
+        closedWindows.append(ClosedWindow(folder: folder, snapshot: snapshot))
+        closedWindows = Array(closedWindows.suffix(20))
+    }
+
+    func reopenClosedWindow() {
+        guard let (openWindow, dismissWindow) = windowActions else { return }
+        while let closed = closedWindows.popLast() {
+            guard Self.isDirectory(closed.folder) else { continue }
+            Workspace.restoreOnNextOpen(folder: closed.folder, snapshot: closed.snapshot)
+            open(closed.folder, openWindow: openWindow, dismissWindow: dismissWindow)
+            return
+        }
+    }
+
     private(set) var recents: [URL] = []
     /// Set when `claude` can't be run; nil when all is well.
     private(set) var cliProblem: String?
@@ -56,6 +80,7 @@ package final class AppModel {
     /// Opens (or focuses) the folder's window and closes the welcome window.
     func open(_ folder: URL, openWindow: OpenWindowAction, dismissWindow: DismissWindowAction) {
         let folder = Self.canonical(folder)
+        closedWindows.removeAll { $0.folder == folder }
         recents.removeAll { $0 == folder }
         recents.insert(folder, at: 0)
         recents = Array(recents.prefix(Self.recentsLimit))

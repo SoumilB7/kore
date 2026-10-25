@@ -274,6 +274,7 @@ extension StoryID {
             package static let reload = StoryID(.editor, "notice").part(.reload)
             package static let keep = StoryID(.editor, "notice").part(.keep)
             package static let compare = StoryID(.editor, "notice").part(.compare)
+            package static let retry = StoryID(.editor, "notice.retry")
         }
 
         package static let rendererToggle = StoryID(.editor, "renderer").part(.toggle)
@@ -326,7 +327,7 @@ extension StoryID {
             Editor.Find.field, Editor.Find.replaceField, Editor.Find.next, Editor.Find.previous, Editor.Find.close,
             Editor.Find.toggleReplace, Editor.Find.replace, Editor.Find.replaceAll, Editor.Find.ticks,
             Editor.Status.indent, Editor.Status.lineEndings, Editor.Status.language,
-            Editor.Notice.reload, Editor.Notice.keep, Editor.Notice.compare, Editor.rendererToggle, Editor.rows,
+            Editor.Notice.reload, Editor.Notice.keep, Editor.Notice.compare, Editor.Notice.retry, Editor.rendererToggle, Editor.rows,
             QuickOpen.field, Search.field, Search.include, Search.exclude, Changes.done, Viewer.close, Viewer.add,
         ]
         let keyed: [StoryID] = [

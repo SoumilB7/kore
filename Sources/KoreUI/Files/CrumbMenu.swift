@@ -89,12 +89,12 @@ struct CrumbMenu: View {
 
     private func entryRow(_ node: FilesStore.Node, index: Int) -> some View {
         let store = workspace.filesStore()
-        let dim = store.state(of: node.path) == .ignored
+        let state = store.state(of: node.path)
         let marked = node.path == target.current
         return row(
             index, symbol: node.isFolder ? "folder" : nil, file: node.isFolder ? nil : node.name, name: node.name,
-            tint: dim ? Theme.tertiary : (marked ? Theme.text : Theme.secondary), bold: marked,
-            trailing: node.isFolder
+            tint: state.map(Theme.Git.color) ?? (marked ? Theme.text : Theme.secondary), bold: marked,
+            semantic: state != nil, trailing: node.isFolder
         ) {
             choose(node)
         }
@@ -102,10 +102,10 @@ struct CrumbMenu: View {
 
     private func row(
         _ index: Int, symbol: String? = nil, file: String? = nil, name: String, tint: Color, bold: Bool = false,
-        trailing: Bool = false, action: @escaping () -> Void
+        semantic: Bool = false, trailing: Bool = false, action: @escaping () -> Void
     ) -> some View {
         CrumbMenuRow(
-            symbol: symbol, file: file, name: name, tint: tint, bold: bold, folder: trailing, selected: selected.value == index,
+            symbol: symbol, file: file, name: name, tint: tint, bold: bold, semantic: semantic, folder: trailing, selected: selected.value == index,
             hover: { selected.value = index }, action: action
         )
         .id(index)
@@ -187,6 +187,7 @@ private struct CrumbMenuRow: View {
     let name: String
     let tint: Color
     let bold: Bool
+    let semantic: Bool
     /// A folder: a chevron at the end says it opens in place.
     let folder: Bool
     let selected: Bool
@@ -206,7 +207,7 @@ private struct CrumbMenuRow: View {
                 .frame(width: Size.Tree.icon)
                 Text(name)
                     .font(bold ? Chrome.bodySemibold : Chrome.body)
-                    .foregroundStyle(selected || bold ? Theme.text : tint)
+                    .foregroundStyle(semantic ? tint : (selected || bold ? Theme.text : tint))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: Space.md)

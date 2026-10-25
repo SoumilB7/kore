@@ -129,7 +129,8 @@ private struct PathRow: View {
                 }
                 let path = base + parts[0...index].joined(separator: "/")
                 Crumb(
-                    name: part, isFile: index == parts.count - 1, path: path, open: menu?.current == path || menu?.folder == path && menu?.current == nil,
+                    name: part, isFile: index == parts.count - 1, path: path,
+                    gitState: index == parts.count - 1 && document.notice == .deleted ? .deleted : workspace.files?.state(of: path), open: menu?.current == path || menu?.folder == path && menu?.current == nil,
                     openMenu: openMenu)
             }
             Spacer(minLength: Space.md)
@@ -154,6 +155,7 @@ private struct Crumb: View {
     let name: String
     let isFile: Bool
     let path: String
+    let gitState: GitStatus.State?
     /// Its menu is open.
     let open: Bool
     let openMenu: (CrumbMenu.Target) -> Void
@@ -167,10 +169,10 @@ private struct Crumb: View {
                 anchor: frames.value.local, window: frames.value.window))
         } label: {
             HStack(spacing: Space.xs) {
-                if isFile { FileIconView(name: name, color: Theme.text) }
+                if isFile { FileIconView(name: name, color: gitState.map(Theme.Git.color) ?? Theme.text) }
                 Text(name)
                     .font(Chrome.label)
-                    .foregroundStyle(isFile || hovered.value ? Theme.text : Theme.secondary)
+                    .foregroundStyle(gitState.map(Theme.Git.color) ?? (isFile || hovered.value ? Theme.text : Theme.secondary))
                     .lineLimit(1)
             }
             .padding(.horizontal, Space.xs)
@@ -240,6 +242,8 @@ private struct NoticeBar: View {
             case .deleted:
                 Button("Save") { document.save() }.buttonStyle(SubtleButtonStyle())
                 Button("Close", action: close).buttonStyle(SubtleButtonStyle())
+            case .saveFailed:
+                Button("Retry") { document.save() }.buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.Notice.retry)
             case .changed:
                 Button("Compare", action: compare).buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.Notice.compare)
                 Button("Reload") { document.reloadInPlace() }.buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.Notice.reload)
@@ -258,6 +262,8 @@ private struct NoticeBar: View {
         switch notice {
         case .deleted:
             return Text("This file was deleted on disk.")
+        case .saveFailed(let reason):
+            return Text("Auto Save couldn't save this file. \(reason)")
         case .changed:
             guard let touch, !touch.sources.isEmpty else {
                 return Text("This file changed on disk. Your edits aren't saved.")

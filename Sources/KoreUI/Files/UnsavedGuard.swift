@@ -23,6 +23,7 @@ final class UnsavedGuard: NSObject, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if let workspace {
+            workspace.flushAutoSaves()
             guard TerminalPanel.confirm(working: workspace.terminals.workingCount),
                   Self.confirm(workspace.unsavedFiles, saveAll: workspace.saveAll) else { return false }
         }

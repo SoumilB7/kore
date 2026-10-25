@@ -215,10 +215,12 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         let lineRange = (document.storage.string as NSString).lineRange(for: range)
         let base = NSColor(Theme.Editor.flash)
         let start = Date()
-        flash = Task { [weak self] in
-            while !Task.isCancelled, let self {
+        let document = document
+        flash = Task { [weak self, weak document] in
+            while !Task.isCancelled, let self, let document {
+                defer { withExtendedLifetime(document) {} }
                 let progress = min(1, Date().timeIntervalSince(start) / Motion.flash)
-                let safe = NSIntersectionRange(lineRange, NSRange(location: 0, length: self.document.storage.length))
+                let safe = NSIntersectionRange(lineRange, NSRange(location: 0, length: document.storage.length))
                 if progress >= 1 {
                     layout.removeTemporaryAttribute(.backgroundColor, forCharacterRange: safe)
                     return
@@ -376,13 +378,15 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     func refreshChanges(after delay: Duration = .zero) {
         diffing?.cancel()
         guard document.isText, !document.readOnly else { return }
+        let document = document
         let url = document.url
-        diffing = Task { [weak self] in
+        diffing = Task { [weak self, weak document] in
             if delay > .zero {
                 try? await Task.sleep(for: delay)
                 if Task.isCancelled { return }
             }
-            guard let self else { return }
+            guard let self, let document else { return }
+            defer { withExtendedLifetime(document) {} }
             let edits = editCount
             let text = document.storage.string
             let result: LineChanges

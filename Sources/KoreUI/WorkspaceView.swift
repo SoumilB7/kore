@@ -120,7 +120,7 @@ struct TabBar: View {
             }
             HStack(spacing: Size.tabGap) {
                 if strip.name > 0 {
-                    ActiveTabName(tab: workspace.activeTab).frame(width: strip.name, alignment: .leading)
+                    ActiveTabName(tab: workspace.activeTab, tint: TabMark.fileTint(workspace.activeTab, in: workspace.files)).frame(width: strip.name, alignment: .leading)
                 }
                 tabs(strip)
                 if strip.overflows {
@@ -165,7 +165,7 @@ struct TabBar: View {
         .overlay(alignment: .topLeading) {
             if let place = list.value {
                 HiddenTabsList(
-                    allTabs: workspace.tabs, shown: shown.value,
+                    allTabs: workspace.tabs, files: workspace.files, shown: shown.value,
                     width: place.width, room: place.room, anchor: { overflowFrame.value }, pick: pick,
                     close: { list.value = nil }
                 )
@@ -497,11 +497,12 @@ private struct TabStripFade: View {
 /// The active tab's name before the strip, while the tabs are too narrow for theirs.
 private struct ActiveTabName: View {
     let tab: ChatTab
+    let tint: Color?
 
     var body: some View {
         Text(tab.title)
             .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
-            .foregroundStyle(Theme.text)
+            .foregroundStyle(tint ?? Theme.text)
             .lineLimit(1)
             .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
             .padding(.leading, Space.sm)
@@ -545,6 +546,7 @@ private struct OverflowButton: View {
 /// Esc, a pick or a click anywhere else closes it, and that click still does what it was aimed at.
 private struct HiddenTabsList: View {
     let allTabs: [ChatTab]
+    let files: FilesStore?
     @ObservedObject var shown: Local<TabStrip.Shown>
     private var tabs: [ChatTab] { allTabs.enumerated().compactMap { shown.value.hides($0.offset) ? $0.element : nil } }
     let width: CGFloat
@@ -598,10 +600,10 @@ private struct HiddenTabsList: View {
             pick(tab)
         } label: {
             HStack(spacing: Space.md) {
-                TabMark(tab: tab, active: false, story: StoryID.Titlebar.hiddenTab(tab.id))
+                TabMark(tab: tab, active: false, story: StoryID.Titlebar.hiddenTab(tab.id), tint: TabMark.fileTint(tab, in: files))
                 Text(tab.title)
                     .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
-                    .foregroundStyle(Theme.text)
+                    .foregroundStyle(TabMark.fileTint(tab, in: files) ?? Theme.text)
                     .lineLimit(1)
                     .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
                 Spacer(minLength: 0)
@@ -758,12 +760,12 @@ private struct TabItem: View {
                 if NSApp.mouseClickCount == 2 { workspace.keep(tab) }
             } label: {
                 HStack(spacing: Space.md) {
-                    TabMark(tab: tab, active: isActive, story: StoryID.Tabs.tab(tab.id))
+                    TabMark(tab: tab, active: isActive, story: StoryID.Tabs.tab(tab.id), tint: TabMark.fileTint(tab, in: workspace.files))
                         .frame(maxWidth: named ? nil : .infinity)
                     if named {
                         Text(tab.title)
                             .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
-                            .foregroundStyle(isActive ? Theme.text : Theme.secondary)
+                            .foregroundStyle(TabMark.fileTint(tab, in: workspace.files) ?? (isActive ? Theme.text : Theme.secondary))
                             .strikethrough(tab.file?.notice == .deleted)
                             .lineLimit(1)
                             // A fork's title is cut in the middle, so " (fork)" always shows.
@@ -838,10 +840,18 @@ private struct TabMark: View {
     let tab: ChatTab
     let active: Bool
     let story: StoryID
+    var tint: Color? = nil
+
+    /// The same file status colours names and glyphs in the strip, its overflow and title.
+    static func fileTint(_ tab: ChatTab, in files: FilesStore?) -> Color? {
+        guard let file = tab.file else { return nil }
+        if file.notice == .deleted { return Theme.Git.deleted }
+        return files?.state(of: file.path).map(Theme.Git.color)
+    }
 
     var body: some View {
         if let file = tab.file {
-            FileIconView(name: file.name, color: active ? Theme.text : Theme.secondary)
+            FileIconView(name: file.name, color: tint ?? (active ? Theme.text : Theme.secondary))
         } else if let chat = tab.chat {
             let running = TabWork.running(chat, agent: tab.agent)
             if let agent = tab.agent, let info = chat.transcript.agent(agent) {

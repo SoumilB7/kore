@@ -26,7 +26,7 @@ extension Theme {
         static let flash = diffAddFill
     }
 
-    /// Git letters in the tree and bars in the gutter. Modified is blue: amber means waiting.
+    /// File state across names, glyphs, badges, dots and gutters. Modified is blue: amber means waiting.
     enum Git {
         static let modified = accent
         static let added = success
@@ -43,6 +43,15 @@ extension Theme {
             case .deleted: deleted
             case .conflicted: conflict
             case .ignored: ignored
+            }
+        }
+
+        /// Recorded changes use their own operation, independent of today's work tree status.
+        static func color(_ kind: FileChange.Kind) -> Color {
+            switch kind {
+            case .add: added
+            case .delete: deleted
+            case .update, .move: modified
             }
         }
 
