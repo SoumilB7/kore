@@ -74,11 +74,12 @@ final class ImportState {
     /// Choose file…).
     var hasOthers: Bool { rows.contains { !$0.sameCLI } }
 
-    /// Reads the folder's chats (both CLIs' lists, as history has them) and their sizes.
+    /// Reads the folder's chats (both CLIs' lists, read afresh as history does on opening, so a
+    /// chat started since shows) and their sizes.
     func load(_ chat: Chat, in workspace: Workspace) async {
         self.chat = chat
         self.workspace = workspace
-        if !workspace.loaded { await workspace.refresh() }
+        await workspace.refresh()
         let own = chat.provider.historyAgent
         let sessions = workspace.chats.filter { !$0.archived && $0.id != chat.sessionId }
         let running = Set(sessions.map(\.id).filter { workspace.busy($0) })
