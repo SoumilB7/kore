@@ -11,9 +11,18 @@ struct CodexAttachmentTests {
         let items = try #require(Attachments.codexInput(text: "Look", files: [file, image]).array)
         #expect(items.map { $0["type"]?.string } == ["mention", "localImage", "text", "text"])
         #expect(items[2]["text"]?.string == "Look")
-        #expect(items[3]["text"]?.string == "[file: /tmp/notes.txt]")
-        #expect(Attachments.isFileNote("[file: /tmp/notes.txt]\n[file: /tmp/b c.md]"))
+        // Not on disk: named by its path.
+        #expect(items[3]["text"]?.string == "[file: /tmp/notes.txt] (attached: open it with your tools)")
+        #expect(Attachments.isFileNote("[file: /tmp/notes.txt]\nhello\n[/file]"))
         #expect(!Attachments.isFileNote("Look at [file: /tmp/notes.txt]"))
         #expect(!Attachments.isFileNote(""))
+    }
+
+    @Test func aSmallTextFileComesWhole() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("kore-note-\(UUID().uuidString).txt")
+        try "The codeword is X.".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let note = Attachments.fileNote(Attachments.File(url: url, name: "n.txt", kind: .text))
+        #expect(note == "[file: \(url.path)]\nThe codeword is X.\n[/file]")
     }
 }

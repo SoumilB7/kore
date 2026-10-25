@@ -205,18 +205,25 @@ package enum Attachments {
                 : ["type": "mention", "name": .string(file.name), "path": .string(file.url.path)]
         }
         if !text.isEmpty { items.append(["type": "text", "text": .string(text), "text_elements": []]) }
-        // A mention reaches only the display: the model is told of the file in a text of its own,
-        // after the user's, which reading back leaves out (`isFileNote`).
-        let note = files.filter { $0.kind != .image }.map { "[file: \($0.url.path)]" }
-        if !note.isEmpty { items.append(["type": "text", "text": .string(note.joined(separator: "\n")), "text_elements": []]) }
+        // A mention reaches only the display: the model is told of the files in a text of its
+        // own, after the user's, which reading back leaves out (`isFileNote`). A text file comes
+        // whole, as Claude gets it; any other, by its path, for the model to open.
+        let note = files.filter { $0.kind != .image }.map(fileNote)
+        if !note.isEmpty { items.append(["type": "text", "text": .string(note.joined(separator: "\n\n")), "text_elements": []]) }
         return .array(items)
     }
 
-    /// Kore's text naming a Codex message's attached files, one "[file: path]" line each.
-    static func isFileNote(_ text: String) -> Bool {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        return !text.isEmpty && lines.allSatisfy { $0.hasPrefix("[file: /") && $0.hasSuffix("]") }
+    static func fileNote(_ file: File) -> String {
+        if file.kind == .text, let data = try? Data(contentsOf: file.url), data.count <= maxCodexTextBytes,
+            let contents = String(data: data, encoding: .utf8)
+        {
+            return "[file: \(file.url.path)]\n\(contents)\n[/file]"
+        }
+        return "[file: \(file.url.path)] (attached: open it with your tools)"
     }
+
+    /// Kore's text naming a Codex message's attached files: an item of its own, from "[file: /".
+    static func isFileNote(_ text: String) -> Bool { text.hasPrefix("[file: /") }
 
     // MARK: Transcripts
 
@@ -250,6 +257,8 @@ package enum Attachments {
     // MARK: Limits and images
 
     private static let maxTextBytes = 2_000_000
+    /// A text file a Codex message carries whole (about 25k tokens); a bigger one goes by its path.
+    private static let maxCodexTextBytes = 100_000
     private static let maxPDFBytes = 32_000_000
     /// Anthropic's limits: 5MB per image once base64-encoded; large images are downscaled anyway.
 
