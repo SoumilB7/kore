@@ -399,6 +399,18 @@ final class TranscriptStore {
     /// Changes waiting to be drawn: streamed deltas are drawn once per `drawInterval`.
     @ObservationIgnored private var drawScheduled = false
     static let drawInterval: TimeInterval = 1.0 / 30
+    /// No one sees it (a tab under another, a covered or minimised window): its rows still
+    /// follow the stream, a couple of times a second, and catch up at once when it shows.
+    static let hiddenDrawInterval: TimeInterval = 0.5
+
+    /// Set by the chat's view: off screen, rebuilds slow to `hiddenDrawInterval`.
+    @ObservationIgnored var hidden = false {
+        didSet {
+            guard oldValue, !hidden, drawScheduled else { return }
+            drawScheduled = false
+            rebuild()
+        }
+    }
     /// Pending approvals of this chat: id → it's a question (AskUserQuestion, Codex user input).
     @ObservationIgnored private var pendingApprovals: [String: Bool] = [:]
     /// A compaction is running, since when (the live row says "Compacting…"), and the point it
@@ -1908,7 +1920,7 @@ final class TranscriptStore {
         mark(index)
         guard !batching, !drawScheduled else { return }
         drawScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.drawInterval) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (hidden ? Self.hiddenDrawInterval : Self.drawInterval)) { [weak self] in
             guard let self else { return }
             drawScheduled = false
             rebuild()

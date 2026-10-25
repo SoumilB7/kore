@@ -1,3 +1,4 @@
+import AppKit
 import KoreCore
 import SwiftUI
 
@@ -17,6 +18,8 @@ struct ChatView: View {
     private static var forkedOnce = false
     private static var importedOnce = false
     @StateObject private var kept = KeptChats()
+    /// The window is covered or minimised: its chats draw as hidden ones do.
+    @StateObject private var occluded = Local(false)
     /// The image open in the viewer, and the turn whose changes are open in the modal: the
     /// active chat's, by its id, so a switch never shows them over another chat.
     @StateObject private var viewer = Local<(chat: UUID, editor: ImageEditor)?>(nil)
@@ -29,6 +32,7 @@ struct ChatView: View {
 
     var body: some View {
         let chats = kept.update(active, tabs: workspace.tabs)
+        let window = workspace.window
         if let chat = active ?? kept.latest {
             content(chat, chats: chats)
                 .opacity(active == nil ? 0 : 1)
@@ -42,6 +46,11 @@ struct ChatView: View {
                 .onChange(of: terminal?.isOpen) { _, open in
                     if open == false, active != nil, workspace.quickOpen == nil { composerFocused = true }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { note in
+                    guard let changed = note.object as? NSWindow, changed === window else { return }
+                    let covered = !changed.occlusionState.contains(.visible)
+                    if occluded.value != covered { occluded.value = covered }
+                }
         }
     }
 
@@ -50,7 +59,11 @@ struct ChatView: View {
             ZStack {
                 ForEach(chats) { kept in
                     let shown = kept === active
+                    let seen = shown && !occluded.value
                     TranscriptTimeline(store: kept.transcript, actions: actions(kept)).equatable()
+                        // Off screen, its stream draws a couple of times a second, not 30.
+                        .onChange(of: seen, initial: true) { _, seen in kept.transcript.hidden = !seen }
+                        .onDisappear { kept.transcript.hidden = false }
                         // The spinner's glyph takes the mode's colour, as the composer outline does.
                         .environment(\.spinnerTint, kept.controls.tint)
                         .environment(\.hiddenTab, !shown)
