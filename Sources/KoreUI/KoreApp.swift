@@ -119,6 +119,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.openFromOutside(urls)
     }
 
+    /// Right-clicking Kore in the Dock: New Window, above the system's own items.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? { Self.dockMenu(app) }
+
+    static func dockMenu(_ app: AppModel) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(DockItem("New Window") { app.showWelcome() })
+        return menu
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Once the windows have their autosave names.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Self.pruneStaleWindowFrames() }
@@ -289,4 +298,19 @@ private struct TerminalCommands: View {
             .keyboardShortcut("`", modifiers: [.control, .shift])
             .disabled(workspace == nil)
     }
+}
+
+/// A Dock menu item that runs its closure.
+private final class DockItem: NSMenuItem {
+    private let run: () -> Void
+
+    init(_ title: String, run: @escaping () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    @objc private func fire() { run() }
 }

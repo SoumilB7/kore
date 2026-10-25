@@ -332,6 +332,24 @@ struct ShowWelcome: Step {
 }
 
 
+/// Right-clicking Kore in the Dock offers New Window, which brings up Welcome (a folder, or a
+/// recent one, opens its window from there).
+final class DockMenuNewWindow: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Expect("the Dock menu offers New Window", found: { _ in AppModel.shared?.storyDockMenu.description }) { _ in
+                AppModel.shared?.storyDockMenu == ["New Window"]
+            },
+            Do("Pick New Window") { _ in AppModel.shared?.storyPickDockItem("New Window") },
+            Expect("the Welcome window shown") { _ in
+                NSApp.windows.contains { $0.title == ListKeys.welcome && $0.isVisible }
+            },
+        ]
+    }
+}
+
 /// Waits out a row's fade (`Motion.fade`), so a snapshot shows where it ends.
 private struct FadesEnd: Step {
     var label: String { "Wait for the fades to end" }

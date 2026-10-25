@@ -59,8 +59,25 @@ package final class AppModel {
     /// Opens (or focuses) a folder's window, the way a folder from outside the app is.
     package func openFolder(_ folder: URL) { openFromOutside([folder]) }
 
+    /// The Welcome window, where a folder (or a recent one) opens its window: the Dock menu's
+    /// New Window.
+    func showWelcome() {
+        NSApp.activate()
+        windowActions?.0(id: KoreApp.welcomeID)
+    }
+
     /// The Welcome window, as Window ▸ Welcome Window opens it (storylines).
     package func storyShowWelcome() { windowActions?.0(id: KoreApp.welcomeID) }
+
+    /// The Dock menu's items, by title (storylines).
+    package var storyDockMenu: [String] { AppDelegate.dockMenu(self).items.map(\.title) }
+
+    /// Picks a Dock menu item by title, as a click on it would (storylines).
+    package func storyPickDockItem(_ title: String) {
+        let menu = AppDelegate.dockMenu(self)
+        guard let index = menu.items.firstIndex(where: { $0.title == title }) else { return }
+        menu.performActionForItem(at: index)
+    }
 
     /// The recent folders, newest first (storylines).
     package var storyRecents: [URL] { recents }
