@@ -33,6 +33,9 @@ public struct CodexHandoffWriter: HandoffWriter {
         if let summary = plan.summary {
             items.append(message("user", [text(HandoffRender.summary(summary, from: plan.product), output: false)]))
         }
+        if let requests = HandoffRender.requests(plan.earlierRequests ?? []) {
+            items.append(message("user", [text(requests, output: false)]))
+        }
         for entry in plan.entries {
             let turn = HandoffRender.turn(entry.turn, entry.level)
             let images: [JSONValue] = turn.images.map { ["type": "input_image", "image_url": .string($0.dataURL)] }

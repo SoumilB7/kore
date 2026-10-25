@@ -444,4 +444,21 @@ struct HandoffTests {
         #expect(HandoffRender.note(plan, folder: scratch).contains("/tmp/elsewhere-project"))
         #expect(HandoffRender.note(plan).contains("in this folder"))
     }
+
+    @Test func requestsOfTurnsNotCarriedAreListedWhenNoSummaryCoversThem() {
+        var segment = HandoffSegment(source: "codex", product: "Codex", sessionId: "s")
+        segment.turns = ["Set up the repo", "Add the parser\nwith tests", "Fix the build"].enumerated().map { index, prompt in
+            var turn = HandoffTurn(id: "t\(index)", prompt: prompt)
+            turn.reply = String(repeating: "long reply ", count: 4_000)
+            return turn
+        }
+        let plan = HandoffBudget.plan(segment, window: 40_000)
+        #expect(plan.carried < 3)
+        #expect(plan.earlierRequests?.first == "Set up the repo")
+        #expect(plan.earlierRequests?.contains("Add the parser") == true)
+        #expect(CodexHandoffWriter.items(plan).contains { "\($0)".contains("Your earlier requests in this chat") })
+        // A summary already covers them.
+        segment.summary = "All of it"
+        #expect(HandoffBudget.plan(segment, window: 40_000).earlierRequests == nil)
+    }
 }

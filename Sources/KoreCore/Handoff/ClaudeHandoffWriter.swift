@@ -65,6 +65,7 @@ public struct ClaudeHandoffWriter: HandoffWriter {
         }
         var note = HandoffRender.note(plan, folder: URL(fileURLWithPath: cwd))
         if let summary = plan.summary { note += "\n\n" + HandoffRender.summary(summary, from: plan.product) }
+        if let requests = HandoffRender.requests(plan.earlierRequests ?? []) { note += "\n\n" + requests }
         row("user", ["role": "user", "content": .string(note)], extra: ["isMeta": true])
         let mode: JSONValue = planMode ? "plan" : "default"
         for (index, entry) in plan.entries.enumerated() {

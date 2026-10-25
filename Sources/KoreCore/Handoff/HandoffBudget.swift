@@ -29,10 +29,13 @@ public struct HandoffPlan: Sendable, Codable {
     /// The source's last item at the handoff.
     public let cutoff: String?
     /// The estimate of what's carried, and the budget it was fitted to.
-    public let tokens: Int
+    public var tokens: Int
     public let budget: Int
     /// The folder the source ran in, when it says.
     public var sourceFolder: String?
+    /// The user's requests in turns not carried, oldest first, one trimmed line each: what
+    /// the chat was about before what's carried, with no summary to say it.
+    public var earlierRequests: [String]?
 
     public func count(_ level: Level) -> Int { entries.count { $0.level == level } }
     public var carried: Int { entries.count }
@@ -127,15 +130,48 @@ public struct HandoffBudget: Sendable {
         return plan
     }
 
-    /// A whole segment fitted into a window at once.
+    /// A whole segment fitted into a window at once. With no summary and turns left out, again
+    /// with room kept for their requests (`earlierRequests`), as Codex's own compaction keeps
+    /// every request word for word: here each trimmed, the newest kept within `requestsShare`.
     public static func plan(_ segment: HandoffSegment, window: Int) -> HandoffPlan {
+        let first = fit(segment, window: window, reserve: 0)
+        guard segment.summary == nil, first.left > 0 else { return first.plan }
+        let room = Int(Double(Int(Double(window) * share)) * requestsShare)
+        let reserve = min(room, lines(segment.turns[..<first.left], room: room).cost)
+        var (plan, left) = fit(segment, window: window, reserve: reserve)
+        let requests = lines(segment.turns[..<left], room: reserve)
+        plan.earlierRequests = requests.lines
+        plan.tokens += requests.cost
+        return plan
+    }
+
+    private static func fit(_ segment: HandoffSegment, window: Int, reserve: Int) -> (plan: HandoffPlan, left: Int) {
         var budget = HandoffBudget(window: window)
+        budget.used += reserve
         if let summary = segment.summary { budget.carry(summary: summary, from: segment.product) }
         var index = segment.turns.endIndex
         while index > segment.turns.startIndex, budget.offer(segment.turns[index - 1]) { index -= 1 }
         let left = segment.turns[..<index]
-        return budget.plan(segment, notCarried: left.count, from: left.first?.at, to: left.last?.at)
+        var plan = budget.plan(segment, notCarried: left.count, from: left.first?.at, to: left.last?.at)
+        plan.tokens -= reserve
+        return (plan, left.count)
     }
+
+    /// The newest requests of `turns` that fit `room`, oldest first, and what they cost.
+    private static func lines(_ turns: ArraySlice<HandoffTurn>, room: Int) -> (lines: [String], cost: Int) {
+        var cost = estimate("Your earlier requests in this chat, oldest first (their turns aren't carried):")
+        var kept: [String] = []
+        for turn in turns.reversed() {
+            let line = HandoffRender.oneLine(turn.prompt, limit: requestChars)
+            guard !line.isEmpty, cost + estimate(line) + 1 <= room else { continue }
+            cost += estimate(line) + 1
+            kept.append(line)
+        }
+        return (kept.reversed(), kept.isEmpty ? 0 : cost)
+    }
+
+    static let requestChars = 300
+    static let requestsShare = 0.15
 
     static func estimate(_ text: String) -> Int { (text.utf8.count + charsPerToken - 1) / charsPerToken }
 
@@ -337,9 +373,16 @@ public enum HandoffRender {
         return text[..<start].trimmingCharacters(in: .newlines) + "\n" + marker + "\n" + text[end...]
     }
 
-    public static func oneLine(_ text: String) -> String {
+    public static func oneLine(_ text: String, limit: Int = 160) -> String {
         let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
-        return line.count > 160 ? String(line.prefix(160)) + "…" : line
+        return line.count > limit ? String(line.prefix(limit)) + "…" : line
+    }
+
+    /// The requests of turns not carried, as one message after the note.
+    public static func requests(_ lines: [String]) -> String? {
+        guard !lines.isEmpty else { return nil }
+        return "Your earlier requests in this chat, oldest first (their turns aren't carried):\n"
+            + lines.map { "- " + $0 }.joined(separator: "\n")
     }
 
     private static func day(_ date: Date) -> String {
