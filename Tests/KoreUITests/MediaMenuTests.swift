@@ -10,7 +10,7 @@ import Testing
 @Suite("Media menu")
 final class MediaMenuTests {
     let folder: URL
-    let board = NSPasteboard(name: .init("kore-media-menu-tests-\(UUID().uuidString)"))
+    nonisolated(unsafe) let board = NSPasteboard(name: .init("kore-media-menu-tests-\(UUID().uuidString)"))
 
     init() throws {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent("kore-media-\(UUID().uuidString)")
@@ -41,7 +41,7 @@ final class MediaMenuTests {
             == ["Copy Image", "Copy Path", "Save As…", "Open", "Reveal in Finder", "Open in Kore Tab"])
         let fileItems = MediaMenu.items(.init(url: file), openInKore: {})
         #expect(titles(fileItems) == ["Copy File", "Copy Path", "Open", "Reveal in Finder", "Open in Kore"])
-        #expect(fileItems.allSatisfy(\.enabled))
+        #expect(fileItems.allSatisfy { $0.enabled })
     }
 
     @Test func aHistoryPictureWithNoFileStillCopiesAndViews() throws {
@@ -57,7 +57,8 @@ final class MediaMenuTests {
     @Test func copyImageCarriesTheFilesOwnBytes() throws {
         let image = try png("shot.png")
         #expect(MediaMenu.copyImage(.init(url: image), to: board))
-        #expect(board.data(forType: .png) == (try Data(contentsOf: image)))
+        let bytes = try Data(contentsOf: image)
+        #expect(board.data(forType: .png) == bytes)
         #expect(board.data(forType: .tiff) != nil)
     }
 
@@ -74,12 +75,14 @@ final class MediaMenuTests {
     @Test func onlyLinksToFilesThatAreThereGetTheMenu() throws {
         try "x".write(to: folder.appendingPathComponent("main.swift"), atomically: true, encoding: .utf8)
         var opened: [URL] = []
-        let items = try #require(MediaMenu.items(link: try #require(URL(string: "main.swift:12")), folder: folder) { opened.append($0) })
+        let link = try #require(URL(string: "main.swift:12"))
+        let items = try #require(MediaMenu.items(link: link, folder: folder) { opened.append($0) })
         #expect(titles(items).first == "Copy File")
         items.last?.action?()
         #expect(opened.map(\.lastPathComponent) == ["main.swift"])
-        #expect(MediaMenu.items(link: try #require(URL(string: "gone.swift")), folder: folder) { _ in } == nil)
-        #expect(MediaMenu.items(link: try #require(URL(string: "https://example.com")), folder: folder) { _ in } == nil)
+        let gone = try #require(URL(string: "gone.swift")), web = try #require(URL(string: "https://example.com"))
+        #expect(MediaMenu.items(link: gone, folder: folder) { _ in } == nil)
+        #expect(MediaMenu.items(link: web, folder: folder) { _ in } == nil)
     }
 
     @Test func aMissingFileOffersOnlyItsPath() {

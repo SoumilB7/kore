@@ -20,8 +20,6 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var following = Local(true)
     @StateObject private var zoomFollowing = Held(Bool?.none)
     @StateObject private var zoomRejoining = Held(false)
-    /// Where a pinch began: the native clip origin and SwiftUI's offset for it.
-    @StateObject private var zoomBegan = Held((native: CGFloat(0), offset: CGFloat(0)))
     /// Written by the scroll view as the reader scrolls; held without re-rendering. `nudge`
     /// re-renders once, when the position has to be pushed back (after a fold).
     @StateObject private var position = Held(ScrollPosition(edge: .bottom))
@@ -307,9 +305,8 @@ struct TranscriptTimeline: View, Equatable {
                 follow(proxy, showing: showing)
             }
             .onAppear {
-                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop, following, zoomFollowing, zoomRejoining, zoomBegan] native in
+                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop, following, zoomFollowing, zoomRejoining] _ in
                     zoomFollowing.value = following.value
-                    zoomBegan.value = (native, geometry.value.offset)
                     zoomRejoining.value = false
                     glidingUntil.value = nil
                     glideCut.value = store.sentAt
@@ -322,35 +319,19 @@ struct TranscriptTimeline: View, Equatable {
                         nudge.value &+= 1
                     }
                 }
-                shift.onZoomEnd = { [following, zoomFollowing, zoomRejoining, zoomBegan, position, nudge, insetTop, glidingUntil, glideCut, store, shift] resume in
+                shift.onZoomEnd = { [following, zoomFollowing, zoomRejoining, position, glidingUntil, glideCut, store] resume in
                     guard let previous = zoomFollowing.value else { return }
                     zoomFollowing.value = nil
-                    let frames = shift.frames
-                    let moved = (frames?.visible.minY).map { $0 - zoomBegan.value.native } ?? 0
-                    var instant = Transaction()
-                    instant.disablesAnimations = true
-                    // A pinch that moved the view (zoomed in around the cursor) stays where it
-                    // landed: the target frozen at begin moves with it, and only a view still
-                    // at the end keeps following. Nothing scrolls on release.
-                    if abs(moved) > 0.5, let frames {
-                        // SwiftUI's document is flipped: its end is at the bottom.
-                        let atEnd = frames.visible.maxY >= frames.content.maxY - Self.atBottom
-                        following.value = previous && atEnd
-                        zoomRejoining.value = false
-                        withTransaction(instant) {
-                            position.value.scrollTo(y: zoomBegan.value.offset + moved + insetTop.value)
-                            nudge.value &+= 1
-                        }
-                        return
-                    }
                     following.value = previous
                     guard resume, previous, !hidden else { zoomRejoining.value = false; return }
                     zoomRejoining.value = true
                     glidingUntil.value = nil
                     glideCut.value = store.sentAt
+                    var instant = Transaction()
+                    instant.disablesAnimations = true
                     withTransaction(instant) {
-                        // Back where it began (a cancelled pinch): rejoin the end it followed,
-                        // replacing the absolute target frozen at begin.
+                        // Replace the absolute target frozen at begin, rather than leaving
+                        // it to compete with following when the next text arrives.
                         position.value = ScrollPosition(edge: .bottom)
                         proxy.scrollTo(Self.end, anchor: .bottom)
                     }
