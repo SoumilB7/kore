@@ -55,6 +55,8 @@ extension Chat {
     package func storySetMode(_ id: String) { setMode(id) }
     /// Codex's plan switch.
     package var storyPlanMode: Bool { controls.planMode }
+    /// The session it forks, while its own hasn't come.
+    package var storyForkOf: String? { fork?.from }
 
     /// The model and mode pickers: which is open.
     package var isModelPickerOpen: Bool { picker.open == .model }

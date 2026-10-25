@@ -133,15 +133,87 @@ final class ImportPickerRefusesQuietly: ChatStoryline {
     }
 }
 
+/// A Claude Code chat of this folder imported into a new Claude Code chat: the CLI's own fork
+/// carries it whole, nothing goes through the translation, and the tab carries on in the fork.
+final class ImportSameCLIForks: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var variants: [Variant] { [.claude] }
+
+    override func steps() -> [any Step] {
+        [PutClaudeChat()] + super.steps() + [
+            ImportSession(provider: "claude", id: PutClaudeChat.session),
+            Expect("a fork of the source, nothing translated", found: { $0.app.chat?.storyForkOf }) { story in
+                let chat = try story.activeChat()
+                return chat.storyForkOf == PutClaudeChat.session && ScriptedWorld.shared.imports.isEmpty
+                    && chat.storyTitle == "Check the build number."
+            },
+        ]
+    }
+}
+
+/// Picking a chat to import sets the composer's mode as the source last ran, in this CLI's terms
+/// (Claude Code's Edit automatically → Codex's ask-for-approval rung), before Import.
+final class ImportPresetsMode: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var variants: [Variant] { [.codex] }
+
+    override func steps() -> [any Step] {
+        [PutClaudeChat(mode: "acceptEdits")] + super.steps() + [
+            Press(.id(StoryID.Composer.importLine)),
+            WaitForElement(.id(StoryID.Composer.importer)),
+            Press(.id(StoryID.Composer.importRow(PutClaudeChat.session))),
+            Expect("the source's mode on the pill", found: { $0.app.chat?.mode }) { try $0.activeChat().mode == "askForApproval" },
+        ]
+    }
+}
+
+/// A fork of an imported chat keeps the carried part above its own history.
+final class ImportedChatForks: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Carried on")]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            ImportHistory("source.jsonl", lines: ImportFixtures.other(than: variant.provider)),
+            Send("And now?"), TurnFinished(1),
+            Fork.fromAnswer(2),
+            Expect.rows("the carried turn in the fork") { rows in
+                rows.contains { $0.kind == "user" && $0.text == "Check the build number." }
+                    && rows.contains { $0.kind == "divider" && $0.text.hasPrefix("Continued in") }
+            },
+        ]
+    }
+}
+
+/// Imports a session of this folder by its id, as the picker's row does.
+struct ImportSession: Step {
+    let provider: String
+    let id: String
+    var label: String { "Import \(provider) session \(id)" }
+
+    func run(_ story: StoryContext) async throws {
+        guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the folder's workspace") }
+        let chat = try story.activeChat()
+        if let refusal = await workspace.importChat(.session(provider: provider, id: id), into: chat) {
+            throw StoryFailure.other("import refused: \(refusal)")
+        }
+        _ = try await story.wait("the imported chat") { story.app.chat.flatMap { $0 === chat ? nil : $0 } }
+    }
+}
+
 /// A Claude Code chat in this folder's store (the run's own), for the picker to list.
 struct PutClaudeChat: Step {
     static let session = "5e55-0001"
+    var mode = "default"
     var label: String { "Put a Claude Code chat in the folder" }
 
     func run(_ story: StoryContext) async throws {
         let file = ClaudeHistory.transcript(sessionId: Self.session, in: story.folder)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let lines = ImportFixtures.claude.map { $0.replacingOccurrences(of: "/tmp/source", with: story.folder.path) }
+        let lines = ImportFixtures.claude.map {
+            $0.replacingOccurrences(of: "/tmp/source", with: story.folder.path)
+                .replacingOccurrences(of: #""permissionMode":"default""#, with: #""permissionMode":"\#(mode)""#)
+        }
         try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
     }
 }

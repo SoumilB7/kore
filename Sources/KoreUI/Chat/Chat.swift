@@ -45,7 +45,7 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var sending: Task<Void, Never>?
     @ObservationIgnored private let resume: SessionSummary?
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude).
-    @ObservationIgnored private let fork: ForkPoint?
+    @ObservationIgnored let fork: ForkPoint?
     /// The chat this one was forked from, for the line after its history.
     @ObservationIgnored private var forkedFrom: String?
     /// An imported chat's carried part (`ImportedHistory`), shown above its own history, and
