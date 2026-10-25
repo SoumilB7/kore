@@ -18,6 +18,9 @@ struct TranscriptTimeline: View, Equatable {
     /// The sections and the end as they were when the chat's tab hid.
     @StateObject private var frozen = Frozen<(sections: [TranscriptStore.SectionModel], tail: Int)>()
     @StateObject private var following = Local(true)
+    /// Long messages open, and whether the end was followed when the first opened: followed
+    /// again once they've all closed.
+    @StateObject private var openMessages = Held((count: 0, followed: false))
     @StateObject private var zoomFollowing = Held(Bool?.none)
     @StateObject private var zoomRejoining = Held(false)
     /// The native clip origin a pinch began at: a release away from it is a pinch that moved the view.
@@ -528,6 +531,19 @@ struct TranscriptTimeline: View, Equatable {
             }
             sticky.row(id, frame.maxY)
             tops.value[id] = frame.minY
+        }
+        // A long message opening grows down from where it is, and closing gives back just that:
+        // the end isn't followed meanwhile, so the rows on screen stay put.
+        let (following, opened) = (following, openMessages)
+        actions.messageOpened = { open in
+            if open {
+                if opened.value.count == 0 { opened.value.followed = following.value }
+                opened.value.count += 1
+                if following.value { following.value = false }
+            } else if opened.value.count > 0 {
+                opened.value.count -= 1
+                if opened.value.count == 0, opened.value.followed { following.value = true }
+            }
         }
         actions.answerMoved = { id, top in
             tops.value[id] = top

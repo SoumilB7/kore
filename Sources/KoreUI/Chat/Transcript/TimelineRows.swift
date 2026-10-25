@@ -34,6 +34,8 @@ struct TranscriptActions {
     /// A message row moved (its frame in the scroll view: the bottom for its pinned copy, the
     /// top for keeping the reader's place), or left the built rows (nil).
     var messageMoved: (String, CGRect?) -> Void = { _, _ in }
+    /// A long message row opened (true) or closed: the end isn't followed while it's open.
+    var messageOpened: (Bool) -> Void = { _ in }
     /// An answer row's top moved, or it left the built rows (nil): a long answer marks the
     /// reader's place where no message is near.
     var answerMoved: (String, CGFloat?) -> Void = { _, _ in }
@@ -381,16 +383,17 @@ private struct EntryContent: View {
 // MARK: Messages (off the timeline)
 
 /// The user's message (or a peer's), first in its section (look.md §15). A long one stops at
-/// `collapsedLines` laid-out lines with its text fading out, and "Show full message" opens it.
-/// While its turn scrolls by, `StickyMessage` keeps its first lines pinned at the top; a click
-/// there scrolls back to it.
+/// `collapsedLines` laid-out lines with its text fading out; a click on it or "Show full message"
+/// opens it a little (`OpenedMessageText`). While its turn scrolls by, `StickyMessage` keeps its
+/// first lines pinned at the top; a click there opens a long one the same way, and scrolls back
+/// to a short one.
 struct MessageHeader: View {
     enum Place { case row, sticky }
 
     let entry: TranscriptStore.Entry
     /// A peer's message is one line until opened.
     var open = true
-    /// A long message shown whole.
+    /// A long message opened (`OpenedMessageText`); a pinned copy keeps its own.
     var expanded = false
     var place = Place.row
     /// Its Copy / Fork row (look §11); nil for none (a pinned copy, a queued message).
@@ -400,10 +403,13 @@ struct MessageHeader: View {
     /// message is collapsed from its first layout: laid out whole first, it would shrink by many
     /// screens and leave the view scrolled past the end.
     @StateObject private var lines: Local<Int>
-    /// The row's top in the visible area (for "Show less"), held without re-rendering.
-    @StateObject private var top = Held(CGFloat(0))
     /// Under the pointer: its action button shows.
     @StateObject private var hovered = Local(false)
+    /// The pinned copy opened.
+    @StateObject private var pinnedOpen = Local(false)
+    /// The box while it's open, global: a press outside it closes it.
+    @StateObject private var box = Held(CGRect.zero)
+    @Environment(\.transcriptSelection) private var selection
 
     init(
         entry: TranscriptStore.Entry, open: Bool = true, expanded: Bool = false, place: Place = .row,
@@ -418,7 +424,7 @@ struct MessageHeader: View {
         _lines = StateObject(wrappedValue: Local(Self.estimatedLines(entry.text)))
     }
 
-    /// The `toggle` key for showing a long message whole.
+    /// The `toggle` key for opening a long message.
     static func expandKey(_ entry: TranscriptStore.Entry) -> String { entry.id.uuidString + "/all" }
 
     /// Lines before measuring: its line breaks, or its length over a typical line's characters.
@@ -445,40 +451,79 @@ struct MessageHeader: View {
         .modifier(StickyBackground(on: place == .sticky))
         .contentShape(Rectangle())
         .onHover { if place == .row { hovered.value = $0 } }
-        .onTapGesture {
-            if entry.kind == .peer && place == .row {
-                actions.toggle(entry.id.uuidString)
-            } else {
-                actions.reveal(entry.id.uuidString)
-            }
-        }
+        .onTapGesture(perform: tapped)
+        // The row's name is its row's (`TimelineRow`); the pinned copy names itself.
+        .storyID(place == .sticky ? story : nil, press: tapped)
         .messageActions(text: place == .row && messageActions != nil ? entry.text : nil, canFork: messageActions?.canFork == true) {
             actions.fork(entry)
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
             guard place == .row else { return }
-            top.value = frame.minY
             actions.messageMoved(entry.id.uuidString, frame)
         }
         .onDisappear { if place == .row { actions.messageMoved(entry.id.uuidString, nil) } }
     }
 
+    /// A click on it: a peer's row opens or closes, a long message opens a little or closes, and
+    /// a short pinned one scrolls back to its row.
+    private func tapped() {
+        if entry.kind == .peer && place == .row {
+            actions.toggle(entry.id.uuidString)
+        } else if openable {
+            open(!opened)
+        } else {
+            actions.reveal(entry.id.uuidString)
+        }
+    }
+
     /// Long enough to clip: from `collapseFrom` lines up, so a clip always hides a few.
     private var collapsible: Bool { lines.value >= Layout.Timeline.collapseFrom }
+
+    /// More than it shows: a clipped row, or a pinned copy past its three lines.
+    private var openable: Bool { place == .sticky ? lines.value > Layout.Timeline.stickyLines : collapsible }
+
+    private var opened: Bool { openable && (place == .sticky ? pinnedOpen.value : expanded) }
+
+    /// The row's in the store (it's still open when built again); the pinned copy's its own.
+    private func open(_ on: Bool) {
+        guard on != opened else { return }
+        if on { OpenedMessageText.opening = openKey }
+        if place == .sticky {
+            pinnedOpen.value = on
+        } else {
+            actions.messageOpened(on)
+            actions.toggle(Self.expandKey(entry))
+        }
+    }
+
+    private var openKey: String { Self.expandKey(entry) + (place == .sticky ? "/pinned" : "") }
+
+    private var story: StoryID {
+        place == .sticky ? StoryID.Transcript.pinned(entry.id) : entry.kind == .peer ? StoryID.Transcript.peer(entry.id) : StoryID.Transcript.user(entry.id)
+    }
 
     /// The lines shown: three when pinned, `collapsedLines` when clipped, else all.
     private var shown: Int? {
         if place == .sticky { return Layout.Timeline.stickyLines }
-        return collapsible && !expanded ? Layout.Timeline.collapsedLines : nil
+        return collapsible ? Layout.Timeline.collapsedLines : nil
     }
 
-    private var text: some View {
-        MessageText(
-            text: entry.text, lines: shown,
-            fade: place == .sticky ? MessageText.lineHeight : Size.collapseFade * Zoom.shared.scale,
-            // A user's message sits in its filled box; a peer's in an outline on the ground.
-            ground: entry.kind == .peer ? Theme.background : PanelStyle.userBox.fill ?? Theme.surface
-        ) { lines.value = $0 }
+    @ViewBuilder private var text: some View {
+        if opened {
+            OpenedMessageText(text: entry.text, key: openKey, box: box) { open(false) }
+                .storyID(story.part(.open))
+                // Its texts are the text view's now: the clipped one's place is no text's.
+                .onAppear { if place == .row { selection?.textGone(entry.id, [0]) } }
+        } else {
+            MessageText(
+                text: entry.text, lines: shown,
+                fade: place == .sticky ? MessageText.lineHeight : Size.collapseFade * Zoom.shared.scale,
+                // A user's message sits in its filled box; a peer's in an outline on the ground.
+                ground: entry.kind == .peer ? Theme.background : PanelStyle.userBox.fill ?? Theme.surface,
+                // Pinned, a click is the copy's (it opens), not a selection's.
+                selectable: place == .row, click: openable ? { open(true) } : nil
+            ) { lines.value = $0 }
+        }
     }
 
     /// Under the text, inside the box: "Show full message" / "Show less".
@@ -486,12 +531,8 @@ struct MessageHeader: View {
         if collapsible && place == .row {
             HStack {
                 Spacer(minLength: 0)
-                MessageToggle(expanded: expanded) {
-                    let above = top.value < 0
-                    actions.toggle(Self.expandKey(entry))
-                    // Closing a long message from below: bring its top back into view.
-                    if expanded && above { actions.reveal(entry.id.uuidString) }
-                }
+                MessageToggle(expanded: opened) { open(!opened) }
+                    .storyID(story.part(.toggle))
             }
             .padding(.top, Space.messageToggle)
         }
@@ -521,6 +562,7 @@ struct MessageHeader: View {
                 }
                 .padding(Inset.userBox)
                 .panel(.userBox)
+                .modifier(OpenBox(on: opened, box: box))
             }
         }
     }
@@ -551,11 +593,27 @@ struct MessageHeader: View {
         .padding(open ? Inset.bubble : Inset.control)
         .frame(maxWidth: .infinity, alignment: .leading)
         .panel(.outline)
+        .modifier(OpenBox(on: opened, box: box))
         .help(open ? "" : "Show all")
     }
 
     private static func firstLine(_ text: String) -> String {
         text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+    }
+}
+
+/// An opened message's box notes where it is (global), for `OpenedMessageText`'s outside
+/// presses; a closed one reports nothing, so scrolling costs no more per message.
+private struct OpenBox: ViewModifier {
+    let on: Bool
+    let box: Held<CGRect>
+
+    func body(content: Content) -> some View {
+        if on {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { box.value = $0 }
+        } else {
+            content
+        }
     }
 }
 
@@ -680,6 +738,10 @@ struct MessageText: View {
     /// What's behind the text: the fade ends in it.
     let ground: Color
     var color = Theme.text
+    /// Takes part in the transcript's selection (a pinned copy's click opens it instead).
+    var selectable = true
+    /// What a plain click on a stopped text does.
+    var click: (() -> Void)?
     let measured: (Int) -> Void
 
     /// The body font's line height, worked out once per zoom.
@@ -702,10 +764,11 @@ struct MessageText: View {
         let line = Self.lineHeight
         let height = lines.map { CGFloat($0) * line }
         let shown = lines == nil ? text : TextPrefix.of(text, lines: Self.prefixLines, bytes: Self.prefixBytes).text
-        Text(shown)
-            .font(TextStyle.body)
-            .foregroundStyle(color)
-            .selectableText([0], shown, .body)
+        let base = Text(shown).font(TextStyle.body).foregroundStyle(color)
+        Group {
+            // Selectable as far as it shows: the toggle under a stopped text is the toggle's.
+            if selectable { base.selectableText([0], shown, .body, shown: height, click: click) } else { base }
+        }
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: Int.self) { Int(($0.size.height / line).rounded()) } action: { measured($0) }
             .frame(height: height, alignment: .top)

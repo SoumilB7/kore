@@ -197,6 +197,9 @@ extension StoryID {
         package static func slept(_ turn: String) -> StoryID { StoryID(.transcript, "slept", key: turn) }
         package static func compacted(_ entry: UUID) -> StoryID { StoryID(.transcript, "compacted", key: entry.uuidString) }
         package static func peer(_ entry: UUID) -> StoryID { StoryID(.transcript, "peer", key: entry.uuidString) }
+        /// A message's first lines pinned at the top while its turn scrolls by. On it and on a
+        /// message row, `.part(.toggle)` is "Show full message" and `.part(.open)` the opened text.
+        package static func pinned(_ entry: UUID) -> StoryID { StoryID(.transcript, "pinned", key: entry.uuidString) }
     }
 
     package enum Approval {

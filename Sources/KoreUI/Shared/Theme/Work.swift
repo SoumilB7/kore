@@ -206,6 +206,9 @@ extension Layout.Timeline {
     static let collapsedLines = 8
     static let collapseFrom = 11
     static let stickyLines = 3
+    /// Opened, it grows to at most this many lines (two and a half clipped ones) and its text
+    /// scrolls inside: a long message never pushes the chat a screen away.
+    static let openedLines = 20
     /// About this many characters fill a line at the window column (the estimate before measuring).
     static let charsPerLine = 100
 }

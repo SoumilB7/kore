@@ -42,6 +42,11 @@ extension View {
     func selectableText(_ path: [Int], _ text: String, _ style: SelectionStyle, enabled: Bool = true) -> some View {
         modifier(SelectableText(path: path, text: AttributedString(text), style: style, enabled: enabled))
     }
+
+    /// A text stopped at `shown` points of its height, and what a plain click on it does.
+    func selectableText(_ path: [Int], _ text: String, _ style: SelectionStyle, shown: CGFloat?, click: (() -> Void)?) -> some View {
+        modifier(SelectableText(path: path, text: AttributedString(text), style: style, enabled: true, shown: shown, click: click))
+    }
 }
 
 private struct SelectionRow: ViewModifier {
@@ -69,14 +74,16 @@ private struct SelectableText: ViewModifier {
     let text: AttributedString
     let style: SelectionStyle
     let enabled: Bool
+    var shown: CGFloat?
+    var click: (() -> Void)?
     @Environment(\.transcriptSelection) private var selection
     @Environment(\.selectionEntry) private var entry
 
     func body(content: Content) -> some View {
         if enabled, let selection, let entry {
-            let (path, text, style) = (path, text, style)
+            let (path, text, style, shown, click) = (path, text, style, shown, click)
             content.onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TranscriptSelection.space)) } action: {
-                selection.textMoved(entry, path, SelectionSlot(frame: $0, text: text, style: style))
+                selection.textMoved(entry, path, SelectionSlot(frame: $0, text: text, style: style, shown: shown, click: click))
             }
         } else {
             content.selectableOnHover()
@@ -307,9 +314,14 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
                 // Taken, like its press: the same release sent again (a window that isn't key)
                 // would open the link a second time.
                 takenAt = event.timestamp
-                // A click on a link that didn't drag opens it.
-                if !done.dragging, done.clicks == 1, !event.modifierFlags.contains(.shift), let url = selection.link(at: point(event)) {
-                    selection.open(url)
+                // A click on a link that didn't drag opens it; on a stopped message, opens that.
+                if !done.dragging, done.clicks == 1, !event.modifierFlags.contains(.shift) {
+                    if let url = selection.link(at: point(event)) {
+                        selection.open(url)
+                    } else if let click = selection.click(at: done.start) {
+                        selection.clear()
+                        click()
+                    }
                 }
                 return nil
             }

@@ -30,6 +30,14 @@ struct SelectionSlot {
     var frame: CGRect
     var text: AttributedString
     var style: SelectionStyle
+    /// A text stopped short (a long message's first lines) shows only this much of its frame's
+    /// top: presses below it are what's under it ("Show full message"), not the text's.
+    var shown: CGFloat? = nil
+    /// What a plain click on it does, when not a caret (a stopped message opens).
+    var click: (() -> Void)? = nil
+
+    /// The part of the frame on screen.
+    var visible: CGRect { shown.map { CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: min(frame.height, $0)) } ?? frame }
 }
 
 /// The chat transcript's one text selection (research/transcript-selection.md): from any text to
@@ -238,7 +246,7 @@ package final class TranscriptSelection: ObservableObject {
         var best: (entry: UUID, path: [Int], frame: CGRect, score: CGFloat)?
         for (entry, texts) in slots where shown[entry] != nil {
             for (path, slot) in texts {
-                let r = slot.frame
+                let r = slot.visible
                 let dy = p.y < r.minY ? r.minY - p.y : p.y > r.maxY ? p.y - r.maxY : 0
                 let dx = p.x < r.minX ? r.minX - p.x : p.x > r.maxX ? p.x - r.maxX : 0
                 let score = dy * 10_000 + dx
@@ -254,10 +262,19 @@ package final class TranscriptSelection: ObservableObject {
     /// The text whose frame holds the point (a press there is the text's, not the row's).
     func text(at p: CGPoint) -> (entry: UUID, path: [Int])? {
         for (entry, texts) in slots where shown[entry] != nil {
-            for (path, slot) in texts where slot.frame.contains(p) { return (entry, path) }
+            for (path, slot) in texts where slot.visible.contains(p) { return (entry, path) }
         }
         return nil
     }
+
+    /// What a plain click on the text under the point does, when it does more than put a caret.
+    func click(at p: CGPoint) -> (() -> Void)? {
+        guard let (entry, path) = text(at: p) else { return nil }
+        return slots[entry]?[path]?.click
+    }
+
+    /// A text that has gone from its row (a message opened into a text view of its own).
+    func textGone(_ entry: UUID, _ path: [Int]) { slots[entry]?[path] = nil }
 
     /// A link under the point, for a click that didn't drag.
     func link(at p: CGPoint) -> URL? {
@@ -309,10 +326,11 @@ package final class TranscriptSelection: ObservableObject {
         for (path, slot) in texts {
             guard let sel = selected(entry, path) else { continue }
             let dx = slot.frame.minX - row.minX, dy = slot.frame.minY - row.minY
+            let shown = CGRect(origin: CGPoint(x: dx, y: dy), size: slot.visible.size)
             if sel.lowerBound == 0, sel.upperBound == .max {
-                out.append(CGRect(origin: CGPoint(x: dx, y: dy), size: slot.frame.size))
+                out.append(shown)
             } else if let layout = layout(entry, path) {
-                out += layout.rects(sel).map { $0.offsetBy(dx: dx, dy: dy) }
+                out += layout.rects(sel).map { $0.offsetBy(dx: dx, dy: dy).intersection(shown) }.filter { !$0.isEmpty }
             }
         }
         return out
