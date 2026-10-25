@@ -242,33 +242,13 @@ package enum Attachments {
     private static let maxTextBytes = 2_000_000
     private static let maxPDFBytes = 32_000_000
     /// Anthropic's limits: 5MB per image once base64-encoded; large images are downscaled anyway.
-    private static let maxImageBytes = 3_750_000
-    private static let maxImageSide = 2000
 
     /// Media type and bytes for an image block: the file as-is when it is a supported type
     /// within limits, else re-encoded (PNG, or JPEG if still too big) at most 2000px a side.
     static func imagePayload(_ url: URL) -> (String, Data)? {
-        guard let data = try? Data(contentsOf: url), let rep = NSBitmapImageRep(data: data) else { return nil }
-        let supported = ["png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"]
-        let side = max(rep.pixelsWide, rep.pixelsHigh)
-        if let mediaType = supported[url.pathExtension.lowercased()], data.count <= maxImageBytes, side <= maxImageSide {
-            return (mediaType, data)
-        }
-        let scale = min(1, Double(maxImageSide) / Double(max(side, 1)))
-        let width = max(1, Int(Double(rep.pixelsWide) * scale)), height = max(1, Int(Double(rep.pixelsHigh) * scale))
-        guard let scaled = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
-            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
-        else { return nil }
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: scaled)
-        rep.draw(in: NSRect(x: 0, y: 0, width: width, height: height))
-        NSGraphicsContext.restoreGraphicsState()
-        if let png = scaled.representation(using: .png, properties: [:]), png.count <= maxImageBytes {
-            return ("image/png", png)
-        }
-        guard let jpeg = scaled.representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else { return nil }
-        return ("image/jpeg", jpeg)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let types = ["png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"]
+        return ImageFit.fit(data, mediaType: types[url.pathExtension.lowercased()]).map { ($0.mediaType, $0.data) }
     }
 
     static func relativePath(_ url: URL, in folder: URL) -> String {

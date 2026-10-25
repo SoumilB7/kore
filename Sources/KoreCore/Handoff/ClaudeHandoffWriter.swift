@@ -39,9 +39,6 @@ public struct ClaudeHandoffWriter: HandoffWriter {
         return f
     }()
 
-    /// Claude takes images up to 5 MB a block.
-    static let imageLimit = 5 << 20
-
     /// The transcript's lines, and the uuids of its conversation rows.
     public static func lines(
         _ plan: HandoffPlan, sessionId: String, cwd: String, version: String, title: String, plan planMode: Bool,
@@ -120,7 +117,8 @@ public struct ClaudeHandoffWriter: HandoffWriter {
 
     /// A string, or text and image blocks.
     static func userContent(_ turn: HandoffRender.Turn) -> JSONValue {
-        let images = turn.images.filter { $0.data.utf8.count / 4 * 3 <= imageLimit }
+        // Scaled as Claude takes them (≤2000 px, 5 MB in base64), the latest `maxImages` of them.
+        let images = turn.images.suffix(ImageFit.maxImages).compactMap(ImageFit.fit)
         guard !turn.images.isEmpty else { return .string(turn.user) }
         var blocks: [JSONValue] = [["type": "text", "text": .string(turn.user)]]
         blocks += images.map { ["type": "image", "source": ["type": "base64", "media_type": .string($0.mediaType), "data": .string($0.data)]] }
