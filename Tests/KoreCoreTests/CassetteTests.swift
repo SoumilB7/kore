@@ -85,15 +85,20 @@ struct CassetteTests {
         #expect(status == 3)
         StdioProcess.recorder.value = nil
 
-        // The recorder is process-wide: CLIs other tests start meanwhile land in this file too.
+        // The recorder is process-wide: CLIs other tests start meanwhile land in this file too,
+        // other `sh` ones among them under load. This one is told by its own script.
         let cassette = try KoreCore.Cassette(contentsOf: file)
-        let process = try #require(cassette.processes.first { $0.cli == "sh" })
+        let process = try #require(cassette.processes.first { $0.cli == "sh" && $0.args.last == script })
         let lines = process.lines
         #expect(lines.first { $0.dir == .in }?.text == #"{"hello":"world"}"#)
         #expect(lines.first { $0.dir == .out }?.text == #"{"got":{"hello":"world"},"cwd":"/WORK"}"#)
         #expect(lines.contains { $0.dir == .err && $0.text == "oops" })
         #expect(lines.last?.dir == .exit && lines.last?.status == 3)
-        let header = try #require(String(contentsOf: file, encoding: .utf8).split(separator: "\n").first { $0.contains(#""cli":"sh""#) })
+        let header = try #require(
+            String(contentsOf: file, encoding: .utf8).split(separator: "\n").first { line in
+                let json = try? JSONValue.parse(Data(line.utf8))
+                return json?["dir"] == nil && json?["proc"]?.int == process.index
+            })
         #expect(header.contains(#""cwd":"/WORK""#) && header.contains(#""model":"haiku""#) && header.contains(#""cassette":1"#))
     }
 }
