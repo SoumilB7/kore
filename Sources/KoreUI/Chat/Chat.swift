@@ -424,6 +424,18 @@ package final class Chat: Identifiable {
     /// A turn or a background agent is running.
     var isWorking: Bool { isBusy || !transcript.agentSummary.running.isEmpty }
 
+    /// A turn, a background agent or a command Stop applies to is running: what a sign-out or
+    /// a switch of its login stops.
+    var hasWork: Bool { isWorking || waitingForNetwork || !commands.stoppable.isEmpty }
+
+    /// Its login is going (a sign-out) or moving (a switch): the turn, the background agents
+    /// and the commands stop, and the CLI starts again as the new login once they have.
+    func stopAllWork() {
+        if isBusy || waitingForNetwork { stop() }
+        for agent in transcript.agentSummary.running { stopAgent(agent.id) }
+        stopAllCommands()
+    }
+
     /// Its turn runs, or it compacts (Kore's own compaction, the wheel's, /compact): the chat is
     /// at work, as its tab shows, until the Continue after it, if any, starts its turn.
     var isBusy: Bool { status.isRunning || context.compacting }
@@ -477,6 +489,8 @@ package final class Chat: Identifiable {
             Task { await AccountStore.shared.refresh(provider) }
             relaunchIfDue()
         case .turnFinished, .agentFinished, .commandEnded:
+            // An agent's end reaches the summary at the next draw: at once, when a start waits.
+            if case .agentFinished = event, relaunchDue || reloadWhenFree != nil { transcript.drawNow() }
             relaunchIfDue()
             if !holdsCLI, let reload = reloadWhenFree {
                 reloadWhenFree = nil

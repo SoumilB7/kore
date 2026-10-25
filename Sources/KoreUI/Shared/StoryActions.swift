@@ -179,10 +179,21 @@ extension Chat {
     /// then the action row's words ("Waiting for the browser…"), or the signed-out row alone.
     package var isAccountOpen: Bool { account.isOpen }
     package var storyAccount: [String] { account.lines(product: provider.usage.product) }
-    /// The Account popup's logins as listed, "✓ " before the active one's email.
+    /// The Account popup's logins as listed, "✓ " before the active one's email, and its cue
+    /// after it (" · Duplicate", " · Signed out").
     package var storyLogins: [String] {
-        AccountStore.shared.logins(provider.id).map { ($0.active ? "✓ " : "") + ($0.email ?? "?") }
+        AccountStore.shared.logins(provider.id).map { login in
+            let cue = login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil
+            return (login.active ? "✓ " : "") + (login.email ?? "?") + (cue.map { " · " + $0 } ?? "")
+        }
     }
+    /// What a login row's caption says under the pointer, a switch to it stopping chats: nil when
+    /// none work.
+    package var storyLoginSwitchCaption: String? { AccountText.switchCaption(working: AccountStore.shared.workingChats(provider.id)) }
+    /// Whether the chat has a turn, a background agent or a command a switch would stop, and
+    /// how many of its agents run.
+    package var storyHasWork: Bool { hasWork }
+    package var storyRunningAgents: Int { transcript.agentSummary.running.count }
     /// The caption under the action row ("Also signs out Terminal and VS Code on this Mac.",
     /// "Stored in your Keychain.", "Pick Console account, then …").
     package var storyAccountCaption: String? {
@@ -196,19 +207,24 @@ extension Chat {
         }
         guard let flow = store.flow(provider.id) else { return nil }
         if flow.step == .terminal { return AccountText.terminalCaption(flow.method) }
-        guard flow.switching, flow.step.cancellable else { return nil }
-        return AccountText.moving
+        guard flow.switching else { return nil }
+        switch flow.step {
+        case .starting, .browser, .code: return AccountText.switchCaption(working: store.workingChats(provider.id))
+        default: return nil
+        }
     }
     /// Whether "Yes, sign out" would go yet (a double-click's time after Sign out).
     package var storyAccountConfirmable: Bool { account.confirmable }
-    /// The ⌄'s methods while they're unfolded in the card, leaf by leaf in their order, closed
-    /// groups too: each by its path ("3rd-party platform/Amazon Bedrock…"), "✓ " before the
-    /// current one, "—" for the CLI's separator; nil while they're folded.
+    /// The methods while they're unfolded in the card (the ⌄'s, Add account's, a login's ⋯ with
+    /// its Remove last), leaf by leaf in their order, closed groups too: each by its path
+    /// ("3rd-party platform/Amazon Bedrock…"), "✓ " before the current one, "—" for the CLI's
+    /// separator; nil while they're folded.
     package var storyAccountMenu: [String]? {
         account.methodsShown.map { items in
-            MethodMenuItem.paths(items).flatMap { path, item in
+            let remove = account.removable.map { $0.duplicate ? AccountText.removeDuplicate : AccountText.remove }
+            return MethodMenuItem.paths(items).flatMap { path, item in
                 (item.separated ? ["—"] : []) + [(item.checked ? "✓ " : "") + path]
-            }
+            } + (remove.map { [$0] } ?? [])
         }
     }
     /// The unfolded methods' top level with their hints: "Claude account with subscription · Pro, Max,

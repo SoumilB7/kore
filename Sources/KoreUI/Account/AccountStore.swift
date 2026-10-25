@@ -4,10 +4,11 @@ import Observation
 
 /// Each CLI's login, app-wide: who it's signed in as, the one sign-in (or sign-out) under way
 /// for it, and a generation that goes up whenever the account changes, so every chat of that
-/// CLI starts its CLI again (with resume) at its next turn boundary. A flow lives here, not in
-/// a popup: closing the popup never cancels it, and the next open shows it. Changes made
-/// outside Kore are caught by watching each CLI's login file and by a check when Kore becomes
-/// active; they show nothing but the restart.
+/// CLI starts its CLI again (with resume) at its next turn boundary. A switch Kore makes (a
+/// login picked, a sign-in landing on someone else) stops the CLI's working chats first. A flow
+/// lives here, not in a popup: closing the popup never cancels it, and the next open shows it.
+/// Changes made outside Kore are caught by watching every login's file and by a check when Kore
+/// becomes active; they show nothing but the restart.
 @MainActor @Observable
 package final class AccountStore {
     package static let shared = AccountStore()
@@ -73,8 +74,16 @@ package final class AccountStore {
         /// The method it runs; nil for a sign-out.
         let method: String?
         var step: Step
-        /// Over an account already signed in.
+        /// Over an account already signed in, or adding one: it switches when it lands.
         let switching: Bool
+    }
+
+    /// Which login a sign-in is for: the active one, a new one, or another listed one (nil:
+    /// main), signed in again in its own folder.
+    package enum Aim: Equatable {
+        case active
+        case new
+        case login(String?)
     }
 
     private(set) var statuses: [String: Status] = [:]
@@ -104,8 +113,12 @@ package final class AccountStore {
     @ObservationIgnored private var epoch = 0
     /// An added login's folder while its sign-in runs: kept only if it signs in as someone new.
     @ObservationIgnored private var adding: [String: String] = [:]
+    /// A listed login that isn't active, while a sign-in runs in its folder.
+    @ObservationIgnored private var aimed: [String: CLIProfiles.Pin] = [:]
     /// Goes up when a CLI's list of logins changes.
     private(set) var loginsVersion = 0
+    /// The logins last read signed out, by CLI: "main" or an added one's id.
+    private(set) var lapsed: [String: Set<String>] = [:]
 
     // MARK: Reading
 
@@ -135,6 +148,17 @@ package final class AccountStore {
     /// The ⌄ menu: those methods in their submenus, the current one checked.
     func menu(_ provider: String) -> [MethodMenuItem] {
         MethodMenuItem.build(allMethods(provider), policy: policy(provider), current: currentMethod(provider)?.id)
+    }
+
+    /// Add account's palette: the methods that make a login of their own, in the CLI's order.
+    func addMenu(_ provider: String) -> [MethodMenuItem] {
+        MethodMenuItem.build(allMethods(provider).filter(\.ownsLogin), policy: policy(provider), current: nil)
+    }
+
+    /// A login's ⋯: the active one's every method; another's, those that sign its own folder in
+    /// (a key or a platform is in the settings every login shares, so it's only the active one's).
+    func loginMenu(_ provider: String, _ id: String?) -> [MethodMenuItem] {
+        CLIProfiles.active(provider) == id ? menu(provider) : addMenu(provider)
     }
 
     /// The method a plain Sign in runs: the last one Kore ran, else the account's own, else the
@@ -176,23 +200,29 @@ package final class AccountStore {
     /// chats start again at their next turn boundary.
     private func note(_ provider: String, _ reading: AccountReading) {
         let key: String
+        let login = Self.loginKey(CLIProfiles.active(provider))
         switch reading {
         case .signedIn(let identity):
             statuses[provider] = .signedIn(identity)
-            if CLIProfiles.note(provider, email: identity.email) { loginsVersion += 1 }
+            if CLIProfiles.note(provider, email: identity.email, workspace: identity.workspace) { loginsVersion += 1 }
+            lapsed[provider]?.remove(login)
             key = [identity.email?.lowercased() ?? "", identity.organization ?? "", identity.method].joined(separator: "\u{1F}")
         case .signedOut:
             statuses[provider] = .signedOut
+            lapsed[provider, default: []].insert(login)
             key = ""
         }
         defer { known[provider] = key }
         guard let before = known[provider], before != key else { return }
         bump(provider)
-        // A Terminal hand-off ends when the account it was for shows up.
-        if flows[provider]?.step == .terminal, case .signedIn = reading {
+        // A Terminal hand-off still waiting ends when the account it was for shows up.
+        if flows[provider]?.step == .terminal, handles[provider] != nil, adding[provider] == nil, aimed[provider] == nil,
+            case .signedIn = reading
+        {
             serials[provider, default: 0] += 1
             let handle = end(provider)
             Task { await handle?.cancel() }
+            if !before.isEmpty { stopWork(provider) }
             flows[provider]?.step = before.isEmpty ? .signedIn : .switched
         }
     }
@@ -204,22 +234,37 @@ package final class AccountStore {
         for chat in liveChats(provider) { chat.accountChanged() }
     }
 
+    /// A switch: every working chat of the CLI stops its turn, background agents and commands,
+    /// so it carries on as the new login at once.
+    private func stopWork(_ provider: String) {
+        let working = liveChats(provider).filter(\.hasWork)
+        guard !working.isEmpty else { return }
+        for chat in working { chat.stopAllWork() }
+        UILog.event("account-stop-chats", ["cli": provider, "chats": String(working.count)])
+    }
+
     // MARK: Signing in and out
 
     /// Starts a sign-in by `method` (nil: `currentMethod`). Over an account, it's a switch: the
-    /// old login works until the new one lands. One flow at a time per CLI.
-    func signIn(_ provider: String, method: SignInMethod? = nil, in folder: URL) {
+    /// old login works until the new one lands, and the working chats stop when it does. For
+    /// another listed login (`aim`), it runs in that login's folder and switches nothing. One flow
+    /// at a time per CLI.
+    func signIn(_ provider: String, method: SignInMethod? = nil, in folder: URL, aim: Aim = .active) {
         guard flows[provider]?.step.live != true, let ops = ops(provider), let method = method ?? currentMethod(provider), method.runs,
             !method.opensEditor
         else { return }
+        if case .login(let id) = aim, CLIProfiles.active(provider) != id { aimed[provider] = CLIProfiles.Pin(cli: provider, id: id) }
         let serial = (serials[provider] ?? 0) + 1
         serials[provider] = serial
         let before: AccountIdentity? = if case .signedIn(let identity) = status(provider) { identity } else { nil }
-        lastMethod[provider] = method.id
+        let other = aimed[provider] != nil
+        if !other { lastMethod[provider] = method.id }
         let refreshing = method.mechanism == .awsRefresh
-        flows[provider] = Flow(method: method.id, step: refreshing ? .refreshing : .starting, switching: before != nil && !refreshing)
-        // Adding a login: its CLIs run in its folder until it's kept.
-        let pin = adding[provider].map { CLIProfiles.Pin(cli: provider, id: $0) }
+        flows[provider] = Flow(
+            method: method.id, step: refreshing ? .refreshing : .starting, switching: before != nil && !refreshing && !other)
+        UILog.event("account-sign-in", ["cli": provider, "method": method.id, "aim": Self.words(aim, adding: adding[provider] != nil)])
+        // Adding a login, or another's: its CLIs run in its folder.
+        let pin = adding[provider].map { CLIProfiles.Pin(cli: provider, id: $0) } ?? aimed[provider]
         Task { await CLIProfiles.$pinned.withValue(pin) {
             do {
                 let handle = try await ops.calls.signIn(method.mechanism, SignInContext(folder: folder))
@@ -248,13 +293,19 @@ package final class AccountStore {
                 let reading: AccountReading
                 if let reply { reading = ops.parse(reply) } else { reading = ops.parse(try await ops.calls.status()) }
                 guard serials[provider] == serial else { return }
-                if let pin {
+                if let pin, aimed[provider] != nil {
+                    aimed[provider] = nil
+                    noteLogin(provider, pin.id, reading)
+                    flows[provider]?.step = if case .signedIn = reading { .signedIn } else { .failed(nil) }
+                    return
+                }
+                if let pin, let id = pin.id {
                     adding[provider] = nil
                     guard case .signedIn(let now) = reading, !isListed(provider, now, before) else {
                         flows[provider]?.step = .same
                         return await discard(pin, signOut: ops)
                     }
-                    CLIProfiles.adopt(provider, pin.id, email: now.email)
+                    CLIProfiles.adopt(provider, id, email: now.email, workspace: now.workspace)
                     loginsVersion += 1
                     rewatch(provider)
                 }
@@ -265,6 +316,7 @@ package final class AccountStore {
                 } else {
                     step = .signedIn
                 }
+                if step == .switched { stopWork(provider) }
                 flows[provider]?.step = step
             } catch {
                 guard serials[provider] == serial else { return }
@@ -277,31 +329,64 @@ package final class AccountStore {
 
     /// A typed key, sent once: the CLI takes it (Codex), or Kore keeps it in the Keychain for
     /// Claude's helper. `done` says whether it landed; on failure the row says why and the field
-    /// comes back. The key goes nowhere else.
-    func useKey(_ provider: String, _ key: String, done: @escaping @MainActor (Bool) -> Void) {
+    /// comes back. The key goes nowhere else. A key the CLI keeps in the login's own folder
+    /// (Codex's) can add a login, or sign another listed one in (`aim`).
+    func useKey(_ provider: String, _ key: String, aim: Aim = .active, done: @escaping @MainActor (Bool) -> Void) {
         guard flows[provider]?.step.live != true, let ops = ops(provider), let method = allMethods(provider).first(where: \.isKey)
         else { return done(false) }
+        var pin: CLIProfiles.Pin?
+        var adds = false
+        switch aim {
+        case .new where method.ownsLogin:
+            guard let id = try? CLIProfiles.prepare(provider) else { return done(false) }
+            (pin, adds) = (CLIProfiles.Pin(cli: provider, id: id), true)
+        case .login(let id) where method.ownsLogin && CLIProfiles.active(provider) != id:
+            pin = CLIProfiles.Pin(cli: provider, id: id)
+        default: break
+        }
         let serial = (serials[provider] ?? 0) + 1
         serials[provider] = serial
         let before: AccountIdentity? = if case .signedIn(let identity) = status(provider) { identity } else { nil }
-        lastMethod[provider] = method.id
-        flows[provider] = Flow(method: method.id, step: .signingIn, switching: before != nil)
-        Task {
+        let other = pin != nil && !adds
+        if !other { lastMethod[provider] = method.id }
+        flows[provider] = Flow(method: method.id, step: .signingIn, switching: before != nil && !other)
+        UILog.event("account-sign-in", ["cli": provider, "method": method.id, "aim": Self.words(aim, adding: adds)])
+        Task { await CLIProfiles.$pinned.withValue(pin) {
             do {
                 let reply = try await ops.calls.useKey(key)
                 let reading: AccountReading
                 if let reply { reading = ops.parse(reply) } else { reading = ops.parse(try await ops.calls.status()) }
-                guard serials[provider] == serial else { return }
+                guard serials[provider] == serial else {
+                    if adds, let id = pin?.id { CLIProfiles.remove(provider, id) }
+                    return
+                }
+                if let pin, other {
+                    noteLogin(provider, pin.id, reading)
+                    flows[provider]?.step = .signedIn
+                    return done(true)
+                }
+                if let pin, let id = pin.id, adds {
+                    guard case .signedIn(let now) = reading, !isListed(provider, now, before) else {
+                        flows[provider]?.step = .same
+                        await discard(pin, signOut: ops)
+                        return done(true)
+                    }
+                    CLIProfiles.adopt(provider, id, email: now.email, workspace: now.workspace)
+                    loginsVersion += 1
+                    rewatch(provider)
+                }
                 note(provider, reading)
                 bumpIfSame(provider, before, reading)
+                if let before, case .signedIn(let now) = reading, !now.isSameAccount(as: before) { stopWork(provider) }
                 flows[provider]?.step = before == nil ? .signedIn : .switched
                 done(true)
             } catch {
+                if adds, let id = pin?.id { CLIProfiles.remove(provider, id) }
                 guard serials[provider] == serial else { return }
                 flows[provider]?.step = .keyFailed(AccountReason.of(error))
                 done(false)
             }
-        }
+        } }
     }
 
     /// Saves a platform form into Claude's settings: then the status again, and every chat of the
@@ -364,7 +449,7 @@ package final class AccountStore {
         serials[provider] = serial
         let setting: AccountIdentity? = if case .signedIn(let identity) = status(provider), identity.isKoreSetting { identity } else { nil }
         flows[provider] = Flow(method: nil, step: .signingOut, switching: false)
-        for chat in liveChats(provider) where chat.isWorking { chat.stop() }
+        for chat in liveChats(provider) where chat.hasWork { chat.stopAllWork() }
         Task {
             do {
                 if let setting {
@@ -402,6 +487,12 @@ package final class AccountStore {
         package let id: String?
         package let email: String?
         package let active: Bool
+        /// The organisation (or plan) it was last read in; nil when not read yet.
+        package var workspace: String?
+        /// Last read signed out.
+        package var signedOut = false
+        /// The same account as one listed with it: removing it loses nothing.
+        package var duplicate = false
     }
 
     /// Main and the added logins, once there's more than main.
@@ -410,8 +501,31 @@ package final class AccountStore {
         // Under a storyline host, only where it gave the logins a folder of their own.
         guard CLIProfiles.supports(provider), !StoryHost.installed || CLIProfiles.root.value != nil else { return [] }
         let active = CLIProfiles.active(provider)
-        return [Login(id: nil, email: CLIProfiles.mainEmail(provider), active: active == nil)]
-            + CLIProfiles.added(provider).map { Login(id: $0.id, email: $0.email, active: active == $0.id) }
+        let out = lapsed[provider] ?? []
+        let main = Login(
+            id: nil, email: CLIProfiles.mainEmail(provider), active: active == nil, workspace: CLIProfiles.mainWorkspace(provider),
+            signedOut: out.contains(Self.loginKey(nil)))
+        let added = CLIProfiles.added(provider).map {
+            Login(id: $0.id, email: $0.email, active: active == $0.id, workspace: $0.workspace, signedOut: out.contains($0.id))
+        }
+        return Self.flaggingDuplicates([main] + added)
+    }
+
+    /// Flags the logins that are the same account (email and workspace) as one kept with them:
+    /// the active one, else the first listed. Only an added login that isn't active is flagged,
+    /// as only it can go; one signed out, or whose workspace isn't read yet, matches nothing.
+    static func flaggingDuplicates(_ logins: [Login]) -> [Login] {
+        var groups: [String: [Int]] = [:]
+        for (index, login) in logins.enumerated() where !login.signedOut {
+            guard let email = login.email?.lowercased(), !email.isEmpty, let workspace = login.workspace else { continue }
+            groups[email + "\u{1F}" + workspace, default: []].append(index)
+        }
+        var flagged = logins
+        for members in groups.values where members.count > 1 {
+            let kept = members.first { logins[$0].active } ?? members[0]
+            for index in members where index != kept && logins[index].id != nil && !logins[index].active { flagged[index].duplicate = true }
+        }
+        return flagged
     }
 
     /// Adds a login: a sign-in in a folder of its own, kept and switched to if it lands on an
@@ -423,10 +537,12 @@ package final class AccountStore {
         if flows[provider]?.step.live != true { dropAdding(provider) }
     }
 
-    /// Every chat of the CLI moves to `id`'s login (nil: main) at its next turn boundary, as a
-    /// sign-in's switch does, without signing in again.
+    /// Every chat of the CLI moves to `id`'s login (nil: main) without signing in again: its
+    /// working chats stop first, then each starts again as the new login.
     func switchLogin(_ provider: String, to id: String?) {
         guard flows[provider]?.step.live != true, CLIProfiles.active(provider) != id else { return }
+        UILog.event("account-switch", ["cli": provider, "login": Self.loginKey(id)])
+        stopWork(provider)
         CLIProfiles.activate(provider, id)
         dismissOutcome(provider)
         loginsVersion += 1
@@ -444,18 +560,24 @@ package final class AccountStore {
     /// Signs an added login out (its folder's only) and forgets it.
     func removeLogin(_ provider: String, _ id: String) {
         guard CLIProfiles.active(provider) != id, let ops = ops(provider) else { return }
+        let duplicate = logins(provider).first { $0.id == id }?.duplicate == true
+        UILog.event("account-remove", ["cli": provider, "login": id, "duplicate": duplicate ? "yes" : "no"])
         Task { await discard(CLIProfiles.Pin(cli: provider, id: id), signOut: ops) }
     }
 
     private func discard(_ pin: CLIProfiles.Pin, signOut ops: AccountOps) async {
+        guard let id = pin.id else { return }
         await CLIProfiles.$pinned.withValue(pin) { try? await ops.calls.signOut() }
-        CLIProfiles.remove(pin.cli, pin.id)
+        CLIProfiles.remove(pin.cli, id)
+        lapsed[pin.cli]?.remove(id)
         loginsVersion += 1
+        rewatch(pin.cli)
     }
 
     /// A sign-in that didn't finish: its folder goes, once its CLI has (`handle`, cancelled
-    /// first), so nothing writes into it after.
+    /// first), so nothing writes into it after. Another login's stays as it was.
     private func dropAdding(_ provider: String, after handle: SignInHandle? = nil) {
+        aimed[provider] = nil
         let id = adding.removeValue(forKey: provider)
         Task {
             await handle?.cancel()
@@ -463,20 +585,57 @@ package final class AccountStore {
         }
     }
 
-    /// The account is one listed already: main's, an added login's, or the one it was over.
+    /// The account is one listed already (the same email in the same organisation or plan),
+    /// or the one it was over.
     private func isListed(_ provider: String, _ identity: AccountIdentity, _ before: AccountIdentity?) -> Bool {
         if let before, identity.isSameAccount(as: before) { return true }
         guard let email = identity.email?.lowercased() else { return false }
-        return logins(provider).contains { $0.email?.lowercased() == email }
+        return logins(provider).contains { !$0.signedOut && $0.email?.lowercased() == email && $0.workspace == identity.workspace }
     }
 
-    /// The login file to watch is the active login's.
-    private func rewatch(_ provider: String) {
-        guard watches[provider] != nil, let ops = ops(provider) else { return }
-        let file = ops.loginFile()
-        stamps[provider] = ops.stamp.flatMap { stamp in (try? Data(contentsOf: file)).flatMap(stamp) }
-        watches[provider] = FileWatch(file) { [weak self] in self?.fileChanged(provider) }
+    /// What a read of a login that isn't active found: who it is now, or that it's signed out.
+    private func noteLogin(_ provider: String, _ id: String?, _ reading: AccountReading) {
+        switch reading {
+        case .signedIn(let identity):
+            lapsed[provider]?.remove(Self.loginKey(id))
+            if CLIProfiles.note(provider, login: id, email: identity.email, workspace: identity.workspace) { loginsVersion += 1 }
+        case .signedOut:
+            lapsed[provider, default: []].insert(Self.loginKey(id))
+        }
     }
+
+    /// A login as the logs and `lapsed` name it: "main" or its id.
+    static func loginKey(_ id: String?) -> String { id ?? "main" }
+
+    private static func words(_ aim: Aim, adding: Bool) -> String {
+        if adding { return "new" }
+        switch aim {
+        case .active: return "active"
+        case .new: return "new"
+        case .login(let id): return loginKey(id)
+        }
+    }
+
+    /// Every login's file is watched, the active one's and the others': a change to another's is
+    /// read in its own folder, so its row says who it is.
+    private func rewatch(_ provider: String) {
+        guard activeObserver != nil, let ops = ops(provider) else { return }
+        let ids: [String?] = [nil] + (CLIProfiles.supports(provider) ? CLIProfiles.added(provider).map(\.id) : [])
+        let keys = Set(ids.map { Self.watchKey(provider, $0) })
+        for key in watches.keys where key.hasPrefix(provider + "/") && !keys.contains(key) {
+            watches[key] = nil
+            stamps[key] = nil
+        }
+        for id in ids {
+            let key = Self.watchKey(provider, id)
+            guard watches[key] == nil else { continue }
+            let file = ops.loginFile(CLIProfiles.environment(provider, login: id))
+            stamps[key] = ops.stamp.flatMap { stamp in (try? Data(contentsOf: file)).flatMap(stamp) }
+            watches[key] = FileWatch(file) { [weak self] in self?.fileChanged(provider, login: id) }
+        }
+    }
+
+    private static func watchKey(_ provider: String, _ id: String?) -> String { provider + "/" + loginKey(id) }
 
     /// The popup closed: an outcome goes, and the next open shows rest. A flow under way goes on.
     func dismissOutcome(_ provider: String) {
@@ -484,8 +643,9 @@ package final class AccountStore {
         flows[provider] = nil
     }
 
-    /// How many of the CLI's chats, in any window, have a turn or a background agent running.
-    func workingChats(_ provider: String) -> Int { liveChats(provider).filter(\.isWorking).count }
+    /// How many of the CLI's chats, in any window, have a turn, a background agent or a command
+    /// running: what a sign-out or a switch stops.
+    func workingChats(_ provider: String) -> Int { liveChats(provider).filter(\.hasWork).count }
 
     // MARK: Chats
 
@@ -519,44 +679,53 @@ package final class AccountStore {
 
     // MARK: Changes outside Kore
 
-    /// Watches each CLI's login file, and checks again when Kore becomes active (at most once a
-    /// 30 s). Not under a storyline host, whose CLIs are scripted.
+    /// Watches every login's file of each CLI, and checks again when Kore becomes active (at
+    /// most once a 30 s). Not under a storyline host, whose CLIs are scripted.
     func watch() {
         guard !StoryHost.installed, activeObserver == nil else { return }
         CLIProfiles.sweep()
-        for provider in Registry.all.map(\.id) {
-            guard let ops = ops(provider) else { continue }
-            let file = ops.loginFile()
-            stamps[provider] = ops.stamp.flatMap { stamp in (try? Data(contentsOf: file)).flatMap(stamp) }
-            watches[provider] = FileWatch(file) { [weak self] in self?.fileChanged(provider) }
-        }
         activeObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.becameActive() }
         }
+        for provider in Registry.all.map(\.id) { rewatch(provider) }
     }
 
     /// Settles for a second (a login writes the file more than once), then reads the status if
-    /// the account in it changed.
-    private func fileChanged(_ provider: String) {
-        settling[provider]?.cancel()
-        settling[provider] = Task { [weak self] in
+    /// the account in it changed: the active login's as the CLI's, another's in its own folder.
+    private func fileChanged(_ provider: String, login id: String?) {
+        let key = Self.watchKey(provider, id)
+        settling[key]?.cancel()
+        settling[key] = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, let self else { return }
-            self.settling[provider] = nil
-            guard self.accountMoved(provider) else { return }
-            await self.refresh(provider)
+            self.settling[key] = nil
+            guard self.accountMoved(provider, login: id) else { return }
+            if CLIProfiles.active(provider) == id {
+                await self.refresh(provider)
+            } else {
+                await self.readLogin(provider, id)
+            }
         }
     }
 
+    /// Reads a login that isn't active, in its own folder.
+    private func readLogin(_ provider: String, _ id: String?) async {
+        guard let ops = ops(provider) else { return }
+        let reply = await CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: provider, id: id)) { try? await ops.calls.status() }
+        guard let reply, CLIProfiles.active(provider) != id else { return }
+        noteLogin(provider, id, ops.parse(reply))
+    }
+
     /// Whether the file's account changed since last seen; always, for a file Kore doesn't read.
-    private func accountMoved(_ provider: String) -> Bool {
+    private func accountMoved(_ provider: String, login id: String?) -> Bool {
         guard let ops = ops(provider) else { return false }
         guard let stamp = ops.stamp else { return true }
-        let now = (try? Data(contentsOf: ops.loginFile())).flatMap(stamp)
-        defer { stamps[provider] = now }
-        return stamps[provider] != .some(now)
+        let key = Self.watchKey(provider, id)
+        let now = (try? Data(contentsOf: ops.loginFile(CLIProfiles.environment(provider, login: id)))).flatMap(stamp)
+        defer { stamps[key] = now }
+        return stamps[key] != .some(now)
     }
 
     private func becameActive() {
@@ -589,6 +758,8 @@ package final class AccountStore {
         lastMethod = [:]
         reads = [:]
         reading = []
+        lapsed = [:]
+        aimed = [:]
     }
 }
 

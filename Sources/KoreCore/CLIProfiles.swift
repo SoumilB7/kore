@@ -9,14 +9,19 @@ import SQLite3
 public enum CLIProfiles {
     public struct Profile: Codable, Hashable, Sendable, Identifiable {
         public let id: String
-        /// Who it's signed in as, the last time Kore read it while it was active.
+        /// Who it's signed in as, the last time Kore read it.
         public var email: String?
+        /// The organisation (or Codex's plan) it works in, with the email telling two logins
+        /// apart: "" for none, nil when not read yet.
+        public var workspace: String?
     }
 
     struct Saved: Codable {
         var active: [String: String] = [:]
         var added: [String: [Profile]] = [:]
         var mainEmail: [String: String] = [:]
+        /// Optional, so a list saved before it reads.
+        var mainWorkspace: [String: String]?
     }
 
     static let variables = ["claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"]
@@ -67,6 +72,7 @@ public enum CLIProfiles {
     /// The active login: nil is main.
     public static func active(_ cli: String) -> String? { saved.active[cli] }
     public static func mainEmail(_ cli: String) -> String? { saved.mainEmail[cli] }
+    public static func mainWorkspace(_ cli: String) -> String? { saved.mainWorkspace?[cli] }
 
     /// The CLI's main folder: its variable as Kore was started with it, else its default.
     public static func mainFolder(_ cli: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
@@ -81,20 +87,29 @@ public enum CLIProfiles {
 
     public struct Pin: Sendable {
         public let cli: String
-        public let id: String
-        public init(cli: String, id: String) { (self.cli, self.id) = (cli, id) }
+        /// nil: main.
+        public let id: String?
+        public init(cli: String, id: String?) { (self.cli, self.id) = (cli, id) }
     }
 
     /// A login's folder for the CLIs one task starts: an added login's sign-in, before it's
-    /// active, or a sign-out of one that isn't.
+    /// active, or a sign-in, read or sign-out of one that isn't.
     @TaskLocal public static var pinned: Pin?
 
     /// What a CLI starts with for the active (or pinned) login: nothing for main.
     public static func overrides(_ cli: String) -> [String: String] {
         guard let name = variables[cli] else { return [:] }
-        if let pin = pinned, pin.cli == cli { return [name: folder(cli, pin.id).path] }
+        if let pin = pinned, pin.cli == cli { return pin.id.map { [name: folder(cli, $0).path] } ?? [:] }
         guard let id = saved.active[cli] else { return [:] }
         return [name: folder(cli, id).path]
+    }
+
+    /// Kore's environment with `id`'s folder (nil: main's) for `cli`, for reading that login's
+    /// files whichever is active.
+    public static func environment(_ cli: String, login id: String?) -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        if let id, let name = variables[cli] { env[name] = folder(cli, id).path }
+        return env
     }
 
     /// Kore's environment as the active logins change it, for reading their files.
@@ -116,9 +131,9 @@ public enum CLIProfiles {
     }
 
     /// A prepared login, signed in: listed, and active from now on.
-    public static func adopt(_ cli: String, _ id: String, email: String?) {
+    public static func adopt(_ cli: String, _ id: String, email: String?, workspace: String? = nil) {
         change {
-            $0.added[cli, default: []].append(Profile(id: id, email: email))
+            $0.added[cli, default: []].append(Profile(id: id, email: email, workspace: workspace))
             $0.active[cli] = id
         }
     }
@@ -142,14 +157,30 @@ public enum CLIProfiles {
 
     /// Records who the active login is; whether that changed the list.
     @discardableResult
-    public static func note(_ cli: String, email: String?) -> Bool {
+    public static func note(_ cli: String, email: String?, workspace: String? = nil) -> Bool {
+        note(cli, login: saved.active[cli], email: email, workspace: workspace)
+    }
+
+    /// Records who `id`'s login (nil: main) is; a nil workspace keeps the one known for the same
+    /// email. Whether that changed the list.
+    @discardableResult
+    public static func note(_ cli: String, login id: String?, email: String?, workspace: String?) -> Bool {
         guard let email, !email.isEmpty else { return false }
-        if let id = saved.active[cli] {
-            guard let index = saved.added[cli]?.firstIndex(where: { $0.id == id }), saved.added[cli]?[index].email != email else { return false }
-            change { $0.added[cli]?[index].email = email }
+        if let id {
+            guard let index = saved.added[cli]?.firstIndex(where: { $0.id == id }), let profile = saved.added[cli]?[index] else { return false }
+            let kept = workspace ?? (profile.email == email ? profile.workspace : nil)
+            guard profile.email != email || profile.workspace != kept else { return false }
+            change { $0.added[cli]?[index] = Profile(id: id, email: email, workspace: kept) }
         } else {
-            guard saved.mainEmail[cli] != email else { return false }
-            change { $0.mainEmail[cli] = email }
+            let known = saved.mainWorkspace?[cli]
+            let kept = workspace ?? (saved.mainEmail[cli] == email ? known : nil)
+            guard saved.mainEmail[cli] != email || known != kept else { return false }
+            change {
+                $0.mainEmail[cli] = email
+                var workspaces = $0.mainWorkspace ?? [:]
+                workspaces[cli] = kept
+                $0.mainWorkspace = workspaces
+            }
         }
         return true
     }

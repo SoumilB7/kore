@@ -17,13 +17,21 @@ final class AccountState {
         case platform(ClaudeSettings.Platform)
     }
 
+    /// What unfolds above the account: the ⌄'s methods, Add account's, or a login's ⋯.
+    enum Palette: Equatable {
+        case methods
+        case add
+        /// A login's (nil: main's).
+        case login(String?)
+    }
+
     private(set) var isOpen = false
     /// Sign out asked; the row is the question until it's answered.
     private(set) var askingSignOut = false
     /// Copy link (or code) was just pressed: it reads "Copied" for a moment.
     private(set) var copied = false
-    /// The ⌄'s methods are unfolded in the card, and the groups disclosed in them, by title.
-    private(set) var methodsOpen = false
+    /// The methods unfolded in the card, and the groups disclosed in them, by title.
+    private(set) var palette: Palette?
     private(set) var disclosed: Set<String> = []
     private(set) var editor: Editor?
     /// A form's picker unfolded in the card, by name ("credentials", "profile").
@@ -38,6 +46,8 @@ final class AccountState {
     var filled: Set<String> = []
     @ObservationIgnored private(set) var provider = ""
     @ObservationIgnored private(set) var folder = FileManager.default.homeDirectoryForCurrentUser
+    /// The login the last sign-in or key was for: Try again goes there again.
+    @ObservationIgnored private var aim = AccountStore.Aim.active
     /// When Sign out asked (system uptime): a "Yes" within a double-click of it is the Sign out
     /// click's second half, and is ignored.
     @ObservationIgnored private var askedAt: TimeInterval = 0
@@ -50,7 +60,7 @@ final class AccountState {
         self.provider = provider
         self.folder = folder
         isOpen = true
-        (askingSignOut, copied, methodsOpen, editor, formPicker, formError, filled) = (false, false, false, nil, nil, nil, [])
+        (askingSignOut, copied, palette, editor, formPicker, formError, filled) = (false, false, nil, nil, nil, nil, [])
         store.dismissOutcome(provider)
         if store.flow(provider)?.step.live != true { Task { await store.refresh(provider) } }
     }
@@ -60,7 +70,7 @@ final class AccountState {
     func close() {
         guard isOpen else { return }
         isOpen = false
-        (askingSignOut, methodsOpen, editor, formPicker, formError, filled) = (false, false, nil, nil, nil, [])
+        (askingSignOut, palette, editor, formPicker, formError, filled) = (false, nil, nil, nil, nil, [])
         store.dismissOutcome(provider)
     }
 
@@ -71,8 +81,8 @@ final class AccountState {
             formPicker = nil
             return true
         }
-        if methodsOpen {
-            methodsOpen = false
+        if palette != nil {
+            palette = nil
             return true
         }
         if editor != nil, !saving {
@@ -119,19 +129,34 @@ final class AccountState {
         store.signOut(provider)
     }
 
-    /// Sign in, Switch account (Add account), Try again: the current method, or the one picked.
-    /// Signed in where the CLI keeps several logins, it adds one. A key or a platform opens its
-    /// field or form, filled in with what's saved (Claude's settings, one for every login).
+    /// Sign in, Switch account, or a method picked from what's unfolded: the current method, or
+    /// the one picked, for Add account's new login, a ⋯'s login, else the active one. A key or a
+    /// platform opens its field or form, filled in with what's saved (Claude's settings, one for
+    /// every login).
     func signIn(_ method: SignInMethod? = nil) {
+        let aim: AccountStore.Aim =
+            switch palette {
+            case .add: .new
+            case .login(let id): CLIProfiles.active(provider) == id ? .active : .login(id)
+            case .methods, nil: .active
+            }
+        start(method, aim: aim)
+    }
+
+    /// Try again: the current method, for the login the last try was for.
+    func tryAgain() { start(nil, aim: aim) }
+
+    private func start(_ method: SignInMethod?, aim: AccountStore.Aim) {
         askingSignOut = false
-        methodsOpen = false
+        palette = nil
         guard let method = method ?? store.currentMethod(provider) else { return }
+        self.aim = aim
         if method.opensEditor { return openEditor(method) }
         closeEditor()
-        if addsLogins {
+        if aim == .new {
             store.addLogin(provider, method: method, in: folder)
         } else {
-            store.signIn(provider, method: method, in: folder)
+            store.signIn(provider, method: method, in: folder, aim: aim)
         }
     }
 
@@ -141,9 +166,38 @@ final class AccountState {
         return !store.logins(provider).isEmpty
     }
 
-    func switchLogin(_ id: String?) { store.switchLogin(provider, to: id) }
+    /// Add account: the methods that make a login of their own unfold (one alone starts at
+    /// once); again, they fold.
+    func toggleAdd() {
+        askingSignOut = false
+        let items = store.addMenu(provider)
+        if palette != .add, items.count == 1, let method = items[0].method { return start(method, aim: .new) }
+        (palette, disclosed) = (palette == .add ? nil : .add, [])
+        if palette == .add { UILog.event("account-add-open", ["cli": provider]) }
+    }
 
-    func removeLogin(_ id: String) { store.removeLogin(provider, id) }
+    /// A login's ⋯: its methods unfold (and, for an added one not in use, Remove); again, they fold.
+    func toggleLoginMenu(_ id: String?) {
+        askingSignOut = false
+        (palette, disclosed) = (palette == .login(id) ? nil : .login(id), [])
+        if palette == .login(id) { UILog.event("account-login-menu", ["cli": provider, "login": AccountStore.loginKey(id)]) }
+    }
+
+    /// The ⋯'s Remove, under its methods: an added login not in use, and whether it's a duplicate.
+    var removable: AccountStore.Login? {
+        guard case .login(let id?) = palette else { return nil }
+        return store.logins(provider).first { $0.id == id && !$0.active }
+    }
+
+    func switchLogin(_ id: String?) {
+        palette = nil
+        store.switchLogin(provider, to: id)
+    }
+
+    func removeLogin(_ id: String) {
+        palette = nil
+        store.removeLogin(provider, id)
+    }
 
     private func openEditor(_ method: SignInMethod) {
         guard store.flow(provider)?.step.live != true else { return }
@@ -172,7 +226,7 @@ final class AccountState {
         let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
         filled = []
-        store.useKey(provider, key) { [weak self] landed in
+        store.useKey(provider, key, aim: aim) { [weak self] landed in
             if landed, self?.editor == .key { self?.editor = nil }
         }
     }
@@ -225,16 +279,16 @@ final class AccountState {
         }
     }
 
-    /// The ⌄'s methods: those the CLI's policy lists, in their groups, the current one checked.
-    var menuItems: [MethodMenuItem] { store.menu(provider) }
-
     /// More than one method to pick from: the ⌄ shows.
     var hasMenu: Bool { store.methods(provider).count > 1 }
+
+    /// The ⌄'s methods are unfolded.
+    var methodsOpen: Bool { palette == .methods }
 
     /// The ⌄: the methods unfold above the account, every group closed; again, they fold.
     func toggleMethods() {
         askingSignOut = false
-        (methodsOpen, disclosed) = (!methodsOpen, [])
+        (palette, disclosed) = (palette == .methods ? nil : .methods, [])
     }
 
     /// A group's row: its methods show under it, or go.
@@ -242,8 +296,16 @@ final class AccountState {
         if disclosed.contains(title) { disclosed.remove(title) } else { disclosed.insert(title) }
     }
 
-    /// The methods while they're unfolded.
-    var methodsShown: [MethodMenuItem]? { methodsOpen ? menuItems : nil }
+    /// The methods while they're unfolded: those the CLI's policy lists, in their groups; the
+    /// ⌄'s with the current one checked.
+    var methodsShown: [MethodMenuItem]? {
+        switch palette {
+        case .methods: store.menu(provider)
+        case .add: store.addMenu(provider)
+        case .login(let id): store.loginMenu(provider, id)
+        case nil: nil
+        }
+    }
 
     /// The identity signed in now, when there is one.
     var identity: AccountIdentity? {
@@ -314,7 +376,7 @@ struct AccountPopup: View {
                     .transition(.opacity.animation(Motion.fade))
             } else {
                 VStack(alignment: .leading, spacing: 0) {
-                    // The ⌄'s methods, unfolded above the account (model-picker.html, "Account ⌄").
+                    // The methods, unfolded above the account (model-picker.html, "Account ⌄").
                     if let items = state.methodsShown {
                         MethodList(state: state, items: items)
                         Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
@@ -334,9 +396,12 @@ struct AccountPopup: View {
         case .unknown where store.logins(provider).count > 1:
             // Just switched: the list stays, the new login's caption to come.
             loginList(nil)
+        case .signedOut where store.logins(provider).count > 1:
+            // Signed out (here or outside Kore): the other logins are still there to switch to.
+            loginList(nil, signedIn: false)
         case .signedIn(let identity):
             VStack(alignment: .leading, spacing: 0) {
-                header(AccountText.header(identity))
+                header(AccountText.header(identity), menu: identity.changeable && !store.logins(provider).isEmpty)
                 // Asked to sign out, the line under the header says what it reaches: the card
                 // keeps its height, so the row (and No, go back over Sign out) stays put.
                 let reach = state.askingSignOut ? signOutReach : nil
@@ -377,17 +442,17 @@ struct AccountPopup: View {
     }
 
     /// With more than main: the logins in the header's place, then the row.
-    private func loginList(_ identity: AccountIdentity?) -> some View {
+    private func loginList(_ identity: AccountIdentity?, signedIn: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             LoginList(state: state, provider: chat.provider.id, identity: identity)
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
-            row(signedIn: true)
+            row(signedIn: signedIn)
         }
     }
 
     /// The email in the title style, truncated in the middle; the spinner while the first read
-    /// is under way.
-    private func header(_ title: String) -> some View {
+    /// is under way. Where the CLI keeps several logins, its ⋯ (`menu`) as a listed login's.
+    private func header(_ title: String, menu: Bool = false) -> some View {
         HStack(spacing: Space.md) {
             Text(title)
                 .font(TextStyle.title)
@@ -398,6 +463,8 @@ struct AccountPopup: View {
             Spacer(minLength: 0)
             if store.status(chat.provider.id) == .unknown, store.isReading(chat.provider.id) {
                 SpinningArc().frame(width: Size.spinner, height: Size.spinner)
+            } else if menu {
+                LoginMenuButton(state: state, login: CLIProfiles.active(chat.provider.id))
             }
         }
         .frame(minHeight: Size.MessageActions.button)
@@ -427,7 +494,7 @@ struct AccountPopup: View {
 
     /// Under the question (signed out), what a sign-out reaches; under the key field, where the key goes (or
     /// why it was refused); under a hand-off, what to do in Terminal; under a switch under way,
-    /// what it means for the open chats.
+    /// the working chats it stops when it lands.
     private func caption(_ flow: AccountStore.Flow?, signedIn: Bool) -> (words: String, danger: Bool)? {
         let provider = chat.provider.id
         if state.askingSignOut {
@@ -442,7 +509,7 @@ struct AccountPopup: View {
         if flow.step == .terminal { return (AccountText.terminalCaption(flow.method), false) }
         guard signedIn, flow.switching else { return nil }
         switch flow.step {
-        case .starting, .browser, .code: return (AccountText.moving, false)
+        case .starting, .browser, .code: return AccountText.switchCaption(working: store.workingChats(provider)).map { ($0, false) }
         default: return nil
         }
     }
@@ -512,11 +579,19 @@ private struct AccountRow: View {
                 Spacer(minLength: 0)
                 // Apart enough that each one's clicks stay its own.
                 HStack(spacing: Space.sm) {
-                    Button(state.addsLogins ? "Add account" : "Switch account") { state.signIn() }
-                        .smallButton()
-                        .storyID(id.part(.switch))
-                        .tabStop(id.part(.switch)) { state.signIn() }
-                    if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method)) }
+                    if state.addsLogins {
+                        // Its palette holds the ways to sign in; each login's own are in its ⋯.
+                        Button("Add account") { state.toggleAdd() }
+                            .smallButton()
+                            .storyID(id.part(.switch))
+                            .tabStop(id.part(.switch)) { state.toggleAdd() }
+                    } else {
+                        Button("Switch account") { state.signIn() }
+                            .smallButton()
+                            .storyID(id.part(.switch))
+                            .tabStop(id.part(.switch)) { state.signIn() }
+                        if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method)) }
+                    }
                 }
                 Button("Sign out") { state.askSignOut() }
                     .smallButton()
@@ -529,7 +604,7 @@ private struct AccountRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
-                signInControl("Sign in", id: id)
+                signInControl("Sign in", id: id) { state.signIn() }
             }
         }
         .font(TextStyle.label)
@@ -583,7 +658,7 @@ private struct AccountRow: View {
             let words = Self.words(step)
             Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).help(words)
             Spacer(minLength: 0)
-            signInControl("Try again", id: id)
+            signInControl("Try again", id: id) { state.tryAgain() }
         case .signOutFailed:
             let words = Self.words(step)
             Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).help(words)
@@ -591,7 +666,7 @@ private struct AccountRow: View {
         case .timedOut:
             Text(AccountText.timedOut).lineLimit(1)
             Spacer(minLength: 0)
-            signInControl("Try again", id: id)
+            signInControl("Try again", id: id) { state.tryAgain() }
         }
     }
 
@@ -611,12 +686,12 @@ private struct AccountRow: View {
     }
 
     /// Sign in (or Try again) and, with more than one method, the ⌄ of methods.
-    private func signInControl(_ title: String, id: StoryID) -> some View {
+    private func signInControl(_ title: String, id: StoryID, action: @escaping @MainActor () -> Void) -> some View {
         HStack(spacing: Space.sm) {
-            Button(title) { state.signIn() }
+            Button(title, action: action)
                 .smallButton(prominent: true)
                 .storyID(id.part(.signIn))
-                .tabStop(id.part(.signIn)) { state.signIn() }
+                .tabStop(id.part(.signIn), action: action)
             if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method)) }
         }
     }
@@ -678,6 +753,7 @@ private struct MethodMenuButton: View {
 
 /// The CLI's sign-in methods, in the card: a 36pt row each with the CLI's hint under its title,
 /// the current one checked; a group discloses its methods under it, indented, never a submenu.
+/// A login's ⋯ ends with Remove (Remove duplicate for a duplicate) where it can go.
 private struct MethodList: View {
     let state: AccountState
     let items: [MethodMenuItem]
@@ -700,31 +776,50 @@ private struct MethodList: View {
                     }
                 }
             }
+            if let login = state.removable, let id = login.id {
+                let title = login.duplicate ? AccountText.removeDuplicate : AccountText.remove
+                let press: @MainActor @Sendable () -> Void = { state.removeLogin(id) }
+                MethodRow(title: title, action: press)
+                    .storyID(StoryID.Composer.accountMethod(title))
+                    .tabStop(StoryID.Composer.accountMethod(title), action: press)
+            }
         }
     }
 }
 
-/// One method, or a group (⌄ open, › closed); the hover fill under the pointer.
+/// One method, or a group (⌄ open, › closed), or a login's Remove; the hover fill under the
+/// pointer.
 private struct MethodRow: View {
-    let item: MethodMenuItem
-    let depth: Int
-    let open: Bool
+    let title: String
+    var hint: String?
+    var depth = 0
+    /// A group's ⌄ or ›; nil for a leaf.
+    var open: Bool?
+    var checked = false
     let action: () -> Void
     @StateObject private var hovered = Local(false)
+
+    init(item: MethodMenuItem, depth: Int, open: Bool, action: @escaping () -> Void) {
+        (title, hint, self.depth, self.action) = (item.title, item.hint, depth, action)
+        self.open = item.method == nil ? open : nil
+        checked = item.checked && item.method != nil
+    }
+
+    init(title: String, action: @escaping () -> Void) { (self.title, self.action) = (title, action) }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.md) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(item.title).font(TextStyle.body).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
-                    if let hint = item.hint {
+                    Text(title).font(TextStyle.body).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
+                    if let hint {
                         Text(hint).font(TextStyle.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.tail)
                     }
                 }
                 Spacer(minLength: Space.md)
-                if item.method == nil {
+                if let open {
                     Image(systemName: open ? "chevron.down" : "chevron.right").font(Glyph.chevron).foregroundStyle(Theme.secondary)
-                } else if item.checked {
+                } else if checked {
                     Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
                 }
             }
@@ -736,13 +831,31 @@ private struct MethodRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .accessibilityAddTraits(item.checked && item.method != nil ? .isSelected : [])
+        .accessibilityAddTraits(checked ? .isSelected : [])
+    }
+}
+
+/// A login's ⋯: its methods unfold in the card, Remove under them where it can go; again, they
+/// fold.
+private struct LoginMenuButton: View {
+    let state: AccountState
+    let login: String?
+
+    var body: some View {
+        let id = StoryID.Composer.accountLogin(AccountStore.loginKey(login)).part(.method)
+        IconButton(
+            symbol: "ellipsis", kind: .mini, font: Glyph.chevron, isOn: state.palette == .login(login), highlightsOnHover: false,
+            help: "Account options"
+        ) { state.toggleLoginMenu(login) }
+            .storyID(id)
+            .tabStop(id) { state.toggleLoginMenu(login) }
     }
 }
 
 /// With more than main, the CLI's logins in place of the header: a row each, the active one's
-/// caption its plan and method and a ✓, main's "Main". A row switches to its login; an added
-/// one's × (on hover) removes it.
+/// caption its plan and method and a ✓, main's "Main"; a login last read signed out says so, and
+/// a duplicate says "Duplicate", quietly. A row switches to its login (its caption, under the
+/// pointer, the working chats that stops); its ⋯ (on hover) holds its methods and Remove.
 private struct LoginList: View {
     let state: AccountState
     let provider: String
@@ -750,9 +863,12 @@ private struct LoginList: View {
     private var store: AccountStore { .shared }
 
     var body: some View {
+        let stops = AccountText.switchCaption(working: store.workingChats(provider))
         VStack(alignment: .leading, spacing: 0) {
             ForEach(store.logins(provider)) { login in
-                LoginRow(state: state, login: login, caption: caption(login), reading: login.active && identity == nil)
+                LoginRow(
+                    state: state, login: login, caption: caption(login), stops: login.active ? nil : stops,
+                    reading: login.active && identity == nil && store.status(provider) == .unknown)
             }
         }
         .padding(.horizontal, -Space.sm)
@@ -760,8 +876,10 @@ private struct LoginList: View {
 
     private func caption(_ login: AccountStore.Login) -> String? {
         let main = login.id == nil ? "Main" : nil
-        guard login.active else { return main }
-        return [main, identity.map(AccountText.caption)].compactMap { $0 }.joined(separator: " · ")
+        let state = login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil
+        let account = login.active ? identity.map(AccountText.caption) : nil
+        let words = [main, account, state].compactMap { $0 }.filter { !$0.isEmpty }
+        return words.isEmpty ? nil : words.joined(separator: " · ")
     }
 }
 
@@ -769,13 +887,17 @@ private struct LoginRow: View {
     let state: AccountState
     let login: AccountStore.Login
     let caption: String?
+    /// What switching to it stops, said under the pointer in the caption's place; nil for none.
+    let stops: String?
     /// Its account being read, just switched to: the spinner in the ✓'s place.
     let reading: Bool
     @StateObject private var hovered = Local(false)
 
     var body: some View {
-        let id = StoryID.Composer.accountLogin(login.id ?? "main")
+        let id = StoryID.Composer.accountLogin(AccountStore.loginKey(login.id))
         let title = login.email ?? (login.id == nil ? "Main account" : "Account")
+        let menuOpen = state.palette == .login(login.id)
+        let shown = hovered.value ? stops ?? caption : caption
         Button { if !login.active { state.switchLogin(login.id) } } label: {
             HStack(spacing: Space.md) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -784,18 +906,16 @@ private struct LoginRow: View {
                         .foregroundStyle(login.active ? Theme.text : Theme.secondary)
                         .lineLimit(1).truncationMode(.middle)
                         .help(title)
-                    if let caption {
-                        Text(caption).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
+                    if let shown {
+                        Text(shown).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
                     }
                 }
                 Spacer(minLength: Space.md)
+                if hovered.value || menuOpen { LoginMenuButton(state: state, login: login.id) }
                 if reading {
                     SpinningArc().frame(width: Size.spinner, height: Size.spinner)
                 } else if login.active {
                     Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
-                } else if let added = login.id, hovered.value {
-                    IconButton(symbol: "xmark", kind: .mini, font: Glyph.chevron, help: "Remove account") { state.removeLogin(added) }
-                        .storyID(id.part(.cancel))
                 }
             }
             .padding(.horizontal, Space.sm)
@@ -806,6 +926,7 @@ private struct LoginRow: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .storyID(id)
+        .storyAction(id.part(.hover)) { hovered.value = true }
         .tabStop(id) { state.switchLogin(login.id) }
         .accessibilityAddTraits(login.active ? .isSelected : [])
     }

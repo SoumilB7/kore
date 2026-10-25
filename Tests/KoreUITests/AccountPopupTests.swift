@@ -90,6 +90,44 @@ struct AccountPopupTests {
         #expect(AccountReason.of(CodexAppServer.Failure.rpc(code: 0, message: "")) == nil)
     }
 
+    @Test func aSwitchSaysWhatItStopsOnlyWhenSomethingWorks() {
+        #expect(AccountText.switchCaption(working: 0) == nil)
+        #expect(AccountText.switchCaption(working: 1) == "Stops 1 working chat.")
+        #expect(AccountText.switchCaption(working: 3) == "Stops 3 working chats.")
+    }
+
+    /// Add account lists only what signs a login's own folder in: never Claude's key or its
+    /// platforms, which live in the settings every login shares.
+    @Test func addAccountListsTheMethodsThatMakeALogin() {
+        let claude = ProviderDescriptor.claude.account.methods.filter(\.ownsLogin)
+        #expect(claude.map(\.id) == ["claudeai", "sso", "consoleTerminal", "console", "gateway"])
+        #expect(MethodMenuItem.paths(MethodMenuItem.build(claude, policy: LoginPolicy(), current: nil)).map(\.path) == [
+            "Claude account with subscription", "Claude account with SSO",
+            "Anthropic Console account/Sign in with your Console account (recommended)", "Anthropic Console account/Create an API key (legacy)",
+        ])
+        #expect(ProviderDescriptor.codex.account.methods.filter(\.ownsLogin).map(\.id) == ["chatgpt", "chatgptDeviceCode", "apiKey"])
+    }
+
+    /// Two logins are one account by email and organisation (Codex's plan standing in for it).
+    @Test func aDuplicateIsTheSameEmailInTheSameWorkspace() {
+        typealias Login = AccountStore.Login
+        let flags = { (logins: [Login]) in AccountStore.flaggingDuplicates(logins).map(\.duplicate) }
+        let main = Login(id: nil, email: "a@x.com", active: true, workspace: "Acme")
+        #expect(flags([main, Login(id: "b", email: "A@x.com", active: false, workspace: "Acme")]) == [false, true])
+        #expect(flags([main, Login(id: "b", email: "a@x.com", active: false, workspace: "Other Org")]) == [false, false])
+        // A workspace not read yet, or a login signed out, matches nothing.
+        #expect(flags([main, Login(id: "b", email: "a@x.com", active: false)]) == [false, false])
+        #expect(flags([Login(id: nil, email: "a@x.com", active: false, workspace: "Acme", signedOut: true),
+                       Login(id: "b", email: "a@x.com", active: true, workspace: "Acme")]) == [false, false])
+        // The active one is kept; main, which can't go, is never flagged.
+        #expect(flags([Login(id: nil, email: "a@x.com", active: false, workspace: "Acme"),
+                       Login(id: "b", email: "a@x.com", active: true, workspace: "Acme")]) == [false, false])
+        #expect(flags([main, Login(id: "b", email: "a@x.com", active: false, workspace: "Acme"),
+                       Login(id: "c", email: "a@x.com", active: false, workspace: "Acme")]) == [false, true, true])
+        #expect(AccountIdentity(email: "a@x.com", plan: "ChatGPT Business", method: "ChatGPT", changeable: true).workspace == "ChatGPT Business")
+        #expect(AccountIdentity(email: "a@x.com", plan: "Claude Max", organization: "Acme", method: "Claude.ai", changeable: true).workspace == "Acme")
+    }
+
     @Test func theWelcomeLine() {
         #expect(AccountText.welcome(signedOut: []) == nil)
         #expect(AccountText.welcome(signedOut: ["Codex"]) == "Codex isn't signed in. Sign in from Account in a chat's / menu.")

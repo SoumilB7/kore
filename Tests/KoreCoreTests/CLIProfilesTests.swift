@@ -93,4 +93,53 @@ import Testing
         #expect(!files.fileExists(atPath: CLIProfiles.folder("codex", stray).path))
         #expect(files.fileExists(atPath: dir.path))
     }
+
+    /// Each login keeps the organisation (or plan) it was read in beside its email, main's too; a
+    /// new email drops the old one's. Main can be pinned while another login is active, and each
+    /// login's files are found whichever is.
+    @Test func eachLoginKeepsItsWorkspaceAndMainCanBePinned() throws {
+        let files = FileManager.default
+        let base = files.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let main = base.appendingPathComponent("main", isDirectory: true)
+        try files.createDirectory(at: main, withIntermediateDirectories: true)
+        CLIProfiles.root.value = base.appendingPathComponent("accounts")
+        CLIProfiles.mains.value = ["claude": main]
+        CLIProfiles.reload()
+        defer {
+            CLIProfiles.root.value = nil
+            CLIProfiles.mains.value = [:]
+            CLIProfiles.reload()
+            try? files.removeItem(at: base)
+        }
+
+        #expect(CLIProfiles.note("claude", email: "a@x.com", workspace: "Personal"))
+        let id = try CLIProfiles.prepare("claude")
+        CLIProfiles.adopt("claude", id, email: "b@x.com", workspace: "Acme")
+        #expect(CLIProfiles.added("claude").map(\.workspace) == ["Acme"])
+        #expect(CLIProfiles.mainWorkspace("claude") == "Personal")
+        // Main read while another login is active, in its own folder.
+        #expect(!CLIProfiles.note("claude", login: nil, email: "a@x.com", workspace: nil))
+        #expect(CLIProfiles.mainWorkspace("claude") == "Personal")
+        #expect(CLIProfiles.note("claude", login: nil, email: "c@x.com", workspace: nil))
+        #expect(CLIProfiles.mainWorkspace("claude") == nil)
+        #expect(CLIProfiles.note("claude", login: id, email: "b@x.com", workspace: "Other"))
+        CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: "claude", id: nil)) {
+            #expect(CLIProfiles.overrides("claude").isEmpty)
+        }
+        #expect(CLIProfiles.overrides("claude") == ["CLAUDE_CONFIG_DIR": CLIProfiles.folder("claude", id).path])
+        #expect(CLIProfiles.environment("claude", login: id)["CLAUDE_CONFIG_DIR"] == CLIProfiles.folder("claude", id).path)
+        #expect(CLIProfiles.environment("claude", login: nil)["CLAUDE_CONFIG_DIR"] == ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"])
+
+        CLIProfiles.reload()
+        #expect(CLIProfiles.added("claude").map(\.workspace) == ["Other"])
+        #expect(CLIProfiles.mainEmail("claude") == "c@x.com")
+
+        // A list saved before workspaces still reads.
+        let old = #"{"active":{},"added":{"claude":[{"id":"\#(id)","email":"b@x.com"}]},"mainEmail":{"claude":"a@x.com"}}"#
+        try Data(old.utf8).write(to: base.appendingPathComponent("accounts/accounts.json"))
+        CLIProfiles.reload()
+        #expect(CLIProfiles.added("claude").map(\.email) == ["b@x.com"])
+        #expect(CLIProfiles.added("claude").first?.workspace == nil)
+        #expect(CLIProfiles.mainWorkspace("claude") == nil)
+    }
 }

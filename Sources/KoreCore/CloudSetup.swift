@@ -171,4 +171,36 @@ package enum TerminalLogin {
 
     /// Single-quoted for the shell.
     static func quoted(_ word: String) -> String { "'" + word.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
+    /// A hand-off's end: its login file names an account other than the one it named at the
+    /// start (an added login's starts with none). Looked at once a second and read only when
+    /// written, so the end is seen whichever login's folder it signs in. `stop` ends the wait.
+    package final class Landing: Sendable {
+        private let file: URL
+        private let start: String?
+        private let stopped = Locked(false)
+
+        package init(file: URL) {
+            self.file = file
+            start = (try? Data(contentsOf: file)).flatMap(ClaudeAuth.accountStamp)
+        }
+
+        package func stop() { stopped.set(true) }
+
+        package func wait() async throws {
+            var written = Self.written(file)
+            while !stopped.value, !Task.isCancelled {
+                try await Task.sleep(for: .seconds(1))
+                let now = Self.written(file)
+                guard now != written else { continue }
+                written = now
+                if let stamp = (try? Data(contentsOf: file)).flatMap(ClaudeAuth.accountStamp), !stamp.isEmpty, stamp != start { return }
+            }
+            throw CancellationError()
+        }
+
+        private static func written(_ file: URL) -> Date? {
+            (try? FileManager.default.attributesOfItem(atPath: file.path))?[.modificationDate] as? Date
+        }
+    }
 }

@@ -7,12 +7,13 @@ import KoreUI
 /// "/", in place of the CLI's own login and logout; picked, the popup opens where the menu was
 /// with the account (the email, then plan · method, a personal organisation left out) and one
 /// row, Switch account and Sign out. A switch opens the sign-in page and waits for the browser,
-/// with Copy link and Cancel; Cancel keeps the old account. Finished as someone else it says
-/// "Switched accounts." and the chat's CLI starts again; finished as the same person, "Still the
-/// same account.". Sign out asks first: a Yes as quick as a double click's second half does
-/// nothing, No and Esc go back, and Return closes the popup without confirming; Yes stops the
-/// working chat and leaves the one signed-out row, whose ⌄ lists every method. A failure says
-/// the CLI's reason with Try again; Codex's device code shows the code to enter.
+/// with Copy link and Cancel (and, with a chat at work, "Stops 1 working chat." under it); Cancel
+/// keeps the old account. Finished as someone else it says "Switched accounts." and the chat's
+/// CLI starts again; finished as the same person, "Still the same account.". Sign out asks first:
+/// a Yes as quick as a double click's second half does nothing, No and Esc go back, and Return
+/// closes the popup without confirming; Yes stops the working chat and leaves the one signed-out
+/// row, whose ⌄ lists every method. A failure says the CLI's reason with Try again; Codex's device
+/// code shows the code to enter.
 final class AccountPopup: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
 
@@ -85,8 +86,8 @@ final class AccountPopup: ChatStoryline {
         steps += [
             Press(part(.switch)),
             lines("waiting for the browser", me + ["Waiting for the browser…"]),
-            Expect("what a switch means for the open chats", found: { $0.app.chat?.storyAccountCaption }) {
-                $0.app.chat?.storyAccountCaption == "Open chats move to the new account after their current turn."
+            Expect("no chat at work: nothing to say about stopping", found: { $0.app.chat?.storyAccountCaption }) {
+                $0.app.chat?.storyAccountCaption == nil
             },
             calls("the sign-in page opened, by the account's method") { log in
                 log.contains(.opened(host)) && log.contains(.signIn(provider, codex ? "type=chatgpt" : "loginWithClaudeAi=true"))
@@ -139,6 +140,14 @@ final class AccountPopup: ChatStoryline {
             Expect("the chat working") { try $0.activeChat().isRunning },
         ]
         steps += open + [
+            // A switch would stop it too, and says so while it waits.
+            Press(part(.switch)),
+            Expect("what a switch stops", found: { $0.app.chat?.storyAccountCaption }) {
+                $0.app.chat?.storyAccountCaption == "Stops 1 working chat."
+            },
+            Press(part(.cancel)),
+            lines("cancelled: at rest", work),
+            Expect("still working") { try $0.activeChat().isRunning },
             Press(part(.signOut)),
             WaitForElement(part(.allow)),
             Press(part(.allow)),

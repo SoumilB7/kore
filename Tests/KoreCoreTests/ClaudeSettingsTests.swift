@@ -214,6 +214,34 @@ struct ClaudeSettingsTests {
         #expect(script == "#!/bin/zsh -l\nrm -f -- \"$0\"\ncd -- '/w/it'\\''s here' 2>/dev/null\nexec '/opt/my tools/claude' '/login'\n")
     }
 
+    /// A hand-off ends once its login file names an account it didn't (an added login's starts
+    /// with none), whichever folder that is: a write without one goes by. Stop ends it too.
+    @Test func theTerminalHandOffEndsWhenItsLoginFileNamesSomeone() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent(".claude.json")
+        try Data(#"{"hasCompletedOnboarding":true}"#.utf8).write(to: file)
+        let landing = TerminalLogin.Landing(file: file)
+        let ended = Locked(false)
+        let waiting = Task {
+            try await landing.wait()
+            ended.set(true)
+        }
+        try await Task.sleep(for: .milliseconds(1200))
+        try Data(#"{"hasCompletedOnboarding":true,"projects":{}}"#.utf8).write(to: file)
+        try await Task.sleep(for: .milliseconds(1500))
+        #expect(!ended.value)
+        try Data(#"{"oauthAccount":{"emailAddress":"b@x.com"}}"#.utf8).write(to: file)
+        try await waiting.value
+        #expect(ended.value)
+
+        let stopped = TerminalLogin.Landing(file: file)
+        let wait = Task { try await stopped.wait() }
+        stopped.stop()
+        await #expect(throws: CancellationError.self) { try await wait.value }
+    }
+
     /// Credentials from the launch shell never reach a CLI Kore starts, a platform's switch and
     /// its key together; what only says where things are does.
     @Test func platformSwitchesAndKeysAreStrippedTogether() {

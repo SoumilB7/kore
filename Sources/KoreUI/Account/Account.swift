@@ -96,6 +96,15 @@ package struct SignInMethod: Identifiable, Hashable, Sendable {
     /// It's a key typed into Kore's field.
     package var isKey: Bool { mechanism == .claudeKey || mechanism == .codexKey }
 
+    /// What it signs in is kept in the login's own folder, so it can make a login of its own:
+    /// not Claude's key or platforms, which live in the settings every login shares.
+    package var ownsLogin: Bool {
+        switch mechanism {
+        case .claudeAuthenticate, .codexLogin, .claudeSSO, .codexKey, .terminal: true
+        default: false
+        }
+    }
+
     /// Its place in the menu: "3rd-party platform/Amazon Bedrock…".
     package var path: String { (group.map { $0.title + "/" } ?? "") + label }
 
@@ -220,6 +229,10 @@ package struct AccountIdentity: Equatable, Sendable {
         self.platform = platform
     }
 
+    /// What tells two logins of one email apart: the organisation, else the plan (Codex's
+    /// workspaces have no organisation); "" for neither.
+    var workspace: String { organization ?? plan ?? "" }
+
     /// The same person and organisation: a switch that lands here changed nothing.
     func isSameAccount(as other: AccountIdentity) -> Bool {
         email?.lowercased() == other.email?.lowercased() && organization == other.organization && method == other.method
@@ -294,12 +307,12 @@ package struct AccountCalls: Sendable {
 }
 
 /// One CLI's login, for the Account popup: its methods, how its status reads, and the file it
-/// keeps its login in (watched for changes made outside Kore).
+/// keeps its login in under an environment (watched for changes made outside Kore).
 struct AccountOps: Sendable {
     let methods: [SignInMethod]
     let parse: @Sendable (JSONValue) -> AccountReading
     let calls: AccountCalls
-    let loginFile: @Sendable () -> URL
+    let loginFile: @Sendable ([String: String]) -> URL
     /// What in that file names the account (Claude's `oauthAccount`); nil: the file is never
     /// read (Codex's holds tokens), and any change to it costs a status read.
     let stamp: (@Sendable (Data) -> String?)?
@@ -402,7 +415,7 @@ extension AccountOps {
                 return nil
             },
             signOut: { try await ClaudeAuth.logout() }),
-        loginFile: { ClaudeAuth.configFile() },
+        loginFile: { ClaudeAuth.configFile(environment: $0) },
         stamp: { ClaudeAuth.accountStamp($0) })
 }
 
@@ -438,8 +451,17 @@ enum ClaudeSignIn {
         case .terminal(let arguments):
             let claude = try await CLIExecutable.resolve("claude").url.path
             let file = try TerminalLogin.write(claude: claude, arguments: arguments, folder: context.folder)
+            // The login's own file (an added login's, while it's being added), so its end is
+            // seen without a watch on it.
+            let landing = TerminalLogin.Landing(file: ClaudeAuth.configFile())
             await MainActor.run { _ = NSWorkspace.shared.open(file) }
-            return SignInHandle(url: nil, wait: untilCancelled, cancel: {})
+            return SignInHandle(
+                url: nil,
+                wait: {
+                    try await landing.wait()
+                    return JSONValue?.none
+                },
+                cancel: { landing.stop() })
         case .awsRefresh:
             let files = [ClaudeSettings.managedFile, ClaudeSettings.userFile()]
             guard let command = ClaudeSettings.awsAuthRefresh(files: files) else { throw AccountUnavailable() }
@@ -454,12 +476,6 @@ enum ClaudeSignIn {
         default:
             throw AccountUnavailable()
         }
-    }
-
-    /// A hand-off's wait: the account changing ends it (the store sees it), else Cancel.
-    @Sendable static func untilCancelled() async throws -> JSONValue? {
-        while !Task.isCancelled { try await Task.sleep(for: .seconds(3600)) }
-        throw CancellationError()
     }
 }
 
@@ -535,7 +551,7 @@ extension AccountOps {
             },
             useKey: { key in try await CodexAuth.signIn(apiKey: key) },
             signOut: { try await CodexAuth.logout() }),
-        loginFile: { CodexAuth.authFile() },
+        loginFile: { CodexAuth.authFile(environment: $0) },
         stamp: nil)
 }
 
@@ -649,7 +665,10 @@ enum AccountText {
     static let same = "Still the same account."
     static let sameHelp = "The browser continued as the same account. Pick another on the sign-in page, then try again."
     static let timedOut = "Sign-in timed out."
-    static let moving = "Open chats move to the new account after their current turn."
+    static let duplicate = "Duplicate"
+    static let removeDuplicate = "Remove duplicate"
+    static let remove = "Remove"
+    static let loginSignedOut = "Signed out"
     static let deviceHelp = "Enter the code at auth.openai.com/codex/device"
     static func signedOutOf(_ name: String) -> String { "Signed out of \(name)." }
 
@@ -668,8 +687,13 @@ enum AccountText {
     /// Kore made reaches every client that reads Claude's settings.
     static func signOutCaption(working: Int, setting: Bool = false) -> String {
         let reach = setting ? "Removes it from Claude's settings everywhere." : "Also signs out Terminal and VS Code on this Mac."
-        guard working > 0 else { return reach }
-        return reach + " Stops \(working) working chat\(working == 1 ? "" : "s")."
+        return [reach, switchCaption(working: working)].compactMap { $0 }.joined(separator: " ")
+    }
+
+    /// A switch's caption (a sign-in over the account, a login picked): the chats it stops;
+    /// nil when none work.
+    static func switchCaption(working: Int) -> String? {
+        working > 0 ? "Stops \(working) working chat\(working == 1 ? "" : "s")." : nil
     }
 
     /// A failed turn's notice: the login lapsed, or there was none.
