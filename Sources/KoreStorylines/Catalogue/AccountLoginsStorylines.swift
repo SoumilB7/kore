@@ -164,6 +164,10 @@ class AccountSwitchStops: ChatStoryline {
         let relaunches = { (story: StoryContext) in try log(story).filter { $0 == .relaunch }.count }
         let open: [any Step] = [Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup)]
         let main = StoryID.Composer.accountLogin("main")
+        let warning = Locator("the chat tab's ⚠") { app in
+            guard let tab = app.workspace?.activeTab else { return .failure(LocatorMiss("no tab", pending: true)) }
+            return .success(StoryID.Tabs.tab(tab.id).part(.stoppedForAccount))
+        }
         return [UseScript(Self.script(provider), for: provider), SeedLogins(provider: provider), OpenFolder(), StartChat()]
             + [WaitForFocus(.id(StoryID.Composer.field))] + open + [
                 Press(part(.switch)),
@@ -209,7 +213,13 @@ class AccountSwitchStops: ChatStoryline {
                     return try story.activeChat().draft == "first queued\nsecond queued"
                 },
                 Expect("the CLI started again as the new login", found: { try? "\(relaunches($0)) relaunches" }) { try relaunches($0) == 2 },
-            ]
+            ] + (Self.observed ? [] : [
+                // Stopped work marks its tab ⚠ until the chat's next send (an agent still
+                // running elsewhere keeps the tab's spinner instead).
+                ExpectElement(warning, .visible),
+                Send("Back to it"),
+                ExpectElement(warning, .absent),
+            ])
     }
 }
 

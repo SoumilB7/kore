@@ -863,6 +863,12 @@ private struct TabMark: View {
                     status: running ? .running : (info.status == .running ? .stopped : info.status),
                     background: info.background, place: .tab)
                     .storyMark(story.part(running ? .working : .done))
+            } else if !running, tab.agent == nil, chat.interruptedByAccount {
+                // Its work stopped for an account switch or sign-out: worth a look.
+                Text("⚠").font(Chrome.body).foregroundStyle(Theme.warning)
+                    .frame(width: Size.spinner, height: Size.spinner)
+                    .help("Stopped by an account change")
+                    .storyMark(story.part(.stoppedForAccount))
             } else if running, tab.agent == nil, chat.isBusy || chat.isWaitingForNetwork, chat.connection.stuck {
                 // Offline or stalled: nothing to spin for (the chat's row says which).
                 Text("⚠").font(Chrome.body).foregroundStyle(Theme.warning)

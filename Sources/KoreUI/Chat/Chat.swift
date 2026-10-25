@@ -127,6 +127,8 @@ package final class Chat: Identifiable {
     /// task alone cannot stop earlier tasks waiting in the send chain.
     @ObservationIgnored private var workEpoch: UInt64 = 0
     private(set) var accountRestartPending = false
+    /// An account switch or sign-out stopped its work: its tab shows ⚠ until the next send.
+    private(set) var interruptedByAccount = false
 
     private func currentWork(_ epoch: UInt64) -> Bool { !closed && workEpoch == epoch }
     /// The turn running now, and when it began: a failure is the sleep's when the Mac slept since.
@@ -484,6 +486,7 @@ package final class Chat: Identifiable {
     /// and the commands stop, and the CLI starts again as the new login once they have.
     func stopAllWork() {
         cancelContinue()
+        if hasWork { interruptedByAccount = true }
         stoppedForAccount = true
         if isBusy || waitingForNetwork { stop() }
         let observed = backend?.observedAgents ?? []
@@ -872,6 +875,7 @@ package final class Chat: Identifiable {
     /// Sends a message the composer has given up (or Kore's own "Continue").
     private func deliver(_ text: String, _ sent: [Attachment]) {
         guard !closed, !accountRestartPending else { return }
+        interruptedByAccount = false
         relaunchIfDue()
         let epoch = workEpoch
         if networkObserver == nil { watchNetwork() }
