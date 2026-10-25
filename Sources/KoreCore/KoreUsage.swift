@@ -25,9 +25,15 @@ public actor KoreUsage {
     private let sessions: KoreSessions
     private var claude: ClaudeUsageIndex?
     private var codex: CodexUsageIndex?
+    /// A CLI's added logins (`PlanSnapshot.account`): what Kore didn't note ran on none of them.
+    private let added: @Sendable (String) -> Set<String>
 
-    public init(paths: UsagePaths, snapshots: PlanSnapshotLog? = nil, sessions: KoreSessions? = nil) {
+    public init(
+        paths: UsagePaths, snapshots: PlanSnapshotLog? = nil, sessions: KoreSessions? = nil,
+        added: @escaping @Sendable (String) -> Set<String> = { cli in Set(CLIProfiles.added(cli).compactMap { PlanSnapshot.account(email: $0.email) }) }
+    ) {
         self.paths = paths
+        self.added = added
         self.snapshots = snapshots ?? PlanSnapshotLog(url: paths.support?.appendingPathComponent("snapshots.jsonl"))
         self.sessions = sessions ?? KoreSessions(url: paths.support?.appendingPathComponent("sessions.jsonl"), logs: paths.logs)
     }
@@ -36,12 +42,23 @@ public actor KoreUsage {
     public func shares(for reading: PlanReading, cli: String, now: Date = Date()) -> KoreShares? {
         guard let bars = reading.limits?.bars, !bars.isEmpty else { return nil }
         let since = Self.horizon(bars, now: now)
-        let requests: [UsageRequest]
+        var requests: [UsageRequest]
         var codexIndex: CodexUsageIndex?
+        let account = PlanSnapshot.account(email: reading.account.email)
         switch cli {
         case "claude":
             refreshClaude(since: since)
-            requests = claude?.requests(known: sessions.known()) ?? []
+            let known = sessions.known()
+            requests = claude?.requests(known: known) ?? []
+            // Only what this login made: Kore notes each chat's login as it starts; what it
+            // didn't note (the CLI on its own, chats from before) ran on the main login, so on
+            // none of the added ones.
+            if let account {
+                let addedLogin = added(cli).contains(account)
+                requests = requests.filter { request in
+                    known.account(cli, request.chat, at: request.time).map { $0 == account } ?? !addedLogin
+                }
+            }
         case "codex":
             refreshCodex(since: since)
             codexIndex = codex
@@ -49,7 +66,6 @@ public actor KoreUsage {
         default:
             return nil
         }
-        let account = PlanSnapshot.account(email: reading.account.email)
         let logged = snapshots.entries(since: since).filter { $0.cli == cli }
         var limits: [String: KoreShare] = [:]
         for bar in bars {

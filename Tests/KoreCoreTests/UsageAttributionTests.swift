@@ -253,6 +253,38 @@ struct UsageAttributionFileTests {
         #expect(kept == again.with(at: kept.at))
     }
 
+    /// Two logins, one Kore chat on each: a login's bar counts only what was made on it.
+    @Test func claudeRequestsCountForTheLoginTheyRanOn() async throws {
+        try write([claudeLine("w1", ago: 30, output: 10, session: "on-main")], to: "claude/projects/-work-app/on-main.jsonl")
+        try write([claudeLine("w2", ago: 20, output: 30, session: "on-work")], to: "claude/projects/-work-app/on-work.jsonl")
+        let sessions = KoreSessions(url: root.appendingPathComponent("support/sessions.jsonl"))
+        let (main, work) = (PlanSnapshot.account(email: "you@example.com"), PlanSnapshot.account(email: "work@acme.dev"))
+        sessions.record(cli: "claude", session: "on-main", folder: nil, launch: "new", account: main, at: now.addingTimeInterval(-3600))
+        sessions.record(cli: "claude", session: "on-work", folder: nil, launch: "new", account: work, at: now.addingTimeInterval(-3600))
+        // Started again on the same login: no new line.
+        sessions.record(cli: "claude", session: "on-work", folder: nil, launch: "resume", account: work, at: now.addingTimeInterval(-60))
+        sessions.sync()
+        #expect(sessions.known().accounts["claude/on-work"]?.count == 1)
+        let usage = KoreUsage(paths: paths, sessions: sessions, added: { _ in Set([work].compactMap { $0 }) })
+        let onWork = try #require(
+            await usage.shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "work@acme.dev"), cli: "claude", now: now))
+        #expect(onWork.limits["Session (5hr)"]?.chats.map(\.id) == ["on-work"])
+        let onMain = try #require(
+            await usage.shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "you@example.com"), cli: "claude", now: now))
+        #expect(onMain.limits["Session (5hr)"]?.chats.map(\.id) == ["on-main"])
+
+        // A chat Kore didn't note the login of ran on main: not the added login's.
+        try write([claudeLine("w3", ago: 10, output: 5, session: "unnoted")], to: "claude/projects/-work-app/unnoted.jsonl")
+        sessions.record(cli: "claude", session: "unnoted", folder: nil, launch: "new", at: now.addingTimeInterval(-3600))
+        sessions.sync()
+        let workAgain = try #require(
+            await usage.shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "work@acme.dev"), cli: "claude", now: now))
+        #expect(workAgain.limits["Session (5hr)"]?.chats.map(\.id) == ["on-work"])
+        let mainAgain = try #require(
+            await usage.shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "you@example.com"), cli: "claude", now: now))
+        #expect(Set(mainAgain.limits["Session (5hr)"]?.chats.map(\.id) ?? []) == ["on-main", "unnoted"])
+    }
+
     @Test func snapshotsInTheLogSplitClaudesBarByInterval() async throws {
         try write(
             [

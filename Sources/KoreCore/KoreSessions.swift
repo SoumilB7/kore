@@ -4,7 +4,10 @@ import Foundation
 /// Kore's" is exact from the day this list began. JSON lines in Kore's Application Support
 /// (`usage/sessions.jsonl`), ids and paths only:
 ///
-///   {"cli":"claude","folder":"/Users/me/app","id":"4fb9…","launch":"resume","t":1792760375}
+///   {"acct":"1a2b3c4d…","cli":"claude","folder":"/Users/me/app","id":"4fb9…","launch":"resume","t":1792760375}
+///
+/// `acct` is the login it ran on (`PlanSnapshot.account`); a chat started again on another login
+/// gets a line of its own, so each of its requests counts against the login it was made on.
 ///
 /// The first time it's opened it takes in the chats Kore's `sessions.log` already names, so the
 /// list starts as early as that log does.
@@ -15,6 +18,7 @@ public final class KoreSessions: @unchecked Sendable {
         public var id: String
         public var folder: String?
         public var launch: String?
+        public var acct: String?
     }
 
     /// What the list says: when it began, and each CLI's ids.
@@ -22,10 +26,24 @@ public final class KoreSessions: @unchecked Sendable {
         /// Before this, a chat's being Kore's is inferred (`UsageAttribution.koreBefore`).
         public var since: Date?
         public var ids: [String: Set<String>]
+        /// Each chat's logins, by "cli/id", earliest first: from when it ran on which.
+        public var accounts: [String: [(since: Date, acct: String)]]
 
-        public init(since: Date?, ids: [String: Set<String>]) {
+        public init(since: Date?, ids: [String: Set<String>], accounts: [String: [(since: Date, acct: String)]] = [:]) {
             self.since = since
             self.ids = ids
+            self.accounts = accounts
+        }
+
+        /// The login `cli`'s chat `id` ran on at `time`; nil when Kore didn't note it then.
+        public func account(_ cli: String, _ id: String, at time: Date) -> String? {
+            accounts[cli + "/" + id]?.last { $0.since <= time.addingTimeInterval(60) }?.acct
+        }
+
+        public static func == (a: Self, b: Self) -> Bool {
+            a.since == b.since && a.ids == b.ids
+                && a.accounts.mapValues { $0.map(\.acct) } == b.accounts.mapValues { $0.map(\.acct) }
+                && a.accounts.mapValues { $0.map(\.since) } == b.accounts.mapValues { $0.map(\.since) }
         }
 
         public static let none = Known(since: nil, ids: [:])
@@ -47,13 +65,18 @@ public final class KoreSessions: @unchecked Sendable {
     public static let shared = KoreSessions(
         url: UsagePaths.current.support?.appendingPathComponent("sessions.jsonl"), logs: UsagePaths.current.logs)
 
-    /// A session Kore launched, resumed or forked; written once per id.
-    public func record(cli: String, session: String?, folder: URL?, launch: String) {
+    /// A session Kore launched, resumed or forked, on login `account`: written once per id, and
+    /// again when it runs on another login.
+    public func record(cli: String, session: String?, folder: URL?, launch: String, account: String? = nil, at: Date = Date()) {
         guard url != nil, let session, !session.isEmpty, session != "-" else { return }
-        let line = Line(t: Date().timeIntervalSince1970.rounded(), cli: cli, id: session, folder: folder?.path, launch: launch)
+        let line = Line(t: at.timeIntervalSince1970.rounded(), cli: cli, id: session, folder: folder?.path, launch: launch, acct: account)
         queue.async { [self] in
             var lines = load()
-            guard !lines.contains(where: { $0.cli == cli && $0.id == session }) else { return }
+            let before = lines.filter { $0.cli == cli && $0.id == session }
+            // Known already: again only on a login other than the last one noted.
+            if !before.isEmpty {
+                guard let account, account != before.last(where: { $0.acct != nil })?.acct else { return }
+            }
             lines.append(line)
             loaded = lines
             append([line])
@@ -76,8 +99,12 @@ public final class KoreSessions: @unchecked Sendable {
         queue.sync {
             let lines = load()
             var ids: [String: Set<String>] = [:]
-            for line in lines { ids[line.cli, default: []].insert(line.id) }
-            return Known(since: lines.map(\.t).min().map(Date.init(timeIntervalSince1970:)), ids: ids)
+            var accounts: [String: [(since: Date, acct: String)]] = [:]
+            for line in lines {
+                ids[line.cli, default: []].insert(line.id)
+                if let acct = line.acct { accounts[line.cli + "/" + line.id, default: []].append((Date(timeIntervalSince1970: line.t), acct)) }
+            }
+            return Known(since: lines.map(\.t).min().map(Date.init(timeIntervalSince1970:)), ids: ids, accounts: accounts)
         }
     }
 
