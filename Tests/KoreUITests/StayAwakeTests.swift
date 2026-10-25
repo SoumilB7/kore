@@ -228,6 +228,29 @@ struct StayAwakeTests {
         #expect(sent == 1)
     }
 
+    @Test func aLimitSayingNoResetIsLookedAtLessAndLessOften() async {
+        let clock = HandClock()
+        let continuation = LimitContinuation(clock: clock)
+        var reads = 0
+        continuation.read = {
+            reads += 1
+            return self.reading(100, resets: nil)
+        }
+        continuation.schedule(turn: "t1", at: clock.now.addingTimeInterval(60))
+        clock.advance(by: 60)
+        await settle()
+        var waits: [TimeInterval] = []
+        for _ in 0..<5 {
+            guard let at = continuation.pending?.at else { break }
+            let wait = at.timeIntervalSince(clock.now)
+            waits.append(wait)
+            clock.advance(by: wait)
+            await settle()
+        }
+        #expect(waits == [1800, 3600, 7200, 14_400, 14_400])
+        #expect(reads == 6)
+    }
+
     @Test func cancelledItNeverSends() async {
         let clock = HandClock()
         let continuation = LimitContinuation(clock: clock)

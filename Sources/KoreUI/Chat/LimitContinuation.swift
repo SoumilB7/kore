@@ -21,8 +21,11 @@ final class LimitContinuation {
     var send: () -> Void = {}
     var changed: (Pending?) -> Void = { _ in }
 
-    /// A limit still spent but saying no reset is looked at again after this.
+    /// A limit still spent but saying no reset is looked at again after this, then after twice
+    /// as long each time it still says none, up to `recheckCap`: each look reads the plan's limits,
+    /// a CLI started for it when the chat's own isn't running.
     static let recheck: TimeInterval = 30 * 60
+    static let recheckCap: TimeInterval = 4 * 60 * 60
     /// Limits that can't be read (the network not back after a wake) are tried again after this,
     /// up to `retries` times; then it continues anyway, and a new limit failure starts it over.
     static let retry: TimeInterval = 60
@@ -31,6 +34,8 @@ final class LimitContinuation {
     private let clock: any AwakeClock
     private var timer: AwakeTimer?
     private var attempt = 0
+    /// Looks in a row that found the limit spent with no reset said.
+    private var rechecks = 0
     /// Bumped by every schedule and cancel, so a read that comes back late is dropped.
     private var generation = 0
 
@@ -43,6 +48,7 @@ final class LimitContinuation {
     func schedule(turn: String, at: Date?) {
         generation &+= 1
         attempt = 0
+        rechecks = 0
         timer = nil
         guard let at else {
             pending = nil
@@ -84,7 +90,13 @@ final class LimitContinuation {
         switch reading?.limits?.blocked(now: now) {
         case .limited(let until):
             var next = current
-            next.at = until.flatMap { $0 > now ? $0 : nil } ?? now.addingTimeInterval(Self.recheck)
+            if let until, until > now {
+                next.at = until
+                rechecks = 0
+            } else {
+                next.at = now.addingTimeInterval(min(Self.recheck * pow(2, Double(rechecks)), Self.recheckCap))
+                rechecks += 1
+            }
             attempt = 0
             arm(next)
         case nil where attempt < Self.retries:
