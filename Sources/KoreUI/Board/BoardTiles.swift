@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 struct ChatSummary {
     let title: String
-    /// "Opus · Edit automatically".
+    /// "Haiku · Edit automatically".
     let caption: String
     /// The latest tool at work, the reply's last line, or the error.
     let line: String?
