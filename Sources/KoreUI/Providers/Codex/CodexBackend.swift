@@ -399,7 +399,9 @@ final class CodexBackend: ChatBackend {
             titlePromptText = text
         }
         let input: JSONValue =
-            files.isEmpty ? [["type": "text", "text": .string(text), "text_elements": []]] : Attachments.codexInput(text: text, files: files)
+            files.isEmpty
+            ? [["type": "text", "text": .string(text), "text_elements": []]]
+            : Attachments.codexInput(text: text, files: files, media: await Task.detached { await AttachedMedia.read(files) }.value)
         if let queued {
             // While a turn runs, the message joins it (`turn/steer`); otherwise it's the next turn.
             if await session.activeTurnId != nil {

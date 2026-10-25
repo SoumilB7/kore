@@ -681,7 +681,9 @@ final class ClaudeBackend: ChatBackend {
             } else {
                 // Reading and encoding files can take a moment; keep it off the main actor.
                 let folder = options.folder
-                let content = await Task.detached { Attachments.claudeContent(text: text, files: files, folder: folder) }.value
+                let content = await Task.detached {
+                    Attachments.claudeContent(text: text, files: files, folder: folder, media: await AttachedMedia.read(files))
+                }.value
                 try await session.send(content: content, uuid: midTurn ? queued : nil)
             }
         } catch {

@@ -155,9 +155,11 @@ package enum Attachments {
         attachments.compactMap { a in a.url.map { File(url: $0, name: a.name, kind: a.kind) } }
     }
 
-    static func claudeContent(text: String, files: [File], folder: URL) -> JSONValue {
+    /// `media`: the video and audio among `files`, read (`AttachedMedia.read`).
+    static func claudeContent(text: String, files: [File], folder: URL, media: [URL: AttachedMedia] = [:]) -> JSONValue {
         var blocks: [JSONValue] = []
         var references: [String] = []
+        var notes: [String] = []
         for file in files {
             switch file.kind {
             case .image:
@@ -187,28 +189,51 @@ package enum Attachments {
                     continue
                 }
             case .other:
-                break
+                // A video as its frames, audio as its line: never handed to the CLI to read.
+                if let media = media[file.url] {
+                    for frame in media.frames {
+                        guard let (mediaType, data) = imagePayload(frame) else { continue }
+                        blocks.append([
+                            "type": "image",
+                            "source": ["type": "base64", "media_type": .string(mediaType), "data": .string(data.base64EncodedString())],
+                        ])
+                    }
+                    notes.append(media.note)
+                    continue
+                }
             }
-            // Folders, binaries, and anything too large: point Claude at it to use its tools on.
-            references.append("@" + relativePath(file.url, in: folder))
+            // A folder: Claude is pointed at it, to use its tools on. Any other file (a binary, one
+            // too large) is named, not handed to the CLI to read whole as an @ reference.
+            if isFolder(file.url) {
+                references.append("@" + relativePath(file.url, in: folder))
+            } else {
+                notes.append("[file: \(file.url.path)]")
+            }
         }
-        let body = ([text] + (references.isEmpty ? [] : [references.joined(separator: " ")]))
+        let body = ([text] + (references.isEmpty ? [] : [references.joined(separator: " ")]) + notes)
             .filter { !$0.isEmpty }.joined(separator: "\n\n")
         if !body.isEmpty { blocks.append(["type": "text", "text": .string(body)]) }
         return .array(blocks)
     }
 
-    static func codexInput(text: String, files: [File]) -> JSONValue {
+    /// A folder on disk, whatever its URL says (one without a trailing slash doesn't).
+    static func isFolder(_ url: URL) -> Bool {
+        url.hasDirectoryPath || (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+
+    static func codexInput(text: String, files: [File], media: [URL: AttachedMedia] = [:]) -> JSONValue {
         var items: [JSONValue] = files.map { file in
             file.kind == .image
                 ? ["type": "localImage", "path": .string(file.url.path)]
                 : ["type": "mention", "name": .string(file.name), "path": .string(file.url.path)]
         }
+        // A video's frames, as images.
+        items += files.flatMap { media[$0.url]?.frames ?? [] }.map { ["type": "localImage", "path": .string($0.path)] }
         if !text.isEmpty { items.append(["type": "text", "text": .string(text), "text_elements": []]) }
         // A mention reaches only the display: the model is told of the files in a text of its
         // own, after the user's, which reading back leaves out (`isFileNote`). A text file comes
         // whole, as Claude gets it; any other, by its path, for the model to open.
-        let note = files.filter { $0.kind != .image }.map(fileNote)
+        let note = files.filter { $0.kind != .image }.map { media[$0.url]?.note ?? fileNote($0) }
         if !note.isEmpty { items.append(["type": "text", "text": .string(note.joined(separator: "\n\n")), "text_elements": []]) }
         return .array(items)
     }
@@ -223,7 +248,9 @@ package enum Attachments {
     }
 
     /// Kore's text naming a Codex message's attached files: an item of its own, from "[file: /".
-    static func isFileNote(_ text: String) -> Bool { text.hasPrefix("[file: /") }
+    static func isFileNote(_ text: String) -> Bool {
+        ["[file: /", "[video: /", "[audio: /"].contains { text.hasPrefix($0) }
+    }
 
     // MARK: Transcripts
 
