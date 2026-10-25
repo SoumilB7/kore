@@ -6,6 +6,7 @@ import SwiftUI
 struct LoginMeters: View {
     let state: LoginUsage.State
     let signedOut: Bool
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
@@ -24,6 +25,7 @@ struct LoginMeters: View {
                         }
                     } else {
                         ForEach(bars, id: \.title) { bar in
+                            let reset = UsageText.resets(bar.resetsAt, now: now)
                             HStack(spacing: Space.sm) {
                                 Text(UsageText.label(bar.title))
                                     .lineLimit(1).truncationMode(.tail)
@@ -32,10 +34,13 @@ struct LoginMeters: View {
                                     .frame(minWidth: Size.usageBarMin, maxWidth: .infinity)
                                 Text(UsageText.percent(bar.used))
                                     .monospacedDigit().fixedSize()
+                                if !reset.isEmpty {
+                                    Text(reset).monospacedDigit().fixedSize()
+                                }
                             }
-                            .help([UsageText.resetsAt(bar.resetsAt, now: Date()), UsageText.stamp(at, now: Date())].compactMap { $0 }.joined(separator: " · "))
+                            .help([UsageText.resetsAt(bar.resetsAt, now: now), UsageText.stamp(at, now: now)].compactMap { $0 }.joined(separator: " · "))
                             .accessibilityElement(children: .ignore)
-                            .accessibilityLabel("\(UsageText.label(bar.title)), \(UsageText.percent(bar.used)) used")
+                            .accessibilityLabel(["\(UsageText.label(bar.title)), \(UsageText.percent(bar.used)) used", reset].filter { !$0.isEmpty }.joined(separator: ", "))
                         }
                     }
                 }

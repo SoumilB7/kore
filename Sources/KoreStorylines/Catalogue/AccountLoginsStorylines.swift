@@ -348,8 +348,8 @@ final class AccountUsageMeters: ChatStoryline {
                     let unused = email == "unused@example.com"
                     return PlanReading(account: .init(plan: cli == "codex" ? "ChatGPT Pro Lite" : nil, email: email,
                         organization: cli == "claude" ? org : nil, access: .plan), limits: .init(bars: [
-                        PlanLimit(title: "Session (5hr)", used: unused ? 0 : 52, resetsAt: nil),
-                        PlanLimit(title: "Weekly (7 day)", used: unused ? 0 : 18, resetsAt: nil),
+                        PlanLimit(title: "Session (5hr)", used: unused ? 0 : 52, resetsAt: unused ? nil : Date().addingTimeInterval(2 * 3600)),
+                        PlanLimit(title: "Weekly (7 day)", used: unused ? 0 : 18, resetsAt: unused ? nil : Date().addingTimeInterval(3 * 86400)),
                     ]))
                 }
             },
@@ -363,6 +363,14 @@ final class AccountUsageMeters: ChatStoryline {
                 return lines["main"] == ["Session · 52%", "Weekly · 18%"]
                     && lines[unused.id] == ["Session · 0%", "Weekly · 0%"]
                     && lines[mismatch.id] == ["Usage unavailable"]
+            },
+            Expect("each login shows its supplied reset times; missing times stay absent") { story in
+                guard let resets = story.app.chat?.storyLoginResets,
+                    let unused = CLIProfiles.added(provider).first(where: { $0.email == "unused@example.com" }),
+                    let mismatch = CLIProfiles.added(provider).first(where: { $0.email == "missing@example.com" })
+                else { return false }
+                return resets["main"] == ["Resets in 2h", "Resets in 3d"]
+                    && resets[unused.id] == [] && resets[mismatch.id] == []
             },
             FadesEnd(), Snapshot("account-usage-meters"),
             Key(.escape), ExpectElement(popup, .absent),

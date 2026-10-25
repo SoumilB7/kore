@@ -208,6 +208,18 @@ extension Chat {
             return (AccountStore.loginKey(login.id), lines)
         })
     }
+    /// Each login's reset countdowns, omitting windows whose provider supplied no reset time.
+    package var storyLoginResets: [String: [String]] {
+        let store = AccountStore.shared
+        return Dictionary(uniqueKeysWithValues: store.logins(provider.id).map { login in
+            let key = LoginUsage.Key(provider.id, login, generation: store.generation(provider.id))
+            let lines: [String]
+            if case .ready(let reading, _) = LoginUsage.shared.state(key) {
+                lines = LoginUsage.bars(reading).map { UsageText.resets($0.resetsAt, now: Date()) }.filter { !$0.isEmpty }
+            } else { lines = [] }
+            return (AccountStore.loginKey(login.id), lines)
+        })
+    }
     /// What a login row's caption says under the pointer, a switch to it stopping chats: nil when
     /// none work.
     package var storyLoginSwitchCaption: String? { AccountText.switchCaption(working: AccountStore.shared.workingChats(provider.id)) }

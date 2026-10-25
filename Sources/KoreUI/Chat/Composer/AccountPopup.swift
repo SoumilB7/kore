@@ -890,12 +890,16 @@ private struct LoginList: View {
         let stops = AccountText.switchCaption(working: store.workingChats(provider))
         let logins = store.logins(provider)
         let keys = logins.map { LoginUsage.Key(provider, $0, generation: store.generation(provider)) }
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(logins) { login in
-                LoginRow(
-                    state: state, login: login, caption: caption(login), stops: login.active ? nil : stops,
-                    reading: login.active && identity == nil && store.status(provider) == .unknown,
-                    usage: LoginUsage.shared.state(LoginUsage.Key(provider, login, generation: store.generation(provider))))
+        // One visible-card clock updates every login's countdown; reads keep their own cache.
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(logins) { login in
+                    LoginRow(
+                        state: state, login: login, caption: caption(login), stops: login.active ? nil : stops,
+                        reading: login.active && identity == nil && store.status(provider) == .unknown,
+                        usage: LoginUsage.shared.state(LoginUsage.Key(provider, login, generation: store.generation(provider))),
+                        now: context.date)
+                }
             }
         }
         .padding(.horizontal, -Space.sm)
@@ -920,6 +924,7 @@ private struct LoginRow: View {
     /// Its account being read, just switched to: the spinner in the ✓'s place.
     let reading: Bool
     let usage: LoginUsage.State
+    let now: Date
     @StateObject private var hovered = Local(false)
 
     var body: some View {
@@ -938,7 +943,7 @@ private struct LoginRow: View {
                     if let shown {
                         Text(shown).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
                     }
-                    LoginMeters(state: usage, signedOut: login.signedOut)
+                    LoginMeters(state: usage, signedOut: login.signedOut, now: now)
                         .padding(.top, Space.xs)
                 }
                 .fixedSize(horizontal: false, vertical: true)
