@@ -17,7 +17,7 @@ final class ReadmeAccounts: Storyline {
     override func steps() -> [any Step] {
         let popup = Locator.id(StoryID.Composer.account)
         return [
-            UseScript(Readme.script(model: "default", reply: Readme.loginReply), for: "claude"),
+            UseScript(CLIScript(start: [Readme.controls("default")]), for: "claude"),
             Do("Three logins: main, work and a side project; each reads its own limits") { story in
                 Readme.privateEmails(story)
                 let base = FileManager.default.temporaryDirectory.appendingPathComponent("kore-logins-\(UUID().uuidString.prefix(8))", isDirectory: true)
@@ -40,8 +40,8 @@ final class ReadmeAccounts: Storyline {
                     ]))
                 }
             },
+            // An empty chat behind the popup, so nothing reads as cut off.
             OpenFolder(), StartChat("claude"),
-            Send("Add rate limiting to the login endpoint"), TurnFinished(1),
             WaitForFocus(.id(StoryID.Composer.field)),
             Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
             Readme.Settle(), Snapshot("accounts"),
@@ -153,12 +153,6 @@ enum Readme {
             models: [ModelOption(id: model, name: name, resolved: model, efforts: ["low", "medium", "high"])],
             model: model, effort: "high", commands: [])))
     }
-
-    static func script(model: String, reply: String) -> CLIScript {
-        CLIScript(start: [controls(model)], turns: [CLIScript.reply(reply)])
-    }
-
-    static let loginReply = "Added a sliding-window limit of 10 attempts a minute per IP, with a test for the 11th."
 
     /// Privacy on for the picture, and back as it was after.
     static func privateEmails(_ story: StoryContext) {
