@@ -58,7 +58,11 @@ struct ComposerBar: View {
                 controls(.minimal)
             }
 
-            sendButton
+            // The ring keeps its own gap, so with none Send sits where it always has.
+            HStack(spacing: 0) {
+                ResetSendButton(chat: chat)
+                sendButton
+            }
         }
         .padding(Inset.composerBar)
     }

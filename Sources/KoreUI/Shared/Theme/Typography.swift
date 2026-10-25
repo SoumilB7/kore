@@ -30,6 +30,8 @@ enum TextStyle {
 enum Glyph {
     static var attach: Font { .kore(14) }
     static var send: Font { .kore(12, .bold) }
+    /// The arrow inside the send-at-reset ring.
+    static var resetArrow: Font { .kore(9, .bold) }
     static var remove: Font { .kore(13) }
 }
 

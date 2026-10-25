@@ -140,7 +140,7 @@ final class TranscriptStore {
         case fold(Fold)
         case rule(turn: String)
         /// `continues`: the turn ended on its plan's limit, and the chat continues at the reset.
-        case outcome(turn: String, text: String, continues: Date? = nil)
+        case outcome(turn: String, text: String, continues: Date? = nil, sends: String? = nil)
         /// A turn the CLI's login refused: Kore's words, the CLI's line, and Sign in.
         case signIn(turn: String, said: String)
         /// A turn that failed while the Mac slept: Kore's words, the CLI's line, and Continue.
@@ -165,7 +165,7 @@ final class TranscriptStore {
                 e.id.uuidString
             case .fold(let f): "fold-\(f.turn)"
             case .rule(let t): "rule-\(t)"
-            case .outcome(let t, _, _), .signIn(let t, _), .slept(let t, _): "outcome-\(t)"
+            case .outcome(let t, _, _, _), .signIn(let t, _), .slept(let t, _): "outcome-\(t)"
             case .changes(let t, _, _, _): "changes-\(t)"
             // The first call's: a read-only call that becomes a group keeps its identity.
             case .explored(let entries, _): entries.first?.id.uuidString ?? "explored"
@@ -691,13 +691,13 @@ final class TranscriptStore {
     }
 
     /// The files a turn changed (the git snapshot, or what the CLI reported), for its summary.
-    /// The turn that ended on its plan's limit, and when the chat continues; shown after its
-    /// notice until it continues or is cancelled.
-    private(set) var continuation: (turn: String, at: Date)?
+    /// The turn that ended on its plan's limit, and when the chat continues (with the message set
+    /// to go then, if one is); shown after its notice until it continues or is cancelled.
+    private(set) var continuation: (turn: String, at: Date, sends: String?)?
 
-    func continues(turn: String?, at: Date?) {
+    func continues(turn: String?, at: Date?, sends: String? = nil) {
         let old = continuation?.turn
-        continuation = turn.flatMap { turn in at.map { (turn, $0) } }
+        continuation = turn.flatMap { turn in at.map { (turn, $0, sends) } }
         if let old { changed(turn: old) }
         if let turn, turn != old { changed(turn: turn) }
     }
@@ -1531,7 +1531,7 @@ final class TranscriptStore {
             return calls.contains(where: \.isError) ? .failure : .success
         case .spinner, .message, .summary, .queued: return nil
         case .rule: return TimelineDot.none
-        case .outcome(_, let text, _): return text == "Interrupted" ? .warning : .failure
+        case .outcome(_, let text, _, _): return text == "Interrupted" ? .warning : .failure
         case .signIn: return .failure
         // The Mac slept: the turn was cut short, as an interrupted one is, not failed.
         case .slept: return .warning
@@ -1712,8 +1712,8 @@ final class TranscriptStore {
         case .completed: break
         case .interrupted: if !folded { rows.append(.outcome(turn: turn.id, text: "Interrupted")) }
         case .failed(let message):
-            let continues = continuation.flatMap { $0.turn == turn.id ? $0.at : nil }
-            rows.append(.outcome(turn: turn.id, text: message, continues: continues))
+            let continues = continuation.flatMap { $0.turn == turn.id ? $0 : nil }
+            rows.append(.outcome(turn: turn.id, text: message, continues: continues?.at, sends: continues?.sends))
         case .authFailed(let said): rows.append(.signIn(turn: turn.id, said: said))
         case .slept(let said): rows.append(.slept(turn: turn.id, said: said))
         }

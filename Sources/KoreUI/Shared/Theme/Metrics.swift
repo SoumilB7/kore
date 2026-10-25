@@ -127,6 +127,12 @@ enum Size {
     static let menuMax: CGFloat = 260
     /// The / menu: five 28pt rows and half of the next, so it shows there are more to scroll to.
     static let slashMenuMax: CGFloat = 158
+    /// A message waiting for the limit's reset, quoted in its notice: at most this wide.
+    static let sendsQuote: CGFloat = 240
+    /// The ring of dots around the send-at-reset arrow (the wait, a dot a twelfth of it).
+    static let resetRing: CGFloat = 20
+    static let resetRingDot: CGFloat = 2.4
+    static let resetRingDots = 12
     /// Each arm of a corner mark, from the outer corner along either edge: at most this…
     static let cornerMark: CGFloat = 20
     /// …else this share of the panel's shorter side (a 42pt card gets about 14)…

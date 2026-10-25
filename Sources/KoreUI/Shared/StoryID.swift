@@ -71,6 +71,8 @@ extension StoryID {
     package enum Composer {
         package static let field = StoryID(.composer, "field")
         package static let send = StoryID(.composer, "send")
+        /// The ring beside Send at a plan's limit: the draft goes when the limit resets.
+        package static let sendAtReset = StoryID(.composer, "sendatreset")
         package static let stop = StoryID(.composer, "stop")
         package static let attach = StoryID(.composer, "attach")
         package static let slash = StoryID(.composer, "slash")

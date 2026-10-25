@@ -301,6 +301,9 @@ extension Chat {
     /// The turn whose limit notice says when the chat continues, and the words it says.
     package var storyContinuesTurn: String? { transcript.continuation?.turn }
     package var storyContinuesLine: String? { continuesAt.map { ContinueText.line($0, now: Date()) } }
+    /// The message set to go when the limit resets, as it will be sent; and the notice's words.
+    package var storySendsAtReset: String? { sendsAtReset.map { Chat.message(command: $0.command, draft: $0.draft) } }
+    package var storySendsLine: String? { transcript.continuation?.sends }
 }
 
 extension Chat {

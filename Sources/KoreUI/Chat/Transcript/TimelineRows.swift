@@ -69,11 +69,13 @@ private struct SignInNotice: View {
 
 /// A failed turn's notice in the CLI's words. When the turn ended on its plan's limit and Stay
 /// awake continues it, one quiet part follows on the same line, or under it when the row is
-/// narrow: "Continues at 3:00 PM" and its ×.
+/// narrow: "Continues at 3:00 PM" and its ×, or, for a message set to go then, "“…” · sends at
+/// 3:00 PM" and its ×.
 private struct OutcomeLine: View {
     let turn: String
     let text: String
     let continues: Date?
+    var sends: String?
     let cancel: () -> Void
 
     var body: some View {
@@ -105,12 +107,26 @@ private struct OutcomeLine: View {
 
     private func quiet(_ at: Date) -> some View {
         HStack(alignment: .center, spacing: Space.xxs) {
-            Text(ContinueText.line(at, now: Date()))
-                .font(TextStyle.body)
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
-                .help("Sends Continue when the limit resets")
-            IconButton(symbol: "xmark", kind: .mini, font: TextStyle.caption, help: "Don't continue", action: cancel)
+            if let sends {
+                Text("\u{201C}\(sends.split(whereSeparator: \.isNewline).first.map(String.init) ?? sends)\u{201D}")
+                    .font(TextStyle.body)
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: Size.sendsQuote, alignment: .leading)
+                    .help(sends)
+                Text("· " + ContinueText.sends(at, now: Date()))
+                    .font(TextStyle.body)
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+            } else {
+                Text(ContinueText.line(at, now: Date()))
+                    .font(TextStyle.body)
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+                    .help("Sends Continue when the limit resets")
+            }
+            IconButton(symbol: "xmark", kind: .mini, font: TextStyle.caption, help: sends == nil ? "Don't continue" : "Don't send it, back to the draft", action: cancel)
                 .storyID(StoryID.Transcript.continues(turn).part(.cancel))
         }
         .fixedSize()
@@ -123,6 +139,12 @@ enum ContinueText {
     static func line(_ at: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
         let time = StayAwake.time(at, now: now, calendar: calendar, locale: locale)
         return calendar.isDate(at, inSameDayAs: now) ? "Continues at \(time)" : "Continues \(time)"
+    }
+
+    /// "sends at 3:00 PM" today, else "sends Thu 9:00 AM".
+    static func sends(_ at: Date, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        let time = StayAwake.time(at, now: now, calendar: calendar, locale: locale)
+        return calendar.isDate(at, inSameDayAs: now) ? "sends at \(time)" : "sends \(time)"
     }
 }
 
@@ -303,8 +325,8 @@ struct RowContent: View {
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         case .rule:
             Rule()
-        case .outcome(let turn, let text, let continues):
-            OutcomeLine(turn: turn, text: text, continues: continues, cancel: actions.cancelContinue)
+        case .outcome(let turn, let text, let continues, let sends):
+            OutcomeLine(turn: turn, text: text, continues: continues, sends: sends, cancel: actions.cancelContinue)
         case .signIn(let turn, let said):
             SignInNotice(turn: turn, said: said, provider: actions.provider, signIn: actions.signIn)
         case .slept(let turn, let said):

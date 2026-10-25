@@ -100,6 +100,13 @@ package final class Chat: Identifiable {
     @ObservationIgnored private lazy var continuation = makeContinuation()
     /// When the chat continues after its plan's limit resets; nil when it won't.
     private(set) var continuesAt: Date?
+    /// The last turn ended on the plan's limit, which resets `at`: a message can wait for it.
+    private(set) var limitReset: (turn: TurnID, at: Date)?
+    /// A message set to go when the limit resets (`sendAtReset`), out of the composer, and when
+    /// it was set (the wait the composer's ring counts down).
+    private(set) var sendsAtReset: (command: SlashCommand?, draft: String, attachments: [Attachment], since: Date)?
+    /// Stay awake was turned on for that message; it goes off again once it's sent or cancelled.
+    @ObservationIgnored private var awakeForReset = false
     /// Its tab closed: nothing of it counts as running any more.
     private var closed = false
 
@@ -549,10 +556,48 @@ package final class Chat: Identifiable {
         deliver("Continue", [])
     }
 
-    /// The × after "Continues at …", Stay awake turned off, or the owner sending.
+    /// The × after "Continues at …", Stay awake turned off, or the owner sending. A message set
+    /// to go at the reset comes back to the composer when it's empty.
     func cancelContinue() {
+        if let waiting = sendsAtReset {
+            sendsAtReset = nil
+            if draft.isEmpty, attachments.isEmpty, command == nil {
+                (command, draft, attachments) = (waiting.command, waiting.draft, waiting.attachments)
+            }
+            releaseAwakeForReset()
+        }
         guard continuesAt != nil || continuation.pending != nil else { return }
         continuation.cancel()
+    }
+
+    /// At the plan's limit, with something typed and nothing set to go yet: it can go at the reset.
+    var canSendAtReset: Bool {
+        limitReset != nil && sendsAtReset == nil && !status.isRunning && canSend
+    }
+
+    /// The composer's ring: the draft goes when the limit resets, Stay awake on until then.
+    func sendAtReset() {
+        guard canSendAtReset, let reset = limitReset else { return }
+        sendsAtReset = (command, draft, attachments, Date())
+        draft = ""
+        command = nil
+        attachments = []
+        if let awake = StayAwake.current, !awake.isOn {
+            awake.choose(.whileAgentsWork)
+            awakeForReset = true
+        }
+        continuation.schedule(turn: reset.turn, at: reset.at)
+        // Already waiting there to send Continue: the row says the message now.
+        showContinuation(continuation.pending)
+    }
+
+    /// Stay awake goes off again if it was turned on for the message, unless another chat waits
+    /// on it.
+    private func releaseAwakeForReset() {
+        guard awakeForReset else { return }
+        awakeForReset = false
+        guard let awake = StayAwake.current, awake.isOn, !awake.othersContinue(besides: self) else { return }
+        awake.turnOff()
     }
 
     private func makeContinuation() -> LimitContinuation {
@@ -561,21 +606,58 @@ package final class Chat: Identifiable {
             guard let self else { return nil }
             return try? await self.connect().usage()
         }
-        continuation.send = { [weak self] in self?.deliver("Continue", []) }
-        continuation.changed = { [weak self] pending in
+        continuation.send = { [weak self] in
             guard let self else { return }
-            continuesAt = pending?.at
-            transcript.continues(turn: pending?.turn, at: pending?.at)
+            if let waiting = sendsAtReset {
+                sendsAtReset = nil
+                deliver(Self.message(command: waiting.command, draft: waiting.draft), waiting.attachments)
+            } else {
+                deliver("Continue", [])
+            }
         }
+        continuation.changed = { [weak self] pending in self?.showContinuation(pending) }
         return continuation
+    }
+
+    private func showContinuation(_ pending: LimitContinuation.Pending?) {
+        continuesAt = pending?.at
+        let message = sendsAtReset.map { Self.message(command: $0.command, draft: $0.draft) }
+        transcript.continues(turn: pending?.turn, at: pending?.at, sends: pending == nil ? nil : message)
     }
 
     /// A turn that ended on the plan's limit continues at the reset, while Stay awake is on.
     private func continueAfterLimit(_ event: ChatEvent) {
+        noteLimitReset(event)
         guard case .turnFinished(let id, .limited(_, let resetsAt), _) = event,
             StayAwake.current?.isOn == true, let turn = id ?? turnBegan?.id
         else { return }
         continuation.schedule(turn: turn, at: resetsAt)
+    }
+
+    /// Where the composer's ring comes from: the reset of the limit the last turn ended on, from
+    /// the CLI or else the plan's limits. A turn starting ends it; the turn of a message sent at
+    /// the reset ending lets Stay awake go.
+    private func noteLimitReset(_ event: ChatEvent) {
+        switch event {
+        case .turnStarted:
+            if limitReset != nil { limitReset = nil }
+        case .turnFinished(let id, .limited(_, let resetsAt), _):
+            guard let turn = id ?? turnBegan?.id else { return }
+            if let resetsAt {
+                limitReset = (turn, resetsAt)
+                return
+            }
+            Task { [weak self] in
+                guard let self, let reading = try? await connect().usage(),
+                    case .limited(let until?) = reading.limits?.blocked(now: Date()), !status.isRunning
+                else { return }
+                limitReset = (turn, until)
+            }
+        case .turnFinished:
+            if sendsAtReset == nil, continuation.pending == nil { releaseAwakeForReset() }
+        default:
+            break
+        }
     }
 
     /// A turn that failed while the Mac slept (or just after it woke) says so, in place of the

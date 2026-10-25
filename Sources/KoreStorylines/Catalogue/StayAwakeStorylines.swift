@@ -145,6 +145,91 @@ final class LimitContinue: ChatStoryline {
     }
 }
 
+/// At the plan's limit, with Stay awake off: typing shows the ring beside Send; a click sets the
+/// draft to go at the reset, turns Stay awake on and says so after the notice; a click takes it
+/// back to the draft and Stay awake off. Set again, it goes once at the reset, after the limits
+/// were read again, in place of Continue, and Stay awake goes off when its turn ends.
+final class SendAtReset: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    static let waiting = "carry on with the corner list"
+
+    static func script(_ provider: String) -> CLIScript {
+        let near = LimitContinue.resets(in: 14)
+        let said = provider == "codex" ? "You've hit your usage limit." : "You've hit your session limit"
+        let usage: UsageAnswer
+        if provider == "codex" {
+            let window: JSONValue = ["usedPercent": 100, "windowDurationMins": 300, "resetsAt": .number(near.timeIntervalSince1970)]
+            usage = .codex(
+                account: ["account": ["type": "chatgpt", "email": "you@example.com", "planType": "plus"]],
+                rateLimits: ["rateLimits": ["limitId": "codex", "primary": window]])
+        } else {
+            let five: JSONValue = ["utilization": 100, "resets_at": .string(ISO8601DateFormatter().string(from: near))]
+            usage = .claude(
+                account: ["email": "you@example.com", "subscriptionType": "Claude Max"],
+                usage: ["subscription_type": "max", "rate_limits_available": true, "rate_limits": ["five_hour": five]])
+        }
+        return CLIScript(
+            turns: [[.startTurn, .finishTurn(.limited(said, resetsAt: near))], CLIScript.reply("Carried on.")],
+            usage: usage)
+    }
+
+    override func steps() -> [any Step] {
+        let provider = variant.provider ?? "claude"
+        let ring = Locator.id(StoryID.Composer.sendAtReset)
+        let sends = { (story: StoryContext) in
+            try story.scriptedBackend().log.filter { if case .send = $0 { true } else { false } }
+        }
+        return [
+            UseScript(Self.script(provider), for: provider), OpenFolder(), StartChat(),
+            AwakeSetUp(grace: 1),
+            Send("Do the long task"),
+            TurnFinished(1),
+            ExpectElement(ring, .absent),
+            WaitForFocus(.id(StoryID.Composer.field)), TypeText(Self.waiting),
+            ExpectElement(ring),
+            Expect("Stay awake still off") { _ in !StoryAwake.isOn },
+            Snapshot("reset-ring"),
+            // Set: the draft waits, Stay awake comes on, the notice says it.
+            Press(ring),
+            Expect("the message waiting, the draft empty", found: { $0.app.chat?.storySendsAtReset }) { story in
+                story.app.chat?.storySendsAtReset == Self.waiting && (try? story.activeChat().draft) == ""
+            },
+            Expect("“…” · sends at … after the notice", found: { $0.app.chat?.storySendsLine }) { $0.app.chat?.storySendsLine == Self.waiting },
+            ExpectElement(Locator("the limit notice's message") { app in
+                guard let turn = app.chat?.storyContinuesTurn else { return .failure(LocatorMiss("no continuation", pending: true)) }
+                return .success(StoryID.Transcript.continues(turn))
+            }),
+            Expect("Stay awake on for it", found: { _ in StoryAwake.line }) { _ in
+                StoryAwake.isOn && StoryAwake.held == "Kore: a chat continues when its limit resets"
+            },
+            Snapshot("reset-set"),
+            // Taken back: the draft again, Stay awake off.
+            Press(ring),
+            Expect("the message back in the draft") { story in
+                story.app.chat?.storySendsAtReset == nil && (try? story.activeChat().draft) == Self.waiting
+            },
+            Expect("Stay awake off again") { _ in !StoryAwake.isOn },
+            // Set again: it goes at the reset, in place of Continue.
+            Press(ring),
+            Expect("sent once at the reset, after the limits were read again", timeout: .seconds(30), found: { story in
+                (try? story.scriptedBackend().log.map { "\($0)" }.joined(separator: ", "))
+            }) { story in
+                let log = try story.scriptedBackend().log
+                guard let read = log.lastIndex(of: .usage), let sent = log.firstIndex(of: .send(Self.waiting)) else { return false }
+                return read < sent
+            },
+            TurnFinished(2),
+            Expect("the two messages sent, no Continue", found: { story in
+                (try? sends(story).map { "\($0)" }.joined(separator: ", "))
+            }) { story in
+                try sends(story) == [.send("Do the long task"), .send(Self.waiting)]
+            },
+            Expect("Stay awake off once its turn ended") { _ in !StoryAwake.isOn },
+            ExpectElement(ring, .absent),
+        ]
+    }
+}
+
 /// Starts from off with a short idle grace, and leaves it off again when the storyline ends,
 /// pass or fail.
 private struct AwakeSetUp: Step {

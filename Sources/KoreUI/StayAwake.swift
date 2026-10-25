@@ -149,6 +149,11 @@ final class StayAwake {
         for chat in Self.chats.compactMap(\.chat) { chat.cancelContinue() }
     }
 
+    /// A chat other than `chat` waits for its limit's reset, which needs Stay awake on.
+    func othersContinue(besides chat: Chat) -> Bool {
+        Self.chats.contains { $0.chat !== chat && $0.chat?.continuesAt != nil }
+    }
+
     private func timerEnded() {
         guard isOn, let end = endsAt, end <= clock.now.addingTimeInterval(1) else { return }
         turnOff()
