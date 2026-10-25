@@ -211,7 +211,8 @@ private struct ExercisePinch: Step {
               PinchZoom.storyPageScale(in: window) == committed else {
             throw StoryFailure.other("the magnified page did not scroll independently of its scale")
         }
-        try await ClickText(.answer(1, [3], at: PinchZoomGesture.paragraph(4), "optical"), count: 2).run(story)
+        // Well below the top: scrolled, the message's pinned copy covers the first paragraphs.
+        try await ClickText(.answer(1, [7], at: PinchZoomGesture.paragraph(8), "optical"), count: 2).run(story)
         try await CopySelection("optical").run(story)
         guard let workspace = story.app.workspace,
               let originalIndex = workspace.tabs.firstIndex(where: { $0.id == workspace.activeTab.id }) else {

@@ -108,7 +108,7 @@ private struct MarkdownCodeBlock: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 0) {
-            SidewaysWhenWide {
+            SidewaysWhenWide(fade: true) {
                 Text(text)
                     .font(TextStyle.code)
                     .foregroundStyle(Theme.text)
@@ -147,15 +147,30 @@ private struct MarkdownCodeBlock: View {
 
 /// Content at its own width, in a sideways scroll view only when it's wider than the column. A
 /// scroll view is most of what a short code block or a small table costs to build, and one that
-/// fits looks and scrolls the same as no scroll view.
+/// fits looks and scrolls the same as no scroll view. With `fade`, a wide one's trailing edge
+/// fades over `Size.tabFade` (the tab strip's "more this way"), and the content ends that much
+/// further in, so scrolled to its end nothing is faded.
 private struct SidewaysWhenWide<Content: View>: View {
+    var fade = false
     @ViewBuilder let content: Content
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
             content.fixedSize(horizontal: true, vertical: false)
-            ScrollView(.horizontal) { content }
-                .scrollBounceBehavior(.basedOnSize)
+            if fade {
+                ScrollView(.horizontal) { content.padding(.trailing, Size.tabFade) }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .mask {
+                        HStack(spacing: 0) {
+                            Rectangle()
+                            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: Size.tabFade)
+                        }
+                    }
+            } else {
+                ScrollView(.horizontal) { content }
+                    .scrollBounceBehavior(.basedOnSize)
+            }
         }
     }
 }

@@ -61,6 +61,11 @@ extension Layout {
         static let indent: CGFloat = 30
         /// Above and below each item; items have no gap between them.
         static let itemPadding: CGFloat = 8
+        /// Above a prompt (a user's or peer's message): with the item above's padding, twice
+        /// `entryGap` before a new prompt…
+        static let promptTop: CGFloat = 2 * Layout.entryGap - itemPadding
+        /// …and under it, with its reply's, `entryGap`: each turn reads as one block.
+        static let promptBottom: CGFloat = Layout.entryGap - itemPadding
         static let dot: CGFloat = 7
         static let dotX: CGFloat = 9
         /// Below the item's top padding.
@@ -289,6 +294,10 @@ extension Size {
         static let top: CGFloat = 6
         static let button: CGFloat = 22
         static let gap: CGFloat = 2
+        /// Beside a message: both buttons, kept whether shown or not.
+        static let width: CGFloat = 2 * button + gap
+        /// Under a turn's last answer, the row hangs into the gap before the next prompt.
+        static let hang: CGFloat = top + row
     }
 }
 

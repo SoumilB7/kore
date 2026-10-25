@@ -109,7 +109,8 @@ private struct OutcomeLine: View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
             Text(text)
                 .font(TextStyle.body)
-                .foregroundStyle(text == "Interrupted" ? Theme.secondary : Theme.danger)
+                // Not a failure when it continues on its own: in secondary, as "Interrupted" is.
+                .foregroundStyle(text == "Interrupted" || continues != nil ? Theme.secondary : Theme.danger)
                 .selectableOnHover()
             if let retry {
                 Button("Retry", action: retry)
@@ -288,6 +289,9 @@ struct TimelineRow: View, Equatable {
                     RowContent(row: item.row, actions: actions)
                 }
             }
+        } else if case .entry(let entry) = item.row, [.user, .peer].contains(entry.kind) {
+            // A message sent during the turn: its own padding, as a section's first message.
+            RowContent(row: item.row, actions: actions)
         } else {
             RowContent(row: item.row, actions: actions)
                 .padding(.vertical, Layout.Timeline.itemPadding)
@@ -433,7 +437,8 @@ struct MessageHeader: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Copy / Fork sit beside the box, so the reply follows it at `entryGap`.
+        HStack(alignment: .bottom, spacing: Space.xs) {
             if entry.kind == .peer {
                 peer
             } else {
@@ -442,11 +447,14 @@ struct MessageHeader: View {
             if place == .row, let messageActions {
                 MessageActionsRow(
                     text: entry.text, shown: messageActions.always || hovered.value, canFork: messageActions.canFork,
-                    story: entry.kind == .peer ? StoryID.Transcript.peer(entry.id) : StoryID.Transcript.user(entry.id)
+                    beside: true, story: entry.kind == .peer ? StoryID.Transcript.peer(entry.id) : StoryID.Transcript.user(entry.id)
                 ) { actions.fork(entry) }
             }
         }
-        .padding(.vertical, Layout.Timeline.itemPadding)
+        .padding(.top, place == .row ? 0 : Layout.Timeline.itemPadding)
+        .padding(.bottom, place == .row ? Layout.Timeline.promptBottom : Layout.Timeline.itemPadding)
+        // On the reply text's edge: one left edge for the prompt and its reply.
+        .padding(.leading, Layout.Timeline.indent)
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(StickyBackground(on: place == .sticky))
         .contentShape(Rectangle())
@@ -457,6 +465,9 @@ struct MessageHeader: View {
         .messageActions(text: place == .row && messageActions != nil ? entry.text : nil, canFork: messageActions?.canFork == true) {
             actions.fork(entry)
         }
+        // Outside the row's own area, so the Copy / Fork hanging from the answer above take
+        // clicks; inside its frame, so the row's place is where it's built.
+        .padding(.top, place == .row ? Layout.Timeline.promptTop : 0)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
             guard place == .row else { return }
             actions.messageMoved(entry.id.uuidString, frame)
@@ -786,7 +797,8 @@ struct MessageText: View {
 // MARK: Message actions
 
 /// A turn's final answer with its Copy / Fork row under it (look §11). The hover is its own,
-/// so the pointer crossing an answer redraws this, not the answer's text.
+/// so the pointer crossing an answer redraws this, not the answer's text. When a prompt (or the
+/// end) is next, the row hangs into the gap before it instead of adding to it.
 private struct AnswerWithActions: View {
     let entry: TranscriptStore.Entry
     let messageActions: TranscriptStore.MessageActions
@@ -805,16 +817,20 @@ private struct AnswerWithActions: View {
         }
         .onHover { if hovered.value != $0 { hovered.value = $0 } }
         .messageActions(text: entry.text, canFork: messageActions.canFork) { actions.forkAfter(entry) }
+        .padding(.bottom, messageActions.hangs ? -Size.MessageActions.hang : 0)
     }
 }
 
-/// Copy and Fork under a message (look §11): a reserved 22pt row, so showing it never moves
-/// anything. Hidden but kept in place until the message is under the pointer (always shown
-/// under the chat's last answer). Nothing here measures or animates while it's hidden.
+/// Copy and Fork under an answer (look §11), or beside a message: a reserved 22pt row, so
+/// showing it never moves anything. Hidden but kept in place until the message is under the
+/// pointer (always shown under the chat's last answer). Nothing here measures or animates while
+/// it's hidden.
 struct MessageActionsRow: View {
     let text: String
     let shown: Bool
     let canFork: Bool
+    /// After a message's box on its last line, rather than under it.
+    var beside = false
     /// The message's or answer's storyline name; Copy and Fork are its `.copy` and `.fork`.
     let story: StoryID
     let fork: () -> Void
@@ -830,8 +846,8 @@ struct MessageActionsRow: View {
                     .storyID(story.part(.fork))
             }
         }
-        .frame(height: Size.MessageActions.row, alignment: .leading)
-        .padding(.top, Size.MessageActions.top)
+        .frame(width: beside ? Size.MessageActions.width : nil, height: Size.MessageActions.row, alignment: .leading)
+        .padding(.top, beside ? 0 : Size.MessageActions.top)
         // Hidden until hover: pressed through their actions meanwhile.
         .storyAction(story.part(.copy)) { copy() }
         .storyAction(story.part(.fork)) { if canFork { fork() } }

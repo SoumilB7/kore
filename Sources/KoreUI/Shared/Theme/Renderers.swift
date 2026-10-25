@@ -116,6 +116,8 @@ extension Size {
         /// The error line and the source under it, × zoom.
         static let errorFont: CGFloat = 12
         static let codeFont: CGFloat = 12
+        /// Either side of an edge's label, inside its knockout, × zoom.
+        static let labelPadding: CGFloat = 4
         /// Round the diagram, and the page's top in a Markdown file.
         static let margin: CGFloat = 24
         static let blockMargin: CGFloat = 8

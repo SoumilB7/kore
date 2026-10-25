@@ -308,9 +308,11 @@ private final class DiagramDelegate: NSObject, WKNavigationDelegate, WKScriptMes
         variables["darkMode"] = true
         variables["fontFamily"] = font
         variables["fontSize"] = "\(Int(Size.Diagram.font * zoom))px"
+        // An edge's label knocks out its line a little past the text, so the line stops short of it.
+        let labelCSS = ".edgeLabel p { padding: 0 \(Size.Diagram.labelPadding * zoom)px; }"
         return [
             "startOnLoad": false, "securityLevel": "strict", "suppressErrorRendering": true, "theme": "base",
-            "darkMode": true, "fontFamily": font, "themeVariables": variables,
+            "darkMode": true, "fontFamily": font, "themeVariables": variables, "themeCSS": labelCSS,
         ]
     }
 

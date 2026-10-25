@@ -5,10 +5,11 @@ import SwiftUI
 /// The running turn's last row, as in the Claude Code extension (look.md §12): a glyph cycling
 /// `· ✢ * ✶ ✻ ✽` and back, and a random verb that changes at 2s, 3s, 5s and then every 5s,
 /// decoding into place one character at a time. Everything follows from the time since the turn
-/// began. One-shot sleeps update its text only at the next glyph, decode or word boundary.
+/// began. One-shot sleeps update its text only at the next glyph, decode or word boundary. A
+/// Codex chat wears its own quieter face: the timeline's plain dot and "Working…", still.
 struct SpinnerRow: View {
     let since: Date
-    /// Claude's list includes "Clauding"; a Codex chat leaves it out.
+    /// Claude's glyph and verbs; otherwise Codex's dot and one word.
     let claude: Bool
     /// Said instead of a random verb ("Compacting").
     var word: String? = nil
@@ -66,10 +67,16 @@ struct SpinnerRow: View {
                                                  reducedMotion: reduceMotion, paused: hidden || !visible.value)
         let frame = clock.frame(for: configuration)
         return HStack(spacing: 0) {
-            Text(frame.glyph)
-                .font(TextStyle.spinnerGlyph)
-                .foregroundStyle(Theme.spinnerGlyph(tint))
-                .frame(width: Size.spinnerGlyphBox)
+            Group {
+                if claude {
+                    Text(frame.glyph)
+                        .font(TextStyle.spinnerGlyph)
+                        .foregroundStyle(Theme.spinnerGlyph(tint))
+                } else {
+                    Circle().fill(Theme.dot).frame(width: Layout.Timeline.dot, height: Layout.Timeline.dot)
+                }
+            }
+            .frame(width: Size.spinnerGlyphBox)
             Text(frame.word)
                 .font(TextStyle.spinnerVerb)
                 .foregroundStyle(Theme.text)
@@ -193,21 +200,21 @@ struct SpinnerConfiguration: Equatable, Sendable {
     var reducedMotion = false
     var paused = false
 
-    @MainActor private var verbs: [String] {
-        claude ? SpinnerRow.verbs : SpinnerRow.verbs.filter { $0 != "Clauding" }
-    }
+    @MainActor private var verbs: [String] { SpinnerRow.verbs }
     private var seed: Int { Int(since.timeIntervalSinceReferenceDate * 1000) }
 
     @MainActor func frame(at date: Date) -> SpinnerFrame {
+        // Codex: no glyph (its dot is drawn) and one word that never changes.
+        guard claude else { return SpinnerFrame(glyph: "", word: (word ?? "Working") + "…") }
         let time = max(0, date.timeIntervalSince(since))
         return SpinnerFrame(glyph: reducedMotion ? "✻" : SpinnerRow.glyph(time),
-                            word: (word ?? SpinnerRow.word(time, verbs: verbs, seed: seed, decode: !reducedMotion)) + "...")
+                            word: (word ?? SpinnerRow.word(time, verbs: verbs, seed: seed, decode: !reducedMotion)) + "…")
     }
 
     /// Absolute deadlines avoid drift, and a late wake renders the current frame instead of
     /// replaying missed frames. Reduce Motion with a fixed word has nothing left to schedule.
     @MainActor func nextUpdate(after date: Date) -> Date? {
-        guard !paused else { return nil }
+        guard claude, !paused else { return nil }
         let time = max(0, date.timeIntervalSince(since))
         let index = SpinnerRow.swapIndex(time)
         var next = word == nil ? SpinnerRow.swapTime(index + 1) : .infinity
@@ -509,9 +516,11 @@ struct QueuedMessage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             MessageHeader(entry: entry, open: true, actions: actions)
-                .padding(.vertical, -Layout.Timeline.itemPadding)
+                .padding(.top, -Layout.Timeline.promptTop)
+                .padding(.bottom, -Layout.Timeline.promptBottom)
                 .opacity(Theme.queuedOpacity)
             Text("Queued").font(TextStyle.caption).foregroundStyle(Theme.secondary)
+                .padding(.leading, Layout.Timeline.indent)
         }
         .padding(.vertical, Space.sm / 2)
         .storyID(StoryID.Composer.queued(entry.id))

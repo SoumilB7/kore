@@ -20,13 +20,15 @@ struct SpinnerRowTests {
         let claudeIndex = try #require((0..<1_000).first { SpinnerRow.verb($0, verbs: SpinnerRow.verbs, seed: 0) == "Clauding" })
         var reduced = configuration
         reduced.reducedMotion = true
-        #expect(reduced.frame(at: at(SpinnerRow.swapTime(claudeIndex))).word == "Clauding...")
-        let codex = SpinnerConfiguration(since: since, claude: false, reducedMotion: true)
+        #expect(reduced.frame(at: at(SpinnerRow.swapTime(claudeIndex))).word == "Clauding…")
+        // Codex wears its own face: no glyph, one word that never changes.
+        let codex = SpinnerConfiguration(since: since, claude: false)
         for index in 0..<200 {
-            #expect(codex.frame(at: at(SpinnerRow.swapTime(index))).word != "Clauding...")
+            #expect(codex.frame(at: at(SpinnerRow.swapTime(index))) == SpinnerFrame(glyph: "", word: "Working…"))
         }
+        #expect(SpinnerConfiguration(since: since, claude: false, word: "Compacting").frame(at: at(2)).word == "Compacting…")
         let fixed = SpinnerConfiguration(since: since, claude: true, word: "Compacting")
-        #expect(fixed.frame(at: at(2.04)).word == "Compacting...")
+        #expect(fixed.frame(at: at(2.04)).word == "Compacting…")
         #expect(fixed.frame(at: at(2.04)).glyph == SpinnerRow.glyph(2.04))
     }
 
@@ -44,7 +46,8 @@ struct SpinnerRowTests {
         }
         #expect(SpinnerConfiguration(since: since, claude: false, paused: true).nextUpdate(after: at(2)) == nil)
         #expect(SpinnerConfiguration(since: since, claude: false, word: "Compacting", reducedMotion: true).nextUpdate(after: at(2)) == nil)
-        let fixed = SpinnerConfiguration(since: since, claude: false, word: "Compacting")
+        #expect(SpinnerConfiguration(since: since, claude: false).nextUpdate(after: at(2)) == nil)
+        let fixed = SpinnerConfiguration(since: since, claude: true, word: "Compacting")
         near(try #require(fixed.nextUpdate(after: at(2.04))).timeIntervalSince(since), 2.16)
         // Exact and near-boundary times must always yield a strictly future deadline.
         for step in 0..<1_000 {
@@ -65,8 +68,8 @@ struct SpinnerRowTests {
         let configuration = SpinnerConfiguration(since: since, claude: true)
         let landed = start + Double(width) * Motion.decodeFrame
         let finished = start + Double(width + 3) * Motion.decodeFrame
-        #expect(configuration.frame(at: at(landed + 0.000_01)).word == target + "...")
-        #expect(configuration.frame(at: at(finished + 0.000_01)).word == target + "...")
+        #expect(configuration.frame(at: at(landed + 0.000_01)).word == target + "…")
+        #expect(configuration.frame(at: at(finished + 0.000_01)).word == target + "…")
         near(try #require(configuration.nextUpdate(after: at(landed - 0.001))).timeIntervalSince(since), landed)
         near(try #require(configuration.nextUpdate(after: at(finished - 0.001))).timeIntervalSince(since), finished)
     }
@@ -100,10 +103,10 @@ struct SpinnerRowTests {
         let original = SpinnerConfiguration(since: since, claude: true)
         let task = Task { await clock.run(original, now: { wall.date }, sleep: { try await gate.sleep($0) }) }
         _ = await gate.request()
-        let reduced = SpinnerConfiguration(since: since, claude: false, word: "Compacting", reducedMotion: true)
+        let reduced = SpinnerConfiguration(since: since, claude: true, word: "Compacting", reducedMotion: true)
         await clock.run(reduced, now: { wall.date }, sleep: { _ in Issue.record("A constant reduced-motion word must not sleep") })
         let replacement = clock.current
-        #expect(replacement == SpinnerFrame(glyph: "✻", word: "Compacting..."))
+        #expect(replacement == SpinnerFrame(glyph: "✻", word: "Compacting…"))
         wall.date = at(100)
         await gate.wake()
         await task.value
@@ -118,7 +121,7 @@ struct SpinnerRowTests {
         let clock = SpinnerClock()
         await clock.run(SpinnerConfiguration(since: since, claude: true), now: { at(0) },
                         sleep: { _ in throw CancellationError() })
-        #expect(clock.current == SpinnerFrame(glyph: "·", word: SpinnerRow.verb(0, verbs: SpinnerRow.verbs, seed: 0) + "..."))
+        #expect(clock.current == SpinnerFrame(glyph: "·", word: SpinnerRow.verb(0, verbs: SpinnerRow.verbs, seed: 0) + "…"))
     }
 
     @Test func visibilityReportsOcclusionAndTeardownCancelsQueuedReports() async {
