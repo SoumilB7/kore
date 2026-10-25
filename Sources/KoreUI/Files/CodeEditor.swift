@@ -962,6 +962,13 @@ final class GutterView: NSRulerView {
 final class EditorTextView: NSTextView {
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let menu = super.menu(for: event) else { return nil }
+        // AppKit's prose extras have no place in code: Speech, Layout Orientation, Substitutions.
+        let prose: Set<Selector> = [
+            #selector(startSpeaking(_:)), #selector(changeLayoutOrientation(_:)), #selector(orderFrontSubstitutionsPanel(_:)),
+        ]
+        for item in menu.items where item.submenu?.items.contains(where: { $0.action.map(prose.contains) == true }) == true {
+            menu.removeItem(item)
+        }
         return OptionsMenu.shared.showNative(menu, event: event, view: self) ? nil : menu
     }
 

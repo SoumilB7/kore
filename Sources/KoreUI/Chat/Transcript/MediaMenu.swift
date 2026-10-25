@@ -3,8 +3,8 @@ import KoreCore
 import UniformTypeIdentifiers
 
 /// The right-click menu of an image or a file in a chat (a message's chip, a tool's file, a
-/// link to one), in Kore's own popup: copy it or its path, save a picture, open it in its app or
-/// in Kore, show it in Finder. Copies go where the transcript's do (`TranscriptSelection.pasteboard`).
+/// link to one), in Kore's own popup: copy it or its path, save a picture, open it in Kore or in
+/// its app, show it in Finder. "Open" is Kore's, as in the explorer. Copies go where the transcript's do (`TranscriptSelection.pasteboard`).
 @MainActor
 enum MediaMenu {
     struct Target {
@@ -50,10 +50,9 @@ enum MediaMenu {
             items.append(OptionItem("Save As…", enabled: file != nil || target.image != nil, action: act("save") { saveAs(target) }))
         }
         items.append(.rule)
-        items.append(OptionItem("Open", enabled: file != nil, action: act("open") { if let file { open(file) } }))
+        items.append(OptionItem("Open", enabled: openInKore != nil, action: act("kore") { openInKore?() }))
+        items.append(OptionItem("Open with Default App", enabled: file != nil, action: act("open") { if let file { open(file) } }))
         items.append(OptionItem("Reveal in Finder", enabled: file != nil, action: act("reveal") { if let file { reveal(file) } }))
-        items.append(OptionItem(image ? "Open in Kore Tab" : "Open in Kore", enabled: openInKore != nil,
-                                action: act("kore") { openInKore?() }))
         return items
     }
 

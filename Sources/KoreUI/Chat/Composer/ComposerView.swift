@@ -114,6 +114,7 @@ struct ComposerView: View {
                         select: { mentionSelection.value = $0 }, accept: acceptMention)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuFrame.value = $0 }
                         .onDisappear { menuFrame.value = nil }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.bottom, Space.lg)
                         .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 } else if chat.usage.isOpen {

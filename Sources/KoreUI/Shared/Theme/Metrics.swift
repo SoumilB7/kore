@@ -110,6 +110,8 @@ enum Size {
     static let closeGlyph: CGFloat = 18
     static let slashGlyph: CGFloat = 16
     static let slashStroke: CGFloat = 1.2
+    /// The / menu's drawn / and $ boxes, the optical size of its rows' 12pt glyphs.
+    static let sigilBox: CGFloat = 12
     static let slashLine: CGFloat = 1.4
     static let thumb: CGFloat = 44
     static let chip: CGFloat = 30

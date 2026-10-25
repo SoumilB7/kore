@@ -189,7 +189,7 @@ struct ModeMenu: View {
 }
 
 /// The "/" key's stroke, drawn rather than set in type so it sits in the middle of its box.
-private struct SlashMark: Shape {
+struct SlashMark: Shape {
     func path(in rect: CGRect) -> Path {
         Path { path in
             path.move(to: CGPoint(x: rect.minX + rect.width * 0.62, y: rect.minY + rect.height * 0.27))

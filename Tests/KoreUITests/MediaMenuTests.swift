@@ -38,9 +38,9 @@ final class MediaMenuTests {
         let file = folder.appendingPathComponent("notes.md")
         try "# notes".write(to: file, atomically: true, encoding: .utf8)
         #expect(titles(MediaMenu.items(.init(url: image), openInKore: {}))
-            == ["Copy Image", "Copy Path", "Save As…", "Open", "Reveal in Finder", "Open in Kore Tab"])
+            == ["Copy Image", "Copy Path", "Save As…", "Open", "Open with Default App", "Reveal in Finder"])
         let fileItems = MediaMenu.items(.init(url: file), openInKore: {})
-        #expect(titles(fileItems) == ["Copy File", "Copy Path", "Open", "Reveal in Finder", "Open in Kore"])
+        #expect(titles(fileItems) == ["Copy File", "Copy Path", "Open", "Open with Default App", "Reveal in Finder"])
         #expect(fileItems.allSatisfy { $0.enabled })
     }
 
@@ -48,8 +48,8 @@ final class MediaMenuTests {
         let thumbnail = try #require(NSImage(contentsOf: try png("thumb.png")))
         let items = MediaMenu.items(.init(name: "pasted", url: nil, image: thumbnail), openInKore: {})
         let enabled = Dictionary(uniqueKeysWithValues: items.filter { !$0.separator }.map { ($0.title, $0.enabled) })
-        #expect(enabled["Copy Image"] == true && enabled["Save As…"] == true && enabled["Open in Kore Tab"] == true)
-        #expect(enabled["Copy Path"] == false && enabled["Open"] == false && enabled["Reveal in Finder"] == false)
+        #expect(enabled["Copy Image"] == true && enabled["Save As…"] == true && enabled["Open"] == true)
+        #expect(enabled["Copy Path"] == false && enabled["Open with Default App"] == false && enabled["Reveal in Finder"] == false)
         #expect(MediaMenu.copyImage(.init(name: "pasted", url: nil, image: thumbnail), to: board))
         #expect(board.data(forType: .png) != nil && board.data(forType: .tiff) != nil)
     }
@@ -78,7 +78,7 @@ final class MediaMenuTests {
         let link = try #require(URL(string: "main.swift:12"))
         let items = try #require(MediaMenu.items(link: link, folder: folder) { opened.append($0) })
         #expect(titles(items).first == "Copy File")
-        items.last?.action?()
+        items.first { $0.title == "Open" }?.action?()
         #expect(opened.map(\.lastPathComponent) == ["main.swift"])
         let gone = try #require(URL(string: "gone.swift")), web = try #require(URL(string: "https://example.com"))
         #expect(MediaMenu.items(link: gone, folder: folder) { _ in } == nil)

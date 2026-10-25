@@ -46,6 +46,8 @@ extension Glyph {
     static var chevron: Font { .kore(9, .semibold) }
     /// Glyphs inside rows (the summary line's icon).
     static var rowIcon: Font { .kore(12) }
+    /// A skill's $ in its / menu box.
+    static var sigil: Font { .kore(9, .semibold) }
     /// The denied-actions hand.
     static var small: Font { .kore(11) }
     /// An agent's stop square.

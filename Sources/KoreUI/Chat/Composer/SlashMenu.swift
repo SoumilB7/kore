@@ -36,11 +36,10 @@ struct SlashMenu: View {
 
     private func row(_ command: SlashCommand, lit: Bool) -> some View {
         HStack(spacing: Space.md) {
-            // Kore's own entries: a glyph where the sigil goes, the name a word.
-            if let glyph = command.glyph {
-                Image(systemName: glyph).font(Glyph.rowIcon).foregroundStyle(Theme.secondary)
-            }
-            Self.label(command)
+            // Every row a mark where the sigil goes, so the names make one column: Kore's
+            // entries their glyph, a command the composer's drawn / key, a skill its $.
+            Self.mark(command).frame(width: Size.slashGlyph)
+            Text(command.kind == .kore ? command.label : command.name)
                 .font(TextStyle.bodyMedium)
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
@@ -66,10 +65,20 @@ struct SlashMenu: View {
         .contentShape(Rectangle())
     }
 
-    /// "/compact", the "/" set close to the name; Kore's entries and skills as they read.
-    private static func label(_ command: SlashCommand) -> Text {
-        guard command.kind == .command else { return Text(command.label) }
-        return Text("/").kerning(TextStyle.sigilKern) + Text(command.name)
+    @ViewBuilder private static func mark(_ command: SlashCommand) -> some View {
+        switch command.kind {
+        case .kore:
+            if let glyph = command.glyph { Image(systemName: glyph).font(Glyph.rowIcon).foregroundStyle(Theme.secondary) }
+        case .command:
+            SlashMark()
+                .stroke(Theme.secondary, style: StrokeStyle(lineWidth: Size.slashStroke, lineCap: .round))
+                .frame(width: Size.sigilBox, height: Size.sigilBox)
+                .overlay(RoundedRectangle(cornerRadius: Radius.glyph).stroke(Theme.secondary, lineWidth: Size.slashStroke))
+        case .skill:
+            Text("$").font(Glyph.sigil).foregroundStyle(Theme.secondary)
+                .frame(width: Size.sigilBox, height: Size.sigilBox)
+                .overlay(RoundedRectangle(cornerRadius: Radius.glyph).stroke(Theme.secondary, lineWidth: Size.slashStroke))
+        }
     }
 }
 

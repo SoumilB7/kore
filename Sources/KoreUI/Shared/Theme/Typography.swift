@@ -21,8 +21,6 @@ enum TextStyle {
     nonisolated static func code(zoom: CGFloat) -> Font { .koreMono(12, zoom: zoom) }
     /// Extra line spacing for running text.
     static let leading: CGFloat = 3
-    /// After the "/" of a command in the / menu, which the system font sets wide of the name.
-    static var sigilKern: CGFloat { -1 * Zoom.shared.scale }
 }
 
 /// Glyphs inside content rows (SF Symbols and drawn marks); they zoom with their row.

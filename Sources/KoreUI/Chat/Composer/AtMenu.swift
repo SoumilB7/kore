@@ -19,7 +19,8 @@ struct AtMenu: View {
                                 .font(TextStyle.caption)
                                 .foregroundStyle(Theme.tertiary)
                                 .padding(.horizontal, Space.md)
-                                .padding(.top, index == 0 ? 0 : Space.sm)
+                                // The first a card's top inset (Space.md, with the list's own).
+                                .padding(.top, index == 0 ? Space.xs : Space.sm)
                         }
                         Button { accept(item) } label: { row(item, lit: index == selected) }
                             .buttonStyle(.plain)
@@ -36,6 +37,8 @@ struct AtMenu: View {
         .fixedSize(horizontal: false, vertical: true)
         .panel(.panel)
         .cornerMarks(Theme.cornerOption)
+        // As wide as the composer's other popups, at its leading edge (the composer aligns it).
+        .frame(maxWidth: Size.usagePopupMax)
     }
 
     private func row(_ item: AtItem, lit: Bool) -> some View {

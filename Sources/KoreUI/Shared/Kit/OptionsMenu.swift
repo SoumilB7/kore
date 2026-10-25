@@ -28,6 +28,18 @@ struct OptionItem {
     static var rule: Self { Self("") }
 }
 
+@MainActor
+extension Array where Element == OptionItem {
+    /// Rules only between entries: none first or last, and a run of them one (a native menu's
+    /// hidden items leave the rules around them side by side).
+    var ruled: [OptionItem] {
+        var kept: [OptionItem] = []
+        for item in self where !(item.separator && kept.last?.separator ?? true) { kept.append(item) }
+        if kept.last?.separator == true { kept.removeLast() }
+        return kept
+    }
+}
+
 /// One in-window menu at a time. Opening it keeps the editor/transcript's first responder,
 /// so Copy, Paste and selection continue to target the original view.
 @MainActor @Observable
@@ -134,6 +146,7 @@ final class OptionsMenu {
 
     func show(_ entries: [OptionItem], at point: CGPoint, in window: NSWindow, source: String) {
         close()
+        let entries = entries.ruled
         guard !entries.isEmpty, window.contentView != nil else { return }
         owner = window
         items = entries
@@ -185,7 +198,7 @@ final class OptionsMenu {
         let item = items[index]
         if !item.children.isEmpty {
             parents.append(items)
-            items = item.children
+            items = item.children.ruled
             selected = nil
             place()
         } else if let action = item.action {
@@ -252,6 +265,9 @@ final class OptionsMenu {
 
 private struct OptionsList: View {
     let menu: OptionsMenu
+    /// The check column, kept only while an entry has a mark (a check, or Back's chevron):
+    /// otherwise labels start at a row's own inset, as Kore's other lists do.
+    private var gutter: Bool { !menu.parents.isEmpty || menu.items.contains(where: \.checked) }
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -293,7 +309,7 @@ private struct OptionsList: View {
 
     private func label(_ text: String, symbol: String?, tint: SwiftUI.Color, branch: Bool = false) -> some View {
         HStack(spacing: Space.sm) {
-            Image(systemName: symbol ?? "checkmark").opacity(symbol == nil ? 0 : 1).font(Chrome.glyphCrumb)
+            if gutter { Image(systemName: symbol ?? "checkmark").opacity(symbol == nil ? 0 : 1).font(Chrome.glyphCrumb) }
             Text(text).font(Chrome.label).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 0)
             if branch { Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.secondary) }
