@@ -44,6 +44,10 @@ final class CodexBackend: ChatBackend {
     private var customName: String?
     private let log = SessionLog.shared
     private static let log = Logger(subsystem: "Kore", category: "codex")
+    /// Reads the threads' background terminals while any outlived its turn (`pollTerminals`).
+    private var terminalPoll: Task<Void, Never>?
+    /// A pane listing commands is open: they're read more often.
+    private var watching = false
 
     var sessionId: String? { translator.threadId ?? resumeId }
 
@@ -333,6 +337,7 @@ final class CodexBackend: ChatBackend {
             if case .titleChanged = event { mayTitle = false }
             yield(event)
         }
+        pollTerminals()
         let folder = options.folder
         for (turn, task) in changes {
             Task {
@@ -469,6 +474,51 @@ final class CodexBackend: ChatBackend {
         }
     }
 
+    // MARK: - Commands
+
+    /// While a terminal that outlived its turn runs: each owning thread's list, at once and then
+    /// every 10 s (2 s while a pane shows them), for the rows' processes and the ones that ended
+    /// unheard. Nothing is read while nothing runs.
+    private func pollTerminals() {
+        guard terminalPoll == nil, translator.commands.hasLive, session != nil else { return }
+        terminalPoll = Task {
+            while !Task.isCancelled, translator.commands.hasLive, let session {
+                for owner in translator.commands.liveOwners {
+                    // An older CLI without the experimental list leaves the rows to their items.
+                    guard let terminals = try? await session.backgroundTerminals(of: owner.sub) else { continue }
+                    translator.terminalsListed(terminals, owner: owner)
+                }
+                flush()
+                try? await Task.sleep(for: watching ? .seconds(2) : .seconds(10))
+            }
+            terminalPoll = nil
+        }
+    }
+
+    func stopCommand(_ id: String) async throws {
+        guard let session else { throw CodexAppServer.Failure.notRunning }
+        guard let terminal = translator.commands.terminal(id) else { return }
+        translator.stopRequested(id)
+        let terminated: Bool
+        do {
+            terminated = try await session.terminate(process: terminal.process, in: terminal.owner.sub)
+        } catch {
+            translator.stopRefused(id)
+            throw error
+        }
+        // Its `item/completed` follows; one that had already ended is done.
+        if !terminated {
+            translator.stopRefused(id)
+            translator.commandGone(id)
+            flush()
+        }
+    }
+
+    func watchCommands(_ closely: Bool) async {
+        watching = closely
+        pollTerminals()
+    }
+
     func stopAgent(_ id: String) async {
         guard let turn = translator.childTurn(id) else { return }
         try? await session?.interrupt(thread: id, turn: turn)
@@ -549,6 +599,11 @@ final class CodexBackend: ChatBackend {
         refused = nil
         guard let session else { return }
         log.relaunch("codex", chat: sessionId, reason: "account changed")
+        // Its terminals end with its process.
+        translator.endCommands()
+        flush()
+        terminalPoll?.cancel()
+        terminalPoll = nil
         // Its exit isn't the chat's news: the pump goes first.
         pump?.cancel()
         pump = nil
@@ -559,6 +614,8 @@ final class CodexBackend: ChatBackend {
     }
 
     func close() async {
+        terminalPoll?.cancel()
+        terminalPoll = nil
         for follow in follows.values { follow.cancel() }
         follows = [:]
         pump?.cancel()

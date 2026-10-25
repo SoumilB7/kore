@@ -73,6 +73,8 @@ final class CodexTranslator {
     private var lookedUp: Set<String> = []
     /// Where child threads' spawns and ends are logged (`AgentLog`). A replay logs none.
     var log: AgentLog = .shared
+    /// Terminals that outlived their turn (`ActiveCommand`).
+    private(set) var commands = CodexCommands()
 
     init(folder: URL) {
         self.folder = folder
@@ -164,6 +166,9 @@ final class CodexTranslator {
             guard !text.isEmpty else { return }
             streamedText.insert(item)
             out.append(.text(item, .plan, text, agent: agent))
+        case .commandOutputDelta(let item, let text) where commands.isRow(item):
+            // A terminal that outlived its turn: its output is the command's now, kept bounded.
+            out.append(.commandOutput(id: item, text))
         case .commandOutputDelta(let item, let text):
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { streamedOutput.insert(item) }
             out.append(.toolOutput(id: item, text, agent: agent))
@@ -180,6 +185,7 @@ final class CodexTranslator {
         case .turnCompleted(let result):
             if case .sub(let thread) = agent {
                 childTurns[thread] = nil
+                if !replaying { commands.turnCompleted(agent: agent, folder: folder, at: .now, into: &out) }
                 if result.status != "interrupted" { outlived(agent) }
                 // One that outlived its parent's turn ends with its own: no item of the parent's
                 // says so until the parent's next turn.
@@ -220,6 +226,7 @@ final class CodexTranslator {
             }
             finishTurn(turn ?? result.turnId, outcome, duration: result.durationMs.map { .milliseconds($0) })
             if outcome != .interrupted { outlived(.main) }
+            commands.turnCompleted(agent: .main, folder: folder, at: .now, into: &out)
         case .raw(let method, let params):
             if method == "modelProvider/authRecoveryStarted" { authRecovering = true }
             if method == "modelProvider/authRecoveryCompleted" { authRecovering = false }
@@ -255,6 +262,7 @@ final class CodexTranslator {
             for id in pendingSteer { out.append(.queuedMessage(id: id, .dropped)) }
             pendingSteer.removeAll()
             turn = nil
+            commands.endAll(at: .now, into: &out)
             out.append(.exited(status: status))
         case .error, .stderr:
             break
@@ -262,6 +270,7 @@ final class CodexTranslator {
     }
 
     private func itemStarted(_ item: CodexItem, agent: AgentID) {
+        if !replaying { commands.started(item, agent: agent, at: .now) }
         if agent == .main, !replaying {
             if item.type == "userMessage" {
                 // A steered message: Codex took it into the running turn.
@@ -299,6 +308,7 @@ final class CodexTranslator {
 
     private func itemCompleted(_ item: CodexItem, agent: AgentID) {
         let failed = ["failed", "declined"].contains(item.status ?? "")
+        if !replaying { commands.completed(item, at: .now, into: &out) }
         switch item.type {
         case "plan":
             if !streamedText.contains(item.id), let text = item.text, !text.isEmpty {
@@ -328,7 +338,10 @@ final class CodexTranslator {
                 out.append(.toolStopped(id: item.id, agent: agent))
                 break
             }
-            let output = streamedOutput.contains(item.id) ? nil : (!aggregated.isEmpty ? aggregated : "exit \(item.exitCode ?? 0)")
+            // A row's output after its turn went to the command, not its tool row.
+            let output =
+                streamedOutput.contains(item.id) || (commands.isRow(item.id) && !replaying)
+                ? nil : (!aggregated.isEmpty ? aggregated : "exit \(item.exitCode ?? 0)")
             let isError = (item.exitCode != nil && item.exitCode != 0) || failed
             out.append(.toolFinished(id: item.id, output: output, isError: isError, agent: agent))
         case "fileChange":
@@ -459,6 +472,22 @@ final class CodexTranslator {
     }
 
     func isFinished(_ thread: String) -> Bool { finished.contains(thread) }
+
+    // MARK: - Commands
+
+    /// A thread's `backgroundTerminals/list`.
+    func terminalsListed(_ terminals: [JSONValue], owner: AgentID) { commands.listed(terminals, owner: owner, at: .now, into: &out) }
+
+    /// Kore asked to terminate it: its kill is Kore's doing.
+    func stopRequested(_ id: String) { commands.stopRequested(id) }
+
+    func stopRefused(_ id: String) { commands.stopRefused(id) }
+
+    /// `terminate` said it wasn't running any more.
+    func commandGone(_ id: String) { commands.gone(id, at: .now, into: &out) }
+
+    /// The app-server ends without an `.exited` (a relaunch): its terminals end with it.
+    func endCommands() { commands.endAll(at: .now, into: &out) }
 
     /// `parent`'s turn ended: the child threads it spawned that still run outlive it, and run on
     /// in the background, as a Claude agent run in the background does. One that finished within
@@ -740,6 +769,7 @@ final class CodexTranslator {
                 } else {
                     itemStarted(item, agent: .main)
                     itemCompleted(item, agent: .main)
+                    commands.replayed(item, turnStart: start, turnDuration: turn["durationMs"]?.int, owner: .main, folder: folder, into: &out)
                 }
             }
             var outcome: TurnOutcome =
