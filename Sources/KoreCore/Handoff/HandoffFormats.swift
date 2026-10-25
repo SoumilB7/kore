@@ -165,7 +165,7 @@ enum HandoffHarness {
         return args.isEmpty ? command : command + " " + args
     }
 
-    private static func value(_ tag: String, in text: String) -> String? {
+    static func value(_ tag: String, in text: String) -> String? {
         guard let open = text.range(of: "<\(tag)>"), let close = text.range(of: "</\(tag)>", range: open.upperBound..<text.endIndex)
         else { return nil }
         return text[open.upperBound..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)

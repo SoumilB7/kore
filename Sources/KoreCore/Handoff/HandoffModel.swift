@@ -52,6 +52,8 @@ public struct HandoffStep: Sendable, Hashable, Codable {
     public var status: Status
     /// A command's exit code, when the source says.
     public var exitCode: Int?
+    /// The source's id for the call (Claude's tool_use id), to find it again.
+    public var callId: String?
     /// Lines added and removed, for an edit's condensed line.
     public var added = 0
     public var removed = 0

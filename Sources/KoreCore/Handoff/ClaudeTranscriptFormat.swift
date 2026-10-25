@@ -150,7 +150,10 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
             }
             // Turns the CLI starts itself (a cron firing, a finished agent's notice): its words
             // go on in the turn they belong to.
-            if ClaudeHistory.cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? "") { return }
+            if ClaudeHistory.cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? "") {
+                if let notice = ClaudeHistory.notificationText(entry) { agentFinished(notice) }
+                return
+            }
             if let echo = texts.lazy.compactMap(HandoffHarness.command).first {
                 command = (entry, echo)
                 return
@@ -212,7 +215,8 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
                 case "tool_use":
                     guard let id = block["id"]?.string else { continue }
                     pending[id] = current?.steps.count
-                    let step = Self.step(block["name"]?.string ?? "tool", block["input"] ?? .null, folder: folder)
+                    var step = Self.step(block["name"]?.string ?? "tool", block["input"] ?? .null, folder: folder)
+                    step.callId = id
                     current?.steps.append(step)
                 case "thinking", "redacted_thinking", "fallback":
                     break
@@ -239,6 +243,23 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
                 if step.status == .ok { step.output = "ok" }
             }
             current?.steps[index] = step
+        }
+
+        /// A background agent's notice: its result is its step's output, in whichever turn it ran.
+        mutating func agentFinished(_ notice: String) {
+            guard let id = HandoffHarness.value("tool-use-id", in: notice),
+                let text = HandoffHarness.value("result", in: notice) ?? HandoffHarness.value("summary", in: notice), !text.isEmpty
+            else { return }
+            func fill(_ turn: inout HandoffTurn) -> Bool {
+                guard let index = turn.steps.firstIndex(where: { $0.kind == .agent && $0.callId == id }) else { return false }
+                turn.steps[index].output = HandoffRender.cut(text)
+                return true
+            }
+            if var turn = current, fill(&turn) {
+                current = turn
+                return
+            }
+            for index in turns.indices.reversed() where fill(&turns[index]) { return }
         }
 
         mutating func open(_ entry: JSONValue, prompt: String) {
