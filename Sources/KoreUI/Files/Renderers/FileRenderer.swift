@@ -106,6 +106,7 @@ struct RendererContext {
         DelimitedRenderer.self,
         JSONRenderer.self,
         NotebookRenderer.self,
+        MermaidRenderer.self,
         HTMLRenderer.self,
         SVGRenderer.self,
         PDFRenderer.self,

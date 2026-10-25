@@ -29,6 +29,15 @@ enum MarkdownRenderer: FileRenderer {
     /// paragraph, ⌘A and ⌘C (as markdown).
     let runs = MarkdownRuns()
     lazy var selection = TranscriptSelection(store: runs)
+    /// The file's Mermaid blocks, by run, kept as the column scrolls them away and back.
+    private(set) var diagrams: [Int: DiagramPage] = [:]
+
+    func diagram(_ run: Int) -> DiagramPage {
+        if let page = diagrams[run] { return page }
+        let page = DiagramPage(block: true)
+        diagrams[run] = page
+        return page
+    }
 }
 
 /// A Markdown file's runs as the rows of its selection: an id each, copied from their source.
@@ -60,6 +69,7 @@ enum MarkdownRenderer: FileRenderer {
                 return part.isEmpty ? nil : part
             // An image has no text to end in: inside the range, it's taken whole.
             case .image(let source, let alt): return "![\(alt)](\(source))"
+            case .diagram(let source): return "```mermaid\n\(source)\n```"
             }
         }.joined(separator: "\n\n")
     }
@@ -95,6 +105,7 @@ private struct MarkdownFileView: View {
                                 switch segment.kind {
                                 case .text(let text): MarkdownView(text: text)
                                 case .image(let source, let alt): MarkdownImage(source: source, alt: alt, base: base)
+                                case .diagram(let source): MermaidBlock(source: source, page: state.diagram(segment.id))
                                 }
                             }
                             .selectionRow(state.runs.ids[segment.id])
@@ -182,11 +193,12 @@ private struct MarkdownFileView: View {
 }
 
 /// A run of a markdown file that renders on its own, so a long file lays out lazily: text
-/// between top-level breaks, or a standalone image line.
+/// between top-level breaks, a standalone image line, or a ```mermaid block.
 struct MarkdownSegment: Identifiable, Sendable {
     enum Kind: Sendable {
         case text(String)
         case image(source: String, alt: String)
+        case diagram(String)
     }
 
     let id: Int
@@ -201,6 +213,7 @@ struct MarkdownSegment: Identifiable, Sendable {
         var run: [Substring] = []
         var fence: Substring?
         var breakAfterBlank = false
+        var diagram: (fence: Substring, lines: [Substring])?
         func flush() {
             if run.contains(where: { !$0.allSatisfy(\.isWhitespace) }) {
                 segments.append(MarkdownSegment(id: segments.count, kind: .text(run.joined(separator: "\n"))))
@@ -209,6 +222,22 @@ struct MarkdownSegment: Identifiable, Sendable {
         }
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let trimmed = line.drop { $0 == " " }
+            if let open = diagram {
+                if trimmed.hasPrefix(open.fence), trimmed.dropFirst(3).allSatisfy(\.isWhitespace) {
+                    segments.append(MarkdownSegment(id: segments.count, kind: .diagram(open.lines.joined(separator: "\n"))))
+                    diagram = nil
+                } else {
+                    diagram?.lines.append(line)
+                }
+                continue
+            }
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~"),
+                trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces).lowercased() == "mermaid"
+            {
+                flush()
+                diagram = (trimmed.prefix(3), [])
+                continue
+            }
             if let open = fence {
                 if trimmed.hasPrefix(open) { fence = nil }
                 run.append(line)
@@ -234,6 +263,10 @@ struct MarkdownSegment: Identifiable, Sendable {
                 continue
             }
             run.append(line)
+        }
+        // An unclosed block runs to the end, as Markdown has it.
+        if let open = diagram {
+            segments.append(MarkdownSegment(id: segments.count, kind: .diagram(open.lines.joined(separator: "\n"))))
         }
         flush()
         return segments
@@ -317,5 +350,28 @@ private struct MarkdownImage: View {
         }
         let path = source.removingPercentEncoding ?? source
         return path.hasPrefix("/") ? URL(fileURLWithPath: path) : base.appendingPathComponent(path)
+    }
+}
+
+/// A ```mermaid block drawn as a diagram, as tall as it draws.
+private struct MermaidBlock: View {
+    let source: String
+    let page: DiagramPage
+    @StateObject private var height: Local<CGFloat>
+
+    init(source: String, page: DiagramPage) {
+        self.source = source
+        self.page = page
+        _height = StateObject(wrappedValue: Local(page.height ?? Size.Diagram.blockHeight))
+    }
+
+    var body: some View {
+        DiagramWeb(page: page)
+            .frame(height: height.value)
+            .task(id: source) {
+                let height = height
+                page.heightChanged = { height.value = $0 }
+                page.draw(source)
+            }
     }
 }

@@ -121,6 +121,26 @@ extension Workspace {
         return await page.storyNumber(script)
     }
 
+    /// A script's answer from the active tab's diagram (a Mermaid file, or a Markdown file's
+    /// first ```mermaid block); nil while it isn't shown.
+    package func storyDiagram(_ script: String) async -> Any? {
+        await storyDiagramPage?.storyAnswer(script)
+    }
+
+    /// The active tab's diagrams as WebKit drew them, and their frames in the window.
+    package func storyDiagramSnapshots() async -> [(image: NSImage, frame: CGRect)] {
+        let current = activeFile?.rendering.memory.current
+        let pages = (current as? DiagramPage).map { [$0] } ?? (current as? MarkdownState)?.diagrams.values.map { $0 } ?? []
+        var shots: [(image: NSImage, frame: CGRect)] = []
+        for page in pages { if let shot = await page.storySnapshot() { shots.append(shot) } }
+        return shots
+    }
+
+    private var storyDiagramPage: DiagramPage? {
+        let current = activeFile?.rendering.memory.current
+        return current as? DiagramPage ?? (current as? MarkdownState)?.diagrams.min { $0.key < $1.key }?.value
+    }
+
     /// The HTML page of the file tab at this path (the active tab's when nil) is in the window.
     package func storyPageShown(_ path: String? = nil) -> Bool {
         let file = path.map { path in tabs.lazy.compactMap(\.file).first { relativePath($0.path) == path } } ?? activeFile

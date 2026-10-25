@@ -89,3 +89,37 @@ extension TextStyle {
     @MainActor static var gridFontDigits: NSFont { .monospacedDigitSystemFont(ofSize: 12 * Zoom.shared.scale, weight: .regular) }
     @MainActor static var gridHeaderFont: NSFont { .systemFont(ofSize: 12 * Zoom.shared.scale, weight: .semibold) }
 }
+
+/// Mermaid diagrams (`MermaidRenderer`): Kore's colours as mermaid's theme variables.
+extension Theme {
+    enum Diagram {
+        static let node = surfaceHover
+        static let nodeLine = Blue.b500
+        static let alternate = surfaceRaised
+        static let cluster = surface
+        static let clusterLine = Color(hex: 0x2A3338)
+        static let edge = secondary
+        static let text = Theme.text
+        static let label = background
+        static let note = surfaceRaised
+        static let noteLine = secondary
+        /// The parse error's point and the line it names.
+        static let error = warning
+        static let errorLine = warning.opacity(0.1)
+    }
+}
+
+extension Size {
+    enum Diagram {
+        /// mermaid's text, × zoom.
+        static let font: CGFloat = 14
+        /// The error line and the source under it, × zoom.
+        static let errorFont: CGFloat = 12
+        static let codeFont: CGFloat = 12
+        /// Round the diagram, and the page's top in a Markdown file.
+        static let margin: CGFloat = 24
+        static let blockMargin: CGFloat = 8
+        /// Before a Markdown block's diagram has measured itself.
+        static let blockHeight: CGFloat = 120
+    }
+}
