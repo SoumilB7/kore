@@ -185,6 +185,26 @@ final class ImportedChatForks: ChatStoryline {
     }
 }
 
+/// A fork of an imported chat from its own first message: nothing of the chat's own comes
+/// before it, so the carried part is carried again into the fork's new session.
+final class ImportedChatForksFromFirst: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Carried on")]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            ImportHistory("source.jsonl", lines: ImportFixtures.other(than: variant.provider)),
+            Send("And now?"), TurnFinished(1),
+            Fork.fromMessage(2),
+            Expect("the history carried again into the fork's own session") { _ in ScriptedWorld.shared.imports.count == 2 },
+            Expect.rows("the carried turn in the fork, the message in its composer") { rows in
+                rows.filter { $0.kind == "user" }.map(\.text) == ["Check the build number."]
+                    && rows.contains { $0.kind == "divider" && $0.text.hasPrefix("Continued in") }
+            },
+        ]
+    }
+}
+
 /// Imports a session of this folder by its id, as the picker's row does.
 struct ImportSession: Step {
     let provider: String

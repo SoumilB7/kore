@@ -157,8 +157,53 @@ package final class Workspace {
                 resume: SessionSummary(id: point.from, agent: chat.provider.historyAgent, title: title, updated: .now),
                 fork: point, forkedFrom: chat.title)
         case .fresh:
+            // Nothing of its own before the message, but an imported chat has the carried part:
+            // it's carried again into the fork's new session (Codex's injected history isn't a
+            // turn its fork could start after).
+            if let imported = chat.imported {
+                Task { await recarry(imported, from: chat, text: text, title: title) }
+                return
+            }
             fork = Chat(provider: chat.provider, folder: folder)
         }
+        open(fork, of: chat, text: text)
+    }
+
+    /// The fork of an imported chat from its first own message: the history kept with its
+    /// import written again as a new session of its CLI, fitted to its window now.
+    private func recarry(_ imported: ImportedHistory, from chat: Chat, text: String, title: String) async {
+        let record = imported.record
+        let model = chat.controls.modelId ?? chat.launchModel
+        var written: (HandoffRecord, HandoffPlan)?
+        if let writer = HandoffWriters.writer(chat.provider.id) {
+            let session = record.target.session
+            let (turns, summary) = await Task.detached {
+                (HandoffRecords.history(target: session) ?? [], record.carried.summary ? HandoffRecords.summary(target: session) : nil)
+            }.value
+            var segment = HandoffSegment(
+                source: record.source.cli, product: record.sourceProduct, sessionId: record.source.session, model: record.sourceModel,
+                summary: summary, turns: turns)
+            segment.title = record.sourceTitle
+            let plan = HandoffBudget.plan(segment, window: writer.window(model: model))
+            let target = HandoffTarget(
+                folder: folder, title: title, model: model, effort: chat.controls.effort, mode: chat.controls.mode,
+                planMode: chat.controls.planMode, instructions: record.instructions.map { URL(fileURLWithPath: $0) })
+            if !plan.isEmpty,
+                let made = try? await HandoffImport.write(segment, plan, file: URL(fileURLWithPath: record.sourceFile), into: target, writer: writer)
+            {
+                written = (made, plan)
+            }
+        }
+        let fork = written.map { record, plan in
+            Chat(
+                provider: chat.provider, folder: folder,
+                resume: SessionSummary(id: record.target.session, agent: chat.provider.historyAgent, title: title, updated: .now),
+                forkedFrom: chat.title, imported: ImportedHistory(record: record, turns: plan.entries.map(\.turn)))
+        } ?? Chat(provider: chat.provider, folder: folder)
+        open(fork, of: chat, text: text)
+    }
+
+    private func open(_ fork: Chat, of chat: Chat, text: String) {
         fork.controls.mode = chat.controls.mode
         fork.controls.planMode = chat.controls.planMode
         fork.launchModel = chat.controls.modelId ?? chat.launchModel
