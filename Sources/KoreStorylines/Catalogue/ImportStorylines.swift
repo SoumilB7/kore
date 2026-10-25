@@ -65,7 +65,9 @@ final class ImportFromPicker: ChatStoryline {
             OpenFolder(), StartChat(),
             ExpectElement(.id(StoryID.Composer.importLine)),
             Press(.id(StoryID.Composer.importLine)),
-            WaitForElement(.id(StoryID.Composer.importer)),
+            // Opening waits on the folder's chat lists from both CLIs (`importer.load`), which
+            // can pass the usual wait on a loaded machine.
+            WaitForElement(.id(StoryID.Composer.importer), timeout: .seconds(20)),
         ]
         if codex {
             steps += [
@@ -119,7 +121,9 @@ final class ImportPickerRefusesQuietly: ChatStoryline {
             },
             OfferFile("empty.jsonl", lines: [ImportFixtures.codex[0]]),
             Press(.id(StoryID.Composer.importLine)),
-            WaitForElement(.id(StoryID.Composer.importer)),
+            // Opening waits on the folder's chat lists from both CLIs (`importer.load`), which
+            // can pass the usual wait on a loaded machine.
+            WaitForElement(.id(StoryID.Composer.importer), timeout: .seconds(20)),
             Expect("the file's row, not importable", found: { $0.app.chat?.storyImportLine }) { story in
                 let chat = try story.activeChat()
                 return chat.storyImportRows == ["empty.jsonl"] && chat.storyImportLine == "Not a chat Kore can import" && !chat.storyImportReady
@@ -160,7 +164,9 @@ final class ImportPresetsMode: ChatStoryline {
     override func steps() -> [any Step] {
         [PutClaudeChat(mode: "acceptEdits")] + super.steps() + [
             Press(.id(StoryID.Composer.importLine)),
-            WaitForElement(.id(StoryID.Composer.importer)),
+            // Opening waits on the folder's chat lists from both CLIs (`importer.load`), which
+            // can pass the usual wait on a loaded machine.
+            WaitForElement(.id(StoryID.Composer.importer), timeout: .seconds(20)),
             Press(.id(StoryID.Composer.importRow(PutClaudeChat.session))),
             Expect("the source's mode on the pill", found: { $0.app.chat?.mode }) { try $0.activeChat().mode == "askForApproval" },
         ]
