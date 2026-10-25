@@ -540,7 +540,7 @@ struct ComposerView: View {
     }
 
     private func attach() {
-        AttachPanel.choose(in: chat.folder) { [chat, focused] urls in
+        AttachPanel.choose(for: chat, over: window.value) { [chat, focused] urls in
             if !urls.isEmpty { chat.attach(urls) }
             focused.wrappedValue = true
         }

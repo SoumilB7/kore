@@ -60,6 +60,11 @@ package enum StoryRegistry {
         entries[id]?.last { $0.window?.isVisible == true }
     }
 
+    /// The one in `window`: with two folder windows open, each has its own of the same name.
+    package static func entry(_ id: String, in window: NSWindow) -> Entry? {
+        entries[id]?.last { $0.window === window }
+    }
+
     /// Every id with an entry in a shown window, sorted: the ids `entry(_:)` answers for, so a
     /// not-found report never names one that only a closed window still holds.
     package static var ids: [String] {

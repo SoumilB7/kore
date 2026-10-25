@@ -14,6 +14,13 @@ package struct StoryElement {
         self.entry = entry
     }
 
+    /// The element of that name in `window`, rather than the latest window's.
+    package init?(_ id: StoryID, in window: NSWindow) {
+        guard let entry = StoryRegistry.entry(id.raw, in: window) else { return nil }
+        self.id = id
+        self.entry = entry
+    }
+
     package var window: NSWindow? { entry.window }
     /// In the window's base coordinates; nil once the element has left its window.
     package var frame: CGRect? { entry.frame }
