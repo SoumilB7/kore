@@ -385,6 +385,54 @@ public actor CodexSession {
     }
 
     /// Sets an objective Codex keeps working toward across turns.
+    /// A short title for a chat from its first message, written by `model` in an ephemeral
+    /// thread of an app-server of its own, so nothing of it reaches this thread or its events.
+    /// Codex names no thread itself and has no call that writes a name; Claude's CLI writes one
+    /// with a model the same way. Nil when it can't (30 s at most).
+    public func generateTitle(from text: String, model: String) async -> String? {
+        let options = options
+        let prompt = "Write a title of at most six words for a chat that begins with the message below. "
+            + "Reply with the title only: no quotes, no full stop.\n\n" + String(text.prefix(2000))
+        return await withTaskGroup(of: String?.self) { group in
+            group.addTask {
+                guard let server = try? await CodexAppServer.start(cwd: options.cwd, executable: options.executable, environment: options.environment)
+                else { return nil }
+                defer { Task { await server.close() } }
+                guard let started = try? await server.request("thread/start", [
+                    "cwd": .string(options.cwd.path), "model": .string(model), "ephemeral": true, "sandbox": "read-only",
+                    "approvalPolicy": "never",
+                ]), let thread = started["thread"]?["id"]?.string,
+                    (try? await server.request("turn/start", [
+                        "threadId": .string(thread), "input": [["type": "text", "text": .string(prompt), "text_elements": []]],
+                    ])) != nil
+                else { return nil }
+                for await incoming in server.incoming {
+                    switch incoming {
+                    case .notification("item/completed", let params) where params["item"]?["type"]?.string == "agentMessage":
+                        return params["item"]?["text"]?.string.flatMap(Self.title)
+                    case .notification("turn/completed", _), .exited: return nil
+                    default: continue
+                    }
+                }
+                return nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(30))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// A model's title, trimmed to one line without quotes or a full stop; nil when empty or long.
+    nonisolated static func title(_ said: String) -> String? {
+        var line = said.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        line = line.trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”‘’`*#. ").union(.whitespaces))
+        return line.isEmpty || line.count > 80 ? nil : line
+    }
+
     public func setGoal(_ objective: String) async throws {
         _ = try await server.request("thread/goal/set", ["threadId": .string(threadId), "objective": .string(objective)])
     }

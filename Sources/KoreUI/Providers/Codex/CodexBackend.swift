@@ -21,6 +21,10 @@ final class CodexBackend: ChatBackend {
     /// can't generate a title), unless a name came from anywhere first: Kore never replaces one.
     private var mayTitle: Bool
     private var titlePrompt: String?
+    /// The first message, whole, for the title.
+    private var titlePromptText: String?
+    /// The model that writes the chat's title: the account's smallest offered, else the chat's.
+    private var titleModel: String?
     /// Where the turns before the ones shown start (`thread/turns/list`'s cursor), and the
     /// rollout, read back as far as they need.
     private var earlierFrom: String?
@@ -206,6 +210,7 @@ final class CodexBackend: ChatBackend {
                 efforts: efforts ?? [])
         }
         var current = await session.model
+        titleModel = models.first { $0.id.contains("luna") || $0.id.contains("mini") || $0.id.contains("nano") }?.id
         if current == nil || !models.contains(where: { $0.id == current }) {
             let fallback = (list.first { $0["isDefault"]?.bool == true } ?? list.first)?["id"]?.string
             if let fallback {
@@ -378,7 +383,10 @@ final class CodexBackend: ChatBackend {
             yield(.notice("Goal set"))
             return false
         }
-        if mayTitle, titlePrompt == nil { titlePrompt = FallbackTitle.from(text) }
+        if mayTitle, titlePrompt == nil {
+            titlePrompt = FallbackTitle.from(text)
+            titlePromptText = text
+        }
         let input: JSONValue =
             files.isEmpty ? [["type": "text", "text": .string(text), "text_elements": []]] : Attachments.codexInput(text: text, files: files)
         if let queued {
@@ -462,6 +470,8 @@ final class CodexBackend: ChatBackend {
     private func saveTitle() {
         guard mayTitle, let name = titlePrompt, let session else { return }
         mayTitle = false
+        let prompt = titlePromptText ?? name
+        let model = titleModel ?? options.model
         Task {
             do {
                 try await session.rename(name)
@@ -471,6 +481,10 @@ final class CodexBackend: ChatBackend {
                     Self.log.warning("Couldn't save the thread's name: \(error.localizedDescription, privacy: .public)")
                 }
             }
+            // Then a model's title in its place, as Claude's chats get, unless renamed meanwhile.
+            guard let model, let title = await session.generateTitle(from: prompt, model: model), customName == nil else { return }
+            try? await session.rename(title)
+            yield(.titleChanged(title))
         }
     }
 
