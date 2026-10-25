@@ -49,7 +49,10 @@ package struct KoreApp: App {
             CommandGroup(replacing: .saveItem) {}
             // ⌘P is quick open.
             CommandGroup(replacing: .printItem) {}
-            CommandGroup(before: .toolbar) { ExplorerCommands() }
+            CommandGroup(before: .toolbar) {
+                ExplorerCommands()
+                TerminalCommands()
+            }
             CommandGroup(after: .toolbar) {
                 Button("Zoom In") { Zoom.shared.zoomIn() }.keyboardShortcut("=")
                 Button("Zoom Out") { Zoom.shared.zoomOut() }.keyboardShortcut("-")
@@ -81,17 +84,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Chats still working, then unsaved file edits, in any window, are asked about first.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let workspaces = Workspace.all.allObjects
-        guard Self.confirmQuit(working: workspaces.reduce(0) { $0 + $1.workingChats }) else { return .terminateCancel }
+        guard Self.confirmQuit(working: workspaces.reduce(0) { $0 + $1.workingChats },
+                               terminals: workspaces.reduce(0) { $0 + $1.terminals.workingCount }) else { return .terminateCancel }
         let files = workspaces.flatMap(\.unsavedFiles)
         return UnsavedGuard.confirm(files) { workspaces.forEach { $0.saveAll() } } ? .terminateNow : .terminateCancel
     }
 
     /// Quitting ends every CLI, and with it what its chat is doing: asked once, Cancel the default.
-    private static func confirmQuit(working: Int) -> Bool {
-        guard working > 0 else { return true }
+    private static func confirmQuit(working: Int, terminals: Int) -> Bool {
+        guard working > 0 || terminals > 0 else { return true }
         let alert = NSAlert()
-        alert.messageText = working == 1 ? "1 chat is working" : "\(working) chats are working"
-        alert.informativeText = "Quitting stops their turns, agents and background commands."
+        alert.messageText = terminals > 0 ? "Work is running in Kore" : (working == 1 ? "1 chat is working" : "\(working) chats are working")
+        alert.informativeText = terminals > 0
+            ? "Quitting stops working chats and terminal commands, and ends every shell."
+            : "Quitting stops their turns, agents and background commands."
         alert.addButton(withTitle: "Cancel")
         let quit = alert.addButton(withTitle: "Quit")
         quit.hasDestructiveAction = true
@@ -101,6 +107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The CLIs end with Kore: one left running would go on acting in a session Kore resumes
     /// in a new process next launch.
     func applicationWillTerminate(_ notification: Notification) {
+        for workspace in Workspace.all.allObjects { workspace.terminals.shutdown(immediately: true) }
+        ProcessChild.finishClosing()
         StdioProcess.closeAll()
     }
 
@@ -251,6 +259,20 @@ private struct ExplorerCommands: View {
         Button("Stop") { workspace?.perform(.stop) }
             .keyboardShortcut(".")
             .disabled(workspace?.can(.stop) != true)
+        Divider()
+    }
+}
+
+private struct TerminalCommands: View {
+    @FocusedValue(\.workspace) private var workspace
+
+    var body: some View {
+        Button("Terminal") { workspace?.terminals.toggle() }
+            .keyboardShortcut("`", modifiers: [.control])
+            .disabled(workspace == nil)
+        Button("New Terminal") { workspace?.terminals.newShell() }
+            .keyboardShortcut("`", modifiers: [.control, .shift])
+            .disabled(workspace == nil)
         Divider()
     }
 }

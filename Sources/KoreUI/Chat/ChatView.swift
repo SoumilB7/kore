@@ -11,6 +11,7 @@ struct ChatView: View {
     /// The active tab's chat; nil while another kind of tab shows, and this view waits hidden.
     let active: Chat?
     @Environment(\.chatColumn) private var column
+    @Environment(\.terminalPanel) private var terminal
     @FocusState private var composerFocused: Bool
     /// KORE_FORK forks once per run, KORE_IMPORT imports once.
     private static var forkedOnce = false
@@ -33,6 +34,14 @@ struct ChatView: View {
                 .opacity(active == nil ? 0 : 1)
                 .allowsHitTesting(active != nil)
                 .accessibilityHidden(active == nil)
+                .onChange(of: terminal?.focusSerial) { _, _ in
+                    guard terminal?.isOpen == true else { return }
+                    active?.closePopups()
+                    composerFocused = false
+                }
+                .onChange(of: terminal?.isOpen) { _, open in
+                    if open == false, active != nil, workspace.quickOpen == nil { composerFocused = true }
+                }
         }
     }
 
@@ -87,7 +96,7 @@ struct ChatView: View {
         .animation(Motion.fade, value: changesTurn.value?.turn)
         .animation(Motion.fade, value: chat.usage.extended)
         // The composer gives up its focus to the usage card and takes it back after.
-        .onChange(of: chat.usage.extended) { _, open in composerFocused = !open }
+        .onChange(of: chat.usage.extended) { _, open in composerFocused = !open && terminal?.focusPending != true }
         // A switch shows the other chat as it is: its mode's outline, its context, its overlays
         // appear at once, not animated from the last chat's.
         .transaction(value: chat.id) { transaction in
@@ -101,7 +110,7 @@ struct ChatView: View {
             if let last, last != active?.id { kept.chats.first { $0.id == last }?.usage.closeExtended() }
             shown.value = active
             guard let active else { return }
-            composerFocused = true
+            composerFocused = terminal?.focusPending != true
             devHooks(active)
         }
         .task(id: chat.id) { await chat.startOnce() }
@@ -295,6 +304,7 @@ struct ChatView: View {
 /// so opening or closing the map renders this layer alone: the transcripts and the composer
 /// under it aren't asked again.
 private struct MapLayer<Under: View>: View {
+    @Environment(\.terminalPanel) private var terminal
     let chat: Chat
     var focused: FocusState<Bool>.Binding
     let openAgent: (String) -> Void
@@ -313,7 +323,7 @@ private struct MapLayer<Under: View>: View {
                 let chat = chat, focused = focused
                 afterThisFrame { if chat.agentMap.isOpen { focused.wrappedValue = false } }
             } else {
-                focused.wrappedValue = true
+                focused.wrappedValue = terminal?.focusPending != true
             }
         }
     }

@@ -27,7 +27,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
 
     package enum Area: String, Sendable, CaseIterable {
         case titlebar, tabs, newtab, composer, transcript, approval, agentmap, history, explorer, editor, quickopen,
-            search, changes, viewer, usage, welcome
+            search, changes, viewer, usage, welcome, terminal
     }
 
     package enum Part: String, Sendable, CaseIterable {
@@ -308,6 +308,7 @@ extension StoryID {
     package static let all: [String] = {
         let k = "<key>"
         let fixed: [StoryID] = [
+            Terminal.panel, Terminal.newShell, Terminal.close, Terminal.hide, Terminal.maximize, Terminal.sash, Terminal.output, Terminal.stop,
             Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab, Titlebar.awake, Titlebar.overflow,
             Titlebar.hiddenTabs, Titlebar.tabName, Tabs.strip,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
@@ -356,6 +357,7 @@ extension StoryID {
             StoryID(.approval, key: k).part(.submit), StoryID(.approval, "other", key: k),
             StoryID(.approval, "other", key: k).part(.field), StoryID(.approval, "option", key: k),
             StoryID(.agentmap, "row", key: k), StoryID(.agentmap, "wires", key: k), StoryID(.agentmap, "ended", key: k),
+            StoryID(.terminal, "entry", key: k), StoryID(.terminal, "entry", key: k).part(.close),
             StoryID(.history, "row", key: k),
             StoryID(.history, "row", key: k).part(.archive), StoryID(.explorer, "row", key: k),
             StoryID(.editor, key: k), StoryID(.editor, "gutter.fold", key: k), StoryID(.editor, "foldchip", key: k),

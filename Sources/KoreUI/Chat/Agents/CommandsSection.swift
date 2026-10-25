@@ -131,6 +131,7 @@ private struct CommandRow: View {
     let owner: TranscriptStore.AgentInfo?
     @StateObject private var hovered = Local(false)
 
+    @Environment(\.terminalPanel) private var terminal
     private var map: AgentMapState { chat.agentMap }
     private var id: StoryID { StoryID.AgentMap.command(command.id) }
 
@@ -155,6 +156,12 @@ private struct CommandRow: View {
                 }
                 ownerLink
                 CommandTime(command: command)
+                if command.kind != .scheduled, let terminal {
+                    IconButton(symbol: "terminal", help: command.isLive ? "Watch in terminal" : "Open command in terminal") {
+                        terminal.open(command, from: chat)
+                    }
+                    .storyID(id.part(.open))
+                }
                 actions
             }
             .padding(.horizontal, Space.md)

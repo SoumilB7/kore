@@ -31,12 +31,14 @@ package final class ChatTab: Identifiable {
 @MainActor @Observable
 package final class Workspace {
     package let folder: URL
+    let terminals: TerminalPanel
     package private(set) var tabs: [ChatTab]
     /// The folder's window, once it's on screen (a storyline host sizes and snapshots it). Its
     /// close, not its view's, ends the chats.
     @ObservationIgnored package weak var window: NSWindow? {
         didSet {
             guard let window, window !== oldValue else { return }
+            terminals.window = window
             if let closer { NotificationCenter.default.removeObserver(closer) }
             closer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) {
                 [weak self] _ in MainActor.assumeIsolated { self?.windowClosed() }
@@ -103,6 +105,7 @@ package final class Workspace {
 
     init(folder: URL, restore: Bool = true) {
         self.folder = folder
+        terminals = TerminalPanel(folder: folder)
         let saved = restore ? Self.saved(for: folder) : nil
         var restored = saved?.tabs.map { Self.tab($0, in: folder) } ?? []
         // A file open twice (saved under two spellings of its path) comes back once.
@@ -295,7 +298,10 @@ package final class Workspace {
     private func remove(_ tab: ChatTab, at index: Int? = nil) {
         guard let index = index ?? tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         if closing?.tab == tab.id { closing = nil }
-        if tab.agent == nil, tab.file == nil { tab.chat?.close() }
+        if tab.agent == nil, tab.file == nil, let chat = tab.chat {
+            terminals.detach(chat)
+            chat.close()
+        }
         tabs.remove(at: index)
         if tabs.isEmpty { tabs = [ChatTab()] }
         if activeID == tab.id { activeID = tabs[min(index, tabs.count - 1)].id }
@@ -330,6 +336,7 @@ package final class Workspace {
         let fresh = Self.tab(Saved.Tab(provider: chat.provider.rawValue, session: chat.sessionId, title: chat.title), in: folder).chat
         fresh?.draft = chat.draft
         fresh?.launchModel = chat.controls.modelId
+        terminals.detach(chat)
         chat.close(reason: "reload")
         tab.chat = fresh
     }
@@ -420,6 +427,7 @@ package final class Workspace {
     }
 
     func closeAll() {
+        terminals.shutdown()
         // A save still waiting goes now.
         if saveQueued, Self.persists(folder) {
             UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: Self.key(Self.savedKey, folder))

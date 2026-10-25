@@ -40,7 +40,7 @@ struct FolderWindow: View {
                             .frame(width: workspace.explorerWidth)
                         ExplorerSash(width: Binding(get: { workspace.explorerWidth }, set: { workspace.explorerWidth = $0 }))
                     }
-                    WorkspaceView(workspace: workspace)
+                    TerminalWorkspace(workspace: workspace)
                         // The columns follow the content's width: the window less a docked sidebar.
                         .environment(\.chatColumn, column)
                         // Widths follow the drag frame by frame; nothing animates them.
@@ -105,6 +105,7 @@ struct FolderWindow: View {
         .navigationTitle(folder.lastPathComponent)
         .focusedSceneValue(\.workspace, workspace.value)
         .modifier(TabKeys(workspace: workspace.value))
+        .modifier(TerminalKeys(workspace: workspace.value))
         .onAppear {
             if let provider = DevSnapshot.startProvider {
                 workspace.value.start(provider, in: workspace.value.activeTab)

@@ -97,6 +97,7 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate {
         UILog.event("terminal-stop", ["id": id.uuidString, "immediate": "\(immediately)"])
         child?.close(signal: SIGHUP, immediately: immediately)
         view.terminate()
+        view.updateUiClosed()
         startup = nil
     }
 
