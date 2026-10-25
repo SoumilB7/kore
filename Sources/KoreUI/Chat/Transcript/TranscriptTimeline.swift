@@ -72,6 +72,7 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var blankCheck = Held(Task<Void, Never>?.none)
     @StateObject private var remounts = Held(0)
     @StateObject private var mount = Local(0)
+    @StateObject private var shown = Held(false)
 
     private static let end = "transcript-end"
     private static let loadRow = "transcript-load-row"
@@ -279,13 +280,16 @@ struct TranscriptTimeline: View, Equatable {
             // following when it hid, whatever came meanwhile. Nothing moves while it's hidden, and
             // a tab showing with nothing new and no glide cut short stays as it was left.
             .onChange(of: [tail, hidden ? 1 : 0], initial: true) { old, new in
-                checkBlank(hidden: new[1] == 1)
+                shown.value = new[1] == 0
+                checkBlank()
                 guard new[1] == 0 else { return }
                 let showing = old[1] == 1
                 if showing, old[0] == new[0], glidingUntil.value.map({ Date() >= $0 }) ?? true { return }
                 follow(proxy, showing: showing)
             }
             .onAppear {
+                // Back from behind other windows, a scroll view has come back with nothing drawn.
+                shift.onReturn = { [shown] in if shown.value { checkBlank() } }
                 if StoryHost.installed {
                     store.storyScroll = { id in
                         following.value = false
@@ -338,21 +342,26 @@ struct TranscriptTimeline: View, Equatable {
         }
     }
 
-    /// Two seconds after it shows or changes, a transcript with rows but none on screen (none
-    /// built, all below the visible area, or scrolled past its end) is logged with its geometry
-    /// in sessions.log ("blank"), and its scroll view is built again at the end, once.
-    private func checkBlank(hidden: Bool) {
+    /// Two seconds after it shows, changes or its window comes back, a transcript with rows but
+    /// none on screen (none built, all below the visible area, scrolled past its end, AppKit's
+    /// content not under the visible part, or no layer drawing there) is logged with its geometry
+    /// in sessions.log ("blank"), and its scroll view is built again at the end, once. Never while
+    /// its window is covered: macOS may drop what it drew until it shows again.
+    private func checkBlank() {
         blankCheck.value?.cancel()
-        guard !hidden else { return }
-        let (store, seen, tops, remounts, mount, position, following) = (store, seen, rowTops, remounts, mount, position, following)
+        guard shown.value else { return }
+        let (store, seen, tops, remounts, mount, position, following, shift) = (store, seen, rowTops, remounts, mount, position, following, shift)
         blankCheck.value = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled, !store.sections.isEmpty, seen.value.count == 4 else { return }
+            guard !Task.isCancelled, !store.sections.isEmpty, seen.value.count == 4, shift.windowVisible else { return }
             let (height, offset, visible) = (seen.value[0], seen.value[1], seen.value[2])
             // Only where the end should show (opened, following) or past it: a reader up among
             // a turn's tool rows has no message or answer on screen, and stays where they are.
             let onScreen = tops.value.values.contains { $0 < visible }
-            guard (!onScreen && following.value) || offset > height else {
+            let frames = shift.frames
+            let drawn = shift.drawn
+            let unseen = (frames.map { $0.content.height < 1 || !$0.content.intersects($0.visible) } ?? false) || drawn == 0
+            guard (!onScreen && following.value) || offset > height || unseen else {
                 if remounts.value > 0 {
                     KoreLog.named("sessions").write("blank-recovered", ["cli": store.providerName])
                     remounts.value = 0
@@ -366,12 +375,16 @@ struct TranscriptTimeline: View, Equatable {
                     "height": String(Int(height)), "offset": String(Int(offset)), "visible": String(Int(visible)),
                     "tops": String(tops.value.count), "first_top": tops.value.values.min().map { String(Int($0)) },
                     "following": following.value ? "yes" : "no", "remounts": String(remounts.value),
+                    "ak_height": frames.map { String(Int($0.content.height)) }, "ak_y": frames.map { String(Int($0.visible.minY)) },
+                    "ak_visible": frames.map { String(Int($0.visible.height)) }, "drawn": drawn.map { String($0) },
                 ])
             guard remounts.value < 1 else { return }
             remounts.value += 1
             following.value = true
             position.value = ScrollPosition(edge: .bottom)
             mount.value &+= 1
+            // Then looked at again: drawn now ("blank-recovered"), or logged once more.
+            checkBlank()
         }
     }
 
