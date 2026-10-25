@@ -95,7 +95,7 @@ struct ModelPicker: View {
                             if controls.fastModeShown {
                                 FastBolt(
                                     on: controls.fastMode, paused: controls.fastPaused, unavailable: controls.fastUnavailable,
-                                    enabled: controls.fastModeEnabled, lit: state.lit == .fast) {
+                                    enabled: controls.fastModeEnabled, lit: state.lit == .fast, cost: chat.provider.usage.fastCost) {
                                     flipFast()
                                 } hover: {
                                     hover(.fast, $0)
@@ -311,24 +311,33 @@ private struct FastBolt: View {
     let unavailable: String?
     let enabled: Bool
     let lit: Bool
+    let cost: FastCost
     let flip: () -> Void
     let hover: (Bool) -> Void
 
     var body: some View {
         Button(action: flip) {
-            Image(systemName: on ? "bolt.fill" : "bolt")
-                .font(TextStyle.title)
-                .foregroundStyle(on ? Theme.accent : lit ? Theme.text : Theme.secondary)
-                .frame(width: Size.hitTarget, height: Size.hitTarget)
-                .contentShape(Rectangle())
+            // The bolt and what it costs beside it, "2×": seen before it's turned on.
+            HStack(spacing: Space.xxs) {
+                Image(systemName: on ? "bolt.fill" : "bolt")
+                    .font(TextStyle.title)
+                    .foregroundStyle(on ? Theme.accent : lit ? Theme.text : Theme.secondary)
+                if !cost.times.isEmpty {
+                    Text(cost.times)
+                        .font(TextStyle.caption).monospacedDigit()
+                        .foregroundStyle(on ? Theme.accent : Theme.tertiary)
+                }
+            }
+            .frame(minWidth: Size.hitTarget, minHeight: Size.hitTarget)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
         .onHover(perform: hover)
-        .help(unavailable ?? (paused ? "Standard speed for now, after a rate limit" : on ? "Fast mode · uses extra usage" : "Fast mode: uses extra usage"))
+        .help(unavailable ?? (paused ? "Standard speed for now, after a rate limit" : cost.detail.isEmpty ? "Fast mode: uses extra usage" : cost.detail))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Fast mode"))
-        .accessibilityValue(Text(unavailable ?? (on ? "On" : "Off")))
+        .accessibilityValue(Text(unavailable ?? ((on ? "On" : "Off") + (cost.times.isEmpty ? "" : ", \(cost.times) usage"))))
         .accessibilityAddTraits(.isButton)
     }
 }

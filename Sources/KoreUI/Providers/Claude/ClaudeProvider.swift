@@ -35,7 +35,9 @@ extension ProviderDescriptor {
             let file = ClaudeHistory.transcript(sessionId: id, in: folder)
             return FileManager.default.fileExists(atPath: file.path) ? file : nil
         },
-        usage: UsageWording(product: "Claude Code", rows: ["Session (5hr)", "Weekly (7 day)"], resetsCaption: nil),
+        usage: UsageWording(product: "Claude Code", rows: ["Session (5hr)", "Weekly (7 day)"], resetsCaption: nil,
+            // Opus 5.5 fast: $8/$40 per MTok against $4/$20; paid from usage credits, not the plan.
+            fastCost: FastCost(times: "2×", detail: "Fast mode: 2× the price per token, paid from usage credits")),
         account: .claude)
 }
 

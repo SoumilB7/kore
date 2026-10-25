@@ -41,6 +41,9 @@ struct UsageWording: Sendable {
     /// What a full reset does, in the CLI's own words, over the list of them; nil for a CLI
     /// without full resets.
     let resetsCaption: String?
+    /// What fast mode costs, from the CLI maker's published rates: the multiplier shown by the
+    /// bolt ("2×") and the line on hovering it.
+    var fastCost = FastCost(times: "", detail: "")
 
     /// Kore's wording for a CLI that isn't signed in: where to sign in.
     var signedOut: String { "\(product) isn't signed in. Sign in from Account in the / menu." }
@@ -49,6 +52,11 @@ struct UsageWording: Sendable {
     func failed(_ detail: String?) -> String {
         "Couldn't read limits from \(product)" + (detail.map { ": " + $0 } ?? ".")
     }
+}
+
+struct FastCost: Sendable {
+    let times: String
+    let detail: String
 }
 
 enum ModeStep {

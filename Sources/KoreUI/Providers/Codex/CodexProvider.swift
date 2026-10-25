@@ -20,7 +20,9 @@ extension ProviderDescriptor {
             }
         },
         historyFile: { id, folder in try? await CodexHistory.rolloutPath(id, in: folder) },
-        usage: UsageWording(product: "Codex", rows: ["5h limit", "Weekly limit"], resetsCaption: "Reset your current usage limits"),
+        usage: UsageWording(product: "Codex", rows: ["5h limit", "Weekly limit"], resetsCaption: "Reset your current usage limits",
+            // OpenAI's Codex speed page: plan limits at 2.5× the Standard rate, credits at 2×.
+            fastCost: FastCost(times: "2.5×", detail: "Fast mode: 2.5× plan usage per token (2× on credits)")),
         account: .codex)
 }
 
