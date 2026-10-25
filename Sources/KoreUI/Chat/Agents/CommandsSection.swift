@@ -138,7 +138,7 @@ private struct CommandRow: View {
     @ViewBuilder private var point: some View {
         if command.isLive {
             Circle().fill(Theme.accent).frame(width: Size.commandPoint, height: Size.commandPoint)
-                .background(Circle().fill(Theme.accent.opacity(0.15)).frame(width: Size.commandPoint + 6, height: Size.commandPoint + 6))
+                .background(Circle().fill(Theme.commandHalo).frame(width: Size.commandHalo, height: Size.commandHalo))
         } else if case .failed = command.state {
             Circle().fill(Theme.danger).frame(width: Size.commandPoint - 1, height: Size.commandPoint - 1)
         }

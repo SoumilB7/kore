@@ -327,6 +327,8 @@ extension Glyph {
 extension Size {
     /// A live command's point in its row.
     static let commandPoint: CGFloat = 7
+    /// Its halo.
+    static let commandHalo: CGFloat = 13
 }
 
 extension Layout {

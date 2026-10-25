@@ -37,6 +37,8 @@ enum Theme {
     static let commandFill = accent.opacity(0.14)
     /// A small accent button under the pointer.
     static let accentFillHover = accent.opacity(0.24)
+    /// The halo round a live command's point.
+    static let commandHalo = accent.opacity(0.15)
     /// A small button under the pointer: a step above `surfaceHover`.
     static let surfaceRaised = Color(hex: 0x263036)
     /// Finished tool dot.
