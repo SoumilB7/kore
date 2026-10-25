@@ -6,7 +6,8 @@ import SwiftUI
 /// too narrow for them steps through them, "2/4 ‹ ›". The body is as tall as the tallest
 /// question, so a switch never moves the card or the composer; past half the window it scrolls
 /// under soft edges. A pick is its radio or checkbox and a thin accent line round its row; Other
-/// is the last row, its field inside it. Nothing goes until Submit, which waits for every answer.
+/// is the last row, the row its field. Nothing goes until Submit, which waits for every answer;
+/// until then, an answered question's button is Next, to the next one unanswered.
 ///
 /// The card has the keys as it arrives over an empty composer, and once clicked (its corner
 /// marks say so): ↑ ↓ move the current row, as the pointer does; Space picks; ↩ picks and goes
@@ -47,22 +48,24 @@ struct QuestionCard: View {
     private var ready: Bool { Self.complete(questions, picked: picked.value, other: other.value) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.lg) {
-            if questions.count > 1 { strip }
-            ScrollViewReader { proxy in
-                ScrollView {
-                    pages.frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .scrollBounceBehavior(.basedOnSize)
-                .frame(maxHeight: max(maxHeight - Self.chrome(tabs: questions.count > 1), Size.Question.row * 2))
-                .fixedSize(horizontal: false, vertical: true)
-                .onScrollGeometryChange(for: ScrollEdges.self) { ScrollEdges($0) } action: { _, now in edges.value = now }
-                .overlay(alignment: .top) { fade(edges.value.top, top: true) }
-                .overlay(alignment: .bottom) { fade(edges.value.bottom, top: false) }
-                .onChange(of: reveal.value) { _, id in
-                    guard let id else { return }
-                    proxy.scrollTo(id)
-                    reveal.value = nil
+        VStack(alignment: .leading, spacing: Space.md) {
+            VStack(alignment: .leading, spacing: Space.lg) {
+                if questions.count > 1 { strip }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        pages.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(maxHeight: max(maxHeight - Self.chrome(tabs: questions.count > 1), Size.Question.row * 2))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onScrollGeometryChange(for: ScrollEdges.self) { ScrollEdges($0) } action: { _, now in edges.value = now }
+                    .overlay(alignment: .top) { fade(edges.value.top, top: true) }
+                    .overlay(alignment: .bottom) { fade(edges.value.bottom, top: false) }
+                    .onChange(of: reveal.value) { _, id in
+                        guard let id else { return }
+                        proxy.scrollTo(id)
+                        reveal.value = nil
+                    }
                 }
             }
             footer
@@ -87,7 +90,7 @@ struct QuestionCard: View {
 
     /// The card's own rows round the questions' body: its padding, the tabs, Submit.
     private static func chrome(tabs: Bool) -> CGFloat {
-        Inset.card.top + Inset.card.bottom + Size.iconButton + Space.lg + (tabs ? Size.Picker.chip + Space.lg : 0)
+        Inset.card.top + Inset.card.bottom + Size.iconButton + Space.md + (tabs ? Size.Picker.chip + Space.lg : 0)
     }
 
     // MARK: Tabs
@@ -114,7 +117,7 @@ struct QuestionCard: View {
             }
             .font(TextStyle.labelMedium)
             .foregroundStyle(on ? Theme.text : Theme.secondary)
-            .padding(.horizontal, Space.md)
+            .padding(.horizontal, Space.lg)
             .frame(height: Size.Picker.chip)
             .background(on ? Theme.surfaceRaised : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
             .contentShape(Rectangle())
@@ -145,6 +148,7 @@ struct QuestionCard: View {
             QuestionStepButton(symbol: "chevron.right", label: "Next question", enabled: index < questions.count - 1) { go(to: index + 1) }
                 .storyID(card.part(.next))
         }
+        .padding(.leading, Inset.row.leading)
         .frame(height: Size.Picker.chip)
     }
 
@@ -172,12 +176,15 @@ struct QuestionCard: View {
 
     private func page(_ question: Approval.Question, at index: Int, shown: Bool) -> some View {
         VStack(alignment: .leading, spacing: Space.md) {
+            // On the options' text edge: the tabs', the question's and the labels' are one.
             Text(question.text)
-                .font(TextStyle.title)
+                .font(TextStyle.bodyMedium)
+                .lineSpacing(TextStyle.leading)
                 .foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Inset.row.leading)
             if question.options.isEmpty {
-                field(question, shown: shown)
+                field(question, shown: shown, well: true)
             } else if question.options.contains(where: { $0.preview != nil }) {
                 if width.value >= Size.Question.split {
                     HStack(alignment: .top, spacing: Space.lg) {
@@ -237,7 +244,8 @@ struct QuestionCard: View {
         .background(StoryAnchor(id: shown && on ? id.part(.ticks).raw : nil, press: nil))
     }
 
-    /// Other: a row like the rest; picked, its field fills the row after the word.
+    /// Other: a row like the rest; picked, the row is its field: the answer is typed after the
+    /// word, on its line, with the row's accent line the only border.
     @ViewBuilder
     private func otherRow(_ question: Approval.Question, at index: Int, shown: Bool) -> some View {
         let open = other.value[question.id] != nil
@@ -246,17 +254,18 @@ struct QuestionCard: View {
         let id = StoryID.Approval.other(question.id)
         Group {
             if open {
-                HStack(spacing: Space.md) {
+                HStack(alignment: .top, spacing: Space.md) {
                     Button { choose(place, in: question) } label: {
-                        HStack(spacing: Space.md) {
-                            QuestionGlyph(multiple: question.multiple, on: true)
-                            Text("Other").font(TextStyle.body).foregroundStyle(Theme.text)
+                        HStack(alignment: .top, spacing: Space.md) {
+                            QuestionGlyph(multiple: question.multiple, on: true).padding(.top, Size.Question.glyphDrop)
+                            // It names the field now.
+                            Text("Other").font(TextStyle.body).foregroundStyle(Theme.secondary)
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .storyID(shown ? id : nil)
-                    field(question, shown: shown)
+                    field(question, shown: shown, well: false)
                     keyHint(place)
                 }
                 .optionRow(current: current, on: true)
@@ -279,8 +288,9 @@ struct QuestionCard: View {
         .background(StoryAnchor(id: shown && open ? id.part(.ticks).raw : nil, press: nil))
     }
 
-    /// The line an answer is typed in: Other's, or a question's with no options.
-    private func field(_ question: Approval.Question, shown: Bool) -> some View {
+    /// The line an answer is typed in: Other's, bare in its row, or in a well for a question with
+    /// no options, where it has no other border.
+    private func field(_ question: Approval.Question, shown: Bool, well: Bool) -> some View {
         let text = Binding(get: { other.value[question.id] ?? "" }, set: { other.value[question.id] = $0 })
         return Group {
             if question.secret {
@@ -291,7 +301,7 @@ struct QuestionCard: View {
             }
         }
         .focused($typing, equals: question.id)
-        .fieldWell(focused: typing == question.id)
+        .modifier(OtherField(well: well, focused: typing == question.id))
         .storyID(shown ? StoryID.Approval.other(question.id).part(.field) : nil)
     }
 
@@ -346,16 +356,22 @@ struct QuestionCard: View {
             .allowsHitTesting(false)
     }
 
+    /// Next while the shown question is answered and another isn't (it goes there, as ↩ does);
+    /// else Submit, an outline with tertiary words until a press would send.
     private var footer: some View {
-        HStack {
+        let next = answered(questions[shownIndex]) ? nextUnanswered : nil
+        let live = ready || next != nil
+        return HStack {
             Spacer(minLength: 0)
-            Button(action: send) {
-                // An outline with tertiary words until a press would send.
-                Text("Submit").foregroundStyle(ready ? Theme.background : Theme.tertiary)
+            Button {
+                if let next { go(to: next) } else { send() }
+            } label: {
+                Text(next != nil ? "Next" : "Submit").foregroundStyle(live ? Theme.background : Theme.tertiary)
             }
-            .buttonStyle(SubtleButtonStyle(prominent: ready))
-            .disabled(!ready)
+            .buttonStyle(SubtleButtonStyle(prominent: live))
+            .disabled(!live)
             .storyID(card.part(.submit))
+            .background(StoryAnchor(id: next != nil ? card.part(.continue).raw : nil, press: nil))
         }
         .background(StoryAnchor(id: ready ? card.part(.done).raw : nil, press: nil))
     }
@@ -575,6 +591,24 @@ private struct ScrollEdges: Equatable {
         top = offset > 1
         bottom = offset + geometry.containerSize.height < geometry.contentSize.height + geometry.contentInsets.top
             + geometry.contentInsets.bottom - 1
+    }
+}
+
+/// Other's field: bare in its row at the label's size (the caret shows focus), or in a well.
+private struct OtherField: ViewModifier {
+    let well: Bool
+    let focused: Bool
+
+    func body(content: Content) -> some View {
+        if well {
+            content.fieldWell(focused: focused)
+        } else {
+            content
+                .textFieldStyle(.plain)
+                .font(TextStyle.body)
+                .foregroundStyle(Theme.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 

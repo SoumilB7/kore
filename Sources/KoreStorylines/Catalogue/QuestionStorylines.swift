@@ -18,8 +18,8 @@ private let card = StoryID.Approval.card("q1")
 private func tab(_ index: Int) -> StoryID { StoryID.Approval.tab("q1", index) }
 
 /// Three questions, the last without a header: a tab each, ticked once answered; the card keeps
-/// its height from tab to tab; Submit is an outline until the last answer, and the answers go
-/// back as they always have.
+/// its height from tab to tab; an answered question's button is Next, on to the one unanswered;
+/// Submit is an outline until the last answer, and the answers go back as they always have.
 final class QuestionCardSteps: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .approvals] }
     static let layout = "How should the settings page be organised?"
@@ -74,10 +74,15 @@ final class QuestionCardSteps: ChatStoryline {
             MarksDrawn(),
             Snapshot("steps-none"),
             option(Self.layout, "Sidebar"),
-            Expect("Sidebar picked, Layout ticked") { _ in self.ticked(Self.layout, "Sidebar") && shown(tab(0).part(.done)) },
+            Expect("Sidebar picked, Layout ticked, the button Next") { _ in
+                self.ticked(Self.layout, "Sidebar") && shown(tab(0).part(.done)) && shown(card.part(.continue))
+            },
             Snapshot("steps-oneof-picked"),
-            Press(.id(tab(1))),
-            Expect("Sync shown") { _ in shown(tab(1).part(.lit)) && shown(StoryID.Approval.option(Self.sync, "Accounts")) },
+            Press(.id(card.part(.submit))),
+            Expect("Next went on to Sync, nothing sent") { story in
+                try shown(tab(1).part(.lit)) && shown(StoryID.Approval.option(Self.sync, "Accounts")) && !shown(card.part(.continue))
+                    && !story.scriptedBackend().log.contains { if case .respond = $0 { true } else { false } }
+            },
             steady("Sync"),
             option(Self.sync, "Appearance"),
             option(Self.sync, "Shortcuts"),
@@ -86,14 +91,15 @@ final class QuestionCardSteps: ChatStoryline {
             },
             Snapshot("steps-anyof"),
             Press(.id(card.part(.submit))),
-            Expect("nothing sent with Reset unanswered, Submit still an outline") { story in
+            Expect("Next went on to Reset, nothing sent, Submit an outline there") { story in
                 try !story.scriptedBackend().log.contains { if case .respond = $0 { true } else { false } }
-                    && !shown(card.part(.done)) && !shown(tab(2).part(.done))
+                    && shown(tab(2).part(.lit)) && !shown(card.part(.done)) && !shown(card.part(.continue))
             },
-            Press(.id(tab(2))),
             steady("Reset"),
             option(Self.reset, "No"),
-            Expect("every tab ticked, Submit ready") { _ in (0..<3).allSatisfy { shown(tab($0).part(.done)) } && shown(card.part(.done)) },
+            Expect("every tab ticked, Submit ready") { _ in
+                (0..<3).allSatisfy { shown(tab($0).part(.done)) } && shown(card.part(.done)) && !shown(card.part(.continue))
+            },
             Snapshot("steps-ready"),
             Press(.id(card.part(.submit))),
             TurnFinished(1),
@@ -297,6 +303,107 @@ final class QuestionCardNarrow: ChatStoryline {
                 try answers(story) == [Self.texts[0]: ["One"], Self.texts[1]: ["Two"], Self.texts[2]: ["One"], Self.texts[3]: ["Two"]]
             },
         ]
+    }
+}
+
+/// A card arriving under a long transcript that follows its end, then growing as Other's answer
+/// wraps: the transcript gives up the card's height and pins its end again each time, so the
+/// last row sits whole above the card, not under it.
+final class QuestionCardUnderTranscript: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .approvals] }
+    static let release = "The README is now 34 lines, and the changelog dates v0.1.0 to Sun 25 Oct. Nobody can land it the usual way. "
+        + "Should I push it to main and publish the v0.1.0 release myself now? The tag will carry Sun 25 Oct, but GitHub shows "
+        + "a release's publish date as the real one, so the release page will say 31 Oct."
+    static let before = "Before I go on, one question about the release."
+    static let typed = "not now, leave it on the clone until the coordinator is back, then land it with tomorrow's batch, "
+        + "after the replays have run once more on both CLIs and the notes are read again"
+    static func long() -> String {
+        (1...30).map { "Paragraph \($0): the scripted CLI says enough here to fill a line or two of the transcript, and a little more, so it wraps." }
+            .joined(separator: "\n\n")
+    }
+    override class var script: CLIScript {
+        let approval = Approval(
+            id: "q1", title: "", detail: nil, body: nil, canAlwaysAllow: false,
+            questions: [
+                Approval.Question(
+                    id: release, text: release, header: "Release",
+                    options: [
+                        .init(label: "Push + release now", description: "Land it on main, build the DMG, tag v0.1.0 and publish."),
+                        .init(label: "Push, release tomorrow", description: "Land the README now; publish tomorrow."),
+                        .init(label: "Wait for coordinator", description: "Hold everything until the coordinator is back."),
+                    ])
+            ])
+        return CLIScript(turns: [
+            [.startTurn, .stream(.answer, long(), chunk: 400), .finishTurn(.completed)],
+            [.startTurn, .stream(.answer, before, chunk: 400), .wait(.release), .approval(approval, allow: Beat.answer("Got it."), deny: []),
+             .finishTurn(.completed)],
+        ])
+    }
+
+    private var cardHeight: CGFloat = 0
+    /// A pin lands a point or two short at most (rows are placed at estimated heights first);
+    /// a card covering the end leaves far more hidden.
+    private static let slack: CGFloat = 4
+
+    /// How far the transcript's end is below what shows (0 when pinned at its end, its 40pt
+    /// under the last row), and how far its bottom edge is over the card's top (window, y up).
+    @MainActor private static func end(_ story: StoryContext) -> (hidden: CGFloat, over: CGFloat)? {
+        // Any row drawn in the transcript finds its scroll view.
+        let rows = StoryRegistry.ids.filter { $0.hasPrefix("transcript.answer") || $0.hasPrefix("transcript.user") }
+        guard let scroll = rows.lazy.compactMap({ StoryRegistry.entry($0)?.registeredView?.enclosingScrollView }).first,
+            let document = scroll.documentView, let top = StoryElement(card.part(.focus))?.frame
+        else { return nil }
+        let visible = scroll.documentVisibleRect
+        let hidden = document.isFlipped ? document.bounds.maxY - visible.maxY : visible.minY - document.bounds.minY
+        return (hidden, scroll.convert(scroll.bounds, to: nil).minY - top.maxY)
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Write it up"),
+            TurnFinished(1),
+            Send("Ask me"),
+            Expect.rows("the line before the question") { $0.last?.text == Self.before },
+            // Past the send's glide: the card arrives while the transcript sits pinned at its end.
+            Pause(.milliseconds(2300)),
+            Release(),
+            WaitForElement(.id(card.part(.focus))),
+            WaitIdle(),
+            Expect("the transcript pinned at its end, its last row whole above the card", found: { story in
+                Self.end(story).map { "\($0.hidden)pt of the end hidden, the edge \($0.over)pt over the card" }
+            }) { story in
+                Self.end(story).map { $0.hidden <= Self.slack && $0.over >= -0.5 } ?? false
+            },
+            Snapshot("under-transcript"),
+            Press(.id(StoryID.Approval.other(Self.release))),
+            WaitForElement(.id(StoryID.Approval.other(Self.release).part(.field))),
+            Do("note the card's height") { _ in self.cardHeight = StoryElement(card.part(.focus))?.frame?.height ?? 0 },
+            Click(.id(StoryID.Approval.other(Self.release).part(.field))),
+            TypeText(Self.typed),
+            Expect("the card grown as the answer wraps") { _ in (StoryElement(card.part(.focus))?.frame?.height ?? 0) > self.cardHeight + 15 },
+            WaitIdle(),
+            Expect("the transcript pinned at its end, still whole above the grown card", found: { story in
+                Self.end(story).map { "\($0.hidden)pt of the end hidden, the edge \($0.over)pt over the card" }
+            }) { story in
+                Self.end(story).map { $0.hidden <= Self.slack && $0.over >= -0.5 } ?? false
+            },
+            Snapshot("under-transcript-grown"),
+            Press(.id(card.part(.submit))),
+            TurnFinished(2),
+            Expect("the typed answer", found: { story in (try? answers(story)).map { "\($0)" } }) { story in try answers(story) == [Self.release: [Self.typed]] },
+        ]
+    }
+}
+
+/// Waits a set time: past a glide, or a draw-in.
+private struct Pause: Step {
+    let duration: Duration
+    var label: String { "Wait \(duration)" }
+    init(_ duration: Duration) { self.duration = duration }
+
+    func run(_ story: StoryContext) async throws {
+        let end = ContinuousClock.now + duration
+        try await story.until("the pause") { ContinuousClock.now >= end }
     }
 }
 

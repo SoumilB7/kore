@@ -221,7 +221,8 @@ extension StoryID {
         /// A question card's tab, by the card and the question's place (0-based); `.part(.done)`
         /// is there while its question is answered, `.part(.lit)` while it's the one shown. The
         /// card's `.part(.previous)` and `.part(.next)` are the narrow card's ‹ ›, its
-        /// `.part(.focus)` is there while it has the keys, and `.part(.done)` while Submit would send.
+        /// `.part(.focus)` is there while it has the keys, `.part(.done)` while Submit would send, and
+        /// `.part(.continue)` while the button reads Next.
         package static func tab(_ card: String, _ index: Int) -> StoryID { StoryID(.approval, "tab", key: "\(card)/\(index)") }
         /// The preview shown in a question's well, by the question's id and the option's label.
         package static func preview(_ question: String, _ label: String) -> StoryID { StoryID(.approval, "preview", key: question + "/" + label) }

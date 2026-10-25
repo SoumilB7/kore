@@ -146,6 +146,14 @@ struct TranscriptTimeline: View, Equatable {
             }
             // Built again when a shown transcript draws none of its rows (`checkBlank`).
             .id(mount.value)
+            // Away from the end, a line under the bottom edge fades out rather than being cut.
+            .overlay(alignment: .bottom) {
+                LinearGradient(colors: [Theme.background.opacity(0), Theme.background], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Size.tabFade)
+                    .opacity(following.value ? 0 : 1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
             // A board tile's pinned message takes its height: the transcript is inset under it.
             .safeAreaInset(edge: .top, spacing: 0) {
                 if band, let section = sections.last(where: { $0.header.map { sticky.stuck.contains($0.id.uuidString) } == true }),
@@ -179,6 +187,9 @@ struct TranscriptTimeline: View, Equatable {
                 let insetMoved = new[3] != insetTop.value
                 insetTop.value = new[3]
                 let (height, offset) = (new[0], new[1])
+                // A card arriving or growing under it takes height from the bottom: the end
+                // would slide under the card.
+                let visibleMoved = new[2] != visibleHeight.value
                 visibleHeight.value = new[2]
                 // Under another tab, nobody reads or scrolls it: its moves are layout's and a glide's
                 // still under way, and say nothing of where the reader is. It shows as it was left.
@@ -293,9 +304,9 @@ struct TranscriptTimeline: View, Equatable {
                     following.value = true
                 }
                 // Rows measured after they were placed change the height: while following, stay
-                // pinned to the end through layout (an inset's move too) as well as new content
-                // (T3 Code does both).
-                if !shift.zoomAdjusting, following.value, height != geometry.value.height || insetSettling.value,
+                // pinned to the end through layout (an inset's move, the visible height's too) as
+                // well as new content (T3 Code does both).
+                if !shift.zoomAdjusting, following.value, height != geometry.value.height || insetSettling.value || visibleMoved,
                     glidingUntil.value.map({ Date() >= $0 }) ?? true
                 {
                     proxy.scrollTo(Self.end, anchor: .bottom)
