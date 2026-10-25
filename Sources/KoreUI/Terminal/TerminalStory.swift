@@ -22,7 +22,7 @@ extension Workspace {
                 entry.map { String(decoding: $0.view.getBufferAsData(), as: UTF8.self) } ?? "",
                 entry.map { window?.firstResponder === $0.view } ?? false, terminals.workingCount, entry?.id)
     }
-    package var storyTerminalTitle: String? { terminals.active?.title }
+    package var storyTerminalTitle: String? { terminals.active.map(terminals.title(of:)) }
     package var storyTerminalIDs: [UUID] { terminals.entries.map(\.id) }
 
     package func storyPaintTerminal() {

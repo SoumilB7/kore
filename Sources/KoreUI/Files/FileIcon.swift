@@ -26,13 +26,14 @@ enum FileIcon {
     }
 }
 
-/// A file's glyph in its 14 box.
+/// A file's glyph in its 14 box. A folder takes the same box, so names line up beside it.
 struct FileIconView: View {
     let name: String
     var color: Color = Theme.secondary
+    var isFolder = false
 
     var body: some View {
-        Image(systemName: FileIcon.symbol(for: name))
+        Image(systemName: isFolder ? "folder" : FileIcon.symbol(for: name))
             .font(Chrome.glyphTreeIcon)
             .foregroundStyle(color)
             .frame(width: Size.Tree.icon, height: Size.Tree.icon)

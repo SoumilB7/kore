@@ -94,6 +94,15 @@ final class TerminalPanel {
 
     init(folder: URL) { self.folder = folder }
     var active: TerminalEntry? { entries.first { $0.id == selected } }
+
+    /// The name a terminal shows: a default shared with earlier ones takes a number ("zsh",
+    /// "zsh 2"); a name the owner gave stays as given.
+    func title(of entry: TerminalEntry) -> String {
+        let base = entry.title
+        guard entry.customTitle == nil else { return base }
+        let earlier = entries.prefix { $0 !== entry }.filter { $0.customTitle == nil && $0.title == base }.count
+        return earlier == 0 ? base : "\(base) \(earlier + 1)"
+    }
     var workingCount: Int { entries.filter { $0.shell?.hasWork == true }.count }
 
     func toggle() {
@@ -172,7 +181,7 @@ final class TerminalPanel {
         selected = entry.id
         isOpen = true
         focusPending = false
-        nameDraft = entry.title
+        nameDraft = title(of: entry)
         renaming = entry.id
     }
 

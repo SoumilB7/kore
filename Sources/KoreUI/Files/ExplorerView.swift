@@ -348,10 +348,11 @@ private struct TreeRow: View {
         HStack(spacing: 0) {
             Spacer().frame(width: Size.Tree.leading + CGFloat(row.depth) * Size.Tree.indent)
             chevron
-            if !row.isFolder {
-                FileIconView(name: editing ? "" : row.names[0], color: tint ?? (isSelected ? Theme.text : Theme.secondary))
-                Spacer().frame(width: Size.Tree.iconGap)
-            }
+            // Folders take the icon slot too: one name column at each depth.
+            FileIconView(
+                name: editing ? "" : row.names[0], color: tint ?? (isSelected ? Theme.text : Theme.secondary),
+                isFolder: row.isFolder)
+            Spacer().frame(width: Size.Tree.iconGap)
             if editing {
                 InlineNameField(row: row, store: store, workspace: workspace)
             } else {

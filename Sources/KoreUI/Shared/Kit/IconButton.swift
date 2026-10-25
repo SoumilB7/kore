@@ -26,6 +26,8 @@ struct IconButton: View {
     var isOn = false
     /// Row actions sit on a row that already highlights; they don't add their own.
     var highlightsOnHover = true
+    /// The glyph's colour under the pointer, for an action that ends something.
+    var hoverTint: Color?
     let help: String
     let action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
@@ -37,7 +39,8 @@ struct IconButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(font)
-                .foregroundStyle(isOn ? Theme.text : (isEnabled ? Theme.secondary : Theme.tertiary))
+                .foregroundStyle(isOn ? Theme.text : !isEnabled ? Theme.tertiary
+                    : hovered.value ? hoverTint ?? Theme.secondary : Theme.secondary)
                 .frame(width: kind.size, height: kind.size)
                 .hoverFill(isOn || (highlightsOnHover && hovered.value && isEnabled), isOn ? Theme.surfaceHover : Theme.toolHover)
                 .hitTarget(reach)

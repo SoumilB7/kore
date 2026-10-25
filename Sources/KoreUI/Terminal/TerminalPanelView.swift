@@ -93,9 +93,10 @@ private struct TerminalPanelView: View {
                 if panel.renaming == active.id {
                     TerminalNameField(panel: panel, entryID: active.id).id(active.id).frame(maxWidth: Layout.Terminal.listWidth * 2)
                 } else {
-                    Text(active.title).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle).layoutPriority(-1)
+                    let title = panel.title(of: active)
+                    Text(title).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle).layoutPriority(-1)
                         .storyID(StoryID.Terminal.title)
-                        .help(active.title)
+                        .help(title)
                         .koreContextMenu("terminal") { terminalOptions(active, panel: panel) }
                     IconButton(symbol: "pencil", help: "Rename terminal") { panel.startRename(active) }
                         .storyID(StoryID.Terminal.rename)
@@ -114,10 +115,6 @@ private struct TerminalPanelView: View {
                 }
             }
             Spacer(minLength: 0)
-            if let active = panel.active {
-                IconButton(symbol: "trash", help: active.shell == nil ? "Close output" : "Close terminal") { panel.requestClose(active) }
-                    .storyID(StoryID.Terminal.close)
-            }
             IconButton(symbol: "plus", help: "New terminal (⌃⇧`)") { panel.newShell() }
                 .storyID(StoryID.Terminal.newShell)
             IconButton(symbol: panel.maximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
@@ -125,6 +122,13 @@ private struct TerminalPanelView: View {
                 .storyID(StoryID.Terminal.maximize)
             IconButton(symbol: "chevron.down", help: "Hide terminal (⌃`)") { panel.hide() }
                 .storyID(StoryID.Terminal.hide)
+            // Closing ends the shell: last, past a rule, red only under the pointer.
+            if let active = panel.active {
+                Rectangle().fill(Theme.border).frame(width: Size.divider.width, height: Size.divider.height)
+                IconButton(symbol: "trash", hoverTint: Theme.danger,
+                           help: active.shell == nil ? "Close output" : "Close terminal") { panel.requestClose(active) }
+                    .storyID(StoryID.Terminal.close)
+            }
         }
         .padding(.horizontal, Space.md)
         .frame(height: Layout.Terminal.header)
@@ -141,7 +145,7 @@ private struct TerminalListRow: View {
             Button { panel.select(entry) } label: {
                 HStack(spacing: Space.sm) {
                     Image(systemName: entry.shell == nil ? "doc.text" : "terminal").font(Chrome.label)
-                    Text(entry.title).font(Chrome.label).lineLimit(1).truncationMode(.middle)
+                    Text(panel.title(of: entry)).font(Chrome.label).lineLimit(1).truncationMode(.middle)
                     // The header says it for the shown one; a row says it for the rest.
                     if let command = entry.command, command.isLive {
                         BlinkingDot().storyMark(StoryID.Terminal.running(command.id))
@@ -161,7 +165,7 @@ private struct TerminalListRow: View {
         .padding(.leading, Space.sm)
         .background(panel.selected == entry.id ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
         .onHover { hovered.value = $0 }
-        .help(entry.title)
+        .help(panel.title(of: entry))
         .koreContextMenu("terminal") { terminalOptions(entry, panel: panel) }
         .accessibilityAction(named: "Rename") { panel.startRename(entry) }
     }

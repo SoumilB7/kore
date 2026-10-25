@@ -27,6 +27,7 @@ final class WindowTerminal: ChatStoryline {
             Expect("the output survives hiding") { $0.app.workspace?.storyTerminal.text.contains("directory:") == true },
             Key(KeyChord(.character("`"), [.control, .shift])),
             Expect("two shells in the same panel") { $0.app.workspace?.storyTerminal.count == 2 },
+            Expect("the second shell's default name takes a number") { $0.app.workspace?.storyTerminalTitle?.hasSuffix(" 2") == true },
             Command(.toggleExplorer),
             TerminalResize(),
             Press(.id(StoryID.Terminal.maximize)),
