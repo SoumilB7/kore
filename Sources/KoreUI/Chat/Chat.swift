@@ -392,7 +392,11 @@ package final class Chat: Identifiable {
     // MARK: Account
 
     /// A turn or a background agent is running.
-    var isWorking: Bool { status.isRunning || !transcript.agentSummary.running.isEmpty }
+    var isWorking: Bool { isBusy || !transcript.agentSummary.running.isEmpty }
+
+    /// Its turn runs, or it compacts (Kore's own compaction, the wheel's, /compact): the chat is
+    /// at work, as its tab shows, until the Continue after it, if any, starts its turn.
+    var isBusy: Bool { status.isRunning || context.compacting }
 
     /// Starting the CLI again would end something: a turn, a background agent, or a command left
     /// live (a dev server, a port-forward, an armed scheduled job), which dies with its process.
@@ -575,7 +579,7 @@ package final class Chat: Identifiable {
     /// What this chat keeps awake for: its turn, and its running agents and Codex child threads.
     var awakeWork: Int {
         guard !closed else { return 0 }
-        return (status.isRunning ? 1 : 0) + transcript.agentSummary.running.count
+        return (isBusy ? 1 : 0) + transcript.agentSummary.running.count
     }
 
     /// Sends "Continue": a slept turn's Continue, and the continuation at a limit's reset.

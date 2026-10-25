@@ -306,8 +306,9 @@ private struct TabItem: View {
                         AgentAvatar(
                             index: info.index, name: info.name, status: info.status, background: info.background, place: .tab)
                     } else if let chat = tab.chat {
-                        if chat.status.isRunning {
+                        if chat.isBusy {
                             ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
+                                .storyMark(StoryID.Tabs.tab(tab.id).part(.working))
                         } else {
                             ProviderLogo(provider: chat.provider, size: Size.logoTab)
                         }

@@ -282,7 +282,7 @@ package final class Workspace {
     /// What closing `tab` does now: ask while its chat's turn runs, then (once asked, and past a
     /// double click's time) close it, or the window when `window`.
     func closeStep(_ tab: ChatTab, window: Bool, now: TimeInterval) -> CloseStep {
-        if tab.agent == nil, tab.chat?.status.isRunning == true {
+        if tab.agent == nil, tab.chat?.isBusy == true {
             guard let closing, closing.tab == tab.id else { return .ask }
             if now - closing.at < NSEvent.doubleClickInterval { return .wait }
         }
@@ -319,7 +319,7 @@ package final class Workspace {
     func cancelClose() { closing = nil }
 
     /// The tab showing the close question: asked, and its turn still running.
-    func asking(_ tab: ChatTab) -> Bool { closing?.tab == tab.id && tab.chat?.status.isRunning == true }
+    func asking(_ tab: ChatTab) -> Bool { closing?.tab == tab.id && tab.chat?.isBusy == true }
 
     /// ⌃⇥ / ⌃⇧⇥: the next or previous tab, round from the last to the first.
     func selectAdjacent(_ step: Int) {

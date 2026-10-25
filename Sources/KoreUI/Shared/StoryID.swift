@@ -36,6 +36,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track, outside, extended
         case signIn = "signin", signOut = "signout"
         case `continue`, background
+        /// A chat tab's spinner: its turn runs, or it compacts.
+        case working
         /// A list row's stand-in for the pointer entering it; there while it's lit; a popup
         /// button's keyboard focus ring.
         case hover, lit, focus

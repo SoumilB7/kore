@@ -93,3 +93,49 @@ final class ChangesLine: ChatStoryline {
         ]
     }
 }
+
+/// A chat compacting between turns is at work: its tab shows the spinner, as a running turn's
+/// does, and it counts among the working chats (the quit check), until the compaction is done.
+final class CompactingTabWorking: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(
+            turns: [CLIScript.reply("OK")],
+            compact: [
+                .event(.compactionStarted(auto: false)), .wait(.release),
+                .event(.compacted(at: Date(), auto: false)), .event(.compactionSummary("The conversation so far, in brief.")),
+            ])
+    }
+
+    override func steps() -> [any Step] {
+        let spinner = Locator("the chat tab's spinner") { app in
+            guard let tab = app.workspace?.activeTab else { return .failure(LocatorMiss("no tab", pending: true)) }
+            return .success(StoryID.Tabs.tab(tab.id).part(.working))
+        }
+        return super.steps() + [
+            Send("Say something"), TurnFinished(1),
+            ExpectElement(spinner, .absent),
+            StartCompact(),
+            Expect("compacting, no turn running") { story in
+                let chat = try story.activeChat()
+                return chat.isCompacting && !chat.isRunning
+            },
+            ExpectElement(spinner),
+            Expect("counted as a working chat") { $0.app.workspace?.workingChats == 1 },
+            Snapshot("compacting-tab"),
+            Release(),
+            Expect("the compaction done") { try !$0.activeChat().isCompacting },
+            ExpectElement(spinner, .absent),
+            Expect("no working chat left") { $0.app.workspace?.workingChats == 0 },
+        ]
+    }
+}
+
+/// Clicks the context wheel to compact, without waiting for it to finish.
+struct StartCompact: Step {
+    var label: String { "Start compacting with the context wheel" }
+    func run(_ story: StoryContext) async throws {
+        try story.activeChat().storyCompact()
+        try await story.until("the compaction to start") { try story.activeChat().isCompacting }
+    }
+}
