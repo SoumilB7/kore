@@ -478,20 +478,36 @@ final class CodexBackend: ChatBackend {
         if let queued {
             // While a turn runs, the message joins it (`turn/steer`); otherwise it's the next turn.
             if await session.activeTurnId != nil {
-                translator.pendingSteer.insert(queued)
+                translator.queuedRequest(queued)
+                log.queue("send", "codex", chat: sessionId, id: queued, via: "steer")
                 do {
-                    try await session.steer(input: input, clientId: queued)
+                    let turn = try await session.steer(input: input, clientId: queued)
+                    translator.queuedAccepted(queued, turn: turn)
+                    flush()
                     return true
                 } catch {
-                    translator.pendingSteer.remove(queued)  // the turn ended meanwhile
+                    // The turn may have ended meanwhile. Keep this id waiting through fallback.
                 }
             }
-            translator.nextTurnQueued = queued
+            log.queue("send", "codex", chat: sessionId, id: queued, via: "start")
+            // An active turn can appear between the check above and turn/start. In that case
+            // Codex steers it without another turn/started; match its user-message receipt.
+            translator.queuedRequest(queued, startsTurn: true)
         }
         // Snapshot before Codex can edit anything; the turn itself opens on turn/started.
         translator.files.begin()
         await translator.files.ready()
-        try await session.send(input: input)
+        do {
+            let turn = try await session.send(input: input, clientId: queued)
+            if let queued { translator.queuedAccepted(queued, turn: turn) }
+            flush()
+        } catch {
+            if let queued {
+                translator.queuedRejected(queued)
+                log.queue("rejected", "codex", chat: sessionId, id: queued, via: "start")
+            }
+            throw error
+        }
         return true
     }
 

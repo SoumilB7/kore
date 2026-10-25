@@ -173,15 +173,18 @@ public actor CodexSession {
 
     /// Adds `input` to the running turn (`turn/steer`): it joins after the current item, as a
     /// `userMessage` item with `clientId`. Throws when no turn is running.
-    public func steer(input: JSONValue, clientId: String) async throws {
+    @discardableResult
+    public func steer(input: JSONValue, clientId: String) async throws -> String {
         guard let turnId = activeTurnId else { throw CodexAppServer.Failure.rpc(code: -32600, message: "no active turn to steer") }
-        _ = try await server.request(
+        let accepted = try await server.request(
             "turn/steer",
             ["threadId": .string(threadId), "expectedTurnId": .string(turnId), "input": input, "clientUserMessageId": .string(clientId)])
+        return accepted["turnId"]?.string ?? turnId
     }
 
     /// `input` is an array of Codex UserInput items (text, localImage, image, mention, skill).
-    public func send(input: JSONValue) async throws {
+    @discardableResult
+    public func send(input: JSONValue, clientId: String? = nil) async throws -> String? {
         // Every setting is sent on every turn, as t3code does: some (the reviewer, the
         // collaboration mode) otherwise stay sticky from an earlier turn.
         var params: [String: JSONValue] = [
@@ -193,6 +196,8 @@ public actor CodexSession {
             // Model catalogs can default reasoning summaries to "none".
             "summary": "detailed",
         ]
+        // turn/start can join work already running: its receipt needs the same id as turn/steer.
+        if let clientId { params["clientUserMessageId"] = .string(clientId) }
         if let effort { params["effort"] = .string(effort) }
         if let model {
             params["model"] = .string(model)
@@ -203,7 +208,9 @@ public actor CodexSession {
         let started = try await server.request("turn/start", .object(params))
         // The reply names the turn before `turn/started` does, so a message sent right after
         // can steer it; unless the turn already finished meanwhile.
-        if let id = started["turn"]?["id"]?.string, id != finishedTurnId { activeTurnId = id }
+        let id = started["turn"]?["id"]?.string
+        if let id, id != finishedTurnId { activeTurnId = id }
+        return id
     }
 
     public func respond(to approval: CodexApproval, _ decision: CodexDecision) async throws {
@@ -570,8 +577,11 @@ public actor CodexSession {
         switch method {
         case "turn/started": activeTurnId = params["turn"]?["id"]?.string
         case "turn/completed":
+            let completed = params["turn"]?["id"]?.string
+            // A delayed completion for an older root turn cannot finish the newer one.
+            if let activeTurnId, completed != activeTurnId { return .raw(method: method, params: params) }
             activeTurnId = nil
-            finishedTurnId = params["turn"]?["id"]?.string
+            finishedTurnId = completed
         case "thread/settings/updated":
             if let model = params["threadSettings"]?["model"]?.string { threadModel = model }
             if let settings = params["threadSettings"] { serviceTier = settings["serviceTier"]?.string }

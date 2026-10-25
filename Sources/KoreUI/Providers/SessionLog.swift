@@ -67,6 +67,11 @@ struct SessionLog: Sendable {
         log.write("rescue", ["cli": cli, "chat": chat ?? "-", "action": action])
     }
 
+    /// Queue transport and delivery receipts. Opaque ids and event names, never input text.
+    func queue(_ event: String, _ cli: String, chat: String?, id: String, via: String) {
+        log.write("queue-\(event)", ["cli": cli, "chat": chat ?? "-", "id": id, "via": via])
+    }
+
     func relaunch(_ cli: String, chat: String?, reason: String) {
         log.write("relaunch", ["cli": cli, "chat": chat ?? "-", "reason": reason])
     }

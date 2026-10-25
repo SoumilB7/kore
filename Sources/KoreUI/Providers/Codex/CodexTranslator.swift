@@ -36,9 +36,14 @@ package final class CodexTranslator {
     private var turn: TurnID?
     /// The main thread's last item this turn: where a steered message lands.
     private var lastItem: String?
+    /// Distinct user receipts in this turn, counted once across started/completed notifications.
+    private var turnUserItems: Set<String> = []
     /// Messages Kore steered into the running turn, not yet taken (their `clientId` is Kore's id).
     var pendingSteer: Set<String> = []
-    /// A queued message sent as the next turn (no turn was running to steer into).
+    /// Requests still awaiting a transport reply. An earlier turn ending cannot drop them.
+    private var queuedInFlight: Set<String> = []
+    private var lastEndedTurn: String?
+    /// A queued message sent with turn/start. It may instead join work already running.
     var nextTurnQueued: String?
     /// Per item: its phase (agentMessage), whether text or output streamed, its changes.
     private var phases: [String: String] = [:]
@@ -116,10 +121,7 @@ package final class CodexTranslator {
     private func openTurn(_ id: TurnID, at date: Date) {
         turn = id
         lastItem = nil
-        if let queued = nextTurnQueued, !replaying {
-            nextTurnQueued = nil
-            out.append(.queuedMessage(id: queued, .nextTurn(id)))
-        }
+        turnUserItems.removeAll()
         turnItems = []
         finalMarked = false
         if replaying { replayChanges = [] } else { files.begin() }
@@ -230,9 +232,10 @@ package final class CodexTranslator {
                 return
             }
             pending.removeAll()
-            // Steered messages the turn ended before taking.
-            for id in pendingSteer { out.append(.queuedMessage(id: id, .dropped)) }
-            pendingSteer.removeAll()
+            lastEndedTurn = result.turnId
+            // A request awaiting its RPC reply may target the next turn instead.
+            // Only accepted requests can be dropped by this turn ending.
+            for id in pendingSteer.subtracting(queuedInFlight) { dropQueued(id, via: "turn-ended") }
             var outcome: TurnOutcome =
                 switch result.status {
                 case "interrupted": .interrupted
@@ -292,8 +295,13 @@ package final class CodexTranslator {
             translate(child, agent: .sub(thread))
         case .exited(let status):
             pending.removeAll()
-            for id in pendingSteer { out.append(.queuedMessage(id: id, .dropped)) }
+            for id in pendingSteer {
+                SessionLog.shared.queue("dropped", "codex", chat: threadId, id: id, via: "exited")
+                out.append(.queuedMessage(id: id, .dropped))
+            }
             pendingSteer.removeAll()
+            queuedInFlight.removeAll()
+            nextTurnQueued = nil
             turn = nil
             commands.endAll(at: .now, into: &out)
             out.append(.exited(status: status))
@@ -332,7 +340,7 @@ package final class CodexTranslator {
         if agent == .main, !replaying {
             if item.type == "userMessage" {
                 // A steered message: Codex took it into the running turn.
-                acknowledgeSteer(item)
+                acknowledgeSteer(item, via: "item-started")
                 return
             }
             lastItem = item.id
@@ -362,16 +370,48 @@ package final class CodexTranslator {
         }
     }
 
-    private func acknowledgeSteer(_ item: CodexItem) {
+    /// Register before writing. The RPC reply names the target but is not a delivery receipt.
+    func queuedRequest(_ id: String, startsTurn: Bool = false) {
+        pendingSteer.insert(id)
+        queuedInFlight.insert(id)
+        if startsTurn { nextTurnQueued = id }
+    }
+
+    func queuedAccepted(_ id: String, turn: String?) {
+        queuedInFlight.remove(id)
+        // Its receipt may already have arrived before the RPC resumed its caller.
+        guard pendingSteer.contains(id), let turn, lastEndedTurn == turn else { return }
+        dropQueued(id, via: "accepted-after-turn-ended")
+    }
+
+    func queuedRejected(_ id: String) {
+        pendingSteer.remove(id)
+        queuedInFlight.remove(id)
+        if nextTurnQueued == id { nextTurnQueued = nil }
+    }
+
+    private func dropQueued(_ id: String, via: String) {
+        queuedRejected(id)
+        SessionLog.shared.queue("dropped", "codex", chat: threadId, id: id, via: via)
+        out.append(.queuedMessage(id: id, .dropped))
+    }
+
+    private func acknowledgeSteer(_ item: CodexItem, via: String) {
+        turnUserItems.insert(item.id)
         // Some versions use the supplied id directly; completed-only receipts count too.
         let candidates = [item.raw["clientId"]?.string, item.id].compactMap { $0 }
         guard let id = candidates.first(where: { pendingSteer.contains($0) }) else { return }
-        pendingSteer.remove(id)
-        out.append(.queuedMessage(id: id, .inTurn(after: lastItem)))
+        // Only the matching user receipt proves this input arrived. A turn can start while
+        // the request still waits for its snapshot, or belong to another client's input.
+        let firstPrompt = nextTurnQueued == id && turnUserItems.count == 1 && lastItem == nil
+        queuedRejected(id)  // clear transport bookkeeping; delivery is emitted below
+        SessionLog.shared.queue("receipt", "codex", chat: threadId, id: id, via: via)
+        if firstPrompt, let turn { out.append(.queuedMessage(id: id, .nextTurn(turn))) }
+        else { out.append(.queuedMessage(id: id, .inTurn(after: lastItem))) }
     }
 
     private func itemCompleted(_ item: CodexItem, agent: AgentID) {
-        if agent == .main, !replaying, item.type == "userMessage" { acknowledgeSteer(item) }
+        if agent == .main, !replaying, item.type == "userMessage" { acknowledgeSteer(item, via: "item-completed") }
         let failed = ["failed", "declined"].contains(item.status ?? "")
         if !replaying { commands.completed(item, at: .now, into: &out) }
         inTurnOutput[item.id] = nil
@@ -575,6 +615,8 @@ package final class CodexTranslator {
         }
         pending.removeAll()
         pendingSteer.removeAll()
+        queuedInFlight.removeAll()
+        nextTurnQueued = nil
         turn = nil
         commands.endAll(at: .now, preserving: observed, state: .stopped(by: .user), into: &out)
         out.append(.exited(status: 0))
