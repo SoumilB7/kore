@@ -544,6 +544,12 @@ package final class Workspace {
 
     var unsavedFiles: [FileDocument] { tabs.compactMap { $0.file?.isDirty == true ? $0.file : nil } }
 
+    /// Chats with work a quit would end: a turn or an agent running, or a background command
+    /// (or an armed scheduled job) live.
+    package var workingChats: Int {
+        tabs.filter { $0.agent == nil }.compactMap(\.chat).filter { $0.isWorking || $0.commands.summary.total > 0 }.count
+    }
+
     /// Every open folder window's workspace, for the quit check.
     package static let all = NSHashTable<Workspace>.weakObjects()
 

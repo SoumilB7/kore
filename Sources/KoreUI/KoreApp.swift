@@ -76,11 +76,24 @@ package struct KoreApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let app = AppModel()
 
-    /// Unsaved file edits in any window are asked about first.
+    /// Chats still working, then unsaved file edits, in any window, are asked about first.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let workspaces = Workspace.all.allObjects
+        guard Self.confirmQuit(working: workspaces.reduce(0) { $0 + $1.workingChats }) else { return .terminateCancel }
         let files = workspaces.flatMap(\.unsavedFiles)
         return UnsavedGuard.confirm(files) { workspaces.forEach { $0.saveAll() } } ? .terminateNow : .terminateCancel
+    }
+
+    /// Quitting ends every CLI, and with it what its chat is doing: asked once, Cancel the default.
+    private static func confirmQuit(working: Int) -> Bool {
+        guard working > 0 else { return true }
+        let alert = NSAlert()
+        alert.messageText = working == 1 ? "1 chat is working" : "\(working) chats are working"
+        alert.informativeText = "Quitting stops their turns, agents and background commands."
+        alert.addButton(withTitle: "Cancel")
+        let quit = alert.addButton(withTitle: "Quit")
+        quit.hasDestructiveAction = true
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     /// The CLIs end with Kore: one left running would go on acting in a session Kore resumes

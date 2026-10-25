@@ -49,3 +49,26 @@ struct SetAutoCompactPoint: Step {
         try story.activeChat().storySetAutoCompact(point)
     }
 }
+
+/// Quitting asks first while a chat works: the count it asks with is the chats with a turn
+/// running, and none once it stops.
+final class QuitCountsWorkingChats: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(turns: [[.startTurn, .tool(name: "Bash", detail: "sleep 600", wait: .interrupt)]])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Expect("no chat working yet") { $0.app.workspace?.workingChats == 0 },
+            Send("Run the long job"),
+            WaitForEvent("the command to start") { if case .toolStarted = $0 { true } else { false } },
+            Expect("one chat working while its turn runs", timeout: .seconds(5)) { $0.app.workspace?.workingChats == 1 },
+            Stop(),
+            TurnFinished(1),
+            Expect("none once it's stopped", timeout: .seconds(5), found: { story in
+                "working \(story.app.workspace?.workingChats ?? -1), log \((try? story.scriptedBackend().log.map { "\($0)" }) ?? [])"
+            }) { $0.app.workspace?.workingChats == 0 },
+        ]
+    }
+}
