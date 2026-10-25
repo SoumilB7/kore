@@ -582,8 +582,9 @@ package final class AccountStore {
     }
 
     /// Every chat of the CLI moves to `id`'s login (nil: main) without signing in again: its
-    /// working chats stop first, then each starts again as the new login.
-    func switchLogin(_ provider: String, to id: String?) {
+    /// working chats stop first, then each starts again as the new login. Only a login picked by
+    /// hand gets here (`LoginPick`): no limit, error, timer or restore moves a CLI to another.
+    func switchLogin(_ provider: String, to id: String?, _ pick: LoginPick) {
         guard flows[provider]?.step.live != true, CLIProfiles.active(provider) != id else { return }
         UILog.event("account-switch", ["cli": provider, "login": Self.loginKey(id)])
         stopWork(provider)

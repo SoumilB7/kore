@@ -20,7 +20,7 @@ struct LoginUsageTests {
         ]))
     }
 
-    @Test func eachLoginReadsItsOwnTotalsAndCachesForAMinute() async {
+    @Test func theCardReadsOnlyTheActiveLoginAndAHoverReadsAnother() async throws {
         var calls: [String?] = []
         var time = now
         let store = LoginUsage(read: { _, id in
@@ -28,15 +28,61 @@ struct LoginUsageTests {
             return reading(id == nil ? "me@example.com" : "new@example.com", used: id == nil ? 43 : 0)
         }, clock: { time })
         let main = key(), unused = key("other", email: "new@example.com")
-        await store.refresh([main, unused])
-        #expect(calls == [nil, "other"])
+        // No card shows the list: a hover reads nothing.
+        store.hover(unused)
+        let card = Task { await store.show([main, unused]) }
+        for _ in 0..<100 where calls.isEmpty { try await Task.sleep(for: .milliseconds(2)) }
+        for _ in 0..<100 where store.state(main) == .loading { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(calls == [nil])
         #expect(store.state(main) == .ready(reading(), now))
+        #expect(store.state(unused) == .idle)
+        store.hover(unused)
+        #expect(store.state(unused) == .loading)
+        for _ in 0..<100 where calls.count < 2 || store.state(unused) == .loading { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(calls == [nil, "other"])
         #expect(store.state(unused) == .ready(reading("new@example.com", used: 0), now))
-        await store.refresh([main, unused])
-        #expect(calls.count == 2)
+        // The active login's minute, a hovered login's five.
         time = time.addingTimeInterval(61)
+        store.hover(unused)
         await store.refresh([main, unused])
-        #expect(calls.count == 4)
+        #expect(calls == [nil, "other", nil])
+        time = time.addingTimeInterval(LoginUsage.hoverCache)
+        await store.refresh([main, unused])
+        #expect(calls == [nil, "other", nil, nil])
+        store.hover(unused)
+        for _ in 0..<100 where calls.count < 5 { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(calls == [nil, "other", nil, nil, "other"])
+        card.cancel()
+        await card.value
+        time = time.addingTimeInterval(LoginUsage.hoverCache + 1)
+        store.hover(unused)
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(calls.count == 5)
+    }
+
+    @Test func closingTheCardDropsAHoverReadUnderWay() async throws {
+        var calls = 0
+        let cancelled = Flag()
+        let store = LoginUsage(read: { _, id in
+            calls += 1
+            if id == nil { return reading() }
+            return try await withTaskCancellationHandler {
+                try await Task.sleep(for: .seconds(10))
+                return reading("other@example.com")
+            } onCancel: {
+                Task { @MainActor in cancelled.value = true }
+            }
+        }, clock: { now })
+        let main = key(), other = key("other", email: "other@example.com")
+        let card = Task { await store.show([main, other]) }
+        for _ in 0..<100 where store.state(main) == .loading { try await Task.sleep(for: .milliseconds(2)) }
+        store.hover(other)
+        for _ in 0..<100 where calls < 2 { try await Task.sleep(for: .milliseconds(2)) }
+        card.cancel()
+        await card.value
+        for _ in 0..<100 where !cancelled.value { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(cancelled.value)
+        #expect(store.state(other) == .idle)
     }
 
     @Test func unavailableSignedOutOrMismatchedAccountsNeverBecomeZero() async {
@@ -71,11 +117,17 @@ struct LoginUsageTests {
             return reading(id == nil ? "me@example.com" : "other@example.com")
         })
         let main = key(), other = key("other", email: "other@example.com")
-        async let first: Void = store.refresh([main, other])
+        let card = Task { await store.show([main, other]) }
         async let second: Void = store.refresh([main, other])
-        _ = await (first, second)
+        for _ in 0..<100 where calls == 0 { try? await Task.sleep(for: .milliseconds(2)) }
+        // A hover read waits behind the active login's.
+        store.hover(other)
+        await second
+        for _ in 0..<200 where calls < 2 || active > 0 { try? await Task.sleep(for: .milliseconds(2)) }
         #expect(calls == 2)
         #expect(peak == 1)
+        card.cancel()
+        await card.value
     }
 
     @Test func cancellationStopsQueuedReadsAndNewIdentityCannotSeeOldValues() async throws {
@@ -394,7 +446,7 @@ struct LoginUsageTests {
         let otherLogin = key("other")
         let otherProvider = LoginUsage.Key("codex", .init(id: nil, email: "me@example.com", active: true, workspace: "Example"), generation: 1)
         let otherWorkspace = LoginUsage.Key("claude", .init(id: nil, email: "me@example.com", active: true, workspace: "Other org"), generation: 1)
-        #expect(store.state(otherLogin) == .loading)
+        #expect(store.state(otherLogin) == .idle)
         #expect(store.state(otherProvider) == .loading)
         #expect(store.state(otherWorkspace) == .loading)
         #expect(store.state(key(signedOut: true)) == .loading)

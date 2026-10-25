@@ -334,14 +334,24 @@ private struct SeedLogins: Step {
     }
 }
 
-/// Inactive and never-used logins read their own plan totals. A mismatched account cannot
-/// borrow another row's bars, and closing/reopening the card reuses the minute's cache.
+/// Opening the card reads the active login alone; a login not in use shows a faint placeholder
+/// until its row is hovered, then reads its own plan totals once. A mismatched account cannot
+/// borrow another row's bars, and closing/reopening the card reuses the cached readings.
 final class AccountUsageMeters: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .gate] }
 
     override func steps() -> [any Step] {
         let provider = variant == .codex ? "codex" : "claude"
         let popup = Locator.id(StoryID.Composer.account)
+        let reads = UsageReads()
+        let hover = { (email: String) -> Locator in
+            Locator("\(email)'s row") { _ in
+                guard let id = CLIProfiles.added(provider).first(where: { $0.email == email })?.id else {
+                    return .failure(LocatorMiss("no login for \(email)", pending: true))
+                }
+                return .success(StoryID.Composer.accountLogin(id).part(.hover))
+            }
+        }
         return [
             UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider),
             Do("Add two isolated login fixtures") { _ in
@@ -351,6 +361,7 @@ final class AccountUsageMeters: ChatStoryline {
                 CLIProfiles.adopt(provider, mismatch, email: "missing@example.com", workspace: provider == "codex" ? "ChatGPT Pro Lite" : "Missing Org")
                 CLIProfiles.activate(provider, nil)
                 StorylineSeams.loginUsage = { cli, id in
+                    await reads.add(id ?? "main")
                     let login = CLIProfiles.added(cli).first { $0.id == id }
                     let email = id == nil ? "you@example.com" : login?.email == "unused@example.com" ? "unused@example.com" : "another@example.com"
                     let org = id == nil ? "you@example.com's Organization" : login?.workspace
@@ -364,6 +375,12 @@ final class AccountUsageMeters: ChatStoryline {
             },
             OpenFolder(), StartChat(), WaitForFocus(.id(StoryID.Composer.field)),
             Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
+            Expect("opening reads the active login alone; the others wait for a hover", found: { $0.app.chat?.storyLoginUsage.description }) { story in
+                guard let lines = story.app.chat?.storyLoginUsage else { return false }
+                return reads.logins == ["main"] && lines["main"] == ["Session · 52%", "Weekly · 18%"]
+                    && lines.filter { $0.key != "main" }.values.allSatisfy { $0 == ["Not read"] }
+            },
+            Press(hover("unused@example.com")), Press(hover("missing@example.com")),
             Expect("main and unused login show separate totals; a mismatch shows unavailable", found: { $0.app.chat?.storyLoginUsage.description }) { story in
                 guard let lines = story.app.chat?.storyLoginUsage,
                     let unused = CLIProfiles.added(provider).first(where: { $0.email == "unused@example.com" }),
@@ -416,8 +433,24 @@ final class AccountUsageMeters: ChatStoryline {
                     && values.contains(["Session · 0%", "Weekly · 0%"])
                     && values.contains(["Usage unavailable"])
             },
+            Press(hover("unused@example.com")), RestPastHover(),
+            Expect("hovering again inside five minutes reads nothing more", found: { _ in reads.logins.description }) { _ in
+                reads.logins.filter { $0 != "main" }.count == 2
+            },
         ]
     }
+}
+
+/// Rests past the time a hovered row waits before its login is read, and a beat more.
+private struct RestPastHover: Step {
+    var label: String { "Rest on the row past the hover's wait" }
+    func run(_ story: StoryContext) async throws { try await Task.sleep(for: .milliseconds(900)) }
+}
+
+/// The logins a storyline's usage seam was asked for, in order.
+@MainActor private final class UsageReads {
+    private(set) var logins: [String] = []
+    func add(_ login: String) { logins.append(login) }
 }
 
 /// Privacy mode as it was before a storyline set it.

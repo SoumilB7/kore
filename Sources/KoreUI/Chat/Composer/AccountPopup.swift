@@ -204,9 +204,9 @@ final class AccountState {
         return store.logins(provider).first { $0.id == id && !$0.active }
     }
 
-    func switchLogin(_ id: String?) {
+    func switchLogin(_ id: String?, _ pick: LoginPick) {
         palette = nil
-        store.switchLogin(provider, to: id)
+        store.switchLogin(provider, to: id, pick)
     }
 
     func removeLogin(_ id: String) {
@@ -889,7 +889,8 @@ private struct LoginMenuButton: View {
 /// With more than main, the CLI's logins in place of the header: a row each, the active one's
 /// caption its plan and method and a ✓, main's "Main"; a login last read signed out says so, and
 /// a duplicate says "Duplicate", quietly. A row switches to its login (its caption, under the
-/// pointer, the working chats that stops); its ⋯ (on hover) holds its methods and Remove.
+/// pointer, the working chats that stops); its ⋯ (on hover) holds its methods and Remove. Only the
+/// active login's usage is read when the card opens; another's when its row is hovered.
 private struct LoginList: View {
     let state: AccountState
     let provider: String
@@ -908,12 +909,12 @@ private struct LoginList: View {
                     LoginRow(
                         state: state, login: login, caption: caption(login), plan: login.active ? identity?.plan : nil,
                         reading: login.active && identity == nil && store.status(provider) == .unknown,
-                        usage: usages[index], now: context.date, labelWidth: labelWidth)
+                        usage: usages[index], usageKey: keys[index], now: context.date, labelWidth: labelWidth)
                 }
             }
         }
         .padding(.horizontal, -Space.sm)
-        .task(id: keys) { await LoginUsage.shared.refresh(keys) }
+        .task(id: keys) { await LoginUsage.shared.show(keys) }
     }
 
     private func caption(_ login: AccountStore.Login) -> String? {
@@ -925,6 +926,12 @@ private struct LoginList: View {
     }
 }
 
+/// A login picked by hand: its row clicked, or pressed with Tab's ring on it. Only this file can
+/// make one, so a switch of login is never Kore's own doing.
+struct LoginPick {
+    fileprivate init() {}
+}
+
 struct LoginRow: View {
     let state: AccountState
     let login: AccountStore.Login
@@ -934,15 +941,21 @@ struct LoginRow: View {
     /// Its account being read, just switched to: the spinner in the ✓'s place.
     let reading: Bool
     let usage: LoginUsage.State
+    /// What a hover reads, for a login not in use.
+    let usageKey: LoginUsage.Key
     let now: Date
     let labelWidth: CGFloat
     @StateObject private var hovered = Local(false)
+    @Environment(TabStops.self) private var stops: TabStops?
+
+    /// How long the pointer rests on a row before its login is read: passing over it reads nothing.
+    static let hoverRead: Duration = .milliseconds(300)
 
     var body: some View {
         let id = StoryID.Composer.accountLogin(AccountStore.loginKey(login.id))
         let title = login.email.map(AccountPrivacy.shared.shown) ?? (login.id == nil ? "Main account" : "Account")
         let menuOpen = state.palette == .login(login.id)
-        Button { if !login.active { state.switchLogin(login.id) } } label: {
+        Button { if !login.active { state.switchLogin(login.id, LoginPick()) } } label: {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: Space.sm) {
                     Text(title)
@@ -986,7 +999,13 @@ struct LoginRow: View {
         .onHover { hovered.value = $0 }
         .storyID(id)
         .storyAction(id.part(.hover)) { hovered.value = true }
-        .tabStop(id) { state.switchLogin(login.id) }
+        .task(id: !login.active && (hovered.value || stops?.current == id.raw)) {
+            guard !login.active, hovered.value || stops?.current == id.raw else { return }
+            try? await Task.sleep(for: Self.hoverRead)
+            guard !Task.isCancelled else { return }
+            LoginUsage.shared.hover(usageKey)
+        }
+        .tabStop(id) { state.switchLogin(login.id, LoginPick()) }
         .accessibilityAddTraits(login.active ? .isSelected : [])
     }
 

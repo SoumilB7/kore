@@ -17,7 +17,8 @@ struct LoginMeters: View {
                 note("Sign in to see usage")
             } else {
                 switch state {
-                case .loading: reading
+                case .idle: hatched("usage not read").opacity(0.5)
+                case .loading: hatched("reading usage")
                 case .unavailable: note("Usage unavailable")
                 case .ready(let reading, let at):
                     let bars = LoginUsage.bars(reading)
@@ -64,8 +65,9 @@ struct LoginMeters: View {
         return UsageText.label(bar.title) + (reset.isEmpty ? "" : " (\(reset))")
     }
 
-    /// While the reading comes: the two rows as they'll stand, their bars hatched.
-    private var reading: some View {
+    /// While the reading comes: the two rows as they'll stand, their bars hatched. Fainter, a
+    /// login not in use that isn't read until its row is hovered: the row's height never moves.
+    private func hatched(_ said: String) -> some View {
         ForEach(["Session", "Weekly"], id: \.self) { title in
             HStack(spacing: Space.md) {
                 Text(title).lineLimit(1).frame(width: labelWidth, alignment: .leading)
@@ -74,7 +76,7 @@ struct LoginMeters: View {
                 Text("100%").hidden().monospacedDigit().fixedSize()
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(title), reading usage")
+            .accessibilityLabel("\(title), \(said)")
         }
     }
 

@@ -212,6 +212,7 @@ extension Chat {
             let key = LoginUsage.Key(provider.id, login, generation: store.generation(provider.id))
             let lines: [String]
             switch LoginUsage.shared.state(key) {
+            case .idle: lines = ["Not read"]
             case .loading: lines = ["Reading usage…"]
             case .unavailable: lines = ["Usage unavailable"]
             case .ready(let reading, _): lines = LoginUsage.bars(reading).map { UsageText.label($0.title) + " · " + UsageText.percent($0.used) }

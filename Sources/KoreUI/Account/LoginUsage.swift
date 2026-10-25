@@ -3,7 +3,9 @@ import KoreCore
 import Observation
 
 /// Account-list reads use the login's own CLI folder, never an open chat's session. One read
-/// at a time, only while the list is visible, with a minute's cache shared across windows.
+/// at a time, only while the list is visible, shared across windows. The card reads the active
+/// login alone (a minute's cache); a login not in use is read only when its row is hovered or
+/// ringed (`hover`), once per five minutes, so opening the card never starts a CLI as it.
 @MainActor @Observable
 final class LoginUsage {
     static let shared = LoginUsage()
@@ -14,6 +16,8 @@ final class LoginUsage {
         let email: String?
         let workspace: String?
         let signedOut: Bool
+        /// The login every CLI starts with: the only one the card reads by itself.
+        let active: Bool
         let generation: Int
 
         init(_ provider: String, _ login: AccountStore.Login, generation: Int) {
@@ -22,6 +26,7 @@ final class LoginUsage {
             email = login.email?.lowercased()
             workspace = login.workspace
             signedOut = login.signedOut
+            active = login.active
             self.generation = generation
         }
 
@@ -31,7 +36,14 @@ final class LoginUsage {
         }
     }
 
+    /// How long a reading holds before the card reads it again: the active login's, and one
+    /// read on hover.
+    static let activeCache: TimeInterval = 60
+    static let hoverCache: TimeInterval = 5 * 60
+
     enum State: Equatable {
+        /// A login not in use, not read yet: nothing is read until its row is hovered.
+        case idle
         case loading
         case ready(PlanReading, Date)
         case unavailable
@@ -50,6 +62,8 @@ final class LoginUsage {
     @ObservationIgnored private var waiters: [UUID: Set<UUID>] = [:]
     @ObservationIgnored private var tail: Task<Void, Never>?
     @ObservationIgnored private var epoch = 0
+    /// Cards showing each provider's list: hover reads run only while one is.
+    @ObservationIgnored private var viewers: [String: Int] = [:]
     private let read: @MainActor (String, String?) async throws -> PlanReading
     private let clock: @MainActor () -> Date
 
@@ -74,7 +88,7 @@ final class LoginUsage {
         self.clock = clock
     }
 
-    func state(_ key: Key) -> State { states[key] ?? confirmed(key) ?? .loading }
+    func state(_ key: Key) -> State { states[key] ?? confirmed(key) ?? (key.active ? .loading : .idle) }
 
     /// A global account generation changes all keys, even for logins whose identity did not
     /// change. Their own last verified reading stays visible until their new read completes.
@@ -96,6 +110,40 @@ final class LoginUsage {
         tail = nil
         states = [:]
         attempted = [:]
+        viewers = [:]
+    }
+
+    /// A card's list for as long as it shows: the active login read, then hover reads allowed
+    /// until the last card of the provider goes, which drops any still under way.
+    func show(_ keys: [Key]) async {
+        guard let provider = keys.first?.provider else { return }
+        let epoch = epoch
+        viewers[provider, default: 0] += 1
+        await refresh(keys)
+        while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
+        guard self.epoch == epoch else { return }
+        viewers[provider, default: 1] -= 1
+        guard viewers[provider] == 0 else { return }
+        viewers[provider] = nil
+        for (key, request) in requests where key.provider == provider && !key.active && waiters[request.id] == nil {
+            request.task.cancel()
+            requests[key] = nil
+            attempted[key] = nil
+            if states[key] == .loading { states[key] = nil }
+        }
+    }
+
+    /// The pointer (or Tab's ring) rests on a login not in use: one read of it, unless one ran
+    /// in the last five minutes or runs now. Nothing while no card shows its list.
+    func hover(_ key: Key) {
+        guard !key.active, !key.signedOut, key.email != nil, viewers[key.provider, default: 0] > 0,
+            currentKeys[key.provider]?.contains(key) == true, requests[key] == nil
+        else { return }
+        if let at = attempted[key], clock().timeIntervalSince(at) < Self.hoverCache { return }
+        if case .ready(_, let at) = state(key), clock().timeIntervalSince(at) < Self.hoverCache { return }
+        requests[key] = start(key, epoch: epoch)
+        // Its place shows the reading coming, behind any read before it.
+        if case .ready = state(key) { } else { states[key] = .loading }
     }
 
     /// Refresh in display order. Cancelling the view stops queued work and the current read;
@@ -125,47 +173,58 @@ final class LoginUsage {
                 states[key] = .unavailable
                 continue
             }
+            // A login not in use waits for its row's hover.
+            guard key.active else { continue }
             if let request = requests[key], !request.task.isCancelled {
                 await wait(request)
                 if !request.task.isCancelled { continue }
             }
             guard !Task.isCancelled, self.epoch == epoch, currentKeys[key.provider]?.contains(key) == true else { return }
             if requests[key]?.task.isCancelled == true { attempted[key] = nil }
-            if let at = attempted[key], clock().timeIntervalSince(at) < 60 { continue }
-            let before = tail
-            let token = UUID()
-            let completion = Completion()
-            let task = Task {
-                defer { completion.done = true }
-                await before?.value
-                guard !Task.isCancelled, self.epoch == epoch, requests[key]?.id == token else { return }
-                if case .ready = states[key] { } else { states[key] = .loading }
-                attempted[key] = clock()
-                UILog.event("account-usage-read", ["cli": key.provider, "login": AccountStore.loginKey(key.login)])
-                let reading = try? await read(key.provider, key.login)
-                guard !Task.isCancelled else {
-                    if requests[key]?.id == token {
-                        if case .ready = states[key] { } else { states[key] = nil }
-                        attempted[key] = nil
-                    }
-                    return
-                }
-                guard self.epoch == epoch, requests[key]?.id == token else { return }
-                if let reading {
-                    // A confirmed different identity must clear the old reading immediately.
-                    states[key] = Self.matches(reading.account, key) ? .ready(reading, clock()) : .unavailable
-                } else if case .ready = states[key] {
-                    // Transient failures keep the real timestamp of the last confirmed read.
-                } else {
-                    states[key] = .unavailable
-                }
-            }
-            let request = Request(id: token, task: task, completion: completion)
+            if let at = attempted[key], clock().timeIntervalSince(at) < Self.activeCache { continue }
+            let request = start(key, epoch: epoch)
             requests[key] = request
-            tail = task
             await wait(request)
-            if self.epoch == epoch, requests[key]?.id == token { requests[key] = nil }
+            if self.epoch == epoch, requests[key]?.id == request.id { requests[key] = nil }
         }
+    }
+
+    /// One read of `key`, after any before it: one CLI at a time across logins.
+    private func start(_ key: Key, epoch: Int) -> Request {
+        let before = tail
+        let token = UUID()
+        let completion = Completion()
+        let task = Task {
+            defer {
+                completion.done = true
+                // A hover read has no waiter to clear it.
+                if !key.active, self.epoch == epoch, requests[key]?.id == token { requests[key] = nil }
+            }
+            await before?.value
+            guard !Task.isCancelled, self.epoch == epoch, requests[key]?.id == token else { return }
+            if case .ready = states[key] { } else { states[key] = .loading }
+            attempted[key] = clock()
+            UILog.event("account-usage-read", ["cli": key.provider, "login": AccountStore.loginKey(key.login)])
+            let reading = try? await read(key.provider, key.login)
+            guard !Task.isCancelled else {
+                if requests[key]?.id == token {
+                    if case .ready = states[key] { } else { states[key] = nil }
+                    attempted[key] = nil
+                }
+                return
+            }
+            guard self.epoch == epoch, requests[key]?.id == token else { return }
+            if let reading {
+                // A confirmed different identity must clear the old reading immediately.
+                states[key] = Self.matches(reading.account, key) ? .ready(reading, clock()) : .unavailable
+            } else if case .ready = states[key] {
+                // Transient failures keep the real timestamp of the last confirmed read.
+            } else {
+                states[key] = .unavailable
+            }
+        }
+        tail = task
+        return Request(id: token, task: task, completion: completion)
     }
 
     /// A closing window releases its interest; it cancels the CLI only if no other window
