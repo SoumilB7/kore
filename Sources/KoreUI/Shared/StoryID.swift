@@ -210,6 +210,13 @@ extension StoryID {
         package static func other(_ question: String) -> StoryID { StoryID(.approval, "other", key: question) }
         /// A question's option, by the question's id and the option's label.
         package static func option(_ question: String, _ label: String) -> StoryID { StoryID(.approval, "option", key: question + "/" + label) }
+        /// A question card's tab, by the card and the question's place (0-based); `.part(.done)`
+        /// is there while its question is answered, `.part(.lit)` while it's the one shown. The
+        /// card's `.part(.previous)` and `.part(.next)` are the narrow card's ‹ ›, its
+        /// `.part(.focus)` is there while it has the keys, and `.part(.done)` while Submit would send.
+        package static func tab(_ card: String, _ index: Int) -> StoryID { StoryID(.approval, "tab", key: "\(card)/\(index)") }
+        /// The preview shown in a question's well, by the question's id and the option's label.
+        package static func preview(_ question: String, _ label: String) -> StoryID { StoryID(.approval, "preview", key: question + "/" + label) }
     }
 
     package enum AgentMap {
@@ -375,6 +382,13 @@ extension StoryID {
             StoryID(.approval, key: k).part(.keepplanning), StoryID(.approval, key: k).part(.autoaccept),
             StoryID(.approval, key: k).part(.submit), StoryID(.approval, "other", key: k),
             StoryID(.approval, "other", key: k).part(.field), StoryID(.approval, "option", key: k),
+            StoryID(.approval, "option", key: k).part(.ticks), StoryID(.approval, "option", key: k).part(.lit),
+            StoryID(.approval, "option", key: k).part(.hover), StoryID(.approval, "other", key: k).part(.ticks),
+            StoryID(.approval, "other", key: k).part(.lit), StoryID(.approval, "other", key: k).part(.hover),
+            StoryID(.approval, "tab", key: k), StoryID(.approval, "tab", key: k).part(.done),
+            StoryID(.approval, "tab", key: k).part(.lit), StoryID(.approval, "preview", key: k),
+            StoryID(.approval, key: k).part(.previous), StoryID(.approval, key: k).part(.next),
+            StoryID(.approval, key: k).part(.focus), StoryID(.approval, key: k).part(.done),
             StoryID(.agentmap, "row", key: k), StoryID(.agentmap, "wires", key: k), StoryID(.agentmap, "ended", key: k),
             StoryID(.terminal, "entry", key: k), StoryID(.terminal, "entry", key: k).part(.close),
             StoryID(.history, "row", key: k),

@@ -746,6 +746,17 @@ package final class ClaudeTranslator {
 
     // MARK: - Approvals
 
+    /// AskUserQuestion's questions, each by its text (the key Claude's answers go back under),
+    /// with its tab's `header` and each option's `preview`.
+    static func questions(_ input: JSONValue) -> [Approval.Question] {
+        (input["questions"]?.array ?? []).map { q in
+            let text = q["question"]?.string ?? ""
+            return Approval.Question(
+                id: text, text: text, header: q["header"]?.string ?? "", options: ToolText.options(q["options"]),
+                multiple: q["multiSelect"]?.bool ?? false)
+        }
+    }
+
     private func approval(_ r: PermissionRequest) -> Approval {
         let agent = r.toolUseId.flatMap { toolAgent[$0] } ?? .main
         if r.toolName == "ExitPlanMode" {
@@ -754,13 +765,8 @@ package final class ClaudeTranslator {
                 questions: [], plan: r.input["plan"]?.string ?? "", agent: agent)
         }
         if r.isQuestion {
-            let questions = (r.input["questions"]?.array ?? []).map { q in
-                let text = q["question"]?.string ?? ""
-                return Approval.Question(
-                    id: text, text: text, options: ToolText.options(q["options"]), multiple: q["multiSelect"]?.bool ?? false)
-            }
             return Approval(
-                id: r.id, title: "", detail: nil, body: nil, canAlwaysAllow: false, questions: questions, agent: agent)
+                id: r.id, title: "", detail: nil, body: nil, canAlwaysAllow: false, questions: Self.questions(r.input), agent: agent)
         }
         var ask = Approval(
             id: r.id, title: "Allow \(r.toolName)?", detail: r.description,

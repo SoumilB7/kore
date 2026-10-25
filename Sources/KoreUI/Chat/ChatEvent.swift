@@ -453,29 +453,57 @@ package struct Approval: Identifiable, Sendable {
     package struct Option: Sendable {
         package let label: String
         package let description: String
+        /// What picking it would look like (Claude's `preview`): monospace text, nil for none.
+        package let preview: String?
 
-        package init(label: String, description: String) {
+        package init(label: String, description: String, preview: String? = nil) {
             self.label = label
             self.description = description
+            self.preview = preview
         }
     }
 
     package struct Question: Sendable {
         package let id: String
         package let text: String
+        /// The CLI's short name for it (`header`), for the card's tabs; empty when it sent none.
+        package let header: String
         package let options: [Option]
         /// Any number of options can be picked (Claude's multiSelect).
         package let multiple: Bool
         /// What's typed is hidden as it's typed (a Codex secret).
         package let secret: Bool
+        /// It takes a typed answer, Other (always for Claude; Codex's isOther).
+        package let other: Bool
 
-        package init(id: String, text: String, options: [Option], multiple: Bool = false, secret: Bool = false) {
+        package init(
+            id: String, text: String, header: String = "", options: [Option], multiple: Bool = false, secret: Bool = false,
+            other: Bool = true
+        ) {
             self.id = id
             self.text = text
+            self.header = header
             self.options = options
             self.multiple = multiple
             self.secret = secret
+            self.other = other || options.isEmpty
         }
+
+        /// Its tab's name: the header, else the question's first words, else "Q<n>".
+        package func tabName(_ index: Int) -> String {
+            let header = header.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !header.isEmpty { return header }
+            var name = ""
+            for word in text.split(whereSeparator: \.isWhitespace) {
+                if !name.isEmpty && name.count + word.count >= Self.tabNameMax { break }
+                name += (name.isEmpty ? "" : " ") + word
+            }
+            name = name.trimmingCharacters(in: .punctuationCharacters)
+            return name.isEmpty ? "Q\(index + 1)" : name
+        }
+
+        /// A header-less tab's name stops at about this many characters, on a word.
+        static let tabNameMax = 16
     }
 
     package let id: String

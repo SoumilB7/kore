@@ -5,6 +5,8 @@ struct ApprovalsView: View {
     let chat: Chat
     /// The tallest a question card grows before its questions scroll.
     var maxHeight: CGFloat = .infinity
+    /// Gives the keys to the composer (true), or takes them from it (false): a question card's.
+    var composerKeys: (Bool) -> Void = { _ in }
 
     var body: some View {
         ForEach(chat.approvals.pending) { approval in
@@ -18,7 +20,10 @@ struct ApprovalsView: View {
                     chat.answer(approval, $0)
                 }
             } else {
-                QuestionCard(approval: approval, maxHeight: maxHeight) { chat.answer(approval, .answers($0)) }
+                QuestionCard(
+                    approval: approval, maxHeight: maxHeight, composerEmpty: { [chat] in chat.draft.isEmpty },
+                    composerKeys: composerKeys
+                ) { chat.answer(approval, .answers($0)) }
             }
         }
         if chat.approvals.offerImplementPlan && !chat.status.isRunning {

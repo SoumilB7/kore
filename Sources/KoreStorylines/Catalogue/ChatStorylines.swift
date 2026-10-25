@@ -352,7 +352,8 @@ final class ApproveAndDeny: ChatStoryline {
 }
 
 /// A question card: nothing goes until Submit, and Submit waits for every question; several
-/// can be picked where the question allows it, and Other takes a typed answer.
+/// can be picked where the question allows it, and Other takes a typed answer. The answers go
+/// back as they always have: each question's picks in their order, then what was typed.
 final class QuestionCardSubmit: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .approvals, .gate] }
     static let layout = "Which layout?"
@@ -381,6 +382,8 @@ final class QuestionCardSubmit: ChatStoryline {
                 try !story.scriptedBackend().log.contains { if case .respond = $0 { true } else { false } }
                     && story.activeChat().pendingApprovals.contains { $0.id == "q1" }
             },
+            // The second question is the second tab's.
+            Press(.id(StoryID.Approval.tab("q1", 1))),
             Self.option(Self.colours, "Red"),
             Self.option(Self.colours, "Blue"),
             Press(.id(StoryID.Approval.other(Self.colours))),

@@ -448,6 +448,8 @@ final class PlanAllowSwitch: ChatStoryline {
             Send("Ask me"),
             WaitForElement(.id(submit)),
             Expect("the question waits") { try $0.activeChat().pendingApprovals.map(\.id) == ["q1"] },
+            // Its card up, the line's words go secondary: the card's ticks are the only accent ones.
+            Snapshot("plan-allow-line-card"),
             Press(.id(StoryID.Approval.option("Which?", "List"))),
             Press(.id(submit)),
             TurnFinished(2),

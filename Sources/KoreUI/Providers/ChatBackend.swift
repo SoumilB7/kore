@@ -269,7 +269,9 @@ enum ToolText {
 
     static func options(_ json: JSONValue?) -> [Approval.Option] {
         (json?.array ?? []).map {
-            Approval.Option(label: $0["label"]?.string ?? "", description: $0["description"]?.string ?? "")
+            Approval.Option(
+                label: $0["label"]?.string ?? "", description: $0["description"]?.string ?? "",
+                preview: $0["preview"]?.string.flatMap { $0.isEmpty ? nil : $0 })
         }
     }
 

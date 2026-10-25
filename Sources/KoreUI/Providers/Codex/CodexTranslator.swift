@@ -710,6 +710,14 @@ package final class CodexTranslator {
 
     // MARK: - Approvals
 
+    /// One of request_user_input's questions, with its tab's `header`. Other only where it takes
+    /// free text: `isOther`, read as true when it isn't sent.
+    static func question(_ q: JSONValue) -> Approval.Question {
+        Approval.Question(
+            id: q["id"]?.string ?? "", text: q["question"]?.string ?? "", header: q["header"]?.string ?? "",
+            options: ToolText.options(q["options"]), secret: q["isSecret"]?.bool ?? false, other: q["isOther"]?.bool ?? true)
+    }
+
     private func approval(_ a: CodexApproval) -> Approval {
         let thread = a.params["threadId"]?.string
         let agent: AgentID = thread.map { $0 == threadId ? .main : .sub($0) } ?? .main
@@ -733,12 +741,7 @@ package final class CodexTranslator {
             ask.signIn = true
             return ask
         case .userInput:
-            let questions = a.questions.map { q in
-                Approval.Question(
-                    id: q["id"]?.string ?? "", text: q["question"]?.string ?? "", options: ToolText.options(q["options"]),
-                    secret: q["isSecret"]?.bool ?? false)
-            }
-            return make("", questions: questions)
+            return make("", questions: a.questions.map(Self.question))
         }
     }
 

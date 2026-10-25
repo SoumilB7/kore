@@ -61,7 +61,7 @@ struct ChatView: View {
             }
             .onDrop(of: [.fileURL], delegate: ImportDrop(state: chat.importer, offered: Self.offersImport(chat)) { openImport(chat, file: $0) })
             VStack(spacing: Space.lg) {
-                ApprovalsView(chat: chat, maxHeight: height.value > 0 ? height.value / 2 : .infinity)
+                ApprovalsView(chat: chat, maxHeight: height.value > 0 ? height.value / 2 : .infinity) { composerFocused = $0 }
                 if Self.offersImport(chat) {
                     ImportLine(state: chat.importer) { openImport(chat) }
                 }
