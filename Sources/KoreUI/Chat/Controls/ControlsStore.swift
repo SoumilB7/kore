@@ -13,6 +13,15 @@ final class ControlsStore {
     private(set) var models: [ModelOption] = []
     var modelId: String?
     var effort: String?
+    /// Fast mode: as the CLI last said, or as the user just set it.
+    var fastMode = false
+    /// On, at standard speed for now (after a rate limit).
+    private(set) var fastPaused = false
+    /// The account can have fast mode, as the CLI last said.
+    private(set) var fastOffered: Bool?
+    private(set) var fastKnown = false
+    private(set) var fastUnavailable: String?
+    var fastChanging = false
     private(set) var commands: [SlashCommand] = []
     /// Who changed the mode last, when it was the agent ("Claude", a sub-agent's name); nil
     /// once the user sets it. The pill's help says so.
@@ -42,10 +51,26 @@ final class ControlsStore {
             modelId = controls.model
             effort = controls.effort
             commands = controls.commands
+            // A fresh CLI may belong to another login. Its capability report must not inherit
+            // an account blocker (or permission) from the previous process.
+            fastKnown = false
+            fastOffered = nil
+            fastUnavailable = nil
+            (fastMode, fastPaused) = (false, false)
         case .modeChanged(let change):
             mode = change.mode
         case .planModeChanged(let change):
             planMode = change.on
+        case .fastModeChanged(let report):
+            // A model without it reports it off, and the switch is hidden on it: the CLI keeps the
+            // setting for the next model that has it.
+            fastKnown = true
+            guard currentModel?.supportsFastMode != false else { return }
+            (fastMode, fastPaused) = (report.on, report.on && report.paused)
+            if let offered = report.offered {
+                fastOffered = offered
+                fastUnavailable = offered ? nil : report.unavailable ?? "Unavailable for this account"
+            }
         case .replayed(let events):
             events.forEach(apply)
         default:
@@ -70,6 +95,11 @@ final class ControlsStore {
     var tint: Color? { activeMode.tint }
 
     var currentModel: ModelOption? { models.first { $0.id == modelId } }
+
+    /// A supported model and a CLI that reports fast mode. Unknown account availability
+    /// allows an explicit opt-in; an actual blocker stays visible with its reason.
+    var fastModeShown: Bool { fastKnown && currentModel?.supportsFastMode == true }
+    var fastModeEnabled: Bool { fastModeShown && (fastMode || fastOffered != false) && !fastChanging }
 
     var modelLabel: String { currentModel?.name ?? modelId ?? provider.name }
 

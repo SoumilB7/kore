@@ -41,10 +41,11 @@ final class PickerState {
 }
 
 /// The model chip's popup (model-picker.html, A): one row per family, its versions newest first
-/// as chips, the current model the one accent chip; a rule, then effort as a slider. A pick
-/// applies at once and the popup stays, so effort can follow; Return picks and closes, Space
-/// picks and stays, Esc, a click outside or typing closes it. Chips that don't fit fold into a
-/// "…" chip, which wraps the row when pressed.
+/// as chips, the current model the one accent chip; a rule, then effort as a slider, and fast
+/// mode's switch where the account and the model can have it. A pick applies at once and the
+/// popup stays, so effort can follow; Return picks and closes, Space picks and stays, Esc, a
+/// click outside or typing closes it. Chips that don't fit fold into a "…" chip, which wraps the
+/// row when pressed.
 struct ModelPicker: View {
     let chat: Chat
     let state: PickerState
@@ -70,10 +71,12 @@ struct ModelPicker: View {
                     .frame(minHeight: Size.Picker.row)
                 }
                 let scale = controls.effortScale
-                if !scale.isEmpty {
+                if !scale.isEmpty || controls.fastModeShown {
                     Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
                         .gridCellColumns(2)
                         .padding(.vertical, Space.sm)
+                }
+                if !scale.isEmpty {
                     GridRow(alignment: .top) {
                         let offered = controls.currentModel?.efforts ?? []
                         Text("Effort")
@@ -85,9 +88,23 @@ struct ModelPicker: View {
                             set: { chat.setEffort($0) })
                     }
                 }
+                if controls.fastModeShown {
+                    FastModeRow(
+                        on: controls.fastMode, paused: controls.fastPaused, unavailable: controls.fastUnavailable,
+                        enabled: controls.fastModeEnabled, lit: state.lit == .fast) {
+                        flipFast()
+                    } hover: {
+                        hover(.fast, $0)
+                    }
+                    .gridCellColumns(2)
+                    .storyID(StoryID.Composer.fastMode)
+                    .tabStop(StoryID.Composer.fastMode) { flipFast() }
+                }
             }
         }
     }
+
+    private func flipFast() { chat.setFastMode(!controls.fastMode) }
 
     // MARK: Rows
 
@@ -194,11 +211,13 @@ struct ModelPicker: View {
         return families[row].members[column].model
     }
 
-    /// ←→ versions (or, on the slider, the level, live), ↑↓ families and down to the slider;
-    /// Return picks and closes, Space picks and stays. Any other key isn't the picker's.
+    /// ←→ versions (or, on the slider, the level, live), ↑↓ families and down to the slider and
+    /// the switch; Return picks (or flips) and closes, Space picks and stays. Any other key isn't
+    /// the picker's.
     private func key(_ event: NSEvent, _ families: [ModelFamily]) -> Bool {
         guard event.modifierFlags.isDisjoint(with: [.command, .control, .option]) else { return false }
-        let grid = ModelPickerGrid(rows: families.map(\.members.count))
+        let grid = ModelPickerGrid(
+            rows: families.map(\.members.count), effort: !controls.effortScale.isEmpty, fast: controls.fastModeShown)
         let move: ModelPickerGrid.Move? =
             switch event.keyCode {
             case 123: .left
@@ -220,8 +239,7 @@ struct ModelPicker: View {
                 state.lit = .effort
                 return true
             }
-            let next = grid.move(from, move)
-            state.lit = next == .effort && controls.effortScale.isEmpty ? from : next
+            state.lit = grid.move(from, move)
             return true
         }
         // Nothing lit: Return and Space are the Tab ring's, or close it.
@@ -229,10 +247,12 @@ struct ModelPicker: View {
         switch event.keyCode {
         case 36, 76:
             if let model = model(at: state.lit, families) { pick(model) }
+            if state.lit == .fast { flipFast() }
             state.close()
             return true
         case 49:
             if let model = model(at: state.lit, families) { pick(model) }
+            if state.lit == .fast { flipFast() }
             return true
         default:
             return false
@@ -274,6 +294,57 @@ private struct VersionChip: View {
     private var fill: Color {
         if current { return lit ? Theme.accentFillHover : Theme.commandFill }
         return lit ? Theme.Row.selected(.surface) : .clear
+    }
+}
+
+/// Fast mode: its name in line with the families', a switch at the end; the hover says what it
+/// costs, or that a rate limit has it at standard speed for now.
+private struct FastModeRow: View {
+    let on: Bool
+    let paused: Bool
+    let unavailable: String?
+    let enabled: Bool
+    let lit: Bool
+    let flip: () -> Void
+    let hover: (Bool) -> Void
+
+    var body: some View {
+        Button(action: flip) {
+            HStack(spacing: Space.md) {
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    Text("Fast mode")
+                        .font(TextStyle.bodyMedium)
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                    if let unavailable {
+                        Text(unavailable)
+                            .font(TextStyle.caption)
+                            .foregroundStyle(Theme.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: Space.xl)
+                Toggle("", isOn: Binding(get: { on }, set: { if $0 != on { flip() } }))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .tint(Theme.accent)
+            }
+            .padding(.horizontal, Space.md)
+            .frame(maxWidth: .infinity, minHeight: Size.Picker.row, alignment: .leading)
+            .hoverFill(lit, Theme.Row.selected(.surface))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        // Its name in line with the families' names, its fill reaching past it.
+        .padding(.horizontal, -Space.md)
+        .onHover(perform: hover)
+        .help(unavailable ?? (paused ? "Standard speed for now, after a rate limit" : "Uses extra usage"))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Fast mode"))
+        .accessibilityValue(Text(unavailable ?? (on ? "On" : "Off")))
+        .accessibilityAddTraits(.isButton)
     }
 }
 

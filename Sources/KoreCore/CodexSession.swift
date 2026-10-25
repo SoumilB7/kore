@@ -102,6 +102,9 @@ public actor CodexSession {
     /// The model Codex has the loaded thread on: what it opened with, then each turn's
     /// (`thread/settings/updated`). A `setModel` reaches it with the next turn, or `compact`.
     public private(set) var threadModel: String?
+    /// The thread's service tier (`priority`: fast; nil: standard), as Codex reports it when it
+    /// opens the thread and as each turn starts (`thread/settings/updated`), or as Kore set it.
+    public private(set) var serviceTier: String?
     /// While `reopen` waits for Codex to unload the thread.
     private var unloading: CheckedContinuation<Void, Never>?
     private var unloaded = false
@@ -294,6 +297,25 @@ public actor CodexSession {
         self.effort = effort
     }
 
+    /// The thread's service tier from the next turn; nil for standard.
+    public func setServiceTier(_ tier: String?) async throws {
+        _ = try await server.request("thread/settings/update", Self.serviceTierParams(threadId, tier))
+        serviceTier = tier
+    }
+
+    static func serviceTierParams(_ thread: String, _ tier: String?) -> JSONValue {
+        // An explicit null clears it; leaving the key out would keep it.
+        ["threadId": .string(thread), "serviceTier": tier.map(JSONValue.string) ?? .null]
+    }
+
+    /// A model's fast tier, from its `model/list` entry: the one of its `serviceTiers` named
+    /// Fast (Codex's `priority`); nil when it has none.
+    public nonisolated static func fastTier(_ model: JSONValue) -> String? {
+        let tiers = model["serviceTiers"]?.array ?? []
+        let fast = tiers.first { $0["name"]?.string?.lowercased() == "fast" } ?? tiers.first { $0["id"]?.string == "priority" }
+        return fast?["id"]?.string
+    }
+
     /// Models this account can use: `[{id, model, displayName, isDefault, ...}]`.
     public func models() async throws -> [JSONValue] {
         try await server.request("model/list")["data"]?.array ?? []
@@ -352,6 +374,11 @@ public actor CodexSession {
         }
         let result = try await server.request("thread/resume", Self.reopenParams(threadId, model: model, cwd: options.cwd, permissions))
         threadModel = result["model"]?.string
+        // A tier set since the last turn may not survive the reopen. Keep the actual value
+        // if restoring it fails, and surface the error before any work uses the wrong tier.
+        let wantedTier = serviceTier
+        serviceTier = result["serviceTier"]?.string
+        if serviceTier != wantedTier { try await setServiceTier(wantedTier) }
         guard threadModel == model else {
             throw CodexAppServer.Failure.rpc(
                 code: -32600, message: "Codex kept this thread on \(threadModel ?? "its model"); send a message to move it to \(model)")
@@ -499,6 +526,7 @@ public actor CodexSession {
         model = result["model"]?.string
         threadModel = model
         if effort == nil { effort = result["reasoningEffort"]?.string }
+        serviceTier = result["serviceTier"]?.string
         sink.yield(.threadStarted(threadId: threadId, model: result["model"]?.string, raw: result))
 
         // Holds the session alive for as long as the app-server runs.
@@ -542,6 +570,7 @@ public actor CodexSession {
             finishedTurnId = params["turn"]?["id"]?.string
         case "thread/settings/updated":
             if let model = params["threadSettings"]?["model"]?.string { threadModel = model }
+            if let settings = params["threadSettings"] { serviceTier = settings["serviceTier"]?.string }
         case "thread/closed": didUnload()
         default: break
         }

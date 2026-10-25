@@ -58,6 +58,10 @@ final class CodexBackend: ChatBackend {
     static let pollBackoff: [Int] = [10, 30, 60, 120]
     /// A pane listing commands is open: they're read more often.
     private var watching = false
+    /// Each model's fast service tier (`model/list`), for those that have one.
+    private var fastTiers: [String: String] = [:]
+    /// Fast mode as last reported to the chat.
+    private var fastReported: Bool?
 
     var sessionId: String? { translator.threadId ?? resumeId }
 
@@ -165,7 +169,41 @@ final class CodexBackend: ChatBackend {
                 self.handle(event)
             }
         }
-        yield(.controlsLoaded(await controls(session)))
+        let controls = await controls(session)
+        fastReported = nil
+        yield(.controlsLoaded(controls))
+        await settleFastMode(session, model: controls.model)
+    }
+
+    private func fastTier(_ model: String?) -> String? { model.flatMap { fastTiers[$0] } }
+
+    /// The thread on the user's choice, when they made one in this chat (a launch again, a
+    /// fork), and the chat told what it runs on.
+    private func settleFastMode(_ session: CodexSession, model: String?) async {
+        var tier = await session.serviceTier
+        if options.fastMode != nil || isFast(tier) {
+            let wanted = options.fastMode ?? true
+            let want = wanted ? fastTier(model) : nil
+            // A resumed/forked chat may choose a model without a fast tier.
+            if tier != want {
+                do {
+                    try await session.setServiceTier(want)
+                    tier = want
+                } catch {
+                    yield(.notice("Couldn't restore fast mode: \(error.localizedDescription)", isError: true))
+                }
+            }
+        }
+        reportFast(tier)
+    }
+
+    private func isFast(_ tier: String?) -> Bool { tier.map(Set(fastTiers.values).contains) ?? false }
+
+    private func reportFast(_ tier: String?) {
+        let on = isFast(tier)
+        guard on != fastReported else { return }
+        fastReported = on
+        yield(.fastModeChanged(FastModeReport(on: on, offered: true)))
     }
 
     /// Through the chat's app-server; once it has exited, or before it starts, a short-lived one.
@@ -211,9 +249,11 @@ final class CodexBackend: ChatBackend {
         let models = list.compactMap { json -> ModelOption? in
             guard let id = json["id"]?.string, json["hidden"]?.bool != true else { return nil }
             let efforts = json["supportedReasoningEfforts"]?.array?.compactMap { $0["reasoningEffort"]?.string ?? $0.string }
+            let tier = CodexSession.fastTier(json)
+            fastTiers[id] = tier
             return ModelOption(
                 id: id, name: json["displayName"]?.string ?? id, resolved: json["model"]?.string ?? id,
-                efforts: efforts ?? [])
+                efforts: efforts ?? [], supportsFastMode: tier != nil)
         }
         var current = await session.model
         titleModel = models.first { $0.id.contains("luna") || $0.id.contains("mini") || $0.id.contains("nano") }?.id
@@ -314,6 +354,10 @@ final class CodexBackend: ChatBackend {
         }
         translator.translate(event)
         flush()
+        // As each turn starts: the tier it runs on.
+        if case .raw("thread/settings/updated", let params) = event, let settings = params["threadSettings"] {
+            reportFast(settings["serviceTier"]?.string)
+        }
         if case .turnCompleted(let result) = event {
             KoreUsageRefresh.soon("codex")
             // A turn that failed may have left no rollout: the next launch looks for it.
@@ -464,6 +508,13 @@ final class CodexBackend: ChatBackend {
     }
 
     func setModel(_ id: String) async throws {
+        if let session, isFast(await session.serviceTier) || options.fastMode == true {
+            // Clear an unsupported tier before selecting the model; on refusal keep the old
+            // model. The preference survives the standard-speed model for switching back.
+            try await session.setServiceTier(fastTier(id))
+            options.fastMode = true
+            reportFast(await session.serviceTier)
+        }
         options.model = id
         await session?.setModel(id)
         if let window = await Task.detached(operation: { CodexModelWindow.window(for: id) }).value {
@@ -476,6 +527,20 @@ final class CodexBackend: ChatBackend {
         // Kept for a launch again (a fresh thread starts on it too).
         options.effort = level
         await session?.setEffort(level)
+    }
+
+    /// The thread's service tier, from the next turn; kept for a launch again.
+    func setFastMode(_ on: Bool) async throws {
+        guard let session else { throw CodexAppServer.Failure.notRunning }
+        let running = await session.model
+        let model = options.model ?? running
+        let tier = on ? fastTier(model) : nil
+        guard !on || tier != nil else {
+            throw CodexAppServer.Failure.rpc(code: -32600, message: "Fast mode is unavailable for this model")
+        }
+        try await session.setServiceTier(tier)
+        options.fastMode = on
+        reportFast(await session.serviceTier)
     }
 
     func rename(_ title: String) async throws {

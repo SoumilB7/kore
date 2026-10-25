@@ -326,6 +326,73 @@ final class ModePicker: ChatStoryline {
     }
 }
 
+/// Fast mode's switch, under the model picker's slider: only where the CLI says the account and
+/// the model can have it. A click or Space flips it and the popup stays; a model without it hides
+/// the switch, and the next that has it shows it as it was; an account blocker keeps the
+/// reason visible and disables the switch.
+final class FastModeSwitch: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        let fast = ModelOption(id: "lyra-3", name: "Lyra 3", resolved: "lyra-3", efforts: ["low", "medium"], supportsFastMode: true)
+        let plain = ModelOption(id: "nova", name: "Nova", resolved: "nova", efforts: ["low"])
+        return CLIScript(
+            start: [
+                .event(.controlsLoaded(ChatControls(models: [fast, plain], model: fast.id, effort: "low", commands: []))),
+                .event(.fastModeChanged(FastModeReport(on: false, offered: nil))),
+            ],
+            // The account's extra usage was turned off meanwhile: the turn's result says so.
+            turns: [[.startTurn] + Beat.answer("OK") + [.event(.fastModeChanged(FastModeReport(on: false, offered: false, unavailable: "Requires usage credits"))), .finishTurn(.completed)]])
+    }
+
+    override func steps() -> [any Step] {
+        let row = Locator.id(StoryID.Composer.fastMode)
+        let chip = { (id: String) in Locator.id(StoryID.Composer.modelChip(id)) }
+        let reads = { (what: String, _ want: String?) in
+            Expect(what, found: { $0.app.chat?.storyFastMode ?? "hidden" }) { $0.app.chat?.storyFastMode == want }
+        }
+        var steps: [any Step] = super.steps() + [WaitForFocus(.id(StoryID.Composer.field))]
+        // 1 · Offered: off, under the slider. A click flips it; the popup stays.
+        steps += ModelPicker.open + [
+            reads("the switch, off", "off"),
+            Press(row),
+            reads("on", "on"),
+            ModelPicker.sent("the CLI told", .setFastMode(true)),
+            ModelPicker.stillOpen,
+            Snapshot("model-picker-fast"),
+        ]
+        // 2 · A model without it hides it; back on one with it, it's as it was.
+        steps += [
+            Press(chip("nova")),
+            ExpectElement(row, .absent),
+            Press(chip("lyra-3")),
+            WaitForElement(row),
+            reads("still on", "on"),
+        ]
+        // 3 · The keys: ↓ past the families and the slider to it, Space flips it and stays.
+        steps += [
+            Key(.down), Key(.down), Key(.down),
+            reads("the keys on it", "*on"),
+            Key(KeyChord(.space)),
+            reads("Space turned it off", "*off"),
+            ModelPicker.sent("the CLI told", .setFastMode(false)),
+            ModelPicker.stillOpen,
+            Key(.escape),
+            ExpectElement(ModelPicker.popup, .absent),
+        ]
+        // 4 · A blocker stays visible, and clicking it sends no setting.
+        steps += [Send("hi"), TurnFinished(1)] + ModelPicker.open + [
+            WaitForElement(row),
+            reads("unavailable", "unavailable"),
+            Press(row),
+            Expect("an unavailable switch sends nothing") { try $0.scriptedBackend().log.filter { if case .setFastMode = $0 { true } else { false } }.count == 2 },
+            reads("still unavailable", "unavailable"),
+            Key(.escape),
+            ExpectElement(ModelPicker.popup, .absent),
+        ]
+        return steps
+    }
+}
+
 /// Gives the window back the run's size.
 struct RestoreWindow: Step {
     var label: String { "Size the window back" }

@@ -125,4 +125,18 @@ struct ModelFamiliesTests {
         #expect(grid.move(.effort, .up) == .chip(row: 2, column: 0))
         #expect(ModelPickerGrid(rows: []).move(.chip(row: 0, column: 0), .down) == .effort)
     }
+
+    @Test func theFastModeSwitchIsBelowTheSlider() {
+        let grid = ModelPickerGrid(rows: [2, 1], fast: true)
+        #expect(grid.move(.effort, .down) == .fast)
+        #expect(grid.move(.fast, .down) == .fast)
+        #expect(grid.move(.fast, .right) == .fast)
+        #expect(grid.move(.fast, .up) == .effort)
+        // No slider: straight from the last family, and back.
+        let bare = ModelPickerGrid(rows: [2, 1], effort: false, fast: true)
+        #expect(bare.move(.chip(row: 1, column: 0), .down) == .fast)
+        #expect(bare.move(.fast, .up) == .chip(row: 1, column: 0))
+        // Neither: the keys stay on the last family.
+        #expect(ModelPickerGrid(rows: [2, 1], effort: false).move(.chip(row: 1, column: 0), .down) == .chip(row: 1, column: 0))
+    }
 }

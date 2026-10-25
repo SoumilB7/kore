@@ -165,21 +165,25 @@ enum EffortScale {
 enum PickerSpot: Hashable {
     case chip(row: Int, column: Int)
     case effort
+    /// The fast mode switch, under the slider.
+    case fast
     /// A row of the mode popup.
     case row(Int)
 }
 
 /// The model picker's arrow keys over its rows: ←→ through a row's versions, ↑↓ between
 /// families in the same column (or the row's last chip), ↓ past the last family to the effort
-/// slider, ↑ from it back to the last family.
+/// slider and the fast mode switch, where they show, ↑ back.
 struct ModelPickerGrid {
     /// Each family's chip count, top to bottom.
     let rows: [Int]
+    var effort = true
+    var fast = false
 
     enum Move { case left, right, up, down }
 
     func move(_ spot: PickerSpot, _ move: Move) -> PickerSpot {
-        guard !rows.isEmpty else { return .effort }
+        guard !rows.isEmpty else { return below(spot) }
         switch (spot, move) {
         case (.chip(let row, let column), .left):
             return .chip(row: row, column: max(column - 1, 0))
@@ -189,16 +193,25 @@ struct ModelPickerGrid {
             let up = max(row - 1, 0)
             return .chip(row: up, column: min(column, max(count(up) - 1, 0)))
         case (.chip(let row, let column), .down):
-            guard row + 1 < rows.count else { return .effort }
+            guard row + 1 < rows.count else { return below(spot) }
             return .chip(row: row + 1, column: min(column, max(count(row + 1) - 1, 0)))
         case (.effort, .up):
             return .chip(row: rows.count - 1, column: 0)
+        case (.effort, .down):
+            return fast ? .fast : .effort
         case (.effort, _):
             return .effort
+        case (.fast, .up):
+            return effort ? .effort : .chip(row: rows.count - 1, column: 0)
+        case (.fast, _):
+            return .fast
         case (.row, _):
             return .chip(row: 0, column: 0)
         }
     }
+
+    /// Past the last family: the slider, else the switch, else nowhere further.
+    private func below(_ spot: PickerSpot) -> PickerSpot { effort ? .effort : fast ? .fast : spot }
 
     private func count(_ row: Int) -> Int { row >= 0 && row < rows.count ? rows[row] : 0 }
 }

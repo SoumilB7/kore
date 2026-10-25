@@ -118,7 +118,7 @@ final class ClaudeBackend: ChatBackend {
         var launch = ClaudeSession.Options(
             cwd: options.folder, model: options.model, effort: options.effort,
             permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
-            resume: fork?.from ?? sessionId)
+            fastMode: options.fastMode ?? false, resume: fork?.from ?? sessionId)
         if let fork { launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at] }
         if let instructions = options.instructions { launch.extraArgs += ["--append-system-prompt-file", instructions.path] }
         let starting = Task { try await ClaudeSession.start(launch) }
@@ -207,6 +207,7 @@ final class ClaudeBackend: ChatBackend {
             for await event in session.events { self.handle(event) }
         }
         yield(.controlsLoaded(await controls(session)))
+        if let fast = await session.fastMode { yield(.fastModeChanged(Self.report(fast))) }
         // The context's fill and window as soon as the CLI is up (a resumed chat's too).
         refreshContext()
     }
@@ -229,7 +230,7 @@ final class ClaudeBackend: ChatBackend {
                 id: value, name: Self.versioned(json["displayName"]?.string ?? value, resolved: resolved),
                 resolved: resolved,
                 efforts: json["supportedEffortLevels"]?.array?.compactMap(\.string) ?? [],
-                supportsAutoMode: json["supportsAutoMode"]?.bool ?? false)
+                supportsAutoMode: json["supportsAutoMode"]?.bool ?? false, supportsFastMode: json["supportsFastMode"]?.bool ?? false)
         }
         let applied = try? await session.settings()["applied"]
         let models = Self.withLongContext(listed, applied: applied?["model"]?.string)
@@ -276,7 +277,7 @@ final class ClaudeBackend: ChatBackend {
             guard bases.contains(model.id), !model.id.hasSuffix(suffix) else { return [model] }
             let long = ModelOption(
                 id: model.id + suffix, name: model.name + " · 1M", resolved: model.resolved + suffix, efforts: model.efforts,
-                supportsAutoMode: model.supportsAutoMode)
+                supportsAutoMode: model.supportsAutoMode, supportsFastMode: model.supportsFastMode)
             return [model, long]
         }
     }
@@ -296,6 +297,8 @@ final class ClaudeBackend: ChatBackend {
         }
         translator.translate(event)
         flush()
+        if case .turnCompleted(let result) = event, let fast = result.fastMode { yield(.fastModeChanged(Self.report(fast))) }
+        if case .sessionStarted(let info) = event, let fast = ClaudeFastMode(info.raw) { yield(.fastModeChanged(Self.report(fast))) }
         if case .exited(let status) = event {
             if let ended = session { logExit(ended, reported: status) }
             session = nil
@@ -790,6 +793,31 @@ final class ClaudeBackend: ChatBackend {
 
     func setEffort(_ level: String) async {
         try? await session?.setEffort(level)
+    }
+
+    /// Kept for a launch again. The CLI says whether it took with the next turn's result.
+    func setFastMode(_ on: Bool) async throws {
+        guard let session else { throw ClaudeSession.Failure.notRunning }
+        try await session.setFastMode(on)
+        options.fastMode = on
+        yield(.fastModeChanged(FastModeReport(on: on, offered: nil)))
+    }
+
+    nonisolated static func report(_ fast: ClaudeFastMode) -> FastModeReport {
+        FastModeReport(on: fast.state != .off, paused: fast.state == .cooldown, offered: fast.offered, unavailable: unavailable(fast.blocked))
+    }
+
+    nonisolated private static func unavailable(_ reason: String?) -> String? {
+        switch reason {
+        case nil, "sdk_opt_in_required", "pending": nil
+        case "extra_usage_disabled": "Requires usage credits"
+        case "free": "Requires a paid account"
+        case "preference": "Disabled by your organization"
+        case "network_error": "Unavailable while the connection is interrupted"
+        case "model_not_allowed": "Model unavailable for fast mode"
+        case "not_first_party": "Requires the Anthropic API directly"
+        default: "Fast mode is currently unavailable"
+        }
     }
 
     func rename(_ title: String) async throws {

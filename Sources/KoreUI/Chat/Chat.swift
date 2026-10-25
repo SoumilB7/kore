@@ -37,6 +37,7 @@ package final class Chat: Identifiable {
     /// Launch with this model and effort instead of the CLI's defaults (a fork, the dev hook).
     @ObservationIgnored var launchModel: String?
     @ObservationIgnored var launchEffort: String?
+    @ObservationIgnored var launchFastMode: Bool?
 
     @ObservationIgnored private var backend: (any ChatBackend)?
     @ObservationIgnored private var pump: Task<Void, Never>?
@@ -360,6 +361,7 @@ package final class Chat: Identifiable {
         var options = BackendOptions(
             folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
             model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
+        options.fastMode = launchFastMode
         if let imported {
             options.hiddenRows = Set(imported.record.written)
             options.instructions = imported.record.instructions.map { URL(fileURLWithPath: $0) }
@@ -1255,6 +1257,25 @@ package final class Chat: Identifiable {
         controls.effort = level
         let backend = backend
         Task { await backend?.setEffort(level) }
+    }
+
+    /// The CLI's report follows and has the last word; one it refused puts the switch back.
+    func setFastMode(_ on: Bool) {
+        guard controls.fastModeEnabled, let backend else { return }
+        let previous = controls.fastMode
+        controls.fastChanging = true
+        controls.fastMode = on
+        UILog.event("fast-mode", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
+        Task {
+            defer { controls.fastChanging = false }
+            do {
+                try await backend.setFastMode(on)
+                launchFastMode = on
+            } catch {
+                controls.fastMode = previous
+                fail("Couldn't switch fast mode: \(error)")
+            }
+        }
     }
 
     func answer(_ approval: Approval, _ decision: Decision) {

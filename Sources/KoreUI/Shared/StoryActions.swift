@@ -89,6 +89,13 @@ extension Chat {
         }
         return (picker.lit == .effort ? ["*"] : []) + stops
     }
+    /// The model picker's fast mode switch as it reads: "on", "off" or "paused", "*" first when
+    /// the keys are on it; nil while it doesn't show.
+    package var storyFastMode: String? {
+        guard controls.fastModeShown else { return nil }
+        let lit = picker.lit == .fast ? "*" : ""
+        return lit + (controls.fastUnavailable != nil ? "unavailable" : controls.fastPaused ? "paused" : controls.fastMode ? "on" : "off")
+    }
     /// The mode pill as it reads ("Auto"), and a mode's tint by its rung: "neutral", "plan",
     /// "edits", "auto" or "danger".
     package var storyModePill: String { (provider.planToggle != nil ? controls.permissionsMode : controls.activeMode).label }

@@ -242,6 +242,7 @@ package final class Workspace {
         fork.controls.planMode = chat.controls.planMode
         fork.launchModel = chat.controls.modelId ?? chat.launchModel
         fork.launchEffort = chat.controls.effort
+        fork.launchFastMode = chat.launchFastMode ?? (chat.controls.fastKnown ? chat.controls.fastMode : nil)
         fork.inheritAutoCompact(from: chat)
         fork.original = chat
         fork.restoreDraft(text, commands: chat.controls.commands)

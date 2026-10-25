@@ -112,6 +112,7 @@ package enum Call: Sendable, Equatable {
     case setPlanMode(Bool)
     case setModel(String)
     case setEffort(String)
+    case setFastMode(Bool)
     case rename(String)
     case stopAgent(String)
     /// Stop on a command's row (after its confirm), and its Run in background.

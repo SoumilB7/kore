@@ -17,6 +17,8 @@ package enum ChatEvent: Sendable {
     case modeChanged(ModeChange)
     /// Providers with a plan toggle apart from their modes (Codex).
     case planModeChanged(PlanModeChange)
+    /// Fast mode as the CLI reports it: when it starts, after each turn, and after a switch.
+    case fastModeChanged(FastModeReport)
 
     // MARK: Turns
 
@@ -299,13 +301,37 @@ package struct ModelOption: Identifiable, Hashable, Sendable {
     package let resolved: String
     package let efforts: [String]
     package var supportsAutoMode = false
+    /// Claude's fast mode, Codex's fast service tier.
+    package var supportsFastMode = false
 
-    package init(id: String, name: String, resolved: String, efforts: [String], supportsAutoMode: Bool = false) {
+    package init(
+        id: String, name: String, resolved: String, efforts: [String], supportsAutoMode: Bool = false, supportsFastMode: Bool = false
+    ) {
         self.id = id
         self.name = name
         self.resolved = resolved
         self.efforts = efforts
         self.supportsAutoMode = supportsAutoMode
+        self.supportsFastMode = supportsFastMode
+    }
+}
+
+/// Fast mode as the CLI says it is.
+package struct FastModeReport: Sendable, Equatable {
+    package var on: Bool
+    /// On, at standard speed for now after a rate limit (Claude's cooldown).
+    package var paused = false
+    /// Whether the account can have it; nil when this report can't say, which keeps what an
+    /// earlier one said.
+    package var offered: Bool?
+    /// A user-facing reason from the CLI's reported blocker, never its raw identifier.
+    package var unavailable: String?
+
+    package init(on: Bool, paused: Bool = false, offered: Bool?, unavailable: String? = nil) {
+        self.on = on
+        self.paused = paused
+        self.offered = offered
+        self.unavailable = unavailable
     }
 }
 

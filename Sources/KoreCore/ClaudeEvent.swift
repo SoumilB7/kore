@@ -170,6 +170,8 @@ public struct TurnResult: Sendable {
     public let costUSD: Double?
     public let durationMs: Int?
     public let usage: JSONValue?
+    /// Fast mode as the turn ended.
+    public let fastMode: ClaudeFastMode?
     public let raw: JSONValue
 
     init(_ json: JSONValue) {
@@ -180,7 +182,43 @@ public struct TurnResult: Sendable {
         costUSD = json["total_cost_usd"]?.double
         durationMs = json["duration_ms"]?.int
         usage = json["usage"]
+        fastMode = ClaudeFastMode(json)
         raw = json
+    }
+}
+
+/// Fast mode as the CLI reports it, in its `initialize` response and in every `result`.
+public struct ClaudeFastMode: Sendable, Equatable {
+    public enum State: String, Sendable {
+        /// `cooldown`: on, but at standard speed for now, after a rate limit.
+        case off, cooldown, on
+    }
+
+    public let state: State
+    /// Why it can't be had (`fast_mode_disabled_reason`: "free", "extra_usage_disabled",
+    /// "model_not_allowed", ...); nil when nothing stops it.
+    public let blocked: String?
+
+    public init(state: State, blocked: String? = nil) {
+        self.state = state
+        self.blocked = blocked
+    }
+
+    /// Nil when the message says nothing of it (an older CLI).
+    public init?(_ json: JSONValue) {
+        guard let state = json["fast_mode_state"]?.string.flatMap(State.init) else { return nil }
+        self.state = state
+        blocked = json["fast_mode_disabled_reason"]?.string
+    }
+
+    /// Whether the account can have it; nil when the report can't say. A host that hasn't opted
+    /// in (`fastMode` among its flag settings) is told only that, not what else would stop it.
+    public var offered: Bool? {
+        switch blocked {
+        case nil: true
+        case "sdk_opt_in_required", "pending": nil
+        default: false
+        }
     }
 }
 

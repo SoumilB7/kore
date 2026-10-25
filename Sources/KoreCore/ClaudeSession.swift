@@ -22,6 +22,9 @@ public actor ClaudeSession {
         public var model: String?
         public var effort: String?
         public var permissionMode: PermissionMode
+        /// Explicit session choice; nil leaves the CLI's settings alone. True is only passed
+        /// after the user enables fast mode. Availability is never probed by enabling it.
+        public var fastMode: Bool?
         /// Session id from a previous `SessionInfo`, to continue that conversation.
         public var resume: String?
         public var thinkingSummaries: Bool
@@ -35,6 +38,7 @@ public actor ClaudeSession {
             model: String? = nil,
             effort: String? = nil,
             permissionMode: PermissionMode = .default,
+            fastMode: Bool? = nil,
             resume: String? = nil,
             thinkingSummaries: Bool = true,
             executable: URL? = nil,
@@ -45,6 +49,7 @@ public actor ClaudeSession {
             self.model = model
             self.effort = effort
             self.permissionMode = permissionMode
+            self.fastMode = fastMode
             self.resume = resume
             self.thinkingSummaries = thinkingSummaries
             self.executable = executable
@@ -70,6 +75,7 @@ public actor ClaudeSession {
             if let model { args += ["--model", model] }
             if let effort { args += ["--effort", effort] }
             if let resume { args += ["--resume", resume] }
+            if let fastMode { args += ["--settings", fastMode ? #"{"fastMode":true}"# : #"{"fastMode":false}"#] }
             if thinkingSummaries { args += ["--thinking-display", "summarized"] }
             return args + extraArgs
         }
@@ -98,6 +104,8 @@ public actor ClaudeSession {
     public private(set) var sessionId: String?
     /// The `initialize` response: slash commands, models, account info, etc.
     public private(set) var capabilities: JSONValue = .null
+    /// Fast mode from `initialize`. Each turn's `result` reports the current state again.
+    public private(set) var fastMode: ClaudeFastMode?
 
     /// Spawns the CLI and completes the initialize handshake.
     public static func start(_ options: Options) async throws -> ClaudeSession {
@@ -160,6 +168,15 @@ public actor ClaudeSession {
     /// "low", "medium", "high", "xhigh", "max". Applies from the next request.
     public func setEffort(_ level: String) async throws {
         try await control("apply_flag_settings", ["settings": ["effortLevel": .string(level)]])
+    }
+
+    /// Fast mode, from the next request. The CLI says whether it took (`result`'s `fast_mode_state`).
+    public func setFastMode(_ on: Bool) async throws {
+        try await control("apply_flag_settings", Self.fastModeFields(on))
+    }
+
+    nonisolated static func fastModeFields(_ on: Bool) -> [String: JSONValue] {
+        ["settings": ["fastMode": .bool(on)]]
     }
 
     /// Asks the CLI to name the session from `description` (e.g. the first prompt) and saves it
@@ -265,6 +282,7 @@ public actor ClaudeSession {
         }
 
         capabilities = try await control("initialize")
+        fastMode = ClaudeFastMode(capabilities)
     }
 
     private func didExit(status: Int32) {

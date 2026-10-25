@@ -27,6 +27,8 @@ package protocol ChatBackend: AnyObject {
     func setPlanMode(_ on: Bool) async
     func setModel(_ id: String) async throws
     func setEffort(_ level: String) async
+    /// Its `.fastModeChanged` follows. Throws the CLI's reason when it can't.
+    func setFastMode(_ on: Bool) async throws
     func rename(_ title: String) async throws
     func stopAgent(_ id: String) async
     /// Stops a running command (`ActiveCommand`): Claude's `stop_task`, Codex's
@@ -89,6 +91,8 @@ package struct BackendOptions {
     /// original's; the dev hook's cheap test models).
     package var model: String?
     package var effort: String?
+    /// Fast mode as the user last set it in this chat; nil keeps the CLI's own (Claude's is off).
+    package var fastMode: Bool?
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude), and the
     /// title it gets.
     package var fork: ForkPoint?
@@ -150,6 +154,9 @@ extension ChatBackend {
     package func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
         try await send(text, files: files, queued: nil)
     }
+
+    /// For a backend without fast mode: it never reports one, so nothing offers it.
+    package func setFastMode(_ on: Bool) async throws {}
 
     /// For a backend that can't compact.
     package func compact(instructions: String) async throws { throw CompactUnavailable() }

@@ -109,7 +109,7 @@ extension TranscriptStore {
             modeChanged(change)
         case .planModeChanged(let change):
             planModeChanged(change)
-        case .sessionIdentified, .titleChanged, .controlsLoaded, .turnOrigin,
+        case .sessionIdentified, .titleChanged, .controlsLoaded, .fastModeChanged, .turnOrigin,
             .planReady, .contextUsage:
             break
         }

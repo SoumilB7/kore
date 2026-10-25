@@ -11,6 +11,7 @@ func tag(_ event: ChatEvent) -> String {
     case .controlsLoaded: "controls"
     case .modeChanged(let change): "mode \(change.mode)"
     case .planModeChanged(let change): "plan \(change.on)"
+    case .fastModeChanged(let report): "fast \(report.on)"
     case .turnStarted(_, let origin, _): "turnStarted \(origin)"
     case .turnOrigin(_, let origin): "turnOrigin \(origin)"
     case .turnFinished(_, let outcome, _): "turnFinished \(outcome)"
