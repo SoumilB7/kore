@@ -63,6 +63,14 @@ public final class KoreSessions: @unchecked Sendable {
     /// Waits until every session so far is written.
     public func sync() { queue.sync {} }
 
+    /// The ids of `cli`'s chats Kore started in `folder`, most recent first. Blocking file IO.
+    public func ids(cli: String, folder: URL) -> [String] {
+        queue.sync {
+            var seen = Set<String>()
+            return load().reversed().filter { $0.cli == cli && $0.folder == folder.path && seen.insert($0.id).inserted }.map(\.id)
+        }
+    }
+
     /// Blocking file IO: call it off the main thread.
     public func known() -> Known {
         queue.sync {

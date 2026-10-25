@@ -43,6 +43,8 @@ struct HistoryPanel: View {
     @StateObject private var showArchived = Local(false)
     @StateObject private var renaming = Local<String?>(nil)
     @StateObject private var frame = Local(CGRect.zero)
+    /// The list's height as its rows make it: the panel hugs a short list and scrolls a long one.
+    @StateObject private var listHeight = Local<CGFloat>(0)
     @StateObject private var monitor = Local<Any?>(nil)
     /// The one lit row, by its place in `matches`: the pointer's or the keys'. Nil until either
     /// moves it, when the first row is lit and Return opens it.
@@ -84,12 +86,15 @@ struct HistoryPanel: View {
                             .highlightRow(StoryID.History.row(chat.id), lit: (lit.value ?? 0) == index) { lit.value = index }
                         }
                     }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight.value = $0 }
                 }
                 .onChange(of: lit.value) { _, index in
                     if let index, matches.indices.contains(index) { proxy.scrollTo(matches[index].id) }
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)
+            // Up to the room the window gives it, never its whole height laid out at once (a big
+            // folder's hundreds of rows made the panel overflow the window, laggy and unscrollable).
+            .frame(maxHeight: max(listHeight.value, 1))
 
             if matches.isEmpty {
                 Text(!workspace.loaded ? "Loading…" : showArchived.value ? "No archived chats" : "No chats yet")

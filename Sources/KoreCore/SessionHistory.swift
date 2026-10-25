@@ -653,8 +653,20 @@ public enum CodexHistory {
                 cursor = result["nextCursor"]?.string.map(JSONValue.string) ?? .null
             } while cursor != .null && threads.count < 1000
         }
+        // Codex's list leaves out some threads Kore made here (an import's, injected before its
+        // first turn), though each still opens: those Kore started, read one by one.
+        let listed = Set(threads.map(\.id))
+        for id in KoreSessions.shared.ids(cli: "codex", folder: folder).filter({ !listed.contains($0) }).prefix(Self.unlistedReads) {
+            guard let thread = try? await server.request("thread/read", ["threadId": .string(id), "includeTurns": false])["thread"],
+                thread["cwd"]?.string == folder.path, let found = summary(thread, archived: false)
+            else { continue }
+            threads.append(found)
+        }
         return threads
     }
+
+    /// At most this many of Kore's own threads missing from Codex's list are read for history.
+    static let unlistedReads = 30
 
     /// A thread's rollout file (`thread/read`), to read its history from directly.
     public static func rolloutPath(_ id: String, in folder: URL, executable: URL? = nil) async throws -> URL? {
