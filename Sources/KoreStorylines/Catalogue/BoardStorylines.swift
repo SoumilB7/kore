@@ -562,16 +562,16 @@ final class BoardApprove: BoardStoryline {
                 chat.storySend("run the tests")
             },
             Expect("the card waiting, with its corner marks") { story in
-                guard let tile = story.stash(Picked.self) { Picked() }.tile, let chat = try BoardProbe.model(story).chats[tile] else { return false }
+                guard let tile = story.stash(Picked.self, make: { Picked() }).tile, let chat = try BoardProbe.model(story).chats[tile] else { return false }
                 return !chat.pendingApprovals.isEmpty && StoryElement(StoryID.Board.tile(tile).part(.allow)) != nil
             },
             Snapshot("board-approval"),
             BoardPress("Allow on the card") { story in
-                guard let tile = story.stash(Picked.self) { Picked() }.tile else { throw StoryFailure.modelMissing("the tile") }
+                guard let tile = story.stash(Picked.self, make: { Picked() }).tile else { throw StoryFailure.modelMissing("the tile") }
                 return StoryID.Board.tile(tile).part(.allow)
             },
             Expect("answered: the command ran, nothing waits") { story in
-                guard let tile = story.stash(Picked.self) { Picked() }.tile, let chat = try BoardProbe.model(story).chats[tile] else { return false }
+                guard let tile = story.stash(Picked.self, make: { Picked() }).tile, let chat = try BoardProbe.model(story).chats[tile] else { return false }
                 return chat.pendingApprovals.isEmpty && !chat.isRunning
             },
         ]

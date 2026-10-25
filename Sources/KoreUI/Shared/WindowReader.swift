@@ -30,7 +30,7 @@ struct WindowReader: NSViewRepresentable {
 enum WindowColor {
     static let space = NSColorSpace.sRGB
 
-    static func prepare(_ window: NSWindow) {
+    @MainActor static func prepare(_ window: NSWindow) {
         if window.colorSpace != space { window.colorSpace = space }
     }
 }

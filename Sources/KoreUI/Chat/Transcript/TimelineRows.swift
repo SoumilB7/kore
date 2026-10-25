@@ -662,7 +662,7 @@ struct StickyMessage: View, Equatable {
                 tracker.header(entry.id.uuidString, y)
             }
             // The band sits right above a pinned anchor: a press there isn't a selection.
-            .onGeometryChange(for: CGRect?.self) { proxy in
+            .onGeometryChange(for: CGRect?.self) { [band] proxy in
                 band ? proxy.frame(in: .named(TranscriptSelection.space)) : nil
             } action: { [tracker, selection, id = entry.id.uuidString] frame in
                 guard let frame else { return }

@@ -321,6 +321,11 @@ private struct PinchFile: Step {
         guard let view = element.registeredView, let scroll = view.enclosingScrollView,
               let window = scroll.window, let document = scroll.documentView
         else { throw StoryFailure.other("\(name) has no native scroll view") }
+        // A file just opened takes the keys a frame after it shows (the Markdown preview's
+        // responder once it's attached), and a pinch lets go when the keys move. Wait for them.
+        try await story.until("\(name) to have the keys") {
+            (window.firstResponder as? NSView)?.enclosingScrollView === scroll
+        }
         let clip = scroll.contentView
         let point = clip.convert(CGPoint(x: clip.bounds.midX, y: clip.bounds.midY), to: nil)
         defer { _ = PinchZoom.storySample(in: window, amount: 0, phase: .cancelled, at: point) }

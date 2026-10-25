@@ -1050,7 +1050,7 @@ struct PrivacyButton: View {
     var body: some View {
         let privacy = AccountPrivacy.shared
         let id = StoryID.Composer.accountPrivacy
-        let flip = { privacy.on.toggle() }
+        let flip: @MainActor () -> Void = { privacy.on.toggle() }
         Button(action: flip) {
             HStack(spacing: Space.xs) {
                 Image(systemName: privacy.on ? "eye.slash" : "eye").font(TextStyle.caption)

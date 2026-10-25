@@ -26,7 +26,7 @@ struct ResetSendButton: View {
 
     private func button(at: Date, now: Date, waiting since: Date?) -> some View {
         let time = StayAwake.time(at, now: now)
-        let press = { since == nil ? chat.sendAtReset() : chat.cancelContinue() }
+        let press: @MainActor () -> Void = { since == nil ? chat.sendAtReset() : chat.cancelContinue() }
         return Button(action: press) {
             ResetRing(lit: since.map { Self.left(since: $0, at: at, now: now) } ?? 0)
                 .foregroundStyle(since != nil ? Theme.accent : hovered.value ? Theme.text : Theme.secondary)

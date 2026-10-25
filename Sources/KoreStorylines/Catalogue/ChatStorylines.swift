@@ -759,7 +759,7 @@ struct HoverCode: Step {
     func run(_ story: StoryContext) async throws {
         // The answer's markdown is laid out after the turn ends: wait for the block.
         try await story.until("code block \(n + 1) on screen") { CodeBlockCopyBelow.blocks().count > n }
-        let ids = await CodeBlockCopyBelow.blocks()
+        let ids = CodeBlockCopyBelow.blocks()
         try await Press(.id(StoryID.Transcript.code(CodeBlockCopyBelow.path(ids[n])).part(.hover))).run(story)
     }
 }

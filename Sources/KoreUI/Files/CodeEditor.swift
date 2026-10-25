@@ -220,7 +220,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         let start = Date()
         let document = document
         flash = Task { [weak self, weak document] in
-            while !Task.isCancelled, let self, let document {
+            while !Task.isCancelled, self != nil, let document {
                 defer { withExtendedLifetime(document) {} }
                 let progress = min(1, Date().timeIntervalSince(start) / Motion.flash)
                 let safe = NSIntersectionRange(lineRange, NSRange(location: 0, length: document.storage.length))
