@@ -171,10 +171,26 @@ package final class StdioProcess: @unchecked Sendable {
         close(running.all, waiting: limit)
     }
 
+    /// Everything under the children ends too: background shells, monitors and agents' tools
+    /// run in process groups of their own, which the children's group signal misses, and would
+    /// outlive Kore under launchd. Taken before any signal, while they are still under a child.
     static func close(_ all: [StdioProcess], waiting limit: Duration) {
+        let under = all.filter(\.isRunning).flatMap { tree($0.process.processIdentifier).dropLast() }
         for child in all { child.close() }
+        for pid in under { kill(-pid, SIGTERM); kill(pid, SIGTERM) }
         let deadline = ContinuousClock.now + limit
-        while all.contains(where: \.isRunning), ContinuousClock.now < deadline { usleep(10_000) }
+        while all.contains(where: \.isRunning) || under.contains(where: alive), ContinuousClock.now < deadline {
+            usleep(10_000)
+        }
+        for pid in under where alive(pid) { kill(pid, SIGKILL) }
+    }
+
+    /// Running, not a zombie (one that has exited runs nothing).
+    private static func alive(_ pid: pid_t) -> Bool {
+        guard kill(pid, 0) == 0 else { return false }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        return !(proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size && info.pbi_status == SZOMB)
     }
 
     /// Signals the child and its group, only while it is running: once reaped, its pid may be

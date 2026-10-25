@@ -73,6 +73,20 @@ struct ChildShutdownTests {
         #expect(await gone(secondTool))
     }
 
+    /// A background command in a group of its own, as a CLI's background shell is: quitting
+    /// ends it too, the deaf one with SIGKILL once the wait is over.
+    @MainActor @Test func quittingEndsBackgroundWorkInItsOwnGroup() async throws {
+        let detached = #"perl -e 'setpgrp; exec "sleep", "60"' & echo "$!"; wait"#
+        let deaf = #"perl -e '$SIG{TERM}="IGNORE"; setpgrp; exec "sleep", "60"' & echo "$!"; wait"#
+        let (first, firstTool) = try await start(detached)
+        let (second, secondTool) = try await start(deaf)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(getpgid(firstTool) == firstTool)
+        StdioProcess.close([first, second], waiting: .milliseconds(500))
+        #expect(await gone(firstTool))
+        #expect(await gone(secondTool))
+    }
+
     // MARK: - Kore gone
 
     /// A child of this test process, as a CLI is of Kore's.
