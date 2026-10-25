@@ -805,36 +805,18 @@ final class AgentMapSashResizes: ChatStoryline {
             Press(.id(StoryID.Titlebar.agents)),
             ExpectElement(.id(sash), .visible),
             Remember("sash at rest") { Int(x($0) ?? 0) },
-            DragSash(by: 120),
+            ExpectHittable(.id(sash)),
+            Drag(.id(sash), by: CGVector(dx: 120, dy: 0)),
             Expect("the tree 120 pt wider", found: { x($0).map { "sash at \(Int($0))" } }) { story in
                 guard let now = x(story), let was = Remember.value(story, "sash at rest") else { return false }
                 return abs(Int(now) - was - 120) <= 2
             },
             Snapshot("agent-map-dragged"),
-            DragSash(by: 0, clicks: 2),
+            DoubleClick(.id(sash)),
             Expect("a double-click: the width that fits the labels again", found: { x($0).map { "sash at \(Int($0))" } }) { story in
                 guard let now = x(story), let was = Remember.value(story, "sash at rest") else { return false }
                 return abs(Int(now) - was) <= 1
             },
         ]
-    }
-
-    /// Drags the sash sideways from its middle; `clicks: 2` with no distance double-clicks it.
-    private struct DragSash: Step {
-        let by: CGFloat
-        var clicks = 1
-        var label: String { clicks == 2 ? "Double-click the sash" : "Drag the sash \(Int(by)) pt" }
-
-        func run(_ story: StoryContext) async throws {
-            guard let window = story.window, let frame = StoryElement(StoryID.AgentMap.sash)?.frame else {
-                throw StoryFailure.other("the sash has no frame")
-            }
-            let a = CGPoint(x: frame.midX, y: frame.midY)
-            if clicks == 2 {
-                await story.input.click(at: a, in: window, count: 2, modifiers: [])
-            } else {
-                await story.input.drag(from: a, to: CGPoint(x: a.x + by, y: a.y), in: window)
-            }
-        }
     }
 }

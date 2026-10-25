@@ -152,6 +152,52 @@ package final class InputDriver {
         await pass()
     }
 
+    // MARK: Pointer, as a person's mouse
+
+    /// Clicks at the element (its centre, or `offset` from it), as a person's mouse does: the
+    /// point checked to be the element's, and every event through AppKit's own dispatch and
+    /// hit-testing, none handed to a view directly. The window is made key and main first, but
+    /// the app isn't activated (the owner keeps focus), and an inactive app's window doesn't
+    /// become key: the press is then a first click, the stricter case (checked 2026-10-29).
+    package func pointerClick(_ element: StoryElement, count: Int = 1, offset: CGVector = .zero) async throws {
+        let (window, point) = try await pointerAim(element, offset)
+        await click(at: point, in: window, count: count)
+    }
+
+    /// The same press, moved by `delta` (window space: y up) in steps and released.
+    package func pointerDrag(_ element: StoryElement, by delta: CGVector, offset: CGVector = .zero, steps: Int = 12) async throws {
+        let (window, start) = try await pointerAim(element, offset)
+        await drag(from: start, to: CGPoint(x: start.x + delta.dx, y: start.y + delta.dy), in: window, steps: steps)
+    }
+
+    /// What a press at the element's point would land on instead of it, or nil when it's the
+    /// element's. AppKit sees SwiftUI's content as its hosting view, so a SwiftUI view counts as
+    /// hit when the view under the point is a SwiftUI view holding it: an AppKit view, another
+    /// hosting view or the titlebar over it is caught; a SwiftUI overlay inside one hosting
+    /// view shows only in what the press then does.
+    package func cover(_ element: StoryElement, offset: CGVector = .zero) -> String? {
+        guard let window = element.window, let frame = element.frame, let mine = element.registeredView else {
+            return "\(element.id) has no frame"
+        }
+        let point = CGPoint(x: frame.midX + offset.dx, y: frame.midY + offset.dy)
+        guard let root = window.contentView?.superview ?? window.contentView, let hit = root.hitTest(point) else {
+            return "nothing at \(Int(point.x)),\(Int(point.y))"
+        }
+        if hit === mine || hit.isDescendant(of: mine) || (Self.isSwiftUI(hit) && mine.isDescendant(of: hit)) { return nil }
+        return "\(Swift.type(of: hit)) at \(Self.describe(hit.convert(hit.bounds, to: nil)))"
+    }
+
+    private func pointerAim(_ element: StoryElement, _ offset: CGVector) async throws -> (NSWindow, CGPoint) {
+        var (window, point) = try await aim(element)
+        point.x += offset.dx
+        point.y += offset.dy
+        if !window.isKeyWindow { window.makeKey() }
+        if !window.isMainWindow { window.makeMain() }
+        await pass()
+        if let cover = cover(element, offset: offset) { throw StoryFailure.expectation("\(element.id) is covered by \(cover)") }
+        return (window, point)
+    }
+
     /// Scrolls the list the element sits in, wherever in it the element is, by moving its scroll
     /// view: where a scroll gesture ends up, without the gesture. (Wheel and trackpad events built
     /// in the process don't reach SwiftUI's scroll views; the spike behind this showed none

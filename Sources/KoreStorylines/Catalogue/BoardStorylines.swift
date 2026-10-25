@@ -199,12 +199,11 @@ final class BoardResize: BoardStoryline {
                 model.renaming = nil
                 story.app.workspace?.attach(third, to: tab, section: model.board.sections.last?.id)
             },
-            BoardDrag(what: "the section gutter to near ⅔", element: { story in StoryID.Board.gutter(try Self.sectionGutter(story).id) }) { story in
+            // By a person's mouse: the window key, the press AppKit's to route.
+            ExpectHittable(Self.sectionGutterLocator),
+            Drag(Self.sectionGutterLocator) { story in
                 let gutter = try Self.sectionGutter(story)
-                return CGPoint(x: gutter.position, y: gutter.rect.midY)
-            } to: { story in
-                let gutter = try Self.sectionGutter(story)
-                return CGPoint(x: gutter.extent * 2 / 3 - 5, y: gutter.rect.midY)
+                return CGVector(dx: gutter.extent * 2 / 3 - 5 - gutter.position, dy: 0)
             },
             Expect("the sections at ⅔ and ⅓, one undo step", found: { story in
                 let model = try? BoardProbe.model(story)
@@ -244,6 +243,13 @@ final class BoardResize: BoardStoryline {
                 return BoardProbe.density(tile) != .chip
             },
         ]
+    }
+
+    @MainActor static let sectionGutterLocator = Locator("the section gutter") { app in
+        guard let model = app.workspace?.tabs.first(where: { $0.board != nil })?.board,
+            let gutter = model.board.solve(in: model.size).gutters.first(where: { $0.id.section == nil })
+        else { return .failure(LocatorMiss("the section gutter", pending: true)) }
+        return .success(StoryID.Board.gutter(gutter.id))
     }
 
     @MainActor static func sectionGutter(_ story: StoryContext) throws -> BoardGutter {

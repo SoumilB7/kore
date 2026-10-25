@@ -153,20 +153,53 @@ package struct PasteText: Step {
     package func run(_ story: StoryContext) async throws { try await story.input.paste(text) }
 }
 
-/// Presses an element and drags it onto another.
+/// Presses an element and drags it onto another; or, `by` a distance (window space, y up), as a
+/// person's mouse: the window key, the press point checked to be the element's.
 package struct Drag: Step {
     let target: Locator
-    let onto: Locator
-    package var label: String { "Drag \(target) onto \(onto)" }
+    let onto: Locator?
+    let by: @MainActor (StoryContext) throws -> CGVector
+    package var label: String { onto.map { "Drag \(target) onto \($0)" } ?? "Drag \(target)" }
     package init(_ target: Locator, to onto: Locator) {
         self.target = target
         self.onto = onto
+        self.by = { _ in .zero }
     }
+    /// `by` is worked out when the step runs, for a distance that depends on the layout.
+    package init(_ target: Locator, by: @escaping @MainActor (StoryContext) throws -> CGVector) {
+        self.target = target
+        self.onto = nil
+        self.by = by
+    }
+    package init(_ target: Locator, by: CGVector) { self.init(target, by: { _ in by }) }
 
     package func run(_ story: StoryContext) async throws {
         let from = try await story.element(target)
-        let to = try await story.element(onto)
-        try await story.input.drag(from, to: to)
+        guard let onto else { return try await story.input.pointerDrag(from, by: try by(story)) }
+        try await story.input.drag(from, to: try await story.element(onto))
+    }
+}
+
+/// Two clicks at the element's centre as a person's mouse makes them, the window key.
+package struct DoubleClick: Step {
+    let target: Locator
+    package var label: String { "Double-click \(target)" }
+    package init(_ target: Locator) { self.target = target }
+
+    package func run(_ story: StoryContext) async throws {
+        try await story.input.pointerClick(try await story.element(target), count: 2)
+    }
+}
+
+/// The view a press at the element's centre lands on is the element's; else what covers it.
+package struct ExpectHittable: Step {
+    let target: Locator
+    package var label: String { "Expect \(target) hittable" }
+    package init(_ target: Locator) { self.target = target }
+
+    package func run(_ story: StoryContext) async throws {
+        let element = try await story.element(target)
+        if let cover = story.input.cover(element) { throw StoryFailure.expectation("\(target) is covered by \(cover)") }
     }
 }
 
