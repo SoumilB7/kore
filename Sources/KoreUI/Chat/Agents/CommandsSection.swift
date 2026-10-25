@@ -45,9 +45,16 @@ struct CommandsSection: View {
                 ForEach(rows.live) { row($0) }
                 ForEach(finished) { row($0) }
                 if finished.count < rows.finished.count {
-                    TextButton("Show \(rows.finished.count - finished.count) more", font: TextStyle.label) { map.allFinished = true }
-                        .padding(.vertical, Space.sm)
-                        .storyID(StoryID.AgentMap.moreCommands, press: { map.allFinished = true })
+                    Button {
+                        map.allFinished = true
+                    } label: {
+                        Text("Show \(rows.finished.count - finished.count) more").font(TextStyle.label).foregroundStyle(Theme.accent)
+                            .frame(minHeight: Size.hitTarget)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, Space.xs)
+                    .storyID(StoryID.AgentMap.moreCommands, press: { map.allFinished = true })
                 }
             }
             .frame(maxWidth: Layout.Commands.width, alignment: .leading)
@@ -70,13 +77,14 @@ struct CommandsSection: View {
                         map.askingStop = nil
                         for command in stoppable { chat.stopCommand(command.id) }
                     }
-                    .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                    .smallButton(prominent: true)
                     .storyID(id.part(.allow))
                     Button("No, go back") { map.askingStop = nil }
-                        .buttonStyle(SubtleButtonStyle(small: true))
+                        .smallButton()
                         .storyID(id.part(.cancel))
                 } else {
-                    TextButton("Stop all", font: TextStyle.label, color: Theme.secondary) { map.askingStop = AgentMapState.stopAll }
+                    Button("Stop all") { map.askingStop = AgentMapState.stopAll }
+                        .quietSmallButton()
                         .storyID(id, press: { map.askingStop = AgentMapState.stopAll })
                 }
             }
@@ -110,14 +118,29 @@ private struct CommandRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: Space.lg) {
-                point.frame(width: Space.xxl)
-                title.frame(maxWidth: .infinity, alignment: .leading)
+                // A button of its own, so the keyboard (Full Keyboard Access, VoiceOver) opens it too.
+                Button(action: toggle) {
+                    HStack(spacing: Space.lg) {
+                        point.frame(width: Space.xxl)
+                        title
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(command.command ?? command.title)
+                .accessibilityHint(Text(open ? "Hides the command" : "Shows the command and its output"))
+                .accessibilityActions {
+                    if command.canStop { Button("Stop") { map.askingStop = command.id } }
+                    if command.canBackground { Button("Run in background") { chat.runInBackground(command.id) } }
+                }
+                ownerLink
                 CommandTime(command: command)
                 actions
             }
             .padding(.horizontal, Space.md)
             .frame(minHeight: (command.isLive ? Layout.Commands.liveRow : Layout.Commands.finishedRow) * Zoom.shared.scale)
-            .hoverFill(open || hovered.value, open ? Theme.surfaceHover : Theme.toolHover, radius: Radius.control)
+            .hoverFill(open || hovered.value, open ? Theme.Row.selected(.window) : Theme.Row.hover(.window), radius: Radius.control)
             .contentShape(Rectangle())
             .onTapGesture(perform: toggle)
             .onHover { hovered.value = $0 }
@@ -147,29 +170,32 @@ private struct CommandRow: View {
     private var title: some View {
         // Codex has no description: its command, in mono.
         let mono = command.title == command.command && command.kind != .scheduled
-        return HStack(spacing: Space.sm) {
-            Text(command.title)
-                .font(mono ? TextStyle.code : (command.isLive ? TextStyle.body : TextStyle.label))
-                .foregroundStyle(command.isLive ? Theme.text : Theme.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(1)
-            if let owner {
-                Button {
-                    map.select(owner.id)
-                } label: {
-                    HStack(spacing: Space.xs) {
-                        Text("· from").foregroundStyle(Theme.secondary)
-                        AgentAvatar(index: owner.index, name: owner.name, status: owner.status, background: owner.background, place: .crumb)
-                        Text(owner.name).foregroundStyle(Theme.secondary).lineLimit(1)
-                    }
-                    .font(TextStyle.caption)
+        return Text(command.title)
+            .font(mono ? TextStyle.code : (command.isLive ? TextStyle.body : TextStyle.label))
+            .foregroundStyle(command.isLive ? Theme.text : Theme.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    /// "· from ▲ Watch the logs" in the Still running pane: selects that agent.
+    @ViewBuilder private var ownerLink: some View {
+        if let owner {
+            Button {
+                map.select(owner.id)
+            } label: {
+                HStack(spacing: Space.xs) {
+                    Text("· from").foregroundStyle(Theme.secondary)
+                    AgentAvatar(index: owner.index, name: owner.name, status: owner.status, background: owner.background, place: .crumb)
+                    Text(owner.name).foregroundStyle(Theme.secondary).lineLimit(1)
                 }
-                .buttonStyle(.plain)
-                .help("Select \(owner.name)")
+                .font(TextStyle.caption)
+                .frame(minHeight: Size.hitTarget)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .help("Select \(owner.name)")
+            .layoutPriority(-1)
         }
-        .help(command.command ?? command.title)
     }
 
     @ViewBuilder private var actions: some View {
@@ -181,21 +207,21 @@ private struct CommandRow: View {
                         map.askingStop = nil
                         chat.stopCommand(command.id)
                     }
-                    .buttonStyle(SubtleButtonStyle(prominent: true, small: true))
+                    .smallButton(prominent: true)
                     .storyID(id.part(.allow))
                     Button("No, go back") { map.askingStop = nil }
-                        .buttonStyle(SubtleButtonStyle(small: true))
+                        .smallButton()
                         .storyID(id.part(.cancel))
                 } else if command.stopping {
-                    Text("Stopping…").font(TextStyle.label).foregroundStyle(Theme.tertiary).fixedSize()
+                    Text("Stopping…").font(TextStyle.label).foregroundStyle(Theme.secondary).fixedSize()
                 } else {
                     if command.canBackground {
                         Button("Run in background") { chat.runInBackground(command.id) }
-                            .buttonStyle(QuietSmallButtonStyle())
+                            .quietSmallButton()
                             .storyID(id.part(.background))
                     }
                     Button("Stop") { map.askingStop = command.id }
-                        .buttonStyle(SubtleButtonStyle(small: true))
+                        .smallButton()
                         .storyID(id.part(.stop))
                 }
             }
@@ -212,7 +238,7 @@ private struct CommandTime: View {
     var body: some View {
         Group {
             if command.kind == .scheduled {
-                Text(CommandText.schedule(command)).foregroundStyle(command.isLive ? Theme.secondary : Theme.tertiary)
+                Text(CommandText.schedule(command)).foregroundStyle(Theme.secondary)
             } else if command.isLive, let start = command.startedAt {
                 TimelineView(.periodic(from: start, by: 1)) { context in
                     Text(CommandText.age(context.date.timeIntervalSince(start))).foregroundStyle(Theme.secondary)
@@ -229,9 +255,9 @@ private struct CommandTime: View {
     private var finished: Text {
         let duration = command.duration.map(CommandText.age)
         let word = CommandText.word(command.state)
-        guard let word else { return Text(duration ?? "").foregroundColor(Theme.tertiary) }
-        let said = Text(word).foregroundColor(command.state.isFailure ? Theme.danger : Theme.tertiary)
-        return duration.map { said + Text(" · \($0)").foregroundColor(Theme.tertiary) } ?? said
+        guard let word else { return Text(duration ?? "").foregroundColor(Theme.secondary) }
+        let said = Text(word).foregroundColor(command.state.isFailure ? Theme.danger : Theme.secondary)
+        return duration.map { said + Text(" · \($0)").foregroundColor(Theme.secondary) } ?? said
     }
 }
 
@@ -275,7 +301,14 @@ private struct CommandDetail: View {
     }
 }
 
-/// A small button with no fill until the pointer is over it ("Run in background").
+extension View {
+    /// `QuietSmallButtonStyle`, taking clicks across 24 points as `smallButton()` does.
+    fileprivate func quietSmallButton() -> some View {
+        buttonStyle(QuietSmallButtonStyle()).hitTargetRoom(QuietSmallButton.reach)
+    }
+}
+
+/// A small button with no fill until the pointer is over it ("Run in background", "Stop all").
 private struct QuietSmallButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         QuietSmallButton(configuration: configuration)
@@ -283,6 +316,7 @@ private struct QuietSmallButtonStyle: ButtonStyle {
 }
 
 private struct QuietSmallButton: View {
+    static let reach = HitTarget.reach(height: Size.smallButton)
     let configuration: ButtonStyleConfiguration
     @StateObject private var hovered = Local(false)
 
@@ -294,7 +328,7 @@ private struct QuietSmallButton: View {
             .padding(.horizontal, Space.lg)
             .frame(height: Size.smallButton)
             .background(lit ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
-            .contentShape(Rectangle())
+            .hitTarget(Self.reach)
             .onHover { hovered.value = $0 }
     }
 }
@@ -428,7 +462,7 @@ struct OutlivedLine: View {
                 }
                 .padding(.horizontal, Space.lg)
                 .frame(height: Layout.AgentMap.groupRow * Zoom.shared.scale)
-                .hoverFill(selected || hovered.value, selected ? Theme.surfaceHover : Theme.toolHover, radius: Radius.control)
+                .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.window) : Theme.Row.hover(.window), radius: Radius.control)
             }
             .contentShape(Rectangle())
         }
@@ -452,7 +486,7 @@ struct CommandsPane: View {
                 Color.clear.frame(height: Space.xl)
                 CommandsSection(chat: chat, rows: rows, showsOwner: pane == .outlived)
                 if rows.live.isEmpty && rows.finished.isEmpty {
-                    Text("Nothing runs in the background").font(TextStyle.body).foregroundStyle(Theme.tertiary)
+                    Text("Nothing runs in the background").font(TextStyle.body).foregroundStyle(Theme.secondary)
                 }
             }
             .padding(.horizontal, Layout.Viewer.canvasSide)

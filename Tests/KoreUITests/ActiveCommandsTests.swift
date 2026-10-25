@@ -41,6 +41,16 @@ struct ActiveCommandsTests {
         #expect(store.summary == CommandsStore.Summary())
     }
 
+    /// A failed agent stays in sight under the chat, but it has ended: what it left running
+    /// counts on its own row and on the foot line alike.
+    @Test func aFailedAgentsCommandCountsAsOutlived() {
+        let store = CommandsStore()
+        store.apply(.commandStarted(Self.shell("c1", owner: .sub("A"))))
+        store.apply(.agentFinished(id: "A", .failed, result: nil))
+        #expect(store.summary.outlived == 1)
+        #expect(store.summary.live(.sub("A")) == 1)
+    }
+
     @Test func livePaneRowsComeNewestFirstThenFinishedByMostRecentEnd() {
         let store = CommandsStore()
         let start = Date(timeIntervalSince1970: 1_000)

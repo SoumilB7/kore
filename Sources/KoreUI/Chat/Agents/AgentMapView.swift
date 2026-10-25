@@ -251,6 +251,9 @@ struct AgentMapView: View {
             if case .fold(let fold) = highlight {
                 map.toggle(fold)
                 map.foldCursor = fold
+            } else if map.pane != nil {
+                // The chat's or Still running pane: no agent to open.
+                return event
             } else if let selected {
                 openAgent(selected)
             }
@@ -467,7 +470,7 @@ private struct GraphRootRow: View {
         .background {
             if hasChildren { GraphWires(depth: -1, rails: [], isLast: true, hasChildren: true).canvas(elbow: nil) }
         }
-        .hoverFill(selected || hovered.value, selected ? Theme.surfaceHover : Theme.toolHover)
+        .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.window) : Theme.Row.hover(.window))
         .contentShape(Rectangle())
     }
 }
