@@ -120,6 +120,8 @@ extension SlashCommand {
 /// Backspace at the start of the text takes it off.
 struct CommandChip: View {
     let command: SlashCommand
+    /// Selected with the whole draft (⌘A): the text selection's colour behind it.
+    var selection: Color?
     let open: () -> Void
 
     var body: some View {
@@ -129,7 +131,7 @@ struct CommandChip: View {
                 .foregroundStyle(Theme.accent)
                 .lineLimit(1)
                 .padding(.horizontal, Space.sm)
-                .background(Theme.commandFill, in: RoundedRectangle(cornerRadius: Radius.chip))
+                .background(selection ?? Theme.commandFill, in: RoundedRectangle(cornerRadius: Radius.chip))
                 .hitTarget(Size.commandChipReach)
         }
         .buttonStyle(.plain)

@@ -38,6 +38,11 @@ struct ComposerView: View {
     /// word) in place of the text selected. While the text before it is the same, the button
     /// takes the "/word" out with that space and puts the selected text back.
     @StateObject private var slashInsert = Held<SlashInsert?>(nil)
+    /// ⌘A has the whole draft, chips and all (`ComposerTextView.wholeDraft`): the chips show
+    /// selected.
+    @StateObject private var wholeDraft = Local(false)
+    /// A whole draft going in (⌘V): its own edit of the text takes no chips with it.
+    @StateObject private var pastingDraft = Held(false)
 
     struct SlashInsert {
         let chat: UUID
@@ -185,7 +190,10 @@ struct ComposerView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Space.md) {
                         ForEach(chat.attachments) { attachment in
-                            AttachmentChip(attachment: attachment, open: { openImage(attachment) }) {
+                            AttachmentChip(
+                                attachment: attachment, selected: wholeDraft.value, focused: focused.wrappedValue,
+                                open: { openImage(attachment) }
+                            ) {
                                 chat.removeAttachment(attachment.id)
                             }
                         }
@@ -212,7 +220,9 @@ struct ComposerView: View {
     private var field: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
             if let command = chat.command {
-                CommandChip(command: command, open: openSlash)
+                CommandChip(
+                    command: command, selection: wholeDraft.value ? Theme.Selection.chip(focused: focused.wrappedValue) : nil,
+                    open: openSlash)
             }
             textField
         }
@@ -234,7 +244,12 @@ struct ComposerView: View {
         let baseline = ComposerText.baseline(font)
         return ComposerText(
             chat: chat.id, text: chat.draft, font: font, placed: caret.value, editor: editor,
-            changed: { chat.draft = $0 }, command: perform
+            changed: { chat.draft = $0 }, command: perform,
+            draft: ComposerText.WholeDraft(
+                hasMore: { !chat.attachments.isEmpty || chat.command != nil },
+                selected: selectWhole,
+                clipboard: clipboard,
+                replaced: { if !pastingDraft.value { setMore(attachments: [], command: nil) } })
         )
         .focused(focused)
         .alignmentGuide(.firstTextBaseline) { _ in baseline }
@@ -287,9 +302,16 @@ struct ComposerView: View {
             return moveSlash(-1) == .handled
         case #selector(NSResponder.moveDown(_:)):
             return moveSlash(1) == .handled
-        case #selector(NSResponder.deleteBackward(_:)):
+        case #selector(NSResponder.deleteBackward(_:)) where !view.wholeDraft:
             return removeCommand(view)
         default:
+            // Backspace (any delete) with ⌘A's whole draft and no text: the chips go. With
+            // text, the text view deletes it, and the chips go with it (`replaced`).
+            if view.wholeDraft, view.string.isEmpty, NSStringFromSelector(command).hasPrefix("delete") {
+                setMore(attachments: [], command: nil)
+                view.endWholeDraft()
+                return true
+            }
             return false
         }
     }
@@ -318,11 +340,121 @@ struct ComposerView: View {
     private func pasteAttachments(_ event: NSEvent) -> NSEvent? {
         guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
             event.charactersIgnoringModifiers == "v",
-            let window = window.value, event.window === window, focused.wrappedValue, let chat = pasteChat.value,
-            let urls = Attachments.fromPasteboard(.general)
+            let window = window.value, event.window === window,
+            let view = editor.view, window.firstResponder === view, let chat = pasteChat.value
         else { return event }
+        let board = DraftClipboard.pasteboard
+        if let draft = DraftClipboard.read(from: board) {
+            paste(draft, into: chat)
+            return nil
+        }
+        guard let urls = Attachments.fromPasteboard(board) else { return event }
         chat.attach(urls)
         return nil
+    }
+
+    // MARK: The whole draft (⌘A)
+
+    private func selectWhole(_ whole: Bool) {
+        wholeDraft.value = whole
+        guard whole, let chat = pasteChat.value else { return }
+        UILog.event("composer-select-all", Self.counts(chat.attachments, command: chat.command))
+    }
+
+    /// Counts for the log, never the text or the names.
+    private static func counts(_ attachments: [Attachment], command: SlashCommand?) -> KeyValuePairs<String, String?> {
+        [
+            "images": String(attachments.filter { $0.kind == .image }.count),
+            "files": String(attachments.filter { $0.kind != .image }.count),
+            "command": command == nil ? "no" : "yes",
+        ]
+    }
+
+    /// ⌘C ⌘X with ⌘A's whole draft: all of it to the clipboard (`DraftClipboard`), and for ⌘X
+    /// out of the box, as Backspace takes it. ⌘V with a whole draft on the clipboard: it goes
+    /// in. Anything else is the text view's own.
+    private func clipboard(_ view: ComposerTextView, _ action: ComposerTextView.Clipboard) -> Bool {
+        guard let chat = pasteChat.value else { return false }
+        switch action {
+        case .copy, .cut:
+            guard view.wholeDraft, view.shown == chat.draft else { return false }
+            DraftClipboard(provider: chat.provider.id, text: chat.draft, command: chat.command, attachments: chat.attachments)
+                .write(to: DraftClipboard.pasteboard)
+            UILog.event(action == .cut ? "composer-cut-all" : "composer-copy-all", Self.counts(chat.attachments, command: chat.command))
+            if action == .cut {
+                if view.string.isEmpty {
+                    setMore(attachments: [], command: nil)
+                    view.endWholeDraft()
+                } else {
+                    view.delete(nil)
+                }
+            }
+            return true
+        case .paste:
+            guard let draft = DraftClipboard.read(from: DraftClipboard.pasteboard) else { return false }
+            paste(draft, into: chat)
+            return true
+        }
+    }
+
+    /// A copied draft into this one: its text at the caret (in place of what's selected), its
+    /// files after the chips there are, in their order, and its command in the chip when the
+    /// chip is free and the command is this CLI's (else as "/name" before the text). Over ⌘A's
+    /// whole draft, it replaces all of it. One undo takes it out again.
+    private func paste(_ draft: DraftClipboard, into chat: Chat) {
+        let replacingAll = editor.view?.wholeDraft == true
+        let before = replacingAll ? [] : chat.attachments
+        var command = replacingAll ? nil : chat.command
+        var text = draft.text
+        if let copied = draft.command, copied.kind == .command {
+            let known =
+                draft.provider == chat.provider.id
+                ? copied.slashCommand
+                : chat.controls.commands.first { $0.kind == .command && $0.name == copied.name }
+            if command == nil, let known {
+                command = known
+            } else {
+                text = text.isEmpty ? "/\(copied.name)" : "/\(copied.name) \(text)"
+            }
+        }
+        let pasted = draft.urls().map(Attachment.init(url:))
+        if let view = editor.view, view.shown == chat.draft, !text.isEmpty || replacingAll {
+            let range = view.selectedRange()
+            pastingDraft.value = true
+            view.breakUndoCoalescing()
+            if view.shouldChangeText(in: range, replacementString: text) {
+                view.replaceCharacters(in: range, with: text)
+                view.didChangeText()
+                view.setSelectedRange(NSRange(location: range.location + (text as NSString).length, length: 0))
+                view.scrollRangeToVisible(view.selectedRange())
+            }
+            pastingDraft.value = false
+        } else if !text.isEmpty || replacingAll {
+            chat.draft = replacingAll ? text : chat.draft + text
+            place()
+        }
+        editor.view?.endWholeDraft()
+        setMore(attachments: before + pasted, command: command)
+        editor.view?.breakUndoCoalescing()
+        UILog.event("composer-paste-all", Self.counts(pasted, command: draft.command?.slashCommand))
+    }
+
+    /// Sets the chips (and the command), undoably in the text's own undo: a clear or a paste of
+    /// the whole draft comes back with ⌘Z, the chips with the text.
+    private func setMore(attachments: [Attachment], command: SlashCommand?) {
+        guard let chat = pasteChat.value else { return }
+        Self.swap(chat, attachments: attachments, command: command, undo: editor.undo)
+    }
+
+    private static func swap(_ chat: Chat, attachments: [Attachment], command: SlashCommand?, undo: UndoManager?) {
+        let attachmentsBefore = chat.attachments
+        let commandBefore = chat.command
+        guard attachmentsBefore.map(\.id) != attachments.map(\.id) || commandBefore != command else { return }
+        undo?.registerUndo(withTarget: chat) { [weak undo] chat in
+            MainActor.assumeIsolated { swap(chat, attachments: attachmentsBefore, command: commandBefore, undo: undo) }
+        }
+        chat.setAttachments(attachments)
+        chat.command = command
     }
 
     /// Backspace with the caret before the first character takes the command chip off; the

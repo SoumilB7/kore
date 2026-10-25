@@ -27,9 +27,12 @@ struct PlanChip: View {
 // MARK: - Attachments
 
 /// An attached image (thumbnail, click to view) or file (icon + name); removable while still
-/// in the composer.
+/// in the composer. Selected with the whole draft (⌘A), it takes the text selection's colour.
 struct AttachmentChip: View {
     let attachment: Attachment
+    var selected = false
+    /// The composer has focus: the selection's active colour, else its inactive one.
+    var focused = true
     var open: (() -> Void)?
     var remove: (() -> Void)?
 
@@ -44,7 +47,15 @@ struct AttachmentChip: View {
                         .aspectRatio(contentMode: .fill)
                         .frame(width: Size.thumb, height: Size.thumb)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.chip))
-                        .overlay(RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.border))
+                        .overlay {
+                            if selected {
+                                RoundedRectangle(cornerRadius: Radius.chip)
+                                    .fill(Theme.Selection.imageWash(focused: focused))
+                                    .strokeBorder(Theme.Selection.chip(focused: focused), lineWidth: Stroke.emphasis)
+                            } else {
+                                RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.border)
+                            }
+                        }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -63,7 +74,9 @@ struct AttachmentChip: View {
                 }
                 .padding(.horizontal, Space.lg)
                 .frame(height: Size.chip)
-                .background(Theme.surfaceHover, in: RoundedRectangle(cornerRadius: Radius.chip))
+                .background(
+                    selected ? Theme.Selection.chip(focused: focused) : Theme.surfaceHover,
+                    in: RoundedRectangle(cornerRadius: Radius.chip))
                 .help(attachment.url?.path ?? attachment.name)
             }
         }

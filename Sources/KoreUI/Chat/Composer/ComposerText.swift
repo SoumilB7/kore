@@ -23,6 +23,17 @@ struct ComposerText: NSViewRepresentable {
     /// A command the text view is about to perform (`insertNewline:`, `moveUp:` …): true when
     /// the composer took it.
     let command: (ComposerTextView, Selector) -> Bool
+    /// The whole draft (⌘A, `ComposerTextView.wholeDraft`): what it holds besides the text, for
+    /// ⌘A to take in; it starting or ending; a copy, cut or paste of it (true when taken); and an
+    /// edit of the whole text, which takes the chips with it.
+    var draft = WholeDraft()
+
+    struct WholeDraft {
+        var hasMore: () -> Bool = { false }
+        var selected: (Bool) -> Void = { _ in }
+        var clipboard: (ComposerTextView, ComposerTextView.Clipboard) -> Bool = { _, _ in false }
+        var replaced: () -> Void = {}
+    }
 
     struct Placed: Equatable {
         let chat: UUID
@@ -46,9 +57,15 @@ struct ComposerText: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.changed = changed
         coordinator.command = command
+        coordinator.draft = draft
         editor.view = scroll.textView
         editor.undo = coordinator.undo
         let view = scroll.textView
+        view.draft = draft
+        // What the view says of the whole draft meanwhile goes to the composer after this
+        // update, not during it.
+        coordinator.updating = true
+        defer { coordinator.updating = false }
         if view.font != font { scroll.setFont(font) }
         let enabled = context.environment.isEnabled
         if view.isEditable != enabled {
@@ -58,6 +75,8 @@ struct ComposerText: NSViewRepresentable {
         if coordinator.chat != chat {
             coordinator.chat = chat
             coordinator.undo.removeAllActions()
+            // Another chat's draft: nothing of it is selected, whatever its text.
+            view.endWholeDraft()
         }
         // Set from outside (a send, a fork, a pick, another chat): the view takes it, and its
         // undo, made for the text it had, starts over. Never over an input method's marked text.
@@ -99,9 +118,22 @@ struct ComposerText: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
-        weak var view: ComposerTextView?
+        weak var view: ComposerTextView? {
+            didSet {
+                view?.selectedWhole = { [weak self] whole in
+                    guard let self else { return }
+                    if self.updating {
+                        DispatchQueue.main.async { [weak self] in self?.draft.selected(whole) }
+                    } else {
+                        self.draft.selected(whole)
+                    }
+                }
+            }
+        }
         var changed: (String) -> Void = { _ in }
         var command: (ComposerTextView, Selector) -> Bool = { _, _ in false }
+        var draft = ComposerText.WholeDraft()
+        var updating = false
         var chat: UUID?
         var serial = -1
         /// The composer's own, not the window's (the explorer's file moves use that one).
@@ -112,6 +144,16 @@ struct ComposerText: NSViewRepresentable {
             let text = view.copiedText()
             view.shown = text
             changed(text)
+        }
+
+        /// The whole text replaced (typed over, deleted, cut, pasted over) while ⌘A has the
+        /// whole draft: the chips go with it, in the same undo. Not an undo's own edit.
+        func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+            guard let view = textView as? ComposerTextView, view.wholeDraft, !undo.isUndoing, !undo.isRedoing,
+                range == NSRange(location: 0, length: (view.string as NSString).length)
+            else { return true }
+            draft.replaced()
+            return true
         }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -125,8 +167,18 @@ struct ComposerText: NSViewRepresentable {
 
 /// The text view, keeping the key it's handling: what a command came from (Return with ⇧ or ⌥
 /// held is a new line, not a send).
-final class ComposerTextView: NSTextView {
+package final class ComposerTextView: NSTextView {
     private(set) var key: NSEvent?
+    var draft = ComposerText.WholeDraft()
+    var selectedWhole: (Bool) -> Void = { _ in }
+    /// ⌘A took the whole draft, the chips with the text, while there are chips: until the
+    /// selection next changes.
+    package private(set) var wholeDraft = false {
+        didSet { if wholeDraft != oldValue { selectedWhole(wholeDraft) } }
+    }
+    private var selectingAll = false
+
+    enum Clipboard { case copy, cut, paste }
     /// What it holds, as last set or typed, as a Swift string of its own: the draft shares it, so
     /// comparing the two costs nothing, where `string` is the text storage's, bridged, and each
     /// read of it walks the whole text.
@@ -146,10 +198,56 @@ final class ComposerTextView: NSTextView {
         }
     }
 
-    override func keyDown(with event: NSEvent) {
+    package override func keyDown(with event: NSEvent) {
         key = event
         defer { key = nil }
         super.keyDown(with: event)
+    }
+
+    // MARK: The whole draft
+
+    package override func selectAll(_ sender: Any?) {
+        selectingAll = true
+        super.selectAll(sender)
+        selectingAll = false
+        wholeDraft = draft.hasMore()
+    }
+
+    package override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        if !selectingAll { wholeDraft = false }
+    }
+
+    func endWholeDraft() { wholeDraft = false }
+
+    package override func copy(_ sender: Any?) {
+        if !draft.clipboard(self, .copy) { super.copy(sender) }
+    }
+
+    package override func cut(_ sender: Any?) {
+        if !draft.clipboard(self, .cut) { super.cut(sender) }
+    }
+
+    package override func paste(_ sender: Any?) {
+        if !draft.clipboard(self, .paste) { super.paste(sender) }
+    }
+
+    /// Copy and Cut with chips but no text selected (an empty text), and Paste with a whole
+    /// draft on the clipboard, are there to choose.
+    package override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        extraValid(item.action) || super.validateMenuItem(item)
+    }
+
+    package override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        extraValid(item.action) || super.validateUserInterfaceItem(item)
+    }
+
+    private func extraValid(_ action: Selector?) -> Bool {
+        switch action {
+        case #selector(copy(_:)), #selector(cut(_:)): wholeDraft && isEditable
+        case #selector(paste(_:)): isEditable && DraftClipboard.isOn(DraftClipboard.pasteboard)
+        default: false
+        }
     }
 }
 

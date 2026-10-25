@@ -26,7 +26,7 @@ package final class Chat: Identifiable {
     let commands = CommandsStore()
 
     /// Waiting in the composer, sent with the next message.
-    private(set) var attachments: [Attachment] = [] {
+    package private(set) var attachments: [Attachment] = [] {
         didSet { if attachments.map(\.id) != oldValue.map(\.id) { composerDraftChanged() } }
     }
     package var draft = "" {
@@ -786,6 +786,11 @@ package final class Chat: Identifiable {
 
     func removeAttachment(_ id: Attachment.ID) {
         attachments.removeAll { $0.id == id }
+    }
+
+    /// All of them at once: a whole draft cleared or pasted, or that undone.
+    func setAttachments(_ list: [Attachment]) {
+        attachments = list
     }
 
     /// Swaps in an edited copy (a marked-up image), keeping its place.

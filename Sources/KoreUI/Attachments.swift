@@ -7,7 +7,7 @@ package struct Attachment: Identifiable {
     package enum Kind: Sendable { case image, text, pdf, other }
 
     package let id = UUID()
-    let name: String
+    package let name: String
     let kind: Kind
     /// Where it lives on disk (pasted images are saved to a temp file); nil when only known
     /// from a transcript.

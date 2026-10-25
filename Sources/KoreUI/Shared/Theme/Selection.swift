@@ -10,6 +10,10 @@ extension Theme {
         static let active = Color(nsColor: dark { .selectedTextBackgroundColor })
         /// The selection while focus is elsewhere (the composer, another window).
         static let inactive = Color(nsColor: dark { .unemphasizedSelectedTextBackgroundColor })
+        /// The composer's chips while ⌘A has the whole draft: the text selection's colour, and
+        /// over an image a wash of it the picture shows through.
+        static func chip(focused: Bool) -> Color { focused ? active : inactive }
+        static func imageWash(focused: Bool) -> Color { chip(focused: focused).opacity(0.4) }
 
         /// A colour that resolves as the dark appearance shows it, each time it's drawn, so a
         /// change of the system's highlight colour comes through.
