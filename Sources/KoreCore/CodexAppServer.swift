@@ -54,8 +54,19 @@ public actor CodexAppServer {
         environment: [String: String] = [:]
     ) async throws -> CodexAppServer {
         let server = CodexAppServer()
-        try await server.launch(cwd: cwd, executable: executable, arguments: arguments, environment: environment)
-        return server
+        do {
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                try await server.launch(cwd: cwd, executable: executable, arguments: arguments, environment: environment)
+                try Task.checkCancellation()
+            } onCancel: {
+                Task { await server.close() }
+            }
+            return server
+        } catch {
+            await server.close()
+            throw error
+        }
     }
 
     private init() {
@@ -133,6 +144,7 @@ public actor CodexAppServer {
 
     private func launch(cwd: URL, executable: URL?, arguments: [String], environment: [String: String]) async throws {
         let resolved = try await CLIExecutable.resolve("codex", override: executable)
+        try Task.checkCancellation()
         let io = try StdioProcess(
             executable: resolved.url,
             arguments: ["app-server"] + arguments,

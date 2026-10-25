@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 
 /// Where a storyline host (phase 12's `kore-storylines`, in the `KoreStorylines` target) reaches
 /// into the app. Each is nil in Kore itself, so the app runs as it always has.
@@ -12,6 +13,8 @@ package enum StorylineSeams {
     /// Each CLI's login calls (status, sign-in, sign-out) in place of the CLI's own, by
     /// provider id; nil for one left as it is.
     package static var accounts: ((_ provider: String) -> AccountCalls?)?
+    /// Account-list plan reads for a login (nil: main), without starting real CLIs.
+    package static var loginUsage: ((_ provider: String, _ login: String?) async throws -> PlanReading)?
     /// A sign-in page Kore would have opened in the browser (under a host nothing opens).
     package static var opened: ((URL) -> Void)?
     /// The file an open panel would have given (a Vertex key file); nil, none picked.

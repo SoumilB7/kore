@@ -34,6 +34,18 @@ package struct UseScript: Step {
         // Each storyline starts with the app's own watchdog wait, whatever one before set.
         Chat.stallAfter.value = 90
         if let provider { ScriptedWorld.shared.scripts[provider] = script } else { ScriptedWorld.shared.script = script }
+        if let provider {
+            // The independent auth-status read and usage reply describe the same fixture.
+            switch script.usage {
+            case .claude(let account, _):
+                ScriptedAccounts.shared.status[provider] = ScriptedAccounts.claude(
+                    email: account["email"]?.string ?? "you@example.com",
+                    org: account["organization"]?.string ?? "you@example.com's Organization",
+                    plan: account["subscriptionType"]?.string ?? "max")
+            case .codex(let account, _, _, _): ScriptedAccounts.shared.status[provider] = account
+            default: break
+            }
+        }
     }
 }
 

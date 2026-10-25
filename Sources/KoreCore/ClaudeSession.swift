@@ -110,8 +110,19 @@ public actor ClaudeSession {
     /// Spawns the CLI and completes the initialize handshake.
     public static func start(_ options: Options) async throws -> ClaudeSession {
         let session = ClaudeSession(options)
-        try await session.launch()
-        return session
+        do {
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                try await session.launch()
+                try Task.checkCancellation()
+            } onCancel: {
+                Task { await session.close() }
+            }
+            return session
+        } catch {
+            await session.close()
+            throw error
+        }
     }
 
     private init(_ options: Options) {
@@ -262,6 +273,7 @@ public actor ClaudeSession {
 
     private func launch() async throws {
         let resolved = try await CLIExecutable.resolve("claude", override: options.executable)
+        try Task.checkCancellation()
         let io = try StdioProcess(
             executable: resolved.url,
             arguments: options.arguments,

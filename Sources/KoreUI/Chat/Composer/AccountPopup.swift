@@ -363,12 +363,13 @@ final class AccountState {
 struct AccountPopup: View {
     let chat: Chat
     let state: AccountState
+    var room: CGFloat?
     private var store: AccountStore { .shared }
     private var product: String { chat.provider.usage.product }
 
     var body: some View {
         ComposerPopup(
-            chat: chat, id: StoryID.Composer.account, isOpen: { state.isOpen }, stepBack: { state.stepBack() }, close: { state.close() },
+            chat: chat, id: StoryID.Composer.account, room: room, isOpen: { state.isOpen }, stepBack: { state.stepBack() }, close: { state.close() },
             editing: { state.isEditing }
         ) {
             if case .platform(let platform) = state.editor {
@@ -864,14 +865,18 @@ private struct LoginList: View {
 
     var body: some View {
         let stops = AccountText.switchCaption(working: store.workingChats(provider))
+        let logins = store.logins(provider)
+        let keys = logins.map { LoginUsage.Key(provider, $0, generation: store.generation(provider)) }
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(store.logins(provider)) { login in
+            ForEach(logins) { login in
                 LoginRow(
                     state: state, login: login, caption: caption(login), stops: login.active ? nil : stops,
-                    reading: login.active && identity == nil && store.status(provider) == .unknown)
+                    reading: login.active && identity == nil && store.status(provider) == .unknown,
+                    usage: LoginUsage.shared.state(LoginUsage.Key(provider, login, generation: store.generation(provider))))
             }
         }
         .padding(.horizontal, -Space.sm)
+        .task(id: keys) { await LoginUsage.shared.refresh(keys) }
     }
 
     private func caption(_ login: AccountStore.Login) -> String? {
@@ -891,6 +896,7 @@ private struct LoginRow: View {
     let stops: String?
     /// Its account being read, just switched to: the spinner in the ✓'s place.
     let reading: Bool
+    let usage: LoginUsage.State
     @StateObject private var hovered = Local(false)
 
     var body: some View {
@@ -909,7 +915,10 @@ private struct LoginRow: View {
                     if let shown {
                         Text(shown).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
                     }
+                    LoginMeters(state: usage, signedOut: login.signedOut)
+                        .padding(.top, Space.xs)
                 }
+                .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: Space.md)
                 if hovered.value || menuOpen { LoginMenuButton(state: state, login: login.id) }
                 if reading {
@@ -919,11 +928,13 @@ private struct LoginRow: View {
                 }
             }
             .padding(.horizontal, Space.sm)
+            .padding(.vertical, Space.xs)
             .frame(maxWidth: .infinity, minHeight: Size.Picker.method, alignment: .leading)
             .hoverFill(hovered.value && !login.active, Theme.Row.hover(.surface))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .fixedSize(horizontal: false, vertical: true)
         .onHover { hovered.value = $0 }
         .storyID(id)
         .storyAction(id.part(.hover)) { hovered.value = true }

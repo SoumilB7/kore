@@ -194,6 +194,20 @@ extension Chat {
             return (login.active ? "✓ " : "") + (login.email ?? "?") + (cue.map { " · " + $0 } ?? "")
         }
     }
+    /// The account-list's displayed totals (not Kore shares), by login id.
+    package var storyLoginUsage: [String: [String]] {
+        let store = AccountStore.shared
+        return Dictionary(uniqueKeysWithValues: store.logins(provider.id).map { login in
+            let key = LoginUsage.Key(provider.id, login, generation: store.generation(provider.id))
+            let lines: [String]
+            switch LoginUsage.shared.state(key) {
+            case .loading: lines = ["Reading usage…"]
+            case .unavailable: lines = ["Usage unavailable"]
+            case .ready(let reading, _): lines = LoginUsage.bars(reading).map { UsageText.label($0.title) + " · " + UsageText.percent($0.used) }
+            }
+            return (AccountStore.loginKey(login.id), lines)
+        })
+    }
     /// What a login row's caption says under the pointer, a switch to it stopping chats: nil when
     /// none work.
     package var storyLoginSwitchCaption: String? { AccountText.switchCaption(working: AccountStore.shared.workingChats(provider.id)) }

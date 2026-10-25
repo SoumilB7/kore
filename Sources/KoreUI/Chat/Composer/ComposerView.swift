@@ -97,7 +97,9 @@ struct ComposerView: View {
                     .padding(.bottom, Space.lg)
                     .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 } else if chat.account.isOpen {
-                    AccountPopup(chat: chat, state: chat.account)
+                    AccountPopup(
+                        chat: chat, state: chat.account,
+                        room: max(boxFrame.value.minY - Size.titleRow - Space.lg - Space.xxxl, Size.usageMinRoom))
                         .padding(.bottom, Space.lg)
                         .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 } else if let kind = chat.picker.open {

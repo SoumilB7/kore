@@ -448,17 +448,22 @@ public enum PlanUsage {
 
     /// From a short-lived `claude -p` that is never sent a message.
     public static func claude(executable: URL? = nil) async throws -> PlanReading {
-        let session = try await ClaudeSession.start(
-            .init(cwd: FileManager.default.homeDirectoryForCurrentUser, thinkingSummaries: false, executable: executable))
-        let deadline = Task {
-            try await Task.sleep(for: Self.deadline)
-            await session.close()
+        try await claude(executable: executable, timeout: deadline)
+    }
+
+    /// The deadline includes resolving and initializing the child, before a session is returned.
+    static func claude(executable: URL?, timeout: Duration) async throws -> PlanReading {
+        try await bounded(timeout) {
+            let session = try await ClaudeSession.start(
+                .init(cwd: FileManager.default.homeDirectoryForCurrentUser, thinkingSummaries: false, executable: executable))
+            defer { Task { await session.close() } }
+            return try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await claude(session, executable: executable)
+            } onCancel: {
+                Task { await session.close() }
+            }
         }
-        defer {
-            deadline.cancel()
-            Task { await session.close() }
-        }
-        return try await claude(session, executable: executable)
     }
 
     /// From a running Codex app-server. Read-only: `account/read` and `account/rateLimits/read`.
@@ -484,16 +489,41 @@ public enum PlanUsage {
 
     /// From a short-lived `codex app-server`.
     public static func codex(executable: URL? = nil) async throws -> PlanReading {
-        let server = try await CodexAppServer.start(cwd: FileManager.default.homeDirectoryForCurrentUser, executable: executable)
-        let deadline = Task {
-            try await Task.sleep(for: Self.deadline)
-            await server.close()
+        try await codex(executable: executable, timeout: deadline)
+    }
+
+    static func codex(executable: URL?, timeout: Duration) async throws -> PlanReading {
+        try await bounded(timeout) {
+            let server = try await CodexAppServer.start(cwd: FileManager.default.homeDirectoryForCurrentUser, executable: executable)
+            defer { Task { await server.close() } }
+            return try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await codex(server)
+            } onCancel: {
+                Task { await server.close() }
+            }
         }
-        defer {
-            deadline.cancel()
-            Task { await server.close() }
+    }
+
+    struct ReadTimedOut: LocalizedError {
+        var errorDescription: String? { "Usage request timed out" }
+    }
+
+    /// The losing task is cancelled and awaited: a timeout cannot leave a detached CLI behind.
+    private static func bounded<Value: Sendable>(
+        _ timeout: Duration, operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        try Task.checkCancellation()
+        return try await withThrowingTaskGroup(of: Value.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw ReadTimedOut()
+            }
+            defer { group.cancelAll() }
+            guard let value = try await group.next() else { throw CancellationError() }
+            return value
         }
-        return try await codex(server)
     }
 
     /// `account/rateLimitResetCredit/consume`'s params: the attempt's key (the same on a retry of

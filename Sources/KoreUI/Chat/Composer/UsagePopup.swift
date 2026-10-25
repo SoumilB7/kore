@@ -55,14 +55,66 @@ final class UsageState {
     /// Each open's own number: a read that lands after a close, or after the next open, is
     /// only kept for next time.
     @ObservationIgnored private var serial = 0
+    /// A reading's identity survives opening its extended view (which closes the small card).
+    @ObservationIgnored private var readingSerial = 0
     /// When a row last asked (system uptime): a "Yes" within a double-click of it is the
     /// "Use reset" click's second half, and is ignored.
     @ObservationIgnored private var askedAt: TimeInterval = 0
     @ObservationIgnored private var patienceTimer: Task<Void, Never>?
     @ObservationIgnored private var provider = ""
+    @ObservationIgnored private var cli = ""
     @ObservationIgnored private var read: (@MainActor () async throws -> PlanReading)?
     @ObservationIgnored private var consume: (@MainActor (String?, UUID) async throws -> PlanResetOutcome)?
     @ObservationIgnored private var attribute: (@MainActor (PlanReading) async -> KoreShares?)?
+    @ObservationIgnored private var accountCurrent: @MainActor () -> Bool = { true }
+
+    private static func accountScope(_ provider: String) -> String {
+        if StoryHost.installed, CLIProfiles.root.value == nil {
+            let identity: AccountIdentity? = if case .signedIn(let identity) = AccountStore.shared.status(provider) { identity } else { nil }
+            return ["scripted", String(AccountStore.shared.generation(provider)), identity?.email ?? "", identity?.workspace ?? ""].joined(separator: "\u{1F}")
+        }
+        let id = CLIProfiles.active(provider)
+        let login = id.flatMap { id in CLIProfiles.added(provider).first { $0.id == id } }
+        let email = id == nil ? CLIProfiles.mainEmail(provider) : login?.email
+        let workspace = id == nil ? CLIProfiles.mainWorkspace(provider) : login?.workspace
+        return [
+            id ?? "main", String(AccountStore.shared.generation(provider)),
+            email ?? "", workspace ?? "",
+        ].joined(separator: "\u{1F}")
+    }
+
+    private static func profileScope(_ provider: String) -> String {
+        let login = StoryHost.installed && CLIProfiles.root.value == nil ? "scripted" : CLIProfiles.active(provider) ?? "main"
+        return [login, String(AccountStore.shared.generation(provider))].joined(separator: "\u{1F}")
+    }
+
+    private static func knownAccount(_ provider: String) -> PlanAccount? {
+        if StoryHost.installed, CLIProfiles.root.value == nil {
+            guard case .signedIn(let identity) = AccountStore.shared.status(provider) else { return nil }
+            return PlanAccount(plan: identity.plan, email: identity.email, organization: identity.organization, access: .plan)
+        }
+        let id = CLIProfiles.active(provider)
+        let login = id.flatMap { id in CLIProfiles.added(provider).first { $0.id == id } }
+        guard let email = id == nil ? CLIProfiles.mainEmail(provider) : login?.email, !email.isEmpty else { return nil }
+        let workspace = id == nil ? CLIProfiles.mainWorkspace(provider) : login?.workspace
+        return PlanAccount(plan: provider == "codex" ? workspace : nil, email: email,
+            organization: provider == "claude" ? workspace : nil, access: .plan)
+    }
+
+    static func sameAccount(_ actual: PlanAccount, expected: PlanAccount?, provider: String) -> Bool {
+        if actual.access == .signedOut { return true }
+        guard let expected, let email = expected.email else {
+            // A key/platform has no subscription limits or login identity to mix with one.
+            if case .perToken = actual.access { return actual.email == nil }
+            return false
+        }
+        guard actual.email?.lowercased() == email.lowercased() else { return false }
+        if provider == "claude", let org = expected.organization, !org.isEmpty {
+            return (actual.organization ?? actual.plan) == org
+        }
+        if provider == "codex", let plan = expected.plan, !plan.isEmpty { return actual.plan == plan }
+        return true
+    }
 
     /// Each provider's last reading, and when it was made.
     private static var kept: [String: (reading: PlanReading, at: Date)] = [:]
@@ -77,20 +129,57 @@ final class UsageState {
     func open(
         provider: String, read: @escaping @MainActor () async throws -> PlanReading,
         useReset: @escaping @MainActor (String?, UUID) async throws -> PlanResetOutcome,
-        shares: @escaping @MainActor (PlanReading) async -> KoreShares? = { _ in nil }
+        shares: @escaping @MainActor (PlanReading) async -> KoreShares? = { _ in nil },
+        cacheScope: String? = nil,
+        expectedAccount: PlanAccount? = nil
     ) {
+        // Never show the previous login's saved limits or hatch while this login loads.
+        let scope = cacheScope ?? Self.accountScope(provider)
+        var boundScope = scope
+        let cli = provider
+        let profile = Self.profileScope(cli)
+        let current: @MainActor () -> Bool = { cacheScope != nil || Self.profileScope(cli) == profile && Self.accountScope(cli) == boundScope }
+        accountCurrent = current
+        self.cli = cli
+        let checkIdentity = expectedAccount != nil || cacheScope == nil && Registry.provider(cli) != nil
+        var expected = expectedAccount ?? Self.knownAccount(cli)
+        let rawRead = read
+        let read: @MainActor () async throws -> PlanReading = {
+            if checkIdentity, expected == nil {
+                // First open on an unrecorded login: learn its identity independently of a
+                // chat server that may still be relaunching under the previous login.
+                await AccountStore.shared.refresh(cli)
+                guard cacheScope != nil || Self.profileScope(cli) == profile else { throw UsageUnavailable() }
+                expected = Self.knownAccount(cli)
+                boundScope = Self.accountScope(cli)
+            }
+            guard current() else { throw UsageUnavailable() }
+            let new = try await rawRead()
+            guard current(), !checkIdentity || Self.sameAccount(new.account, expected: expected, provider: cli) else {
+                throw UsageUnavailable()
+            }
+            return new
+        }
+        let provider = provider + "\u{1F}" + scope
         serial += 1
         let open = serial
+        readingSerial = open
         isOpen = true
         status = .loading
         (resetsOpen, resetSteps, rereading, held) = (false, [:], false, [])
         (self.provider, self.read, self.consume, attribute) = (provider, read, useReset, shares)
-        let last = Self.kept[provider]
+        let last = checkIdentity && expected == nil ? nil : Self.kept[provider]
         (reading, readAt) = (last?.reading, last?.at)
-        self.shares = Self.keptShares[provider]
+        self.shares = last == nil ? nil : Self.keptShares[provider]
         Task { [weak self] in
             let outcome: Result<PlanReading, any Error>
             do { outcome = .success(try await read()) } catch { outcome = .failure(error) }
+            guard current() else {
+                guard let self, self.serial == open else { return }
+                (self.reading, self.readAt, self.shares) = (nil, nil, nil)
+                self.status = .unavailable(nil)
+                return
+            }
             if case .success(let new) = outcome, new.limits != nil || new.account.access != .plan {
                 Self.kept[provider] = (new, Date())
             }
@@ -111,10 +200,12 @@ final class UsageState {
     private func attribute(_ reading: PlanReading, open: Int) {
         guard let attribute else { return }
         let provider = provider
+        let current = accountCurrent
         Task { [weak self] in
             guard let shares = await attribute(reading) else { return }
+            guard current() else { return }
             Self.keptShares[provider] = shares
-            guard let self, self.reading == reading else { return }
+            guard let self, self.readingSerial == open, self.provider == provider, self.reading == reading else { return }
             self.shares = shares
         }
     }
@@ -191,6 +282,16 @@ final class UsageState {
         patienceTimer?.cancel()
     }
 
+    /// Another login took over, including in a different window. Its old limits and reset
+    /// actions leave with the card; async reads cannot reopen or repopulate it.
+    func accountChanged() {
+        close()
+        closeExtended()
+        readingSerial += 1
+        (reading, readAt, shares) = (nil, nil, nil)
+        resetSteps = [:]
+    }
+
     /// The count of full resets, clicked: unfolds the list, or folds it and drops a question.
     /// A reset being sent goes on; its outcome waits in its row.
     func toggleResets() {
@@ -234,14 +335,24 @@ final class UsageState {
     /// popup stays open; a read that lands after a close is only kept for next time.
     func useReset() {
         // The asking row's credit; nil (the row of a count alone) lets Codex pick.
-        guard let asking = resetSteps.first(where: { $0.value == .asking }), confirmable, !resetsBusy, let consume, let read else { return }
+        guard accountCurrent(), let confirmed = reading?.account, confirmed.access == .plan,
+            let asking = resetSteps.first(where: { $0.value == .asking }), confirmable, !resetsBusy, let consume, let read else { return }
         let credit = asking.key
         if held.isEmpty { held = resetRows }
         resetSteps[credit] = .using
         let (open, provider) = (serial, provider)
+        let current = accountCurrent
+        let cli = cli
         Task { [weak self] in
+            guard current() else { return }
             let step: ResetStep
             do {
+                // The server can still have the old login while a relaunch is pending.
+                // Verify on that same read path immediately before spending a credit.
+                let checked = try await read()
+                guard current(), checked.account.access == .plan,
+                    Self.sameAccount(checked.account, expected: confirmed, provider: cli)
+                else { throw UsageUnavailable() }
                 let outcome = try await consume(credit, UUID())
                 let said = UsageText.said(outcome) ?? ""
                 switch outcome {
@@ -252,14 +363,15 @@ final class UsageState {
             } catch {
                 step = .failed(UsageText.resetFailed(error))
             }
+            guard current() else { return }
             guard let self, self.serial == open else {
-                if let new = try? await read(), new.limits != nil { Self.kept[provider] = (new, Date()) }
+                if let new = try? await read(), current(), new.limits != nil { Self.kept[provider] = (new, Date()) }
                 return
             }
             (self.resetSteps[credit], self.rereading) = (step, true)
             let new = try? await read()
-            if let new, new.limits != nil { Self.kept[provider] = (new, Date()) }
-            guard self.serial == open else { return }
+            if let new, current(), new.limits != nil { Self.kept[provider] = (new, Date()) }
+            guard current(), self.serial == open else { return }
             if let new, new.limits != nil {
                 (self.reading, self.readAt, self.status) = (new, Date(), .fresh)
                 self.attribute(new, open: open)

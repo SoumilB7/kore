@@ -336,7 +336,7 @@ final class UsagePopup: ChatStoryline {
             Key(.tab),
             WaitForElement(popup),
             composer("the draft as it was before “/lim”", "fix the bug "),
-            Expect("the account read again") { try $0.scriptedBackend().log.filter { $0 == .usage }.count == (codex ? 3 : 2) },
+            Expect("the account read again") { try $0.scriptedBackend().log.filter { $0 == .usage }.count == (codex ? 4 : 2) },
             // Reopened, the last reading shows at once, its bars full.
             Snapshot("usage-popup"),
             // Typing closes it, and the key lands in the field.

@@ -306,3 +306,55 @@ private struct SeedLogins: Step {
         CLIProfiles.reload()
     }
 }
+
+/// Inactive and never-used logins read their own plan totals. A mismatched account cannot
+/// borrow another row's bars, and closing/reopening the card reuses the minute's cache.
+final class AccountUsageMeters: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    override func steps() -> [any Step] {
+        let provider = variant == .codex ? "codex" : "claude"
+        let popup = Locator.id(StoryID.Composer.account)
+        return [
+            UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider),
+            Do("Add two isolated login fixtures") { _ in
+                let unused = try CLIProfiles.prepare(provider)
+                CLIProfiles.adopt(provider, unused, email: "unused@example.com", workspace: provider == "codex" ? "ChatGPT Pro Lite" : "Unused Org")
+                let mismatch = try CLIProfiles.prepare(provider)
+                CLIProfiles.adopt(provider, mismatch, email: "missing@example.com", workspace: provider == "codex" ? "ChatGPT Pro Lite" : "Missing Org")
+                CLIProfiles.activate(provider, nil)
+                StorylineSeams.loginUsage = { cli, id in
+                    let login = CLIProfiles.added(cli).first { $0.id == id }
+                    let email = id == nil ? "you@example.com" : login?.email == "unused@example.com" ? "unused@example.com" : "another@example.com"
+                    let org = id == nil ? "you@example.com's Organization" : login?.workspace
+                    let unused = email == "unused@example.com"
+                    return PlanReading(account: .init(plan: cli == "codex" ? "ChatGPT Pro Lite" : nil, email: email,
+                        organization: cli == "claude" ? org : nil, access: .plan), limits: .init(bars: [
+                        PlanLimit(title: "Session (5hr)", used: unused ? 0 : 52, resetsAt: nil),
+                        PlanLimit(title: "Weekly (7 day)", used: unused ? 0 : 18, resetsAt: nil),
+                    ]))
+                }
+            },
+            OpenFolder(), StartChat(), WaitForFocus(.id(StoryID.Composer.field)),
+            Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
+            Expect("main and unused login show separate totals; a mismatch shows unavailable", found: { $0.app.chat?.storyLoginUsage.description }) { story in
+                guard let lines = story.app.chat?.storyLoginUsage,
+                    let unused = CLIProfiles.added(provider).first(where: { $0.email == "unused@example.com" }),
+                    let mismatch = CLIProfiles.added(provider).first(where: { $0.email == "missing@example.com" })
+                else { return false }
+                return lines["main"] == ["Session · 52%", "Weekly · 18%"]
+                    && lines[unused.id] == ["Session · 0%", "Weekly · 0%"]
+                    && lines[mismatch.id] == ["Usage unavailable"]
+            },
+            FadesEnd(), Snapshot("account-usage-meters"),
+            Key(.escape), ExpectElement(popup, .absent),
+            Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
+            Expect("reopening keeps each login's own bars", found: { $0.app.chat?.storyLoginUsage.description }) { story in
+                let values = story.app.chat?.storyLoginUsage.values ?? Dictionary<String, [String]>().values
+                return values.contains(["Session · 52%", "Weekly · 18%"])
+                    && values.contains(["Session · 0%", "Weekly · 0%"])
+                    && values.contains(["Usage unavailable"])
+            },
+        ]
+    }
+}

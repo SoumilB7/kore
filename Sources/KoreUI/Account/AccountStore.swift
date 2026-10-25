@@ -204,11 +204,17 @@ package final class AccountStore {
         switch reading {
         case .signedIn(let identity):
             statuses[provider] = .signedIn(identity)
-            if CLIProfiles.note(provider, email: identity.email, workspace: identity.workspace) { loginsVersion += 1 }
+            if (!StoryHost.installed || CLIProfiles.root.value != nil), CLIProfiles.note(provider, email: identity.email, workspace: identity.workspace) {
+                loginsVersion += 1
+                // The first status read can correct saved identity without a prior `known`
+                // value to bump against. A visible cached card must leave immediately too.
+                for chat in liveChats(provider) where chat.usage.reading != nil { chat.usage.accountChanged() }
+            }
             lapsed[provider]?.remove(login)
             key = [identity.email?.lowercased() ?? "", identity.organization ?? "", identity.method].joined(separator: "\u{1F}")
         case .signedOut:
             statuses[provider] = .signedOut
+            for chat in liveChats(provider) where chat.usage.reading != nil { chat.usage.accountChanged() }
             lapsed[provider, default: []].insert(login)
             key = ""
         }
@@ -231,7 +237,10 @@ package final class AccountStore {
     /// next turn boundary.
     private func bump(_ provider: String) {
         generations[provider, default: 0] += 1
-        for chat in liveChats(provider) { chat.accountChanged() }
+        for chat in liveChats(provider) {
+            chat.usage.accountChanged()
+            chat.accountChanged()
+        }
     }
 
     /// A switch: every working chat of the CLI stops its turn, background agents and commands,
@@ -748,6 +757,7 @@ package final class AccountStore {
 
     /// Back to nothing known, nothing under way (a storyline's start).
     package func reset() {
+        LoginUsage.shared.reset()
         epoch += 1
         for provider in Array(handles.keys) { let handle = end(provider); Task { await handle?.cancel() } }
         for provider in serials.keys { serials[provider, default: 0] += 1 }

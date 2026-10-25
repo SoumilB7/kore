@@ -79,6 +79,7 @@ package final class ScriptedAccounts {
         keyFails = [:]
         keys = [:]
         chosenFile = nil
+        StorylineSeams.loginUsage = nil
         keychain.removeAll()
         // The run's Claude settings start empty for each storyline.
         try? FileManager.default.removeItem(at: ClaudeSettings.userFile())
