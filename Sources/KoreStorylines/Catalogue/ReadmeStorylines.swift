@@ -111,8 +111,15 @@ final class ReadmePort: Storyline {
             ImportHistory("api-version-check.jsonl", lines: Readme.claudeChat),
             Send("Now add the same check to the iOS client"),
             Expect.rows("Codex's answer under the divider") { $0.last { $0.kind == "assistant" }?.text.hasPrefix("Done: the app") == true },
-            // The new turn's rows take a moment longer to lay out under the carried part.
-            Readme.Settle(for: .seconds(2)), Snapshot("port"),
+            // The model has it before the window draws it: wait for the answer's own row to be
+            // drawn inside the window. Only looks: a locator would unfold or scroll to it.
+            Expect("Codex's answer drawn in view", timeout: .seconds(10)) { story in
+                guard let window = story.window, let transcript = story.app.chat?.storyTranscript,
+                      let answer = transcript.entries.last(where: { $0.kind == .answer }),
+                      let frame = StoryElement(StoryID.Transcript.answer(answer.id), in: window)?.frame else { return false }
+                return window.contentView.map { $0.bounds.contains(frame) } ?? false
+            },
+            Readme.Settle(), Snapshot("port"),
         ]
     }
 }
