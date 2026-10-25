@@ -79,12 +79,41 @@ extension Workspace {
         let find = editor.find
         return StoryEditor(
             path: relativePath(file.path), text: file.storage.string, isDirty: file.isDirty, caretLine: file.caret.line,
+            caretShown: Self.storyCaretShown(editor),
             hiddenLines: hidden, foldCount: editor.folds.count, changedLines: editor.changes.marks.keys.sorted().map { $0 + 1 },
             find: find.isOpen
                 ? StoryEditor.Find(
                     query: find.query, showsReplace: find.showReplace, label: find.countLabel,
                     matchLines: find.matches.map { lines.line(at: $0.location) + 1 })
                 : nil)
+    }
+
+    /// The editor has the keyboard and its caret's spot is on screen, clear of the gutter
+    /// (a storyline's window is never key, so AppKit never draws the caret itself).
+    private static func storyCaretShown(_ editor: CodeEditorController) -> Bool {
+        let text = editor.textView
+        guard text.window?.firstResponder === text, text.selectedRange().length == 0,
+            let layout = text.layoutManager, let container = text.textContainer, let gutter = editor.scrollView.verticalRulerView
+        else { return false }
+        let caret = text.selectedRange().location
+        let length = text.textStorage?.length ?? 0
+        var box: NSRect
+        if caret >= length, layout.extraLineFragmentRect.height > 0 {
+            box = layout.extraLineFragmentRect
+            box.origin.x += container.lineFragmentPadding
+        } else if length > 0 {
+            // The glyph after the caret, or at the end the one before it.
+            let after = caret < length
+            let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: after ? caret : length - 1, length: 1), actualCharacterRange: nil)
+            box = layout.boundingRect(forGlyphRange: glyphs, in: container)
+            if !after { box.origin.x = box.maxX }
+        } else {
+            return false
+        }
+        box.size.width = 1
+        let spot = editor.scrollView.convert(box.offsetBy(dx: text.textContainerOrigin.x, dy: text.textContainerOrigin.y), from: text)
+        let clip = editor.scrollView.contentView.frame
+        return box.height > 0 && spot.minX >= gutter.frame.maxX && spot.maxX <= clip.maxX && spot.minY >= clip.minY && spot.maxY <= clip.maxY
     }
 
     /// The window's file tabs, left to right.
@@ -186,6 +215,9 @@ package struct StoryEditor: Sendable, Equatable {
     package let text: String
     package let isDirty: Bool
     package let caretLine: Int
+    /// The caret is where it's seen: the editor has the keyboard, and the caret's spot is on
+    /// screen, not under the gutter.
+    package let caretShown: Bool
     /// Lines under a fold.
     package let hiddenLines: [Int]
     package let foldCount: Int

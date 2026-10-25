@@ -31,6 +31,21 @@ struct TextFileTests {
         #expect(file.content == .text("one\ntwo\nthree\n"))
     }
 
+    /// The stamp a save returns is the file it wrote, even when the same URL was stamped just
+    /// before (URLs keep resource values they read): else the next save sees its own write as
+    /// a change on disk.
+    @Test func aSaveStampsTheFileItWrote() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("kore-textfile-\(UUID()).md")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data().write(to: url)
+        let file = TextFile.read(url)
+        #expect(TextFile.Stamp.of(url)?.size == 0)
+        let stamp = try file.write("# Black Eye\n", to: url)
+        #expect(stamp?.size == 12)
+        #expect(stamp == TextFile.Stamp.of(URL(fileURLWithPath: url.path)))
+        #expect(TextFile.Stamp.of(url) == stamp)
+    }
+
     @Test func nulBytesMeanBinary() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("kore-textfile-\(UUID()).bin")
         defer { try? FileManager.default.removeItem(at: url) }

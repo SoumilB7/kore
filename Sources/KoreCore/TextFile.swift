@@ -61,6 +61,10 @@ public struct TextFile: Sendable {
         public let size: Int
 
         public static func of(_ url: URL) -> Stamp? {
+            // A URL keeps the values it read until the run loop turns: without this, the stamp
+            // taken right after our own write is the file as it was before it.
+            var url = url
+            url.removeAllCachedResourceValues()
             guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
                 let modified = values.contentModificationDate
             else { return nil }

@@ -48,6 +48,45 @@ final class AutoSaveEdits: EditorStoryline {
     }
 }
 
+/// A new, empty file: the caret shows on its first line as it opens with the keyboard, and on
+/// a click (a Markdown file's source), before anything is typed. Typing then saves on its own,
+/// edit after edit, and Kore's own saves never read as a change on disk.
+final class EmptyFileCaret: FilesStoryline {
+    override class var tags: Set<Tag> { [.editor] }
+    static let opened = "notes.txt"
+    static let clicked = "black-eye.md"
+    override class var files: [(path: String, text: String)] { [(opened, ""), (clicked, "")] }
+
+    override func steps() -> [any Step] {
+        [Do("Enable Auto Save for this scenario") { story in
+            _ = story.stash(SavedAutoSave.self) { SavedAutoSave() }
+            FileAutoSave.shared.isEnabled = true
+        }] + super.steps() + [
+            Command(.toggleExplorer),
+            Click(.treeRow(Self.opened), count: 2),
+            WaitForFocus(.editor),
+            Expect.editor("the caret on the empty file's first line as it opens") {
+                $0.path == Self.opened && $0.text.isEmpty && $0.caretLine == 1 && $0.caretShown
+            },
+            Press(.treeRow(Self.clicked)),
+            Press(.id(StoryID.Editor.rendererToggle)),
+            Click(.editor),
+            WaitForFocus(.editor),
+            Expect.editor("the caret on the clicked empty line") {
+                $0.path == Self.clicked && $0.text.isEmpty && $0.caretLine == 1 && $0.caretShown
+            },
+            TypeText("# Black Eye"),
+            Expect.disk(Self.clicked, "# Black Eye"),
+            TypeText("\n"),
+            Expect.disk(Self.clicked, "# Black Eye\n"),
+            TypeText("one"),
+            Expect.disk(Self.clicked, "# Black Eye\none"),
+            Expect.editor("saved, the caret still shown") { !$0.isDirty && $0.caretLine == 2 && $0.caretShown },
+            ExpectElement(.id(StoryID.Editor.Notice.reload), .absent),
+        ]
+    }
+}
+
 @MainActor private final class SavedAutoSave: StoryFinishing {
     private let original = FileAutoSave.shared.isEnabled
     func finish() { FileAutoSave.shared.isEnabled = original }

@@ -8,7 +8,7 @@ import SwiftUI
 @MainActor
 final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency NSTextStorageDelegate {
     unowned let document: FileDocument
-    let scrollView = NSScrollView()
+    let scrollView = EditorScrollView()
     let textView: EditorTextView
     private let gutter: GutterView
     let lines = LineIndex()
@@ -686,6 +686,20 @@ final class SyntaxColorer {
 }
 
 // MARK: - The gutter
+
+/// The editor's scroll view. The clip runs under the gutter and its left inset (the gutter's
+/// width) only exists once the view is laid out at a real size; until then its origin is 0,
+/// which then leaves the first columns, and the caret on an empty line, under the gutter.
+final class EditorScrollView: NSScrollView {
+    override func tile() {
+        let clip = contentView
+        let first = clip.bounds.width == 0
+        super.tile()
+        guard first, clip.bounds.width > 0, clip.bounds.origin.x > -clip.contentInsets.left else { return }
+        clip.scroll(to: NSPoint(x: -clip.contentInsets.left, y: clip.bounds.origin.y))
+        reflectScrolledClipView(clip)
+    }
+}
 
 /// Line numbers, right-aligned, the caret's line brighter, and git change bars at the right
 /// edge (look §4); a click on a bar opens its peek.

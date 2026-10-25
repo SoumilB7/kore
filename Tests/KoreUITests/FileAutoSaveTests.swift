@@ -90,6 +90,42 @@ struct FileAutoSaveTests {
         #expect(f.document.notice == nil && !f.document.isDirty)
     }
 
+    /// A new empty file typed into: each automatic save is Kore's own, and neither the next
+    /// save nor the disk event for the last one raises the changed-on-disk notice. A real change
+    /// from outside with no edits still reloads in place.
+    @Test func ownSavesNeverReadAsAChangeOnDisk() async throws {
+        let f = try Fixture(Data())
+        defer { f.finish() }
+        func turn() { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+        f.edit("# Black Eye")
+        try await until { f.delay.calls == 1 }
+        f.delay.fire()
+        try await until { !f.document.isDirty }
+        turn()
+        f.edit("# Black Eye\n")
+        // The disk event for the first save lands after the next keystroke.
+        f.document.diskChanged()
+        #expect(f.document.notice == nil && f.document.isDirty)
+        try await until { f.delay.calls == 2 }
+        f.delay.fire()
+        try await until { !f.document.isDirty || f.document.notice != nil }
+        #expect(f.document.notice == nil)
+        #expect(try f.read() == Data("# Black Eye\n".utf8))
+        turn()
+        f.edit("# Black Eye\none")
+        try await until { f.delay.calls == 3 }
+        f.delay.fire()
+        try await until { !f.document.isDirty || f.document.notice != nil }
+        #expect(f.document.notice == nil)
+        #expect(try f.read() == Data("# Black Eye\none".utf8))
+        f.document.diskChanged()
+        #expect(f.document.notice == nil && !f.document.isDirty)
+        try Data("from outside\n".utf8).write(to: f.url)
+        f.document.diskChanged()
+        #expect(f.document.notice == nil && !f.document.isDirty)
+        #expect(f.document.storage.string == "from outside\n")
+    }
+
     @Test func undoAndDisablingCancelDelayedWritesButEnablingSchedulesDirtyFiles() async throws {
         let f = try Fixture()
         defer { f.finish() }
@@ -117,11 +153,15 @@ struct FileAutoSaveTests {
     @Test func externalChangesCannotBeOverwrittenEvenWithTheSameStamp() async throws {
         let f = try Fixture()
         defer { f.finish() }
+        // A whole second, so setting it again later gives the very same stamp.
+        let second = Date(timeIntervalSinceReferenceDate: floor(Date().timeIntervalSinceReferenceDate) - 60)
+        try FileManager.default.setAttributes([.modificationDate: second], ofItemAtPath: f.url.path)
+        f.document.diskChanged()
         f.edit("mine\n")
         try await until { f.delay.calls == 1 }
         let stamp = try #require(TextFile.Stamp.of(f.url))
         try Data("other\n".utf8).write(to: f.url)
-        try FileManager.default.setAttributes([.modificationDate: stamp.modified], ofItemAtPath: f.url.path)
+        try FileManager.default.setAttributes([.modificationDate: second], ofItemAtPath: f.url.path)
         #expect(TextFile.Stamp.of(f.url) == stamp)
         f.delay.fire()
         try await until { f.document.notice == .changed }
