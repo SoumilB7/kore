@@ -361,7 +361,7 @@ final class AccountUsageMeters: ChatStoryline {
                 CLIProfiles.adopt(provider, mismatch, email: "missing@example.com", workspace: provider == "codex" ? "ChatGPT Pro Lite" : "Missing Org")
                 CLIProfiles.activate(provider, nil)
                 StorylineSeams.loginUsage = { cli, id in
-                    await reads.add(id ?? "main")
+                    reads.add(id ?? "main")
                     let login = CLIProfiles.added(cli).first { $0.id == id }
                     let email = id == nil ? "you@example.com" : login?.email == "unused@example.com" ? "unused@example.com" : "another@example.com"
                     let org = id == nil ? "you@example.com's Organization" : login?.workspace
