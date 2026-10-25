@@ -413,8 +413,8 @@ final class AccountUsageMeters: ChatStoryline {
                 Chat.storyAccountPrivacy = false
             },
             Press(.id(StoryID.Composer.accountPrivacy)),
-            Expect("every email masked to two characters and its domain", found: { $0.app.chat?.storyLoginTitles.description }) { story in
-                story.app.chat?.storyLoginTitles.sorted() == ["mi••••@example.com", "un••••@example.com", "yo••••@example.com"]
+            Expect("every email masked to two letters, the domain to its last two and ending", found: { $0.app.chat?.storyLoginTitles.description }) { story in
+                story.app.chat?.storyLoginTitles.sorted() == ["mi••••@••le.com", "un••••@••le.com", "yo••••@••le.com"]
             },
             FadesEnd(), Snapshot("account-privacy"),
             Key(.escape), ExpectElement(popup, .absent),

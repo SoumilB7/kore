@@ -15,10 +15,15 @@ final class AccountPrivacy {
     /// An email as the card shows it: masked while privacy is on.
     func shown(_ email: String) -> String { on ? Self.mask(email) : email }
 
-    /// Always four dots, so the length isn't given away; the domain whole.
+    /// The name's first two letters and the domain's last two before its ending:
+    /// "ku••••@••il.com". Always the same dots, so no length is given away.
     nonisolated static func mask(_ email: String) -> String {
         guard let at = email.firstIndex(of: "@") else { return String(email.prefix(2)) + "••••" }
-        return String(email[..<at].prefix(2)) + "••••" + email[at...]
+        let domain = email[email.index(after: at)...]
+        guard let dot = domain.lastIndex(of: "."), dot > domain.startIndex else {
+            return String(email[..<at].prefix(2)) + "••••@••" + String(domain.suffix(2))
+        }
+        return String(email[..<at].prefix(2)) + "••••@••" + String(domain[..<dot].suffix(2)) + domain[dot...]
     }
 
     /// A plan's pill: the plan without its product's name ("Claude Max" → "Max", "ChatGPT Pro
