@@ -606,7 +606,9 @@ final class StickyTracker: ObservableObject {
         update(id)
     }
 
-    func row(_ id: String, _ y: CGFloat) {
+    /// A row's bottom; nil once it's gone from the list. A jump (a long output arriving, a
+    /// fling) can take it off screen with no frame reported past its header: gone, it's above.
+    func row(_ id: String, _ y: CGFloat?) {
         rows[id] = y
         update(id)
     }

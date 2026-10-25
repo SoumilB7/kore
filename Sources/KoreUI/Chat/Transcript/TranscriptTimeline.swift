@@ -453,6 +453,7 @@ struct TranscriptTimeline: View, Equatable {
         actions.messageMoved = { id, frame in
             guard let frame else {
                 tops.value[id] = nil
+                sticky.row(id, nil)
                 return
             }
             sticky.row(id, frame.maxY)
