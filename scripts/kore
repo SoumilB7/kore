@@ -1,14 +1,124 @@
 #!/bin/zsh
-# kore [folder] - opens the folder (the current one by default) in Kore. A folder that
-# already has a window gets that window focused instead of a second one.
-set -eu
+# kore - the Kore command. Bare `kore` opens Kore; `kore <folder>` opens that folder (a folder
+# that already has a window gets that window focused); `kore setup` installs the agent CLIs.
+set -u
 
-dir="${1:-.}"
-if [[ ! -d "$dir" ]]; then
-    print -u2 "kore: not a folder: $dir"
-    exit 1
-fi
+usage() {
+    print -r -- "usage: kore                  open Kore
+       kore <folder>         open a folder in Kore (kore . for this one)
+       kore setup [claude|codex] [--verbose]
+                             install the agent CLIs that are missing
+       kore help             show this"
+}
 
 # This script ships inside Kore.app/Contents/Resources, so it opens the app it came with.
+# KORE_OPEN stands in for `open` (tests).
 app="${0:A:h:h:h}"
-exec open -a "$app" "${dir:A}"
+opener="${KORE_OPEN:-open}"
+
+# Where an installed CLI is looked for: the login shell's PATH plus the installers' usual homes.
+# KORE_SETUP_PATH replaces the whole search path (tests).
+search_path() {
+    if [[ -n "${KORE_SETUP_PATH:-}" ]]; then
+        print -r -- "$KORE_SETUP_PATH"
+        return
+    fi
+    local login
+    login=$("${SHELL:-/bin/zsh}" -lc 'printf %s "$PATH"' </dev/null 2>/dev/null) || login=""
+    print -r -- "${login:+$login:}$PATH:$HOME/.local/bin:/opt/homebrew/bin"
+}
+
+find_cli() {
+    local found
+    found=$(PATH="$(search_path)"; command -v -- "$1" 2>/dev/null) || return 1
+    [[ "$found" == /* ]] && print -r -- "$found"
+}
+
+# One line per tool. The installer commands match KoreCore's CLIInstaller;
+# KORE_SETUP_INSTALL_CLAUDE / KORE_SETUP_INSTALL_CODEX replace them (tests).
+install_cli() {
+    local tool=$1 verbose=$2 label cmd found log reason st
+    case $tool in
+        claude) label="Claude Code"
+                cmd="${KORE_SETUP_INSTALL_CLAUDE:-curl -fsSL https://claude.ai/install.sh | bash}" ;;
+        codex)  label="Codex"
+                cmd="${KORE_SETUP_INSTALL_CODEX:-curl -fsSL https://chatgpt.com/codex/install.sh | sh}" ;;
+    esac
+
+    if found=$(find_cli $tool); then
+        print -r -- "$tool: already installed ($found)"
+        return 0
+    fi
+
+    # On a terminal the "Installing…" line is replaced by the result.
+    local tty=0
+    [[ -t 1 && $verbose == 0 ]] && tty=1
+    if (( tty )); then print -rn -- "Installing $label…"; else print -r -- "Installing $label…"; fi
+
+    log=$(mktemp -t kore-setup) || { print -r -- "✗ $label: could not make a temp file"; return 1 }
+    if (( verbose )); then
+        zsh -o pipefail -c "$cmd" 2>&1 | tee "$log"
+        st=${pipestatus[1]}
+    else
+        zsh -o pipefail -c "$cmd" >"$log" 2>&1 </dev/null
+        st=$?
+    fi
+    (( tty )) && print -rn -- $'\r\e[K'
+
+    if (( st != 0 )); then
+        # The installer's last words, on one line.
+        reason=$(grep -v '^[[:space:]]*$' "$log" | tail -n 1 | sed -e $'s/\e\\[[0-9;]*[A-Za-z]//g' -e 's/^[[:space:]]*//' | cut -c 1-120)
+        print -r -- "✗ $label: ${reason:-installer exited $st}"
+    elif found=$(find_cli $tool); then
+        print -r -- "✓ $label installed"
+    else
+        print -r -- "✗ $label: installed, but $tool isn't on PATH"
+        st=1
+    fi
+    rm -f "$log"
+    (( st == 0 ))
+}
+
+setup() {
+    local verbose=0 t
+    local -a tools
+    for t in "$@"; do
+        case $t in
+            claude|codex) tools+=($t) ;;
+            -v|--verbose) verbose=1 ;;
+            -h|--help|help) usage; return 0 ;;
+            *) print -u2 -r -- "kore setup: unknown: $t"; usage >&2; return 2 ;;
+        esac
+    done
+    (( ${#tools} )) || tools=(claude codex)
+    local failed=0
+    for t in ${(u)tools}; do
+        install_cli $t $verbose || failed=1
+    done
+    return $failed
+}
+
+# `kore ./setup` (or any path with a slash) is always a folder.
+case "${1-}" in
+    "")
+        if (( $# )); then
+            print -u2 "kore: not a folder: (empty)"
+            exit 1
+        fi
+        exec "$opener" -a "$app" ;;
+    help|-h|--help)
+        usage ;;
+    setup)
+        shift
+        setup "$@" ;;
+    *)
+        if (( $# > 1 )); then
+            usage >&2
+            exit 2
+        fi
+        if [[ ! -d "$1" ]]; then
+            print -u2 -r -- "kore: not a folder: $1"
+            exit 1
+        fi
+        exec "$opener" -a "$app" "${1:A}" ;;
+esac

@@ -75,7 +75,7 @@ if [[ "${1:-}" == "--install" ]]; then
     rm -rf /Applications/Kore.app
     ditto "$APP" /Applications/Kore.app
     echo "installed /Applications/Kore.app"
-    # The `kore` command: `kore [folder]` opens or focuses that folder's window.
+    # The `kore` command: `kore` opens Kore, `kore <folder>` opens that folder, `kore setup` installs the CLIs.
     mkdir -p ~/.local/bin
     ln -sf /Applications/Kore.app/Contents/Resources/kore ~/.local/bin/kore
     echo "linked ~/.local/bin/kore"
