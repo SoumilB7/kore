@@ -16,6 +16,9 @@ final class ScrollShift: ObservableObject {
     var onZoomBegin: ((CGPoint) -> Void)?
     var onZoomEnd: ((Bool) -> Void)?
     var onZoomInput: (() -> Void)?
+    /// A file preview's column takes a pinch as the transcript does. The transcript is found by
+    /// its selection responder instead, which knows when its tab is hidden.
+    var pinches = false
 
     func attach(_ scroll: NSScrollView) {
         if let old = scrollView, Self.known.object(forKey: old) === self { Self.known.removeObject(forKey: old) }
@@ -33,6 +36,8 @@ final class ScrollShift: ObservableObject {
     static func endZoom(in scroll: NSScrollView, resumeFollowing: Bool) {
         known.object(forKey: scroll)?.onZoomEnd?(resumeFollowing)
     }
+
+    static func pinches(_ scroll: NSScrollView) -> Bool { known.object(forKey: scroll)?.pinches == true }
 
     static func interruptZoomRecovery(in scroll: NSScrollView) {
         known.object(forKey: scroll)?.onZoomInput?()

@@ -133,6 +133,9 @@ private final class GridCanvas: CanvasView {
     private var gutterAttributes: [NSAttributedString.Key: Any] = [:]
     private var noteAttributes: [NSAttributedString.Key: Any] = [:]
 
+    /// Its header, row numbers and rules sit over the scroll view, outside the magnified clip.
+    override var pinches: Bool { false }
+
     private var rows: Int { table?.rows ?? 0 }
     private var columns: Int { table?.columns ?? 0 }
     /// The note row under the last row when the file was cut short.

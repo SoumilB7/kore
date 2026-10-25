@@ -247,6 +247,8 @@ struct PlacedRows<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @StateObject private var position = Held(ScrollPosition(edge: .top))
     @StateObject private var nudge = Local(0)
+    /// The scroll view, for a pinch (`PinchZoom`): magnified in place, kept where it was let go.
+    @StateObject private var shift = ScrollShift()
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -254,6 +256,9 @@ struct PlacedRows<Content: View>: View {
                 content()
                     .coordinateSpace(.named(RowPlace.space))
                     .storyMark(StoryID.Editor.rows)
+                    .background(alignment: .topLeading) {
+                        ScrollShift.Finder(shift).frame(width: Stroke.hairline, height: Stroke.hairline)
+                    }
             }
             .scrollPosition(binding)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, new in
@@ -265,6 +270,19 @@ struct PlacedRows<Content: View>: View {
                     position.value.scrollTo(y: y)
                     nudge.value &+= 1
                 }
+                shift.pinches = true
+                // A target left from going back to a row would pull the view to it as the
+                // magnification changes: hold where the pinch began, and drop it on release,
+                // so native scrolling keeps the place the last sample left.
+                shift.onZoomBegin = { [place] _ in
+                    var instant = Transaction()
+                    instant.disablesAnimations = true
+                    withTransaction(instant) {
+                        position.value.scrollTo(y: place.offset)
+                        nudge.value &+= 1
+                    }
+                }
+                shift.onZoomEnd = { _ in position.value = ScrollPosition() }
                 guard let left = place.left else { return }
                 place.pending = (left.row, left.into, false)
                 // Once the column is laid out: to the row, which then reports where it is.
@@ -275,6 +293,8 @@ struct PlacedRows<Content: View>: View {
                 }
             }
             .onDisappear {
+                shift.onZoomBegin = nil
+                shift.onZoomEnd = nil
                 place.left = place.current
                 place.pending = nil
                 // What the next view reports is its own.

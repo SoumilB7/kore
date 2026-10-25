@@ -287,3 +287,88 @@ private struct ExercisePinch: Step {
         return Double(time.tv_sec) + Double(time.tv_nsec) / 1e9
     }
 }
+
+/// A code file and a Markdown file, each in its tab and scrolled down, pinched as the transcript
+/// is: out first (no smaller than ⌘+ / ⌘− set), then in, and let go where the last sample left
+/// the view. The page scrolls on after, at its new size.
+final class FilePreviewPinch: ChatStoryline {
+    override class var tags: Set<Tag> { [.files] }
+
+    override func steps() -> [any Step] {
+        [WriteFiles([FileTabState.files[1], FileTabState.files[2]])] + super.steps()
+            + FileTabState.open(FileTabState.code) + [
+                Expect.editor("the code in the editor") { $0.path == FileTabState.code },
+                Scroll(.editor, to: .by(2000)),
+                PinchFile(target: .editor, name: "the editor"),
+            ]
+            + FileTabState.open(FileTabState.notes) + [
+                Expect("the notes in the Markdown renderer") { $0.app.workspace?.storyActiveRenderer == "markdown" },
+                Scroll(.id(StoryID.Editor.rows), to: .by(2400)),
+                PinchFile(target: .id(StoryID.Editor.rows), name: "the Markdown"),
+            ]
+    }
+}
+
+private struct PinchFile: Step {
+    let target: Locator
+    let name: String
+    var label: String { "Pinch \(name) out and in, let go, and scroll on" }
+    var timeout: Duration? { .seconds(20) }
+
+    func run(_ story: StoryContext) async throws {
+        let element = try await story.element(target)
+        guard let view = element.registeredView, let scroll = view.enclosingScrollView,
+              let window = scroll.window, let document = scroll.documentView
+        else { throw StoryFailure.other("\(name) has no native scroll view") }
+        let clip = scroll.contentView
+        let point = clip.convert(CGPoint(x: clip.bounds.midX, y: clip.bounds.midY), to: nil)
+        defer { _ = PinchZoom.storySample(in: window, amount: 0, phase: .cancelled, at: point) }
+        let start = PinchZoom.storyScale()
+        let pageStart = PinchZoom.storyPageScale(in: window) ?? 1
+        // The width text lays out in: an unwrapped editor's view widens to the magnified clip,
+        // its container stays as it was.
+        let layoutWidth = { (document as? NSTextView)?.textContainer?.size.width ?? document.bounds.width }
+        let width = layoutWidth()
+        guard PinchZoom.storySample(in: window, amount: 0, phase: .began, at: point) else {
+            throw StoryFailure.other("\(name) did not take the pinch")
+        }
+        // Paced as a trackpad's samples, with SwiftUI's updates landing in between.
+        for _ in 0..<10 {
+            _ = PinchZoom.storySample(in: window, amount: -0.05, phase: .changed, at: point)
+            try await Task.sleep(for: .milliseconds(8))
+        }
+        guard let out = PinchZoom.storyPageScale(in: window), out >= pageStart - 0.001, PinchZoom.storyScale() == start else {
+            throw StoryFailure.other("pinching \(name) out went below the ⌘ scale")
+        }
+        for _ in 0..<20 {
+            _ = PinchZoom.storySample(in: window, amount: 0.02, phase: .changed, at: point)
+            try await Task.sleep(for: .milliseconds(8))
+        }
+        guard let magnified = PinchZoom.storyPageScale(in: window), magnified > pageStart + 0.1 else {
+            throw StoryFailure.other("pinching \(name) in did not magnify it")
+        }
+        let lastSample = clip.bounds.origin
+        guard PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point) else {
+            throw StoryFailure.other("the pinch on \(name) did not finish")
+        }
+        try await story.until("the pinch on \(name) to finish") { PinchZoom.storyPlacement(in: window) != nil }
+        try await story.idle()
+        // A few more passes: a target held from the pinch's start would land by then.
+        for _ in 0..<10 { try await Task.sleep(for: .milliseconds(20)) }
+        let released = clip.bounds.origin
+        guard abs(released.y - lastSample.y) < 1, abs(released.x - lastSample.x) < 1 else {
+            throw StoryFailure.other("releasing the pinch moved \(name): \(lastSample) → \(released)")
+        }
+        guard let committed = PinchZoom.storyPageScale(in: window), abs(committed - magnified) < 0.001,
+              PinchZoom.storyScale() == start, abs(layoutWidth() - width) < 1
+        else {
+            throw StoryFailure.other("\(name) lost its magnification (\(magnified) → \(String(describing: PinchZoom.storyPageScale(in: window)))), reflowed (\(width) → \(layoutWidth())) or changed the ⌘ scale")
+        }
+        let before = clip.bounds.minY
+        try await Wheel(target, by: 200).run(story)
+        try await story.until("\(name) to scroll at its new size") { abs(clip.bounds.minY - before) > 1 }
+        guard PinchZoom.storyPageScale(in: window) == committed else {
+            throw StoryFailure.other("scrolling \(name) changed its magnification")
+        }
+    }
+}

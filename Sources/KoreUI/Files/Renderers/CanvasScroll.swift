@@ -101,4 +101,8 @@ class CanvasView: NSView {
     func point(_ event: NSEvent) -> NSPoint { convert(event.locationInWindow, from: nil) }
 
     var visible: NSRect { scroller?.visible ?? visibleRect }
+
+    /// Magnified by a pinch (`PinchZoom`) with its scroll view. Not with sticky parts over the
+    /// scroll view: they would keep their size while the canvas under them grows.
+    var pinches: Bool { true }
 }

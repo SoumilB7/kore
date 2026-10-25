@@ -378,7 +378,8 @@ package final class PinchZoom {
 
     private func supported(_ scroll: NSScrollView) -> Bool {
         if scroll.allowsMagnification, !pages.values.contains(where: { $0.scroll === scroll && $0.original != nil }) { return false }
-        if scroll.documentView is EditorTextView { return true }
+        // The editor, a tree's canvas, and a preview's column of rows.
+        if scroll.documentView is EditorTextView || (scroll as? CanvasScrollView)?.canvas.pinches == true || ScrollShift.pinches(scroll) { return true }
         return scroll.documentView.map { selectionResponder(in: $0, scroll: scroll) != nil } ?? false
     }
 
