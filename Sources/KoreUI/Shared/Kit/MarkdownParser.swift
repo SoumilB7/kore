@@ -281,9 +281,12 @@ enum MarkdownParser {
     /// Inline markdown (emphasis, code spans, links, strikethrough) styled for Kore: code on its
     /// fill in Menlo (`code`), links in the link colour and underlined.
     private static func inline(_ text: Substring, _ code: Font) -> AttributedString {
-        // Plain text (most cells, items and many paragraphs) skips Foundation's parser.
+        // Plain text (most cells, items and many paragraphs) skips Foundation's parser; a bare
+        // URL ("https://…", "www.…") needs it, as it links them.
         let markup: Set<UInt8> = [0x2A, 0x5F, 0x60, 0x5B, 0x7E, 0x5C, 0x3C, 0x26, 0x21]  // * _ ` [ ~ \ < & !
-        if !text.utf8.contains(where: markup.contains) { return AttributedString(text) }
+        if !text.utf8.contains(where: markup.contains), !text.contains("://"), !text.contains("www.") {
+            return AttributedString(text)
+        }
         let options = AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: false, interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible)
