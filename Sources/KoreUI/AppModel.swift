@@ -27,6 +27,7 @@ package final class AppModel {
         let paths = UserDefaults.standard.stringArray(forKey: Self.recentsKey) ?? []
         recents = paths.map { URL(fileURLWithPath: $0) }.filter(Self.isDirectory)
         Self.shared = self
+        UILog.start()
         accounts.watch()
     }
 
