@@ -180,6 +180,9 @@ package final class Chat: Identifiable {
     }
 
     package var sessionId: String? { status.sessionId }
+    /// The id the folder's history lists it under: its session's, or a fork's own before its
+    /// CLI names one (`KoreForks`).
+    var listedId: String? { sessionId ?? fork?.id }
     var resumed: Bool { status.resumed }
     var hasConversation: Bool { status.hasConversation }
     var title: String { status.title(fallback: provider.name) }
@@ -234,6 +237,7 @@ package final class Chat: Identifiable {
         if case .sessionIdentified(let id) = event, let record = imported?.record, record.target.session != id {
             Task.detached { HandoffRecords.alias(record, session: id) }
         }
+        noteFork(event)
         status.apply(event)
         context.apply(event)
         // Codex says a model's window only in a chat: kept for the next import into one.
@@ -250,6 +254,17 @@ package final class Chat: Identifiable {
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
         StorylineSeams.events?(self, event)
+    }
+
+    /// Kore's record of a fork it lists follows its CLI: the id the CLI names it by, and that a
+    /// message went out (from then the CLI has the session).
+    private func noteFork(_ event: ChatEvent) {
+        guard let key = fork?.id else { return }
+        switch event {
+        case .sessionIdentified(let id): KoreForks.shared.identified(cli: provider.id, key: key, as: id)
+        case .userMessage: KoreForks.shared.sent(cli: provider.id, key: key)
+        default: break
+        }
     }
 
     /// What the transcript took after a replay, until the backend has confirmed it

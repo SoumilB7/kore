@@ -299,6 +299,9 @@ extension Workspace {
         closing.map { ProcessInfo.processInfo.systemUptime - $0.at >= NSEvent.doubleClickInterval } ?? false
     }
 
+    /// The History panel's chats, as listed: id and title.
+    package var storyHistory: [(id: String, title: String)] { chats.map { ($0.id, $0.title) } }
+
     /// The nth user message's Fork button (1-based): its fork opens in a new tab. False when
     /// there's no such message or the fork failed.
     package func storyFork(_ chat: Chat, message n: Int) async -> Bool {

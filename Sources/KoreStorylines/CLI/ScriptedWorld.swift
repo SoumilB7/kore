@@ -24,6 +24,9 @@ package final class ScriptedWorld {
     /// earlier conversation, one page.
     package var earlier: [String: [ChatEvent]] = [:]
     private var made = 0
+    /// The forks the scripted CLI lists in a folder's history, by session id: as the real ones
+    /// do, Codex's from when the fork opens, Claude's from its first message.
+    private(set) var listed: [String: (provider: String, folder: String, title: String)] = [:]
     /// Each import's history as Kore gave it to the scripted CLI, oldest first.
     package private(set) var imports: [(provider: String, plan: HandoffPlan, target: HandoffTarget)] = []
 
@@ -36,6 +39,25 @@ package final class ScriptedWorld {
             return backend
         }
         HandoffWriters.standIns.value = Dictionary(uniqueKeysWithValues: HandoffWriters.all.map { ($0.id, ScriptedHandoffWriter(real: $0)) })
+        // Claude's own list is the run's store; a real Codex would list the owner's threads.
+        StorylineSeams.sessions = { [unowned self] provider, folder in
+            let path = folder.standardizedFileURL.path
+            let extra = listed.filter { $0.value.provider == provider && $0.value.folder == path }.map { id, chat in
+                SessionSummary(id: id, agent: provider == "codex" ? .codex : .claude, title: chat.title, updated: .now)
+            }
+            return (own: provider != "codex", extra: extra)
+        }
+    }
+
+    /// A session the scripted CLI now lists (named `title` unless it has a name already).
+    func list(_ id: String, provider: String, folder: URL, title: String) {
+        guard listed[id] == nil else { return }
+        listed[id] = (provider, folder.standardizedFileURL.path, title)
+    }
+
+    /// A rename, as the CLI saves it.
+    func retitle(_ id: String, _ title: String) {
+        listed[id]?.title = title
     }
 
     /// The backend of the chat with this session id (`Chat.status.sessionId`).
@@ -47,6 +69,7 @@ package final class ScriptedWorld {
     package func reset() {
         backends = []
         sessions = [:]
+        listed = [:]
         imports = []
         scripts = [:]
         script = .echo

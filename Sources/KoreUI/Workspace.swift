@@ -129,6 +129,9 @@ package final class Workspace {
     @ObservationIgnored private var drafts: [String: ChatDraft] = [:]
     @ObservationIgnored private var retainedAttachments: [UUID: [Attachment]] = [:]
     private(set) var closedTabs: [Saved.Closed] = []
+    /// The chats restored from last time: only these are checked against the CLIs' first lists
+    /// (a chat opened before the lists came isn't closed for being missing from them).
+    @ObservationIgnored private var restoredChats: Set<ObjectIdentifier> = []
 
     init(folder: URL, restore: Bool = true) {
         self.folder = folder
@@ -146,6 +149,7 @@ package final class Workspace {
         }
         if restored.isEmpty { restored = [ChatTab()] }
         tabs = restored
+        restoredChats = Set(restored.compactMap { $0.chat.map(ObjectIdentifier.init) })
         activeID = restored[min(max(saved?.active ?? 0, 0), restored.count - 1)].id
         if restore, let explorer = Self.savedExplorer(for: folder) {
             explorerWidth = explorer.width
@@ -220,7 +224,16 @@ package final class Workspace {
         let title = "\(chat.title) (fork)"
         let fork: Chat
         switch start {
-        case .pending(let point):
+        case .pending(var point):
+            // Listed in the history at once, under an id of its own, though its CLI may make it
+            // only on its first message (`KoreForks`).
+            let id = UUID().uuidString.lowercased()
+            point.id = id
+            KoreForks.shared.add(
+                KoreForks.Fork(cli: chat.provider.id, folder: folder, key: id, title: title, from: point.from, at: point.at, source: chat.title))
+            if !chats.contains(where: { $0.id == id }) {
+                chats.insert(SessionSummary(id: id, agent: chat.provider.historyAgent, title: title, updated: .now), at: 0)
+            }
             fork = Chat(
                 provider: chat.provider, folder: folder,
                 resume: SessionSummary(id: point.from, agent: chat.provider.historyAgent, title: title, updated: .now),
@@ -369,7 +382,7 @@ package final class Workspace {
     private func reopen(_ chat: Chat, in tab: ChatTab) {
         guard tab.chat === chat, tabs.contains(where: { $0 === tab }) else { return }
         for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
-        let fresh = Self.tab(Saved.Tab(provider: chat.provider.rawValue, session: chat.sessionId, title: chat.title), in: folder).chat
+        let fresh = Self.tab(Saved.Tab(provider: chat.provider.rawValue, session: chat.listedId, title: chat.title), in: folder).chat
         fresh?.restoreComposerDraft(chat.composerDraft, keeping: chat.attachments)
         fresh?.launchModel = chat.controls.modelId
         terminals.detach(chat)
@@ -744,9 +757,15 @@ package final class Workspace {
     private func load() async {
         let folder = folder
         var lists: [String: [SessionSummary]] = [:]
+        let scripted = StorylineSeams.sessions
         await withTaskGroup(of: (String, [SessionSummary]?).self) { group in
             for provider in Registry.all {
-                group.addTask { (provider.id, await provider.sessions(folder)) }
+                let stand = scripted?(provider.id, folder)
+                group.addTask {
+                    let own: [SessionSummary]? = stand?.own == false ? [] : await provider.sessions(folder)
+                    // Kore's forks its CLI doesn't list yet, or lists under another title.
+                    return (provider.id, own.map { KoreForks.shared.merged($0 + (stand?.extra ?? []), cli: provider.id, agent: provider.historyAgent, folder: folder) })
+                }
             }
             // Each CLI's list shows as it comes (Claude's is a quick file read; Codex asks its
             // app-server). A CLI that hasn't answered keeps what was shown.
@@ -773,7 +792,7 @@ package final class Workspace {
             if byId[Self.draftKey(provider, id)]?.archived != false { discardRecovery(provider: provider, session: id) }
         }
         for tab in tabs where tab.agent == nil {
-            guard let chat = tab.chat, chat.resumed, let id = chat.sessionId else { continue }
+            guard let chat = tab.chat, restoredChats.contains(ObjectIdentifier(chat)), chat.resumed, let id = chat.sessionId else { continue }
             if let session = byId[Self.draftKey(chat.provider.id, id)] {
                 if session.archived { discardRecovery(provider: chat.provider.id, session: id); close(tab, remember: false) } else { chat.adoptName(session.title) }
             } else if listed.contains(chat.provider.id) {
@@ -789,6 +808,12 @@ package final class Workspace {
         let provider = Registry.provider(for: session.agent).id
         discardRecovery(provider: provider, session: session.id)
         if let tab = tab(for: session.id, provider: provider) { close(tab, remember: false) }
+        // A fork its CLI never made has nothing to archive: it's let go.
+        if KoreForks.shared.find(cli: provider, id: session.id)?.made == false {
+            KoreForks.shared.forget(cli: provider, id: session.id)
+            chats.removeAll { $0.id == session.id }
+            return
+        }
         await Registry.provider(for: session.agent).setArchived(session.id, true, folder)
         setArchived(session.id, true)
     }
@@ -802,8 +827,12 @@ package final class Workspace {
             let old = chats[index]
             chats[index] = SessionSummary(id: old.id, agent: old.agent, title: name, updated: old.updated, archived: old.archived)
         }
+        let provider = Registry.provider(for: session.agent).id
+        KoreForks.shared.rename(cli: provider, id: session.id, to: name)
         if let chat = tab(for: session.id)?.chat {
             await chat.applyRename(name)
+        } else if KoreForks.shared.find(cli: provider, id: session.id)?.made == false {
+            // A fork its CLI hasn't made: it takes the name when it's opened and made.
         } else {
             let chat = chat(session)
             await chat.applyRename(name)
@@ -824,11 +853,14 @@ package final class Workspace {
     }
 
     private func tab(for sessionId: String, provider: String? = nil) -> ChatTab? {
-        tabs.first { $0.chat?.sessionId == sessionId && $0.agent == nil && (provider == nil || $0.chat?.provider.id == provider) }
+        tabs.first { tab in
+            guard let chat = tab.chat, tab.agent == nil, provider == nil || chat.provider.id == provider else { return false }
+            return chat.listedId == sessionId || chat.fork?.id == sessionId
+        }
     }
 
     private func chat(_ session: SessionSummary) -> Chat {
-        let chat = Chat(provider: Registry.provider(for: session.agent), folder: folder, resume: session)
+        let chat = Self.chat(session, provider: Registry.provider(for: session.agent), in: folder)
         if let draft = drafts[Self.draftKey(chat.provider.id, session.id)] {
             let closed = closedTabs.last { $0.tab.provider == chat.provider.id && $0.tab.session == session.id }
             chat.restoreComposerDraft(draft, keeping: closed.flatMap { retainedAttachments[$0.id] } ?? [])
@@ -873,7 +905,7 @@ package final class Workspace {
             tabs: kept.map { tab in
                 if let file = tab.file { return Saved.Tab(file: file.path) }
                 guard let chat = tab.chat else { return Saved.Tab() }
-                let resumable = chat.hasConversation ? chat.sessionId : nil
+                let resumable = chat.hasConversation ? chat.listedId : nil
                 return Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title })
             },
             active: kept.firstIndex { $0.id == activeID } ?? kept.firstIndex { $0.chat === activeTab.chat } ?? 0)
@@ -937,7 +969,7 @@ package final class Workspace {
     private static func draftKey(_ provider: String, _ session: String) -> String { provider + ":" + session }
 
     private func rememberDraft(_ chat: Chat) {
-        guard let session = chat.sessionId else { return }
+        guard let session = chat.listedId else { return }
         let key = Self.draftKey(chat.provider.id, session)
         let draft = chat.composerDraft
         // A clear supersedes an older closed snapshot, so sending a recovered draft cannot resurrect it.
@@ -949,7 +981,7 @@ package final class Workspace {
     private func trimDrafts() {
         guard drafts.count > 100 else { return }
         let protected = Set(tabs.compactMap { tab -> String? in
-            guard let chat = tab.chat, let id = chat.sessionId else { return nil }
+            guard let chat = tab.chat, let id = chat.listedId else { return nil }
             return Self.draftKey(chat.provider.id, id)
         } + closedTabs.compactMap { entry -> String? in
             guard let provider = entry.tab.provider, let id = entry.tab.session else { return nil }
@@ -965,7 +997,7 @@ package final class Workspace {
         if let file = tab.file { value.file = file.path }
         if let chat = tab.chat {
             value.provider = chat.provider.id
-            value.session = chat.hasConversation ? chat.sessionId : nil
+            value.session = chat.hasConversation ? chat.listedId : nil
             value.title = chat.title
             value.draft = chat.composerDraft
         }
@@ -1067,8 +1099,24 @@ package final class Workspace {
             SessionSummary(
                 id: $0, agent: provider.historyAgent, title: saved.title ?? provider.name, updated: .now)
         }
-        tab.chat = Chat(provider: provider, folder: folder, resume: session)
+        tab.chat = session.map { chat($0, provider: provider, in: folder) } ?? Chat(provider: provider, folder: folder)
         if let draft = saved.draft { tab.chat?.restoreComposerDraft(draft) }
         return tab
+    }
+
+    /// A past chat as it opens again: a fork its CLI hasn't made yet opens as that fork (its
+    /// history from the original), one it has made under its CLI's id.
+    private static func chat(_ session: SessionSummary, provider: Provider, in folder: URL) -> Chat {
+        guard let fork = KoreForks.shared.find(cli: provider.id, id: session.id) else {
+            return Chat(provider: provider, folder: folder, resume: session)
+        }
+        guard !fork.made else {
+            let own = SessionSummary(id: fork.id, agent: session.agent, title: session.title, updated: session.updated, file: session.file)
+            return Chat(provider: provider, folder: folder, resume: own)
+        }
+        return Chat(
+            provider: provider, folder: folder,
+            resume: SessionSummary(id: fork.from, agent: provider.historyAgent, title: fork.title, updated: .now),
+            fork: ForkPoint(from: fork.from, at: fork.at, id: fork.key), forkedFrom: fork.source)
     }
 }

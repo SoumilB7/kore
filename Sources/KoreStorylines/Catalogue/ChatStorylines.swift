@@ -1,4 +1,5 @@
 import AppKit
+import KoreCore
 import KoreUI
 
 /// A chat with the scripted CLI, told once by Claude and once by Codex: the folder opens, the
@@ -270,6 +271,48 @@ final class ForkFromAnswer: ChatStoryline {
                 rows.filter { $0.kind == "user" }.map(\.text) == ["one"] && rows.last { $0.kind == "assistant" }?.text == "First answer"
             },
             Expect("an empty composer") { try $0.activeChat().draft.isEmpty },
+        ]
+    }
+}
+
+/// A fork is in History as soon as it's made, before anything is sent in it (Claude makes its
+/// session only with the first message; Codex as the fork opens). A message later, there's
+/// still one entry for it, under its title, and Kore's own record of it has given way to the
+/// CLI's.
+final class ForkListedInHistory: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer")]) }
+
+    /// History's rows for the fork, and Kore's records of the folder's forks.
+    @MainActor private static func listed(_ story: StoryContext) -> [(id: String, title: String)] {
+        guard let chat = story.app.chat else { return [] }
+        return story.app.workspace?.storyHistory.filter { $0.title == chat.storyTitle } ?? []
+    }
+
+    @MainActor private static func records(_ story: StoryContext) -> Int {
+        ["claude", "codex"].reduce(0) { $0 + KoreForks.shared.forks(cli: $1, folder: story.folder).count }
+    }
+
+    @MainActor private static func shown(_ story: StoryContext) -> Bool {
+        let rows = listed(story)
+        return rows.count == 1 && StoryRegistry.ids.contains(StoryID.History.row(rows[0].id).raw)
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1),
+            Fork.fromAnswer(1),
+            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.hasSuffix("(fork)") },
+            Press(.id(StoryID.Titlebar.history)),
+            Expect("one History row for the fork, nothing sent in it", found: { "\(Self.listed($0))" }) { story in
+                try Self.shown(story) && !(story.scriptedBackend().log.contains { if case .send = $0 { true } else { false } })
+            },
+            Key(.escape),
+            Send("two"), TurnFinished(1),
+            Press(.id(StoryID.Titlebar.history)),
+            Expect("still one row for the fork, now the CLI's own", found: { "\(Self.listed($0)), records \(Self.records($0))" }) { story in
+                Self.shown(story) && Self.records(story) == 0 && Self.listed(story).first?.id == story.app.chat?.sessionId
+            },
         ]
     }
 }

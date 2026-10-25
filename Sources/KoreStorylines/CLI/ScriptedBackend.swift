@@ -30,6 +30,8 @@ package final class ScriptedBackend: ChatBackend {
     private var reset = false
     private var closed = false
     private var sends = 0
+    /// A rename before the fork was made: the name it's listed under once it is.
+    private var forkTitle: String?
     /// The turn being played, the last tool or text in it, and the tools still running.
     private var turn: TurnID?
     private var lastItem: String?
@@ -74,8 +76,11 @@ package final class ScriptedBackend: ChatBackend {
         if let fork = options.fork {
             history = world.history(of: fork.from, through: fork.at)
             sink.yield(.replayed(history))
-            sessionId = world.newSession(provider)
+            // Claude's fork takes the id Kore gives it (`--session-id`); Codex names its thread.
+            sessionId = (provider == "claude" ? fork.id : nil) ?? world.newSession(provider)
             if let title = options.forkTitle { sink.yield(.titleChanged(title)) }
+            // Codex makes the fork's thread, named, as it opens; Claude on its first message.
+            if provider == "codex", let sessionId { world.list(sessionId, provider: provider, folder: options.folder, title: options.forkTitle ?? "") }
         } else if let resume = options.resume {
             sessionId = resume.id
             history = world.sessions[resume.id] ?? []
@@ -99,6 +104,9 @@ package final class ScriptedBackend: ChatBackend {
             return true
         }
         log.append(.send(text))
+        if options.fork != nil, let sessionId {
+            world.list(sessionId, provider: provider, folder: options.folder, title: forkTitle ?? options.forkTitle ?? text)
+        }
         let index = sends
         sends += 1
         record(.userMessage(text: text, attachments: [], id: "m\(index)"))
@@ -146,6 +154,9 @@ package final class ScriptedBackend: ChatBackend {
 
     package func rename(_ title: String) async throws {
         log.append(.rename(title))
+        // A fork not made yet takes the name when it's made (as `ClaudeBackend` does).
+        forkTitle = title
+        if let sessionId { world.retitle(sessionId, title) }
         sink.yield(.titleChanged(title))
     }
 

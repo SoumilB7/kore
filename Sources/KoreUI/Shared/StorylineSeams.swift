@@ -19,4 +19,7 @@ package enum StorylineSeams {
     package static var opened: ((URL) -> Void)?
     /// The file an open panel would have given (a Vertex key file); nil, none picked.
     package static var chooseFile: (() -> URL?)?
+    /// The scripted CLI's chats in a folder's history, by provider id: added to the CLI's own
+    /// list, or in place of it (`own` false: a real Codex would read the owner's threads).
+    package static var sessions: ((_ provider: String, _ folder: URL) -> (own: Bool, extra: [SessionSummary]))?
 }

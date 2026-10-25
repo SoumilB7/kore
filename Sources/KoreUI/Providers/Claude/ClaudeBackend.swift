@@ -128,7 +128,11 @@ final class ClaudeBackend: ChatBackend {
             cwd: options.folder, model: options.model, effort: options.effort,
             permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
             fastMode: options.fastMode ?? false, resume: fork?.from ?? sessionId)
-        if let fork { launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at] }
+        if let fork {
+            launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at]
+            // The new session takes the id Kore lists the fork under (`KoreForks`) before it exists.
+            if let id = fork.id, UUID(uuidString: id) != nil { launch.extraArgs += ["--session-id", id] }
+        }
         if let instructions = options.instructions { launch.extraArgs += ["--append-system-prompt-file", instructions.path] }
         let starting = Task { try await ClaudeSession.start(launch) }
         opening = starting
@@ -848,6 +852,12 @@ final class ClaudeBackend: ChatBackend {
     }
 
     func rename(_ title: String) async throws {
+        // A fork not sent yet has no session to rename: it takes the name with its first message.
+        if options.forkTitle != nil, !forkNamed {
+            options.forkTitle = title
+            titled = true
+            return
+        }
         try await start()
         titled = true
         try await session?.rename(title)

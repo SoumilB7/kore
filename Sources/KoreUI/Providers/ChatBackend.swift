@@ -136,11 +136,15 @@ package struct ForkPoint: Sendable {
     /// That history, already read while finding the message (Claude), so the new tab shows it
     /// without reading the transcript again.
     package var history: ClaudeHistory.Page?
+    /// The fork's own id, as Kore keeps it in the history (`KoreForks`) before its CLI lists it:
+    /// Claude's new session takes it (`--session-id`). Nil for a fork Kore doesn't list itself.
+    package var id: String?
 
-    package init(from: String, at: String, history: ClaudeHistory.Page? = nil) {
+    package init(from: String, at: String, history: ClaudeHistory.Page? = nil, id: String? = nil) {
         self.from = from
         self.at = at
         self.history = history
+        self.id = id
     }
 }
 
