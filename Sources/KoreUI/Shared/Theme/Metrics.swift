@@ -85,8 +85,17 @@ enum Size {
     static let trafficLights: CGFloat = 82
     static let trafficLightsFullScreen: CGFloat = 10
     static let tab: CGFloat = 30
-    static let tabMinWidth: CGFloat = 90
+    /// A tab at its narrowest: its mark and its ×.
+    static let tabMinWidth: CGFloat = 48
     static let tabMaxWidth: CGFloat = 180
+    /// Narrower than this, tabs show their marks alone, and the active one's name shows before
+    /// them, at most `tabNameMax` wide (and a quarter of the room).
+    static let tabNamed: CGFloat = 90
+    static let tabNameMax: CGFloat = 160
+    /// `»N` after a strip that scrolls.
+    static let tabOverflow: CGFloat = 36
+    /// The soft edge of the strip on a side with tabs past it.
+    static let tabFade: CGFloat = 20
     /// A tab asking before its close stops a turn: the question and its Yes and No.
     static let tabAsking: CGFloat = 200
     static let tabGap: CGFloat = 4

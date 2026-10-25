@@ -18,6 +18,13 @@ extension Workspace {
         if tabs.indices.contains(index) { select(tabs[index]) }
     }
 
+    /// The name of the tab at `index` (0-based) in the strip: `tabs.file[…]` for a file's.
+    package func storyTabID(at index: Int) -> StoryID? {
+        guard tabs.indices.contains(index) else { return nil }
+        let tab = tabs[index]
+        return tab.file.map { StoryID.Tabs.file(relativePath($0.path)) } ?? StoryID.Tabs.tab(tab.id)
+    }
+
     /// The tree's selected row, relative to the folder.
     package var storyTreeSelection: String? { files.flatMap { store in store.selection.map(store.relative) } }
 

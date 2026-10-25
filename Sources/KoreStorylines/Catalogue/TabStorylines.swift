@@ -161,3 +161,127 @@ final class TabMemory {
 }
 
 
+
+/// Thirty tabs in a window a thousand points wide: they shrink to their marks, the active tab's
+/// name shows before them, and `»N` counts the tabs out of view. Its list holds them, a running
+/// chat with its spinner and a file among them; picking one shows it and brings it into view, as
+/// ⌘9 and a new tab do. Closed back down to four, the strip is as it was.
+final class TabOverflow: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [[.startTurn, .wait(.interrupt), .finishTurn(.interrupted)]]) }
+    static let notes = "notes.md"
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("keep going"),
+            Expect("the first chat's turn running") { try $0.activeChat().isRunning },
+            WriteFiles([(Self.notes, "# Notes\n")]),
+        ]
+            + FileTabState.open(Self.notes) + [
+                OpenTabs(28),
+                Expect("thirty tabs") { $0.app.workspace?.tabs.count == 30 },
+                StripCheck.shown("the new tab", at: 30),
+                ExpectElement(.id(StoryID.Titlebar.tabName)),
+                StripCheck.counted,
+
+                // The list: the tabs out of view, the running chat's spinner in its row.
+                Press(.id(StoryID.Titlebar.overflow)),
+                ExpectElement(.id(StoryID.Titlebar.hiddenTabs), .visible),
+                ExpectElement(.hiddenTab(1).action(.working)),
+                Snapshot("hidden-tabs"),
+                Do("Resize with the hidden-tab list open") { story in
+                    story.window?.setContentSize(CGSize(width: 760, height: 600))
+                },
+                ExpectElement(.id(StoryID.Titlebar.hiddenTabs), .absent),
+                Do("Restore the window size") { story in
+                    story.window?.setContentSize(story.windowSize)
+                },
+                Press(.id(StoryID.Titlebar.overflow)),
+                Press(.hiddenTab(1)),
+                Expect("the first tab active") { $0.app.workspace.map { $0.activeTab === $0.tabs[0] } ?? false },
+                ExpectElement(.id(StoryID.Titlebar.hiddenTabs), .absent),
+                StripCheck.shown("the first tab", at: 1),
+                StripCheck.counted,
+
+                // ⌘9: the last, brought into view.
+                Key(.cmd("9")),
+                StripCheck.shown("the last tab", at: 30),
+
+                // The file, from the list.
+                Press(.id(StoryID.Titlebar.overflow)),
+                Press(.hiddenTab(2)),
+                Expect("the file's tab active") { $0.app.workspace?.storyActiveFile == Self.notes },
+                StripCheck.shown("the file's tab", at: 2),
+
+                // Esc closes the list. (Back on a chat: a storyline's window, never key, takes no
+                // click in the title row while a file shows.)
+                Key(.cmd("1")),
+                Press(.id(StoryID.Titlebar.overflow)),
+                ExpectElement(.id(StoryID.Titlebar.hiddenTabs), .visible),
+                Key(.escape),
+                ExpectElement(.id(StoryID.Titlebar.hiddenTabs), .absent),
+
+                // A new tab, at the end, in view.
+                Press(.id(StoryID.Titlebar.newtab)),
+                StripCheck.shown("the new tab", at: 31),
+            ]
+            + Array(repeating: CloseLast() as any Step, count: 27) + [
+                Expect("four tabs") { $0.app.workspace?.tabs.count == 4 },
+                ExpectElement(.id(StoryID.Titlebar.overflow), .absent),
+                ExpectElement(.id(StoryID.Titlebar.tabName), .absent),
+                StripCheck.shown("the first tab", at: 1),
+                StripCheck.shown("the last tab", at: 4),
+            ]
+    }
+}
+
+/// ⌘W on the last tab, made the active one: it closes.
+private struct CloseLast: Step {
+    var label: String { "Close the last tab" }
+
+    func run(_ story: StoryContext) async throws {
+        guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the workspace") }
+        let count = workspace.tabs.count
+        workspace.storySelect(tabAt: count - 1)
+        try await Key(.cmd("w")).run(story)
+        try await story.until("\(count - 1) tabs") { workspace.tabs.count == count - 1 }
+    }
+}
+
+/// The strip's tabs as the window draws them.
+@MainActor
+enum StripCheck {
+    /// The tab's whole width inside the strip's.
+    static func shown(_ what: String, at n: Int) -> Expect {
+        Expect("\(what) wholly in the strip", found: { story in frames(story, n).map { "\($0.tab) in \($0.strip)" } ?? "no frame" }) { story in
+            frames(story, n).map { inside($0.tab, $0.strip) } ?? false
+        }
+    }
+
+    /// `»N` counts the tabs not wholly in the strip.
+    static let counted = Expect(
+        "»N to count the tabs out of view", found: { story in "»\(shownCount() ?? -1), \(outOfView(story)) out of view" }
+    ) { story in shownCount() == outOfView(story) }
+
+    /// The tab's frame (its button and its ×) and the strip's.
+    static func frames(_ story: StoryContext, _ n: Int) -> (tab: CGRect, strip: CGRect)? {
+        guard let id = story.app.workspace?.storyTabID(at: n - 1), let tab = StoryElement(id)?.frame,
+            let strip = StoryElement(StoryID.Tabs.strip)?.frame
+        else { return nil }
+        return (StoryElement(id.part(.close))?.frame.map(tab.union) ?? tab, strip)
+    }
+
+    static func inside(_ tab: CGRect, _ strip: CGRect) -> Bool { strip.insetBy(dx: -0.5, dy: -0.5).contains(tab) }
+
+    /// The number `»N` shows.
+    static func shownCount() -> Int? {
+        let prefix = "titlebar.overflow.count["
+        return StoryRegistry.ids.lazy.compactMap { id in id.hasPrefix(prefix) ? Int(id.dropFirst(prefix.count).dropLast()) : nil }.first
+    }
+
+    /// The tabs not wholly in the strip (built ones out of it, and the ones the strip hasn't built).
+    static func outOfView(_ story: StoryContext) -> Int {
+        guard let count = story.app.workspace?.tabs.count else { return -1 }
+        return count - (0..<count).count { frames(story, $0 + 1).map { inside($0.tab, $0.strip) } ?? false }
+    }
+}

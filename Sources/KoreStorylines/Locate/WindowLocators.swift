@@ -12,6 +12,15 @@ extension Locator {
         }
     }
 
+    /// The `n`-th tab's row in `»N`'s list of the tabs out of view.
+    package static func hiddenTab(_ n: Int) -> Locator {
+        Locator("tab \(n) in the hidden tabs") { app in
+            guard let tabs = app.workspace?.tabs else { return .failure(LocatorMiss("tab \(n): no workspace")) }
+            guard tabs.indices.contains(n - 1) else { return .failure(LocatorMiss("tab \(n): the window has \(tabs.count) tabs")) }
+            return .success(StoryID.Titlebar.hiddenTab(tabs[n - 1].id))
+        }
+    }
+
     /// The tab whose title is `title`.
     package static func tab(titled title: String) -> Locator {
         Locator("the “\(title)” tab") { app in

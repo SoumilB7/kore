@@ -66,3 +66,59 @@ struct MeasureNav: Step {
         }
     }
 }
+
+/// Navigation with forty tabs open: switching along them, and a new tab opened and closed at
+/// the end of the strip. Nothing is asserted; the numbers go to `nav.notes`, as `NavCost`'s do.
+final class ManyTabsCost: Storyline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        [OpenFolder()] + NavCost.chat(1) + [OpenTabs(39), WaitIdle(), MeasureTabs()]
+    }
+}
+
+/// Starts a chat in each of `count` new tabs.
+struct OpenTabs: Step {
+    let count: Int
+    var label: String { "Open \(count) more chat tabs" }
+    var timeout: Duration? { .seconds(60) }
+    init(_ count: Int) { self.count = count }
+
+    func run(_ story: StoryContext) async throws {
+        guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the workspace") }
+        let start = workspace.tabs.count
+        for n in 1...count {
+            guard workspace.start(provider: story.variant?.provider ?? "claude", model: nil) else {
+                throw StoryFailure.modelMissing("a provider")
+            }
+            _ = try await story.wait("tab \(start + n)") { workspace.tabs.count == start + n ? story.app.chat : nil }
+        }
+    }
+}
+
+struct MeasureTabs: Step {
+    var label: String { "Measure switching, opening and closing tabs" }
+    var timeout: Duration? { .seconds(240) }
+
+    func run(_ story: StoryContext) async throws {
+        guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the workspace") }
+        func f(_ v: Double) -> String { String(format: "%.1f", v) }
+        func median(_ v: [Double]) -> Double { v.isEmpty ? 0 : v.sorted()[v.count / 2] }
+        func p95(_ v: [Double]) -> Double { v.isEmpty ? 0 : v.sorted()[min(v.count - 1, Int((Double(v.count - 1) * 0.95).rounded()))] }
+        // A warm-up lap shows every chat once.
+        _ = await DevNavProbe.switchTabs(workspace, rounds: workspace.tabs.count)
+        let costs = await DevNavProbe.tabCosts(workspace, rounds: 20)
+        let lines = costs.map { name, ms in
+            "\(story.name) \(workspace.tabs.count) tabs, \(name): \(ms.count) median \(f(median(ms))) ms, p95 \(f(p95(ms))), max \(f(ms.max() ?? 0))"
+        }
+        let text = lines.joined(separator: "\n") + "\n"
+        let url = story.outputs.appendingPathComponent("nav.notes")
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(text.utf8))
+            try? handle.close()
+        } else {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+}

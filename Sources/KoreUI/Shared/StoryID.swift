@@ -60,12 +60,23 @@ extension StoryID {
         package static let awake = StoryID(.titlebar, "awake")
         /// A mode in the cup's menu, by `StayAwake.Mode`'s id; "off" is Turn Off.
         package static func awakeMode(_ id: String) -> StoryID { StoryID(.titlebar, "awake.mode", key: id) }
+        /// `»N` after a strip that scrolls; its list of the tabs out of view, and a tab's row in it
+        /// (its spinner `.part(.working)`, its ⚠ `.part(.stuck)`).
+        package static let overflow = StoryID(.titlebar, "overflow")
+        package static let hiddenTabs = StoryID(.titlebar, "overflow.list")
+        package static func hiddenTab(_ id: UUID) -> StoryID { StoryID(.titlebar, "overflow.tab", key: id.uuidString) }
+        /// The number `»N` shows, as its key.
+        package static func hiddenCount(_ n: Int) -> StoryID { StoryID(.titlebar, "overflow.count", key: String(n)) }
+        /// The active tab's name before a strip of tabs too narrow for theirs.
+        package static let tabName = StoryID(.titlebar, "tabname")
     }
 
     package enum Tabs {
         /// A chat or agent tab; `.part(.close)` is its close button.
         package static func tab(_ id: UUID) -> StoryID { StoryID(.tabs, "tab", key: id.uuidString) }
         package static func file(_ relativePath: String) -> StoryID { StoryID(.tabs, "file", key: relativePath) }
+        /// The strip the tabs scroll in.
+        package static let strip = StoryID(.tabs, "strip")
     }
 
     package enum NewTab {
@@ -295,7 +306,8 @@ extension StoryID {
     package static let all: [String] = {
         let k = "<key>"
         let fixed: [StoryID] = [
-            Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab, Titlebar.awake,
+            Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab, Titlebar.awake, Titlebar.overflow,
+            Titlebar.hiddenTabs, Titlebar.tabName, Tabs.strip,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
             Composer.model, Composer.models, Composer.effort, Composer.modes, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
             Composer.usage.part(.reset), Composer.account, Composer.account.part(.signIn), Composer.account.part(.method),
@@ -332,7 +344,8 @@ extension StoryID {
             StoryID(.transcript, "changes", key: k), StoryID(.transcript, "compacted", key: k),
             StoryID(.transcript, "peer", key: k), StoryID(.transcript, "signin", key: k),
             StoryID(.transcript, "signin", key: k).part(.signIn),
-            StoryID(.titlebar, "awake.mode", key: k), StoryID(.transcript, "continues", key: k),
+            StoryID(.titlebar, "awake.mode", key: k), StoryID(.titlebar, "overflow.tab", key: k),
+            StoryID(.titlebar, "overflow.count", key: k), StoryID(.transcript, "continues", key: k),
             StoryID(.transcript, "continues", key: k).part(.cancel), StoryID(.transcript, "slept", key: k),
             StoryID(.transcript, "slept", key: k).part(.continue),
             StoryID(.approval, key: k).part(.allow), StoryID(.approval, key: k).part(.always),

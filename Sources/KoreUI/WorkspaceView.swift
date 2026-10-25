@@ -37,8 +37,19 @@ struct TabBar: View {
     @Binding var historyOpen: Bool
     @Binding var clockFrame: CGRect
     private let tabHeight: CGFloat = 30
-    /// Width the tab strip got; tabs share it (180 down to 90 each), then the strip scrolls.
+    /// Width the tabs got, with the active tab's name before them and `»N` after (`TabStrip`).
     @StateObject private var stripWidth = Local<CGFloat>(0)
+    /// Only the count, fade and open list observe scrolling; the tab bar itself stays still.
+    @StateObject private var shown = Held(Local(TabStrip.Shown()))
+    /// The strip's scroll view: where it's scrolled, read and set at once.
+    @StateObject private var scroller = StripScroller()
+    /// `»N`'s list of the tabs out of view, while it's open: where it hangs.
+    @StateObject private var list = Local<HiddenTabsPlace?>(nil)
+    @StateObject private var overflowFrame = Held(CGRect.zero)
+    @StateObject private var barFrame = Held(CGRect.zero)
+    /// The strip's frame in the window: a tab scrolled out of it takes no double click.
+    @StateObject private var stripFrame = Held(CGRect.zero)
+    @StateObject private var window = Held<NSWindow?>(nil)
     /// Each tab's frame in the window, for the double-click monitor below.
     @StateObject private var tabFrames = Held<[UUID: CGRect]>([:])
     @StateObject private var doubleClicks = Held<Any?>(nil)
@@ -52,18 +63,22 @@ struct TabBar: View {
         var dx: CGFloat
     }
 
-    /// One tab and the gap after it: every tab has the same width, so a slot is arithmetic, not
-    /// measured.
-    private var slot: CGFloat { tabWidth + Size.tabGap }
+    /// The strip's layout for the tabs in the width they got.
+    private var strip: TabStrip {
+        let tabs = workspace.tabs
+        // The one tab that can be wider: the one asking before its close.
+        let asking = workspace.closing.flatMap { closing in tabs.firstIndex { $0.id == closing.tab } }
+        return TabStrip(count: tabs.count, width: stripWidth.value, asking: asking.flatMap { workspace.asking(tabs[$0]) ? $0 : nil })
+    }
 
     /// Where the dragged tab would land now.
     private func target(_ drag: TabDrag) -> Int {
-        min(max(drag.from + Int((drag.dx / slot).rounded()), 0), workspace.tabs.count - 1)
+        min(max(drag.from + Int((drag.dx / strip.slot).rounded()), 0), workspace.tabs.count - 1)
     }
 
     /// How far a tab is moved from its place while another is dragged: the dragged one with the
     /// pointer, the ones it passes one slot aside.
-    private func shift(_ index: Int) -> CGFloat {
+    private func shift(_ index: Int, slot: CGFloat) -> CGFloat {
         guard let drag = drag.value else { return 0 }
         let to = target(drag)
         if index == drag.from { return drag.dx }
@@ -81,6 +96,7 @@ struct TabBar: View {
                     workspace.select(tab)
                 }
                 let count = workspace.tabs.count
+                let slot = strip.slot
                 // Kept within the strip.
                 let dx = min(max(value.translation.width, -CGFloat(index) * slot), CGFloat(count - 1 - index) * slot)
                 drag.value = TabDrag(id: tab.id, from: index, dx: dx)
@@ -95,44 +111,33 @@ struct TabBar: View {
             }
     }
 
-    private var tabWidth: CGFloat {
-        let count = CGFloat(workspace.tabs.count)
-        return min(180, max(90, (stripWidth.value - 4 * (count - 1)) / count))
-    }
-
     var body: some View {
+        let strip = strip
         HStack(spacing: Size.tabGap) {
             ExplorerButton(workspace: workspace, size: tabHeight).storyID(StoryID.Titlebar.explorer)
             if let explorerDock {
                 Color.clear.frame(width: max(0, explorerDock + Space.md - leadingInset - tabHeight - 2 * Size.tabGap), height: 0)
             }
-            ScrollViewReader { scroller in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Size.tabGap) {
-                        ForEach(Array(workspace.tabs.enumerated()), id: \.element.id) { index, tab in
-                            let dragged = drag.value?.id == tab.id
-                            TabItem(tab: tab, workspace: workspace, height: tabHeight)
-                                // The close question takes the room it needs.
-                                .frame(width: workspace.asking(tab) ? max(tabWidth, Size.tabAsking) : tabWidth)
-                                .offset(x: shift(index))
-                                .zIndex(dragged ? 1 : 0)
-                                // The others slide aside as the dragged one passes; it follows the pointer.
-                                .animation(reduceMotion || dragged ? nil : Motion.fade, value: drag.value.map(target))
-                                .simultaneousGesture(reorder(tab, at: index))
-                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-                                    tabFrames.value[tab.id] = $0
-                                }
-                        }
-                    }
+            HStack(spacing: Size.tabGap) {
+                if strip.name > 0 {
+                    ActiveTabName(tab: workspace.activeTab).frame(width: strip.name, alignment: .leading)
                 }
-                .scrollBounceBehavior(.basedOnSize)
-                // Never wider than the tabs at full size (a close question's a little wider), so the
-                // rest of the row still drags the window.
-                .frame(maxWidth: CGFloat(workspace.tabs.count) * 184 + (workspace.tabs.contains(where: workspace.asking) ? Size.tabAsking - Size.tabMaxWidth : 0))
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stripWidth.value = $0 }
-                .onChange(of: workspace.activeID) { _, id in
-                    withAnimation(Motion.fade) { scroller.scrollTo(id) }
+                tabs(strip)
+                if strip.overflows {
+                    OverflowButton(strip: strip, shown: shown.value, isOpen: list.value != nil, size: tabHeight, action: toggleList)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { overflowFrame.value = $0 }
+                        .storyID(StoryID.Titlebar.overflow)
                 }
+            }
+            // Never wider than the tabs at full size (a close question's a little wider), so the
+            // rest of the row still drags the window.
+            .frame(maxWidth: strip.cap)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { stripWidth.value = $0 }
+            .onChange(of: workspace.activeID) { list.value = nil }
+            // The active tab is always in view: shown, opened, or moved by a close before it.
+            .onChange(of: ActiveSpot(id: workspace.activeID, count: workspace.tabs.count)) { reveal(strip) }
+            .onChange(of: strip.overflows) { _, overflows in
+                if !overflows { list.value = nil }
             }
             NewTabButton(size: tabHeight) { workspace.newTab() }.storyID(StoryID.Titlebar.newtab)
             Spacer(minLength: Space.xl)
@@ -155,7 +160,26 @@ struct TabBar: View {
         .padding(.leading, leadingInset)
         .padding(.trailing, Space.md)
         .frame(height: height)
-        .background(WindowReader { window in watchDoubleClicks(in: window) })
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { barFrame.value = $0 }
+        // `»N`'s list hangs under the row, over the chat (the bar is above it, see FolderWindow).
+        .overlay(alignment: .topLeading) {
+            if let place = list.value {
+                HiddenTabsList(
+                    allTabs: workspace.tabs, shown: shown.value,
+                    width: place.width, room: place.room, anchor: { overflowFrame.value }, pick: pick,
+                    close: { list.value = nil }
+                )
+                .offset(x: place.x, y: height)
+            }
+        }
+        .onChange(of: historyOpen) { _, open in if open { list.value = nil } }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { notice in
+            if let resized = notice.object as? NSWindow, resized === window.value { list.value = nil }
+        }
+        .background(WindowReader { window in
+            self.window.value = window
+            watchDoubleClicks(in: window)
+        })
         .onDisappear {
             if let monitor = doubleClicks.value { NSEvent.removeMonitor(monitor) }
             doubleClicks.value = nil
@@ -167,6 +191,77 @@ struct TabBar: View {
                 .allowsWindowActivationEvents(true)
         }
     }
+
+    /// The tabs, sharing the strip's width; past their narrowest they scroll, a soft edge on a
+    /// side with more past it.
+    private func tabs(_ strip: TabStrip) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Size.tabGap) {
+                ForEach(Array(workspace.tabs.enumerated()), id: \.element.id) { index, tab in
+                    let dragged = drag.value?.id == tab.id
+                    TabItem(tab: tab, workspace: workspace, height: tabHeight, named: strip.named, isActive: workspace.activeID == tab.id)
+                        // The close question takes the room it needs.
+                        .frame(width: strip.width(index))
+                        .offset(x: shift(index, slot: strip.slot))
+                        .zIndex(dragged ? 1 : 0)
+                        // The others slide aside as the dragged one passes; it follows the pointer.
+                        .animation(reduceMotion || dragged ? nil : Motion.fade, value: drag.value.map(target))
+                        .simultaneousGesture(reorder(tab, at: index))
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                            tabFrames.value[tab.id] = $0
+                        }
+                }
+            }
+            .background(StripScroller.Finder(scroller: scroller))
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        // Arithmetic on the offset, a scroll's only work; the bar redraws only when a tab comes
+        // wholly into view or leaves it. A tab more or fewer, or a new width, is worked out with
+        // the strip where it was.
+        .onChange(of: strip, initial: true) {
+            let shown = shown.value
+            scroller.moved = { shown.value = strip.shown($0) }
+            shown.value = strip.shown(scroller.scroll)
+            reveal(strip)
+        }
+        .mask { TabStripFade(shown: shown.value) }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { stripFrame.value = $0 }
+        .storyID(StoryID.Tabs.strip)
+    }
+
+    /// Scrolls the active tab wholly into view, clear of the soft edges, if it isn't: at once, as
+    /// the switch itself is; a tab just opened, once the strip has laid it out.
+    private func reveal(_ strip: TabStrip) {
+        let id = workspace.activeID
+        let (workspace, scroller) = (workspace, scroller)
+        let go: @MainActor @Sendable () -> Void = {
+            guard workspace.activeID == id, let index = workspace.tabs.firstIndex(where: { $0.id == id }), let x = strip.reveal(index, from: scroller.scroll.offset) else { return }
+            scroller.scroll(to: x)
+        }
+        if scroller.content >= strip.content - 0.5 { go() } else { DispatchQueue.main.async(execute: go) }
+    }
+
+    /// `»N`: opens its list under it, in the window, closing whatever else is open; or closes it.
+    private func toggleList() {
+        guard list.value == nil else {
+            list.value = nil
+            return
+        }
+        let bar = barFrame.value
+        let width = min(Size.menuMax, bar.width - 2 * Space.md)
+        let x = max(Space.md, min(overflowFrame.value.minX - bar.minX, bar.width - width - Space.md))
+        let room = (window.value?.contentView?.bounds.height ?? Layout.Window.minHeight) - height - Space.xxxl
+        historyOpen = false
+        workspace.activeTab.chat?.closePopups()
+        list.value = HiddenTabsPlace(x: x, width: width, room: max(room, tabHeight))
+        UILog.event("hidden-tabs", ["count": String(strip.hidden(shown.value.value))])
+    }
+
+    private func pick(_ tab: ChatTab) {
+        list.value = nil
+        UILog.event("hidden-tab-pick", ["tab": tab.id.uuidString])
+        workspace.select(tab)
+    }
 }
 
 extension TabBar {
@@ -176,18 +271,378 @@ extension TabBar {
     fileprivate func watchDoubleClicks(in window: NSWindow?) {
         guard let window, doubleClicks.value == nil else { return }
         let frames = tabFrames
+        let area = stripFrame
         let workspace = workspace
         doubleClicks.value = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak window] event in
             guard let window, event.window === window, event.clickCount == 2, let content = window.contentView else { return event }
             // Window coordinates (bottom-left) to SwiftUI's global ones (top-left).
             let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
-            guard let id = frames.value.first(where: { $0.value.contains(point) })?.key,
+            guard area.value.contains(point), let id = frames.value.first(where: { $0.value.contains(point) })?.key,
                 let tab = workspace.tabs.first(where: { $0.id == id })
             else { return event }
             workspace.select(tab)
             workspace.keep(tab)
             return nil
         }
+    }
+}
+
+/// The tab strip's layout, from its width alone: tabs share it at 180 down to `Size.tabNamed`
+/// each, then show their marks alone, the active tab's name before them, down to
+/// `Size.tabMinWidth`; past that the strip scrolls, `»N` after it counting the tabs out of view.
+/// Arithmetic, so a switch, a new tab or a scroll measures nothing.
+struct TabStrip: Equatable {
+    let count: Int
+    /// The tab asking before its close stops a turn: wider than the rest.
+    let asking: Int?
+    /// Each tab's width, but the asking one's.
+    let tab: CGFloat
+    /// Wide enough for names; else marks alone.
+    let named: Bool
+    /// The active tab's name before the strip, this wide; 0 while the tabs show theirs.
+    let name: CGFloat
+    /// More tabs than fit at their narrowest: the strip scrolls, `»N` after it.
+    let overflows: Bool
+    /// The scrolling part's width.
+    let visible: CGFloat
+
+    init(count: Int, width: CGFloat, asking: Int? = nil) {
+        let gap = Size.tabGap
+        let n = CGFloat(max(count, 1))
+        let asking = asking.flatMap { (0..<count).contains($0) ? $0 : nil }
+        let gaps = gap * (n - 1)
+        func required(_ tab: CGFloat) -> CGFloat {
+            n * tab + gaps + (asking == nil ? 0 : max(0, Size.tabAsking - tab))
+        }
+        func share(_ room: CGFloat) -> CGFloat {
+            if asking != nil, count > 1 { return (room - gaps - Size.tabAsking) / (n - 1) }
+            return (room - gaps) / n
+        }
+        var room = width
+        named = width >= required(Size.tabNamed)
+        let label = min(Size.tabNameMax, width / 4)
+        name = !named && label >= Size.tabMinWidth ? label : 0
+        if name > 0 { room -= name + gap }
+        overflows = room < required(Size.tabMinWidth)
+        if overflows { room -= Size.tabOverflow + gap }
+        self.count = count
+        self.asking = asking
+        tab = min(Size.tabMaxWidth, max(Size.tabMinWidth, share(room)))
+        visible = max(0, room)
+    }
+
+    var slot: CGFloat { tab + Size.tabGap }
+    private var extra: CGFloat { asking == nil ? 0 : max(0, Size.tabAsking - tab) }
+    func width(_ index: Int) -> CGFloat { index == asking ? tab + extra : tab }
+    func minX(_ index: Int) -> CGFloat { CGFloat(index) * slot + (asking.map { index > $0 } == true ? extra : 0) }
+    func maxX(_ index: Int) -> CGFloat { minX(index) + width(index) }
+    var content: CGFloat { count > 0 ? maxX(count - 1) : 0 }
+    /// The most the strip takes: every tab at full size.
+    var cap: CGFloat { CGFloat(count) * slotMax + (asking == nil ? 0 : Size.tabAsking - Size.tabMaxWidth) }
+    private var slotMax: CGFloat { Size.tabMaxWidth + Size.tabGap }
+
+    /// The tabs wholly in view, `first` to `last`, and whether there's more past either edge.
+    struct Shown: Equatable {
+        var first = 0
+        var last = Int.max
+        var leading = false
+        var trailing = false
+
+        func hides(_ index: Int) -> Bool { index < first || index > last }
+    }
+
+    /// How many tabs aren't wholly in view.
+    func hidden(_ shown: Shown) -> Int { count - max(0, min(shown.last, count - 1) - shown.first + 1) }
+
+    /// How far along the strip is scrolled, and how wide it is.
+    struct Scroll: Equatable {
+        var offset: CGFloat = 0
+        var visible: CGFloat = 0
+    }
+
+    /// What's in view with the strip scrolled so.
+    func shown(_ scroll: Scroll) -> Shown {
+        let (offset, visible) = (scroll.offset, scroll.visible)
+        let lo = offset - 0.5
+        let hi = offset + visible + 0.5
+        var first = min(count, max(0, Int((lo / slot).rounded(.up))))
+        while first > 0, minX(first - 1) >= lo { first -= 1 }
+        while first < count, minX(first) < lo { first += 1 }
+        var last = min(count - 1, max(-1, Int(((hi + Size.tabGap) / slot).rounded(.down)) - 1))
+        while last + 1 < count, maxX(last + 1) <= hi { last += 1 }
+        while last >= 0, maxX(last) > hi { last -= 1 }
+        return Shown(first: first, last: last, leading: offset > 0.5, trailing: offset + visible < content - 0.5)
+    }
+
+    /// Where to scroll from `offset` so the tab is wholly in view, clear of the soft edge on a
+    /// side with more past it. Nil when it's in view already.
+    func reveal(_ index: Int, from offset: CGFloat) -> CGFloat? {
+        guard index >= 0, index < count, visible > 0 else { return nil }
+        let lo = minX(index) - (index > 0 ? Size.tabFade : 0)
+        let hi = maxX(index) + (index < count - 1 ? Size.tabFade : 0)
+        var target = offset
+        if hi > target + visible { target = hi - visible }
+        if lo < target { target = lo }
+        target = min(max(target, 0), max(0, content - visible))
+        return abs(target - offset) >= 0.5 ? target : nil
+    }
+}
+
+/// The strip's AppKit scroll view, found from inside it (`Finder`): where it's scrolled, read and
+/// set at once, and `moved` on every change, the reader's or ours (SwiftUI's own scroll geometry
+/// missed a move made between two layouts).
+@MainActor
+private final class StripScroller: ObservableObject {
+    var moved: ((TabStrip.Scroll) -> Void)?
+    private weak var view: NSScrollView?
+    private var observers: [NSObjectProtocol] = []
+
+    var scroll: TabStrip.Scroll {
+        guard let clip = view?.contentView else { return TabStrip.Scroll() }
+        return TabStrip.Scroll(offset: clip.bounds.minX, visible: clip.bounds.width)
+    }
+
+    /// The width the scroll view has laid its content out to.
+    var content: CGFloat { view?.documentView?.frame.width ?? 0 }
+
+    func scroll(to x: CGFloat) {
+        guard let view else { return }
+        let clip = view.contentView
+        clip.scroll(to: NSPoint(x: x, y: clip.bounds.minY))
+        view.reflectScrolledClipView(clip)
+    }
+
+    fileprivate func detach() {
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers.removeAll()
+        view = nil
+    }
+
+    fileprivate func attach(_ view: NSScrollView) {
+        guard view !== self.view else { return }
+        detach()
+        self.view = view
+        let clip = view.contentView
+        clip.postsBoundsChangedNotifications = true
+        clip.postsFrameChangedNotifications = true
+        observers = [NSView.boundsDidChangeNotification, NSView.frameDidChangeNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: clip, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.moved?(self.scroll)
+                }
+            }
+        }
+        moved?(scroll)
+    }
+
+    struct Finder: NSViewRepresentable {
+        let scroller: StripScroller
+
+        func makeNSView(context: Context) -> NSView { Probe(scroller) }
+        func updateNSView(_ nsView: NSView, context: Context) {}
+
+        static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
+            (nsView as? Probe)?.scroller.detach()
+        }
+
+        private final class Probe: NSView {
+            let scroller: StripScroller
+            init(_ scroller: StripScroller) {
+                self.scroller = scroller
+                super.init(frame: .zero)
+            }
+
+            required init?(coder: NSCoder) { nil }
+
+            override func viewDidMoveToWindow() {
+                super.viewDidMoveToWindow()
+                if let scroll = enclosingScrollView { scroller.attach(scroll) }
+            }
+
+            override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        }
+    }
+}
+
+/// The active tab and how many there are: either changing may take it out of view.
+private struct ActiveSpot: Equatable {
+    let id: UUID
+    let count: Int
+}
+
+/// Where `»N`'s list hangs, in the bar: from its left, how wide, and how tall it may be.
+private struct HiddenTabsPlace: Equatable {
+    let x: CGFloat
+    let width: CGFloat
+    let room: CGFloat
+}
+
+/// The strip's mask: a soft edge on a side with tabs past it.
+private struct TabStripFade: View {
+    @ObservedObject var shown: Local<TabStrip.Shown>
+
+    var body: some View {
+        let (leading, trailing) = (shown.value.leading, shown.value.trailing)
+        HStack(spacing: 0) {
+            LinearGradient(colors: [leading ? .clear : .black, .black], startPoint: .leading, endPoint: .trailing)
+                .frame(width: Size.tabFade)
+            Rectangle()
+            LinearGradient(colors: [.black, trailing ? .clear : .black], startPoint: .leading, endPoint: .trailing)
+                .frame(width: Size.tabFade)
+        }
+    }
+}
+
+/// The active tab's name before the strip, while the tabs are too narrow for theirs.
+private struct ActiveTabName: View {
+    let tab: ChatTab
+
+    var body: some View {
+        Text(tab.title)
+            .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
+            .foregroundStyle(Theme.text)
+            .lineLimit(1)
+            .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
+            .padding(.leading, Space.sm)
+            .help(tab.title)
+            .storyID(StoryID.Titlebar.tabName)
+    }
+}
+
+/// `»N` after a strip too long for its room: how many tabs are out of view; a click lists them.
+private struct OverflowButton: View {
+    let strip: TabStrip
+    @ObservedObject var shown: Local<TabStrip.Shown>
+    private var hidden: Int { strip.hidden(shown.value) }
+    let isOpen: Bool
+    let size: CGFloat
+    let action: () -> Void
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        Button(action: action) {
+            Text("»\(hidden)")
+                .font(Chrome.labelDigits)
+                .foregroundStyle(hovered.value || isOpen ? Theme.text : Theme.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(width: Size.tabOverflow, height: size)
+                .background(hovered.value || isOpen ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
+                .contentShape(RoundedRectangle(cornerRadius: Radius.control))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
+        .help("Hidden tabs")
+        .accessibilityLabel(Text("Hidden tabs"))
+        .accessibilityValue(Text("\(hidden)"))
+        .background(Color.clear.storyMark(StoryID.Titlebar.hiddenCount(hidden)))
+    }
+}
+
+/// `»N`'s list: the tabs out of view in the strip's order, each with its mark and name. A row
+/// shows its tab, which the strip brings into view. ↑ ↓ move the lit row and Return picks it;
+/// Esc, a pick or a click anywhere else closes it, and that click still does what it was aimed at.
+private struct HiddenTabsList: View {
+    let allTabs: [ChatTab]
+    @ObservedObject var shown: Local<TabStrip.Shown>
+    private var tabs: [ChatTab] { allTabs.enumerated().compactMap { shown.value.hides($0.offset) ? $0.element : nil } }
+    let width: CGFloat
+    let room: CGFloat
+    /// `»N`: a click on it isn't outside (its own action closes the list).
+    let anchor: () -> CGRect
+    let pick: (ChatTab) -> Void
+    let close: () -> Void
+    /// The one lit row, by its place in `tabs`: the pointer's or the keys'. The first until either moves.
+    @StateObject private var lit = Local<Int?>(nil)
+    @StateObject private var listHeight = Local<CGFloat>(0)
+    @StateObject private var frame = Held(CGRect.zero)
+    @StateObject private var window = Held<NSWindow?>(nil)
+    @StateObject private var monitor = Held<Any?>(nil)
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: Space.xxs) {
+                    ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                        row(tab, lit: (lit.value ?? 0) == index)
+                            .highlightRow(StoryID.Titlebar.hiddenTab(tab.id), lit: (lit.value ?? 0) == index) { lit.value = index }
+                    }
+                }
+                .padding(Space.sm)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight.value = $0 }
+            }
+            .onChange(of: lit.value) { _, index in
+                if let index, tabs.indices.contains(index) { proxy.scrollTo(tabs[index].id) }
+            }
+        }
+        // As tall as its rows, up to the room the window gives it.
+        .frame(width: width, height: min(max(listHeight.value, 1), room))
+        .panel(.panel)
+        .cornerMarks(Theme.cornerOption)
+        .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
+        .background(WindowReader { window.value = $0 })
+        .storyID(StoryID.Titlebar.hiddenTabs)
+        .onAppear {
+            monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
+        }
+        .onDisappear {
+            if let m = monitor.value { NSEvent.removeMonitor(m) }
+            monitor.value = nil
+        }
+    }
+
+    private func row(_ tab: ChatTab, lit: Bool) -> some View {
+        Button {
+            pick(tab)
+        } label: {
+            HStack(spacing: Space.md) {
+                TabMark(tab: tab, active: false, story: StoryID.Titlebar.hiddenTab(tab.id))
+                Text(tab.title)
+                    .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                    .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
+                Spacer(minLength: 0)
+            }
+            .padding(Inset.row)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverFill(lit, Theme.Row.selected(.surface))
+        .storyID(StoryID.Titlebar.hiddenTab(tab.id))
+    }
+
+    /// ↑ ↓ from the lit row, stopping at the ends.
+    private func move(_ step: Int) {
+        guard !tabs.isEmpty else { return }
+        lit.value = min(max((lit.value ?? 0) + step, 0), tabs.count - 1)
+        PointerGate.keyed()
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard let window = window.value, event.window === window, let content = window.contentView else { return event }
+        if event.type == .keyDown {
+            // Any other key closes the list and goes on (⌘1–9 to their tab).
+            guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+                close()
+                return event
+            }
+            switch event.keyCode {
+            case 53: close()
+            case 125: move(1)
+            case 126: move(-1)
+            case 36, 76: if tabs.indices.contains(lit.value ?? 0) { pick(tabs[lit.value ?? 0]) }
+            default:
+                close()
+                return event
+            }
+            return nil
+        }
+        let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+        if !frame.value.contains(point), !anchor().contains(point) { close() }
+        return event
     }
 }
 
@@ -200,13 +655,16 @@ private struct TabItem: View {
     let tab: ChatTab
     let workspace: Workspace
     let height: CGFloat
+    /// Wide enough for its name; else its mark alone, centred.
+    let named: Bool
+    /// A switch changes only the old and new tab, rather than every tab observing activeID.
+    let isActive: Bool
     @StateObject private var hovered = Local(false)
     @StateObject private var renaming = Local(false)
     @StateObject private var newName = Local("")
 
     @StateObject private var closeHovered = Local(false)
 
-    private var isActive: Bool { workspace.activeID == tab.id }
     private var dirty: Bool { tab.file?.isDirty == true }
 
     /// `tabs.file[<path>]` for a file tab, else `tabs.tab[<id>]`.
@@ -244,7 +702,7 @@ private struct TabItem: View {
         Group {
             if workspace.asking(tab) { question } else { item }
         }
-        // Width set by the tab bar (180 down to 90, like browser tabs); titles truncate.
+        // Width set by the tab bar (180 down to 48, like browser tabs); titles truncate, then go.
         .frame(height: height)
         .background(
             isActive ? Theme.surface : (hovered.value ? Theme.tabHover : .clear),
@@ -300,40 +758,23 @@ private struct TabItem: View {
                 if NSApp.mouseClickCount == 2 { workspace.keep(tab) }
             } label: {
                 HStack(spacing: Space.md) {
-                    if let file = tab.file {
-                        FileIconView(name: file.name, color: isActive ? Theme.text : Theme.secondary)
-                    } else if let chat = tab.chat, let agent = tab.agent, let info = chat.transcript.agent(agent) {
-                        AgentAvatar(
-                            index: info.index, name: info.name, status: info.status, background: info.background, place: .tab)
-                    } else if let chat = tab.chat {
-                        if chat.isBusy, chat.connection.stuck {
-                            // Offline or stalled: nothing to spin for (the chat's row says which).
-                            Text("⚠").font(Chrome.body).foregroundStyle(Theme.warning)
-                                .frame(width: Size.spinner, height: Size.spinner)
-                                .help(chat.connection.word ?? "")
-                                .storyMark(StoryID.Tabs.tab(tab.id).part(.stuck))
-                        } else if chat.isBusy {
-                            // The system spinner is grey: multiplied, it takes the CLI's colour.
-                            ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
-                                .colorMultiply(WorkingSpinner.tint(chat.provider))
-                                .storyMark(StoryID.Tabs.tab(tab.id).part(.working))
-                        } else {
-                            ProviderLogo(provider: chat.provider, size: Size.logoTab)
+                    TabMark(tab: tab, active: isActive, story: StoryID.Tabs.tab(tab.id))
+                        .frame(maxWidth: named ? nil : .infinity)
+                    if named {
+                        Text(tab.title)
+                            .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
+                            .foregroundStyle(isActive ? Theme.text : Theme.secondary)
+                            .strikethrough(tab.file?.notice == .deleted)
+                            .lineLimit(1)
+                            // A fork's title is cut in the middle, so " (fork)" always shows.
+                            .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
+                        if let parent = duplicateParent {
+                            Text(parent).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
                         }
+                        Spacer(minLength: 0)
                     }
-                    Text(tab.title)
-                        .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
-                        .foregroundStyle(isActive ? Theme.text : Theme.secondary)
-                        .strikethrough(tab.file?.notice == .deleted)
-                        .lineLimit(1)
-                        // A fork's title is cut in the middle, so " (fork)" always shows.
-                        .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
-                    if let parent = duplicateParent {
-                        Text(parent).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
-                    }
-                    Spacer(minLength: 0)
                 }
-                .padding(.leading, Space.xl)
+                .padding(.leading, named ? Space.xl : Space.sm)
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
@@ -371,6 +812,38 @@ private struct TabItem: View {
         guard tab.chat != nil else { return }
         newName.value = tab.title
         renaming.value = true
+    }
+}
+
+/// A tab's mark: the file's icon, the agent's avatar, or the chat's provider logo, a spinner in
+/// its place while a turn runs and ⚠ while that turn is offline or stalled. `story` names the
+/// spinner and the ⚠ for storylines.
+private struct TabMark: View {
+    let tab: ChatTab
+    let active: Bool
+    let story: StoryID
+
+    var body: some View {
+        if let file = tab.file {
+            FileIconView(name: file.name, color: active ? Theme.text : Theme.secondary)
+        } else if let chat = tab.chat, let agent = tab.agent, let info = chat.transcript.agent(agent) {
+            AgentAvatar(index: info.index, name: info.name, status: info.status, background: info.background, place: .tab)
+        } else if let chat = tab.chat {
+            if chat.isBusy, chat.connection.stuck {
+                // Offline or stalled: nothing to spin for (the chat's row says which).
+                Text("⚠").font(Chrome.body).foregroundStyle(Theme.warning)
+                    .frame(width: Size.spinner, height: Size.spinner)
+                    .help(chat.connection.word ?? "")
+                    .storyMark(story.part(.stuck))
+            } else if chat.isBusy {
+                // The system spinner is grey: multiplied, it takes the CLI's colour.
+                ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
+                    .colorMultiply(WorkingSpinner.tint(chat.provider))
+                    .storyMark(story.part(.working))
+            } else {
+                ProviderLogo(provider: chat.provider, size: Size.logoTab)
+            }
+        }
     }
 }
 

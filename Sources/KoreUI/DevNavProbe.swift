@@ -115,6 +115,37 @@ package enum DevNavProbe {
         return result
     }
 
+    /// The tab strip's own share of navigation, `rounds` times each: a switch to the next tab, a
+    /// new tab, and closing it. Each is timed twice: its main-thread work (the change, then the
+    /// window's layout and drawing at once), and to the first of three still frames.
+    package static func tabCosts(_ workspace: Workspace, rounds: Int) async -> [(name: String, ms: [Double])] {
+        guard let window = workspace.window, let content = window.contentView else { return [] }
+        let (pacer, scroll) = start(window, workspace)
+        defer { pacer.stop() }
+        var sync: [String: [Double]] = [:]
+        var settled: [String: [Double]] = [:]
+        let names = ["switch", "open", "close"]
+        for _ in 0..<rounds {
+            for name in names {
+                let began = CACurrentMediaTime()
+                switch name {
+                case "switch":
+                    let index = workspace.tabs.firstIndex { $0 === workspace.activeTab } ?? 0
+                    workspace.select(workspace.tabs[(index + 1) % workspace.tabs.count])
+                case "open": workspace.newTab()
+                default: workspace.close(workspace.activeTab)
+                }
+                content.layoutSubtreeIfNeeded()
+                content.displayIfNeeded()
+                sync[name, default: []].append((CACurrentMediaTime() - began) * 1000)
+                scroll.value = nil
+                if let end = await pacer.waitSettled(timeout: 10) { settled[name, default: []].append((end - began) * 1000) }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        return names.flatMap { [($0, sync[$0] ?? []), ($0 + " settled", settled[$0] ?? [])] }
+    }
+
     /// Scrolls the active transcript to the top, then back to the bottom, at `speed` px/s (the
     /// clip view moved a frame at a time; rows build as they enter).
     package static func scroll(_ workspace: Workspace, speed: Double = 3000) async -> Frames {
@@ -210,7 +241,7 @@ package enum DevNavProbe {
         pacer.start(on: window.contentView ?? NSView()) {
             if scroll.value?.window !== window { scroll.value = DevScroller.transcript(in: window) }
             guard let view = scroll.value, let document = view.documentView else { return nil }
-            let ready = workspace.activeTab.chat.map { !$0.transcript.sections.isEmpty } ?? true
+            let ready = workspace.activeTab.chat.map { !$0.hasConversation || !$0.transcript.sections.isEmpty } ?? true
             return DevFramePacer.Probe(height: document.frame.height, offset: DevScroller.offset(view), ready: ready)
         }
         return (pacer, scroll)
