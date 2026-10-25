@@ -491,6 +491,9 @@ final class TranscriptStore {
 
     private var windowStartIndex: Int { windowStart.flatMap { position[$0] } ?? 0 }
 
+    /// The user turns the store holds, shown or not.
+    var userTurns: Int { entries.count { $0.kind == .user } }
+
     private func countHidden() {
         let hidden = entries[..<windowStartIndex].count { $0.kind == .user }
         if hidden != hiddenTurns { hiddenTurns = hidden }

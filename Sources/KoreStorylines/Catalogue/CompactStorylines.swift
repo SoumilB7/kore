@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import KoreUI
 
 /// A compaction the user didn't ask for doesn't leave work stopped: Kore's own at its point,
@@ -128,4 +129,55 @@ struct SetNetwork: Step {
     init(_ online: Bool?) { self.online = online }
     var label: String { online.map { $0 ? "The network comes back" : "The network goes" } ?? "The Mac's own network" }
     func run(_ story: StoryContext) async throws { NetworkWatch.shared.pin(online) }
+}
+
+/// A chat whose history starts at a compaction, with little after it, opens with the
+/// conversation before the compaction shown too, not just the summary under a "Load earlier
+/// conversation" row.
+final class CompactedChatShowsEarlier: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    static let before = "Before the compaction"
+    static let after = "After the compaction"
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            SeedCompacted(provider: variant.provider ?? "claude"),
+            Expect("the message from before the compaction shown", found: { story in
+                try? story.activeChat().storyTranscript.entries.filter { $0.kind == .user }.map(\.text).joined(separator: " | ")
+            }) { story in
+                let entries = try story.activeChat().storyTranscript.entries
+                let users = entries.filter { $0.kind == .user }.map(\.text)
+                return users == [Self.before, Self.after] && entries.contains { $0.kind == .summary }
+            },
+            Expect("one page read") { _ in ScriptedWorld.shared.backends.last?.log.filter { $0 == .earlier }.count == 1 },
+        ]
+    }
+
+    /// The session's history from its compaction on, the turn before it as the earlier page;
+    /// then it's opened as a resumed chat.
+    private struct SeedCompacted: Step {
+        let provider: String
+        var label: String { "Open a chat that was compacted" }
+
+        func run(_ story: StoryContext) async throws {
+            guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the folder's workspace") }
+            let world = ScriptedWorld.shared
+            let session = "scripted-\(provider)-compacted"
+            world.earlier[session] = turn(0, CompactedChatShowsEarlier.before, "The answer before it.")
+            world.sessions[session] = [.compacted(at: Date()), .compactionSummary("What the chat did so far.")]
+                + turn(1, CompactedChatShowsEarlier.after, "The answer after it.")
+            workspace.open(SessionSummary(id: session, agent: SessionSummary.Agent(rawValue: provider) ?? .claude, title: "Compacted", updated: .now))
+            _ = try await story.wait("the resumed chat") { story.app.chat }
+        }
+
+        private func turn(_ i: Int, _ message: String, _ answer: String) -> [ChatEvent] {
+            [
+                .userMessage(text: message, attachments: [], id: "compacted-message-\(i)"),
+                .turnStarted("compacted-turn-\(i)", origin: .user, at: Date()),
+                .text("compacted-block-\(i)", .answer, answer),
+                .turnFinished("compacted-turn-\(i)", .completed, duration: nil),
+            ]
+        }
+    }
 }

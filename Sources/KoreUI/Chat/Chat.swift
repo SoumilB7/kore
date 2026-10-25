@@ -227,6 +227,7 @@ package final class Chat: Identifiable {
         autoCompactIfDue(event)
         afterAccountEvent(event)
         continueAfterLimit(event)
+        showBeforeCompaction(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
         StorylineSeams.events?(self, event)
@@ -1057,6 +1058,13 @@ package final class Chat: Identifiable {
             fail("Couldn't fork: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    /// A history that starts at a compaction with little after it: the conversation before it
+    /// shows too (a page), not just the summary under a "Load earlier" row.
+    private func showBeforeCompaction(_ event: ChatEvent) {
+        guard case .earlierHistory(true) = event, transcript.userTurns < 10 else { return }
+        loadEarlierConversation()
     }
 
     /// The conversation before a compaction, ten turns at a time.

@@ -123,6 +123,8 @@ package enum Call: Sendable, Equatable {
     /// The usage popup used a full reset: the credit it named.
     case useReset(credit: String?)
     case fork(message: String?)
+    /// The conversation before a compaction was read (a page of it).
+    case earlier
     /// The CLI started again after the account changed.
     case relaunch
     /// Started again after a relaunch, before a send asked (its models reloaded).

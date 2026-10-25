@@ -20,6 +20,9 @@ package final class ScriptedWorld {
     package private(set) var backends: [ScriptedBackend] = []
     /// What each session played, by session id.
     var sessions: [String: [ChatEvent]] = [:]
+    /// What a session had before its compaction, by session id: a resume offers it as the
+    /// earlier conversation, one page.
+    package var earlier: [String: [ChatEvent]] = [:]
     private var made = 0
     /// Each import's history as Kore gave it to the scripted CLI, oldest first.
     package private(set) var imports: [(provider: String, plan: HandoffPlan, target: HandoffTarget)] = []

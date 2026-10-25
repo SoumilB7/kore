@@ -78,6 +78,7 @@ package final class ScriptedBackend: ChatBackend {
             sessionId = resume.id
             history = world.sessions[resume.id] ?? []
             sink.yield(.replayed(history))
+            if world.earlier[resume.id] != nil { sink.yield(.earlierHistory(true)) }
         } else {
             sessionId = world.newSession(provider)
         }
@@ -182,7 +183,11 @@ package final class ScriptedBackend: ChatBackend {
         return .pending(ForkPoint(from: sessionId, at: String(history.count)))
     }
 
-    package func earlier() async -> (events: [ChatEvent], more: Bool)? { nil }
+    package func earlier() async -> (events: [ChatEvent], more: Bool)? {
+        guard let sessionId, let page = world.earlier[sessionId] else { return nil }
+        log.append(.earlier)
+        return (page, false)
+    }
 
     package func usage() async throws -> PlanReading {
         log.append(.usage)
