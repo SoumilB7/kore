@@ -1,66 +1,32 @@
 import AppKit
 import SwiftUI
 
-/// The Agents button's running agents (look.md §10): their shapes, still, in one capsule track
-/// with one dash going round it. One agent is a ring around its shape, as a running avatar's;
-/// more stretch the ring sideways, so their shapes stand clear instead of crossing arcs. The
-/// whole mark is one Canvas on one timeline, which holds still under Reduce Motion, under
-/// another tab and while its window is hidden.
+/// The Agents button's running marks. Core Animation moves one dash around the capsule;
+/// steady motion needs no SwiftUI frame callback. Count changes briefly animate the layout.
 struct RunningTrack: View {
-    /// The running agents' spawn orders, at most three.
     let indexes: [Int]
-    /// They all run in the background: the track is dashed.
     var background = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hiddenTab) private var hidden
-    @StateObject private var visible = Local(true)
-    /// The shapes as they were before a change, so a leaving one fades as the track closes.
-    @StateObject private var trail = Held<(was: [Int], now: [Int])>(([], []))
-    @StateObject private var dash = Held(Dash())
 
     var body: some View {
-        if trail.value.now != indexes { trail.value = (trail.value.now, indexes) }
-        return Track(
-            width: Self.width(indexes.count), indexes: indexes, leaving: trail.value.was,
-            still: reduceMotion || hidden || !visible.value, dash: dash, background: background
-        )
-        .animation(Motion.fade, value: indexes.count)
-        .background(Occlusion { visible.value = $0 })
-        .accessibilityHidden(true)
+        Track(width: Self.width(indexes.count), indexes: Array(indexes.prefix(3)),
+              background: background, still: reduceMotion || hidden)
+            .animation(reduceMotion || hidden ? nil : Motion.fade, value: indexes.count)
+            .accessibilityHidden(true)
     }
 
-    /// The track's box for `count` shapes, its stroke included.
     static func width(_ count: Int) -> CGFloat {
-        Size.agentTrack + CGFloat(max(count, 1) - 1) * Size.agentTrackStep + Stroke.emphasis
+        Size.agentTrack + CGFloat(min(max(count, 1), 3) - 1) * Size.agentTrackStep + Stroke.emphasis
     }
 
-    /// Where the dash is, as a share of the way round; it moves at the running ring's speed
-    /// whatever the track's length, and carries on from where it was as the track changes.
-    final class Dash {
-        var at = 0.0
-        var last: Date?
-
-        func advance(to date: Date, perimeter: CGFloat, still: Bool) -> Double {
-            defer { last = still ? nil : date }
-            guard !still, let last, perimeter > 0 else { return at }
-            // A long gap (a pause, a hidden spell) restarts from where it stopped.
-            let step = min(date.timeIntervalSince(last), 0.1)
-            at = (at + step * Double(Self.speed / perimeter)).truncatingRemainder(dividingBy: 1)
-            return at
-        }
-
-        /// A lone running avatar's ring: once round in `Motion.ringLap`.
-        static let speed = .pi * Size.agentTrack / Motion.ringLap
-    }
-
-    /// The drawing, with the width animatable so the track stretches and closes smoothly.
+    /// Only a count change interpolates this width. The native dash runs independently once
+    /// layout settles; no timeline drives this wrapper.
     private struct Track: View, Animatable {
         var width: CGFloat
         let indexes: [Int]
-        let leaving: [Int]
-        let still: Bool
-        let dash: Held<Dash>
         let background: Bool
+        let still: Bool
 
         nonisolated var animatableData: CGFloat {
             get { width }
@@ -68,103 +34,256 @@ struct RunningTrack: View {
         }
 
         var body: some View {
-            // Its frames render it alone, not the window around it.
-            OwnLayer(content: TimelineView(.animation(minimumInterval: nil, paused: still)) { context in
-                Canvas { graphics, size in
-                    draw(&graphics, size, at: dash.value.advance(to: context.date, perimeter: Self.perimeter(size), still: still))
-                }
-            })
-            .frame(width: width, height: Size.agentTrack + Stroke.emphasis)
+            Native(indexes: indexes, background: background, still: still)
+                .frame(width: width, height: Size.agentTrack + Stroke.emphasis)
         }
+    }
 
-        /// The capsule's path, clockwise from the top of its left end.
-        private static func path(_ size: CGSize) -> Path {
-            let inset = Stroke.emphasis / 2
-            let box = CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset)
-            let r = box.height / 2
-            var path = Path()
-            path.move(to: CGPoint(x: box.minX + r, y: box.minY))
-            path.addLine(to: CGPoint(x: box.maxX - r, y: box.minY))
-            path.addRelativeArc(center: CGPoint(x: box.maxX - r, y: box.midY), radius: r, startAngle: .degrees(-90), delta: .degrees(180))
-            path.addLine(to: CGPoint(x: box.minX + r, y: box.maxY))
-            path.addRelativeArc(center: CGPoint(x: box.minX + r, y: box.midY), radius: r, startAngle: .degrees(90), delta: .degrees(180))
-            path.closeSubpath()
-            return path
-        }
+    private struct Native: NSViewRepresentable {
+        let indexes: [Int]
+        let background: Bool
+        let still: Bool
 
-        private static func perimeter(_ size: CGSize) -> CGFloat {
-            let h = size.height - Stroke.emphasis
-            return 2 * max(size.width - size.height, 0) + .pi * h
+        func makeNSView(context: Context) -> RunningTrackHost { RunningTrackHost() }
+        func updateNSView(_ view: RunningTrackHost, context: Context) {
+            view.configure(indexes: indexes, background: background, still: still)
         }
-
-        private func draw(_ graphics: inout GraphicsContext, _ size: CGSize, at: Double) {
-            let path = Self.path(size)
-            let perimeter = Self.perimeter(size)
-            graphics.stroke(
-                path, with: .color(Theme.border),
-                style: StrokeStyle(lineWidth: Stroke.emphasis, dash: background ? Stroke.backgroundDash : []))
-            // A running avatar's arc: 0.28 of a lone ring, the same length on any track.
-            let length = 0.28 * .pi * Size.agentTrack
-            let start = CGFloat(at) * perimeter
-            graphics.stroke(
-                path, with: .color(Theme.agentArc),
-                style: StrokeStyle(lineWidth: Stroke.emphasis, lineCap: .round, dash: [length, max(perimeter - length, 0)], dashPhase: perimeter - start))
-            let shown = max(indexes.count, leaving.count)
-            for slot in 0..<min(shown, 3) {
-                guard let index = slot < indexes.count ? indexes[slot] : leaving[safe: slot] else { continue }
-                // A slot fades in over the last step of the track reaching it.
-                let opacity = min(max((width - RunningTrack.width(slot + 1)) / Size.agentTrackStep + 1, 0), 1)
-                guard opacity > 0 else { continue }
-                let side = AgentAvatar.Place.stack.shape
-                let x = Stroke.emphasis / 2 + Size.agentTrack / 2 + CGFloat(slot) * Size.agentTrackStep
-                let rect = CGRect(x: x - side / 2, y: size.height / 2 - side / 2, width: side, height: side)
-                let shape = AgentShape(rawValue: index % AgentShape.allCases.count)!
-                var layer = graphics
-                layer.opacity = opacity
-                for part in AgentShapeView.paths(shape, in: rect) { layer.fill(part, with: .color(Theme.agentMark)) }
-            }
-        }
+        static func dismantleNSView(_ view: RunningTrackHost, coordinator: ()) { view.detach() }
     }
 }
 
-/// Says whether its window can be seen: false while it's minimised or covered.
-private struct Occlusion: NSViewRepresentable {
-    let onChange: (Bool) -> Void
+/// Geometry shared by native drawing and the tests. Coordinates follow SwiftUI's top-left
+/// origin, including the clockwise path's start at the top of its left semicircle.
+struct RunningTrackGeometry {
+    let size: CGSize
+    static let dashLength = 0.28 * .pi * Size.agentTrack
 
-    func makeNSView(context: Context) -> Watcher { Watcher(onChange: onChange) }
-    func updateNSView(_ nsView: Watcher, context: Context) {}
+    var perimeter: CGFloat {
+        guard size.height > Stroke.emphasis, size.width >= size.height else { return 0 }
+        let height = max(size.height - Stroke.emphasis, 0)
+        return 2 * max(size.width - size.height, 0) + .pi * height
+    }
 
-    final class Watcher: NSView {
-        let onChange: (Bool) -> Void
-        private var observer: NSObjectProtocol?
+    var path: CGPath {
+        let inset = Stroke.emphasis / 2
+        let box = CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset)
+        guard perimeter > 0 else { return CGMutablePath() }
+        let radius = box.height / 2
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: box.minX + radius, y: box.minY))
+        path.addLine(to: CGPoint(x: box.maxX - radius, y: box.minY))
+        path.addArc(center: CGPoint(x: box.maxX - radius, y: box.midY), radius: radius,
+                    startAngle: -.pi / 2, endAngle: .pi / 2, clockwise: false)
+        path.addLine(to: CGPoint(x: box.minX + radius, y: box.maxY))
+        path.addArc(center: CGPoint(x: box.minX + radius, y: box.midY), radius: radius,
+                    startAngle: .pi / 2, endAngle: 3 * .pi / 2, clockwise: false)
+        path.closeSubpath()
+        return path
+    }
 
-        init(onChange: @escaping (Bool) -> Void) {
-            self.onChange = onChange
-            super.init(frame: .zero)
-        }
-
-        required init?(coder: NSCoder) { fatalError() }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-            observer = nil
-            guard let window else { return }
-            // Not inside the update that moved it here.
-            DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.changed() } }
-            observer = NotificationCenter.default.addObserver(
-                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.changed() }
-            }
-        }
-
-        private func changed() {
-            onChange(window?.occlusionState.contains(.visible) ?? false)
-        }
+    @MainActor func mark(_ index: Int, slot: Int) -> CGPath {
+        let side = AgentAvatar.Place.stack.shape
+        let x = Stroke.emphasis / 2 + Size.agentTrack / 2 + CGFloat(slot) * Size.agentTrackStep
+        let rect = CGRect(x: x - side / 2, y: size.height / 2 - side / 2, width: side, height: side)
+        let count = AgentShape.allCases.count
+        let shape = AgentShape(rawValue: (index % count + count) % count)!
+        let path = CGMutablePath()
+        for part in AgentShapeView.paths(shape, in: rect) { path.addPath(part.cgPath) }
+        return path
     }
 }
 
-private extension Array {
-    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+/// A monotonic clock anchor, not a ticking task. A geometry change keeps the fraction round
+/// the track; a pause keeps that same fraction, while each new lap retains its point speed.
+struct RunningTrackPhase {
+    static let speed = .pi * Size.agentTrack / Motion.ringLap
+    private(set) var fraction = 0.0
+    private(set) var perimeter: CGFloat = 0
+    private(set) var began: CFTimeInterval?
+
+    func value(at time: CFTimeInterval) -> Double {
+        guard let began, perimeter > 0 else { return fraction }
+        return (fraction + max(time - began, 0) * Double(Self.speed / perimeter)).truncatingRemainder(dividingBy: 1)
+    }
+
+    mutating func update(perimeter: CGFloat, running: Bool, at time: CFTimeInterval) {
+        fraction = value(at: time)
+        self.perimeter = perimeter
+        began = running && perimeter > 0 ? time : nil
+    }
+}
+
+@MainActor
+final class RunningTrackHost: NSView {
+    static let motionKey = "running-track.phase"
+    private let drawing = CALayer()
+    let track = CAShapeLayer()
+    let dash = CAShapeLayer()
+    let marks = (0..<3).map { _ in CAShapeLayer() }
+    private(set) var phase = RunningTrackPhase()
+    private(set) var windowVisible = false
+    private(set) var indexes: [Int] = []
+    private var leaving: [Int] = []
+    private var background = false
+    private var still = false
+    private var laidOut = CGSize.zero
+    private var observer: RunningTrackObservation?
+    private let now: () -> CFTimeInterval
+
+    init(now: @escaping () -> CFTimeInterval = CACurrentMediaTime) {
+        self.now = now
+        super.init(frame: .zero)
+        wantsLayer = true
+        track.fillColor = nil
+        track.strokeColor = NSColor(Theme.border).cgColor
+        track.lineWidth = Stroke.emphasis
+        dash.fillColor = nil
+        dash.strokeColor = NSColor(Theme.agentArc).cgColor
+        dash.lineWidth = Stroke.emphasis
+        dash.lineCap = .round
+        drawing.addSublayer(track)
+        drawing.addSublayer(dash)
+        for mark in marks {
+            mark.fillColor = NSColor(Theme.agentMark).cgColor
+            mark.opacity = 0
+            drawing.addSublayer(mark)
+        }
+        setAccessibilityElement(false)
+        setAccessibilityChildren([])
+    }
+
+    required init?(coder: NSCoder) { nil }
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func configure(indexes: [Int], background: Bool, still: Bool) {
+        let indexes = Array(indexes.prefix(3))
+        guard self.indexes != indexes || self.background != background || self.still != still else { return }
+        if self.indexes != indexes { leaving = self.indexes }
+        self.indexes = indexes
+        self.background = background
+        self.still = still
+        refresh()
+    }
+
+    override func layout() {
+        super.layout()
+        guard bounds.size != laidOut else { return }
+        refresh()
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        refresh()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        refresh()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateScale()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observer = nil
+        guard let window else { return detach() }
+        layer?.addSublayer(drawing)
+        updateScale()
+        let token = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.setWindowVisible(self.window?.occlusionState.contains(.visible) ?? false)
+            }
+        }
+        observer = RunningTrackObservation(token)
+        windowVisible = window.occlusionState.contains(.visible)
+        refresh()
+    }
+
+    /// Also a seam for deterministic notification/lifecycle tests without ordering a window in.
+    func setWindowVisible(_ visible: Bool) {
+        guard visible != windowVisible else { return }
+        windowVisible = visible
+        refresh()
+    }
+
+    func detach() {
+        observer = nil
+        windowVisible = false
+        phase.update(perimeter: phase.perimeter, running: false, at: now())
+        stopAnimations()
+        drawing.removeFromSuperlayer()
+    }
+
+    private func updateScale() {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in [drawing, track, dash] + marks { layer.contentsScale = scale }
+        CATransaction.commit()
+    }
+
+    private func refresh() {
+        let geometry = RunningTrackGeometry(size: bounds.size)
+        let running = !still && windowVisible && window != nil && !isHiddenOrHasHiddenAncestor
+            && !indexes.isEmpty && geometry.perimeter > 0
+        let time = now()
+        phase.update(perimeter: geometry.perimeter, running: running, at: time)
+        laidOut = bounds.size
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        drawing.frame = bounds
+        for layer in [track, dash] + marks { layer.frame = CGRect(origin: .zero, size: bounds.size) }
+        track.path = geometry.path
+        dash.path = geometry.path
+        track.lineDashPattern = background ? Stroke.backgroundDash.map { NSNumber(value: Double($0)) } : nil
+        let length = min(RunningTrackGeometry.dashLength, geometry.perimeter)
+        dash.lineDashPattern = geometry.perimeter > 0
+            ? [NSNumber(value: Double(length)), NSNumber(value: Double(max(geometry.perimeter - length, 0)))] : nil
+        dash.lineDashPhase = CGFloat(1 - phase.fraction) * geometry.perimeter
+        for (slot, mark) in marks.enumerated() {
+            let shown = indexes.isEmpty || geometry.perimeter == 0 ? nil : (slot < indexes.count ? indexes[slot] : (slot < leaving.count ? leaving[slot] : nil))
+            if let shown {
+                mark.path = geometry.mark(shown, slot: slot)
+                // The old slot remains while the capsule closes; a new slot appears over the
+                // last step of its expansion, as in the previous Canvas implementation.
+                mark.opacity = Float(min(max((bounds.width - RunningTrack.width(slot + 1)) / Size.agentTrackStep + 1, 0), 1))
+            } else {
+                mark.opacity = 0
+            }
+        }
+        // Restart only on input, geometry or visibility changes; there is no frame callback.
+        dash.removeAnimation(forKey: Self.motionKey)
+        if running {
+            let motion = CABasicAnimation(keyPath: "lineDashPhase")
+            motion.fromValue = dash.lineDashPhase
+            motion.toValue = dash.lineDashPhase - geometry.perimeter
+            motion.duration = Double(geometry.perimeter / RunningTrackPhase.speed)
+            motion.repeatCount = .infinity
+            motion.beginTime = dash.convertTime(time, from: nil)
+            motion.timingFunction = CAMediaTimingFunction(name: .linear)
+            dash.add(motion, forKey: Self.motionKey)
+        }
+        CATransaction.commit()
+    }
+
+    private func stopAnimations() {
+        track.removeAllAnimations()
+        dash.removeAllAnimations()
+        for mark in marks { mark.removeAllAnimations() }
+    }
+}
+
+/// NotificationCenter owns the callback, not the view. Removal also happens if the view is
+/// released without first detaching; the token wrapper itself can be released on any thread.
+private final class RunningTrackObservation: @unchecked Sendable {
+    private let token: NSObjectProtocol
+    init(_ token: NSObjectProtocol) { self.token = token }
+    deinit { NotificationCenter.default.removeObserver(token) }
 }

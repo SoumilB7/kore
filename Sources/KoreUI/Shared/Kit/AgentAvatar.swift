@@ -115,9 +115,10 @@ struct AgentAvatar: View {
 struct SpinningArc: View {
     var lineWidth = Stroke.emphasis
     @Environment(\.hiddenTab) private var hidden
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if hidden { arc } else { Turning(lineWidth: lineWidth) }
+        if hidden || reduceMotion { arc } else { Turning(lineWidth: lineWidth) }
     }
 
     private var arc: some View {
@@ -126,9 +127,8 @@ struct SpinningArc: View {
             .stroke(Theme.agentArc, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
     }
 
-    /// The arc in a shape layer of its own, turned by Core Animation: a repeating SwiftUI
-    /// rotation would render the whole window at the display's rate for as long as it ran.
-    private struct Turning: NSViewRepresentable {
+    /// A shape layer turns without a repeating SwiftUI rotation update.
+    struct Turning: NSViewRepresentable {
         let lineWidth: CGFloat
 
         func makeNSView(context: Context) -> Arc { Arc() }
@@ -138,9 +138,12 @@ struct SpinningArc: View {
             view.needsLayout = true
         }
 
-        final class Arc: NSView {
+        static func dismantleNSView(_ view: Arc, coordinator: ()) { view.stopAnimation() }
+
+        final class Arc: LayerAnimationView {
             var lineWidth = Stroke.emphasis
             private let arc = CAShapeLayer()
+            override var animatedLayer: CALayer? { arc }
 
             init() {
                 super.init(frame: .zero)
@@ -150,6 +153,9 @@ struct SpinningArc: View {
                 arc.lineCap = .round
                 arc.strokeEnd = 0.28
                 layer?.addSublayer(arc)
+                // Clockwise, as the SwiftUI arc turned.
+                setAnimation(LayerAnimation(keyPath: "transform.rotation.z", from: 0, to: -2 * .pi,
+                                            duration: Motion.ringLap), key: "turn")
             }
 
             required init?(coder: NSCoder) { nil }
@@ -159,24 +165,16 @@ struct SpinningArc: View {
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
                 arc.frame = bounds
+                arc.contentsScale = window?.backingScaleFactor ?? 1
                 arc.lineWidth = lineWidth
                 arc.path = CGPath(ellipseIn: bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2), transform: nil)
                 CATransaction.commit()
             }
 
-            override func viewDidMoveToWindow() {
-                super.viewDidMoveToWindow()
-                guard window != nil, arc.animation(forKey: "turn") == nil else { return }
-                let turn = CABasicAnimation(keyPath: "transform.rotation.z")
-                turn.fromValue = 0
-                // Clockwise, as the SwiftUI arc turned.
-                turn.toValue = -2 * Double.pi
-                turn.duration = Motion.ringLap
-                turn.repeatCount = .infinity
-                arc.add(turn, forKey: "turn")
+            override func viewDidChangeBackingProperties() {
+                super.viewDidChangeBackingProperties()
+                needsLayout = true
             }
-
-            override func hitTest(_ point: NSPoint) -> NSView? { nil }
         }
     }
 }

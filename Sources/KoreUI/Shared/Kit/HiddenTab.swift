@@ -35,10 +35,9 @@ final class Frozen<Value>: ObservableObject {
 
 extension View {
     /// Fades between full and `low` opacity for as long as it shows, unless motion is reduced.
-    /// Under another tab it holds still. Core Animation runs the fade, on a layer of its own: a
-    /// repeating SwiftUI animation renders the whole window at the display's rate for as long
-    /// as it runs (three quarters of a core while a chat worked); this costs the app nothing per
-    /// frame. The view doesn't take this one's environment: style it fully (font, colour) first.
+    /// Under another tab it holds still. A layer animation avoids a repeating SwiftUI opacity
+    /// update; surrounding framework work can remain. Style the content fully (font, colour)
+    /// first, because the separate host does not inherit the enclosing SwiftUI environment.
     func pulse(low: Double, period: TimeInterval, easing: CAMediaTimingFunctionName = .linear) -> some View {
         Pulse(content: self, low: low, period: period, easing: easing)
     }
@@ -60,14 +59,8 @@ private struct Pulse<Content: View>: View {
         }
     }
 
-    private var fade: CABasicAnimation {
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 1
-        fade.toValue = low
-        fade.duration = period
-        fade.autoreverses = true
-        fade.repeatCount = .infinity
-        fade.timingFunction = CAMediaTimingFunction(name: easing)
-        return fade
+    private var fade: LayerAnimation {
+        LayerAnimation(keyPath: "opacity", from: 1, to: low, duration: period,
+                       autoreverses: true, easing: easing)
     }
 }
