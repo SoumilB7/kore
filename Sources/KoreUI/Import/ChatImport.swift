@@ -71,6 +71,25 @@ extension Workspace {
         guard let (segment, plan) = await Task.detached(priority: .userInitiated, operation: { HandoffImport.plan(file, for: writer, model: model) }).value
         else { return .notImportable }
         if busy(segment.sessionId) { return .sourceBusy }
+        // A chat of this CLI from this folder: the CLI's own fork carries it whole, nothing translated.
+        if segment.source == chat.provider.id, let last = segment.turns.last,
+            await Registry.provider(chat.provider.id)?.historyFile(segment.sessionId, folder)?.standardizedFileURL == file.standardizedFileURL
+        {
+            let point = ForkPoint(from: segment.sessionId, at: chat.provider.id == "codex" ? last.id : last.lastItem)
+            let fork = Chat(
+                provider: chat.provider, folder: folder,
+                resume: SessionSummary(id: segment.sessionId, agent: chat.provider.historyAgent, title: segment.shownTitle, updated: .now),
+                fork: point, forkedFrom: segment.shownTitle)
+            fork.controls.mode = settings.mode
+            fork.controls.planMode = settings.planMode
+            fork.launchModel = settings.model
+            fork.launchEffort = settings.effort
+            fork.inheritAutoCompact(from: chat)
+            fork.restoreDraft(chat.draft, commands: chat.controls.commands)
+            tab.chat = fork
+            chat.close()
+            return nil
+        }
         let target = HandoffTarget(
             folder: folder, title: segment.shownTitle, model: settings.model, effort: settings.effort, mode: settings.mode,
             planMode: settings.planMode, instructions: HandoffWriters.instructions(for: writer, in: folder))
