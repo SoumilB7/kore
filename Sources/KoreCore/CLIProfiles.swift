@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 /// A CLI's extra logins. Each one is a config folder of its own (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`)
 /// under Kore's, where the CLI keeps that login (Claude in a Keychain item named for the folder,
@@ -22,7 +23,7 @@ public enum CLIProfiles {
     /// The main folder's entries that stay each login's own.
     static let own: [String: Set<String>] = [
         "claude": [".claude.json", ".claude.json.lock", ".credentials.json", "backups", "config.json", "mcp-needs-auth-cache.json", "statsig"],
-        "codex": ["auth.json", "installation_id", "ipc", "log", "sqlite", "tmp", ".tmp"],
+        "codex": ["auth.json", "installation_id", "ipc", "log", "models_cache.json", "sqlite", "tmp", ".tmp"],
     ]
 
     /// Kore's folder for them, and the CLIs' main folders by name; a test's own.
@@ -109,6 +110,7 @@ public enum CLIProfiles {
         let dir = folder(cli, id)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if cli == "claude" { seedClaudeConfig(in: dir) }
+        if cli == "codex" { seedCodexState(in: dir) }
         link(cli, id)
         return id
     }
@@ -160,10 +162,53 @@ public enum CLIProfiles {
         let dir = folder(cli, id)
         let skip = own[cli] ?? []
         guard let names = try? files.contentsOfDirectory(atPath: main.path) else { return }
+        for name in skip where (try? files.destinationOfSymbolicLink(atPath: dir.appendingPathComponent(name).path)) != nil {
+            // Linked by an older Kore: the login's own from now on.
+            try? files.removeItem(at: dir.appendingPathComponent(name))
+        }
         for name in names where !skip.contains(name) && !name.hasSuffix(".sqlite") && !name.contains(".sqlite-") && !name.hasPrefix("logs_") {
             let target = dir.appendingPathComponent(name)
             guard (try? files.destinationOfSymbolicLink(atPath: target.path)) == nil, !files.fileExists(atPath: target.path) else { continue }
             try? files.createSymbolicLink(at: target, withDestinationURL: main.appendingPathComponent(name))
+        }
+    }
+
+    /// Deletes the folders of logins no longer listed (a sign-in Kore quit during, or a CLI that
+    /// wrote on after its folder went). At launch, before any sign-in.
+    public static func sweep() {
+        let files = FileManager.default
+        // Only against a list read whole: never on a file that didn't parse.
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent("accounts.json")),
+            let read = try? JSONDecoder().decode(Saved.self, from: data)
+        else { return }
+        for cli in variables.keys {
+            let listed = Set((read.added[cli] ?? []).map(\.id))
+            let base = directory.appendingPathComponent(cli)
+            for name in (try? files.contentsOfDirectory(atPath: base.path)) ?? [] where !listed.contains(name) {
+                try? files.removeItem(at: base.appendingPathComponent(name))
+            }
+        }
+    }
+
+    /// Codex lists its threads from a database it builds from every rollout the first time it
+    /// runs in a folder (20 s and more): a new login starts with a copy of main's, by SQLite's
+    /// own backup, so a sign-in starts at once and the threads are there.
+    private static func seedCodexState(in dir: URL) {
+        let main = mainFolder("codex")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: main.path)) ?? []
+        for name in names where name.hasPrefix("state_") && name.hasSuffix(".sqlite") {
+            var source: OpaquePointer?
+            var target: OpaquePointer?
+            defer {
+                sqlite3_close(source)
+                sqlite3_close(target)
+            }
+            guard sqlite3_open_v2(main.appendingPathComponent(name).path, &source, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+                sqlite3_open(dir.appendingPathComponent(name).path, &target) == SQLITE_OK,
+                let backup = sqlite3_backup_init(target, "main", source, "main")
+            else { continue }
+            sqlite3_backup_step(backup, -1)
+            sqlite3_backup_finish(backup)
         }
     }
 

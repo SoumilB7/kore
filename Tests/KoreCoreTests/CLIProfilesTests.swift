@@ -56,4 +56,41 @@ import Testing
         #expect(CLIProfiles.added("claude").isEmpty)
         #expect(!files.fileExists(atPath: dir.path))
     }
+
+    @Test func aNewCodexLoginStartsWithMainsThreadsAndStraysGo() throws {
+        let files = FileManager.default
+        let base = files.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let main = base.appendingPathComponent("main", isDirectory: true)
+        try files.createDirectory(at: main, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: main.appendingPathComponent("models_cache.json"))
+        let db = main.appendingPathComponent("state_5.sqlite").path
+        let make = Process()
+        make.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        make.arguments = [db, "create table threads(id text); insert into threads values('t1');"]
+        try make.run()
+        make.waitUntilExit()
+        CLIProfiles.root.value = base.appendingPathComponent("accounts")
+        CLIProfiles.mains.value = ["codex": main]
+        CLIProfiles.reload()
+        defer {
+            CLIProfiles.root.value = nil
+            CLIProfiles.mains.value = [:]
+            CLIProfiles.reload()
+            try? files.removeItem(at: base)
+        }
+
+        let id = try CLIProfiles.prepare("codex")
+        let dir = CLIProfiles.folder("codex", id)
+        let copy = Data(try Data(contentsOf: dir.appendingPathComponent("state_5.sqlite")))
+        #expect(copy.starts(with: Data("SQLite format 3".utf8)))
+        #expect((try? files.destinationOfSymbolicLink(atPath: dir.appendingPathComponent("state_5.sqlite").path)) == nil)
+        #expect(!files.fileExists(atPath: dir.appendingPathComponent("models_cache.json").path))
+        CLIProfiles.adopt("codex", id, email: "b@x.com")
+
+        // A folder no longer listed goes; a listed one stays.
+        let stray = try CLIProfiles.prepare("codex")
+        CLIProfiles.sweep()
+        #expect(!files.fileExists(atPath: CLIProfiles.folder("codex", stray).path))
+        #expect(files.fileExists(atPath: dir.path))
+    }
 }

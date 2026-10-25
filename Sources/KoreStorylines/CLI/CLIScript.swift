@@ -123,6 +123,8 @@ package enum Call: Sendable, Equatable {
     case fork(message: String?)
     /// The CLI started again after the account changed.
     case relaunch
+    /// Started again after a relaunch, before a send asked (its models reloaded).
+    case restarted
     /// Not Kore's: a test's go-ahead (`ScriptedBackend.release()`), to hold a script mid-way.
     case release
 

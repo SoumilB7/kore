@@ -57,7 +57,13 @@ package final class ScriptedBackend: ChatBackend {
 
     // MARK: - ChatBackend
 
+    private var relaunched = false
+
     package func start() async throws {
+        if relaunched {
+            relaunched = false
+            log.append(.restarted)
+        }
         guard !started else { return }
         started = true
         // A fork also names the session it came from as `resume` (`Workspace.fork`): the fork wins.
@@ -208,7 +214,10 @@ package final class ScriptedBackend: ChatBackend {
     }
 
     /// The account changed: the process would end here and start again at the next send.
-    package func relaunch() async { log.append(.relaunch) }
+    package func relaunch() async {
+        log.append(.relaunch)
+        relaunched = true
+    }
 
     /// Lets a script held at `.wait(.release)` go on.
     package func release() {

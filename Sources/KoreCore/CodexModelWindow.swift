@@ -4,7 +4,7 @@ import Foundation
 /// keeps it in its models cache (`context_window`, of which it uses `effective_context_window_percent`),
 /// and `model_context_window` in config.toml overrides it. The turn's own report replaces this.
 public enum CodexModelWindow {
-    public static func window(for model: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> Int? {
+    public static func window(for model: String, environment: [String: String] = CLIProfiles.environment) -> Int? {
         let home = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
         guard let data = try? Data(contentsOf: home.appendingPathComponent("models_cache.json")),

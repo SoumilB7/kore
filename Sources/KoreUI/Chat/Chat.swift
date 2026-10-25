@@ -411,8 +411,9 @@ package final class Chat: Identifiable {
         relaunchIfDue()
     }
 
-    /// Ends the CLI's process between turns, so the next send starts it again as the new
-    /// account. It waits behind any send under way, and the next send waits for it.
+    /// Ends the CLI's process between turns and starts it again as the new account, so its
+    /// models, effort and commands are the new account's before the next send. It waits behind
+    /// any send under way, and the next send waits for it.
     private func relaunchIfDue() {
         guard relaunchDue, !holdsCLI, let backend else { return }
         relaunchDue = false
@@ -420,6 +421,7 @@ package final class Chat: Identifiable {
         sending = Task {
             await previous?.value
             await backend.relaunch()
+            try? await backend.start()
         }
     }
 

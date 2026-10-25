@@ -56,6 +56,9 @@ final class AccountLogins: ChatStoryline {
             logins("main active again", ["✓ you@example.com", "work@acme.dev"]),
             Expect("no sign-in") { _ in !accounts.isWaiting(provider) },
             Expect("the chat's CLI started again", found: { try? "\(relaunches($0)) relaunches" }) { try relaunches($0) == 2 },
+            Expect("each time at once, its models reloaded before a send", found: { try? "\(try $0.scriptedBackend().log.filter { $0 == .restarted }.count) restarts" }) {
+                try $0.scriptedBackend().log.filter { $0 == .restarted }.count == 2
+            },
             Expect("main's folder: nothing added to the CLI's") { _ in CLIProfiles.overrides(provider).isEmpty },
             Expect("the active login's account read") { _ in
                 if case .signedIn = AccountStore.shared.status(provider) { return true }

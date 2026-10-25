@@ -339,8 +339,7 @@ package final class AccountStore {
         serials[provider, default: 0] += 1
         let handle = end(provider)
         flows[provider] = nil
-        dropAdding(provider)
-        Task { await handle?.cancel() }
+        dropAdding(provider, after: handle)
     }
 
     private func timeOut(_ provider: String, serial: Int) {
@@ -348,8 +347,7 @@ package final class AccountStore {
         serials[provider, default: 0] += 1
         let handle = end(provider)
         flows[provider]?.step = .timedOut
-        dropAdding(provider)
-        Task { await handle?.cancel() }
+        dropAdding(provider, after: handle)
     }
 
     @discardableResult
@@ -455,10 +453,14 @@ package final class AccountStore {
         loginsVersion += 1
     }
 
-    /// A sign-in that didn't finish: its folder goes.
-    private func dropAdding(_ provider: String) {
-        guard let id = adding.removeValue(forKey: provider) else { return }
-        CLIProfiles.remove(provider, id)
+    /// A sign-in that didn't finish: its folder goes, once its CLI has (`handle`, cancelled
+    /// first), so nothing writes into it after.
+    private func dropAdding(_ provider: String, after handle: SignInHandle? = nil) {
+        let id = adding.removeValue(forKey: provider)
+        Task {
+            await handle?.cancel()
+            if let id { CLIProfiles.remove(provider, id) }
+        }
     }
 
     /// The account is one listed already: main's, an added login's, or the one it was over.
@@ -521,6 +523,7 @@ package final class AccountStore {
     /// 30 s). Not under a storyline host, whose CLIs are scripted.
     func watch() {
         guard !StoryHost.installed, activeObserver == nil else { return }
+        CLIProfiles.sweep()
         for provider in Registry.all.map(\.id) {
             guard let ops = ops(provider) else { continue }
             let file = ops.loginFile()
