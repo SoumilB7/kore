@@ -2,7 +2,7 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
-## [0.1.0] - 2026-10-25
+## [1.0.0] - 2026-10-25
 
 First release.
 
@@ -37,4 +37,4 @@ First release.
 - Stay-awake while chats work; a notice when the network drops.
 - The `kore` command: `kore <folder>` opens a folder, `kore setup` installs missing CLIs.
 
-[0.1.0]: ../../releases/tag/v0.1.0
+[1.0.0]: ../../releases/tag/v1.0.0
