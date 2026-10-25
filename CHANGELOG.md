@@ -2,7 +2,7 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
-## [0.1.0] - 2026-11-01
+## [0.1.0] - 2026-10-25
 
 First release.
 

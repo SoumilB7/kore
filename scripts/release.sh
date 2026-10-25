@@ -23,9 +23,9 @@ notes=$(awk -v v="$VERSION" '
   on' CHANGELOG.md)
 [[ -n ${notes//[[:space:]]/} ]] || { print -u2 "no CHANGELOG.md section for $VERSION"; exit 1; }
 
-# The tag is the repo owner's, whatever the local git identity is.
+# The tag is the repo owner's, whatever the local git identity is, and dated like the commit.
 GIT_COMMITTER_NAME=SoumilB7 GIT_COMMITTER_EMAIL=107888098+SoumilB7@users.noreply.github.com \
-  git tag -a "$TAG" -m "Kore $VERSION"
+  GIT_COMMITTER_DATE="$(git log -1 --format=%cI)" git tag -a "$TAG" -m "Kore $VERSION"
 git -c credential.helper= -c credential.helper='!gh auth git-credential' push origin "$TAG"
 gh release create "$TAG" "$DMG" "$DMG.sha256" --verify-tag --title "Kore $VERSION" \
   --notes "$notes" ${1:+"$1"}
