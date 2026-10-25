@@ -41,6 +41,10 @@ package final class CodexTranslator {
     private var phases: [String: String] = [:]
     private var streamedText: Set<String> = []
     private var streamedOutput: Set<String> = []
+    /// What a running command printed in its turn, its last `inTurnTail` characters: a command
+    /// that outlives the turn starts its row's output with it.
+    private var inTurnOutput: [String: String] = [:]
+    private static let inTurnTail = 16_384
     private var itemChanges: [String: [FileChange]] = [:]
     /// The main thread's messages and tool items this turn, to find the final answer when the
     /// model doesn't mark it.
@@ -171,6 +175,10 @@ package final class CodexTranslator {
             out.append(.commandOutput(id: item, text))
         case .commandOutputDelta(let item, let text):
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { streamedOutput.insert(item) }
+            if !replaying {
+                let kept = inTurnOutput[item, default: ""] + text
+                inTurnOutput[item] = kept.count > Self.inTurnTail ? String(kept.suffix(Self.inTurnTail)) : kept
+            }
             out.append(.toolOutput(id: item, text, agent: agent))
         case .itemStarted(let item):
             itemStarted(item, agent: agent)
@@ -185,7 +193,7 @@ package final class CodexTranslator {
         case .turnCompleted(let result):
             if case .sub(let thread) = agent {
                 childTurns[thread] = nil
-                if !replaying { commands.turnCompleted(agent: agent, folder: folder, at: .now, into: &out) }
+                if !replaying { commandsOutlived(agent: agent) }
                 if result.status != "interrupted" { outlived(agent) }
                 // One that outlived its parent's turn ends with its own: no item of the parent's
                 // says so until the parent's next turn.
@@ -226,7 +234,7 @@ package final class CodexTranslator {
             }
             finishTurn(turn ?? result.turnId, outcome, duration: result.durationMs.map { .milliseconds($0) })
             if outcome != .interrupted { outlived(.main) }
-            commands.turnCompleted(agent: .main, folder: folder, at: .now, into: &out)
+            commandsOutlived(agent: .main)
         case .raw(let method, let params):
             if method == "modelProvider/authRecoveryStarted" { authRecovering = true }
             if method == "modelProvider/authRecoveryCompleted" { authRecovering = false }
@@ -266,6 +274,17 @@ package final class CodexTranslator {
             out.append(.exited(status: status))
         case .error, .stderr:
             break
+        }
+    }
+
+    /// The turn ended: the commands it still runs become rows, their output so far with them.
+    private func commandsOutlived(agent: AgentID) {
+        let before = out.count
+        commands.turnCompleted(agent: agent, folder: folder, at: .now, into: &out)
+        for event in out[before...] {
+            guard case .commandStarted(let command) = event, let printed = inTurnOutput.removeValue(forKey: command.id), !printed.isEmpty
+            else { continue }
+            out.append(.commandOutput(id: command.id, printed))
         }
     }
 
@@ -309,6 +328,7 @@ package final class CodexTranslator {
     private func itemCompleted(_ item: CodexItem, agent: AgentID) {
         let failed = ["failed", "declined"].contains(item.status ?? "")
         if !replaying { commands.completed(item, at: .now, into: &out) }
+        inTurnOutput[item.id] = nil
         switch item.type {
         case "plan":
             if !streamedText.contains(item.id), let text = item.text, !text.isEmpty {
