@@ -40,5 +40,16 @@ struct ComposerCaretTests {
         editor.placeCaret(at: point(view, x: -20, y: line * 1.5))
         #expect(view.selectedRange() == NSRange(location: 6, length: 0))
     }
-}
 
+    /// Off the text view but in the box: the click is the text view's, not the clip view's.
+    @Test func aClickOffTheTextViewInTheBoxIsTheTextViews() {
+        let scroll = ComposerScrollView(font: .systemFont(ofSize: 13))
+        scroll.frame = NSRect(x: 0, y: 0, width: 300, height: 200)
+        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = scroll
+        Self.kept.append(window)
+        scroll.textView.string = "one line"
+        scroll.textView.setFrameSize(NSSize(width: 300, height: 20))
+        #expect(scroll.hitTest(NSPoint(x: 100, y: 100)) === scroll.textView)
+    }
+}

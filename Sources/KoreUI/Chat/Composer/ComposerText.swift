@@ -260,6 +260,15 @@ final class ComposerScrollView: NSScrollView {
         return min(max(used, lineHeight), cap).rounded(.up)
     }
 
+    /// A click in the box but off the text view (under its last line, before the text view has
+    /// grown to the box, on the clip view or AppKit's views in it) is the text view's: it puts the caret at the nearest point of the text,
+    /// where the clip view would take it and do nothing.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        // The clip view, or AppKit's own views in it (its overhang view), never the scrollers.
+        return hit.isDescendant(of: contentView) && !hit.isDescendant(of: textView) ? textView : hit
+    }
+
     /// The box grew or shrank with its text: the caret stays in sight (after a paste, the end
     /// of what was pasted).
     override func setFrameSize(_ newSize: NSSize) {
