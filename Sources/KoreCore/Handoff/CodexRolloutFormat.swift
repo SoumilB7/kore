@@ -237,7 +237,9 @@ public struct CodexRolloutFormat: HandoffFormat {
                 current?.images = images
                 current?.files = files
             case "assistant":
-                // Every message, in its place: the last one becomes the reply at the turn's end.
+                // Every message, in its place: the last one becomes the reply at the turn's end. A
+                // turn whose prompt was all context still has its words.
+                if current == nil { current = HandoffTurn(id: turnId ?? UUID().uuidString, prompt: "", at: at) }
                 current?.say(texts.joined(separator: "\n"))
             default:
                 break  // developer: Codex's own instructions
@@ -245,7 +247,7 @@ public struct CodexRolloutFormat: HandoffFormat {
         }
 
         static func isContext(_ text: String) -> Bool {
-            text.hasPrefix("<") || text.hasPrefix("# AGENTS.md instructions")
+            HandoffHarness.isHarness(text) || text.hasPrefix("# AGENTS.md instructions")
         }
 
         mutating func function(_ item: JSONValue) {

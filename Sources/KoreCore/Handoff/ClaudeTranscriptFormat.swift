@@ -86,6 +86,11 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
             switch entry["type"]?.string {
             case "user": user(entry)
             case "assistant": assistant(entry)
+            // A message sent while a turn ran, taken at a tool boundary: a prompt of its own.
+            case "attachment" where entry["attachment"]?["type"]?.string == "queued_command":
+                if ClaudeHistory.notificationText(entry) == nil, let text = entry["attachment"]?["prompt"]?.string, !text.isEmpty {
+                    open(entry, prompt: text)
+                }
             default: break
             }
         }
@@ -113,7 +118,8 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
             // Turns the CLI starts itself (a cron firing, a finished agent's notice): its words
             // go on in the turn they belong to.
             if ClaudeHistory.cliTurnOrigins.contains(entry["turnOrigin"]?.string ?? "") { return }
-            let prompt = texts.filter { !$0.hasPrefix("<") }
+            // A slash command's echo is its turn's prompt, "/name args".
+            let prompt = texts.lazy.compactMap(HandoffHarness.command).first.map { [$0] } ?? texts.filter { !HandoffHarness.isHarness($0) }
             var images: [HandoffImage] = []
             var files: [String] = []
             for block in blocks {

@@ -138,3 +138,36 @@ public struct HandoffReadError: Error, CustomStringConvertible {
 
     public init(_ description: String) { self.description = description }
 }
+
+/// The CLIs' own text in a user message: tags the harness wraps its context, notices and command
+/// echoes in. Only these are left out; a prompt the user began with "<" is theirs.
+enum HandoffHarness {
+    static let tags: Set<String> = [
+        "system-reminder", "local-command-stdout", "local-command-stderr", "local-command-caveat", "command-name",
+        "command-message", "command-args", "task-notification", "user-prompt-submit-hook", "bash-input", "bash-stdout",
+        "bash-stderr", "environment_context", "user_instructions", "permissions", "turn_aborted", "user_shell_command",
+        "INSTRUCTIONS", "subagent_notification", "collaboration_mode", "ide_selection", "ide_opened_file",
+        "new-diagnostics", "persisted-output", "skill", "personality_spec", "app-context", "model_switch",
+    ]
+
+    static func isHarness(_ text: String) -> Bool {
+        let text = text.drop(while: \.isWhitespace)
+        guard text.first == "<" else { return false }
+        let name = text.dropFirst().prefix { !($0 == ">" || $0 == " " || $0 == "/") }
+        return tags.contains(String(name))
+    }
+
+    /// "/name args" from a slash command's echo (`<command-name>/name</command-name>` …).
+    static func command(_ text: String) -> String? {
+        guard let name = value("command-name", in: text), !name.isEmpty else { return nil }
+        let args = value("command-args", in: text) ?? ""
+        let command = name.hasPrefix("/") ? name : "/" + name
+        return args.isEmpty ? command : command + " " + args
+    }
+
+    private static func value(_ tag: String, in text: String) -> String? {
+        guard let open = text.range(of: "<\(tag)>"), let close = text.range(of: "</\(tag)>", range: open.upperBound..<text.endIndex)
+        else { return nil }
+        return text[open.upperBound..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
