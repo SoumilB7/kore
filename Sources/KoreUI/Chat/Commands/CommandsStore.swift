@@ -56,6 +56,12 @@ final class CommandsStore {
         return commands.values.filter(\.canStop).sorted { ($0.startedAt ?? .distantPast) > ($1.startedAt ?? .distantPast) }
     }
 
+    /// Every row, in no order.
+    var all: [ActiveCommand] {
+        access(keyPath: \.version)
+        return Array(commands.values)
+    }
+
     /// A streamed command's output, its last `lines` lines.
     func streamedTail(_ id: String, lines: Int) -> [String] { streams[id]?.lines(lines) ?? [] }
 

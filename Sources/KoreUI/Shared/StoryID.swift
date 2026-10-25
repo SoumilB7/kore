@@ -35,7 +35,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
         case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track, outside, extended
         case signIn = "signin", signOut = "signout"
-        case `continue`
+        case `continue`, background
         /// A list row's stand-in for the pointer entering it; there while it's lit; a popup
         /// button's keyboard focus ring.
         case hover, lit, focus
@@ -171,6 +171,16 @@ extension StoryID {
         package static func ended(_ group: String) -> StoryID { StoryID(.agentmap, "ended", key: group) }
         /// The chat's own row, the root the running agents hang off.
         package static let chat = StoryID(.agentmap, "chat")
+        /// A command's row in a BACKGROUND section: its click opens it; `.part(.stop)` asks to stop
+        /// it, `.part(.allow)` is "Yes, stop", `.part(.cancel)` "No, go back", `.part(.background)`
+        /// Run in background.
+        package static func command(_ id: String) -> StoryID { StoryID(.agentmap, "command", key: id) }
+        /// Stop all over a section's rows, with the same parts as a row's Stop.
+        package static let stopAll = StoryID(.agentmap, "stopall")
+        /// ">_ 2 still running after their agents" at the tree's foot.
+        package static let outlived = StoryID(.agentmap, "outlived")
+        /// "Show 34 more" under the finished rows.
+        package static let moreCommands = StoryID(.agentmap, "morecommands")
         package static let open = StoryID(.agentmap, "open")
         package static let stop = StoryID(.agentmap, "stop")
         package static let close = StoryID(.agentmap, "close")

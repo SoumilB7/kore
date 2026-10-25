@@ -316,3 +316,26 @@ extension Theme {
     /// A message sent while a turn runs, until the CLI takes it.
     static let queuedOpacity: Double = 0.6
 }
+
+// MARK: Background commands (active-commands.html)
+
+extension Glyph {
+    /// The ">_" of a commands mark, in mono.
+    static var commandCue: Font { .system(size: 9.5 * Zoom.shared.scale, weight: .semibold, design: .monospaced) }
+}
+
+extension Size {
+    /// A live command's point in its row.
+    static let commandPoint: CGFloat = 7
+}
+
+extension Layout {
+    enum Commands {
+        /// A BACKGROUND section's widest, and its rows' heights before zoom.
+        static let width: CGFloat = 640
+        static let liveRow: CGFloat = 32
+        static let finishedRow: CGFloat = 26
+        /// An opened row's output tail.
+        static let tailLines = 12
+    }
+}

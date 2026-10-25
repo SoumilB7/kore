@@ -22,10 +22,35 @@ final class AgentMapState {
     /// As it opens: the chat's other popups close (`Chat.closePopups`).
     @ObservationIgnored var opening: (() -> Void)?
 
+    /// What the detail shows in place of the selected agent: the chat's own commands (its root
+    /// row), or those still running after their agents (the foot line).
+    enum Pane: Equatable { case chat, outlived }
+    var pane: Pane?
+    /// The command row opened in the pane, and the one asking "Stop this?" (`stopAll` for Stop all).
+    var openCommand: String?
+    var askingStop: String?
+    /// "Show N more" was clicked under the finished rows.
+    var allFinished = false
+    static let stopAll = "*all"
+
+    /// An agent's row: its pane, each command closed.
+    func select(_ id: String) {
+        selected = id
+        foldCursor = nil
+        show(nil)
+    }
+
+    /// The root row, the foot line, or (nil) the selected agent.
+    func show(_ pane: Pane?) {
+        self.pane = pane
+        openCommand = nil
+        askingStop = nil
+        allFinished = false
+    }
+
     func open(selecting id: String? = nil) {
         if let id {
-            selected = id
-            foldCursor = nil
+            select(id)
             reveal = id
         }
         if !isOpen { opening?() }
