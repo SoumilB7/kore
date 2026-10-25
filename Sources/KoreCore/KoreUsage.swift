@@ -100,8 +100,8 @@ public actor KoreUsage {
     public func refresh(cli: String, now: Date = Date()) {
         let floor = Self.day(now.addingTimeInterval(-7 * 86400))
         switch cli {
-        case "claude": refreshClaude(since: min(claude?.horizon ?? floor, floor))
-        case "codex": refreshCodex(since: min(codex?.horizon ?? floor, floor))
+        case "claude": refreshClaude(since: min(claude?.horizon ?? floor, floor), saving: false)
+        case "codex": refreshCodex(since: min(codex?.horizon ?? floor, floor), saving: false)
         default: break
         }
     }
@@ -123,19 +123,40 @@ public actor KoreUsage {
         return logged == read
     }
 
-    private func refreshClaude(since: Date) {
+    /// When each CLI's index was last written, and whether it changed since.
+    private var saved: [String: Date] = [:]
+    private var unsaved: Set<String> = []
+    /// Kept in memory after every turn; written at most this often (the index is a megabyte or
+    /// two, and a turn ends every few seconds while chats work), and whenever usage is read. A
+    /// crash loses at most this much, read again from the files' offsets on the next launch.
+    static let saveEvery: TimeInterval = 10 * 60
+
+    private func refreshClaude(since: Date, saving: Bool = true) {
         let file = paths.caches?.appendingPathComponent("claude.index")
         var index = claude ?? file.flatMap(UsageIndexStore.loadClaude) ?? ClaudeUsageIndex()
         let changed = index.refresh(root: paths.claudeProjects, since: since)
         claude = index
-        if changed, let file { UsageIndexStore.save(index, to: file) }
+        if changed { unsaved.insert("claude") }
+        if let file, due("claude", now: saving) { UsageIndexStore.save(index, to: file) }
     }
 
-    private func refreshCodex(since: Date) {
+    private func refreshCodex(since: Date, saving: Bool = true) {
         let file = paths.caches?.appendingPathComponent("codex.index")
         var index = codex ?? file.flatMap(UsageIndexStore.loadCodex) ?? CodexUsageIndex()
         let changed = index.refresh(root: paths.codexSessions, since: since)
         codex = index
-        if changed, let file { UsageIndexStore.save(index, to: file) }
+        if changed { unsaved.insert("codex") }
+        if let file, due("codex", now: saving) { UsageIndexStore.save(index, to: file) }
+    }
+
+    /// Whether `cli`'s index should be written now: it changed, and usage is being read
+    /// (`now`) or the last write is `saveEvery` old. Marks it written.
+    private func due(_ cli: String, now: Bool) -> Bool {
+        guard unsaved.contains(cli) else { return false }
+        let at = Date()
+        guard now || at.timeIntervalSince(saved[cli] ?? .distantPast) >= Self.saveEvery else { return false }
+        saved[cli] = at
+        unsaved.remove(cli)
+        return true
     }
 }

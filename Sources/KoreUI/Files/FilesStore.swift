@@ -56,6 +56,9 @@ final class FilesStore {
     @ObservationIgnored private var expanded: Set<String> = []
     @ObservationIgnored private var watcher: FolderWatcher?
     @ObservationIgnored private var gitRefresh: Task<Void, Never>?
+    /// Git is running for `gitRefresh`; a change meanwhile sets `gitAgain` for one more read.
+    @ObservationIgnored private var gitReading = false
+    @ObservationIgnored private var gitAgain = false
     @ObservationIgnored private var moved: Set<String> = []
     @ObservationIgnored private var movedReport: Task<Void, Never>?
 
@@ -228,7 +231,10 @@ final class FilesStore {
                 }
                 continue
             }
-            gitChanged = true
+            // Under an ignored folder (a build, node_modules, a venv) nothing git reports can
+            // change, and builds and tests write thousands of files there: those don't ask git
+            // again. `.gitignore` itself is never under one.
+            if git.state(of: path) != .ignored { gitChanged = true }
             files.append(path)
             let parent = (path as NSString).deletingLastPathComponent
             if children[parent] != nil { folders.insert(parent) }
@@ -259,15 +265,24 @@ final class FilesStore {
         }
     }
 
-    /// Git states, at most every half second while files keep changing.
+    /// Git states, at most every half second while files keep changing. A change that comes in
+    /// while git runs gets one more read after it, so the last change is never missed.
     private func refreshGit() {
-        guard gitRefresh == nil else { return }
+        guard gitRefresh == nil else {
+            // Before git starts, the coming read takes this change in already.
+            if gitReading { gitAgain = true }
+            return
+        }
         let root = URL(fileURLWithPath: root)
+        gitAgain = false
         gitRefresh = Task {
             try? await Task.sleep(for: .milliseconds(500))
+            gitReading = true
             let status = await GitStatus.read(root) ?? .empty
+            gitReading = false
             if status != git { git = status }
             gitRefresh = nil
+            if gitAgain { refreshGit() }
         }
     }
 

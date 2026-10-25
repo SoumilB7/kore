@@ -323,7 +323,21 @@ public actor ClaudeSession {
 
     // MARK: - Wire
 
+    /// Stream deltas Kore has no use for: a tool's input streaming in (a long Write sends
+    /// thousands) and thinking signatures. Matched on the raw line, with the quotes JSON never
+    /// leaves unescaped inside a string, so no text can match.
+    private static let quietDeltas = ["\"delta\":{\"type\":\"input_json_delta\"", "\"delta\":{\"type\":\"signature_delta\""]
+        .map { Data($0.utf8) }
+    /// The last one passed on: one each half second still says the CLI is working (the stall
+    /// watchdog, a retry clearing); the rest are dropped before they're parsed.
+    private var quietDeltaAt: ContinuousClock.Instant?
+
     private func handle(line: Data) {
+        if Self.quietDeltas.contains(where: { line.range(of: $0) != nil }) {
+            let now = ContinuousClock.now
+            if let last = quietDeltaAt, now - last < .milliseconds(500) { return }
+            quietDeltaAt = now
+        }
         guard let message = try? JSONValue.parse(line) else {
             sink.yield(.stderr("unparseable stdout line: \(String(decoding: line, as: UTF8.self))\n"))
             return
