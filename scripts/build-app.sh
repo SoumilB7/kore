@@ -3,7 +3,7 @@
 set -euo pipefail
 
 cd "${0:A:h}/.."
-VERSION="0.1.0"
+VERSION="$(<VERSION)"
 # The commit built, for scripts/check-install.sh; a copy without .git (the verify cache) passes it in.
 BUILD_SHA="${KORE_BUILD_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 APP="build/Kore.app"
