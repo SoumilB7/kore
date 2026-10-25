@@ -544,7 +544,8 @@ final class CodexBackend: ChatBackend {
         let match = { (turn: JSONValue) in
             (turn["items"]?.array ?? []).contains { item in
                 item["type"]?.string == "userMessage"
-                    && (item["content"]?.array ?? []).compactMap { $0["text"]?.string }.joined(separator: "\n") == text
+                    && (item["content"]?.array ?? []).compactMap { $0["text"]?.string }.filter { !Attachments.isFileNote($0) }
+                        .joined(separator: "\n") == text
             }
         }
         if let start = try await fork(session, thread, view: .summary, at: match) { return start }

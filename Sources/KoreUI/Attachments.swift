@@ -205,7 +205,17 @@ package enum Attachments {
                 : ["type": "mention", "name": .string(file.name), "path": .string(file.url.path)]
         }
         if !text.isEmpty { items.append(["type": "text", "text": .string(text), "text_elements": []]) }
+        // A mention reaches only the display: the model is told of the file in a text of its own,
+        // after the user's, which reading back leaves out (`isFileNote`).
+        let note = files.filter { $0.kind != .image }.map { "[file: \($0.url.path)]" }
+        if !note.isEmpty { items.append(["type": "text", "text": .string(note.joined(separator: "\n")), "text_elements": []]) }
         return .array(items)
+    }
+
+    /// Kore's text naming a Codex message's attached files, one "[file: path]" line each.
+    static func isFileNote(_ text: String) -> Bool {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        return !text.isEmpty && lines.allSatisfy { $0.hasPrefix("[file: /") && $0.hasSuffix("]") }
     }
 
     // MARK: Transcripts

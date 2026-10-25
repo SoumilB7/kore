@@ -754,7 +754,8 @@ package final class CodexTranslator {
             for item in (turn["items"]?.array ?? []).map(CodexItem.init) {
                 if item.type == "userMessage" {
                     let content = item.raw["content"] ?? []
-                    let text = content.array?.compactMap { $0["text"]?.string }.joined(separator: "\n") ?? ""
+                    let text = content.array?.compactMap { $0["text"]?.string }.filter { !Attachments.isFileNote($0) }
+                        .joined(separator: "\n") ?? ""
                     let attachments = Self.attachments(content)
                     // The turn's id is where a fork from its first message starts; a message steered
                     // into the turn later keeps its own item id.
