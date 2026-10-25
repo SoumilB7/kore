@@ -83,6 +83,7 @@ struct UsageModal: View {
         .frame(width: width, alignment: .leading)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: Radius.panel))
         .overlay(RoundedRectangle(cornerRadius: Radius.panel).strokeBorder(Theme.border, lineWidth: Stroke.hairline))
+        .cornerMarks(Theme.cornerOption)
         .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
         .contentShape(Rectangle())
         .accessibilityElement(children: .contain)
