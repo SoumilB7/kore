@@ -11,6 +11,12 @@ final class CodexBackend: ChatBackend {
     private let translator: CodexTranslator
     private var session: CodexSession?
     private var starting: Task<Void, any Error>?
+    private var opening: Task<CodexSession, any Error>?
+    private var accountClosing: Task<Bool, Never>?
+    private var accountBlocked = false
+    private var pendingShutdown: PendingCLIShutdown?
+    /// Ownership outlives a watcher: an external agent can finish while its command still runs.
+    private var observed: Set<String> = []
     private var pump: Task<Void, Never>?
     private var replayPending: Bool
     private var resumeId: String?
@@ -65,11 +71,11 @@ final class CodexBackend: ChatBackend {
 
     var sessionId: String? { translator.threadId ?? resumeId }
 
-    init(_ options: BackendOptions) {
+    init(_ options: BackendOptions, translator: CodexTranslator? = nil) {
         self.options = options
         (events, sink) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
-        translator = CodexTranslator(folder: options.folder)
-        translator.planMode = options.planMode
+        self.translator = translator ?? CodexTranslator(folder: options.folder)
+        self.translator.planMode = options.planMode
         replayPending = options.resume != nil
         resumeId = options.resume?.id
         forkAt = options.fork?.at
@@ -77,6 +83,8 @@ final class CodexBackend: ChatBackend {
     }
 
     func start() async throws {
+        if let accountClosing, !(await accountClosing.value) { throw CodexAppServer.Failure.notRunning }
+        guard !accountBlocked else { throw CodexAppServer.Failure.notRunning }
         if session != nil { return }
         if let starting { return try await starting.value }
         if let refused { throw refused }
@@ -87,6 +95,7 @@ final class CodexBackend: ChatBackend {
     }
 
     private func launch() async throws {
+        try Task.checkCancellation()
         launches += 1
         // A thread with no rollout can't be resumed: a fresh one takes its place.
         let fresh = unwritten && forkAt == nil && !CodexSession.rolloutExists(rolloutPath)
@@ -97,12 +106,19 @@ final class CodexBackend: ChatBackend {
         if let file = options.instructions { instructions = await Task.detached { HandoffWriters.instructionText(file) }.value }
         let session: CodexSession
         do {
-            session = try await CodexSession.launch(
-                .init(
-                    cwd: options.folder, model: options.model, effort: options.effort,
-                    permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
-                    plan: options.planMode, resume: resume, forkAt: forkAt, developerInstructions: instructions))
+            try Task.checkCancellation()
+            let launch = CodexSession.Options(
+                cwd: options.folder, model: options.model, effort: options.effort,
+                permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
+                plan: options.planMode, resume: resume, forkAt: forkAt, developerInstructions: instructions)
+            let task = Task { try await CodexSession.launch(launch) }
+            opening = task
+            session = try await task.value
         } catch {
+            if let pending = error as? PendingCLIShutdown {
+                pendingShutdown = pending
+                accountBlocked = true
+            }
             log.startFailed("codex", chat: sessionId, launch: kind)
             throw error
         }
@@ -160,7 +176,12 @@ final class CodexBackend: ChatBackend {
                 ms: ClaudeBackend.ms(ContinuousClock.now - began))
             settleUnfinished()
         }
+        if Task.isCancelled {
+            if !(await session.close(waiting: .seconds(6))) { accountBlocked = true }
+            throw CancellationError()
+        }
         self.session = session
+        opening = nil
         pump = Task {
             for await event in session.events {
                 // A new sub-agent's nickname, before the event that makes its card.
@@ -319,10 +340,12 @@ final class CodexBackend: ChatBackend {
     /// until its turn ends there or it stays quiet past `AgentOutcome.quietLimit`.
     private func follow(_ thread: String, _ first: CodexAgentThread) {
         guard follows[thread] == nil, let path = first.path else { return }
+        observed.insert(thread)
         follows[thread] = Task {
             var info = first
             while !Task.isCancelled, !translator.isFinished(thread) {
                 try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { break }
                 let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.uint64Value ?? 0
                 if size != info.size {
                     let known = info
@@ -332,6 +355,7 @@ final class CodexBackend: ChatBackend {
                         return fresh
                     }.value
                 }
+                guard !Task.isCancelled else { break }
                 switch info.outcome() {
                 case .running: continue
                 case .finished: translator.agentEnded(thread, .completed, info, source: .fileFinished)
@@ -388,6 +412,10 @@ final class CodexBackend: ChatBackend {
         let (events, changes) = translator.take()
         for event in events {
             if case .titleChanged = event { mayTitle = false }
+            if case .agentResumed(let id) = event {
+                observed.remove(id)
+                follows.removeValue(forKey: id)?.cancel()
+            }
             switch event {
             // A command's own news: the lists after it start again from the shortest wait.
             case .commandStarted, .commandChanged, .commandEnded: terminalPollStep = 0
@@ -410,6 +438,9 @@ final class CodexBackend: ChatBackend {
     }
 
     private func yield(_ event: ChatEvent) {
+        if case .agentSpawned(let agent) = event, let parent = agent.parent.sub, observed.contains(parent) {
+            observed.insert(agent.id)
+        }
         EventLog.write(event)
         sink.yield(event)
         EventLog.loadAgents(event, from: self)
@@ -701,6 +732,57 @@ final class CodexBackend: ChatBackend {
         let replayed = await replay(older.turns, session)
         translator.adopt(replayed.carried, history: true)
         return (replayed.events, older.earlier != nil)
+    }
+
+    var observedAgents: Set<String> { observed }
+
+    /// Coalesced across rapid switches; cancellation of an obsolete chat task never skips
+    /// waiting for its old child, and external file observers keep their actual lifecycle.
+    func relaunchAfterAccountChange() async -> Bool {
+        if let accountClosing { return await accountClosing.value }
+        let task = Task { await stopForAccountChange() }
+        accountClosing = task
+        let result = await task.value
+        accountClosing = nil
+        return result
+    }
+
+    private func stopForAccountChange() async -> Bool {
+        let startup = starting
+        let opening = opening
+        startup?.cancel()
+        opening?.cancel()
+        terminalPoll?.cancel()
+        terminalPoll = nil
+        pump?.cancel()
+        pump = nil
+        let initializing: CodexSession?
+        do { initializing = try await opening?.value }
+        catch { initializing = nil; if let pending = error as? PendingCLIShutdown { pendingShutdown = pending } }
+        if let pendingShutdown {
+            guard await pendingShutdown.wait(within: .seconds(6)) else {
+                accountBlocked = true
+                yield(.notice("The previous account is still stopping. Try switching again.", isError: true))
+                return false
+            }
+            self.pendingShutdown = nil
+        }
+        let old = session ?? initializing
+        if let old, !(await old.close(waiting: .seconds(6))) {
+            accountBlocked = true
+            yield(.notice("The previous account is still stopping. Try switching again.", isError: true))
+            return false
+        }
+        _ = try? await startup?.value
+        if let old { log.relaunch("codex", chat: sessionId, reason: "account changed"); logExit(old) }
+        resumeId = sessionId
+        session = nil
+        self.opening = nil
+        refused = nil
+        translator.accountStopped(observed: observedAgents)
+        flush()
+        accountBlocked = false
+        return true
     }
 
     func relaunch(reason: String) async {

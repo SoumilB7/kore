@@ -561,6 +561,18 @@ package final class CodexTranslator {
     /// The app-server ends without an `.exited` (a relaunch): its terminals end with it.
     func endCommands() { commands.endAll(at: .now, into: &out) }
 
+    /// Clear only the transport and work this app-server owned, retaining observed children.
+    func accountStopped(observed: Set<String>) {
+        for id in unfinishedAgents() where !observed.contains(id) {
+            finish(id, .stopped, source: .accountSwitch)
+        }
+        pending.removeAll()
+        pendingSteer.removeAll()
+        turn = nil
+        commands.endAll(at: .now, preserving: observed, state: .stopped(by: .user), into: &out)
+        out.append(.exited(status: 0))
+    }
+
     /// `parent`'s turn ended: the child threads it spawned that still run outlive it, and run on
     /// in the background, as a Claude agent run in the background does. One that finished within
     /// the turn stays where it is. Live and replayed alike: a child's end is an item of its

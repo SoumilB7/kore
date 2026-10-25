@@ -26,6 +26,7 @@ struct AgentLog: Sendable {
         /// Its turn was stopped while it ran.
         case turnInterrupt = "turn interrupt"
         case replay
+        case accountSwitch = "account switch"
         /// Codex: an item of the parent's turn (`subAgentActivity`, a wait's states).
         case agentItem = "agent item"
         /// Codex: the child thread's own turn ended.

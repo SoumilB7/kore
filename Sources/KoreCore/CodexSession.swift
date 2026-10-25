@@ -468,6 +468,10 @@ public actor CodexSession {
         await server.close()
     }
 
+    public func close(waiting limit: Duration) async -> Bool {
+        await server.close(waiting: limit)
+    }
+
     /// The app-server's process id, how it ended and whether Kore asked it to, for the session log.
     public var process: (id: Int32?, end: ProcessEnd?, closeAsked: Bool) {
         get async { (await server.processId, await server.processEnd, await server.closeAsked) }

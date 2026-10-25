@@ -10,6 +10,12 @@ final class ClaudeBackend: ChatBackend {
     private let translator: ClaudeTranslator
     private var session: ClaudeSession?
     private var starting: Task<Void, any Error>?
+    private var opening: Task<ClaudeSession, any Error>?
+    private var accountClosing: Task<Bool, Never>?
+    private var accountBlocked = false
+    private var pendingShutdown: PendingCLIShutdown?
+    /// Ownership outlives a watcher: an external agent can finish while its command still runs.
+    private var observed: Set<String> = []
     private var pump: Task<Void, Never>?
     private var replayPending: Bool
     /// The session has a name, or a prompt was sent to make one from.
@@ -78,16 +84,18 @@ final class ClaudeBackend: ChatBackend {
     /// The signed-in account's key in the plan snapshot log.
     private var planAccount: String?
 
-    init(_ options: BackendOptions) {
+    init(_ options: BackendOptions, translator: ClaudeTranslator? = nil) {
         self.options = options
         (events, sink) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
         // A fork has no session of its own until its first message makes one.
-        translator = ClaudeTranslator(folder: options.folder, sessionId: options.fork == nil ? options.resume?.id : nil)
+        self.translator = translator ?? ClaudeTranslator(folder: options.folder, sessionId: options.fork == nil ? options.resume?.id : nil)
         replayPending = options.resume != nil
         titled = options.resume != nil
     }
 
     func start() async throws {
+        if let accountClosing, !(await accountClosing.value) { throw ClaudeSession.Failure.notRunning }
+        guard !accountBlocked else { throw ClaudeSession.Failure.notRunning }
         if session != nil { return }
         if let starting { return try await starting.value }
         let task = Task { try await launch() }
@@ -97,6 +105,7 @@ final class ClaudeBackend: ChatBackend {
     }
 
     private func launch() async throws {
+        try Task.checkCancellation()
         // A resumed session's past is read while the CLI starts, and shown as soon as it's read
         // (a page takes a fraction of a second, the CLI a second or more).
         let folder = options.folder
@@ -122,6 +131,7 @@ final class ClaudeBackend: ChatBackend {
         if let fork { launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at] }
         if let instructions = options.instructions { launch.extraArgs += ["--append-system-prompt-file", instructions.path] }
         let starting = Task { try await ClaudeSession.start(launch) }
+        opening = starting
         launches += 1
         let kind = launches > 1 ? "again" : fork != nil ? "fork" : sessionId != nil ? "resume" : "new"
         var pastMode: String?
@@ -179,6 +189,7 @@ final class ClaudeBackend: ChatBackend {
                 if let ran { yield(.agentProgress(id: id, AgentProgress(duration: .seconds(ran)))) }
                 yield(.agentResumed(id: id))
                 alone.insert(id)
+                observed.insert(id)
                 tail(id)
             }
         }
@@ -186,6 +197,10 @@ final class ClaudeBackend: ChatBackend {
         do {
             session = try await starting.value
         } catch {
+            if let pending = error as? PendingCLIShutdown {
+                pendingShutdown = pending
+                accountBlocked = true
+            }
             log.startFailed("claude", chat: sessionId ?? fork?.from, launch: kind)
             throw error
         }
@@ -193,7 +208,12 @@ final class ClaudeBackend: ChatBackend {
         planAccount = PlanSnapshot.account(email: await session.capabilities["account"]?["email"]?.string)
         KoreSessions.shared.record(cli: "claude", session: sessionId, folder: options.folder, launch: kind, account: planAccount)
         relaunchReason = nil
+        if Task.isCancelled {
+            if !(await session.close(waiting: .seconds(6))) { accountBlocked = true }
+            throw CancellationError()
+        }
         self.session = session
+        opening = nil
         // A resumed chat carries on in the mode its history ended in (the pill shows it), not
         // the one it launched in. One the CLI refuses (Bypass) it reports at the first turn.
         if let mode = pastMode, mode != options.mode, let permission = ClaudeSession.PermissionMode(rawValue: mode) {
@@ -333,7 +353,11 @@ final class ClaudeBackend: ChatBackend {
             if case .agentSpawned(let agent) = event, agent.background { tail(agent.id) }
             // Run again, it runs in the background: its new entries only (the CLI may have
             // written its first ones a moment before this came).
-            if case .agentResumed(let id) = event { tail(id, since: .now.addingTimeInterval(-Self.resumeLead)) }
+            if case .agentResumed(let id) = event {
+                alone.remove(id)  // this CLI explicitly ran the observed agent again
+                observed.remove(id)
+                tail(id, since: .now.addingTimeInterval(-Self.resumeLead))
+            }
             // A stop can end background agents too, with no notification: their files say so.
             if case .turnFinished(_, .interrupted, _) = event { recheckAgents(via: "turn interrupt") }
         }
@@ -341,6 +365,9 @@ final class ClaudeBackend: ChatBackend {
     }
 
     private func yield(_ event: ChatEvent) {
+        if case .agentSpawned(let agent) = event, let parent = agent.parent.sub, observed.contains(parent) {
+            observed.insert(agent.id)
+        }
         EventLog.write(event)
         sink.yield(event)
         EventLog.loadAgents(event, from: self)
@@ -855,6 +882,57 @@ final class ClaudeBackend: ChatBackend {
 
     func commandOutput(_ id: String) async -> String? {
         try? await session?.taskOutput(id)
+    }
+
+    var observedAgents: Set<String> { observed }
+
+    /// Coalesced across rapid switches; cancellation of an obsolete chat task never skips
+    /// waiting for its old child, and external file observers keep their actual lifecycle.
+    func relaunchAfterAccountChange() async -> Bool {
+        if let accountClosing { return await accountClosing.value }
+        let task = Task { await stopForAccountChange() }
+        accountClosing = task
+        let result = await task.value
+        accountClosing = nil
+        return result
+    }
+
+    private func stopForAccountChange() async -> Bool {
+        let startup = starting
+        let opening = opening
+        startup?.cancel()
+        opening?.cancel()
+        pump?.cancel()
+        pump = nil
+        let initializing: ClaudeSession?
+        do { initializing = try await opening?.value }
+        catch { initializing = nil; if let pending = error as? PendingCLIShutdown { pendingShutdown = pending } }
+        if let pendingShutdown {
+            guard await pendingShutdown.wait(within: .seconds(6)) else {
+                accountBlocked = true
+                yield(.notice("The previous account is still stopping. Try switching again.", isError: true))
+                return false
+            }
+            self.pendingShutdown = nil
+        }
+        let old = session ?? initializing
+        if let old, !(await old.close(waiting: .seconds(6))) {
+            accountBlocked = true
+            yield(.notice("The previous account is still stopping. Try switching again.", isError: true))
+            return false
+        }
+        _ = try? await startup?.value
+        if let old { log.relaunch("claude", chat: sessionId, reason: "account changed"); logExit(old) }
+        session = nil
+        self.opening = nil
+        let observed = observed
+        let ownedTails = tails.filter { !observed.contains($0.key) }
+        for task in ownedTails.values { task.cancel() }
+        for task in ownedTails.values { await task.value }
+        translator.accountStopped(observed: observed)
+        flush()
+        accountBlocked = false
+        return true
     }
 
     func relaunch(reason: String) async {

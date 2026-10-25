@@ -220,7 +220,6 @@ package final class AccountStore {
         }
         defer { known[provider] = key }
         guard let before = known[provider], before != key else { return }
-        bump(provider)
         // A Terminal hand-off still waiting ends when the account it was for shows up.
         if flows[provider]?.step == .terminal, handles[provider] != nil, adding[provider] == nil, aimed[provider] == nil,
             case .signedIn = reading
@@ -231,6 +230,7 @@ package final class AccountStore {
             if !before.isEmpty { stopWork(provider) }
             flows[provider]?.step = before.isEmpty ? .signedIn : .switched
         }
+        bump(provider)
     }
 
     /// The account (or how the CLI reaches it) changed: every chat of the CLI starts again at its
@@ -318,7 +318,6 @@ package final class AccountStore {
                     loginsVersion += 1
                     rewatch(provider)
                 }
-                note(provider, reading)
                 let step: Step
                 if let before {
                     step = if case .signedIn(let now) = reading, now.isSameAccount(as: before) { .same } else { .switched }
@@ -326,6 +325,7 @@ package final class AccountStore {
                     step = .signedIn
                 }
                 if step == .switched { stopWork(provider) }
+                note(provider, reading)
                 flows[provider]?.step = step
             } catch {
                 guard serials[provider] == serial else { return }
@@ -384,9 +384,9 @@ package final class AccountStore {
                     loginsVersion += 1
                     rewatch(provider)
                 }
+                if let before, case .signedIn(let now) = reading, !now.isSameAccount(as: before) { stopWork(provider) }
                 note(provider, reading)
                 bumpIfSame(provider, before, reading)
-                if let before, case .signedIn(let now) = reading, !now.isSameAccount(as: before) { stopWork(provider) }
                 flows[provider]?.step = before == nil ? .signedIn : .switched
                 done(true)
             } catch {

@@ -121,20 +121,28 @@ final class AccountLogins: ChatStoryline {
 /// agent and a background command, a login row's caption under the pointer says "Stops 1
 /// working chat."; picked, the turn is interrupted, the agent and the command stopped, and the
 /// chat's CLI starts again as the new login once they have.
-final class AccountSwitchStops: ChatStoryline {
+class AccountSwitchStops: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
+    class var scheduledOnly: Bool { false }
+    class var deaf: Bool { false }
+    class var checkQueue: Bool { false }
+    class var observed: Bool { false }
 
-    static func script(_ provider: String) -> CLIScript {
+    class func script(_ provider: String) -> CLIScript {
         let base = AccountPopup.script(provider)
         let command = ActiveCommand(
-            id: "dev", kind: .shell, title: "Run the dev server", command: "npm run dev", folder: "/tmp", startedAt: Date(), owner: .main,
+            id: "dev", kind: scheduledOnly ? .scheduled : .shell, title: "Run the dev server", command: "npm run dev", folder: "/tmp", startedAt: Date(), owner: .main,
             toolId: "call-dev", output: .stream)
         // A turn that starts an agent and a command, then works until a Stop.
         let work: [Beat] = [
             .startTurn, AgentMapStories.spawn("scout", "Scout the repo", background: true), .event(.commandStarted(command)),
             .wait(.release),
         ] + Beat.answer("Done.") + [.finishTurn(.completed)]
-        return CLIScript(start: base.start, turns: [work])
+        let beats: [Beat] = scheduledOnly ? [.startTurn, .event(.commandStarted(command)), .finishTurn(.completed)] : work
+        var script = CLIScript(start: base.start, turns: [beats])
+        script.deaf = deaf
+        script.observedAgents = observed ? ["scout"] : []
+        return script
     }
 
     override func steps() -> [any Step] {
@@ -170,9 +178,10 @@ final class AccountSwitchStops: ChatStoryline {
                 Send("Work on it"),
                 Expect("a turn, an agent and a command running") { story in
                     let chat = try story.activeChat()
-                    return chat.isRunning && chat.storyRunningAgents == 1 && chat.storyLiveCommands == 1
+                    return (Self.scheduledOnly ? !chat.isRunning && chat.storyRunningAgents == 0 : chat.isRunning && chat.storyRunningAgents == 1)
+                        && chat.storyLiveCommands == 1
                 },
-            ] + open + [
+            ] + (Self.checkQueue ? [Queue("first queued") as any Step, Queue("second queued")] : []) + open + [
                 WaitForElement(.id(main)),
                 Press(.id(main.part(.hover))),
                 Expect("under the pointer, what a switch stops", found: { $0.app.chat?.storyLoginSwitchCaption }) {
@@ -188,9 +197,18 @@ final class AccountSwitchStops: ChatStoryline {
                 logins("main active", ["✓ you@example.com", "work@acme.dev"]),
                 Expect("the turn interrupted, the agent and the command stopped", found: { try? "\(log($0))" }) { story in
                     let log = try log(story)
-                    return log.contains(.interrupt) && log.contains(.stopAgent("scout")) && log.contains(.stopCommand("dev"))
+                    if Self.scheduledOnly { return !log.contains(.stopCommand("dev")) }
+                    return log.contains(.interrupt) && log.contains(.stopAgent("scout")) == !Self.observed && log.contains(.stopCommand("dev"))
                 },
-                Expect("nothing left working") { try !$0.activeChat().storyHasWork },
+                Expect("owned work stopped, observed work preserved") { story in
+                    let chat = try story.activeChat()
+                    if Self.observed { return !chat.isRunning && chat.storyRunningAgents == 1 && chat.storyLiveCommands == 0 }
+                    return !chat.storyHasWork
+                },
+                Expect("unaccepted queued text preserved") { story in
+                    if !Self.checkQueue { return true }
+                    return try story.activeChat().draft == "first queued\nsecond queued"
+                },
                 Expect("the CLI started again as the new login", found: { try? "\(relaunches($0)) relaunches" }) { try relaunches($0) == 2 },
             ]
     }
@@ -354,6 +372,57 @@ final class AccountUsageMeters: ChatStoryline {
                 return values.contains(["Session · 52%", "Weekly · 18%"])
                     && values.contains(["Session · 0%", "Weekly · 0%"])
                     && values.contains(["Usage unavailable"])
+            },
+        ]
+    }
+}
+
+/// Armed jobs cannot acknowledge Stop; switching still closes their old CLI.
+final class AccountSwitchStopsScheduled: AccountSwitchStops {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var scheduledOnly: Bool { true }
+}
+
+/// Missing all Stop acknowledgements cannot leave any old-account work behind.
+final class AccountSwitchStopsDeaf: AccountSwitchStops {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var deaf: Bool { true }
+    override class var checkQueue: Bool { true }
+}
+
+/// Watching another client's agent never authorizes stopping that process on a login switch.
+final class AccountSwitchPreservesObserved: AccountSwitchStops {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var observed: Bool { true }
+}
+
+/// A sign-in landing on a new identity must force cleanup just as picking a saved login does.
+final class AccountSignInStopsDeaf: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    override func steps() -> [any Step] {
+        let provider = variant == .codex ? "codex" : "claude"
+        var script = AccountSwitchStops.script(provider)
+        script.deaf = true
+        let account = StoryID.Composer.account
+        let reply = variant == .codex ? ScriptedAccounts.codex(email: "changed@example.com")
+            : ScriptedAccounts.claude(email: "changed@example.com")
+        return [UseScript(script, for: provider), OpenFolder(), StartChat(), Send("Work on it"),
+            Expect("all owned work running") { story in
+                let chat = try story.activeChat()
+                return chat.isRunning && chat.storyRunningAgents == 1 && chat.storyLiveCommands == 1
+            },
+            Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))),
+            WaitForElement(.id(account)), Press(.id(account.part(.switch))),
+            Expect("the new sign-in lands") { _ in
+                guard ScriptedAccounts.shared.isWaiting(provider) else { return false }
+                ScriptedAccounts.shared.finish(provider, as: reply)
+                return true
+            },
+            Expect("deaf work ended and the new account started") { story in
+                let chat = try story.activeChat()
+                let log = try story.scriptedBackend().log
+                return !chat.storyHasWork && log.filter { $0 == .relaunch }.count == 1
             },
         ]
     }

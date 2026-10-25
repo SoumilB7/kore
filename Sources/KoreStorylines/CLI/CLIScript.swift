@@ -20,6 +20,8 @@ package struct CLIScript: Sendable {
     package var usage: UsageAnswer?
     /// A CLI that never answers a Stop (a dead connection, a wedged process).
     package var deaf = false
+    /// Agents whose work belongs to a different process and is only observed here.
+    package var observedAgents: Set<String> = []
 
     package init(
         start: [Beat] = [.controls()], turns: [[Beat]] = [], compact: [Beat] = CLIScript.compaction(), agents: [String: [ChatEvent]] = [:],

@@ -9,6 +9,10 @@ package protocol ChatBackend: AnyObject {
     var events: AsyncStream<ChatEvent> { get }
     /// Claude session id / Codex thread id, once known.
     var sessionId: String? { get }
+    /// Agents observed from another client's files, whose work this CLI does not own.
+    var observedAgents: Set<String> { get }
+    /// Explicit login switch: stop only this CLI's work and confirm its process ended.
+    func relaunchAfterAccountChange() async -> Bool
 
     /// Launches the CLI; a resumed session's past arrives first, as one `.replayed`.
     /// Idempotent: callers can await it from anywhere.
@@ -151,6 +155,12 @@ enum ForkError: LocalizedError {
 /// merged per file. Two chats running in one folder at once see each other's edits in their
 /// git diffs.
 extension ChatBackend {
+    package var observedAgents: Set<String> { [] }
+    package func relaunchAfterAccountChange() async -> Bool {
+        await relaunch(reason: "account changed")
+        return true
+    }
+
     package func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
         try await send(text, files: files, queued: nil)
     }

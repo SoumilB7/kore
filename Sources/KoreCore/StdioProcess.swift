@@ -15,6 +15,18 @@ public struct ProcessEnd: Sendable, Equatable {
     public var field: (key: String, value: String) { (signal ? "signal" : "status", String(code)) }
 }
 
+/// A cancelled initialization can fail before its child stops. Keep its transport alive
+/// and retryable rather than letting a new account bypass unfinished shutdown.
+package struct PendingCLIShutdown: Error, Sendable {
+    private let io: StdioProcess
+    init(_ io: StdioProcess) { self.io = io }
+    package func wait(within limit: Duration) async -> Bool {
+        io.prepareOwnedClose()
+        io.close()
+        return await io.waitForExit(within: limit)
+    }
+}
+
 /// A child process speaking newline-delimited JSON over stdin/stdout. Shared transport
 /// for both CLIs; the protocol on top differs (Claude stream-json vs Codex JSON-RPC).
 package final class StdioProcess: @unchecked Sendable {
@@ -140,6 +152,16 @@ package final class StdioProcess: @unchecked Sendable {
     /// How it ended, once it has.
     var end: ProcessEnd? { ending.value }
     private let ending = Ending()
+    private let closingTree = ClosingTree()
+
+    private final class ClosingTree: @unchecked Sendable {
+        private let lock = NSLock()
+        private var saved: [ProcessChild] = []
+        func add(_ children: [ProcessChild]) {
+            lock.withLock { for child in children where !saved.contains(child) { saved.append(child) } }
+        }
+        var all: [ProcessChild] { lock.withLock { saved } }
+    }
 
     private final class Ending: @unchecked Sendable {
         private let lock = NSLock()
@@ -153,6 +175,9 @@ package final class StdioProcess: @unchecked Sendable {
     /// whole; on EOF alone `claude -p` would first finish its turn. Still running after `grace`,
     /// the child and every process under it get SIGKILL.
     func close(grace: Duration = .seconds(5)) {
+        // Startup cancellation may close before the account-switch waiter arrives. Retain
+        // identities now, before any parent can exit and reparent its background work.
+        if let root = ProcessChild(pid) { closingTree.add(root.descendants() + [root]) }
         try? stdin.close()
         send(SIGTERM)
         let process = process, wait = Int(grace / .milliseconds(1))
@@ -163,6 +188,34 @@ package final class StdioProcess: @unchecked Sendable {
             kill(-pid, SIGKILL)
             for pid in all { kill(pid, SIGKILL) }
         }
+    }
+
+    /// Freeze the owned tree before stopping an account, including jobs with their own
+    /// process groups. Observed work from other CLIs is never in this ownership tree.
+    func prepareOwnedClose() {
+        if let root = ProcessChild(pid) {
+            let owned = root.stoppedTree()
+            closingTree.add(owned)
+            for child in owned { child.signal(SIGTERM); child.signal(SIGCONT) }
+        }
+        for child in closingTree.all { child.signal(SIGTERM) }
+    }
+
+    /// Await the entire captured tree, even when its parent has already exited. The wait
+    /// survives cancellation so a second account switch cannot bypass the previous child.
+    func waitForExit(within limit: Duration) async -> Bool {
+        await Task.detached { [self] in
+            let until = ContinuousClock.now + limit
+            let forceAt = ContinuousClock.now + .seconds(5)
+            while isRunning || closingTree.all.contains(where: \.alive) {
+                guard ContinuousClock.now < until else { return false }
+                if ContinuousClock.now >= forceAt {
+                    for child in closingTree.all { child.signal(SIGKILL) }
+                }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            return true
+        }.value
     }
 
     /// Closes every child (quitting). Waits up to `limit` for them to exit, so their last output

@@ -100,9 +100,10 @@ struct CodexCommands {
     }
 
     /// The app-server ended: its processes did too.
-    mutating func endAll(at: Date, into out: inout [ChatEvent]) {
-        running = [:]
-        for (id, row) in rows.sorted(by: { $0.key < $1.key }) where row.live { end(id, .ended, at: at, into: &out) }
+    mutating func endAll(at: Date, preserving observed: Set<String> = [], state: ActiveCommand.State = .ended, into out: inout [ChatEvent]) {
+        running = running.filter { $0.value.owner.sub.map(observed.contains) == true }
+        for (id, row) in rows.sorted(by: { $0.key < $1.key })
+        where row.live && row.owner.sub.map(observed.contains) != true { end(id, state, at: at, into: &out) }
     }
 
     /// A read-back turn's item: one that ran longer than its turn outlived it, a row ended as it

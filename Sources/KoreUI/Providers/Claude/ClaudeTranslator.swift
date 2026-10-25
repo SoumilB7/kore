@@ -724,6 +724,23 @@ package final class ClaudeTranslator {
     /// The CLI's process ends without an `.exited` (a relaunch): what it ran ends with it.
     func endCommands() { commands.endAll(at: .now, into: &out) }
 
+    /// The old transport is gone; observed agents and their commands belong to other clients.
+    func accountStopped(observed: Set<String>) {
+        for (id, _) in unfinishedAgents() where !observed.contains(id) {
+            agentEnded(id, .stopped, source: .accountSwitch)
+            finished[id] = true  // a late old-process notification cannot revive this run
+        }
+        pending.removeAll()
+        pendingQueued.removeAll()
+        deliveredQueued.removeAll()
+        turn = nil
+        turnItems = []
+        turnAgents = []
+        block = nil
+        commands.endAll(at: .now, preserving: observed, state: .stopped(by: .user), into: &out)
+        out.append(.exited(status: 0))
+    }
+
     // MARK: - Approvals
 
     private func approval(_ r: PermissionRequest) -> Approval {

@@ -59,6 +59,7 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var held: [ChatEvent] = []
     /// Messages sent while a turn ran, by Kore's id, until the CLI takes or drops them.
     @ObservationIgnored private var waiting: [String: (text: String, files: [Attachment])] = [:]
+    @ObservationIgnored private var waitingOrder: [String] = []
     /// A message sent with no network waits for it (Stop gives it up); a running turn's spinner
     /// says when the network goes.
     @ObservationIgnored private var waitingForNetwork = false
@@ -111,6 +112,13 @@ package final class Chat: Identifiable {
     /// The CLI's account changed since its CLI started: it starts again (with resume) at the
     /// next turn boundary, so it runs as the new account.
     @ObservationIgnored private var relaunchDue = false
+    @ObservationIgnored private var stoppedForAccount = false
+    /// Every asynchronous send/start belongs to one transport lifetime. Cancelling the last
+    /// task alone cannot stop earlier tasks waiting in the send chain.
+    @ObservationIgnored private var workEpoch: UInt64 = 0
+    private(set) var accountRestartPending = false
+
+    private func currentWork(_ epoch: UInt64) -> Bool { !closed && workEpoch == epoch }
     /// The turn running now, and when it began: a failure is the sleep's when the Mac slept since.
     @ObservationIgnored private var turnBegan: (id: TurnID, at: Date)?
     /// Stay awake's continuation after the plan's limit (`LimitContinuation`).
@@ -196,7 +204,7 @@ package final class Chat: Identifiable {
         let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
         noteHeard(event)
         if case .replayed = event { showImported(in: transcript) }
-        transcript.apply(event)
+        transcript.apply(event, preserving: backend?.observedAgents ?? [])
         commands.apply(event)
         noteSinceReplay(event)
         if case .replayed = event, let original = forkedFrom {
@@ -341,9 +349,12 @@ package final class Chat: Identifiable {
     }
 
     func start() async {
+        guard !closed, !Task.isCancelled else { return }
+        let epoch = workEpoch
         do {
             try await connect().start()
         } catch {
+            guard currentWork(epoch), !Task.isCancelled else { return }
             fail(Self.reason(error))
         }
     }
@@ -370,9 +381,13 @@ package final class Chat: Identifiable {
         self.backend = backend
         pump = Task {
             for await event in backend.events {
+                guard !Task.isCancelled, !closed else { break }
+                let epoch = workEpoch
                 // An imported chat's carried part is read before its own history shows.
                 if let imported, importedEvents == nil, Self.isReplay(event) || Self.isCorrection(event) {
-                    importedEvents = await imported.events()
+                    let events = await imported.events()
+                    guard currentWork(epoch), !Task.isCancelled else { continue }
+                    importedEvents = events
                 }
                 self.dispatch(event)
             }
@@ -424,18 +439,21 @@ package final class Chat: Identifiable {
     // MARK: Account
 
     /// A turn or a background agent is running.
-    var isWorking: Bool { isBusy || !transcript.agentSummary.running.isEmpty }
+    var isWorking: Bool { !closed && (isBusy || !transcript.agentSummary.running.isEmpty) }
 
     /// A turn, a background agent or a command Stop applies to is running: what a sign-out or
     /// a switch of its login stops.
-    var hasWork: Bool { isWorking || waitingForNetwork || !commands.stoppable.isEmpty }
+    var hasWork: Bool { !closed && (isWorking || waitingForNetwork || commands.summary.total > 0) }
 
     /// Its login is going (a sign-out) or moving (a switch): the turn, the background agents
     /// and the commands stop, and the CLI starts again as the new login once they have.
     func stopAllWork() {
+        cancelContinue()
+        stoppedForAccount = true
         if isBusy || waitingForNetwork { stop() }
-        for agent in transcript.agentSummary.running { stopAgent(agent.id) }
-        stopAllCommands()
+        let observed = backend?.observedAgents ?? []
+        for agent in transcript.agentSummary.running where !observed.contains(agent.id) { stopAgent(agent.id) }
+        for command in commands.stoppable where command.owner.sub.map(observed.contains) != true { stopCommand(command.id) }
     }
 
     /// Its turn runs, or it compacts (Kore's own compaction, the wheel's, /compact): the chat is
@@ -446,11 +464,17 @@ package final class Chat: Identifiable {
     /// live (a dev server, a port-forward, an armed scheduled job), which dies with its process.
     private var holdsCLI: Bool { isWorking || commands.summary.total > 0 }
 
-    /// The account changed (a sign-in, a sign-out, a change outside Kore): the CLI starts again
-    /// at the next turn boundary with nothing live, at once when nothing is. Commands left
-    /// running hold it as running agents do, until the last one ends.
+    /// An explicit account switch closes old work even when a scheduled job or dead CLI
+    /// cannot acknowledge Stop. Other credential refreshes wait for the next safe boundary.
     func accountChanged() {
+        cancelContinue()
         guard backend != nil else { return }
+        if stoppedForAccount || accountRestartPending {
+            stoppedForAccount = false
+            relaunchDue = false
+            restartCLI(reason: "account changed", clearingWork: true)
+            return
+        }
         relaunchDue = true
         relaunchIfDue()
     }
@@ -461,10 +485,17 @@ package final class Chat: Identifiable {
     private func relaunchIfDue() {
         guard relaunchDue, !holdsCLI, let backend else { return }
         relaunchDue = false
+        workEpoch &+= 1
+        let epoch = workEpoch
         let previous = sending
+        previous?.cancel()
+        for id in waitingOrder.reversed() { dispatch(.queuedMessage(id: id, .dropped)) }
         sending = Task {
+            guard currentWork(epoch), !Task.isCancelled else { return }
             await previous?.value
+            guard currentWork(epoch), !Task.isCancelled else { return }
             await backend.relaunch(reason: "account changed")
+            guard currentWork(epoch), !Task.isCancelled else { return }
             try? await backend.start()
         }
     }
@@ -586,13 +617,48 @@ package final class Chat: Identifiable {
 
     /// Ends the CLI under a turn that won't end by itself and starts it again: the turn ends
     /// here, at once, and nothing waits for the send that hangs on it.
-    private func restartCLI(reason: String) {
-        guard let backend else { return }
+    private func restartCLI(reason: String, clearingWork: Bool = false) {
+        guard !closed, let backend else { return }
+        let clearingWork = clearingWork || accountRestartPending
+        if clearingWork { accountRestartPending = true }
+        workEpoch &+= 1
+        let epoch = workEpoch
+        relaunchDue = false
+        sending?.cancel()
+        waitingForNetwork = false
+        // Restore synchronously: another account switch can cancel this task before it runs.
+        if clearingWork {
+            for id in waitingOrder.reversed() { dispatch(.queuedMessage(id: id, .dropped)) }
+        }
         if status.isRunning { dispatch(.turnFinished(nil, .interrupted, duration: nil)) }
         status.setRunning(false)
-        sending?.cancel()
         sending = Task {
-            await backend.relaunch(reason: reason)
+            guard currentWork(epoch), !Task.isCancelled else { return }
+            if clearingWork {
+                guard await backend.relaunchAfterAccountChange() else { return }
+            } else {
+                await backend.relaunch(reason: reason)
+            }
+            guard currentWork(epoch), !Task.isCancelled else { return }
+            if clearingWork {
+                // External file watchers can discover descendants while shutdown waits.
+                let observed = backend.observedAgents
+                // The old process is gone. Jobs and deaf agents cannot hold the switch;
+                // agents merely observed in another process retain their live state.
+                for approval in approvals.pending { dispatch(.approvalWithdrawn(approval.id)) }
+                for command in commands.all where command.isLive && command.owner.sub.map(observed.contains) != true {
+                    dispatch(.commandEnded(id: command.id, .stopped(by: .user), at: .now))
+                }
+                transcript.drawNow()
+                for agent in transcript.agentSummary.running where !observed.contains(agent.id) {
+                    dispatch(.agentFinished(id: agent.id, .stopped, result: nil))
+                }
+                context.end()
+                dispatch(.exited(status: 0))
+                transcript.drawNow()
+                accountRestartPending = false
+            }
+            guard currentWork(epoch), !Task.isCancelled else { return }
             try? await backend.start()
         }
     }
@@ -632,6 +698,10 @@ package final class Chat: Identifiable {
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil
         closed = true
+        workEpoch &+= 1
+        sending?.cancel()
+        waitingForNetwork = false
+        endWatch()
         cancelContinue()
         pump?.cancel()
         let backend = backend
@@ -643,7 +713,7 @@ package final class Chat: Identifiable {
 
     /// Something to send, and no compaction under way (sending waits until it's done).
     var canSend: Bool {
-        !context.compacting
+        !accountRestartPending && !context.compacting
             && (command != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
 
@@ -683,6 +753,7 @@ package final class Chat: Identifiable {
     }
 
     func send() {
+        guard !closed, !accountRestartPending else { return }
         let text = Self.message(command: command, draft: draft)
         let sent = attachments
         guard !text.isEmpty || !sent.isEmpty, !context.compacting else { return }
@@ -708,7 +779,9 @@ package final class Chat: Identifiable {
 
     /// Sends a message the composer has given up (or Kore's own "Continue").
     private func deliver(_ text: String, _ sent: [Attachment]) {
+        guard !closed, !accountRestartPending else { return }
         relaunchIfDue()
+        let epoch = workEpoch
         if networkObserver == nil { watchNetwork() }
         // The Codex extension's /plan flips the plan toggle; it isn't a message.
         if text == "/plan" && sent.isEmpty && provider.planToggle != nil {
@@ -722,20 +795,27 @@ package final class Chat: Identifiable {
         let message: ChatEvent =
             queued.map { .messageQueued(id: $0, text: text, attachments: shown) }
             ?? .userMessage(text: text, attachments: shown)
-        if let queued { waiting[queued] = (text, sent) }
+        if let queued {
+            waiting[queued] = (text, sent)
+            waitingOrder.append(queued)
+        }
         if awaitingHistory { hold(message) } else { dispatch(message) }
         status.setRunning(true)
         startWatchdog()
         let backend = connect()
         let previous = sending
         sending = Task {
+            guard currentWork(epoch), !Task.isCancelled else { return }
             await previous?.value
+            guard currentWork(epoch), !Task.isCancelled else { return }
             do {
                 try await backend.start()
+                guard currentWork(epoch), !Task.isCancelled else { return }
                 if queued == nil, !NetworkWatch.shared.isOnline {
                     dispatch(.notice("Offline: this sends when the network is back"))
                     waitingForNetwork = true
                     await NetworkWatch.shared.online()
+                    guard currentWork(epoch) else { return }
                     waitingForNetwork = false
                     if Task.isCancelled {
                         status.setRunning(false)
@@ -743,9 +823,12 @@ package final class Chat: Identifiable {
                         return
                     }
                 }
+                guard currentWork(epoch), !Task.isCancelled else { return }
                 let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued)
+                guard currentWork(epoch), !Task.isCancelled else { return }
                 if !turn, queued == nil { status.setRunning(false) }
             } catch {
+                guard currentWork(epoch), !Task.isCancelled else { return }
                 // A queued message that couldn't go goes back to the composer.
                 if let queued { dispatch(.queuedMessage(id: queued, .dropped)) } else { status.setRunning(false) }
                 fail(Self.reason(error))
@@ -777,7 +860,7 @@ package final class Chat: Identifiable {
             }
             releaseAwakeForReset()
         }
-        guard continuesAt != nil || continuation.pending != nil else { return }
+        // Cancels a first reset lookup too, before it has supplied a pending time.
         continuation.cancel()
     }
 
@@ -814,11 +897,12 @@ package final class Chat: Identifiable {
     private func makeContinuation() -> LimitContinuation {
         let continuation = LimitContinuation(clock: StayAwake.current?.clock ?? SystemClock())
         continuation.read = { [weak self] in
-            guard let self else { return nil }
+            guard let self, !closed, !accountRestartPending else { return nil }
             return try? await self.connect().usage()
         }
         continuation.send = { [weak self] in
-            guard let self else { return }
+            guard let self, !closed else { return }
+            guard !accountRestartPending else { cancelContinue(); return }
             if let waiting = sendsAtReset {
                 sendsAtReset = nil
                 deliver(Self.message(command: waiting.command, draft: waiting.draft), waiting.attachments)
@@ -858,9 +942,10 @@ package final class Chat: Identifiable {
                 limitReset = (turn, resetsAt)
                 return
             }
+            let epoch = workEpoch
             Task { [weak self] in
                 guard let self, let reading = try? await connect().usage(),
-                    case .limited(let until?) = reading.limits?.blocked(now: Date()), !status.isRunning
+                    currentWork(epoch), case .limited(let until?) = reading.limits?.blocked(now: Date()), !status.isRunning
                 else { return }
                 limitReset = (turn, until)
             }
@@ -906,10 +991,11 @@ package final class Chat: Identifiable {
         // A CLI that doesn't answer (a dead connection, a wedged process) is ended after 5 s;
         // a turn sent since isn't this Stop's.
         let serial = turnSerial
+        let epoch = workEpoch
         stopFallback?.cancel()
         stopFallback = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
-            guard let self, !Task.isCancelled, self.status.isRunning, self.turnSerial == serial else { return }
+            guard let self, !Task.isCancelled, self.currentWork(epoch), self.status.isRunning, self.turnSerial == serial else { return }
             SessionLog.shared.rescue(self.provider.id, chat: self.sessionId, action: "stop-unanswered")
             self.restartCLI(reason: "stop unanswered")
         }
@@ -1105,6 +1191,7 @@ package final class Chat: Identifiable {
     /// A queued message dropped by Stop: its text and files go back to the composer.
     private func restoreQueued(_ event: ChatEvent) {
         guard case .queuedMessage(let id, let delivery) = event, let message = waiting.removeValue(forKey: id) else { return }
+        waitingOrder.removeAll { $0 == id }
         guard delivery == .dropped else { return }
         if command == nil, draft.isEmpty {
             restoreDraft(message.text, commands: controls.commands)

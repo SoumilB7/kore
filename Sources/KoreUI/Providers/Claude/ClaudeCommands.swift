@@ -19,6 +19,7 @@ struct ClaudeCommands {
 
     private struct Tracked {
         var kind: ActiveCommand.Kind
+        var owner: AgentID = .main
         var foreground: Bool
         var state: ActiveCommand.State = .running
         var toolId: String?
@@ -92,12 +93,12 @@ struct ClaudeCommands {
             let recurring = result?["recurring"]?.bool ?? call.input["recurring"]?.bool ?? true
             let schedule = CronSchedule(cron)
             let expires = recurring ? call.at.addingTimeInterval(Self.jobLifetime) : nil
-            tracked[job] = Tracked(kind: .scheduled, foreground: false, toolId: id, job: (prompt, schedule, recurring, expires))
+            tracked[job] = Tracked(kind: .scheduled, owner: call.agent, foreground: false, toolId: id, job: (prompt, schedule, recurring, expires))
             let title = prompt.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? prompt
             out.append(
                 .commandStarted(
                     ActiveCommand(
-                        id: job, kind: .scheduled, title: title, command: prompt, folder: folder.path, startedAt: call.at, owner: .main,
+                        id: job, kind: .scheduled, title: title, command: prompt, folder: folder.path, startedAt: call.at, owner: call.agent,
                         toolId: id,
                         schedule: ActiveCommand.Schedule(
                             cron: cron, human: result?["humanSchedule"]?.string, recurring: recurring,
@@ -219,9 +220,10 @@ struct ClaudeCommands {
     }
 
     /// The CLI ended (or a replay did): what it ran ended with it, armed jobs too.
-    mutating func endAll(at: Date, into out: inout [ChatEvent]) {
-        for (id, command) in tracked.sorted(by: { $0.key < $1.key }) where command.state.isLive {
-            end(id, .ended, at: at, into: &out)
+    mutating func endAll(at: Date, preserving observed: Set<String> = [], state: ActiveCommand.State = .ended, into out: inout [ChatEvent]) {
+        for (id, command) in tracked.sorted(by: { $0.key < $1.key })
+        where command.state.isLive && command.owner.sub.map(observed.contains) != true {
+            end(id, state, at: at, into: &out)
         }
     }
 
@@ -231,7 +233,7 @@ struct ClaudeCommands {
         _ id: String, kind: ActiveCommand.Kind, title: String, command: String?, owner: AgentID, toolId: String?, folder: URL, at: Date,
         file: String?, into out: inout [ChatEvent]
     ) {
-        tracked[id] = Tracked(kind: kind, foreground: kind == .foreground, toolId: toolId)
+        tracked[id] = Tracked(kind: kind, owner: owner, foreground: kind == .foreground, toolId: toolId)
         out.append(
             .commandStarted(
                 ActiveCommand(

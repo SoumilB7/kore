@@ -62,6 +62,7 @@ struct ComposerView: View {
     /// Empty, except while a turn runs (look.md §10): a message sent then waits for it, or joins
     /// it where the CLI can steer (Codex).
     private var placeholder: String {
+        if chat.accountRestartPending { return "Switching accounts…" }
         // With a command and nothing typed: what the command takes ("objective").
         if let hint = chat.command?.hint, !hint.isEmpty, chat.draft.isEmpty { return hint }
         guard chat.status.isRunning else {

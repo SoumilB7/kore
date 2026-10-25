@@ -60,11 +60,11 @@ public actor CodexAppServer {
                 try await server.launch(cwd: cwd, executable: executable, arguments: arguments, environment: environment)
                 try Task.checkCancellation()
             } onCancel: {
-                Task { await server.close() }
+                Task { _ = await server.close(waiting: .seconds(6)) }
             }
             return server
         } catch {
-            await server.close()
+            if !(await server.close(waiting: .seconds(6))), let pending = await server.pendingShutdown { throw pending }
             throw error
         }
     }
@@ -132,6 +132,16 @@ public actor CodexAppServer {
         guard running else { return }
         io?.close()
     }
+
+    /// A forced account change cannot start another CLI until this child has exited.
+    public func close(waiting limit: Duration) async -> Bool {
+        io?.prepareOwnedClose()
+        close()
+        guard let io else { return true }
+        return await io.waitForExit(within: limit)
+    }
+
+    private var pendingShutdown: PendingCLIShutdown? { io.map(PendingCLIShutdown.init) }
 
     /// The process's id, for the session log.
     public var processId: Int32? { io?.pid }

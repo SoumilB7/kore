@@ -660,7 +660,7 @@ final class TranscriptStore {
         changed(turn: turn)
     }
 
-    func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date()) {
+    func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date(), preserving observed: Set<String> = []) {
         connection = .ok
         guard let id = id ?? current, var turn = turns[id] else { return }
         endThinking()
@@ -678,13 +678,14 @@ final class TranscriptStore {
             case .tool where interrupted && !entries[i].done:
                 entries[i].done = true
                 entries[i].stopped = true
-            case .agent where interrupted && entries[i].agent?.status == .running:
+            case .agent where interrupted && entries[i].agent?.status == .running
+                && entries[i].agent.map({ !observed.contains($0.id) }) == true:
                 entries[i].agent?.status = .stopped
                 // Live, it ran until now; a replayed one has no true end, so its meter says "stopped".
                 if !batching, entries[i].agent?.duration == nil, let start = entries[i].agent?.startedAt {
                     entries[i].agent?.duration = date.timeIntervalSince(start)
                 }
-                if let agent = entries[i].agent?.id { stopLane(agent, at: batching ? nil : date) }
+                if let agent = entries[i].agent?.id { stopLane(agent, at: batching ? nil : date, preserving: observed) }
             default:
                 break
             }
@@ -1075,19 +1076,19 @@ final class TranscriptStore {
 
     /// An agent's open calls end as stopped, and its own agents with them. `date`: when, for the
     /// stopped agents' time (nil leaves it unknown, as for a replayed session).
-    private func stopLane(_ agent: String, at date: Date? = nil) {
+    private func stopLane(_ agent: String, at date: Date? = nil, preserving observed: Set<String> = []) {
         guard var lane = lanes[agent] else { return }
         for i in lane.indices {
             if lane[i].kind == .tool, !lane[i].done {
                 lane[i].done = true
                 lane[i].stopped = true
             }
-            if lane[i].agent?.status == .running {
+            if lane[i].agent?.status == .running, lane[i].agent.map({ !observed.contains($0.id) }) == true {
                 lane[i].agent?.status = .stopped
                 if let date, lane[i].agent?.duration == nil, let start = lane[i].agent?.startedAt {
                     lane[i].agent?.duration = date.timeIntervalSince(start)
                 }
-                if let child = lane[i].agent?.id { stopLane(child, at: date) }
+                if let child = lane[i].agent?.id { stopLane(child, at: date, preserving: observed) }
             }
         }
         lanes[agent] = lane

@@ -4,7 +4,9 @@ import Foundation
 /// The transcript's side of `ChatEvent`: content, turns and sub-agents. Session, control and
 /// approval events belong to other stores and pass through untouched.
 extension TranscriptStore {
-    func apply(_ event: ChatEvent) {
+    func apply(_ event: ChatEvent) { apply(event, preserving: []) }
+
+    func apply(_ event: ChatEvent, preserving observed: Set<String>) {
         switch event {
         case .replayed(let events):
             replay(events)
@@ -20,7 +22,7 @@ extension TranscriptStore {
             case .limited(let message, _): .failed(message)
             case .slept(let said): .slept(said)
             }
-            turnFinished(id, outcome, duration: duration.map(Self.seconds))
+            turnFinished(id, outcome, duration: duration.map(Self.seconds), preserving: observed)
         case .turnChanges(let id, let changes):
             turnChanges(id, changes)
 
@@ -77,7 +79,7 @@ extension TranscriptStore {
 
         case .exited(let status):
             compacting(false)
-            if turnIsOpen { turnFinished(nil, .interrupted) }
+            if turnIsOpen { turnFinished(nil, .interrupted, preserving: observed) }
             if status != 0 && status != 15 { notice("\(providerName) exited (\(status))", isError: true) }
 
         case .approvalRequested(let approval):
