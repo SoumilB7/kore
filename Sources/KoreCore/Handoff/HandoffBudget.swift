@@ -48,6 +48,8 @@ public struct HandoffBudget: Sendable {
     public static let imageTokens = 1500
     /// Codex reports 258,400 for most models (475,000 for some); `model/list` has no windows.
     public static let codexWindow = 258_400
+    /// The most the source's summary takes of the budget: one huge summary can't fill the target.
+    static let summaryShare = 0.3
 
     /// Claude's window: 1M for a `[1m]` model, else 200k.
     public static func claudeWindow(model: String?) -> Int {
@@ -69,8 +71,9 @@ public struct HandoffBudget: Sendable {
         used = Self.estimate(HandoffRender.noteAllowance)
     }
 
-    /// The source's own summary, carried whatever its size.
+    /// The source's own summary, cut to at most `summaryShare` of the budget.
     public mutating func carry(summary: String, from product: String) {
+        let summary = HandoffRender.cut(summary, to: Int(Double(tokens) * Self.summaryShare) * Self.charsPerToken)
         self.summary = summary
         used += Self.estimate(HandoffRender.summary(summary, from: product))
     }
@@ -152,8 +155,12 @@ public enum HandoffRender {
     static let head = 2000
     static let tail = 1000
 
+    /// One message (a prompt, a text, a reply) is cut to about this many characters, a fifth of
+    /// the smallest budget (Claude's 200k window), so no one message can overflow the target.
+    static let messageChars = 80_000
+
     public static func turn(_ turn: HandoffTurn, _ level: HandoffPlan.Level) -> Turn {
-        var user = turn.prompt
+        var user = cut(turn.prompt, to: messageChars)
         let extras = turn.files + (level == .full ? [] : turn.images.map { _ in "[image]" })
         if !extras.isEmpty { user += (user.isEmpty ? "" : "\n\n") + extras.joined(separator: "\n") }
         if user.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (level != .full || turn.images.isEmpty) {
@@ -163,7 +170,7 @@ public enum HandoffRender {
         let calls = turn.steps.filter { $0.kind != .text }
         switch level {
         // Full: every text and call in order, the texts as they were said.
-        case .full: blocks = turn.steps.map { $0.kind == .text ? $0.output : step($0) }
+        case .full: blocks = turn.steps.map { $0.kind == .text ? cut($0.output, to: messageChars) : step($0) }
         // Shorter: the calls one line each, and only the last words.
         case .condensed: if !calls.isEmpty { blocks = [condensed(calls)] }
         case .bare: break
@@ -171,7 +178,7 @@ public enum HandoffRender {
         if level == .full, turn.reply.isEmpty, turn.end == .done, turn.steps.contains(where: { $0.kind == .text }) {
             // Its last words are already there, before the calls after them.
         } else {
-            blocks.append(reply(turn, full: level == .full))
+            blocks.append(cut(reply(turn, full: level == .full), to: messageChars))
         }
         return Turn(user: user, images: level == .full ? turn.images : [], assistant: blocks)
     }
@@ -284,7 +291,15 @@ public enum HandoffRender {
 
     /// About `head` characters from the start and `tail` from the end, at line breaks, with
     /// "[… N lines cut …]" between.
-    public static func cut(_ text: String) -> String {
+    public static func cut(_ text: String) -> String { cut(text, head: head, tail: tail) }
+
+    /// About `limit` characters: two thirds from the start, one third from the end.
+    public static func cut(_ text: String, to limit: Int) -> String {
+        guard text.utf8.count > limit else { return text }
+        return cut(text, head: limit * 2 / 3, tail: limit / 3)
+    }
+
+    static func cut(_ text: String, head: Int, tail: Int) -> String {
         guard text.count > head + tail + 200 else { return text }
         var start = text.index(text.startIndex, offsetBy: head)
         var end = text.index(text.endIndex, offsetBy: -tail)
