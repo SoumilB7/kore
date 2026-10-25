@@ -748,6 +748,8 @@ final class ClaudeBackend: ChatBackend {
     func setModel(_ id: String) async throws {
         options.model = id
         try await session?.setModel(id)
+        // The new model's window at once, not after the next turn.
+        refreshContext()
     }
 
     func setEffort(_ level: String) async {

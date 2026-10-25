@@ -696,6 +696,12 @@ package final class CodexTranslator {
     /// The user picked a preset in Kore; Codex runs the next turn with it.
     func userChanged(mode id: String) { setMode(id, .user, at: .now) }
 
+    /// The user picked a model: its window at once, before a turn on it reports one.
+    func userChanged(window: Int) {
+        contextWindow = window
+        if let contextUsed { reportContext(contextUsed, at: .now) }
+    }
+
     /// The user toggled Plan in Kore (the toggle or `/plan`).
     func userChanged(plan on: Bool) { setPlan(on, .user, at: .now) }
 

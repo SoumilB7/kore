@@ -466,6 +466,10 @@ final class CodexBackend: ChatBackend {
     func setModel(_ id: String) async throws {
         options.model = id
         await session?.setModel(id)
+        if let window = await Task.detached(operation: { CodexModelWindow.window(for: id) }).value {
+            translator.userChanged(window: window)
+            flush()
+        }
     }
 
     func setEffort(_ level: String) async {
