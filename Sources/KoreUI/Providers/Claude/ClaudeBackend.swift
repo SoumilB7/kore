@@ -949,7 +949,7 @@ final class ClaudeBackend: ChatBackend {
         guard let session else { return }
         log.relaunch("claude", chat: sessionId, reason: reason)
         // Its shells end with its process.
-        translator.endCommands()
+        translator.relaunched()
         flush()
         // Its exit isn't the chat's news: the pump goes first.
         pump?.cancel()

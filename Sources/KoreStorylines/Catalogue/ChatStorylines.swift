@@ -827,6 +827,54 @@ final class StalledTurn: ChatStoryline {
     }
 }
 
+/// Messages queued behind a turn whose CLI Kore starts again (a stalled turn's Retry, a Stop
+/// it never answered): the old process takes them with it unsent, so they go back to the
+/// composer in order, and no "Queued" is left for something nobody will send.
+class QueuedThroughRelaunch: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    class var viaStop: Bool { false }
+    override class var script: CLIScript {
+        var script = CLIScript(turns: [[.startTurn, .wait(.release)], CLIScript.reply("Carried on")])
+        script.deaf = viaStop
+        return script
+    }
+
+    override func steps() -> [any Step] {
+        let relaunch: [any Step] = Self.viaStop ? [
+            Stop(),
+            Expect("after 5 s, its CLI ended by Kore", timeout: .seconds(9)) { try $0.scriptedBackend().log.contains(.relaunch) },
+        ] : [
+            Expect("the turn seen as stalled", timeout: .seconds(8)) { try $0.activeChat().connection == .stalled },
+            Press(.id(StoryID.Transcript.stalledRetry)),
+            Expect("its CLI started again") { try $0.scriptedBackend().log.contains(.relaunch) },
+        ]
+        let stall: [any Step] = Self.viaStop ? [] : [Do("Wait 1 s for a stall") { _ in Chat.stallAfter.value = 1 }]
+        return super.steps() + stall + [
+            Send("Start the job"),
+            WaitForEvent("the turn to start") { if case .turnStarted = $0 { true } else { false } },
+            Queue("first queued"),
+            Queue("second queued"),
+        ] + relaunch + [
+            Expect("no “Queued” left", found: { _ in QueuedMessage.captions().joined(separator: ", ") }) { _ in
+                QueuedMessage.captions().isEmpty
+            },
+            Expect("the queued text back in the composer", found: { $0.app.chat?.draft }) {
+                $0.app.chat?.draft == "first queued\nsecond queued"
+            },
+        ] + (Self.viaStop ? [] : [
+            TurnFinished(2),
+            Expect.rows("only Continue sent, not the queued text") { rows in
+                rows.contains { $0.text == "Carried on" } && !rows.contains { $0.kind == "user" && $0.text.contains("queued") }
+            },
+        ])
+    }
+}
+
+/// The same through a Stop the CLI never answers.
+final class QueuedThroughUnansweredStop: QueuedThroughRelaunch {
+    override class var viaStop: Bool { true }
+}
+
 /// A Stop the CLI never answers: after 5 s Kore ends the CLI itself, the turn ends as
 /// stopped, and the chat can send again.
 final class UnansweredStop: ChatStoryline {

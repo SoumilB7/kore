@@ -687,10 +687,9 @@ package final class Chat: Identifiable {
         sending?.cancel()
         transcript.sending(false)
         waitingForNetwork = false
-        // Restore synchronously: another account switch can cancel this task before it runs.
-        if clearingWork {
-            for id in waitingOrder.reversed() { dispatch(.queuedMessage(id: id, .dropped)) }
-        }
+        // Messages queued in the old process die with it, unseen: back to the composer, at
+        // once, as another account switch can cancel this task before it runs.
+        for id in waitingOrder.reversed() { dispatch(.queuedMessage(id: id, .dropped)) }
         if status.isRunning { dispatch(.turnFinished(nil, .interrupted, duration: nil)) }
         status.setRunning(false)
         sending = Task {

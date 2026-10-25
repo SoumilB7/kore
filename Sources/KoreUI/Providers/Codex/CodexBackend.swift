@@ -807,7 +807,7 @@ final class CodexBackend: ChatBackend {
         guard let session else { return }
         log.relaunch("codex", chat: sessionId, reason: reason)
         // Its terminals end with its process.
-        translator.endCommands()
+        translator.relaunched()
         flush()
         terminalPoll?.cancel()
         terminalPoll = nil

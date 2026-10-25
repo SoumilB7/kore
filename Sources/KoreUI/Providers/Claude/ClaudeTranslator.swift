@@ -724,8 +724,14 @@ package final class ClaudeTranslator {
     /// Kore asked the turn to stop: a foreground command killed meanwhile was interrupted.
     func interruptRequested() { commands.interrupting = true }
 
-    /// The CLI's process ends without an `.exited` (a relaunch): what it ran ends with it.
-    func endCommands() { commands.endAll(at: .now, into: &out) }
+    /// The CLI's process ends without an `.exited` (a relaunch): what it ran, and the messages
+    /// still queued in it, end with it.
+    func relaunched() {
+        for id in pendingQueued { out.append(.queuedMessage(id: id, .dropped)) }
+        pendingQueued.removeAll()
+        deliveredQueued.removeAll()
+        commands.endAll(at: .now, into: &out)
+    }
 
     /// The old transport is gone; observed agents and their commands belong to other clients.
     func accountStopped(observed: Set<String>) {

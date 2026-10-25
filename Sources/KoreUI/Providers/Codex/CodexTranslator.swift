@@ -609,8 +609,15 @@ package final class CodexTranslator {
     /// `terminate` said it wasn't running any more.
     func commandGone(_ id: String) { commands.gone(id, at: .now, into: &out) }
 
-    /// The app-server ends without an `.exited` (a relaunch): its terminals end with it.
-    func endCommands() { commands.endAll(at: .now, into: &out) }
+    /// The app-server ends without an `.exited` (a relaunch): its terminals, and the messages
+    /// steered or queued into it and not yet taken, end with it.
+    func relaunched() {
+        for id in pendingSteer { out.append(.queuedMessage(id: id, .dropped)) }
+        pendingSteer.removeAll()
+        queuedInFlight.removeAll()
+        nextTurnQueued = nil
+        commands.endAll(at: .now, into: &out)
+    }
 
     /// Clear only the transport and work this app-server owned, retaining observed children.
     func accountStopped(observed: Set<String>) {
