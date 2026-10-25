@@ -184,7 +184,7 @@ struct BackgroundAgentsTests {
         let agent = script.store.agent("toolu_bgA")
         #expect(agent?.tokens == 239_412)
         #expect(agent?.approximate == true)
-        #expect(agent.flatMap(AgentMeter.tokens(of:)) == "~239.4k")
+        #expect(agent.flatMap(AgentMeter.tokens(of:)) == "~239k")
         script.on(.agentProgress(id: "toolu_bgA", AgentProgress(tokens: 241_000)))
         #expect(script.store.agent("toolu_bgA")?.approximate == false)
         #expect(script.store.agent("toolu_bgA").flatMap(AgentMeter.tokens(of:)) == "241k")

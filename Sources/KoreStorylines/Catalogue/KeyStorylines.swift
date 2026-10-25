@@ -6,7 +6,7 @@ private let holdTurn: [Beat] = [.startTurn, .tool(name: "Bash", detail: "sleep 6
 
 /// The tab keys, pressed as keys: ⌃⇥ and ⌃⇧⇥ step round the tabs, ⌘1–8 go to one and ⌘9 to the
 /// last, ⌘W closes the tab and leaves the window, a running chat's tab asks first in the tab
-/// (No puts it back, Yes or a second ⌘W a moment later closes it), and ⌥⌘1 opens Welcome,
+/// (Cancel puts it back, Stop or a second ⌘W a moment later closes it), and ⌥⌘1 opens Welcome,
 /// which ⇧⌘1 no longer does.
 final class TabKeys: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
@@ -74,7 +74,7 @@ final class TabKeys: ChatStoryline {
             Key(.cmd("3")), Key(.cmd("w")),
             Self.tabs(2, "two tabs, the window still open"), Self.active(2),
 
-            // A running chat's tab asks first, and No puts it back.
+            // A running chat's tab asks first, and Cancel puts it back.
             Key(.cmd("2")), Send("Run the long job"),
             WaitForEvent("the command to start") { if case .toolStarted = $0 { true } else { false } },
             Key(.cmd("w")),

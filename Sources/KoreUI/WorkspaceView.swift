@@ -726,20 +726,20 @@ private struct TabItem: View {
         }
     }
 
-    /// Closing a running chat's tab asks first, in the tab (sign-out's pattern): No where the ×
-    /// was, so a double click's second half goes back, and Yes before it.
+    /// Closing a running chat's tab asks first, in the tab, as a command's Stop does: Cancel where
+    /// the × was, so a double click's second half goes back, and Stop, in red, before it.
     private var question: some View {
         HStack(spacing: Space.sm) {
-            Text("Stop the turn?")
+            Text("Stop turn?")
                 .font(Chrome.label)
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
-            Button("Yes") { workspace.confirmClose() }
-                .smallButton(prominent: true)
+            Button("Stop") { workspace.confirmClose() }
+                .smallButton(danger: true)
                 .storyID(storyKey.part(.allow))
-            Button("No") { workspace.cancelClose() }
+            Button("Cancel") { workspace.cancelClose() }
                 .smallButton()
                 .storyID(storyKey.part(.cancel))
         }

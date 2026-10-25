@@ -55,6 +55,12 @@ struct ContextStoreTests {
 
     @Test func labels() {
         #expect([999, 1_234, 18_400, 1_100_000].map(ContextStore.tokens) == ["999", "1.2k", "18k", "1.1M"])
+    }
+
+    /// One count everywhere, at most three figures: 403k, not 402.9k; no "1000k" or "10.0k".
+    @Test func tokenCountsKeepThreeFigures() {
+        #expect([6_240, 9_960, 64_000, 402_900, 999_600, 9_960_000, 12_340_000].map(ContextStore.tokens)
+            == ["6.2k", "10k", "64k", "403k", "1M", "10M", "12M"])
         #expect([0.004, 0.62, 0].map(ContextStore.percent) == ["<1%", "62%", "0%"])
     }
 

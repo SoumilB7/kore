@@ -4,7 +4,7 @@ import KoreUI
 
 /// A command the chat leaves running in the background: the Agents button counts it (">_ 1",
 /// with no agents to show), the map opens on the chat's own BACKGROUND, and its Stop asks first
-/// ("No, go back" leaves it running); "Yes, stop" goes to the CLI, and the row ends stopped.
+/// (Cancel leaves it running); Stop goes to the CLI, and the row ends stopped.
 final class BackgroundCommandStopped: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .agents] }
     static let id = "dev"
@@ -37,7 +37,7 @@ final class BackgroundCommandStopped: ChatStoryline {
             Snapshot("stop-confirm"),
             Press(.id(row.part(.cancel))),
             ExpectElement(.id(row.part(.allow)), .absent),
-            Expect("still running after No, go back") { try $0.activeChat().storyLiveCommands == 1 },
+            Expect("still running after Cancel") { try $0.activeChat().storyLiveCommands == 1 },
             Press(.id(row.part(.stop))),
             Press(.id(row.part(.allow))),
             Expect("the stop sent to the CLI") { try $0.scriptedBackend().log.contains(.stopCommand(Self.id)) },

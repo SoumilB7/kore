@@ -221,7 +221,7 @@ extension StoryID {
         /// The chat's own row, the root the running agents hang off.
         package static let chat = StoryID(.agentmap, "chat")
         /// A command's row in a BACKGROUND section: its click opens it; `.part(.stop)` asks to stop
-        /// it, `.part(.allow)` is "Yes, stop", `.part(.cancel)` "No, go back", `.part(.background)`
+        /// it, `.part(.allow)` is the red Stop, `.part(.cancel)` Cancel, `.part(.background)`
         /// Run in background.
         package static func command(_ id: String) -> StoryID { StoryID(.agentmap, "command", key: id) }
         /// Stop all over a section's rows, with the same parts as a row's Stop.

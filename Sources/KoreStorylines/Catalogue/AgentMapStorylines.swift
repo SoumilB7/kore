@@ -459,6 +459,8 @@ final class FailedAgentVisible: ChatStoryline {
             Snapshot("agent-map-failed"),
         ]
             + failed
+            // The failed agent's reason first under its header, above its prompt.
+            + [Press(.id(scan)), WaitIdle(), Snapshot("failed-detail")]
             + [Press(.id(StoryID.AgentMap.close)), Send("Go on"), TurnFinished(2), Press(.id(StoryID.Titlebar.agents))]
             + failed
     }

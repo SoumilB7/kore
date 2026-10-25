@@ -59,13 +59,17 @@ final class ContextStore {
         return (usage.approximate ? "~" : "") + Self.tokens(usage.used)
     }
 
-    /// 1.2k, 18k, 1.1M (T3 Code's format).
+    /// 1.2k, 18k, 403k, 1.1M, 12M (T3 Code's format): at most three figures, the one token count
+    /// every view shows (the context wheel, the agent rows and the map).
     static func tokens(_ count: Int) -> String {
+        let k = (Double(count) / 1_000 * 10).rounded() / 10
+        let m = (Double(count) / 1_000_000 * 10).rounded() / 10
         switch count {
         case ..<1_000: return "\(count)"
-        case ..<10_000: return trimmed(Double(count) / 1_000) + "k"
-        case ..<1_000_000: return "\(Int((Double(count) / 1_000).rounded()))k"
-        default: return trimmed(Double(count) / 1_000_000) + "M"
+        case _ where k < 10: return trimmed(k) + "k"
+        case _ where k.rounded() < 1_000: return "\(Int(k.rounded()))k"
+        case _ where m < 10: return trimmed(m) + "M"
+        default: return "\(Int(m.rounded()))M"
         }
     }
 

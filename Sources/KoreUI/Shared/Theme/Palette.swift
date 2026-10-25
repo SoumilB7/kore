@@ -37,6 +37,10 @@ enum Theme {
     static let commandFill = accent.opacity(0.14)
     /// A small accent button under the pointer.
     static let accentFillHover = accent.opacity(0.24)
+    /// A small danger button (a confirm's Stop) at rest, under the pointer, and its outline.
+    static let dangerFill = danger.opacity(0.14)
+    static let dangerFillHover = danger.opacity(0.24)
+    static let dangerLine = danger.opacity(0.6)
     /// The halo round a live command's point.
     static let commandHalo = accent.opacity(0.15)
     /// A small button under the pointer: a step above `surfaceHover`.

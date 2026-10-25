@@ -403,20 +403,24 @@ struct AgentMapRows {
 struct MapHeader: View {
     let summary: TranscriptStore.AgentSummary
 
-    /// "24 · 2 running", then the failed part, in red.
+    /// "24 · 2 running", then the failed part, in red; nothing at 0, where the chat's own row
+    /// speaks for itself.
     static func counts(_ summary: TranscriptStore.AgentSummary) -> (counts: String, failed: String) {
-        ("\(summary.total)" + (summary.running.isEmpty ? "" : " · \(summary.running.count) running"),
-         summary.failed.isEmpty ? "" : " · \(summary.failed.count) failed")
+        guard summary.total > 0 else { return ("", "") }
+        return ("\(summary.total)" + (summary.running.isEmpty ? "" : " · \(summary.running.count) running"),
+                summary.failed.isEmpty ? "" : " · \(summary.failed.count) failed")
     }
 
     var body: some View {
         let (counts, failed) = Self.counts(summary)
         HStack(spacing: Space.md) {
             Text("Agents").font(TextStyle.labelStrong).foregroundStyle(Theme.text)
-            (Text(counts) + Text(failed).foregroundColor(Theme.danger))
-                .font(TextStyle.caption.monospacedDigit())
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
+            if !counts.isEmpty {
+                (Text(counts) + Text(failed).foregroundColor(Theme.danger))
+                    .font(TextStyle.caption.monospacedDigit())
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+            }
         }
         .padding(Inset.row)
         .padding(.top, Space.xs)
@@ -710,8 +714,8 @@ struct AgentDuration: View {
 
 // MARK: Detail
 
-/// The selected agent: who it is and its meter, Stop and Open in tab; then its prompt; then its
-/// own timeline, live.
+/// The selected agent: who it is and its meter, Stop and Open in tab; a failed one's reason;
+/// then its prompt; then its own timeline, live.
 struct AgentDetail: View {
     let chat: Chat
     let info: TranscriptStore.AgentInfo
@@ -728,9 +732,10 @@ struct AgentDetail: View {
                 Section {
                     if filled.value {
                         Color.clear.frame(height: Space.xl)
+                        AgentFailure(chat: chat, info: info)
                         CommandsSection(chat: chat, rows: chat.commands.rows(of: .sub(info.id)))
                         if let prompt = info.prompt, !prompt.isEmpty { AgentPrompt(prompt: prompt).padding(.bottom, Space.xl) }
-                        AgentTimelineRows(chat: chat, id: info.id)
+                        AgentTimelineRows(chat: chat, id: info.id, failureAbove: true)
                         Color.clear.frame(height: Layout.Transcript.bottom)
                     }
                 } header: {
@@ -806,8 +811,8 @@ private struct AnyLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View { make(configuration) }
 }
 
-/// "Explore · haiku · 0:41 · 18.2k tokens · 6 tools", live; an ended agent's says how it ended
-/// before its time ("general-purpose · stopped · 0:15 · 3.2k tokens").
+/// "Explore · haiku · 0:41 · 18k · 6 tools", live; an ended agent's says how it ended before its
+/// time ("general-purpose · stopped · 0:15 · 3.2k"). Its tokens read as the tree row's, unit and all.
 struct AgentMeta: View {
     let info: TranscriptStore.AgentInfo
 
@@ -825,7 +830,7 @@ struct AgentMeta: View {
         var parts = [info.type, info.model].compactMap { $0 }
         if let state = AgentNodeMeter.state(info.status) { parts.append(state) }
         if let duration { parts.append(AgentMeter.clock(duration)) }
-        if let tokens = AgentMeter.tokens(of: info) { parts.append("\(tokens) tokens") }
+        if let tokens = AgentMeter.tokens(of: info) { parts.append(tokens) }
         if info.tools > 0 { parts.append(info.tools == 1 ? "1 tool" : "\(info.tools) tools") }
         return Text(parts.joined(separator: " · "))
             .font(TextStyle.caption.monospacedDigit())
@@ -856,26 +861,48 @@ struct AgentPrompt: View {
     }
 }
 
+/// A failed agent's reason, first under the map's header: "● The log is missing".
+struct AgentFailure: View {
+    let chat: Chat
+    let info: TranscriptStore.AgentInfo
+
+    var body: some View {
+        if info.status == .failed, let reason = TranscriptStore.distinctResult(info, lane: chat.transcript.lane(info.id)) {
+            TimelineItem(dot: .failure, top: 0, bottom: Space.xl) {
+                Text(planMarkdown(reason))
+                    .font(TextStyle.body)
+                    .foregroundStyle(Theme.secondary)
+                    .lineSpacing(TextStyle.leading)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
 /// An agent's own items as its timeline's rows, unwrapped: in a lazy stack, each is a row of it.
+/// "No commands" when it has none, unless it failed with a reason: that's the one fact to show.
 struct AgentTimelineRows: View {
     let chat: Chat
     let id: String
+    /// A failed agent's reason is shown above (`AgentFailure`), not after its rows.
+    var failureAbove = false
 
     var body: some View {
         let _ = chat.transcript.agentsVersion
         let items = chat.transcript.agentItems(id)
         let info = chat.transcript.agent(id)
-        if items.isEmpty, let info {
-            Text(info.background && info.status == .running
-                ? "Commands appear when this agent finishes"
-                : info.status == .running ? "No commands yet" : "No commands recorded")
+        let result = info.flatMap { TranscriptStore.distinctResult($0, lane: chat.transcript.lane(id)) }
+        let failed = info?.status == .failed && result != nil
+        if items.isEmpty, let info, !failed {
+            Text(info.background && info.status == .running ? "Commands appear when this agent finishes" : "No commands")
                 .font(TextStyle.body)
                 .foregroundStyle(Theme.tertiary)
         }
         ForEach(items) { item in
             TimelineRow(item: item, actions: actions).equatable()
         }
-        if let info, let result = TranscriptStore.distinctResult(info, lane: chat.transcript.lane(id)) {
+        if let info, let result, !(failed && failureAbove) {
             TimelineItem(dot: info.status == .failed ? .failure : .plain, above: !items.isEmpty) {
                 Text(planMarkdown(result))
                     .font(TextStyle.body)

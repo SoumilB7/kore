@@ -92,13 +92,13 @@ struct CommandsSection: View {
             if stoppable.count >= 2 {
                 if map.askingStop == AgentMapState.stopAll {
                     Text("Stop all \(stoppable.count)?").font(TextStyle.label).foregroundStyle(Theme.secondary).lineLimit(1)
-                    Button("Yes, stop all") {
+                    Button("Stop all") {
                         map.askingStop = nil
                         for command in stoppable { chat.stopCommand(command.id) }
                     }
-                    .smallButton(prominent: true)
+                    .smallButton(danger: true)
                     .storyID(id.part(.allow))
-                    Button("No, go back") { map.askingStop = nil }
+                    Button("Cancel") { map.askingStop = nil }
                         .smallButton()
                         .storyID(id.part(.cancel))
                 } else {
@@ -229,13 +229,13 @@ private struct CommandRow: View {
             HStack(spacing: Space.sm) {
                 if asking {
                     Text("Stop this?").font(TextStyle.label).foregroundStyle(Theme.secondary).lineLimit(1).fixedSize()
-                    Button("Yes, stop") {
+                    Button("Stop") {
                         map.askingStop = nil
                         chat.stopCommand(command.id)
                     }
-                    .smallButton(prominent: true)
+                    .smallButton(danger: true)
                     .storyID(id.part(.allow))
-                    Button("No, go back") { map.askingStop = nil }
+                    Button("Cancel") { map.askingStop = nil }
                         .smallButton()
                         .storyID(id.part(.cancel))
                 } else if command.stopping {

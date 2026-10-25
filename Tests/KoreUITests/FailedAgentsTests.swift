@@ -83,4 +83,10 @@ struct FailedAgentsTests {
         #expect(AgentsButton.label(summary) == "2 stopped")
         #expect(MapHeader.counts(summary).counts == "2")
     }
+
+    @Test func noCountAtZero() {
+        let summary = Script().store.agentSummary
+        #expect(summary.total == 0)
+        #expect(MapHeader.counts(summary) == ("", ""))
+    }
 }

@@ -1195,7 +1195,7 @@ struct AgentItem: View {
             }
             if lane.isEmpty, info.status == .running {
                 NestedNote(
-                    text: info.background ? "Commands appear when this agent finishes" : "No commands yet")
+                    text: info.background ? "Commands appear when this agent finishes" : "No commands")
             }
             NestedTimeline(
                 rows: Array(lane.suffix(lane.count - hidden)), actions: actions, result: result(info), rail: rail(info))
@@ -1393,19 +1393,8 @@ struct AgentMeter: View {
             : String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    /// 940 · 18.2k · 1.3M.
-    static func tokens(_ n: Int) -> String {
-        func one(_ v: Double, _ unit: String) -> String {
-            let s = String(format: "%.1f", v)
-            return (s.hasSuffix(".0") ? String(s.dropLast(2)) : s) + unit
-        }
-        if n < 1000 { return "\(n)" }
-        if n < 1_000_000 { return one(Double(n) / 1000, "k") }
-        return one(Double(n) / 1_000_000, "M")
-    }
-
     /// Its tokens, "~239k" when read from its transcript rather than reported.
     static func tokens(of info: TranscriptStore.AgentInfo) -> String? {
-        info.tokens.map { (info.approximate ? "~" : "") + tokens($0) }
+        info.tokens.map { (info.approximate ? "~" : "") + ContextStore.tokens($0) }
     }
 }
