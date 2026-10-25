@@ -38,9 +38,20 @@ struct WelcomeView: View {
                         .foregroundStyle(Theme.tertiary)
                         .padding(.horizontal, Space.lg)
                         .padding(.bottom, Space.xxs)
-                    ForEach(Array(app.recents.enumerated()), id: \.element) { index, folder in
-                        RecentRow(folder: folder, lit: lit.value == index) { open(folder) }
-                            .highlightRow(StoryID.Welcome.recent(folder.path), lit: lit.value == index) { lit.value = index }
+                    // At most `recentsShown` rows tall, the rest a scroll away: the window keeps one size.
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical) {
+                            VStack(alignment: .leading, spacing: Space.xs) {
+                                ForEach(Array(app.recents.enumerated()), id: \.element) { index, folder in
+                                    RecentRow(folder: folder, lit: lit.value == index) { open(folder) }
+                                        .highlightRow(StoryID.Welcome.recent(folder.path), lit: lit.value == index) { lit.value = index }
+                                        .id(index)
+                                }
+                            }
+                        }
+                        .scrollIndicators(app.recents.count > Layout.Welcome.recentsShown ? .automatic : .never)
+                        .frame(height: Layout.Welcome.recentsHeight(app.recents.count))
+                        .onChange(of: lit.value) { _, index in if let index { proxy.scrollTo(index) } }
                     }
                 }
                 .frame(width: Layout.Welcome.contentWidth)

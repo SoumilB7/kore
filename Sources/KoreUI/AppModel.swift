@@ -10,7 +10,7 @@ package final class AppModel {
     /// The app's one model, for a storyline host to open folders through (phase 12).
     package private(set) static weak var shared: AppModel?
     private static let recentsKey = "recentFolders"
-    private static let recentsLimit = 8
+    private static let recentsLimit = 20
 
     private struct ClosedWindow {
         var folder: URL

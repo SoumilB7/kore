@@ -53,6 +53,13 @@ enum Layout {
         static let width: CGFloat = 480
         static let contentWidth: CGFloat = 380
         static let minHeight: CGFloat = 360
+        /// Recent folders shown before the list scrolls, and one row with its gap.
+        static let recentsShown = 5
+        static let recentPitch: CGFloat = 32
+        static func recentsHeight(_ count: Int) -> CGFloat {
+            let rows = min(count, recentsShown)
+            return CGFloat(rows) * recentPitch - Space.xs
+        }
         static let paddingV: CGFloat = 48
         static let paddingH: CGFloat = 40
         static let sectionGap: CGFloat = 28
