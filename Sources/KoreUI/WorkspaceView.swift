@@ -1180,19 +1180,27 @@ private struct ProviderButton: View {
 /// Gives the window an empty compact toolbar, so macOS draws a 40pt title bar with the
 /// traffic lights centered in it (the tab bar fills that row). In full screen the toolbar is
 /// removed: there macOS moves it into an overlay window over the top of the content, which
-/// would take the tab bar's clicks. Reports full screen so the tab bar can adjust.
+/// would take the tab bar's clicks. Reports full screen so the tab bar can adjust, and in full
+/// screen how far the title bar has slid down over the window (the pointer at the top of the
+/// screen brings it, under the menu bar), so the tab row can move down out from under it.
 struct TitleBar: NSViewRepresentable {
     let onFullScreenChange: (Bool) -> Void
+    let onReveal: (CGFloat) -> Void
 
-    func makeNSView(context: Context) -> NSView { Hook(onFullScreenChange: onFullScreenChange) }
+    func makeNSView(context: Context) -> NSView { Hook(onFullScreenChange: onFullScreenChange, onReveal: onReveal) }
     func updateNSView(_ nsView: NSView, context: Context) {}
 
     private final class Hook: NSView {
         let onFullScreenChange: (Bool) -> Void
+        let onReveal: (CGFloat) -> Void
         private var observers: [NSObjectProtocol] = []
+        /// The title bar's own observers, in full screen.
+        private var revealObservers: [NSObjectProtocol] = []
+        private var reveal: CGFloat = 0
 
-        init(onFullScreenChange: @escaping (Bool) -> Void) {
+        init(onFullScreenChange: @escaping (Bool) -> Void, onReveal: @escaping (CGFloat) -> Void) {
             self.onFullScreenChange = onFullScreenChange
+            self.onReveal = onReveal
             super.init(frame: .zero)
         }
 
@@ -1202,23 +1210,36 @@ struct TitleBar: NSViewRepresentable {
             super.viewDidMoveToWindow()
             observers.forEach(NotificationCenter.default.removeObserver)
             observers = []
-            guard let window else { return }
-            let isFullScreen = window.styleMask.contains(.fullScreen)
-            setToolbar(on: !isFullScreen)
-            onFullScreenChange(isFullScreen)
-            let events: [(Notification.Name, Bool)] = [
-                (NSWindow.willEnterFullScreenNotification, true), (NSWindow.didExitFullScreenNotification, false),
-            ]
-            for (name, entering) in events {
-                observers.append(
-                    NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) {
-                        [weak self] _ in
-                        MainActor.assumeIsolated {
-                            self?.setToolbar(on: !entering)
-                            self?.onFullScreenChange(entering)
-                        }
-                    })
+            guard let window else { return watchReveal(false) }
+            sync()
+            // Before the move in, so the toolbar never shows over the content; after a move in or
+            // out, or to another screen (a display unplugged), from the window as it is.
+            observe(NSWindow.willEnterFullScreenNotification, of: window) { $0.apply(fullScreen: true) }
+            let after = [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification, NSWindow.didChangeScreenNotification]
+            for name in after {
+                observe(name, of: window) { $0.sync() }
             }
+        }
+
+        private func observe(
+            _ name: Notification.Name, of object: AnyObject, into list: ReferenceWritableKeyPath<Hook, [NSObjectProtocol]> = \.observers,
+            _ act: @escaping @MainActor (Hook) -> Void
+        ) {
+            self[keyPath: list].append(
+                NotificationCenter.default.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { if let self { act(self) } }
+                })
+        }
+
+        private func sync() {
+            guard let window else { return }
+            apply(fullScreen: window.styleMask.contains(.fullScreen))
+        }
+
+        private func apply(fullScreen: Bool) {
+            setToolbar(on: !fullScreen)
+            onFullScreenChange(fullScreen)
+            watchReveal(fullScreen)
         }
 
         private func setToolbar(on: Bool) {
@@ -1226,9 +1247,50 @@ struct TitleBar: NSViewRepresentable {
             if on, window.toolbar == nil {
                 window.toolbar = NSToolbar(identifier: "kore.titlebar")
                 window.toolbarStyle = .unifiedCompact
-            } else if !on {
+            } else if !on, window.toolbar != nil {
                 window.toolbar = nil
             }
         }
+
+        /// In full screen the title bar's container sits in a window of its own over the top of
+        /// the screen, slid up out of it; macOS moves it frame by frame as it slides in and out.
+        private func watchReveal(_ on: Bool) {
+            revealObservers.forEach(NotificationCenter.default.removeObserver)
+            revealObservers = []
+            if on, let window, let container = TitleBarReach.container(window), let host = container.window, host !== window {
+                container.postsFrameChangedNotifications = true
+                observe(NSView.frameDidChangeNotification, of: container, into: \.revealObservers) { $0.measureReveal() }
+                for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+                    observe(name, of: host, into: \.revealObservers) { $0.measureReveal() }
+                }
+            }
+            measureReveal()
+        }
+
+        private func measureReveal() {
+            let reach = window.flatMap { $0.styleMask.contains(.fullScreen) ? TitleBarReach.of($0) : nil } ?? 0
+            guard reach != reveal else { return }
+            reveal = reach
+            onReveal(reach)
+        }
+    }
+}
+
+/// How far the title bar reaches down over a full-screen window, as AppKit has placed it: 0
+/// while it's slid up out of sight, and out of full screen (where it's the window's own,
+/// transparent over the tab row).
+@MainActor
+package enum TitleBarReach {
+    /// The view holding the title bar and the traffic lights.
+    package static func container(_ window: NSWindow) -> NSView? {
+        window.standardWindowButton(.closeButton)?.superview?.superview
+    }
+
+    package static func of(_ window: NSWindow) -> CGFloat {
+        guard let container = container(window), let host = container.window, host !== window else { return 0 }
+        let shown = host.convertToScreen(container.convert(container.bounds, to: nil))
+            .intersection(host.frame).intersection(window.frame)
+        guard !shown.isNull, shown.height >= 0.5 else { return 0 }
+        return (window.frame.maxY - shown.minY).rounded()
     }
 }

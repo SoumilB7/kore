@@ -24,15 +24,17 @@ struct FolderWindow: View {
             VStack(spacing: 0) {
                 // Above the chat: its scroll view extends up under the title bar and would
                 // otherwise take the tab bar's clicks.
-                TabBar(
-                    workspace: workspace,
-                    // Full screen has no title bar inset; keep the same 40pt row.
-                    height: fullScreen.value ? 40 : max(geometry.safeAreaInsets.top, 28),
-                    leadingInset: fullScreen.value ? 10 : 82,
-                    explorerDock: docked ? workspace.explorerWidth : nil,
-                    historyOpen: $historyOpen.value,
-                    clockFrame: $clockFrame.value
-                )
+                TitleRow(onFullScreenChange: { fullScreen.value = $0 }) {
+                    TabBar(
+                        workspace: workspace,
+                        // Full screen has no title bar inset; keep the same 40pt row.
+                        height: fullScreen.value ? 40 : max(geometry.safeAreaInsets.top, 28),
+                        leadingInset: fullScreen.value ? 10 : 82,
+                        explorerDock: docked ? workspace.explorerWidth : nil,
+                        historyOpen: $historyOpen.value,
+                        clockFrame: $clockFrame.value
+                    )
+                }
                 .zIndex(1)
                 HStack(spacing: 0) {
                     if docked, let store = workspace.files {
@@ -93,7 +95,6 @@ struct FolderWindow: View {
             .ignoresSafeArea(.container, edges: .top)
             .animation(Motion.fade, value: historyOpen.value)
         }
-        .background(TitleBar { fullScreen.value = $0 })
         .background(PinchZoomHost(workspace: workspace.value, activeTab: workspace.value.activeID, openTabs: workspace.value.tabs.map(\.id)))
         .background(WindowReader { window in
             if let window {
@@ -166,6 +167,21 @@ struct FolderWindow: View {
         .onChange(of: workspace.value.saved) { workspace.value.save() }
         // The chats end with the window (`Workspace.window`), not with this view: SwiftUI may
         // build it again while the window stays.
+    }
+}
+
+/// The tab row, holding the title bar's hook. In full screen it moves down while the title bar
+/// slides over the top of the window (the pointer at the top of the screen), so the bar never
+/// covers it; an offset, so nothing below it lays out again.
+private struct TitleRow<Content: View>: View {
+    let onFullScreenChange: (Bool) -> Void
+    @ViewBuilder let content: Content
+    @StateObject private var reveal = Local(CGFloat(0))
+
+    var body: some View {
+        content
+            .offset(y: reveal.value)
+            .background(TitleBar(onFullScreenChange: onFullScreenChange) { reveal.value = $0 })
     }
 }
 
