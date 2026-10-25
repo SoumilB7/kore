@@ -204,6 +204,27 @@ package final class ComposerTextView: NSTextView {
         super.keyDown(with: event)
     }
 
+    // MARK: Lines
+
+    /// The caret is on the text's first line as drawn (a wrapped line's parts count), or on its
+    /// last: where ↑ and ↓ step through sent messages rather than move it.
+    var caretOnFirstLine: Bool { caretOnEdgeLine(first: true) }
+    var caretOnLastLine: Bool { caretOnEdgeLine(first: false) }
+
+    private func caretOnEdgeLine(first: Bool) -> Bool {
+        guard let storage = textStorage else { return true }
+        let text = storage.string as NSString
+        let location = min(selectedRange().location, text.length)
+        let rest = first ? NSRange(location: 0, length: location) : NSRange(location: location, length: text.length - location)
+        if text.rangeOfCharacter(from: .newlines, options: [], range: rest).location != NSNotFound { return false }
+        guard first ? location > 0 : location < text.length, let layout = layoutManager else { return true }
+        // The edge's line and the caret's, as laid out.
+        let caret = layout.glyphIndexForCharacter(at: min(location, text.length - 1))
+        let edge = layout.glyphIndexForCharacter(at: first ? 0 : text.length - 1)
+        return layout.lineFragmentRect(forGlyphAt: caret, effectiveRange: nil).minY
+            == layout.lineFragmentRect(forGlyphAt: edge, effectiveRange: nil).minY
+    }
+
     // MARK: The whole draft
 
     package override func selectAll(_ sender: Any?) {

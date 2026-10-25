@@ -46,6 +46,17 @@ struct ComposerView: View {
     @StateObject private var wholeDraft = Local(false)
     /// A whole draft going in (⌘V): its own edit of the text takes no chips with it.
     @StateObject private var pastingDraft = Held(false)
+    /// The sent message ↑ brought back into the empty box, while the box still holds it as it
+    /// came (`recall`).
+    @StateObject private var recalled = Held<Recalled?>(nil)
+
+    struct Recalled {
+        let chat: UUID
+        /// How far back: 0 the newest message.
+        let back: Int
+        let draft: String
+        let command: SlashCommand?
+    }
 
     struct SlashInsert {
         let chat: UUID
@@ -171,6 +182,7 @@ struct ComposerView: View {
             place()
             slashSelection.value = 0
             mentionSelection.value = 0
+            recalled.value = nil
             mentions.close()
             if chat.slashClosed { chat.slashClosed = false }
             forgetUndo()
@@ -315,9 +327,9 @@ struct ComposerView: View {
             escape(view)
             return true
         case #selector(NSResponder.moveUp(_:)):
-            return moveSlash(-1) == .handled || moveMention(-1) == .handled
+            return moveSlash(-1) == .handled || moveMention(-1) == .handled || recall(view, older: true)
         case #selector(NSResponder.moveDown(_:)):
-            return moveSlash(1) == .handled || moveMention(1) == .handled
+            return moveSlash(1) == .handled || moveMention(1) == .handled || recall(view, older: false)
         case #selector(NSResponder.deleteBackward(_:)) where !view.wholeDraft:
             return removeCommand(view)
         default:
@@ -347,6 +359,50 @@ struct ComposerView: View {
         case .stop: chat.stop()
         case .nothing: break
         }
+    }
+
+    // MARK: Sent messages (↑ ↓)
+
+    /// The message ↑ brought back, while the box holds it untouched; nil once it's edited (a
+    /// draft of its own then).
+    private var recalling: Recalled? {
+        guard let kept = recalled.value, kept.chat == chat.id, kept.draft == chat.draft, kept.command == chat.command,
+            chat.attachments.isEmpty
+        else { return nil }
+        return kept
+    }
+
+    /// ↑ in an empty box brings back this chat's last sent message, as a shell does its last
+    /// command; ↑ again an older one, ↓ a newer one, and past the newest the box is empty again.
+    /// A message brought back steps on from its first line (↑) or its last (↓), so one of
+    /// several lines can still be moved about in. Its text only: files sent with it stay out.
+    private func recall(_ view: ComposerTextView, older: Bool) -> Bool {
+        guard !composing, view.shown == chat.draft, view.selectedRange().length == 0 else { return false }
+        let kept = recalling
+        if kept == nil {
+            recalled.value = nil
+            guard older, chat.draft.isEmpty, chat.command == nil, chat.attachments.isEmpty else { return false }
+        } else if !(older ? view.caretOnFirstLine : view.caretOnLastLine) {
+            return false
+        }
+        let messages = chat.transcript.sentMessages
+        let back = (kept?.back ?? -1) + (older ? 1 : -1)
+        // The oldest stays; an empty chat has nothing to bring back.
+        guard back < messages.count else { return kept != nil }
+        if back < 0 {
+            recalled.value = nil
+            chat.command = nil
+            chat.draft = ""
+        } else {
+            let (command, draft) = Chat.split(messages[messages.count - 1 - back], commands: chat.controls.commands)
+            // Set before the draft: the menus read it as the box shows the message.
+            recalled.value = Recalled(chat: chat.id, back: back, draft: draft, command: command)
+            chat.command = command
+            chat.draft = draft
+        }
+        place()
+        forgetUndo()
+        return true
     }
 
     // MARK: Paste and +
@@ -513,7 +569,7 @@ struct ComposerView: View {
 
     /// The "/word" at the caret (or Codex's "$word"), anywhere in the draft.
     private var slashToken: SlashToken? {
-        guard let caret = caretIndex else { return nil }
+        guard recalling == nil, let caret = caretIndex else { return nil }
         return SlashToken(in: chat.draft, caret: caret, skills: chat.provider == .codex)
     }
 
@@ -618,7 +674,8 @@ struct ComposerView: View {
 
     /// The "@word" at the caret: the @ menu's search.
     private var mentionToken: SlashToken? {
-        guard let caret = caretIndex, let token = SlashToken(in: chat.draft, caret: caret, skills: false, mentions: true),
+        guard recalling == nil, let caret = caretIndex,
+            let token = SlashToken(in: chat.draft, caret: caret, skills: false, mentions: true),
             token.sigil == "@"
         else { return nil }
         return token

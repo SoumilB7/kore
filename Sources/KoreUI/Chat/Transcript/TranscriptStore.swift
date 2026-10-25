@@ -1142,6 +1142,12 @@ final class TranscriptStore {
     /// Sent while a turn runs, in order, by Kore's id.
     @ObservationIgnored private var queued: [(id: String, entry: Entry)] = []
 
+    /// The owner's messages with text, oldest first, the waiting ones last: what ↑ in an empty
+    /// composer brings back (`ComposerView.recall`).
+    var sentMessages: [String] {
+        (entries.lazy.filter { $0.kind == .user }.map(\.text) + queued.map(\.entry.text)).filter { !$0.allSatisfy(\.isWhitespace) }
+    }
+
     func messageQueued(id: String, text: String, attachments: [Attachment]) {
         queued.append((id, Entry(kind: .user, text: text, attachments: attachments)))
         changed(at: entries.count - 1)

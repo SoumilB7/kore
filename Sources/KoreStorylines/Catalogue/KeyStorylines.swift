@@ -191,6 +191,54 @@ final class EscStops: ChatStoryline {
     }
 }
 
+/// ↑ in an empty composer brings back the chat's sent messages, newest first, as a shell does:
+/// ↑ again an older one, ↓ a newer one, and past the newest the box is empty. Typed into, a
+/// message brought back is a draft of its own, and ↑ no longer steps.
+final class PromptRecall: ChatStoryline {
+    static let first = "The first prompt"
+    static let second = "The second prompt"
+    override class var tags: Set<Tag> { [.chat] }
+
+    /// The composer's text view in the storyline's own window: earlier storylines' windows can
+    /// still be open.
+    @MainActor static func textView(_ story: StoryContext) -> NSTextView? {
+        func find(_ view: NSView) -> NSTextView? {
+            if let text = view as? NSTextView, String(describing: type(of: text)) == "ComposerTextView" { return text }
+            return view.subviews.lazy.compactMap(find).first
+        }
+        return story.window?.contentView.flatMap(find)
+    }
+
+    static func shows(_ text: String, _ what: String) -> Expect {
+        Expect(what, found: { story in
+            let view = textView(story)
+            return "draft “\((try? story.activeChat().draft) ?? "?")”, caret \(view.map { String($0.selectedRange().location) } ?? "?")"
+        }) { story in
+            guard try story.activeChat().draft == text, let view = textView(story), view.string == text else { return false }
+            return view.selectedRange() == NSRange(location: (text as NSString).length, length: 0)
+        }
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send(Self.first), TurnFinished(1),
+            Send(Self.second), TurnFinished(2),
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Key(.up), Self.shows(Self.second, "the second prompt back, the caret at its end"),
+            Key(.up), Self.shows(Self.first, "the first prompt back"),
+            Key(.up), Self.shows(Self.first, "the first still, the oldest"),
+            Key(.down), Self.shows(Self.second, "the second again"),
+            Key(.down), Self.shows("", "the box empty past the newest"),
+            Key(.down), Self.shows("", "the box still empty"),
+            // Typed into, it's a draft: ↑ moves the caret only.
+            Key(.up), Self.shows(Self.second, "the second back once more"),
+            TypeText("!"), Self.shows(Self.second + "!", "typed after it"),
+            Key(.up),
+            Expect("the typed draft kept, not stepped") { try $0.activeChat().draft == Self.second + "!" },
+        ]
+    }
+}
+
 /// Lets a fade finish before a snapshot.
 private struct Settle: Step {
     var label: String { "Let the fade finish" }
