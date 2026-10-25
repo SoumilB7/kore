@@ -14,6 +14,8 @@ package final class PinchZoom {
         package var previews = 0
         package var commits = 0
         package var cancellations = 0
+        package var freezes = 0
+        package var corrections = 0
     }
 
     /// Text can rewrap in a viewport with no horizontal scroll range. In that case the
@@ -47,6 +49,10 @@ package final class PinchZoom {
         let pivot: CGPoint
         let anchor: Anchor
         var finishing = false
+        let heldOrigin: CGPoint
+        let postedBounds: Bool
+        var boundsObserver: NSObjectProtocol?
+        var restoringBounds = false
 
         init(scroll: NSScrollView, layer: CALayer, backed: Bool, base: CGFloat, point: CGPoint, anchor: Anchor) {
             self.scroll = scroll
@@ -57,6 +63,8 @@ package final class PinchZoom {
             self.base = base
             scale = base
             let clip = scroll.contentView
+            heldOrigin = clip.bounds.origin
+            postedBounds = clip.postsBoundsChangedNotifications
             // Core Animation applies sublayerTransform around this layer's anchor point.
             // Its pivot is relative to that anchor, rather than an absolute bounds point.
             pivot = CGPoint(x: point.x - clip.bounds.minX - layer.bounds.width * layer.anchorPoint.x,
@@ -136,9 +144,11 @@ package final class PinchZoom {
             clip.wantsLayer = true
             guard let layer = clip.layer else { clip.wantsLayer = backed; return false }
             let local = clip.convert(point, from: nil)
-            session = Session(scroll: scroll, layer: layer, backed: backed, base: zoom.scale, point: local,
-                              anchor: capture(scroll: scroll, source: source, point: point))
-            ScrollShift.beginZoom(in: scroll)
+            let active = Session(scroll: scroll, layer: layer, backed: backed, base: zoom.scale, point: local,
+                                 anchor: capture(scroll: scroll, source: source, point: point))
+            session = active
+            holdViewport(active)
+            if ScrollShift.beginZoom(in: scroll) { counts.freezes += 1 }
         }
         guard let session else { return false }
         guard !phase.contains(.cancelled), !session.finishing, session.scroll?.window === window,
@@ -166,6 +176,7 @@ package final class PinchZoom {
 
     private func finish(_ session: Session) {
         session.finishing = true
+        releaseViewport(session)
         restoreTransform(session)
         guard zoom.commitPinch(session.scale) else { clear(); return }
         counts.commits += 1
@@ -189,6 +200,7 @@ package final class PinchZoom {
 
     func cancel() {
         guard let session else { return }
+        releaseViewport(session)
         restoreTransform(session)
         counts.cancellations += 1
         clear()
@@ -204,8 +216,44 @@ package final class PinchZoom {
     private func clear() {
         if let settling { CFRunLoopRemoveObserver(CFRunLoopGetMain(), settling, .commonModes) }
         settling = nil
-        if let session, !session.backed { session.scroll?.contentView.wantsLayer = false }
+        if let session {
+            releaseViewport(session)
+            if !session.backed { session.scroll?.contentView.wantsLayer = false }
+        }
         session = nil
+    }
+
+    /// SwiftUI may finish an already-issued animated/anchored scroll after a pinch starts.
+    /// Correct only those attempted native moves, synchronously before paint. There is no
+    /// timer, display callback, font mutation or SwiftUI state write in this observer.
+    private func holdViewport(_ session: Session) {
+        guard let clip = session.scroll?.contentView else { return }
+        clip.postsBoundsChangedNotifications = true
+        session.boundsObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: nil) { [weak self, weak session] _ in
+            MainActor.assumeIsolated {
+                guard let self, let session, self.session === session, !session.finishing,
+                      !session.restoringBounds, let scroll = session.scroll else { return }
+                let clip = scroll.contentView
+                let desired = CGRect(origin: session.heldOrigin, size: clip.bounds.size)
+                let held = clip.constrainBoundsRect(desired).origin
+                guard abs(clip.bounds.minX - held.x) > 0.001 || abs(clip.bounds.minY - held.y) > 0.001 else { return }
+                session.restoringBounds = true
+                defer { session.restoringBounds = false }
+                self.counts.corrections += 1
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                clip.scroll(to: held)
+                scroll.reflectScrolledClipView(clip)
+                CATransaction.commit()
+            }
+        }
+    }
+
+    private func releaseViewport(_ session: Session) {
+        guard let observer = session.boundsObserver else { return }
+        NotificationCenter.default.removeObserver(observer)
+        session.boundsObserver = nil
+        session.scroll?.contentView.postsBoundsChangedNotifications = session.postedBounds
     }
 
     private func target(in window: NSWindow, at point: CGPoint) -> (NSScrollView, NSView)? {

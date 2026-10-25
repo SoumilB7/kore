@@ -163,6 +163,50 @@ struct PinchZoomTests {
         #expect(frozen == [offset])
     }
 
+    @Test(arguments: [true, false])
+    func nativeScrollAttemptsAreHeldUntilCancellationThenRelease(posted: Bool) {
+        let (window, scroll, _, point) = editor()
+        let clip = scroll.contentView
+        clip.postsBoundsChangedNotifications = posted
+        clip.scroll(to: CGPoint(x: 0, y: 300))
+        let held = clip.bounds.origin
+        var writes = 0
+        let pinch = PinchZoom(zoom: Zoom(saved: 1, persist: { _ in writes += 1 }))
+        pinch.attach(window)
+        defer { pinch.detach(); window.contentView = nil }
+        #expect(pinch.receive(0.1, phase: .began, at: point))
+        #expect(clip.postsBoundsChangedNotifications)
+        for delta in [20.0, 40.0, -20.0] {
+            clip.scroll(to: CGPoint(x: held.x, y: held.y + delta))
+            #expect(clip.bounds.origin == held)
+        }
+        #expect(pinch.counts.corrections == 3 && writes == 0)
+        #expect(pinch.receive(0, phase: .cancelled, at: point))
+        #expect(clip.postsBoundsChangedNotifications == posted)
+        clip.scroll(to: CGPoint(x: held.x, y: held.y + 40))
+        #expect(clip.bounds.minY > held.y && pinch.counts.corrections == 3)
+    }
+
+    @Test func endingReleasesNativeBoundsHoldBeforeRestoringTheTextAnchor() {
+        let (window, scroll, _, point) = editor()
+        let clip = scroll.contentView
+        clip.postsBoundsChangedNotifications = true
+        clip.scroll(to: CGPoint(x: 0, y: 300))
+        let held = clip.bounds.origin
+        let pinch = PinchZoom(zoom: Zoom(saved: 1, persist: { _ in }))
+        pinch.attach(window)
+        defer { pinch.detach(); window.contentView = nil }
+        #expect(pinch.receive(0.1, phase: .began, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        clip.scroll(to: CGPoint(x: held.x, y: held.y + 40))
+        #expect(clip.bounds.minY > held.y && pinch.counts.corrections == 0)
+        pinch.completeLayout()
+        #expect(clip.postsBoundsChangedNotifications && pinch.counts.commits == 1)
+        let landed = clip.bounds.minY
+        clip.scroll(to: CGPoint(x: held.x, y: landed + 30))
+        #expect(clip.bounds.minY > landed && pinch.counts.corrections == 0)
+    }
+
     @Test func nativeMagnifyingScrollViewsAndUnphasedInputAreNotCaptured() {
         let (window, scroll, _, point) = editor()
         let zoom = Zoom(saved: 1, persist: { _ in Issue.record("Native gestures must not change app zoom") })

@@ -56,6 +56,9 @@ private struct ExerciseStreamingPinch: Step {
               PinchZoom.storySample(in: window, amount: 0, phase: .began, at: point),
               let held = PinchZoom.storyOffset(in: window)
         else { throw StoryFailure.other("the streaming transcript did not take the pinch") }
+        guard PinchZoom.storyCounts(in: window)?.freezes == before.freezes + 1 else {
+            throw StoryFailure.other("the live transcript did not freeze its retained scroll target")
+        }
         var largestDrift: CGFloat = 0
         for _ in 0..<120 {
             guard PinchZoom.storySample(in: window, amount: 0.0002, phase: .changed, at: point) else {
@@ -80,7 +83,8 @@ private struct ExerciseStreamingPinch: Step {
         }
         chat.storyStop()
         try await story.until("the scripted stream stops") { !chat.isRunning }
-        let note = "\(story.name): samples=120 semantic=0 streamedChars=\(added) maxViewportDrift=\(String(format: "%.2f", largestDrift)) followingResumed=true\n"
+        let corrections = (PinchZoom.storyCounts(in: window)?.corrections ?? before.corrections) - before.corrections
+        let note = "\(story.name): samples=120 semantic=0 freezes=1 nativeCorrections=\(corrections) streamedChars=\(added) maxViewportDrift=\(String(format: "%.2f", largestDrift)) followingResumed=true\n"
         try note.write(to: story.outputs.appendingPathComponent(story.name + ".pinch-streaming.notes"), atomically: true, encoding: .utf8)
     }
 

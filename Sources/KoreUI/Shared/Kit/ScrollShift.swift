@@ -20,8 +20,11 @@ final class ScrollShift: ObservableObject {
         Self.known.setObject(self, forKey: scroll)
     }
 
-    static func beginZoom(in scroll: NSScrollView) {
-        known.object(forKey: scroll)?.onZoomBegin?(scroll.contentView.bounds.minY)
+    @discardableResult
+    static func beginZoom(in scroll: NSScrollView) -> Bool {
+        guard let freeze = known.object(forKey: scroll)?.onZoomBegin else { return false }
+        freeze(scroll.contentView.bounds.minY)
+        return true
     }
 
     /// AppKit's own geometry: the content's frame and the visible part of it.

@@ -295,13 +295,15 @@ struct TranscriptTimeline: View, Equatable {
                 follow(proxy, showing: showing)
             }
             .onAppear {
-                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, insetTop] offset in
+                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop] _ in
                     glidingUntil.value = nil
                     glideCut.value = store.sentAt
                     var instant = Transaction()
                     instant.disablesAnimations = true
                     withTransaction(instant) {
-                        position.value.scrollTo(y: offset + insetTop.value)
+                        // ScrollPosition counts from SwiftUI's content origin. A native
+                        // clip origin already includes a different inset conversion.
+                        position.value.scrollTo(y: geometry.value.offset + insetTop.value)
                         nudge.value &+= 1
                     }
                 }
