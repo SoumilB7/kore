@@ -369,12 +369,20 @@ package final class Workspace {
 
     // MARK: - Reload
 
-    /// ⌘R: every tab read again. A chat closes its CLI and opens again from its saved history,
-    /// on the same model with its draft; one with a turn, an agent or a command running waits
-    /// for the last to end, unless ⌘R comes again. A file reads its disk again, unless it has unsaved edits. The
-    /// history list too.
+    /// ⇧⌘R: every tab read again, and the history list too.
     func reload() {
-        for tab in tabs where tab.agent == nil {
+        reload(tabs)
+        // Only a list already read: a first read also settles the restored tabs, and would
+        // close a chat just reopened that its CLI's list leaves out.
+        if loaded { Task { await refresh() } }
+    }
+
+    /// ⌘R (the active tab) or ⇧⌘R (all of them): a chat closes its CLI and opens again from its
+    /// saved history, on the same model with its draft; one with a turn, an agent or a command
+    /// running waits for the last to end, unless the reload comes again. A file reads its disk
+    /// again, unless it has unsaved edits.
+    func reload(_ targets: [ChatTab]) {
+        for tab in targets where tab.agent == nil {
             if let file = tab.file {
                 if !file.isDirty { file.reloadInPlace() }
                 continue
@@ -385,9 +393,6 @@ package final class Workspace {
                 self.reopen(chat, in: tab)
             }
         }
-        // Only a list already read: a first read also settles the restored tabs, and would
-        // close a chat just reopened that its CLI's list leaves out.
-        if loaded { Task { await refresh() } }
     }
 
     private func reopen(_ chat: Chat, in tab: ChatTab) {

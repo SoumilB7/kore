@@ -276,8 +276,11 @@ private struct ExplorerCommands: View {
             .keyboardShortcut("f", modifiers: [.command, .shift])
             .disabled(workspace?.can(.search) != true)
         Divider()
-        Button("Reload Window") { workspace?.perform(.reload) }
+        Button("Reload Tab") { workspace?.perform(.reloadTab) }
             .keyboardShortcut("r")
+            .disabled(workspace?.can(.reloadTab) != true)
+        Button("Reload Window") { workspace?.perform(.reload) }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
             .disabled(workspace?.can(.reload) != true)
         Button("Stop") { workspace?.perform(.stop) }
             .keyboardShortcut(".")

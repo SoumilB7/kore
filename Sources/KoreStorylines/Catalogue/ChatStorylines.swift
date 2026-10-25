@@ -764,7 +764,35 @@ struct HoverCode: Step {
     }
 }
 
-/// ⌘R reloads the window: an idle chat opens again from its saved history in the same tab, on a
+/// ⌘R reloads only the active tab: a chat in another tab stays as it is.
+final class ReloadTab: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("First answer")]) }
+
+    override func steps() -> [any Step] {
+        final class Seen { var chat: AnyObject?; var session: String? }
+        let seen = Seen()
+        return super.steps() + [
+            Send("one"), TurnFinished(1),
+            Expect("the chat as it is") { story in
+                let chat = try story.activeChat()
+                (seen.chat, seen.session) = (chat, chat.sessionId)
+                return true
+            },
+            Command(.newTab),
+            Command(.reloadTab),
+            Key(.cmd("1")),
+            Expect("another tab's reload leaves it alone") { try $0.activeChat() === seen.chat },
+            Command(.reloadTab),
+            Expect("its own reload opens it again, anew") { story in
+                let chat = try story.activeChat()
+                return chat !== seen.chat && chat.sessionId == seen.session
+            },
+        ]
+    }
+}
+
+/// ⇧⌘R reloads the window: an idle chat opens again from its saved history in the same tab, on a
 /// new CLI; a working one waits for its turn to end, unless ⌘R comes again.
 final class ReloadWindow: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }

@@ -22,6 +22,7 @@ package struct Command: Step {
         case .goToLine: "Go to line"
         case .toggleExplorer: "Show or hide the explorer"
         case .search: "Search the folder"
+        case .reloadTab: "Reload the tab"
         case .reload: "Reload the window"
         case .stop: "Stop the chat"
         }
