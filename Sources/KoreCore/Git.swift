@@ -25,9 +25,11 @@ enum Git {
             process.standardError = FileHandle.nullDevice
             process.standardInput = FileHandle.nullDevice
             do { try process.run() } catch { return nil }
+            ChildReaper.shared.watch(process.processIdentifier)
             // Read before waiting, so a large diff can't fill the pipe and stall git.
             let data = out.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
+            ChildReaper.shared.forget(process.processIdentifier)
             return (process.terminationStatus, String(decoding: data, as: UTF8.self))
         }.value
     }

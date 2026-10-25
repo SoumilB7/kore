@@ -274,7 +274,7 @@ package final class CodexTranslator {
                 out.append(.titleChanged(name))
             }
             if method == "turn/diff/updated", agent == .main, let diff = params["diff"]?.string {
-                files.setTurnDiff(UnifiedDiff.files(diff, root: folder))
+                files.setTurnDiff(diff)
             }
             // Sent as each turn starts, with the settings it runs under: Kore's own changes were
             // reported when made, so this adds only what differs (a relaunch in another preset).
@@ -617,6 +617,14 @@ package final class CodexTranslator {
         queuedInFlight.removeAll()
         nextTurnQueued = nil
         commands.endAll(at: .now, into: &out)
+    }
+
+    /// The app-server's process ended: the child threads it ran end with it, stopped. Observed
+    /// ones (another client's) go on.
+    func cliExited(observed: Set<String>) {
+        for id in unfinishedAgents() where !observed.contains(id) {
+            finish(id, .stopped, source: .cliExited)
+        }
     }
 
     /// Clear only the transport and work this app-server owned, retaining observed children.

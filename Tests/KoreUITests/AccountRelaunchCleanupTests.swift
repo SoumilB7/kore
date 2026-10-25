@@ -53,6 +53,17 @@ struct AccountRelaunchCleanupTests {
         #expect(t.isFinished("owned") && !t.isFinished("external"))
     }
 
+    @Test func aCLIThatExitsEndsItsOwnAgentsOnly() throws {
+        let claude = try claude()
+        claude.cliExited(observed: ["external"])
+        #expect(ended(claude.take().events) == ["owned"])
+        #expect(claude.isFinished("owned") && !claude.isFinished("external"))
+        let codex = codex()
+        codex.cliExited(observed: ["external"])
+        #expect(ended(codex.take().events) == ["owned"])
+        #expect(codex.isFinished("owned") && !codex.isFinished("external"))
+    }
+
     @Test func claudeCleansOwnedStateEvenWhenTheSessionAlreadyDied() async throws {
         let t = try claude()
         let backend = ClaudeBackend(BackendOptions(folder: folder, mode: "default"), translator: t)

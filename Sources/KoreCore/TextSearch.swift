@@ -286,6 +286,7 @@ private final class Search: @unchecked Sendable {
         lock.withLock { self.process = process }
         do {
             try process.run()
+            ChildReaper.shared.watch(process.processIdentifier)
         } catch {
             finish(.failed("Couldn't run rg: \(error.localizedDescription)"))
             return
@@ -301,6 +302,7 @@ private final class Search: @unchecked Sendable {
             }
             reader.flush()
             process.waitUntilExit()
+            ChildReaper.shared.forget(process.processIdentifier)
             if self.isCancelled {
                 self.finish(.done(files: 0, matches: 0))
             } else if process.terminationStatus == 2 && reader.hits == 0 {

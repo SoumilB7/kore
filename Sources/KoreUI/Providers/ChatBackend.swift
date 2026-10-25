@@ -213,19 +213,21 @@ final class TurnFiles: @unchecked Sendable {
     private let lock = NSLock()
     private var snapshot: Task<GitSnapshot?, Never>?
     private var reported: [FileChange] = []
-    private var turnDiff: [FileChange]?
+    private var turnDiff: String?
 
     init(folder: URL) { self.folder = folder }
 
     /// Starts the turn's snapshot (git runs off the main actor). A turn already begun keeps its
-    /// snapshot: Codex's begins at send, before its `turn/started`.
-    func begin() {
+    /// snapshot: Codex's begins at send, before its `turn/started`. True if this call began it.
+    @discardableResult
+    func begin() -> Bool {
         lock.withLock {
-            guard snapshot == nil else { return }
+            guard snapshot == nil else { return false }
             let folder = folder
             snapshot = Task.detached { await GitSnapshot.take(folder) }
             reported = []
             turnDiff = nil
+            return true
         }
     }
 
@@ -237,15 +239,25 @@ final class TurnFiles: @unchecked Sendable {
 
     func record(_ changes: [FileChange]) { lock.withLock { reported += changes } }
 
-    /// The CLI's diff of the whole turn so far (replaces any earlier one).
-    func setTurnDiff(_ changes: [FileChange]) { lock.withLock { turnDiff = changes } }
+    /// The CLI's diff of the whole turn so far (replaces any earlier one). Kept as text: it
+    /// grows with the turn and comes again after each edit, and git usually answers instead.
+    func setTurnDiff(_ diff: String) { lock.withLock { turnDiff = diff } }
+
+    /// Drops a turn that never reached the CLI: nothing to diff, so no end snapshot.
+    func discard() {
+        lock.withLock {
+            snapshot = nil
+            reported = []
+            turnDiff = nil
+        }
+    }
 
     /// Ends the turn. The list is computed after (a git diff takes a moment); the next turn
     /// can begin meanwhile.
     func finish() -> Task<[FileChange], Never> {
         let folder = folder
-        let (start, reported) = lock.withLock {
-            let taken = (snapshot, turnDiff ?? FileChange.mergedByPath(self.reported))
+        let (start, diff, reported) = lock.withLock {
+            let taken = (snapshot, turnDiff, FileChange.mergedByPath(self.reported))
             snapshot = nil
             self.reported = []
             turnDiff = nil
@@ -255,6 +267,7 @@ final class TurnFiles: @unchecked Sendable {
             if let begin = await start?.value, let end = await GitSnapshot.take(folder) {
                 return await begin.changes(to: end)
             }
+            if let diff { return UnifiedDiff.files(diff, root: folder) }
             return reported
         }
     }

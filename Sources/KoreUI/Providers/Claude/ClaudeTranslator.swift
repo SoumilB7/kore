@@ -182,7 +182,7 @@ package final class ClaudeTranslator {
     func abandonTurn() {
         guard let turn else { return }
         out.append(.turnFinished(turn, .completed, duration: nil))
-        _ = files.finish()
+        files.discard()
         self.turn = nil
     }
 
@@ -731,6 +731,15 @@ package final class ClaudeTranslator {
         pendingQueued.removeAll()
         deliveredQueued.removeAll()
         commands.endAll(at: .now, into: &out)
+    }
+
+    /// The CLI's process ended: the agents it ran in it end with it, stopped. Observed ones
+    /// (another client's) go on.
+    func cliExited(observed: Set<String>) {
+        for (id, _) in unfinishedAgents() where !observed.contains(id) {
+            agentEnded(id, .stopped, source: .cliExited)
+            finished[id] = true
+        }
     }
 
     /// The old transport is gone; observed agents and their commands belong to other clients.

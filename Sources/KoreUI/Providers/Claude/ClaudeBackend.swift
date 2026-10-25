@@ -332,6 +332,7 @@ final class ClaudeBackend: ChatBackend {
             if let ended = session { logExit(ended, reported: status) }
             session = nil
             pump = nil
+            endOwnAgents()
         }
     }
 
@@ -956,8 +957,9 @@ final class ClaudeBackend: ChatBackend {
     func relaunch(reason: String) async {
         guard let session else { return }
         log.relaunch("claude", chat: sessionId, reason: reason)
-        // Its shells end with its process.
+        // Its shells, and the agents it ran, end with its process.
         translator.relaunched()
+        endOwnAgents()
         flush()
         // Its exit isn't the chat's news: the pump goes first.
         pump?.cancel()
@@ -965,6 +967,20 @@ final class ClaudeBackend: ChatBackend {
         self.session = nil
         await session.close()
         logExit(session)
+    }
+
+    /// The CLI's process is gone: the agents it ran end, and their transcripts aren't read
+    /// again. Another client's agents (`alone`) go on being followed.
+    private func endOwnAgents() {
+        translator.cliExited(observed: alone)
+        for (id, tail) in tails where !alone.contains(id) {
+            tail.cancel()
+            tails[id] = nil
+            tailFiles[id] = nil
+            tailsSince[id] = nil
+            tailsWrote.remove(id)
+        }
+        flush()
     }
 
     func close() async {

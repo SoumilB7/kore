@@ -393,6 +393,8 @@ final class CodexBackend: ChatBackend {
             resumeId = sessionId
             session = nil
             pump = nil
+            translator.cliExited(observed: observedAgents)
+            flush()
         }
     }
 
@@ -501,7 +503,7 @@ final class CodexBackend: ChatBackend {
             translator.queuedRequest(queued, startsTurn: true)
         }
         // Snapshot before Codex can edit anything; the turn itself opens on turn/started.
-        translator.files.begin()
+        let began = translator.files.begin()
         await translator.files.ready()
         do {
             let turn = try await session.send(input: input, clientId: queued)
@@ -512,6 +514,7 @@ final class CodexBackend: ChatBackend {
                 translator.queuedRejected(queued)
                 log.queue("rejected", "codex", chat: sessionId, id: queued, via: "start")
             }
+            if began { translator.files.discard() }
             throw error
         }
         return true
@@ -812,8 +815,9 @@ final class CodexBackend: ChatBackend {
         refused = nil
         guard let session else { return }
         log.relaunch("codex", chat: sessionId, reason: reason)
-        // Its terminals end with its process.
+        // Its terminals, and the child threads it ran, end with its process.
         translator.relaunched()
+        translator.cliExited(observed: observedAgents)
         flush()
         terminalPoll?.cancel()
         terminalPoll = nil

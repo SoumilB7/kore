@@ -746,7 +746,7 @@ package final class AccountStore {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, let self else { return }
             self.settling[key] = nil
-            guard self.accountMoved(provider, login: id) else { return }
+            guard await self.accountMoved(provider, login: id) else { return }
             if CLIProfiles.active(provider) == id {
                 await self.refresh(provider)
             } else {
@@ -764,11 +764,14 @@ package final class AccountStore {
     }
 
     /// Whether the file's account changed since last seen; always, for a file Kore doesn't read.
-    private func accountMoved(_ provider: String, login id: String?) -> Bool {
+    /// The file (~80 KB, rewritten by every CLI as it works) is read and parsed off the main
+    /// thread.
+    private func accountMoved(_ provider: String, login id: String?) async -> Bool {
         guard let ops = ops(provider) else { return false }
         guard let stamp = ops.stamp else { return true }
         let key = Self.watchKey(provider, id)
-        let now = (try? Data(contentsOf: ops.loginFile(CLIProfiles.environment(provider, login: id)))).flatMap(stamp)
+        let file = ops.loginFile(CLIProfiles.environment(provider, login: id))
+        let now = await Task.detached(priority: .utility) { (try? Data(contentsOf: file)).flatMap(stamp) }.value
         defer { stamps[key] = now }
         return stamps[key] != .some(now)
     }

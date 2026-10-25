@@ -27,6 +27,8 @@ struct AgentLog: Sendable {
         case turnInterrupt = "turn interrupt"
         case replay
         case accountSwitch = "account switch"
+        /// The CLI that ran it ended (a crash, a restart): its own agents end with it.
+        case cliExited = "cli exited"
         /// Codex: an item of the parent's turn (`subAgentActivity`, a wait's states).
         case agentItem = "agent item"
         /// Codex: the child thread's own turn ended.
