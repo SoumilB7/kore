@@ -1,5 +1,6 @@
 <p align="center"><img src="Resources/kore-transition.svg" width="128" alt="Kore"></p>
 <h1 align="center">Kore</h1>
+<p align="center"><b>What VS Code could have been.</b></p>
 <p align="center">A native macOS app for the Claude Code and Codex CLIs.</p>
 
 Kore runs the `claude` and `codex` CLIs on your Mac and gives them a proper interface: a window
