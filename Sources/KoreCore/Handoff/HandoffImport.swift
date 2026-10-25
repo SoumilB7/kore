@@ -73,7 +73,7 @@ public enum HandoffImport {
         -> (segment: HandoffSegment, plan: HandoffPlan)?
     {
         let window = window ?? writer.window(model: model)
-        guard let segment = HandoffFormats.read(file, window: window) else { return nil }
+        guard let segment = HandoffFormats.read(file, window: window).map(HandoffRecords.chained) else { return nil }
         let plan = HandoffBudget.plan(segment, window: window)
         return plan.isEmpty ? nil : (segment, plan)
     }
@@ -87,7 +87,7 @@ public enum HandoffImport {
         -> Result<HandoffPreview, HandoffReadError>
     {
         let window = window ?? writer.window(model: model)
-        return HandoffFormats.check(file, window: window).map { segment in
+        return HandoffFormats.check(file, window: window).map(HandoffRecords.chained).map { segment in
             HandoffPreview(segment, HandoffBudget.plan(segment, window: window), file: file)
         }
     }

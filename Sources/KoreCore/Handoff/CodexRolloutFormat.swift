@@ -233,13 +233,13 @@ public struct CodexRolloutFormat: HandoffFormat {
                     return
                 }
                 close()
-                current = HandoffTurn(id: turnId ?? UUID().uuidString, prompt: prompt.joined(separator: "\n\n"), at: at)
+                current = HandoffTurn(id: turnId ?? HandoffRecords.untracked + UUID().uuidString, prompt: prompt.joined(separator: "\n\n"), at: at)
                 current?.images = images
                 current?.files = files
             case "assistant":
                 // Every message, in its place: the last one becomes the reply at the turn's end. A
                 // turn whose prompt was all context still has its words.
-                if current == nil { current = HandoffTurn(id: turnId ?? UUID().uuidString, prompt: "", at: at) }
+                if current == nil { current = HandoffTurn(id: turnId ?? HandoffRecords.untracked + UUID().uuidString, prompt: "", at: at) }
                 current?.say(texts.joined(separator: "\n"))
             default:
                 break  // developer: Codex's own instructions
@@ -360,7 +360,7 @@ public struct CodexRolloutFormat: HandoffFormat {
         }
 
         mutating func add(_ step: HandoffStep, call: String? = nil) {
-            if current == nil { current = HandoffTurn(id: turnId ?? UUID().uuidString, prompt: "", at: at) }
+            if current == nil { current = HandoffTurn(id: turnId ?? HandoffRecords.untracked + UUID().uuidString, prompt: "", at: at) }
             current?.steps.append(step)
             if let call, !call.isEmpty { pending[call] = (current?.steps.count ?? 1) - 1 }
         }

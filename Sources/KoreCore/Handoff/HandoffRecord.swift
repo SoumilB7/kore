@@ -155,6 +155,21 @@ public enum HandoffRecords {
         return record
     }
 
+    /// A turn a Codex rollout names no turn for: in a thread Kore made, the history it injected.
+    static let untracked = "untracked-"
+
+    /// `segment` with the history Kore carried into it put back in front, when Kore made it
+    /// (a chain A → B → C keeps A): its own copy of that history, written rows or injected
+    /// items, left out so nothing comes twice.
+    public static func chained(_ segment: HandoffSegment) -> HandoffSegment {
+        guard let record = record(target: segment.sessionId), let earlier = history(target: segment.sessionId) else { return segment }
+        var segment = segment
+        let written = Set(record.written)
+        segment.turns.removeAll { written.contains($0.id) || ($0.id.hasPrefix(untracked) && record.target.cli == "codex") }
+        segment.turns.insert(contentsOf: earlier, at: 0)
+        return segment
+    }
+
     /// The turns shown above the divider of the chat this session is (`save`).
     public static func history(target session: String) -> [HandoffTurn]? {
         let decoder = JSONDecoder()
