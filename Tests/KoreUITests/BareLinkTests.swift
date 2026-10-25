@@ -3,7 +3,7 @@ import Testing
 
 @testable import KoreUI
 
-/// A bare URL in a reply's paragraph is a link, as one beside markdown already was.
+/// Only markdown links link: a bare URL stays text, with or without other markup on its line.
 @Suite("Bare links")
 struct BareLinkTests {
     private func links(_ text: String) -> [URL] {
@@ -12,14 +12,15 @@ struct BareLinkTests {
         return string.runs.compactMap(\.link)
     }
 
-    @Test func bareURLsLink() {
-        #expect(links("Standard: https://www.youtube.com/watch?v=dQw4w9WgXcQ").map(\.absoluteString)
-            == ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"])
-        #expect(links("Short form: https://youtu.be/dQw4w9WgXcQ").map(\.absoluteString) == ["https://youtu.be/dQw4w9WgXcQ"])
-        #expect(links("See www.example.com for more").count == 1)
+    @Test func bareURLsStayText() {
+        #expect(links("Standard: https://www.youtube.com/watch?v=dQw4w9WgXcQ").isEmpty)
+        #expect(links("With a start time: https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=43s").isEmpty)
+        #expect(links("**Bold** then www.example.com").isEmpty)
     }
 
-    @Test func plainTextStaysPlain() {
-        #expect(links("Nothing to link here, just words.").isEmpty)
+    @Test func markdownLinksLink() {
+        #expect(links("See [the video](https://youtu.be/dQw4w9WgXcQ)").map(\.absoluteString) == ["https://youtu.be/dQw4w9WgXcQ"])
+        #expect(links("Or [https://youtu.be/x](https://youtu.be/x)").count == 1)
+        #expect(links("Or <https://example.com>").count == 1)
     }
 }

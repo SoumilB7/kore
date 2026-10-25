@@ -186,14 +186,15 @@ struct ChatColumn: Equatable {
     let composerMaxWidth: CGFloat
     let composerPadding: CGFloat
 
-    /// p(W) = clamp(24, 24 + (W − 800) × 0.04, 48), whole points; the transcript takes all of
-    /// W − 2p (no cap: the sides are used at any size, full screen included); the composer
-    /// is min(760, W − 2p), centred. Continuous, so a drag is one plain relayout per frame.
+    /// p(W) = clamp(24, 24 + (W − 800) × 0.04, 48), whole points; the transcript sits a
+    /// further 12 in from each side and takes the rest (no cap: the sides are used at any
+    /// size, full screen included); the composer is min(760, W − 2p), centred. Continuous, so
+    /// a drag is one plain relayout per frame.
     static func fitting(_ width: CGFloat) -> ChatColumn {
         let padding = min(max(24 + (width - 800) * 0.04, 24), 48).rounded()
         let composer = min(760, max(width - 2 * padding, 0))
         return ChatColumn(
-            maxWidth: .infinity, padding: padding, composerMaxWidth: composer + 2 * padding, composerPadding: padding)
+            maxWidth: .infinity, padding: padding + 12, composerMaxWidth: composer + 2 * padding, composerPadding: padding)
     }
 
     /// Before the window has measured itself (galleries, previews).

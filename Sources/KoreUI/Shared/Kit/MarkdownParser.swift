@@ -281,12 +281,9 @@ enum MarkdownParser {
     /// Inline markdown (emphasis, code spans, links, strikethrough) styled for Kore: code on its
     /// fill in Menlo (`code`), links in the link colour and underlined.
     private static func inline(_ text: Substring, _ code: Font) -> AttributedString {
-        // Plain text (most cells, items and many paragraphs) skips Foundation's parser; a bare
-        // URL ("https://…", "www.…") needs it, as it links them.
+        // Plain text (most cells, items and many paragraphs) skips Foundation's parser.
         let markup: Set<UInt8> = [0x2A, 0x5F, 0x60, 0x5B, 0x7E, 0x5C, 0x3C, 0x26, 0x21]  // * _ ` [ ~ \ < & !
-        if !text.utf8.contains(where: markup.contains), !text.contains("://"), !text.contains("www.") {
-            return AttributedString(text)
-        }
+        if !text.utf8.contains(where: markup.contains) { return AttributedString(text) }
         let options = AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: false, interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible)
@@ -296,6 +293,15 @@ enum MarkdownParser {
         for run in string.runs {
             if run.inlinePresentationIntent?.contains(.code) == true { spans.append(run.range) }
             if run.link != nil { links.append(run.range) }
+        }
+        // Only markdown links ([text](url), <url>) link: a bare URL the parser linked by itself
+        // stays text, as it does on a line without markup.
+        links.removeAll { range in
+            let shown = String(string[range].characters)
+            guard text.contains("[" + shown + "](") == false, text.contains("<" + shown + ">") == false,
+                  shown.contains("://") || shown.hasPrefix("www.") else { return false }
+            string[range].link = nil
+            return true
         }
         for range in spans {
             string[range].font = code
