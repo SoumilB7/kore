@@ -433,7 +433,7 @@ final class CodexBackend: ChatBackend {
             case .allow, .approvePlan: .accept
             case .allowAlways: .acceptForSession
             case .deny, .keepPlanning: .decline
-            case .answers(let answers): .answers(answers.mapValues { [$0] })
+            case .answers(let answers): .answers(answers)
             }
         try? await session.respond(to: request, mapped)
     }

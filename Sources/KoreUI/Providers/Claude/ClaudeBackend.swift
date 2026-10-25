@@ -758,7 +758,8 @@ final class ClaudeBackend: ChatBackend {
             case .allow: .allow
             case .allowAlways: .allowAlways
             case .deny: .deny(message: ClaudeTranslator.deniedCall)
-            case .answers(let answers): .answers(answers)
+            // Several picked go as one line, as Claude Code's own picker sends them.
+            case .answers(let answers): .answers(answers.mapValues { $0.joined(separator: ", ") })
             case .approvePlan(let autoAcceptEdits): autoAcceptEdits ? .allowSettingMode("acceptEdits") : .allow
             case .keepPlanning: .deny(message: "The user wants to keep planning. Ask what to change.")
             }

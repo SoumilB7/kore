@@ -496,6 +496,9 @@ package final class CodexTranslator {
     }
 
     private func spawn(_ thread: String, parent: AgentID, toolId: String?, name: String?, prompt: String?, model: String?) {
+        // A child's activity can name a thread above it (the chat's own, at agent path /root):
+        // no agent of its own, and one that would never end.
+        guard thread != threadId, !isAncestor(thread, of: parent) else { return }
         guard spawned.insert(thread).inserted else { return }
         parents[thread] = parent
         // Its nickname ("Hume") or role names it; else its task, from an agent path like
@@ -510,6 +513,16 @@ package final class CodexTranslator {
                 AgentInfo(
                     id: thread, parent: parent, toolId: toolId, name: shown, type: beside, model: model, prompt: prompt,
                     background: false)))
+    }
+
+    private func isAncestor(_ thread: String, of agent: AgentID) -> Bool {
+        var at = agent
+        var seen: Set<String> = []
+        while case .sub(let id) = at, seen.insert(id).inserted {
+            if id == thread { return true }
+            at = parents[id] ?? .main
+        }
+        return false
     }
 
     /// `by`: the activity item reporting it. Each run's end is an item of its own, so another
@@ -655,7 +668,8 @@ package final class CodexTranslator {
         case .userInput:
             let questions = a.questions.map { q in
                 Approval.Question(
-                    id: q["id"]?.string ?? "", text: q["question"]?.string ?? "", options: ToolText.options(q["options"]))
+                    id: q["id"]?.string ?? "", text: q["question"]?.string ?? "", options: ToolText.options(q["options"]),
+                    secret: q["isSecret"]?.bool ?? false)
             }
             return make("", questions: questions)
         }

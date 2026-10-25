@@ -19,6 +19,8 @@ package final class ScriptedBackend: ChatBackend {
 
     /// Every call Kore made, in order.
     package private(set) var log: [Call] = []
+    /// A question card's answers, by approval id.
+    package private(set) var answers: [String: [String: [String]]] = [:]
     package private(set) var sessionId: String?
 
     /// Text deltas a second (`CLIScript.feed`); nil: one a run-loop pass.
@@ -118,6 +120,7 @@ package final class ScriptedBackend: ChatBackend {
             case .allow, .allowAlways, .approvePlan, .answers: true
             case .deny, .keepPlanning: false
             }
+        if case .answers(let given) = decision { answers[approvalID] = given }
         log.append(.respond(approval: approvalID, allowed: allowed))
         offer(.respond(approval: approvalID, allowed: allowed))
     }

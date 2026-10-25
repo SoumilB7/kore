@@ -23,6 +23,8 @@ struct ChatView: View {
     /// ⌘. stops the shown chat's turn from anywhere in it: the monitor, and the chat it reads.
     @StateObject private var stopKey = Held<Any?>(nil)
     @StateObject private var shown = Held<Chat?>(nil)
+    /// The chat's height: a question card takes at most half of it.
+    @StateObject private var height = Local<CGFloat>(0)
 
     var body: some View {
         let chats = kept.update(active, tabs: workspace.tabs)
@@ -50,7 +52,7 @@ struct ChatView: View {
             }
             .onDrop(of: [.fileURL], delegate: ImportDrop(state: chat.importer, offered: Self.offersImport(chat)) { openImport(chat, file: $0) })
             VStack(spacing: Space.lg) {
-                ApprovalsView(chat: chat)
+                ApprovalsView(chat: chat, maxHeight: height.value > 0 ? height.value / 2 : .infinity)
                 if Self.offersImport(chat) {
                     ImportLine(state: chat.importer) { openImport(chat) }
                 }
@@ -62,6 +64,7 @@ struct ChatView: View {
             .padding(.bottom, Space.xxxl)
             .frame(maxWidth: column.composerMaxWidth)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height.value = $0 }
         .contextCard(chat)
         .environment(\.hiddenTab, active == nil)
         // The approvals' and the changes modal's files open in Kore, as the transcript's do.

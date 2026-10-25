@@ -434,11 +434,17 @@ package struct Approval: Identifiable, Sendable {
         package let id: String
         package let text: String
         package let options: [Option]
+        /// Any number of options can be picked (Claude's multiSelect).
+        package let multiple: Bool
+        /// What's typed is hidden as it's typed (a Codex secret).
+        package let secret: Bool
 
-        package init(id: String, text: String, options: [Option]) {
+        package init(id: String, text: String, options: [Option], multiple: Bool = false, secret: Bool = false) {
             self.id = id
             self.text = text
             self.options = options
+            self.multiple = multiple
+            self.secret = secret
         }
     }
 
@@ -474,8 +480,8 @@ package enum Decision: Sendable {
     /// Claude's "Ready to code?": approve the plan, optionally switching to Accept edits.
     case approvePlan(autoAcceptEdits: Bool)
     case keepPlanning
-    /// Keyed by `Approval.Question.id`.
-    case answers([String: String])
+    /// Keyed by `Approval.Question.id`: the options picked, or what was typed under Other.
+    case answers([String: [String]])
 }
 
 /// How a turn's connection to its model stands (`ChatEvent.connection`).

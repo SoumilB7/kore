@@ -282,6 +282,50 @@ final class ApproveAndDeny: ChatStoryline {
     }
 }
 
+/// A question card: nothing goes until Submit, and Submit waits for every question; several
+/// can be picked where the question allows it, and Other takes a typed answer.
+final class QuestionCardSubmit: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .approvals, .gate] }
+    static let layout = "Which layout?"
+    static let colours = "Which colours?"
+    override class var script: CLIScript {
+        let questions = [
+            Approval.Question(id: layout, text: layout, options: [.init(label: "Grid", description: ""), .init(label: "List", description: "")]),
+            Approval.Question(
+                id: colours, text: colours, options: [.init(label: "Red", description: ""), .init(label: "Blue", description: "")], multiple: true),
+        ]
+        let approval = Approval(id: "q1", title: "", detail: nil, body: nil, canAlwaysAllow: false, questions: questions)
+        return CLIScript(turns: [[.startTurn, .approval(approval, allow: Beat.answer("Got it."), deny: []), .finishTurn(.completed)]])
+    }
+
+    private static func option(_ question: String, _ label: String) -> Press { Press(.id(StoryID.Approval.option(question, label))) }
+    private static let submit = Press(.id(StoryID.Approval.card("q1").part(.submit)))
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Ask me"),
+            WaitForElement(.id(StoryID.Approval.card("q1").part(.submit))),
+            Self.option(Self.layout, "List"),
+            Self.option(Self.layout, "Grid"),
+            Self.submit,
+            Expect("nothing sent with a question unanswered") { story in
+                try !story.scriptedBackend().log.contains { if case .respond = $0 { true } else { false } }
+                    && story.activeChat().pendingApprovals.contains { $0.id == "q1" }
+            },
+            Self.option(Self.colours, "Red"),
+            Self.option(Self.colours, "Blue"),
+            Press(.id(StoryID.Approval.other(Self.colours))),
+            Click(.id(StoryID.Approval.other(Self.colours).part(.field))),
+            TypeText("Green"),
+            Self.submit,
+            TurnFinished(1),
+            Expect("the picks and the typed answer sent") { story in
+                try story.scriptedBackend().answers["q1"] == [Self.layout: ["Grid"], Self.colours: ["Red", "Blue", "Green"]]
+            },
+        ]
+    }
+}
+
 /// An answer's rows are built without text selection views: SwiftUI's view per selectable text
 /// was two fifths of building rows, so text becomes selectable only once the pointer reaches it.
 final class AnswerRowsWithoutSelection: ChatStoryline {

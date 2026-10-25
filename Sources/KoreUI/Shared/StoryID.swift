@@ -35,7 +35,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
         case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track, outside, extended
         case signIn = "signin", signOut = "signout"
-        case `continue`, background
+        case `continue`, background, submit, other
         /// A chat tab's spinner: its turn runs, or it compacts.
         case working
         /// A tab whose turn is offline or stalled: ⚠ in its spinner's place.
@@ -175,8 +175,12 @@ extension StoryID {
 
     package enum Approval {
         /// `.part(.allow)`, `.always`, `.deny`; a plan card's `.approveplan` (edits approved by hand),
-        /// `.autoaccept` and `.keepplanning`.
+        /// `.autoaccept` and `.keepplanning`; a question card's `.submit`.
         package static func card(_ id: String) -> StoryID { StoryID(.approval, key: id) }
+        /// A question's Other, by the question's id; `.part(.field)` is what's typed under it.
+        package static func other(_ question: String) -> StoryID { StoryID(.approval, "other", key: question) }
+        /// A question's option, by the question's id and the option's label.
+        package static func option(_ question: String, _ label: String) -> StoryID { StoryID(.approval, "option", key: question + "/" + label) }
     }
 
     package enum AgentMap {
@@ -334,6 +338,8 @@ extension StoryID {
             StoryID(.approval, key: k).part(.allow), StoryID(.approval, key: k).part(.always),
             StoryID(.approval, key: k).part(.deny), StoryID(.approval, key: k).part(.approveplan),
             StoryID(.approval, key: k).part(.keepplanning), StoryID(.approval, key: k).part(.autoaccept),
+            StoryID(.approval, key: k).part(.submit), StoryID(.approval, "other", key: k),
+            StoryID(.approval, "other", key: k).part(.field), StoryID(.approval, "option", key: k),
             StoryID(.agentmap, "row", key: k), StoryID(.agentmap, "wires", key: k), StoryID(.agentmap, "ended", key: k),
             StoryID(.history, "row", key: k),
             StoryID(.history, "row", key: k).part(.archive), StoryID(.explorer, "row", key: k),

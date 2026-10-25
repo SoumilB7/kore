@@ -736,7 +736,8 @@ package final class ClaudeTranslator {
         if r.isQuestion {
             let questions = (r.input["questions"]?.array ?? []).map { q in
                 let text = q["question"]?.string ?? ""
-                return Approval.Question(id: text, text: text, options: ToolText.options(q["options"]))
+                return Approval.Question(
+                    id: text, text: text, options: ToolText.options(q["options"]), multiple: q["multiSelect"]?.bool ?? false)
             }
             return Approval(
                 id: r.id, title: "", detail: nil, body: nil, canAlwaysAllow: false, questions: questions, agent: agent)

@@ -233,6 +233,20 @@ struct BackgroundAgentsTests {
         #expect(script.store.agent("child")?.tokens == 900)
     }
 
+    /// A child's activity naming the thread above it (the chat's own, at /root) adds no agent:
+    /// once it did, as one that ran forever, under the child that named it.
+    @Test func aCodexChildNamingItsParentAddsNoAgent() {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp"))
+        translator.translate(.threadStarted(threadId: "main", model: nil, raw: .null))
+        translator.translate(CodexEvent(notification: "turn/started", params: .object(["turn": .object(["id": .string("t1")])])))
+        translator.translate(.itemCompleted(activity("started", "call_1")))
+        translator.translate(.itemCompleted(activity("started", "call_2", thread: "main")), agent: .sub("child"))
+        translator.translate(.itemCompleted(activity("started", "call_3", thread: "child")), agent: .sub("child"))
+        let spawned = translator.take().events.compactMap { if case .agentSpawned(let info) = $0 { info.id } else { nil } }
+        #expect(spawned == ["child"])
+        #expect(translator.unfinishedAgents() == ["child"])
+    }
+
     /// One still running when its parent's turn ends runs on in the background, as a Claude agent
     /// run in the background does: running under the chat, a background one, ended by its own
     /// turn, then in Done.
