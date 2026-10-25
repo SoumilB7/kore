@@ -227,6 +227,14 @@ struct ClaudeCommands {
         }
     }
 
+    /// What `agents` ran, ended: work read from their last lines after their CLI ended.
+    mutating func endAll(of agents: Set<String>, at: Date, into out: inout [ChatEvent]) {
+        for (id, command) in tracked.sorted(by: { $0.key < $1.key })
+        where command.state.isLive && command.owner.sub.map(agents.contains) == true {
+            end(id, .ended, at: at, into: &out)
+        }
+    }
+
     // MARK: - Helpers
 
     private mutating func start(

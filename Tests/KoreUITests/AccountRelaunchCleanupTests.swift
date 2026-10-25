@@ -64,6 +64,21 @@ struct AccountRelaunchCleanupTests {
         #expect(codex.isFinished("owned") && !codex.isFinished("external"))
     }
 
+    @Test func workReadFromAnEndedAgentsLastLinesEnds() {
+        let at = Date.now
+        var commands = ClaudeCommands()
+        var events: [ChatEvent] = []
+        for id in ["owned", "external"] {
+            commands.call(id, "CronCreate", ["cron": "* * * * *", "prompt": "Check"], agent: .sub(id), at: at)
+            commands.result(id, text: "", isError: false, result: ["id": .string(id)], folder: folder, session: "s", at: at, into: &events)
+        }
+        events = []
+        commands.endAll(of: ["owned"], at: at, into: &events)
+        let ended = events.compactMap { if case .commandEnded(let id, _, _) = $0 { id } else { nil } }
+        #expect(ended == ["owned"])
+        #expect(commands.isLive("external"))
+    }
+
     @Test func claudeCleansOwnedStateEvenWhenTheSessionAlreadyDied() async throws {
         let t = try claude()
         let backend = ClaudeBackend(BackendOptions(folder: folder, mode: "default"), translator: t)

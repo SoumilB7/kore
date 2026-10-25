@@ -742,6 +742,11 @@ package final class ClaudeTranslator {
         }
     }
 
+    /// What those agents' last lines started (a scheduled job) ended with the process too.
+    func cliExitRead(agents: Set<String>) {
+        commands.endAll(of: agents, at: .now, into: &out)
+    }
+
     /// The old transport is gone; observed agents and their commands belong to other clients.
     func accountStopped(observed: Set<String>) {
         for (id, _) in unfinishedAgents() where !observed.contains(id) {

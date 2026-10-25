@@ -267,6 +267,15 @@ public actor ClaudeSession {
         io?.close()
     }
 
+    /// Closes, then waits up to `limit` for the CLI's own process (not what it started) to exit,
+    /// so nothing it writes as it goes is missed, and it never overlaps the next one.
+    public func close(awaitingExit limit: Duration) async {
+        close()
+        guard let io else { return }
+        let until = ContinuousClock.now + limit
+        while io.isRunning, ContinuousClock.now < until { try? await Task.sleep(for: .milliseconds(20)) }
+    }
+
     /// A forced account change cannot start another CLI until this child has exited.
     public func close(waiting limit: Duration) async -> Bool {
         io?.prepareOwnedClose()
