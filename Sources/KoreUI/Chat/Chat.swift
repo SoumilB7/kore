@@ -70,6 +70,17 @@ package final class Chat: Identifiable {
     /// starts or Kore asks for one. So a failed compaction, or one that leaves usage past the
     /// point, waits for the user's next turn.
     @ObservationIgnored private var autoCompactDue = false
+    /// A compaction the user didn't ask for stopped work that was going on: Kore's own at its
+    /// point, right after a turn that ran to its end, or the CLI's own in a turn that then ended
+    /// with nothing after it. "Continue" goes once it's done; never after the wheel or /compact,
+    /// a Stop, a failure or a limit.
+    @ObservationIgnored private var continueAfterCompaction = false
+    @ObservationIgnored private var lastTurnCompleted = false
+    @ObservationIgnored private var compactedInTurn = false
+    /// The turn the next starts is Kore's own Continue, and the one running is: neither counts
+    /// as the user's, so it neither compacts at the point nor continues again (no loop).
+    @ObservationIgnored private var continueSent = false
+    @ObservationIgnored private var inContinueTurn = false
     /// The context card's presence: the wheel and the card share it.
     let contextCard = ContextCardPresence()
     /// The usage popup over the composer (the / menu's Usage).
@@ -590,6 +601,8 @@ package final class Chat: Identifiable {
     // MARK: Actions
 
     func stop() {
+        continueAfterCompaction = false
+        compactedInTurn = false
         let backend = backend
         Task { await backend?.interrupt() }
     }
@@ -603,6 +616,8 @@ package final class Chat: Identifiable {
     func compact(instructions: String = "", at point: Int? = nil) {
         guard canCompact else { return }
         autoCompactDue = false
+        // Kore's own, after a turn that ran to its end: the work goes on after it.
+        continueAfterCompaction = point != nil && lastTurnCompleted
         context.begin()
         transcript.compacting(true, at: point)
         let backend = connect()
@@ -647,16 +662,54 @@ package final class Chat: Identifiable {
         switch event {
         case .turnStarted(_, let origin, _):
             // A compaction's own turn (Kore's, as both CLIs run one) isn't the user's.
-            if origin == .user && !context.compacting { autoCompactDue = true }
-        case .compactionStarted, .compacted, .exited:
+            if origin == .user && !context.compacting {
+                inContinueTurn = continueSent
+                continueSent = false
+                if !inContinueTurn { autoCompactDue = true }
+                compactedInTurn = false
+            }
+        case .compacted(_, _, let auto):
             autoCompactDue = false
-        case .turnFinished, .contextUsage:
+            // The CLI's own, mid-turn: the turn goes on, unless it ends with nothing after it.
+            if auto == true, status.isRunning { compactedInTurn = true }
+            if continueAfterCompaction, !status.isRunning { sendContinueAfterCompaction() }
+        case .text, .toolStarted:
+            compactedInTurn = false
+        case .compactionStarted:
+            autoCompactDue = false
+        case .compactionFailed, .exited:
+            autoCompactDue = false
+            continueAfterCompaction = false
+            compactedInTurn = false
+        case .turnFinished(_, let outcome, _):
+            lastTurnCompleted = outcome == .completed && !context.compacting
+            if continueAfterCompaction, !context.compacting {
+                sendContinueAfterCompaction()
+                return
+            }
+            let stoppedByCompaction = compactedInTurn && outcome == .completed && !inContinueTurn
+            compactedInTurn = false
+            if inContinueTurn { lastTurnCompleted = false }
+            if autoCompactDue, context.pastPoint, canCompact, waiting.isEmpty, let point = context.autoCompactAt {
+                compact(at: point)
+            } else if stoppedByCompaction, waiting.isEmpty {
+                continueSent = true
+                deliver("Continue", [])
+            }
+        case .contextUsage:
             guard autoCompactDue, context.pastPoint, canCompact, waiting.isEmpty, let point = context.autoCompactAt
             else { return }
             compact(at: point)
         default:
             break
         }
+    }
+
+    private func sendContinueAfterCompaction() {
+        continueAfterCompaction = false
+        guard waiting.isEmpty else { return }
+        continueSent = true
+        deliver("Continue", [])
     }
 
     /// The instructions of a typed `/compact` (empty when it has none); nil for anything else.

@@ -38,6 +38,8 @@ extension Chat {
 
     /// The context wheel's click: compacts, between turns only.
     package func storyCompact() { compact() }
+    /// The context card's auto-compact point (a percent), nil for Off.
+    package func storySetAutoCompact(_ point: Int?) { setAutoCompact(point) }
 
     /// The composer's Send (or a queued send, while a turn runs).
     package func storySend(_ text: String) {

@@ -205,6 +205,9 @@ final class CompactCommandTests {
         try await turn(chat, "First")
         #expect(compactions(chat) == 1)
         #expect(chat.transcript.entries.contains { $0.kind == .divider && $0.text.hasPrefix("Compacted at 80% · ") })
+        // The work goes on with Kore's Continue; that turn, not the user's, doesn't compact again.
+        try await until("Kore's Continue answered") { userTexts(chat).last == "Continue" && !chat.status.isRunning }
+        #expect(compactions(chat) == 1)
         try await turn(chat, "Second")
         #expect(compactions(chat) == 2)
         chat.close()
