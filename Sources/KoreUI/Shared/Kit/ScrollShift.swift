@@ -12,7 +12,8 @@ final class ScrollShift: ObservableObject {
     /// Called when its window comes back into view or to the front.
     var onReturn: (() -> Void)?
     /// A single absolute position replaces any retained edge/row scroll target at pinch begin.
-    var onZoomBegin: ((CGFloat) -> Void)?
+    /// Given the native clip origin the pinch began at.
+    var onZoomBegin: ((CGPoint) -> Void)?
     var onZoomEnd: ((Bool) -> Void)?
     var onZoomInput: (() -> Void)?
 
@@ -25,7 +26,7 @@ final class ScrollShift: ObservableObject {
     @discardableResult
     static func beginZoom(in scroll: NSScrollView) -> Bool {
         guard let freeze = known.object(forKey: scroll)?.onZoomBegin else { return false }
-        freeze(scroll.contentView.bounds.minY)
+        freeze(scroll.contentView.bounds.origin)
         return true
     }
 

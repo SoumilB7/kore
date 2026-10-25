@@ -148,6 +148,8 @@ private struct ExercisePinch: Step {
         let wallMs = milliseconds(began.duration(to: clock.now))
         guard let preview = PinchZoom.storyCounts(in: window), preview.commits == before.commits,
               preview.previews - before.previews == 120 else { throw StoryFailure.other("page previews finished early or skipped native magnification") }
+        // Where the last sample left the view: releasing the fingers must not move it.
+        let lastSample = scroll.contentView.bounds.origin
         guard PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point) else {
             throw StoryFailure.other("the pinch did not finish")
         }
@@ -159,6 +161,12 @@ private struct ExercisePinch: Step {
               let committed = PinchZoom.storyPageScale(in: window), committed > pageStart + 0.1,
               PinchZoom.storyScale() == start
         else { throw StoryFailure.other("native magnification was lost or changed the global font size") }
+        // A few more passes: a target held from the pinch's start would land by then.
+        for _ in 0..<10 { try await Task.sleep(for: .milliseconds(20)) }
+        let released = scroll.contentView.bounds.origin
+        guard abs(released.y - lastSample.y) < 1, abs(released.x - lastSample.x) < 1 else {
+            throw StoryFailure.other("releasing the pinch moved the view: \(lastSample) → \(released)")
+        }
         guard abs(document.bounds.width - layoutSize.width) < 1, abs(document.bounds.height - layoutSize.height) < 1 else {
             throw StoryFailure.other("optical magnification reflowed the document: \(layoutSize) → \(document.bounds.size)")
         }

@@ -20,6 +20,8 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var following = Local(true)
     @StateObject private var zoomFollowing = Held(Bool?.none)
     @StateObject private var zoomRejoining = Held(false)
+    /// The native clip origin a pinch began at: a release away from it is a pinch that moved the view.
+    @StateObject private var zoomBegan = Held(CGPoint.zero)
     /// Written by the scroll view as the reader scrolls; held without re-rendering. `nudge`
     /// re-renders once, when the position has to be pushed back (after a fold).
     @StateObject private var position = Held(ScrollPosition(edge: .bottom))
@@ -305,8 +307,9 @@ struct TranscriptTimeline: View, Equatable {
                 follow(proxy, showing: showing)
             }
             .onAppear {
-                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop, following, zoomFollowing, zoomRejoining] _ in
+                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop, following, zoomFollowing, zoomRejoining, zoomBegan] native in
                     zoomFollowing.value = following.value
+                    zoomBegan.value = native
                     zoomRejoining.value = false
                     glidingUntil.value = nil
                     glideCut.value = store.sentAt
@@ -319,9 +322,22 @@ struct TranscriptTimeline: View, Equatable {
                         nudge.value &+= 1
                     }
                 }
-                shift.onZoomEnd = { [following, zoomFollowing, zoomRejoining, position, glidingUntil, glideCut, store] resume in
+                shift.onZoomEnd = { [following, zoomFollowing, zoomRejoining, zoomBegan, position, glidingUntil, glideCut, store, shift] resume in
                     guard let previous = zoomFollowing.value else { return }
                     zoomFollowing.value = nil
+                    // A pinch that moved the view (zoomed in around the cursor) leaves it where
+                    // the last sample put it. The target frozen at begin is dropped, not replaced:
+                    // no target, no scroll. Native scrolling owns the place from here, and only
+                    // a view still at the end follows.
+                    if let frames = shift.frames,
+                        hypot(frames.visible.minX - zoomBegan.value.x, frames.visible.minY - zoomBegan.value.y) > 0.5
+                    {
+                        // SwiftUI's document is flipped: its end is at the bottom.
+                        following.value = previous && frames.visible.maxY >= frames.content.maxY - Self.atBottom
+                        zoomRejoining.value = false
+                        position.value = ScrollPosition()
+                        return
+                    }
                     following.value = previous
                     guard resume, previous, !hidden else { zoomRejoining.value = false; return }
                     zoomRejoining.value = true
