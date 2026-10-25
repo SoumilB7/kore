@@ -1,29 +1,37 @@
 <p align="center"><img src="Resources/kore-transition.svg" width="128" alt="Kore"></p>
 <h1 align="center">Kore</h1>
 <p align="center"><b>What VS Code could have been.</b></p>
-<p align="center">A native macOS app for the Claude Code and Codex CLIs.</p>
+<p align="center">Your agents, out of the terminal and on one team.</p>
+<p align="center"><a href="../../releases/latest">Download</a> · <a href="CHANGELOG.md">Changelog</a></p>
+
+<p align="center"><img src="docs/images/board.png" width="100%" alt="A board of four Claude Code and Codex chats in one tab"></p>
 
 Kore runs the `claude` and `codex` CLIs on your Mac and gives them a proper interface: a window
 per folder, tabs for chats, files, terminals and history. The CLIs do the work; Kore shows it.
 
 ## Features
 
-**Multiple accounts.** Keep a pool of logins and switch by hand, so nothing rotates behind your back.
+### Tab groups
 
-<img src="docs/images/accounts.png" width="760" alt="Account popup with three Claude logins, emails masked">
+A board holds several chats in one tab, like a control panel (above).
 
-**Intuitive interaction.** Auto-compact, Plan mode without permission prompts, Stay awake, and
-pasted images.
+### Multiple accounts
 
-<img src="docs/images/flow.png" width="760" alt="A chat after an automatic compaction, in Plan mode with a pasted screenshot">
+Keep a pool of logins and switch by hand, so nothing rotates behind your back.
 
-**Port chats.** Carry a Claude Code chat on in Codex, or a Codex chat in Claude Code.
+<p align="center"><img src="docs/images/accounts.png" width="100%" alt="Account popup with three Claude logins, emails masked"></p>
 
-<img src="docs/images/port.png" width="760" alt="A Claude Code chat continued in Codex">
+### Intuitive interaction
 
-**Tab groups.** A board holds several chats in one tab, like a control panel.
+Auto-compact, Plan mode without permission prompts, Stay awake, and pasted images.
 
-<img src="docs/images/board.png" width="760" alt="A board of four chats in one tab">
+<p align="center"><img src="docs/images/flow.png" width="100%" alt="A chat after an automatic compaction, in Plan mode with a pasted screenshot"></p>
+
+### Port chats
+
+Carry a Claude Code chat on in Codex, or a Codex chat in Claude Code.
+
+<p align="center"><img src="docs/images/port.png" width="100%" alt="A Claude Code chat continued in Codex"></p>
 
 ## Install
 

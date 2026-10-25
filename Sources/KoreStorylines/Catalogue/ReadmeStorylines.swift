@@ -4,7 +4,7 @@ import KoreCore
 import KoreUI
 
 // The README's pictures: each one tells a feature with the scripted CLI in a demo folder, so no
-// real account, email or chat shows. `scripts/storylines.sh --tag readme` takes them all; the
+// real account, email or chat shows. `scripts/readme-shots.sh` takes and frames them all; the
 // folder each opens is its name.
 
 /// Several logins for Claude in Account, privacy on: main active with its limits, a work login
@@ -12,7 +12,7 @@ import KoreUI
 final class ReadmeAccounts: Storyline {
     override class var storyName: String { "acme-web" }
     override class var tags: Set<Tag> { ["readme"] }
-    override class var needs: Needs { Needs(window: CGSize(width: 1000, height: 600)) }
+    override class var needs: Needs { Needs(window: CGSize(width: 1040, height: 650)) }
 
     override func steps() -> [any Step] {
         let popup = Locator.id(StoryID.Composer.account)
@@ -54,7 +54,7 @@ final class ReadmeAccounts: Storyline {
 final class ReadmeFlow: Storyline {
     override class var storyName: String { "acme-api" }
     override class var tags: Set<Tag> { ["readme"] }
-    override class var needs: Needs { Needs(window: CGSize(width: 1000, height: 720)) }
+    override class var needs: Needs { Needs(window: CGSize(width: 1040, height: 650)) }
 
     override func steps() -> [any Step] {
         let turn: [Beat] = [.startTurn] + Beat.answer("Reproducing it first: totals over $1,000 come out a cent short.") + [
@@ -98,7 +98,7 @@ final class ReadmeFlow: Storyline {
 final class ReadmePort: Storyline {
     override class var storyName: String { "acme-mobile" }
     override class var tags: Set<Tag> { ["readme"] }
-    override class var needs: Needs { Needs(window: CGSize(width: 1000, height: 640)) }
+    override class var needs: Needs { Needs(window: CGSize(width: 1040, height: 650)) }
 
     override func steps() -> [any Step] {
         let reply = [.startTurn] + Beat.answer("Reading the API's new check first.") + [
@@ -122,7 +122,7 @@ final class ReadmePort: Storyline {
 final class ReadmeBoard: Storyline {
     override class var storyName: String { "acme-platform" }
     override class var tags: Set<Tag> { ["readme"] }
-    override class var needs: Needs { Needs(window: CGSize(width: 1280, height: 780)) }
+    override class var needs: Needs { Needs(window: CGSize(width: 1280, height: 800)) }
 
     override func steps() -> [any Step] {
         let chats: [(provider: String, ask: String, answer: String)] = [

@@ -28,6 +28,9 @@ account and spend nothing:
 ./scripts/storylines.sh --tag chat
 ```
 
+`./scripts/readme-shots.sh` retakes the README's screenshots the same way (demo folders, emails
+masked) and frames them into `docs/images` (needs Pillow).
+
 `--cli process` plays recorded CLI sessions from `Tests/Fixtures/cassettes` instead. Before
 committing a new recording, strip anything account-specific from it.
 
