@@ -9,7 +9,10 @@ struct ApprovalsView: View {
             if let plan = approval.plan {
                 PlanApprovalCard(plan: plan, id: approval.id) { chat.answer(approval, $0) }
             } else if approval.questions.isEmpty {
-                PermissionCard(approval: approval, asker: asker(approval), folder: chat.folder) {
+                PermissionCard(
+                    approval: approval, asker: asker(approval), folder: chat.folder,
+                    corners: Theme.modeCorners(chat.controls.activeMode.rung)
+                ) {
                     chat.answer(approval, $0)
                 }
             } else {

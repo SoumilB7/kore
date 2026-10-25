@@ -269,6 +269,7 @@ private struct ContextCard: View {
         }
         .padding(Inset.row)
         .panel(.panel)
+        .cornerMarks(Theme.cornerOption)
         .onHover { if $0 { presence.card(true, intent: true) } }
         .onChange(of: trackFocused) { _, now in
             presence.trackFocused = now

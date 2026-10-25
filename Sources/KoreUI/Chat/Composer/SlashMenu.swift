@@ -31,6 +31,7 @@ struct SlashMenu: View {
         .frame(maxHeight: Size.menuMax)
         .fixedSize(horizontal: false, vertical: true)
         .panel(.panel)
+        .cornerMarks(Theme.cornerOption)
     }
 
     private func row(_ command: SlashCommand, lit: Bool) -> some View {

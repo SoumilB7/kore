@@ -7,6 +7,8 @@ struct PermissionCard: View {
     /// The sub-agent asking (its mark's index and name); nil for the chat's own agent.
     var asker: (index: Int, name: String)?
     var folder: URL?
+    /// The mode it asks past: its corner marks' colour.
+    var corners: Color?
     let decide: (Decision) -> Void
 
     var body: some View {
@@ -60,6 +62,7 @@ struct PermissionCard: View {
         }
         .padding(Inset.card)
         .panel(.card)
+        .cornerMarks(corners, radius: Radius.card)
     }
 }
 
@@ -142,7 +145,8 @@ struct PlanApprovalCard: View {
             }
         }
         .padding(Inset.card)
-        .panel(.planCard)
+        .panel(.card)
+        .cornerMarks(Rung.plan.color, radius: Radius.card)
     }
 }
 
@@ -177,7 +181,8 @@ struct ImplementPlanCard: View {
             }
         }
         .padding(Inset.card)
-        .panel(.planCard)
+        .panel(.card)
+        .cornerMarks(Rung.plan.color, radius: Radius.card)
     }
 }
 

@@ -100,6 +100,7 @@ struct HistoryPanel: View {
         }
         .padding(Space.lg)
         .panel(.panel)
+        .cornerMarks(Theme.cornerOption, shown: isOpen)
         .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
         .background(WindowReader { window.value = $0 })

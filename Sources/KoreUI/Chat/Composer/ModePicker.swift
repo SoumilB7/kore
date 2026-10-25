@@ -14,7 +14,8 @@ struct ModePicker: View {
     var body: some View {
         ComposerPopup(
             chat: chat, id: StoryID.Composer.modes, edge: .trailing, hugs: true, isOpen: { state.open == .mode },
-            stepBack: { false }, close: { state.close() }, keys: key, spare: { state.chips[.mode] }
+            stepBack: { false }, close: { state.close() }, keys: key, spare: { state.chips[.mode] },
+            corners: Theme.modeCorners(chat.controls.activeMode.rung)
         ) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(modes.enumerated()), id: \.element.id) { index, mode in

@@ -296,6 +296,9 @@ extension Theme {
     /// The mode pill's fill when the agent changes the mode, fading to its own: the new rung's
     /// colour at 14%, or the hover fill for a neutral mode.
     static func modeFlash(_ rung: Rung?) -> Color { rung.map { $0.color.opacity(0.14) } ?? surfaceHover }
+    /// Corner marks where the mode governs (the mode popup, permission and plan cards): the
+    /// rung's colour, or secondary for a neutral mode.
+    static func modeCorners(_ rung: Rung?) -> Color { rung?.color ?? secondary }
 }
 
 extension Motion {

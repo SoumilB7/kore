@@ -73,6 +73,7 @@ struct CrumbMenu: View {
         .frame(width: Size.Editor.crumbMenu)
         // An in-window menu, like Kore's others: no shadow.
         .panel(.panel)
+        .cornerMarks(Theme.cornerOption)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
         .task(id: folder.value) { await load() }
         .onAppear {

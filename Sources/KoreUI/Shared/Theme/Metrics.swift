@@ -125,6 +125,8 @@ enum Size {
     static let dropZone: CGFloat = 56
     static let dropDash: [CGFloat] = [4, 3]
     static let menuMax: CGFloat = 260
+    /// Each arm of a corner mark, from the outer corner along either edge.
+    static let cornerMark: CGFloat = 20
     static let planScrollMax: CGFloat = 320
     static let chipBadge = CGSize(width: 5, height: -5)
     /// The remove badge (15 across, 5 past its chip's corner) takes clicks 24 across: back over
@@ -143,6 +145,8 @@ enum Stroke {
     static let quote: CGFloat = 2
     /// A background agent's ring: dashes (on, off) where another agent's is solid.
     static let backgroundDash: [CGFloat] = [2.5, 2]
+    /// Corner marks (corner-marks-before-after.html): heavier than the hairline they sit on.
+    static let cornerMark: CGFloat = 1.5
 }
 
 /// The one shadow: the history panel floating over content (owner kept it, 2026-10-20).

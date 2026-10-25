@@ -29,8 +29,8 @@ enum Theme {
     /// Transcript plan block.
     static let planFill = Rung.plan.color.opacity(0.06)
     static let planLine = Rung.plan.color.opacity(0.3)
-    /// Plan approval and implement-plan cards.
-    static let planCardLine = Rung.plan.color.opacity(0.45)
+    /// Corner marks on an open option popup (the / menu, model, Usage, Account, quick open…).
+    static let cornerOption = accent
     /// Rename field, drop-zone dash.
     static let accentLine = accent.opacity(0.6)
     /// The composer's command chip; a small accent button at rest.

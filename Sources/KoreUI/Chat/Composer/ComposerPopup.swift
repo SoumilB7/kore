@@ -32,6 +32,8 @@ struct ComposerPopup<Content: View>: View {
     /// A key the content takes first (a list's ↑ ↓ and Return): true when taken.
     var keys: @MainActor (NSEvent) -> Bool = { _ in false }
     var spare: @MainActor () -> CGRect? = { nil }
+    /// Its corner marks: the option accent, or (the mode popup) the mode's colour.
+    var corners: Color = Theme.cornerOption
     @ViewBuilder let content: () -> Content
     @StateObject private var frame = Held(CGRect.zero)
     @StateObject private var window = Held<NSWindow?>(nil)
@@ -42,6 +44,7 @@ struct ComposerPopup<Content: View>: View {
         sized
             .tabStops(stops.value)
             .panel(.panel)
+            .cornerMarks(corners)
             .frame(maxWidth: Size.usagePopupMax)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
             .background(WindowReader { window.value = $0 })

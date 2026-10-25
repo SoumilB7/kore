@@ -18,8 +18,6 @@ struct PanelStyle {
     static let outline = PanelStyle(radius: Radius.panel, line: Theme.border)
     /// Sunken areas inside a panel (search field, code body, plan scroll).
     static let well = PanelStyle(fill: Theme.background, radius: Radius.control)
-    /// Plan approval and implement-plan cards.
-    static let planCard = PanelStyle(fill: Theme.surface, radius: Radius.card, line: Theme.planCardLine)
     /// The transcript's plan block.
     static let plan = PanelStyle(fill: Theme.planFill, radius: Radius.panel, line: Theme.planLine)
 }
