@@ -35,11 +35,21 @@ package final class BoardModel {
     /// a strip tab dropped on the board lands by them.
     @ObservationIgnored var frames: (() -> BoardFrames)?
     @ObservationIgnored package var origin = CGPoint.zero
-    /// A strip tab dragged over the board: where it would land, and the zone that lights.
-    var incoming: (drop: BoardDrop, zone: CGRect)?
+    /// A strip tab dragged over the board: its chat, and the ghost of where it would land.
+    package private(set) var incoming: (chat: Chat, preview: DropPreview)?
     /// Where something dropped at a window point (SwiftUI's global space) would land.
     func drop(atGlobal point: CGPoint) -> (drop: BoardDrop, zone: CGRect)? {
         frames?().drop(at: CGPoint(x: point.x - origin.x, y: point.y - origin.y), moving: nil).map { (drop: $0.0, zone: $0.1) }
+    }
+    /// A strip tab's chat over the board at a window point, or gone (nil): the preview is
+    /// solved again only when the drop it would make changes.
+    func hover(_ chat: Chat?, atGlobal point: CGPoint) {
+        guard let chat, let (drop, zone) = drop(atGlobal: point) else {
+            if incoming != nil { incoming = nil }
+            return
+        }
+        if let incoming, incoming.chat === chat, incoming.preview.drop == drop { return }
+        incoming = (chat, board.preview(drop, zone: zone, moving: nil, isSlot: isSlot, in: size))
     }
 
     /// A section whose name is being typed, after Split or a new board.

@@ -1183,10 +1183,20 @@ extension Workspace {
 
     /// Moves a strip tab's chat onto a board: its tab closes (its agents' tabs with it) and the
     /// chat goes on as it was, its draft and turn with it. Into a slot, beside a drop point, or
-    /// into a section by auto placement.
+    /// into a section by auto placement. On a tile's middle it takes the tile, and the tile's
+    /// chat comes to the strip in the tab's place.
     package func attach(_ tab: ChatTab, to boardTab: ChatTab, section: UUID? = nil, slot: UUID? = nil, drop: BoardDrop? = nil) {
         guard let board = boardTab.board, let chat = tab.chat, tab.agent == nil, tab !== boardTab else { return }
-        place(chat, on: board, section: section, slot: slot, drop: drop)
+        var displaced: ChatTab?
+        if slot == nil, case .swap(let target)? = drop, let old = board.chats[target] {
+            board.place(chat, in: target)
+            board.focus(target)
+            displaced = ChatTab()
+            displaced?.chat = old
+        } else {
+            place(chat, on: board, section: section, slot: slot, drop: drop)
+        }
+        if let displaced, let index = tabs.firstIndex(where: { $0 === tab }) { tabs.insert(displaced, at: index) }
         for other in tabs where other.chat === chat && other.agent != nil { tabs.removeAll { $0 === other } }
         tab.onChatChanged = nil
         chat.onDraftChanged = nil

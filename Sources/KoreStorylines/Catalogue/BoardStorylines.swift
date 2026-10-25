@@ -635,3 +635,240 @@ final class BoardSnapshots: BoardStoryline {
         ]
     }
 }
+
+// MARK: - Splits both ways (board-tiling-add.html part 1, option A)
+
+/// A strip tab held over a tile's top, bottom, left and right shows the ghost of the result
+/// (its place filled, the tile's place after outlined, nothing laid out again) and lands there;
+/// over the middle it takes the tile and the tile's chat's ghost tab holds its strip place. A
+/// tile's header held over another's bottom shows the same, and its ⋯ leads with the splits.
+final class BoardDropPreview: BoardStoryline {
+    override class var tags: Set<Tag> { ["board"] }
+
+    override class var chats: Int { 2 }
+
+    override func steps() -> [any Step] {
+        // The third chat's tab made after the board, so the strip has just laid it out.
+        var steps = super.steps() + [
+            MakeBoard(name: "Backend", take: 2), StartChat(), Send("chat 3"), TurnFinished(1),
+            Command(.previousTab),
+            Expect("the board shown") { story in story.app.workspace?.activeTab.board != nil },
+        ]
+        for edge in [DropEdge.top, .bottom, .left, .right] {
+            steps += [
+                HeldDrag(what: "the strip chat's tab over the second tile's \(edge.rawValue)", element: Self.stripTab, from: Self.stripTabPoint, to: { story in
+                    try Self.point(edge, in: Self.target(story), story)
+                }, check: { story in try Self.shows(edge, story) }, snapshot: "board-drop-\(edge.rawValue)"),
+                Expect("the chat beside the second tile, on its \(edge.rawValue)") { story in
+                    let frames = try BoardProbe.frames(story), model = try BoardProbe.model(story)
+                    // The dropped chat's tile takes focus.
+                    guard model.chats.count == 3, let held = story.stash(Kept.self, make: { Kept() }).target, let target = frames.tiles[held],
+                        let landed = model.focused.flatMap({ frames.tiles[$0] })
+                    else { return false }
+                    switch edge {
+                    case .top: return landed.maxY <= target.minY + 0.5
+                    case .bottom: return landed.minY >= target.maxY - 0.5
+                    case .left: return landed.maxX <= target.minX + 0.5
+                    case .right: return landed.minX >= target.maxX - 0.5
+                    }
+                },
+                UndoLayout(),
+                Expect("two chats on the board again") { story in try BoardProbe.model(story).chats.count == 2 },
+            ]
+        }
+        steps += [
+            HeldDrag(what: "the strip chat's tab over the second tile's middle", element: Self.stripTab, from: Self.stripTabPoint, to: { story in
+                try Self.point(nil, in: Self.target(story), story)
+            }, check: { story in try Self.shows(nil, story) }, snapshot: "board-drop-centre"),
+            Expect("the strip chat in the second tile, its chat in the strip") { story in
+                let model = try BoardProbe.model(story)
+                let kept = story.stash(Kept.self) { Kept() }
+                let target = try Self.target(story)
+                return model.chats.count == 2 && model.chats[target] === kept.dragged
+                    && BoardProbe.chatTabs(story).contains { $0.chat === kept.displaced }
+            },
+            HeldDrag(what: "the first tile's header over the second tile's bottom", element: { story in
+                StoryID.Board.tileHeader(try BoardProbe.model(story).board.tiles[0].id)
+            }, from: { _ in .zero }, to: { story in
+                let frames = try BoardProbe.frames(story), model = try BoardProbe.model(story)
+                guard let first = frames.tiles[model.board.tiles[0].id] else { throw StoryFailure.modelMissing("the first tile") }
+                let header = CGPoint(x: first.midX, y: first.minY + BoardMetrics.tileHeader / 2)
+                let bottom = try Self.point(.bottom, in: Self.target(story), story)
+                return CGPoint(x: bottom.x - header.x, y: bottom.y - header.y)
+            }, check: { story in try Self.shows(.bottom, story) }, snapshot: "board-drop-tile-bottom"),
+            Expect("the first tile under the second") { story in
+                let model = try BoardProbe.model(story), frames = try BoardProbe.frames(story)
+                guard model.board.tiles.count == 2, let a = frames.tiles[model.board.tiles[0].id], let b = frames.tiles[model.board.tiles[1].id] else { return false }
+                return a.maxY <= b.minY + 0.5
+            },
+            Snapshot("board-split-down"),
+            Do("Open the first tile's ⋯") { story in
+                let model = try BoardProbe.model(story)
+                model.focus(model.board.tiles[0].id)
+            },
+            BoardPress("the first tile's ⋯") { story in StoryID.Board.tileMenu(try BoardProbe.model(story).board.tiles[0].id) },
+            WaitForElement(.id(StoryID.Options.panel)),
+            Expect("Split Right and Split Down first") { _ in
+                let items = BoardMenus.storyTitles
+                return Array(items.prefix(2)) == ["Split Right", "Split Down"]
+            },
+            Snapshot("board-tile-menu"),
+            Key(.escape),
+        ]
+        return steps
+    }
+
+    final class Kept {
+        var dragged: Chat?
+        var displaced: Chat?
+        /// The tile the last drop was held over.
+        var target: UUID?
+    }
+
+    /// The tile drops land on: the second.
+    @MainActor static func target(_ story: StoryContext) throws -> UUID {
+        let model = try BoardProbe.model(story)
+        guard model.board.tiles.count >= 2 else { throw StoryFailure.modelMissing("a second tile") }
+        return model.board.tiles[1].id
+    }
+
+    @MainActor static func stripTab(_ story: StoryContext) throws -> StoryID {
+        guard let tab = BoardProbe.chatTabs(story).first else { throw StoryFailure.modelMissing("the chat's tab") }
+        return StoryID.Tabs.tab(tab.id)
+    }
+
+    @MainActor static func stripTabPoint(_ story: StoryContext) throws -> CGPoint {
+        guard let tab = BoardProbe.chatTabs(story).first, let frame = StoryElement(StoryID.Tabs.tab(tab.id))?.frame,
+            let content = story.window?.contentView
+        else { throw StoryFailure.modelMissing("the chat's tab") }
+        let model = try BoardProbe.model(story)
+        return CGPoint(x: frame.midX - model.origin.x, y: content.bounds.height - frame.midY - model.origin.y)
+    }
+
+    /// A board point in a tile's zone: a tenth in from that side, or its middle.
+    @MainActor static func point(_ edge: DropEdge?, in tile: UUID, _ story: StoryContext) throws -> CGPoint {
+        guard let r = try BoardProbe.frames(story).tiles[tile] else { throw StoryFailure.modelMissing("the tile") }
+        switch edge {
+        case .top?: return CGPoint(x: r.midX, y: r.minY + r.height * 0.1)
+        case .bottom?: return CGPoint(x: r.midX, y: r.maxY - r.height * 0.1)
+        case .left?: return CGPoint(x: r.minX + r.width * 0.1, y: r.midY)
+        case .right?: return CGPoint(x: r.maxX - r.width * 0.1, y: r.midY)
+        case nil: return CGPoint(x: r.midX, y: r.midY)
+        }
+    }
+
+    /// While held: the layout as it was, the incoming place drawn on that side of the target's
+    /// outlined place after (window space runs up); in the middle, the incoming place over the
+    /// tile with no outline and the tile's chat's ghost tab in the strip.
+    @MainActor static func shows(_ edge: DropEdge?, _ story: StoryContext) throws -> Bool {
+        let model = try BoardProbe.model(story)
+        guard let zone = StoryElement(StoryID.Board.dropZone)?.frame else { return false }
+        let target = StoryElement(StoryID.Board.dropTarget)?.frame
+        story.stash(Kept.self) { Kept() }.target = try Self.target(story)
+        guard let edge else {
+            let kept = story.stash(Kept.self) { Kept() }
+            kept.dragged = model.incoming?.chat
+            kept.displaced = model.chats[try Self.target(story)]
+            return target == nil && StoryElement(StoryID.Board.ghostTab) != nil
+        }
+        guard let target, model.chats.count <= 3 else { return false }
+        switch edge {
+        case .top: return zone.minY >= target.maxY - 0.5 && abs(zone.minX - target.minX) < 0.5
+        case .bottom: return zone.maxY <= target.minY + 0.5 && abs(zone.minX - target.minX) < 0.5
+        case .left: return zone.maxX <= target.minX + 0.5 && abs(zone.minY - target.minY) < 0.5
+        case .right: return zone.minX >= target.maxX - 0.5 && abs(zone.minY - target.minY) < 0.5
+        }
+    }
+}
+
+/// A full tile's pinned prompt has its own height: once the message scrolls above, its pinned
+/// copy sits over the transcript, which starts under it, so no reply line runs beneath it.
+final class BoardPinnedPrompt: BoardStoryline {
+    override class var tags: Set<Tag> { ["board"] }
+    override class var chats: Int { 1 }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(LongMessageOpens.reply)]) }
+
+    override func steps() -> [any Step] {
+        let tile = Locator("the tile", key: { app in
+            guard let tile = app.workspace?.tabs.first(where: { $0.board != nil })?.board?.board.tiles.first?.id else {
+                return .failure(LocatorMiss("no tile yet", pending: true))
+            }
+            return .success(StoryID.Board.tile(tile))
+        })
+        let pinned = Locator("the tile's pinned prompt", key: { app in
+            guard let chat = app.workspace?.tabs.first(where: { $0.board != nil })?.board?.orderedChats.first,
+                let message = chat.storyTranscript.entries.first(where: { $0.kind == .user })
+            else { return .failure(LocatorMiss("no message yet", pending: true)) }
+            return .success(StoryID.Transcript.pinned(message.id))
+        })
+        return super.steps() + [
+            MakeBoard(name: "Backend", take: 1),
+            Expect("one full tile") { story in
+                try BoardProbe.model(story).board.tiles.first.map { BoardProbe.density($0.id) } == .full
+            },
+            Wheel(tile, by: 400), WaitIdle(), Wheel(tile, by: 400), WaitIdle(),
+            WaitForElement(pinned),
+            Snapshot("board-pinned-prompt"),
+            Expect("the transcript starting under the pinned prompt") { story in
+                guard case .found(let element) = pinned.resolve(story.app), let frame = element.frame,
+                    let scroll = Self.transcript(under: element, story)
+                else { return false }
+                // Window space runs up: the scroll view's visible top is its frame's top.
+                let top = scroll.convert(scroll.bounds, to: nil).maxY - scroll.contentInsets.top
+                return frame.minY >= top - 0.5
+            },
+        ]
+    }
+
+    /// The tile's transcript: the scroll view under the tile's middle.
+    @MainActor static func transcript(under element: StoryElement, _ story: StoryContext) -> NSScrollView? {
+        guard let window = story.window, let tile = try? BoardProbe.frames(story).tiles.values.first, let model = try? BoardProbe.model(story),
+            let content = window.contentView
+        else { return nil }
+        let point = CGPoint(x: model.origin.x + tile.midX, y: content.bounds.height - model.origin.y - tile.midY)
+        var view = content.hitTest(point)
+        while let v = view {
+            if let scroll = v as? NSScrollView { return scroll }
+            view = v.superview
+        }
+        return nil
+    }
+}
+
+/// Presses an element and moves it by `to - from` (board points) in steps, holding the button
+/// until `check` holds (or 3s), then lets go: the check sees what shows mid-drag.
+struct HeldDrag: Step {
+    let what: String
+    let element: @MainActor (StoryContext) throws -> StoryID
+    let from: @MainActor (StoryContext) throws -> CGPoint
+    let to: @MainActor (StoryContext) throws -> CGPoint
+    let check: @MainActor (StoryContext) throws -> Bool
+    /// The window as the preview shows, saved under this name.
+    var snapshot: String?
+    var label: String { "Hold \(what), its preview shown, and let go" }
+    var timeout: Duration? { .seconds(15) }
+
+    func run(_ story: StoryContext) async throws {
+        let found = try await story.element(.id(try element(story)))
+        guard let window = story.window, let frame = found.frame else { throw StoryFailure.other("no \(what)") }
+        let a = try from(story), b = try to(story)
+        let start = CGPoint(x: frame.midX, y: frame.midY)
+        let end = CGPoint(x: start.x + b.x - a.x, y: start.y - (b.y - a.y))
+        let seen = Seen()
+        await story.input.drag(from: start, to: end, in: window, steps: 16, hold: .seconds(3)) {
+            if !seen.value, (try? check(story)) == true {
+                seen.value = true
+                if let name = snapshot, let png = takeSnapshot(window) {
+                    try? png.write(to: story.outputs.appendingPathComponent("\(name).png"))
+                }
+            }
+            return seen.value
+        }
+        try await story.idle()
+        guard seen.value else { throw StoryFailure.expectation("while holding \(what), the preview didn't show the result") }
+    }
+
+    final class Seen { var value = false }
+}
+
+@MainActor private func takeSnapshot(_ window: NSWindow) -> Data? { snapshot(window) }

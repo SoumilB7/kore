@@ -380,6 +380,8 @@ private struct FullTile: View {
                 TileHeader(chat: chat, state: state, model: model, workspace: workspace, tab: tab, tile: tile, drag: drag)
                 TranscriptTimeline(store: chat.transcript, actions: transcriptActions).equatable()
                     .environment(\.spinnerTint, chat.controls.tint)
+                    // No title bar over it here: the pinned prompt takes its own height.
+                    .environment(\.pinnedBand, true)
                 VStack(spacing: Space.lg) {
                     ApprovalsView(chat: chat, maxHeight: size.height / 2)
                     ComposerView(chat: chat, workspace: workspace, focused: $composerFocused) { _ in }

@@ -100,7 +100,7 @@ struct TabBar: View {
                     workspace.select(tab)
                 }
                 if let board = board?.board {
-                    board.incoming = value.translation.height > tabHeight ? board.drop(atGlobal: value.location) : nil
+                    board.hover(value.translation.height > tabHeight ? tab.chat : nil, atGlobal: value.location)
                 }
                 let count = workspace.tabs.count
                 let slot = strip.slot
@@ -111,7 +111,7 @@ struct TabBar: View {
             .onEnded { value in
                 guard let ended = drag.value else { return }
                 if let boardTab = boardUnder(tab), let board = boardTab.board {
-                    board.incoming = nil
+                    board.hover(nil, atGlobal: .zero)
                     if value.translation.height > tabHeight {
                         drag.value = nil
                         workspace.attach(tab, to: boardTab, drop: board.drop(atGlobal: value.location)?.drop)
@@ -124,6 +124,12 @@ struct TabBar: View {
                     drag.value = nil
                 }
             }
+    }
+
+    /// The chat a dragged tab would send to the strip (a board tile's, the tab dropped on its middle).
+    private var displaced: Chat? {
+        guard let board = workspace.activeTab.board, let tile = board.incoming?.preview.displaced else { return nil }
+        return board.chats[tile]
     }
 
     /// The board shown while a chat's tab is dragged: it can take the chat in.
@@ -227,6 +233,13 @@ struct TabBar: View {
                     TabItem(tab: tab, workspace: workspace, height: tabHeight, label: strip.label, isActive: workspace.activeID == tab.id)
                         // The close question takes the room it needs.
                         .frame(width: strip.width(index))
+                        // Dropped on a board tile's middle, the tile's chat comes to the strip
+                        // where this tab was: its ghost holds the place.
+                        .overlay {
+                            if dragged, let ghost = displaced {
+                                GhostTab(chat: ghost, height: tabHeight).offset(x: -shift(index, slot: strip.slot))
+                            }
+                        }
                         .offset(x: shift(index, slot: strip.slot))
                         .zIndex(dragged ? 1 : 0)
                         // The others slide aside as the dragged one passes; it follows the pointer.
@@ -688,6 +701,29 @@ private struct HiddenTabsList: View {
         let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
         if !frame.value.contains(point), !anchor().contains(point) { close() }
         return event
+    }
+}
+
+/// Where a chat a drop sends to the strip would be: a dashed tab with its mark and name.
+private struct GhostTab: View {
+    let chat: Chat
+    let height: CGFloat
+
+    var body: some View {
+        HStack(spacing: Space.md) {
+            ProviderLogo(provider: chat.provider, size: Size.logoTab)
+            Text(chat.title).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Space.md)
+        .frame(height: height)
+        .background(Theme.background, in: RoundedRectangle(cornerRadius: Radius.control))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.control)
+                .strokeBorder(Theme.Board.dropLine, style: StrokeStyle(lineWidth: Stroke.hairline, dash: Size.Board.slotDash))
+        }
+        .allowsHitTesting(false)
+        .storyMark(StoryID.Board.ghostTab)
     }
 }
 

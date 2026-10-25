@@ -63,6 +63,9 @@ struct BoardView: View {
         return board
     }
 
+    /// The tile a drag would land on: dimmed under the preview.
+    private var dropTarget: UUID? { tileDrag.value?.preview?.target ?? model.incoming?.preview.target }
+
     private func layer(_ board: Board, _ frames: BoardFrames, live: Set<UUID>) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(board.sections) { section in
@@ -80,7 +83,7 @@ struct BoardView: View {
                         frozen: frozen.map { Density.of($0.size) == .full && Density.of(rect.size) == .full ? $0.size : nil } ?? nil,
                         live: live.contains(tile.id), drag: tileGesture(tile.id, frames: frames)
                     )
-                    .opacity(tileDrag.value?.tile == tile.id ? Theme.Board.dragged : 1)
+                    .opacity(tileDrag.value?.tile == tile.id ? Theme.Board.dragged : dropTarget == tile.id ? Theme.Board.structureDim : 1)
                     .onHover { inside in
                         if inside { hovered.value = tile.id } else if hovered.value == tile.id { hovered.value = nil }
                     }
@@ -101,8 +104,10 @@ struct BoardView: View {
             if let pull = roomPull.value?.pull {
                 RoomView(pull: pull)
             }
-            if let zone = tileDrag.value?.zone ?? model.incoming?.zone {
-                DropZone(rect: zone)
+            if let drag = tileDrag.value, let preview = drag.preview {
+                DropPreviewView(preview: preview, incoming: model.chats[drag.tile], target: preview.target.flatMap { model.chats[$0] })
+            } else if let incoming = model.incoming {
+                DropPreviewView(preview: incoming.preview, incoming: incoming.chat, target: incoming.preview.target.flatMap { model.chats[$0] })
             }
         }
         .frame(width: frames.content.width, height: frames.content.height, alignment: .topLeading)
@@ -162,11 +167,14 @@ struct BoardView: View {
                 .onChanged { value in
                     let point = value.location
                     if point.y < 0 {
-                        tileDrag.value = TileDragState(tile: tile, drop: nil, strip: true, zone: nil)
+                        tileDrag.value = TileDragState(tile: tile, drop: nil, strip: true, preview: nil)
                     } else if let (drop, zone) = frames.drop(at: point, moving: tile) {
-                        tileDrag.value = TileDragState(tile: tile, drop: drop, strip: false, zone: zone)
+                        // The would-be board is solved once per zone, not per pointer move.
+                        guard tileDrag.value?.drop != drop || tileDrag.value?.strip == true else { return }
+                        let preview = model.board.preview(drop, zone: zone, moving: tile, isSlot: model.isSlot, in: model.size)
+                        tileDrag.value = TileDragState(tile: tile, drop: drop, strip: false, preview: preview)
                     } else {
-                        tileDrag.value = TileDragState(tile: tile, drop: nil, strip: false, zone: nil)
+                        tileDrag.value = TileDragState(tile: tile, drop: nil, strip: false, preview: nil)
                     }
                 }
                 .onEnded { _ in
@@ -236,15 +244,15 @@ struct TileDragState: Equatable {
     var drop: BoardDrop?
     /// Over the strip: it goes back to its own tab.
     var strip: Bool
-    var zone: CGRect?
+    var preview: DropPreview?
 }
 
 // MARK: - Drops
 
 extension BoardFrames {
     /// Where something dropped at `point` lands, and the zone that lights: the tab's outer edge
-    /// makes a new section there; a tile's outer quarter splits it on that side and its middle
-    /// swaps; elsewhere in a section, into it. Nil over the tile being moved.
+    /// makes a new section there; a tile's outer ring splits it on its nearest side and its
+    /// middle swaps; elsewhere in a section, into it. Nil over the tile being moved.
     package func drop(at point: CGPoint, moving: UUID?) -> (BoardDrop, CGRect)? {
         let edge = Size.Board.tabEdge
         if point.x < edge { return (.newSection(.left), CGRect(x: 0, y: 0, width: edge, height: content.height)) }
@@ -252,31 +260,102 @@ extension BoardFrames {
         if point.y > content.height - edge { return (.newSection(.bottom), CGRect(x: 0, y: content.height - edge, width: content.width, height: edge)) }
         if let (id, rect) = tiles.first(where: { $0.value.contains(point) }) {
             guard id != moving else { return nil }
-            let x = (point.x - rect.minX) / max(rect.width, 1)
-            let y = (point.y - rect.minY) / max(rect.height, 1)
-            let quarter = Size.Board.dropEdge
-            if x < quarter { return (.beside(id, .left), CGRect(x: rect.minX, y: rect.minY, width: rect.width / 2, height: rect.height)) }
-            if x > 1 - quarter { return (.beside(id, .right), CGRect(x: rect.midX, y: rect.minY, width: rect.width / 2, height: rect.height)) }
-            if y < quarter { return (.beside(id, .top), CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height / 2)) }
-            if y > 1 - quarter { return (.beside(id, .bottom), CGRect(x: rect.minX, y: rect.midY, width: rect.width, height: rect.height / 2)) }
-            return (.swap(id), rect)
+            switch Self.side(of: point, in: rect) {
+            case .left?: return (.beside(id, .left), CGRect(x: rect.minX, y: rect.minY, width: rect.width / 2, height: rect.height))
+            case .right?: return (.beside(id, .right), CGRect(x: rect.midX, y: rect.minY, width: rect.width / 2, height: rect.height))
+            case .top?: return (.beside(id, .top), CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height / 2))
+            case .bottom?: return (.beside(id, .bottom), CGRect(x: rect.minX, y: rect.midY, width: rect.width, height: rect.height / 2))
+            case nil: return (.swap(id), rect)
+            }
         }
         if let (id, rect) = sections.first(where: { $0.value.contains(point) }) { return (.into(id), rect) }
         return nil
     }
+
+    /// A tile's side a point is nearest, or nil in its middle: the middle half each way (top and
+    /// bottom bands never under `dropBand`), and the ring around it cut by its diagonals, so top
+    /// and bottom are as easy to hit as left and right. A chip splits only sideways.
+    package static func side(of point: CGPoint, in rect: CGRect) -> DropEdge? {
+        let across = rect.width * Size.Board.dropEdge
+        let down = max(rect.height * Size.Board.dropEdge, min(Size.Board.dropBand, rect.height / 2))
+        let left = point.x - rect.minX, right = rect.maxX - point.x
+        if Density.of(rect.size) == .chip { return left < across ? .left : right < across ? .right : nil }
+        let top = point.y - rect.minY, bottom = rect.maxY - point.y
+        if left >= across, right >= across, top >= down, bottom >= down { return nil }
+        let sides: [(DropEdge, CGFloat)] = [(.left, left / across), (.right, right / across), (.top, top / down), (.bottom, bottom / down)]
+        return sides.min { $0.1 < $1.1 }?.0
+    }
 }
 
-/// A drop zone: the accent at 14% with its line, as the composer's file drop zone.
-private struct DropZone: View {
-    let rect: CGRect
+extension Board {
+    /// What a drop would make, without making it: one solve of the board as it would be. The
+    /// incoming chat's place, and the target tile's place after (nil when it leaves: a strip tab
+    /// on a tile's middle sends that tile's chat to the strip).
+    package func preview(_ drop: BoardDrop, zone: CGRect, moving: UUID?, isSlot: (UUID) -> Bool, in size: CGSize) -> DropPreview {
+        let now = solve(in: size)
+        switch drop {
+        case .swap(let target):
+            let place = now.tiles[target] ?? zone
+            if isSlot(target) { return DropPreview(drop: drop, incoming: place) }
+            if let moving { return DropPreview(drop: drop, incoming: place, target: target, targetPlace: now.tiles[moving]) }
+            return DropPreview(drop: drop, incoming: place, target: target, displaced: target)
+        case .beside, .into, .newSection:
+            var after = self
+            let id = moving ?? UUID()
+            if let moving { after.move(moving, to: drop, in: size) } else { after.put(id, section: nil, drop: drop, in: size) }
+            let frames = after.solve(in: size)
+            var target: UUID?
+            if case .beside(let other, _) = drop { target = other }
+            return DropPreview(drop: drop, incoming: frames.tiles[id] ?? zone, target: target, targetPlace: target.flatMap { frames.tiles[$0] })
+        }
+    }
+}
+
+/// A drop's ghost of the result, drawn over the board while something drags (option A of
+/// board-tiling-add.html): nothing under it moves.
+package struct DropPreview: Equatable, Sendable {
+    package var drop: BoardDrop
+    /// Where the dragged chat would be: filled and named.
+    package var incoming: CGRect
+    /// The tile it lands on (dimmed), and that tile's place after: outlined and named.
+    package var target: UUID?
+    package var targetPlace: CGRect?
+    /// A tile whose chat would go to the strip: its ghost tab shows there.
+    package var displaced: UUID?
+}
+
+/// The ghost of the result: the incoming chat's place filled with its mark and name, the
+/// target's place after outlined with its name, the target's content dimmed.
+private struct DropPreviewView: View {
+    let preview: DropPreview
+    let incoming: Chat?
+    let target: Chat?
 
     var body: some View {
-        RoundedRectangle(cornerRadius: Radius.panel)
-            .fill(Theme.Board.dropFill)
-            .overlay { RoundedRectangle(cornerRadius: Radius.panel).strokeBorder(Theme.Board.dropLine, lineWidth: Stroke.emphasis) }
-            .allowsHitTesting(false)
-            .storyMark(StoryID.Board.dropZone)
-            .place(rect)
+        ZStack(alignment: .topLeading) {
+            if let place = preview.targetPlace, let target {
+                RoundedRectangle(cornerRadius: Radius.panel)
+                    .strokeBorder(Theme.Board.dropLine, style: StrokeStyle(lineWidth: Stroke.emphasis, dash: Size.Board.slotDash))
+                    .overlay { name(target, color: Theme.secondary) }
+                    .storyMark(StoryID.Board.dropTarget)
+                    .place(place)
+            }
+            RoundedRectangle(cornerRadius: Radius.panel)
+                .fill(Theme.Board.dropFill)
+                .overlay { RoundedRectangle(cornerRadius: Radius.panel).strokeBorder(Theme.Board.dropLine, lineWidth: Stroke.emphasis) }
+                .overlay { if let incoming { name(incoming, color: Theme.text) } }
+                .storyMark(StoryID.Board.dropZone)
+                .place(preview.incoming)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func name(_ chat: Chat, color: Color) -> some View {
+        HStack(spacing: Space.sm) {
+            ProviderLogo(provider: chat.provider, size: Size.logoTab)
+            Text(chat.title).font(TextStyle.bodyMedium).foregroundStyle(color).lineLimit(1)
+        }
+        .padding(.horizontal, Space.md)
     }
 }
 

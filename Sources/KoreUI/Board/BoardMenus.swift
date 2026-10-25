@@ -37,13 +37,20 @@ extension StoryID {
         /// The room a pulled grip shows; keyed "open" once letting go makes a slot.
         package static func room(_ opens: Bool) -> StoryID { StoryID(.board, "room", key: opens ? "open" : "closed") }
         package static let dropZone = StoryID(.board, "drop")
+        /// The tile a drop lands on, outlined where it would be after.
+        package static let dropTarget = StoryID(.board, "drop.target")
+        /// The strip's ghost of a tile's chat a drop would send there.
+        package static let ghostTab = StoryID(.board, "ghost.tab")
         package static let zoomed = StoryID(.board, "zoomed")
     }
 }
 
 /// The board's Kore popups: a section's ⋯ and ＋, and a tile's ⋯.
 @MainActor
-enum BoardMenus {
+package enum BoardMenus {
+    /// Storylines: the open popup's entries.
+    package static var storyTitles: [String] { OptionsMenu.shared.items.map(\.title) }
+
     static func section(_ id: UUID, model: BoardModel, workspace: Workspace, tab: ChatTab) -> [OptionItem] {
         let others = model.board.sections.filter { $0.id != id }
         let current = model.board.section(id)?.swatch
@@ -74,6 +81,13 @@ enum BoardMenus {
         model.renaming = section.id
     }
 
+    /// A slot beside a tile, focused for its choice (⌘\ and ⌘⇧\, the tile's Split Right / Down).
+    static func splitTile(_ tile: UUID, _ edge: DropEdge, model: BoardModel) {
+        let slot = UUID()
+        model.edit { $0.split(tile, edge, new: slot) }
+        model.focus(slot)
+    }
+
     /// ＋: a new chat, or one of this window's strip chats, into the section.
     static func attach(_ section: UUID, workspace: Workspace, tab: ChatTab) -> [OptionItem] {
         let chats = workspace.stripChats.map { other in
@@ -98,15 +112,21 @@ enum BoardMenus {
         let current = model.board.solve(in: size).tiles[tile].map { Density.of($0.size) }
         let here = model.board.section(of: tile)?.id
         let sections = model.board.sections.filter { $0.id != here }
-        return Density.allCases.map { density in
+        // Split first, with their keys (⌘\ and ⌘⇧\ do the same on the focused tile).
+        let splits = [
+            OptionItem("Split Right", glyph: "rectangle.split.2x1", key: "⌘\\") { splitTile(tile, .right, model: model) },
+            OptionItem("Split Down", glyph: "rectangle.split.1x2", key: "⌘⇧\\") { splitTile(tile, .bottom, model: model) },
+            .rule,
+        ]
+        return splits + Density.allCases.map { density in
             OptionItem(density.rawValue.capitalized, checked: current == density) { model.edit { $0.setDensity(tile, density, in: size) } }
         } + [
             .rule,
-            OptionItem("Zoom") { model.zoomed = tile },
+            OptionItem("Zoom", key: "⌘⇧↩") { model.zoomed = tile },
             OptionItem("Move To", enabled: !sections.isEmpty, children: sections.map { section in
                 OptionItem(section.name) { model.edit { $0.move(tile, to: .into(section.id), in: size) } }
             }),
-            OptionItem("Move to Its Own Tab") { workspace.detach(tile, from: tab) },
+            OptionItem("Move to Its Own Tab", key: "⌥⌘T") { workspace.detach(tile, from: tab) },
             .rule,
             OptionItem("Remove from \(model.name)", destructive: true) { workspace.detach(tile, from: tab, select: false) },
         ]
@@ -153,9 +173,7 @@ enum BoardKeys {
         case ([.control, .command], _, "-") where focused != nil, ([.control, .command], 27, _) where focused != nil:
             step(focused!, up: false, model: model)
         case (.command, 42, _) where focused != nil, ([.command, .shift], 42, _) where focused != nil:
-            let slot = UUID()
-            model.edit { $0.split(focused!, flags.contains(.shift) ? .bottom : .right, new: slot) }
-            model.focus(slot)
+            BoardMenus.splitTile(focused!, flags.contains(.shift) ? .bottom : .right, model: model)
         case ([], 51, _) where !typing && focused.map(model.isSlot) == true:
             model.edit { $0.closeSlot(focused!) }
         case ([], 36, _) where !typing && focused.map(model.isSlot) == true:

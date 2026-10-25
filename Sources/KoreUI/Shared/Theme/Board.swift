@@ -37,8 +37,10 @@ extension Size {
         static let snapPull: CGFloat = 8
         /// The keyboard's step for a boundary when no snap point is nearer.
         static let keyStep: CGFloat = 32
-        /// A drop on a tile's outer quarter splits it; its middle swaps.
+        /// A drop on a tile's outer ring splits it on the nearest side; its middle half swaps.
         static let dropEdge: CGFloat = 0.25
+        /// A short tile's top and bottom drop bands are never thinner than this.
+        static let dropBand: CGFloat = 12
         /// A tile dragged to the tab's outer edge makes a new section there.
         static let tabEdge: CGFloat = 12
         /// A snap point's tick while a gutter drags.

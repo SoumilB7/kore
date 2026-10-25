@@ -648,6 +648,8 @@ struct StickyMessage: View, Equatable {
     let actions: TranscriptActions
     @ObservedObject var tracker: StickyTracker
     @Environment(\.transcriptSelection) private var selection
+    /// The pinned copy is the transcript's band (`PinnedBand`), not a copy hanging from here.
+    @Environment(\.pinnedBand) private var band
 
     /// By content, like the rows: the actions are one shared value, and the tracker redraws it
     /// when a message crosses.
@@ -659,8 +661,16 @@ struct StickyMessage: View, Equatable {
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { y in
                 tracker.header(entry.id.uuidString, y)
             }
+            // The band sits right above a pinned anchor: a press there isn't a selection.
+            .onGeometryChange(for: CGRect?.self) { proxy in
+                band ? proxy.frame(in: .named(TranscriptSelection.space)) : nil
+            } action: { [tracker, selection, id = entry.id.uuidString] frame in
+                guard let frame else { return }
+                let stuck = tracker.stuck.contains(id)
+                selection?.blocker(id, stuck ? CGRect(x: frame.minX, y: frame.minY - tracker.bandHeight, width: frame.width, height: tracker.bandHeight) : nil)
+            }
             .overlay(alignment: .top) {
-                if tracker.stuck.contains(entry.id.uuidString) {
+                if !band, tracker.stuck.contains(entry.id.uuidString) {
                     let (id, selection) = (entry.id.uuidString, selection)
                     MessageHeader(entry: entry, open: open, place: .sticky, actions: actions)
                         .fixedSize(horizontal: false, vertical: true)
@@ -686,6 +696,8 @@ struct StickyMessage: View, Equatable {
 @MainActor
 final class StickyTracker: ObservableObject {
     @Published private(set) var stuck: Set<String> = []
+    /// The pinned band's height, where the transcript has one (a board tile).
+    var bandHeight: CGFloat = 0
     private var headers: [String: CGFloat] = [:]
     private var rows: [String: CGFloat] = [:]
 
@@ -1409,5 +1421,38 @@ struct AgentMeter: View {
     /// Its tokens, "~239k" when read from its transcript rather than reported.
     static func tokens(of info: TranscriptStore.AgentInfo) -> String? {
         info.tokens.map { (info.approximate ? "~" : "") + ContextStore.tokens($0) }
+    }
+}
+
+/// A transcript whose pinned message is a band of its own height over the scroll view (a
+/// board's full tile): the transcript is inset under it, so no reply line runs beneath it.
+struct PinnedBandKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var pinnedBand: Bool {
+        get { self[PinnedBandKey.self] }
+        set { self[PinnedBandKey.self] = newValue }
+    }
+}
+
+/// The pinned message as a band at the column's width, opaque, the transcript inset under it.
+struct PinnedBand: View {
+    let entry: TranscriptStore.Entry
+    let open: Bool
+    let actions: TranscriptActions
+    let tracker: StickyTracker
+    @Environment(\.chatColumn) private var column
+
+    var body: some View {
+        MessageHeader(entry: entry, open: open, place: .sticky, actions: actions)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, column.padding)
+            .frame(maxWidth: column.maxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .background(Theme.background)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { [tracker] in tracker.bandHeight = $0 }
+            .onDisappear { [tracker] in tracker.bandHeight = 0 }
     }
 }

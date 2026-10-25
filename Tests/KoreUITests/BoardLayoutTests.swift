@@ -287,4 +287,37 @@ struct BoardLayoutTests {
         let old = try JSONDecoder().decode(Workspace.Saved.self, from: Data(#"{"tabs":[{"provider":"claude"}],"active":0}"#.utf8))
         #expect(old.tabs[0].board == nil)
     }
+
+    /// Drop zones by nearest edge: the outer ring cut by its diagonals, so a point near a top
+    /// corner splits down, not sideways; the middle half swaps; a chip splits only sideways.
+    @Test func dropZonesByNearestEdge() {
+        let tile = CGRect(x: 0, y: 0, width: 800, height: 400)
+        #expect(BoardFrames.side(of: CGPoint(x: 150, y: 20), in: tile) == .top)
+        #expect(BoardFrames.side(of: CGPoint(x: 20, y: 150), in: tile) == .left)
+        #expect(BoardFrames.side(of: CGPoint(x: 650, y: 385), in: tile) == .bottom)
+        #expect(BoardFrames.side(of: CGPoint(x: 790, y: 300), in: tile) == .right)
+        #expect(BoardFrames.side(of: CGPoint(x: 400, y: 200), in: tile) == nil)
+        let short = CGRect(x: 0, y: 0, width: 400, height: 70)
+        #expect(BoardFrames.side(of: CGPoint(x: 200, y: 6), in: short) == .top)
+        let chip = CGRect(x: 0, y: 0, width: 400, height: 30)
+        #expect(BoardFrames.side(of: CGPoint(x: 200, y: 2), in: chip) == nil)
+        #expect(BoardFrames.side(of: CGPoint(x: 20, y: 2), in: chip) == .left)
+    }
+
+    /// The preview is the board after the drop, solved once: the dropped chat below the tile,
+    /// the tile above, and the board itself unchanged.
+    @Test func dropPreviewIsTheResult() {
+        let (board, t) = Self.ops()
+        let before = board
+        let frames = board.solve(in: Self.wide)
+        let rect = frames.tiles[t[0]]!
+        let (drop, zone) = frames.drop(at: CGPoint(x: rect.midX, y: rect.maxY - 4), moving: nil)!
+        #expect(drop == .beside(t[0], .bottom))
+        let preview = board.preview(drop, zone: zone, moving: nil, isSlot: { _ in false }, in: Self.wide)
+        #expect(board == before)
+        #expect(preview.incoming.minY >= preview.targetPlace!.maxY)
+        #expect(preview.target == t[0])
+        let swap = board.preview(.swap(t[1]), zone: .zero, moving: nil, isSlot: { _ in false }, in: Self.wide)
+        #expect(swap.displaced == t[1] && swap.incoming == frames.tiles[t[1]])
+    }
 }

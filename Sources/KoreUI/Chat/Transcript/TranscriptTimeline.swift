@@ -15,6 +15,8 @@ struct TranscriptTimeline: View, Equatable {
     @Environment(\.chatColumn) private var column
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hiddenTab) private var hidden
+    /// A board tile: the pinned message is a band the transcript is inset under.
+    @Environment(\.pinnedBand) private var band
     /// The sections and the end as they were when the chat's tab hid.
     @StateObject private var frozen = Frozen<(sections: [TranscriptStore.SectionModel], tail: Int)>()
     @StateObject private var following = Local(true)
@@ -144,6 +146,13 @@ struct TranscriptTimeline: View, Equatable {
             }
             // Built again when a shown transcript draws none of its rows (`checkBlank`).
             .id(mount.value)
+            // A board tile's pinned message takes its height: the transcript is inset under it.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if band, let section = sections.last(where: { $0.header.map { sticky.stuck.contains($0.id.uuidString) } == true }),
+                    let header = section.header {
+                    PinnedBand(entry: header, open: section.headerOpen, actions: reveal, tracker: sticky)
+                }
+            }
             .accessibilityAction(named: Text("Copy Selection")) { store.selection.copy() }
             .scrollPosition(binding)
             .defaultScrollAnchor(.bottom, for: .alignment)
