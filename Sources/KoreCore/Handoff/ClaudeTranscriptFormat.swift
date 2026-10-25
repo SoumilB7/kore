@@ -43,11 +43,41 @@ public struct ClaudeTranscriptFormat: HandoffFormat {
         // agent's own history.
         let written = Set(HandoffRecords.record(target: identity.sessionId)?.written ?? [])
         let folder = URL(fileURLWithPath: identity.cwd ?? file.deletingLastPathComponent().path)
-        var segment = Self.segment(page.messages, sessionId: identity.sessionId, folder: folder, skipping: written)
+        let messages = Self.withPreserved(page.messages, from: file)
+        var segment = Self.segment(messages, sessionId: identity.sessionId, folder: folder, skipping: written)
         // Named as Kore's history lists it (the newest rename wins over an older AI title).
         segment.title = ClaudeHistory.title(of: file) ?? identity.title
         segment.cwd = identity.cwd
         return segment
+    }
+
+    /// The rows a compaction kept word for word (`preservedMessages`) sit before its boundary in
+    /// the file, where the page starts: the CLI puts them back after its summary, and so does
+    /// this, read from the end until all are found (at most 256 MB back).
+    static func withPreserved(_ messages: [JSONValue], from file: URL) -> [JSONValue] {
+        guard let boundary = messages.lastIndex(where: ClaudeHistory.isBoundary) else { return messages }
+        let kept = messages[boundary]["compactMetadata"]?["preservedMessages"]
+        let uuids = (kept?["allUuids"]?.array ?? kept?["uuids"]?.array ?? []).compactMap(\.string)
+        let shown = Set(messages.compactMap { $0["uuid"]?.string })
+        var wanted = Set(uuids).subtracting(shown)
+        guard !wanted.isEmpty, var lines = TailLines(file: file) else { return messages }
+        let needles = wanted.map { Array($0.utf8) }
+        var found: [String: JSONValue] = [:]
+        while !wanted.isEmpty, let (offset, line) = lines.next(), lines.end - offset < 256 << 20 {
+            let has = line.withUnsafeBytes { bytes in
+                needles.contains { needle in bytes.baseAddress.map { memmem($0, bytes.count, needle, needle.count) != nil } ?? false }
+            }
+            guard has, let entry = try? JSONValue.parse(line), let uuid = entry["uuid"]?.string, wanted.contains(uuid) else { continue }
+            found[uuid] = entry
+            wanted.remove(uuid)
+        }
+        let preserved = uuids.compactMap { found[$0] }
+        guard !preserved.isEmpty else { return messages }
+        // After the summary that follows the boundary, else right after the boundary.
+        let summary = messages[boundary...].firstIndex { $0["isCompactSummary"]?.bool == true } ?? boundary
+        var out = messages
+        out.insert(contentsOf: preserved, at: summary + 1)
+        return out
     }
 
     /// `skipping`: entries Kore wrote itself (an earlier import into this session).
