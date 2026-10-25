@@ -2,6 +2,13 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.1.1] - 2026-10-25
+
+### Fixed
+- In full screen, the tab bar moves down with the title bar when it slides in at the top, so
+  tabs stay visible and clickable. Window chrome is checked again after entering or leaving
+  full screen and when a display changes.
+
 ## [0.1.0] - 2026-10-25
 
 First release.
@@ -37,4 +44,5 @@ First release.
 - Stay-awake while chats work; a notice when the network drops.
 - The `kore` command: `kore <folder>` opens a folder, `kore setup` installs missing CLIs.
 
+[0.1.1]: ../../releases/tag/v0.1.1
 [0.1.0]: ../../releases/tag/v0.1.0
