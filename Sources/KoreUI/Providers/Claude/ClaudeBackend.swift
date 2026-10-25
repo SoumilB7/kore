@@ -828,9 +828,9 @@ final class ClaudeBackend: ChatBackend {
         try? await session?.taskOutput(id)
     }
 
-    func relaunch() async {
+    func relaunch(reason: String) async {
         guard let session else { return }
-        log.relaunch("claude", chat: sessionId, reason: "account changed")
+        log.relaunch("claude", chat: sessionId, reason: reason)
         // Its shells end with its process.
         translator.endCommands()
         flush()

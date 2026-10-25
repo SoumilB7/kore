@@ -38,6 +38,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case `continue`, background
         /// A chat tab's spinner: its turn runs, or it compacts.
         case working
+        /// A tab whose turn is offline or stalled: ⚠ in its spinner's place.
+        case stuck
         /// A list row's stand-in for the pointer entering it; there while it's lit; a popup
         /// button's keyboard focus ring.
         case hover, lit, focus
@@ -158,6 +160,9 @@ extension StoryID {
         /// A fenced code block, by its place in its markdown; `.part(.copy)` is its Copy.
         package static func code(_ path: [Int]) -> StoryID { StoryID(.transcript, "code", key: path.map(String.init).joined(separator: ".")) }
         package static let earlier = StoryID(.transcript, "earlier")
+        /// A stalled turn's spinner row: Retry and Stop.
+        package static let stalledRetry = StoryID(.transcript, "stalled-retry")
+        package static let stalledStop = StoryID(.transcript, "stalled-stop")
         /// A refused login's notice, by its turn; `.part(.signIn)` is its Sign in.
         package static func signIn(_ turn: String) -> StoryID { StoryID(.transcript, "signin", key: turn) }
         /// A limit notice's "Continues at …", by its turn; `.part(.cancel)` is its ×.

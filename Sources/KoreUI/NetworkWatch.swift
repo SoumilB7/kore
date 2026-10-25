@@ -1,17 +1,18 @@
 import Foundation
 import Network
+import Observation
 
 /// Whether the Mac has a network path, app-wide: one `NWPathMonitor`, its changes posted on the
 /// main thread. A send made offline waits for the path; a running turn's spinner says so.
-@MainActor
+@MainActor @Observable
 package final class NetworkWatch {
     package static let shared = NetworkWatch()
     static let changed = Notification.Name("KoreNetworkChanged")
 
     private(set) var isOnline = true
     /// Set by a test or storyline: the monitor's word no longer counts.
-    private var pinned: Bool?
-    private let monitor = NWPathMonitor()
+    @ObservationIgnored private var pinned: Bool?
+    @ObservationIgnored private let monitor = NWPathMonitor()
 
     private init() {
         monitor.pathUpdateHandler = { path in

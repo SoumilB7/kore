@@ -95,6 +95,21 @@ package struct WaitIdle: Step {
     package func run(_ story: StoryContext) async throws { try await story.idle() }
 }
 
+/// Something the storyline sets or does directly, not through the interface (a shorter wait).
+package struct Do: Step {
+    let what: String
+    let action: @MainActor (StoryContext) throws -> Void
+    package var label: String { what }
+    package var timeout: Duration? { nil }
+
+    package init(_ what: String, _ action: @escaping @MainActor (StoryContext) throws -> Void) {
+        self.what = what
+        self.action = action
+    }
+
+    package func run(_ story: StoryContext) async throws { try action(story) }
+}
+
 /// Checks the model, waiting up to the step's timeout for it to hold.
 package struct Expect: Step {
     let what: String

@@ -684,3 +684,55 @@ final class ReloadWindow: ChatStoryline {
         ]
     }
 }
+
+/// A turn that goes quiet while it waits on the model (a connection that died unnoticed): after
+/// the watchdog's wait its spinner holds still with "No response" and Retry / Stop, its tab
+/// shows ⚠, and Retry starts its CLI again on the same chat and asks it to carry on.
+final class StalledTurn: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(turns: [[.startTurn, .wait(.release)], CLIScript.reply("Carried on")])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Do("Wait 1 s for a stall") { _ in Chat.stallAfter.value = 1 },
+            Send("Start the job"),
+            WaitForEvent("the turn to start") { if case .turnStarted = $0 { true } else { false } },
+            Expect("the turn seen as stalled", timeout: .seconds(8)) { try $0.activeChat().connection == .stalled },
+            // Its spinner's Retry (pressing it finds it on screen).
+            Press(.id(StoryID.Transcript.stalledRetry)),
+            Expect("its CLI started again") { try $0.scriptedBackend().log.contains(.relaunch) },
+            Expect("and was asked to carry on") { try $0.scriptedBackend().log.contains(.send("Continue")) },
+            TurnFinished(2),
+            Expect.rows("the answer after it") { $0.contains { $0.text == "Carried on" } },
+            Expect("the connection fine again") { try $0.activeChat().connection == .ok },
+        ]
+    }
+}
+
+/// A Stop the CLI never answers: after 5 s Kore ends the CLI itself, the turn ends as
+/// stopped, and the chat can send again.
+final class UnansweredStop: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        var script = CLIScript(turns: [[.startTurn, .wait(.release)], CLIScript.reply("Back")])
+        script.deaf = true
+        return script
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Start the job"),
+            WaitForEvent("the turn to start") { if case .turnStarted = $0 { true } else { false } },
+            Stop(),
+            Expect("the turn still running at first") { try $0.activeChat().isRunning },
+            Expect("after 5 s, ended by Kore", timeout: .seconds(9)) { story in
+                try !story.activeChat().isRunning && story.scriptedBackend().log.contains(.relaunch)
+            },
+            Send("again"),
+            TurnFinished(2),
+            Expect.rows("the next turn answered") { $0.contains { $0.text == "Back" } },
+        ]
+    }
+}

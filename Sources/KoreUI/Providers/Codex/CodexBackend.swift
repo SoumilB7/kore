@@ -640,11 +640,11 @@ final class CodexBackend: ChatBackend {
         return (replayed.events, older.earlier != nil)
     }
 
-    func relaunch() async {
+    func relaunch(reason: String) async {
         // A new account may resume what the last one couldn't.
         refused = nil
         guard let session else { return }
-        log.relaunch("codex", chat: sessionId, reason: "account changed")
+        log.relaunch("codex", chat: sessionId, reason: reason)
         // Its terminals end with its process.
         translator.endCommands()
         flush()

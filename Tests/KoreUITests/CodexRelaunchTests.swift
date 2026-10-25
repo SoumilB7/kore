@@ -84,7 +84,7 @@ struct CodexRelaunchTests {
         try await backend.start()
         try await until("the thread named") { backend.sessionId == Self.unturned }
         await backend.setEffort("low")
-        await backend.relaunch()
+        await backend.relaunch(reason: "account changed")
         #expect(try await backend.send("hey", files: [], queued: nil))
         try await until("the turn's end") { heard.finished }
         #expect(backend.sessionId == Self.fresh)

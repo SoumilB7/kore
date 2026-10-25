@@ -33,6 +33,8 @@ package final class ScriptedBackend: ChatBackend {
     private var lastItem: String?
     private var openTools: [String] = []
     private var interrupted = false
+    /// The process under the playing turn was ended (`relaunch`): what it would still say is lost.
+    private var silenced = false
     /// Sends made while a turn ran, not yet taken into one.
     private var queued: [(id: String, text: String)] = []
     /// Calls no `.wait` has taken yet, and the wait that's blocked.
@@ -104,7 +106,7 @@ package final class ScriptedBackend: ChatBackend {
     /// Ends the playing turn at its next beat, or at once when it's waiting.
     package func interrupt() async {
         log.append(.interrupt)
-        guard turn != nil else { return }
+        guard turn != nil, !script.deaf else { return }
         interrupted = true
         offer(.interrupt)
     }
@@ -214,9 +216,14 @@ package final class ScriptedBackend: ChatBackend {
     }
 
     /// The account changed: the process would end here and start again at the next send.
-    package func relaunch() async {
+    package func relaunch(reason: String) async {
         log.append(.relaunch)
         relaunched = true
+        // A turn still playing dies with the process, saying nothing more.
+        guard turn != nil else { return }
+        silenced = true
+        interrupted = true
+        offer(.interrupt)
     }
 
     /// Lets a script held at `.wait(.release)` go on.
@@ -256,6 +263,7 @@ package final class ScriptedBackend: ChatBackend {
         turn = delivery?.turn ?? ToolID.make()
         lastItem = nil
         interrupted = false
+        silenced = false
         if let delivery { await emit(.queuedMessage(id: delivery.id, .nextTurn(delivery.turn))) }
         let finished = await play(beats)
         if !finished {
@@ -369,7 +377,7 @@ package final class ScriptedBackend: ChatBackend {
     }
 
     private func emit(_ event: ChatEvent) async {
-        guard !closed else { return }
+        guard !closed, !silenced else { return }
         sink.yield(event)
         record(event)
         await pace(text: false)

@@ -18,6 +18,8 @@ package struct CLIScript: Sendable {
     package var agents: [String: [ChatEvent]]
     /// What the CLI answers when Kore reads the account's limits (the usage popup); nil: it fails.
     package var usage: UsageAnswer?
+    /// A CLI that never answers a Stop (a dead connection, a wedged process).
+    package var deaf = false
 
     package init(
         start: [Beat] = [.controls()], turns: [[Beat]] = [], compact: [Beat] = CLIScript.compaction(), agents: [String: [ChatEvent]] = [:],

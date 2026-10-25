@@ -4,6 +4,9 @@ import SwiftUI
 /// What the transcript's rows can do. One value shared by every row, so rows compare by content.
 struct TranscriptActions {
     var toggleTurn: (String) -> Void = { _ in }
+    /// A stalled turn's Retry and Stop (its spinner row's buttons).
+    var retry: () -> Void = {}
+    var stop: () -> Void = {}
     /// Opens or closes a tool body, thinking, a file inside an edit ("id/path"), or an agent.
     var toggle: (String) -> Void = { _ in }
     var openImage: (Attachment) -> Void = { _ in }
@@ -258,9 +261,9 @@ struct TimelineRow: View, Equatable {
             MessageHeader(entry: entry, open: open, expanded: expanded, messageActions: item.actions, actions: actions)
         } else if case .summary(let entry, let expanded) = item.row {
             CompactionSummary(entry: entry, expanded: expanded, actions: actions)
-        } else if case .spinner(_, let since, let claude, let word) = item.row {
+        } else if case .spinner(_, let since, let claude, let word, let connection) = item.row {
             // Not a timeline item: no dot, and the line doesn't run into it.
-            SpinnerRow(since: since, claude: claude, word: word)
+            SpinnerRow(since: since, claude: claude, word: word, connection: connection, retry: actions.retry, stop: actions.stop)
         } else if let dot = item.dot {
             let rule = if case .rule = item.row { true } else { false }
             TimelineItem(
@@ -315,8 +318,8 @@ struct RowContent: View {
             }
         case .explored(let calls, let open):
             ExploredItem(calls: calls.count, open: open) { actions.toggle("explored-\(calls[0].id.uuidString)") }
-        case .spinner(_, let since, let claude, let word):
-            SpinnerRow(since: since, claude: claude, word: word)
+        case .spinner(_, let since, let claude, let word, let connection):
+            SpinnerRow(since: since, claude: claude, word: word, connection: connection, retry: actions.retry, stop: actions.stop)
         case .summary(let entry, let expanded):
             CompactionSummary(entry: entry, expanded: expanded, actions: actions)
         case .queued(let entry):

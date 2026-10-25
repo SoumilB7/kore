@@ -306,7 +306,13 @@ private struct TabItem: View {
                         AgentAvatar(
                             index: info.index, name: info.name, status: info.status, background: info.background, place: .tab)
                     } else if let chat = tab.chat {
-                        if chat.isBusy {
+                        if chat.isBusy, chat.connection.stuck {
+                            // Offline or stalled: nothing to spin for (the chat's row says which).
+                            Text("⚠").font(Chrome.body).foregroundStyle(Theme.warning)
+                                .frame(width: Size.spinner, height: Size.spinner)
+                                .help(chat.connection.word ?? "")
+                                .storyMark(StoryID.Tabs.tab(tab.id).part(.stuck))
+                        } else if chat.isBusy {
                             // The system spinner is grey: multiplied, it takes the CLI's colour.
                             ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
                                 .colorMultiply(WorkingSpinner.tint(chat.provider))

@@ -484,14 +484,22 @@ package enum Connection: Sendable, Equatable {
     case offline
     /// The CLI's own retry of a request that failed: which try of how many, when it says.
     case retrying(attempt: Int?, of: Int?)
+    /// Online, waiting on the model, and nothing heard for `Chat.stallAfter` (Kore's watchdog):
+    /// the connection likely died without the CLI noticing.
+    case stalled
 
     /// What the running turn's spinner says for it; nil when fine.
     var word: String? {
         switch self {
         case .ok: nil
         case .offline: "Offline · waiting for the network"
-        case .retrying(let attempt?, let of?): "Reconnecting (\(attempt) of \(of))"
-        case .retrying: "Reconnecting"
+        case .retrying(let attempt?, let of?): "Connection unstable · retrying (\(attempt) of \(of))"
+        case .retrying: "Connection unstable · retrying"
+        case .stalled: "No response · the connection may have dropped"
         }
     }
+
+    /// Offline or stalled: the spinner holds still and the tab shows ⚠. Retrying is the CLI at
+    /// work, and keeps moving.
+    var stuck: Bool { self == .offline || self == .stalled }
 }

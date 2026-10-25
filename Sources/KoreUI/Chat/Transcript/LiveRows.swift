@@ -10,12 +10,51 @@ struct SpinnerRow: View {
     let claude: Bool
     /// Said instead of a random verb ("Compacting").
     var word: String? = nil
+    /// Offline or stalled, it holds still with ⚠; stalled, it offers Retry and Stop.
+    var connection: Connection = .ok
+    var retry: () -> Void = {}
+    var stop: () -> Void = {}
     @Environment(\.spinnerTint) private var tint
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hiddenTab) private var hidden
     @StateObject private var shown = Local(false)
 
     var body: some View {
+        if connection.stuck {
+            stuck
+        } else {
+            moving
+        }
+    }
+
+    /// Nothing to animate while nothing can arrive: ⚠, what's wrong, and when stalled the way out.
+    private var stuck: some View {
+        HStack(spacing: 0) {
+            Text("⚠")
+                .font(TextStyle.spinnerGlyph)
+                .foregroundStyle(Theme.warning)
+                .frame(width: Size.spinnerGlyphBox)
+            Text(word ?? "")
+                .font(TextStyle.spinnerVerb)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .padding(.leading, Layout.Timeline.indent - Size.spinnerGlyphBox)
+            if connection == .stalled {
+                HStack(spacing: Space.sm) {
+                    Button("Retry", action: retry).smallButton(prominent: true)
+                        .storyID(StoryID.Transcript.stalledRetry)
+                    Button("Stop", action: stop).smallButton()
+                        .storyID(StoryID.Transcript.stalledStop)
+                }
+                .padding(.leading, Space.md)
+            }
+        }
+        .frame(height: Size.spinnerRow)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, Space.spinnerTop)
+    }
+
+    private var moving: some View {
         TimelineView(Schedule(since: since, still: reduceMotion, paused: hidden, verbs: verbs)) { context in
             let t = max(0, context.date.timeIntervalSince(since))
             HStack(spacing: 0) {

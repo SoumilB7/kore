@@ -174,6 +174,8 @@ struct ChatView: View {
         let workspace = workspace
         var actions = TranscriptActions()
         actions.toggleTurn = { chat.transcript.toggle(turn: $0) }
+        actions.retry = { chat.retryStalled() }
+        actions.stop = { chat.stop() }
         actions.toggle = { key in
             chat.transcript.toggle(key)
             if let agent = chat.transcript.agentID(forCard: key) { chat.loadAgentIfNeeded(agent) }

@@ -20,7 +20,7 @@ struct ConnectionTests {
         }
         t.translate(ClaudeEvent(message: json(#"{"type":"stream_event","event":{"type":"message_start"}}"#)))
         #expect(connections(t.take().events) == [.retrying(attempt: 1, of: 10), .retrying(attempt: 2, of: 10), .ok])
-        #expect(Connection.retrying(attempt: 2, of: 10).word == "Reconnecting (2 of 10)")
+        #expect(Connection.retrying(attempt: 2, of: 10).word == "Connection unstable · retrying (2 of 10)")
         #expect(Connection.offline.word == "Offline · waiting for the network")
     }
 

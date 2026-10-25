@@ -64,7 +64,10 @@ struct ComposerView: View {
     private var placeholder: String {
         // With a command and nothing typed: what the command takes ("objective").
         if let hint = chat.command?.hint, !hint.isEmpty, chat.draft.isEmpty { return hint }
-        guard chat.status.isRunning else { return "" }
+        guard chat.status.isRunning else {
+            // Known before sending: what's sent waits for the network.
+            return NetworkWatch.shared.isOnline ? "" : "Offline · what you send goes when you're back"
+        }
         return chat.provider == .codex ? "Add to this turn…" : "Queue another message…"
     }
 

@@ -62,6 +62,18 @@ package final class Chat: Identifiable {
     /// says when the network goes.
     @ObservationIgnored private var waitingForNetwork = false
     @ObservationIgnored private var networkObserver: (any NSObjectProtocol)?
+    /// The running turn's connection, as its spinner and tab show it (`Connection.stuck`: ⚠).
+    package private(set) var connection = Connection.ok
+    /// When the CLI last said anything, and the turn's watchdog (`checkStall`).
+    @ObservationIgnored private var lastHeard = Date()
+    @ObservationIgnored private var watchdog: Task<Void, Never>?
+    /// A Stop's fallback (`stop`), and which turn it was for: one sent since isn't ended by it.
+    @ObservationIgnored private var stopFallback: Task<Void, Never>?
+    @ObservationIgnored private var turnSerial = 0
+    /// Online, waiting on the model (no tool, agent, approval or compaction under way), and
+    /// nothing heard for this long: the turn's connection likely died unnoticed. A storyline
+    /// sets it shorter.
+    package static let stallAfter = HostSetting<TimeInterval>(90)
     /// That chat, while it's open (its "Forked from" line switches to it).
     @ObservationIgnored weak var original: Chat?
     /// The chat has been shown, so its CLI was started once (`startOnce`).
@@ -181,6 +193,7 @@ package final class Chat: Identifiable {
             return
         }
         let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
+        noteHeard(event)
         if case .replayed = event { showImported(in: transcript) }
         transcript.apply(event)
         commands.apply(event)
@@ -436,7 +449,7 @@ package final class Chat: Identifiable {
         let previous = sending
         sending = Task {
             await previous?.value
-            await backend.relaunch()
+            await backend.relaunch(reason: "account changed")
             try? await backend.start()
         }
     }
@@ -473,6 +486,117 @@ package final class Chat: Identifiable {
             relaunchDue = false
         default:
             break
+        }
+    }
+
+    // MARK: Connection
+
+    /// What the CLI said keeps the watchdog fed; a turn's start and end, and its connection's
+    /// changes, are logged.
+    private func noteHeard(_ event: ChatEvent) {
+        switch event {
+        case .connection(let state):
+            guard state != connection else { return }
+            connection = state
+            let attempt: String? = if case .retrying(let n?, let of?) = state { "\(n)/\(of)" } else { nil }
+            SessionLog.shared.connection(provider.id, chat: sessionId, state: Self.name(state), attempt: attempt)
+        case .turnStarted:
+            turnSerial &+= 1
+            lastHeard = Date()
+            SessionLog.shared.turn("turn-start", provider.id, chat: sessionId)
+            startWatchdog()
+        case .turnFinished(_, let outcome, let duration):
+            endWatch()
+            SessionLog.shared.turn(
+                "turn-end", provider.id, chat: sessionId, outcome: Self.name(outcome), seconds: duration.map { Int($0.components.seconds) })
+        case .exited:
+            endWatch()
+        default:
+            guard !Self.isReplay(event) else { return }
+            lastHeard = Date()
+            if connection == .stalled {
+                // It spoke again: the connection was fine after all.
+                connection = .ok
+                transcript.connected(.ok)
+                SessionLog.shared.connection(provider.id, chat: sessionId, state: "ok")
+            }
+        }
+    }
+
+    private func endWatch() {
+        watchdog?.cancel()
+        watchdog = nil
+        stopFallback?.cancel()
+        stopFallback = nil
+        connection = .ok
+    }
+
+    /// Every 10 s while a turn runs: `checkStall`. Started by a send too, in case the CLI never
+    /// answers with the turn's start.
+    private func startWatchdog() {
+        guard watchdog == nil else { return }
+        lastHeard = Date()
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(min(10, Self.stallAfter.value / 3)))
+                guard let self, !Task.isCancelled else { return }
+                guard self.status.isRunning else {
+                    self.watchdog = nil
+                    return
+                }
+                self.checkStall()
+            }
+        }
+    }
+
+    private func checkStall() {
+        let quiet = Date().timeIntervalSince(lastHeard)
+        guard connection != .stalled, quiet > Self.stallAfter.value, NetworkWatch.shared.isOnline, !waitingForNetwork,
+            approvals.pending.isEmpty, !context.compacting, !transcript.workRunning
+        else { return }
+        connection = .stalled
+        transcript.connected(.stalled)
+        SessionLog.shared.connection(provider.id, chat: sessionId, state: "stalled", quiet: Int(quiet))
+    }
+
+    /// A stalled turn's Retry: its CLI ends and starts again on the same chat, which is asked
+    /// to carry on.
+    func retryStalled() {
+        SessionLog.shared.rescue(provider.id, chat: sessionId, action: "retry")
+        restartCLI(reason: "stalled")
+        deliver("Continue", [])
+    }
+
+    /// Ends the CLI under a turn that won't end by itself and starts it again: the turn ends
+    /// here, at once, and nothing waits for the send that hangs on it.
+    private func restartCLI(reason: String) {
+        guard let backend else { return }
+        if status.isRunning { dispatch(.turnFinished(nil, .interrupted, duration: nil)) }
+        status.setRunning(false)
+        sending?.cancel()
+        sending = Task {
+            await backend.relaunch(reason: reason)
+            try? await backend.start()
+        }
+    }
+
+    private static func name(_ state: Connection) -> String {
+        switch state {
+        case .ok: "ok"
+        case .offline: "offline"
+        case .retrying: "retrying"
+        case .stalled: "stalled"
+        }
+    }
+
+    private static func name(_ outcome: TurnOutcome) -> String {
+        switch outcome {
+        case .completed: "completed"
+        case .interrupted: "interrupted"
+        case .failed: "failed"
+        case .authFailed: "auth-failed"
+        case .limited: "limited"
+        case .slept: "slept"
         }
     }
 
@@ -584,6 +708,7 @@ package final class Chat: Identifiable {
         if let queued { waiting[queued] = (text, sent) }
         if awaitingHistory { hold(message) } else { dispatch(message) }
         status.setRunning(true)
+        startWatchdog()
         let backend = connect()
         let previous = sending
         sending = Task {
@@ -761,6 +886,16 @@ package final class Chat: Identifiable {
         compactedInTurn = false
         let backend = backend
         Task { await backend?.interrupt() }
+        // A CLI that doesn't answer (a dead connection, a wedged process) is ended after 5 s;
+        // a turn sent since isn't this Stop's.
+        let serial = turnSerial
+        stopFallback?.cancel()
+        stopFallback = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self, !Task.isCancelled, self.status.isRunning, self.turnSerial == serial else { return }
+            SessionLog.shared.rescue(self.provider.id, chat: self.sessionId, action: "stop-unanswered")
+            self.restartCLI(reason: "stop unanswered")
+        }
     }
 
     /// The context wheel's click (look §9): compacts at once, between turns only.

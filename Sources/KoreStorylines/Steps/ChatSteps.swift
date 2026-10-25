@@ -31,6 +31,8 @@ package struct UseScript: Step {
     }
 
     package func run(_ story: StoryContext) async throws {
+        // Each storyline starts with the app's own watchdog wait, whatever one before set.
+        Chat.stallAfter.value = 90
         if let provider { ScriptedWorld.shared.scripts[provider] = script } else { ScriptedWorld.shared.script = script }
     }
 }

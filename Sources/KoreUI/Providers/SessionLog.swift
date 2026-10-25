@@ -51,6 +51,22 @@ struct SessionLog: Sendable {
         log.write("shown", ["cli": cli, "chat": chat ?? "-", "rows": String(rows), "held": String(held), "late": late ? "yes" : nil])
     }
 
+    /// A turn began, or ended with its outcome and how long it ran.
+    func turn(_ event: String, _ cli: String, chat: String?, outcome: String? = nil, seconds: Int? = nil) {
+        log.write(event, ["cli": cli, "chat": chat ?? "-", "outcome": outcome, "s": seconds.map(String.init)])
+    }
+
+    /// A running turn's connection changed: "offline", "ok", "retrying" (`attempt`), "stalled"
+    /// (nothing heard for `quiet` seconds).
+    func connection(_ cli: String, chat: String?, state: String, attempt: String? = nil, quiet: Int? = nil) {
+        log.write("connection", ["cli": cli, "chat": chat ?? "-", "state": state, "attempt": attempt, "quiet": quiet.map(String.init)])
+    }
+
+    /// A stalled turn's Retry, or a Stop the CLI didn't answer: Kore ends its CLI itself.
+    func rescue(_ cli: String, chat: String?, action: String) {
+        log.write("rescue", ["cli": cli, "chat": chat ?? "-", "action": action])
+    }
+
     func relaunch(_ cli: String, chat: String?, reason: String) {
         log.write("relaunch", ["cli": cli, "chat": chat ?? "-", "reason": reason])
     }

@@ -156,7 +156,7 @@ final class TranscriptStore {
         case queued(Entry)
         /// The running turn's last row: glyph and verb (look.md §12); `word` in place of the
         /// random verb ("Compacting").
-        case spinner(turn: String, since: Date, claude: Bool, word: String?)
+        case spinner(turn: String, since: Date, claude: Bool, word: String?, connection: Connection = .ok)
 
         var id: String {
             switch self {
@@ -169,7 +169,7 @@ final class TranscriptStore {
             case .changes(let t, _, _, _): "changes-\(t)"
             // The first call's: a read-only call that becomes a group keeps its identity.
             case .explored(let entries, _): entries.first?.id.uuidString ?? "explored"
-            case .spinner(let t, _, _, _): "spinner-\(t)"
+            case .spinner(let t, _, _, _, _): "spinner-\(t)"
             }
         }
     }
@@ -545,11 +545,17 @@ final class TranscriptStore {
         changed(turn: turnShowsSpinner ? current : nil)
     }
 
-    /// The running turn's connection: its spinner says "Offline · …" or "Reconnecting (3 of 10)"
-    /// while it isn't fine, and goes back to its own word once it is.
     /// What the running turn's spinner says of its connection; nil when fine.
     var connectionWord: String? { connection.word }
 
+    /// The running turn has a tool or an agent at work: a quiet CLI is busy, not stalled.
+    var workRunning: Bool {
+        guard let current else { return false }
+        return entries.suffix(400).contains { $0.turn == current && (($0.kind == .tool && !$0.done) || $0.agent?.status == .running) }
+    }
+
+    /// The running turn's connection: its spinner says "Offline · …", "Connection unstable · …"
+    /// or "No response · …" while it isn't fine, and goes back to its own word once it is.
     func connected(_ state: Connection) {
         guard state != connection else { return }
         connection = state
@@ -1454,6 +1460,12 @@ final class TranscriptStore {
         if let since = compactingSince, !turnShowsSpinner {
             rows.append(.spinner(turn: Self.compactionRow, since: since, claude: providerName == "Claude", word: "Compacting"))
         }
+        // A running turn with nothing of its own yet, offline or stalled: its live row says so
+        // (and, stalled, offers Retry and Stop).
+        if connection.stuck, compactingSince == nil, !turnShowsSpinner, turnIsOpen, let current, let turn = turns[current] {
+            rows.append(
+                .spinner(turn: current, since: turn.startedAt, claude: providerName == "Claude", word: connection.word, connection: connection))
+        }
         // Messages waiting for the running turn come last, after its spinner.
         rows.append(contentsOf: queued.map { .queued($0.entry) })
         return rows
@@ -1682,7 +1694,7 @@ final class TranscriptStore {
             rows.append(
                 .spinner(
                     turn: turn.id, since: turn.startedAt, claude: providerName == "Claude",
-                    word: compactingSince != nil ? "Compacting" : connection.word))
+                    word: compactingSince != nil ? "Compacting" : connection.word, connection: compactingSince != nil ? .ok : connection))
         }
     }
 
