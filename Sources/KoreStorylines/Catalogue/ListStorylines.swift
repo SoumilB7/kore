@@ -244,6 +244,9 @@ final class PopupTab: Storyline {
             Press(.id(StoryID.Composer.slash)),
             Press(row("account")),
             WaitForElement(.id(account.part(.signOut))),
+            // The card's header first (the privacy eye), then its rows, top to bottom.
+            Key(.tab),
+            ExpectElement(.id(StoryID.Composer.accountPrivacy.part(.focus))),
             Key(.tab),
             ExpectElement(.id(account.part(.switch).part(.focus))),
             TabTo(account.part(.signOut)),
