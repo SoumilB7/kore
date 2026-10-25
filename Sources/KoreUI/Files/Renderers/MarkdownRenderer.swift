@@ -108,7 +108,7 @@ private struct MarkdownFileView: View {
                     // The transcript's selection: texts report in this space, and the responder
                     // at its corner follows the pointer and takes ⌘A / ⌘C.
                     .background(alignment: .topLeading) {
-                        SelectionResponder(selection: state.selection, hidden: false, openLink: follow)
+                        SelectionResponder(selection: state.selection, hidden: false, openLink: follow, onReady: focus)
                             .frame(width: Stroke.hairline, height: Stroke.hairline)
                     }
                     .coordinateSpace(.named(TranscriptSelection.space))
@@ -116,7 +116,6 @@ private struct MarkdownFileView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .environment(\.openURL, OpenURLAction(handler: open))
-                .onAppear(perform: focus)
             }
         }
         .task(id: context.reloadToken) {
@@ -142,15 +141,15 @@ private struct MarkdownFileView: View {
         }
     }
 
-    /// The keyboard to the preview, so ⌘A and ⌘C work without a click first: when the tab was
-    /// asked for it, or nothing else in the window has it (the source view just went).
-    private func focus() {
-        let (selection, takeFocus) = (state.selection, context.takeFocus)
-        DispatchQueue.main.async {
-            guard let view = selection.responder, let window = view.window else { return }
-            if takeFocus() || window.firstResponder == nil || window.firstResponder === window {
-                window.makeFirstResponder(view)
-            }
+    /// The keyboard request belongs to the attached responder, after Quick Open's field
+    /// has left. A tab/renderer switch before that frame completes cannot take the keys.
+    private func focus(_ view: SelectionResponderView) {
+        let takeFocus = context.takeFocus
+        afterThisFrame { [weak view] in
+            guard let view, !view.hiddenTab, view.selection?.responder === view,
+                let window = view.window, takeFocus()
+            else { return }
+            window.makeFirstResponder(view)
         }
     }
 

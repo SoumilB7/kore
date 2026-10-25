@@ -115,11 +115,14 @@ struct SelectionResponder: NSViewRepresentable {
     let hidden: Bool
     /// Where its links open (the chat's window).
     var openLink: ((URL) -> Void)?
+    /// A preview can take a pending keyboard request once its responder actually mounts.
+    var onReady: ((SelectionResponderView) -> Void)?
 
     func makeNSView(context: Context) -> SelectionResponderView {
         let view = SelectionResponderView()
         view.selection = selection
         view.hiddenTab = hidden
+        view.onReady = onReady
         selection.openLink = openLink
         return view
     }
@@ -127,7 +130,9 @@ struct SelectionResponder: NSViewRepresentable {
     func updateNSView(_ view: SelectionResponderView, context: Context) {
         view.selection = selection
         view.hiddenTab = hidden
+        view.onReady = onReady
         selection.openLink = openLink
+        view.notifyReady()
     }
 }
 
@@ -141,6 +146,13 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
         didSet { selection?.responder = self }
     }
     var hiddenTab = false
+    var onReady: ((SelectionResponderView) -> Void)?
+
+    func notifyReady() {
+        guard window != nil, !hiddenTab else { return }
+        onReady?(self)
+    }
+
     private var monitor: Any?
     private var observers: [NSObjectProtocol] = []
     private var tracking: NSTrackingArea?
@@ -188,6 +200,7 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
         }
         updateActive()
         DispatchQueue.main.async { [weak self] in self?.track() }
+        notifyReady()
     }
 
     /// The I-beam over text comes from a tracking area on the transcript's clip view (this view

@@ -42,6 +42,7 @@ struct RendererHost<Fallback: View>: View {
         let workspace = workspace
         let rendering = document.rendering
         let document = document
+        let rendererID = rendering.renderer?.id
         return RendererContext(
             reloadToken: document.revision, folder: workspace.folder,
             openURL: { workspace.openFile($0, preview: true) }, zoom: Zoom.shared.scale, memory: rendering.memory,
@@ -56,7 +57,12 @@ struct RendererHost<Fallback: View>: View {
                 document.loadIfNeeded()
                 document.openAnyway()
             },
-            takeFocus: {
+            takeFocus: { [weak workspace, weak document, weak rendering] in
+                guard let workspace, let document, let rendering,
+                    workspace.activeFile === document, rendering.showsRenderer,
+                    let rendererID, rendering.renderer?.id == rendererID,
+                    rendering.resolved == document.url
+                else { return false }
                 defer { rendering.focusPending = false }
                 return rendering.focusPending
             })
