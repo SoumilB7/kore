@@ -675,8 +675,15 @@ struct StickyMessage: View, Equatable {
                     MessageHeader(entry: entry, open: open, place: .sticky, actions: actions)
                         .fixedSize(horizontal: false, vertical: true)
                         // Pinned over the rows: a press on it isn't a selection of what's under it.
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TranscriptSelection.space)) } action: {
-                            selection?.blocker(id, $0)
+                        // Its own top says too whether it's pinned at all: the lazy stack can build
+                        // a section again without its header reporting where it is now, and a copy
+                        // left hanging down the screen would cover its row's text.
+                        .onGeometryChange(for: [CGFloat].self) { proxy in
+                            let f = proxy.frame(in: .named(TranscriptSelection.space))
+                            return [f.minX, f.minY, f.width, f.height, proxy.frame(in: .scrollView).minY]
+                        } action: { [tracker] v in
+                            if v[4] >= 0.5 { return tracker.header(id, v[4]) }
+                            selection?.blocker(id, CGRect(x: v[0], y: v[1], width: v[2], height: v[3]))
                         }
                         .onDisappear { selection?.blocker(id, nil) }
                 }
@@ -706,8 +713,13 @@ final class StickyTracker: ObservableObject {
 
     private func update(_ id: String) {
         guard let header = headers[id] else { return }
-        // A header on screen whose row never laid out: the row is above (the chat opened below it).
-        let past = rows[id].map { $0 < header - 0.5 } ?? true
+        // Only a header pinned at the top (or pushed up past it by the next one) hangs its
+        // message. One further down sits where the lazy stack placed it, right over its own row:
+        // a row report left over from where the row was before (the stack drops reports for rows
+        // it builds again) mustn't pin a copy there, over the text a press would select. Pinned,
+        // a row that never laid out is above (the chat opened below it, or a jump took it off
+        // with no frame reported past its header).
+        let past = header < 0.5 && (rows[id].map { $0 < header - 0.5 } ?? true)
         if past != stuck.contains(id) {
             if past { stuck.insert(id) } else { stuck.remove(id) }
         }

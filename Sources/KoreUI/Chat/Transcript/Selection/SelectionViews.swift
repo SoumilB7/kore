@@ -396,6 +396,7 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
         let minY = -scroll.contentInsets.top
         let y = min(max(clip.bounds.origin.y + (document.isFlipped ? step : -step), minY), maxY)
         guard abs(y - clip.bounds.origin.y) > 0.1 else { return }
+        selection?.draggedScroll?()
         clip.scroll(to: CGPoint(x: clip.bounds.origin.x, y: y))
         scroll.reflectScrolledClipView(clip)
         selection?.extend(to: point(event))

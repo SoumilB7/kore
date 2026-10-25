@@ -343,6 +343,9 @@ package final class TranscriptSelection: ObservableObject {
     var openLink: ((URL) -> Void)?
     /// The chat's folder, where a link's relative path is.
     var folder: URL?
+    /// A drag scrolled the transcript past its edge: the reader's move, so the timeline stops
+    /// following the end (or it pulls the view back as rows measure).
+    var draggedScroll: (() -> Void)?
 
     /// A link to a file that's there: its right-click menu (`MediaMenu`); nil for anything else.
     func fileMenu(_ url: URL) -> [OptionItem]? {

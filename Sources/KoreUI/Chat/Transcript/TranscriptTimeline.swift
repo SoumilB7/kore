@@ -70,6 +70,10 @@ struct TranscriptTimeline: View, Equatable {
     /// while `ScrollPosition.scrollTo(y:)` counts from the content's top, so offsets are
     /// converted (`scrollTo(offset:)`).
     @StateObject private var insetTop = Held(CGFloat(0))
+    /// The top inset changed while following and the end isn't reached again yet: AppKit moves
+    /// the clip for a new inset (to the top, when the window first shows), which is layout's
+    /// move, not the reader's.
+    @StateObject private var insetSettling = Held(false)
     /// Which sections' messages have scrolled past their pinned header.
     @StateObject private var sticky = StickyTracker()
     /// The scroll view's last geometry: content height, offset, visible height, top inset.
@@ -114,11 +118,13 @@ struct TranscriptTimeline: View, Equatable {
                         TimelineSection(section: section, actions: rowActions, reveal: reveal, sticky: sticky)
                             .id(section.id)
                     }
-                    Color.clear.frame(height: Stroke.hairline).id(Self.end)
+                    // The bottom padding is the end's own: pinning the end (`scrollTo`) and the
+                    // scroll position's bottom edge land on the same place, not a padding apart,
+                    // so the two never pull the view between them.
+                    Color.clear.frame(height: Layout.Transcript.bottom).id(Self.end)
                 }
                 .padding(.horizontal, column.padding)
                 .padding(.top, Layout.Transcript.top)
-                .padding(.bottom, Layout.Transcript.bottom)
                 .frame(maxWidth: column.maxWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
                 // One text selection over every row: rows report their texts in this space, and
@@ -161,6 +167,7 @@ struct TranscriptTimeline: View, Equatable {
                 [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height, $0.contentInsets.top]
             } action: { _, new in
                 seen.value = new
+                let insetMoved = new[3] != insetTop.value
                 insetTop.value = new[3]
                 let (height, offset) = (new[0], new[1])
                 visibleHeight.value = new[2]
@@ -176,6 +183,8 @@ struct TranscriptTimeline: View, Equatable {
                     geometry.value = (height, offset)
                     return
                 }
+                // A new top inset moves the clip (`insetSettling`): pinned again below.
+                if insetMoved, following.value { insetSettling.value = true }
                 // Native reset geometry may arrive after the ending layout pass. It is not
                 // a reader scrolling away: wait for the explicit bottom target to land.
                 if zoomRejoining.value {
@@ -256,7 +265,10 @@ struct TranscriptTimeline: View, Equatable {
                 // more than a screen (a shorter chat sits at the bottom and moves as it grows), and
                 // only well clear of the end: our own pin aims at estimated row heights and can
                 // land a little above it.
-                if !shift.zoomAdjusting, following.value, height == geometry.value.height, height > new[2] + Self.atBottom,
+                if insetSettling.value, !following.value || gesturing.value || offset + new[2] >= height - Self.atBottom {
+                    insetSettling.value = false
+                }
+                if !shift.zoomAdjusting, following.value, !insetSettling.value, height == geometry.value.height, height > new[2] + Self.atBottom,
                     offset < geometry.value.offset - 1, offset + new[2] < height - Self.leftEnd
                 {
                     following.value = false
@@ -272,8 +284,11 @@ struct TranscriptTimeline: View, Equatable {
                     following.value = true
                 }
                 // Rows measured after they were placed change the height: while following, stay
-                // pinned to the end through layout as well as new content (T3 Code does both).
-                if !shift.zoomAdjusting, following.value, height != geometry.value.height, glidingUntil.value.map({ Date() >= $0 }) ?? true {
+                // pinned to the end through layout (an inset's move too) as well as new content
+                // (T3 Code does both).
+                if !shift.zoomAdjusting, following.value, height != geometry.value.height || insetSettling.value,
+                    glidingUntil.value.map({ Date() >= $0 }) ?? true
+                {
                     proxy.scrollTo(Self.end, anchor: .bottom)
                 }
                 // Within a screen of the top on the way up: earlier turns go in above, as the top
@@ -365,6 +380,14 @@ struct TranscriptTimeline: View, Equatable {
                         following.value = false
                         proxy.scrollTo(id, anchor: .center)
                     }
+                }
+                // A selection dragged past the edge scrolls as the reader would: nothing pulls it
+                // back to the end, or to a place still being restored. Turns going in above as it
+                // nears the top keep what's on screen, as for a wheel.
+                store.selection.draggedScroll = { [following, restore, restoreInRow] in
+                    following.value = false
+                    restore.value = nil
+                    restoreInRow.value = nil
                 }
                 restore.value = store.savedScroll
                 lastSend.value = store.sentAt
