@@ -175,7 +175,7 @@ final class EndedCommandHistory: ChatStoryline {
         super.steps() + [
             Do("Use an isolated shell home") { try $0.app.workspace?.storyPrepareTerminals() },
             Send("Build the site"), TurnFinished(1),
-            Press(.id(StoryID.Titlebar.agents)),
+            Do("Open the commands panel") { $0.app.workspace?.storyOpenCommands() },
             Press(.id(StoryID.AgentMap.chat)),
             Press(.id(StoryID.AgentMap.doneCommands)),
             Press(.id(StoryID.AgentMap.command(Self.id).part(.open))),

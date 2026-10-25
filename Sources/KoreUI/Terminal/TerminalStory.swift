@@ -3,6 +3,10 @@ import Darwin
 import KoreCore
 
 extension Workspace {
+    /// The active chat's agents and commands panel, which has no titlebar button while the
+    /// chat has neither agents nor live commands.
+    package func storyOpenCommands() { activeTab.chat?.agentMap.open() }
+
     package func storyPrepareTerminals() throws {
         let config = folder.appendingPathComponent(".terminal-test", isDirectory: true)
         try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
