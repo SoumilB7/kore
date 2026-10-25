@@ -23,3 +23,14 @@ struct WindowReader: NSViewRepresentable {
         }
     }
 }
+
+/// Kore's windows draw in sRGB: every colour Kore names is an sRGB hex, so nothing it draws
+/// changes, and on a wide-gamut screen a layer holding more than one colour (a link, a code
+/// span) is kept at 4 bytes a pixel instead of 8. Pictures in a P3 profile show clamped to sRGB.
+enum WindowColor {
+    static let space = NSColorSpace.sRGB
+
+    static func prepare(_ window: NSWindow) {
+        if window.colorSpace != space { window.colorSpace = space }
+    }
+}

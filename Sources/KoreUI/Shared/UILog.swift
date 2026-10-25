@@ -73,7 +73,9 @@ enum UILog {
 
     /// The kernel's own peak footprint since launch, read twice a minute: each rise of
     /// `peakStep` or more is logged with what the footprint is now, so a spike, however short,
-    /// sits next to the events around it. One `task_info` call a read.
+    /// sits next to the events around it, and with what the memory is made of then (drawn
+    /// layers, decoded images, heap: `MemoryMap`). One `task_info` call a read; the map only
+    /// on a rise.
     private static let peakStep: UInt64 = 200 << 20
     nonisolated(unsafe) private static var memoryTimer: DispatchSourceTimer?
 
@@ -86,7 +88,11 @@ enum UILog {
             MainActor.assumeIsolated {
                 guard let (now, peak) = footprint(), peak >= logged + peakStep else { return }
                 logged = peak
-                UILog.event("mem-peak", ["mb": String(peak >> 20), "now": String(now >> 20)])
+                let parts = MemoryMap.parts()
+                UILog.event("mem-peak", [
+                    "mb": String(peak >> 20), "now": String(now >> 20), "layers": String(parts.layers >> 20),
+                    "images": String(parts.images >> 20), "heap": String(parts.heap >> 20),
+                ])
             }
         }
         timer.resume()

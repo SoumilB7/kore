@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 enum MediaMenu {
     struct Target {
         var name: String
-        /// nil for a picture known only from history (its thumbnail).
+        /// A picture known only from history: the one it was sent as.
         var url: URL?
         var image: NSImage?
 
@@ -20,7 +20,7 @@ enum MediaMenu {
         }
 
         init(_ attachment: Attachment) {
-            self.init(name: attachment.name, url: attachment.url, image: attachment.kind == .image ? attachment.thumbnail : nil)
+            self.init(name: attachment.name, url: attachment.url, image: attachment.kind == .image ? attachment.image : nil)
         }
 
         var isImage: Bool { image != nil || url.map { Attachments.kind(of: $0) == .image } == true }

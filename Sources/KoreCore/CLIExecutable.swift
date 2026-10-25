@@ -262,4 +262,7 @@ final class Locked<Value: Sendable>: @unchecked Sendable {
     var value: Value { lock.withLock { stored } }
 
     func set(_ value: Value) { lock.withLock { stored = value } }
+
+    /// Reads and changes it in one step.
+    func withLock<T>(_ body: (inout Value) -> T) -> T { lock.withLock { body(&stored) } }
 }

@@ -128,7 +128,7 @@ extension TranscriptStore {
 
     private static func attachment(_ a: SentAttachment) -> Attachment {
         if let url = a.url, FileManager.default.fileExists(atPath: url.path) { return Attachment(url: url) }
-        return Attachment(name: a.name, kind: a.kind, thumbnail: a.image.flatMap(NSImage.init(data:)))
+        return Attachment(name: a.name, kind: a.kind, imageData: a.image)
     }
 }
 

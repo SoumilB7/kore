@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import KoreCore
 import UniformTypeIdentifiers
 
@@ -12,20 +13,66 @@ package struct Attachment: Identifiable {
     /// Where it lives on disk (pasted images are saved to a temp file); nil when only known
     /// from a transcript.
     let url: URL?
-    let thumbnail: NSImage?
+    /// A picture known only from a transcript, as it was sent: decoded only when opened or copied.
+    let imageData: Data?
+    private let preview: Thumbnail?
 
     init(url: URL) {
         self.url = url
         name = url.lastPathComponent
         kind = Attachments.kind(of: url)
-        thumbnail = kind == .image ? NSImage(contentsOf: url) : nil
+        imageData = nil
+        preview = kind == .image ? Thumbnail { CGImageSourceCreateWithURL(url as CFURL, nil) } : nil
     }
 
-    init(name: String, kind: Kind, thumbnail: NSImage? = nil) {
+    init(name: String, kind: Kind, imageData: Data? = nil) {
         url = nil
         self.name = name
         self.kind = kind
-        self.thumbnail = thumbnail
+        self.imageData = imageData
+        preview = imageData.map { data in Thumbnail { CGImageSourceCreateWithData(data as CFData, nil) } }
+    }
+
+    /// The chip's picture, decoded at the chip's size (a screenshot's full bitmap is many MB,
+    /// kept for as long as its chat is open); made on first use.
+    var thumbnail: NSImage? { preview?.image }
+
+    /// The whole picture, for the viewer and copying: its file, else the data it was sent as.
+    /// Decoded each time it's asked for, and not kept.
+    var image: NSImage? {
+        guard kind == .image else { return nil }
+        return url.flatMap(NSImage.init(contentsOf:)) ?? imageData.flatMap(NSImage.init(data:))
+    }
+}
+
+/// A chip-sized picture made once, on first use, from an image source.
+final class Thumbnail: @unchecked Sendable {
+    /// Big enough for the chip (44 pt) on a 2× screen at up to 2× zoom.
+    static let maxPixels = 176
+
+    private let lock = NSLock()
+    private var source: (() -> CGImageSource?)?
+    private var made: NSImage?
+
+    init(_ source: @escaping () -> CGImageSource?) { self.source = source }
+
+    var image: NSImage? {
+        lock.withLock {
+            if let make = source {
+                source = nil
+                made = make().flatMap(Self.thumbnail)
+            }
+            return made
+        }
+    }
+
+    static func thumbnail(_ source: CGImageSource) -> NSImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels, kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 }
 
@@ -260,7 +307,7 @@ package enum Attachments {
             switch block["type"]?.string {
             case "image":
                 let data = block["source"]?["data"]?.string.flatMap { Data(base64Encoded: $0) }
-                return Attachment(name: "Image", kind: .image, thumbnail: data.flatMap(NSImage.init(data:)))
+                return Attachment(name: "Image", kind: .image, imageData: data)
             case "document":
                 let isPDF = block["source"]?["media_type"]?.string == "application/pdf"
                 return Attachment(name: block["title"]?.string ?? "Document", kind: isPDF ? .pdf : .text)

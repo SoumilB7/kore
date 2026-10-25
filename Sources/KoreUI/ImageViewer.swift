@@ -56,7 +56,7 @@ final class ImageEditor: Identifiable {
     @ObservationIgnored var restore: ImageScrollView.Place?
 
     init?(_ attachment: Attachment, pending: Bool) {
-        guard let image = attachment.url.flatMap(NSImage.init(contentsOf:)) ?? attachment.thumbnail,
+        guard let image = attachment.image ?? attachment.thumbnail,
             image.size.width > 0, image.size.height > 0
         else { return nil }
         self.image = image

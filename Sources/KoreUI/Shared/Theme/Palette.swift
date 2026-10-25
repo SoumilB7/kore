@@ -1,7 +1,13 @@
 import SwiftUI
 
-/// One hue (206°, the logo's blue) in many shades: neutrals are that hue at low saturation,
-/// raised layers are lighter, and saturation is kept for what acts. Red is the one exception.
+/// One hue (206°, the logo's blue) in many shades: grounds and borders are that hue at low
+/// saturation, raised layers are lighter, and saturation is kept for what acts. Red is the one
+/// exception. Body text is neutral grey (owner, 2026-10-30): each paragraph is drawn into a layer
+/// of its own, and macOS keeps an all-grey one at 2 bytes a pixel but one holding a second
+/// colour (a tinted text on a tinted inline-code fill) at 8 on a wide-gamut screen. A streamed
+/// reply measured 60 → 19 MB of layers, its peak 277 → 142 MB. Greying `secondary` and
+/// `tertiary` too measured no further saving, so they keep the hue. The grey keeps the tinted
+/// text's luminance, so contrast is unchanged.
 /// Every colour a view uses is named here; views hold no colour values or opacities.
 enum Theme {
     /// The window ground stays the original neutral near-black (owner, 2026-10-21: the blue-tinted
@@ -10,9 +16,9 @@ enum Theme {
     static let surface = Color(hex: 0x171D21)
     static let surfaceHover = Color(hex: 0x1D252A)
     static let border = Color(hex: 0xBED7EB).opacity(0.09)
-    /// 16.2, 6.2 and 4.8 : 1 on the background (tertiary 4.3 on `surface`, 4.0 on `surfaceHover`,
+    /// 16.1, 6.2 and 4.8 : 1 on the background (tertiary 4.3 on `surface`, 4.0 on `surfaceHover`,
     /// 3.4 on `surfaceRaised`). Tertiary is for hints only: what a person needs to read is secondary.
-    static let text = Color(hex: 0xEAEEF1)
+    static let text = Color(hex: 0xEDEDED)
     static let secondary = Color(hex: 0x89959F)
     static let tertiary = Color(hex: 0x77828B)
     static let danger = Color(hex: 0xF0736B)

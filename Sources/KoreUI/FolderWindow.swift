@@ -97,6 +97,7 @@ struct FolderWindow: View {
         .background(PinchZoomHost(workspace: workspace.value, activeTab: workspace.value.activeID, openTabs: workspace.value.tabs.map(\.id)))
         .background(WindowReader { window in
             if let window {
+                WindowColor.prepare(window)
                 UnsavedGuard.install(on: window, for: workspace.value)
                 workspace.value.window = window
             }
