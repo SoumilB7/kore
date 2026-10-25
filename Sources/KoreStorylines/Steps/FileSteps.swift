@@ -19,6 +19,37 @@ package struct WriteFiles: Step {
     }
 }
 
+/// Runs git in the storyline's folder (or a folder in it), as the terminal would: with a
+/// throwaway identity on the command line, never the user's config.
+package struct RunGit: Step {
+    let folder: String
+    let args: [String]
+    package var label: String { "Run git \(args.joined(separator: " ")) in \(folder.isEmpty ? "the folder" : folder)" }
+    package init(in folder: String = "", _ args: String...) {
+        self.folder = folder
+        self.args = args
+    }
+
+    package func run(_ story: StoryContext) async throws {
+        let directory = folder.isEmpty ? story.folder : story.folder.appendingPathComponent(folder)
+        let config = ["user.name=x", "user.email=x@y", "commit.gpgsign=false", "core.hooksPath=/dev/null"]
+        let args = config.flatMap { ["-c", $0] } + args
+        let status = await Task.detached { () -> Int32 in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = args
+            process.currentDirectoryURL = directory
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            process.standardInput = FileHandle.nullDevice
+            do { try process.run() } catch { return -1 }
+            process.waitUntilExit()
+            return process.terminationStatus
+        }.value
+        guard status == 0 else { throw StoryFailure.other("\(label) exited \(status)") }
+    }
+}
+
 /// Waits until the element has the window's keyboard focus: the view itself (the editor's
 /// text), or a text view over it (a text field's field editor, the composer's own text). Typing goes to the focus,
 /// so a storyline waits for it before typing into a field that has just appeared.

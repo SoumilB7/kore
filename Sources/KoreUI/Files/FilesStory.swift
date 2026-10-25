@@ -76,7 +76,7 @@ extension Workspace {
         let find = editor.find
         return StoryEditor(
             path: relativePath(file.path), text: file.storage.string, isDirty: file.isDirty, caretLine: file.caret.line,
-            hiddenLines: hidden, foldCount: editor.folds.count,
+            hiddenLines: hidden, foldCount: editor.folds.count, changedLines: editor.changes.marks.keys.sorted().map { $0 + 1 },
             find: find.isOpen
                 ? StoryEditor.Find(
                     query: find.query, showsReplace: find.showReplace, label: find.countLabel,
@@ -186,6 +186,8 @@ package struct StoryEditor: Sendable, Equatable {
     /// Lines under a fold.
     package let hiddenLines: [Int]
     package let foldCount: Int
+    /// Lines with a change bar against git `HEAD`.
+    package let changedLines: [Int]
     /// The find bar, when it's open.
     package let find: Find?
 

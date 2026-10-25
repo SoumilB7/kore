@@ -47,11 +47,17 @@ final class FilesStore {
     }
     /// Tells the workspace which paths changed on disk (for its open files).
     @ObservationIgnored var onChange: (([String]) -> Void)?
+    /// Tells the workspace which work trees (this folder's or one nested in it) moved `HEAD`,
+    /// the index or a branch: commit, checkout, reset, stash, pull. Their open files' change
+    /// bars are against a `HEAD` that's gone.
+    @ObservationIgnored var onGitMove: (([String]) -> Void)?
 
     @ObservationIgnored private var children: [String: [Node]] = [:]
     @ObservationIgnored private var expanded: Set<String> = []
     @ObservationIgnored private var watcher: FolderWatcher?
     @ObservationIgnored private var gitRefresh: Task<Void, Never>?
+    @ObservationIgnored private var moved: Set<String> = []
+    @ObservationIgnored private var movedReport: Task<Void, Never>?
 
     /// `.git` and Finder's litter are hidden; other dotfiles show (VS Code's `files.exclude`).
     nonisolated private static let hidden: Set<String> = [".git", ".DS_Store", ".svn", ".hg"]
@@ -212,10 +218,14 @@ final class FilesStore {
         var folders: Set<String> = []
         var gitChanged = false
         var files: [String] = []
+        var trees: Set<String> = []
         for path in paths {
-            if path.contains("/.git/") || path.hasSuffix("/.git") {
+            if let git = path.range(of: "/.git/") ?? path.range(of: "/.git", options: [.anchored, .backwards]) {
                 // Commits, staging, checkouts; not object churn.
-                if path.hasSuffix("/index") || path.hasSuffix("/HEAD") || path.contains("/refs/") { gitChanged = true }
+                if path.hasSuffix("/index") || path.hasSuffix("/HEAD") || path.contains("/refs/") {
+                    gitChanged = true
+                    trees.insert(String(path[..<git.lowerBound]))
+                }
                 continue
             }
             gitChanged = true
@@ -231,7 +241,22 @@ final class FilesStore {
             }
         }
         if gitChanged { refreshGit() }
+        if !trees.isEmpty { report(moved: trees) }
         if !files.isEmpty { onChange?(files) }
+    }
+
+    /// A commit writes the index, a ref and `HEAD` over a few events: one report once they stop.
+    private func report(moved trees: Set<String>) {
+        moved.formUnion(trees)
+        movedReport?.cancel()
+        movedReport = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            if Task.isCancelled { return }
+            let trees = Array(moved)
+            moved = []
+            movedReport = nil
+            onGitMove?(trees)
+        }
     }
 
     /// Git states, at most every half second while files keep changing.

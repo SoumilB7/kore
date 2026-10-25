@@ -31,6 +31,50 @@ class EditorStoryline: FilesStoryline {
     }
 }
 
+/// A committed file edited and saved shows its change bar; a commit from outside (the
+/// terminal) clears it without reopening the file. Its subclasses name the repository's folder.
+class GitMarksStoryline: EditorStoryline {
+    override class var isFamily: Bool { self == GitMarksStoryline.self }
+    override class var tags: Set<Tag> { [.editor] }
+    /// The repository's folder in the storyline's folder ("" for the folder itself).
+    class var repo: String { "" }
+    override class var files: [(path: String, text: String)] {
+        [((repo as NSString).appendingPathComponent("notes.txt"), "one\ntwo\nthree\n")]
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            RunGit(in: Self.repo, "init", "-q"),
+            RunGit(in: Self.repo, "add", "notes.txt"),
+            RunGit(in: Self.repo, "commit", "-qm", "first"),
+            Expect.editor("no change bars") { $0.changedLines.isEmpty },
+            TypeText("1 "),
+            Key(.cmd("s")),
+            Expect.editor("line 1's change bar, saved") { $0.changedLines == [1] && !$0.isDirty },
+            RunGit(in: Self.repo, "commit", "-qam", "second"),
+            Expect.editor("the bar gone once committed") { $0.changedLines.isEmpty },
+        ]
+    }
+}
+
+/// The folder's own repository.
+final class GitMarksClearOnCommit: GitMarksStoryline {}
+
+/// A repository in a dot folder of the folder's repository (as `.agents` is): its commits
+/// move its own `HEAD`, not the folder's.
+final class GitMarksClearInNestedRepo: GitMarksStoryline {
+    override class var repo: String { ".agents" }
+    override class var files: [(path: String, text: String)] { super.files + [("README.md", "outer\n")] }
+
+    override func steps() -> [any Step] {
+        // After the files are written, before the folder opens.
+        var steps = super.steps()
+        let outer: [any Step] = [RunGit("init", "-q"), RunGit("add", "README.md"), RunGit("commit", "-qm", "outer")]
+        steps.insert(contentsOf: outer, at: 1)
+        return steps
+    }
+}
+
 /// Find, replace one and then the rest, save, fold, and undo: the editor's find bar and its
 /// keys, the gutter, and the file on disk.
 final class EditorFindReplace: EditorStoryline {

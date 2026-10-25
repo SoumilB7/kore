@@ -519,6 +519,7 @@ package final class Workspace {
         if let files { return files }
         let store = FilesStore(folder: folder)
         store.onChange = { [weak self] paths in self?.diskChanged(paths) }
+        store.onGitMove = { [weak self] trees in self?.gitMoved(trees) }
         files = store
         return store
     }
@@ -706,6 +707,14 @@ package final class Workspace {
         for tab in tabs {
             guard let file = tab.file else { continue }
             if changed.contains(file.path) { file.diskChanged() }
+        }
+    }
+
+    /// Open files in a work tree whose `HEAD` or index moved re-diff against the new `HEAD`.
+    private func gitMoved(_ trees: [String]) {
+        for tab in tabs {
+            guard let file = tab.file, file.loaded, file.isText else { continue }
+            if trees.contains(where: { file.path.hasPrefix($0 + "/") }) { file.editor.refreshChanges() }
         }
     }
 
