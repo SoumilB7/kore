@@ -52,8 +52,9 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate {
         }
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
-        // A CLI launched by a chat can carry these flags; a user's shell is a separate host.
-        environment["CLAUDECODE"] = nil
+        // A CLI launched by a chat can carry these flags (and Kore opened from a chat, its host
+        // session's); a user's shell is a separate host.
+        environment = CLIExecutable.withoutHostSession(environment)
         environment["CODEX_THREAD_ID"] = nil
         self.environment = environment
         view.processDelegate = self

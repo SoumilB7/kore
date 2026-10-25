@@ -308,6 +308,9 @@ final class ClaudeBackend: ChatBackend {
 
     // MARK: - Events
 
+    /// What the running CLI wrote to stderr, for its exit line.
+    private var stderrTail = StderrTail()
+
     private func handle(_ event: ClaudeEvent) {
         switch event {
         case .sessionStarted(let info):
@@ -317,6 +320,8 @@ final class ClaudeBackend: ChatBackend {
             PlanSnapshotLog.shared.append(PlanSnapshot.claude(rateLimitEvent: json, account: planAccount))
         case .turnCompleted:
             KoreUsageRefresh.soon("claude")
+        case .stderr(let text):
+            stderrTail.append(text)
         default: break
         }
         translator.translate(event)
@@ -334,6 +339,7 @@ final class ClaudeBackend: ChatBackend {
     private func logExit(_ session: ClaudeSession, reported: Int32? = nil) {
         let chat = sessionId
         let log = log
+        let stderr = stderrTail.take()
         Task.detached(priority: .utility) {
             let pid = await session.processId
             var end = await session.processEnd
@@ -341,7 +347,7 @@ final class ClaudeBackend: ChatBackend {
                 try? await Task.sleep(for: .milliseconds(200))
                 end = await session.processEnd
             }
-            log.exited("claude", chat: chat, pid: pid, end: end, reported: reported ?? -1, asked: await session.closeAsked)
+            log.exited("claude", chat: chat, pid: pid, end: end, reported: reported ?? -1, asked: await session.closeAsked, stderr: stderr)
         }
     }
 
@@ -823,6 +829,8 @@ final class ClaudeBackend: ChatBackend {
     }
 
     func setEffort(_ level: String) async {
+        // Kept for a launch again: a relaunch (an account change, a retry) starts on it.
+        options.effort = level
         try? await session?.setEffort(level)
     }
 

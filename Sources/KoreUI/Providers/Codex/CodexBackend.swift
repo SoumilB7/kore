@@ -386,6 +386,8 @@ final class CodexBackend: ChatBackend {
             if result.status == "completed" { unwritten = false }
             saveTitle()
         }
+        if case .stderr(let text) = event { stderrTail.append(text) }
+        if case .error(let message, false) = event { stderrTail.append("error: \(message)\n") }
         if case .exited(let status) = event {
             if let ended = session { logExit(ended, reported: status) }
             resumeId = sessionId
@@ -394,17 +396,21 @@ final class CodexBackend: ChatBackend {
         }
     }
 
+    /// What the running app-server wrote to stderr, for its exit line.
+    private var stderrTail = StderrTail()
+
     /// How the app-server ended, once it has (one Kore ended takes up to its close grace).
     private func logExit(_ session: CodexSession, reported: Int32? = nil) {
         let chat = sessionId
         let log = log
+        let stderr = stderrTail.take()
         Task.detached(priority: .utility) {
             var process = await session.process
             for _ in 0..<40 where process.end == nil {
                 try? await Task.sleep(for: .milliseconds(200))
                 process = await session.process
             }
-            log.exited("codex", chat: chat, pid: process.id, end: process.end, reported: reported ?? -1, asked: process.closeAsked)
+            log.exited("codex", chat: chat, pid: process.id, end: process.end, reported: reported ?? -1, asked: process.closeAsked, stderr: stderr)
         }
     }
 

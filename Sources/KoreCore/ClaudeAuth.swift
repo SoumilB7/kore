@@ -116,11 +116,22 @@ public enum ClaudeAuth {
             process.standardError = err
             process.standardInput = FileHandle.nullDevice
             try process.run()
+            // A CLI that hangs (a stuck network, a prompt) mustn't hold every later account read
+            // waiting on this one; ended with its group, and by the reaper if Kore goes first.
+            let pid = process.processIdentifier
+            ChildReaper.shared.watch(pid)
+            let killer = DispatchWorkItem {
+                kill(-pid, SIGKILL)
+                kill(pid, SIGKILL)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(30), execute: killer)
             // Both pipes drained at once, so a full stderr can't stall the CLI.
             let errors = Task.detached { err.fileHandleForReading.readDataToEndOfFile() }
             let output = out.fileHandleForReading.readDataToEndOfFile()
             let said = await errors.value
             process.waitUntilExit()
+            killer.cancel()
+            ChildReaper.shared.forget(pid)
             return (output, said, process.terminationStatus)
         }.value
     }

@@ -177,20 +177,29 @@ package final class StdioProcess: @unchecked Sendable {
     /// Closes stdin and sends SIGTERM to the child and its process group. Both CLIs exit within
     /// a second or two of SIGTERM, ending their tool processes and keeping their transcripts
     /// whole; on EOF alone `claude -p` would first finish its turn. Still running after `grace`,
-    /// the child and every process under it get SIGKILL.
+    /// the child and every process under it get SIGKILL. What it had started in groups of its
+    /// own (a background shell, a monitor), taken before any signal, ends then too, as on quit:
+    /// it would otherwise outlive the CLI under launchd.
     func close(grace: Duration = .seconds(5)) {
         // Startup cancellation may close before the account-switch waiter arrives. Retain
         // identities now, before any parent can exit and reparent its background work.
         if let root = ProcessChild(pid) { closingTree.add(root.descendants() + [root]) }
         try? stdin.close()
         send(SIGTERM)
-        let process = process, wait = Int(grace / .milliseconds(1))
+        let process = process, tree = closingTree, wait = Int(grace / .milliseconds(1))
         DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(wait)) {
-            guard process.isRunning else { return }
-            let pid = process.processIdentifier
-            let all = Self.tree(pid)
-            kill(-pid, SIGKILL)
-            for pid in all { kill(pid, SIGKILL) }
+            if process.isRunning {
+                let pid = process.processIdentifier
+                let all = Self.tree(pid)
+                kill(-pid, SIGKILL)
+                for pid in all { kill(pid, SIGKILL) }
+            }
+            let left = tree.all.filter(\.alive)
+            guard !left.isEmpty else { return }
+            for child in left { child.signal(SIGTERM) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(1)) {
+                for child in left where child.alive { child.signal(SIGKILL) }
+            }
         }
     }
 

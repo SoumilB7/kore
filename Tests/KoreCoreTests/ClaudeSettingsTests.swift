@@ -258,4 +258,19 @@ struct ClaudeSettingsTests {
             #expect(!CLIExecutable.isForeignAuth(name))
         }
     }
+
+    /// Kore opened from inside a claude CLI session: that session's variables (its effort, id,
+    /// messaging token) go nowhere Kore starts; a person's own generic ones stay unless Claude
+    /// Code set them; their own tuning variables stay always.
+    @Test func aHostSessionsVariablesAreNotPassedOn() {
+        let hosted = [
+            "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_CODE_CHILD_SESSION": "1", "CLAUDE_CODE_SESSION_ATTENDED": "0",
+            "CLAUDE_CODE_SESSION_ID": "x", "CLAUDE_CODE_EXECPATH": "/x", "CLAUDE_PID": "1", "CLAUDE_EFFORT": "high", "AI_AGENT": "x",
+            "CLAUDE_CODE_MESSAGING_TOKEN": "t", "CLAUDE_CODE_MESSAGING_SOCKET": "/s", "GIT_EDITOR": "true",
+            "COREPACK_ENABLE_AUTO_PIN": "0", "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000", "PATH": "/bin",
+        ]
+        #expect(CLIExecutable.withoutHostSession(hosted) == ["CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000", "PATH": "/bin"])
+        let own = ["GIT_EDITOR": "vim", "COREPACK_ENABLE_AUTO_PIN": "0", "PATH": "/bin"]
+        #expect(CLIExecutable.withoutHostSession(own) == own)
+    }
 }

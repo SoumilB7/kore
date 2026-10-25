@@ -27,11 +27,18 @@ struct SessionLog: Sendable {
     }
 
     /// `asked`: Kore ended it (a relaunch, the chat closed), so the exit was expected.
-    func exited(_ cli: String, chat: String?, pid: Int32?, end: ProcessEnd?, reported: Int32, asked: Bool) {
+    /// `stderr`: what the CLI wrote there, as `StderrTail` classifies it (a reason and a byte
+    /// count, never the text), the only trace of a warning or a crash: the chat never shows it.
+    func exited(
+        _ cli: String, chat: String?, pid: Int32?, end: ProcessEnd?, reported: Int32, asked: Bool, stderr: (reason: String, bytes: Int)? = nil
+    ) {
         let field: (key: String, value: String) = end?.field ?? ("status", String(reported))
         log.write(
             "exited",
-            ["cli": cli, "chat": chat ?? "-", "pid": pid.map(String.init) ?? "-", field.key: field.value, "asked": asked ? "yes" : "no"])
+            [
+                "cli": cli, "chat": chat ?? "-", "pid": pid.map(String.init) ?? "-", field.key: field.value, "asked": asked ? "yes" : "no",
+                "stderr": stderr?.reason, "stderr_bytes": stderr.map { String($0.bytes) },
+            ])
     }
 
     /// Kore ending a chat's CLI and the chat with it: "tab closed", "window closed", "reload",
@@ -93,5 +100,38 @@ struct SessionLog: Sendable {
                 "ms": String(Int(ms.rounded())), "shown_ms": shown.map { String(Int($0.rounded())) },
                 "corrected": corrected ? "yes" : nil,
             ])
+    }
+}
+
+/// What a CLI wrote to stderr (and stdout lines that weren't JSON), for its exit line. Only a
+/// classified reason and a byte count reach the log, never the text: it can hold prompts, file
+/// contents, paths or tokens. The tail stays in memory.
+struct StderrTail {
+    static let limit = 600
+    private(set) var text = ""
+    private(set) var bytes = 0
+
+    mutating func append(_ more: String) {
+        bytes += more.utf8.count
+        text += more
+        if text.utf8.count > Self.limit * 2 { text = String(text.suffix(Self.limit)) }
+    }
+
+    /// "auth", "network", "limit", "crash" or "unknown" with its byte count, for the exit line;
+    /// nil when it wrote nothing. Emptied for the next process.
+    mutating func take() -> (reason: String, bytes: Int)? {
+        defer { (text, bytes) = ("", 0) }
+        guard bytes > 0 else { return nil }
+        return (Self.reason(text.lowercased()), bytes)
+    }
+
+    static func reason(_ text: String) -> String {
+        let kinds: [(String, [String])] = [
+            ("auth", ["unauthorized", "401", "403", "not logged in", "log in", "login", "oauth", "api key", "credential", "token expired"]),
+            ("limit", ["rate limit", "429", "usage limit", "quota", "overloaded", "529"]),
+            ("network", ["econnreset", "econnrefused", "etimedout", "enotfound", "network", "socket", "timed out", "dns", "certificate"]),
+            ("crash", ["panic", "fatal", "segmentation", "abort", "uncaught", "traceback", "stack trace", "out of memory"]),
+        ]
+        return kinds.first { $0.1.contains(where: text.contains) }?.0 ?? "unknown"
     }
 }

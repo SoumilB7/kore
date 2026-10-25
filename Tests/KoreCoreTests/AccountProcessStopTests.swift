@@ -91,6 +91,49 @@ struct AccountProcessStopTests {
     }
 
 
+    /// A chat's tab closing (or its CLI starting again) ends what the CLI started in a group of
+    /// its own too, as quitting does: a background shell that shrugs off SIGTERM doesn't
+    /// outlive it under launchd. Nothing else is touched.
+    @Test func closingEndsADetachedJobItsCLILeft() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("close-tree-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let marker = folder.appendingPathComponent("child.pid")
+        let fake = folder.appendingPathComponent("fake-cli.py")
+        let script = """
+            import signal, subprocess, sys, time
+            code = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(20)"
+            child = subprocess.Popen([sys.executable, "-c", code], start_new_session=True,
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.1)
+            with open(sys.argv[1], "w") as marker: marker.write(str(child.pid))
+            while True: time.sleep(1)
+            """
+        try script.write(to: fake, atomically: true, encoding: .utf8)
+        let unrelated = Process()
+        unrelated.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        unrelated.arguments = ["20"]
+        try unrelated.run()
+        defer { if unrelated.isRunning { unrelated.terminate() } }
+        let io = try StdioProcess(executable: URL(fileURLWithPath: "/usr/bin/python3"),
+                                  arguments: [fake.path, marker.path], cwd: folder,
+                                  environment: ProcessInfo.processInfo.environment)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let childPID = try #require(Int32(String(contentsOf: marker, encoding: .utf8)))
+        let child = try #require(ProcessChild(childPID))
+        defer { child.signal(SIGKILL) }
+        #expect(child.alive)
+        io.close(grace: .milliseconds(200))
+        let gone = ContinuousClock.now + .seconds(4)
+        while child.alive, ContinuousClock.now < gone { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(!io.isRunning)
+        #expect(!child.alive)
+        #expect(unrelated.isRunning)
+    }
+
     @Test(arguments: ["claude", "codex"])
     func canceledInitializationDoesNotReturnWithItsChildStillAlive(_ provider: String) async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("account-start-\(UUID())")

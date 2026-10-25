@@ -31,11 +31,18 @@ public enum Disclaim {
         sigfillset(&all)
         posix_spawnattr_setsigmask(&attributes, &none)
         posix_spawnattr_setsigdefault(&attributes, &all)
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
+        // Only stdin, stdout and stderr go on: a terminal shell (forked by SwiftTerm, which
+        // closes nothing) would otherwise hold every file Kore has open, the CLIs' stdin pipes
+        // (so closing one couldn't end its CLI), login files and logs among them.
+        posix_spawnattr_setflags(
+            &attributes, Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_CLOEXEC_DEFAULT))
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        for fd in Int32(0)...2 { posix_spawn_file_actions_addinherit_np(&actions, fd) }
         _ = setDisclaim.map { $0(&attributes, 1) }
         var argv: [UnsafeMutablePointer<CChar>?] = args.dropFirst(2).map { strdup($0) } + [nil]
         var pid: pid_t = 0
-        let error = posix_spawn(&pid, args[2], nil, &attributes, &argv, environ)
+        let error = posix_spawn(&pid, args[2], &actions, &attributes, &argv, environ)
         // Only a failed exec returns.
         FileHandle.standardError.write(Data("\(args[2]): \(String(cString: strerror(error)))\n".utf8))
         exit(127)

@@ -108,9 +108,30 @@ public enum CLIExecutable {
         name.hasPrefix(foreignAuthPrefix) || foreignAuthVariables.contains(name)
     }
 
-    /// Set when Kore itself is launched from inside Claude Code (e.g. its VS Code extension);
-    /// passed on, they'd record Kore's sessions as that host's.
-    static let inheritedHostVariables = ["CLAUDE_CODE_ENTRYPOINT", "CLAUDECODE"]
+    /// Set when Kore itself is launched from inside the claude CLI (its VS Code extension, or a
+    /// chat that opened Kore): passed on, they'd make every CLI a child of that session, with
+    /// its effort, its session id and its messaging token (a credential).
+    static let inheritedHostVariables = [
+        "CLAUDE_CODE_ENTRYPOINT", "CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_EXECPATH", "CLAUDE_PID", "CLAUDE_EFFORT", "AI_AGENT",
+    ]
+    /// The host session's messaging socket and token, by prefix.
+    static let inheritedHostPrefix = "CLAUDE_CODE_MESSAGING_"
+    /// Names a person may set themselves: stripped only when a claude CLI session set them
+    /// (`CLAUDECODE` is in the environment).
+    static let inheritedHostGeneric = ["GIT_EDITOR", "COREPACK_ENABLE_AUTO_PIN"]
+
+    /// `env` without what a claude CLI session Kore was started from left in it: what a CLI or
+    /// a terminal Kore starts gets, as if Kore had been opened from the Dock.
+    public static func withoutHostSession(_ env: [String: String]) -> [String: String] {
+        var env = env
+        let hosted = env["CLAUDECODE"] != nil
+        for name in env.keys
+        where inheritedHostVariables.contains(name) || name.hasPrefix(inheritedHostPrefix) || (hosted && inheritedHostGeneric.contains(name)) {
+            env[name] = nil
+        }
+        return env
+    }
 
     /// Starts reading the login shell's PATH, once per run. Called at app launch.
     public static func prepare() { _ = loading }
@@ -134,9 +155,9 @@ public enum CLIExecutable {
 
     /// The process environment with a CLI-ready PATH and without the variables above.
     private static func cleaned(path: String?) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+        var env = withoutHostSession(ProcessInfo.processInfo.environment)
         if let path { env["PATH"] = path }
-        for name in env.keys where isForeignAuth(name) || inheritedHostVariables.contains(name) { env[name] = nil }
+        for name in env.keys where isForeignAuth(name) { env[name] = nil }
         // A login folder inherited from a chat Kore was started in: main means the CLI's default.
         for name in CLIProfiles.variables.values where env[name].map(CLIProfiles.isLoginFolder) == true { env[name] = nil }
         return env
@@ -166,18 +187,69 @@ public enum CLIExecutable {
         do { try process.run() } catch { return nil }
 
         // A broken rc file shouldn't hang app launch. With last run's PATH to start CLIs with,
-        // nothing waits on the shell, so a slow one (a busy machine) gets longer.
+        // nothing waits on the shell, so a slow one (a busy machine) gets longer. The shell is
+        // its own process group: the whole group goes, whatever the rc files started in it,
+        // and Kore ending first (a quick dev run) leaves nothing behind either.
         let pid = process.processIdentifier
-        let killer = DispatchWorkItem { kill(pid, SIGKILL) }
+        ChildReaper.shared.watch(pid)
+        // Read until both markers are in, not to the end: a daemon the rc files start can keep
+        // the shell's stdout open long after it has printed.
+        let answer = PathAnswer(marker: marker)
+        let killer = DispatchWorkItem {
+            kill(-pid, SIGKILL)
+            kill(pid, SIGKILL)
+            answer.finish()
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + (cachedEnvironment == nil ? 5 : 10), execute: killer)
 
-        let output = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
+        let reading = out.fileHandleForReading
+        reading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty || answer.take(data) { answer.finish() }
+        }
+        answer.wait()
+        reading.readabilityHandler = nil
         killer.cancel()
-        let parts = output.components(separatedBy: marker)
+        // Done with it: whatever it left running in its group goes now.
+        kill(-pid, SIGKILL)
+        process.waitUntilExit()
+        ChildReaper.shared.forget(pid)
+        let parts = answer.output.components(separatedBy: marker)
         guard parts.count >= 3, !parts[1].isEmpty else { return nil }
         return parts[1]
     }
+}
+
+/// The login shell's output as it arrives, until it holds the PATH between two markers or the
+/// shell's stdout closes.
+private final class PathAnswer: @unchecked Sendable {
+    private let marker: String
+    private let lock = NSLock()
+    private let done = DispatchSemaphore(value: 0)
+    private var data = Data()
+    private var finished = false
+
+    init(marker: String) { self.marker = marker }
+
+    var output: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
+
+    /// Takes a chunk; true once both markers are in.
+    func take(_ chunk: Data) -> Bool {
+        lock.withLock {
+            data.append(chunk)
+            return String(decoding: data, as: UTF8.self).components(separatedBy: marker).count >= 3
+        }
+    }
+
+    func finish() {
+        let first = lock.withLock { () -> Bool in
+            defer { finished = true }
+            return !finished
+        }
+        if first { done.signal() }
+    }
+
+    func wait() { done.wait() }
 }
 
 /// A value read and written from any thread.

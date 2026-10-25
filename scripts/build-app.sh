@@ -62,6 +62,16 @@ echo "built $APP ($BUILD_SHA)"
 
 if [[ "${1:-}" == "--install" ]]; then
     osascript -e 'quit app "Kore"' 2>/dev/null || true
+    # Kore asks first while chats work: replace it only once it has really quit, never under a
+    # running app (a cancelled quit would leave it running from a deleted bundle).
+    for _ in {1..60}; do
+        pgrep -f '^/Applications/Kore.app/Contents/MacOS/Kore' >/dev/null || break
+        sleep 1
+    done
+    if pgrep -f '^/Applications/Kore.app/Contents/MacOS/Kore' >/dev/null; then
+        echo "Kore is still running (quit cancelled?): not installed. $APP is built." >&2
+        exit 1
+    fi
     rm -rf /Applications/Kore.app
     ditto "$APP" /Applications/Kore.app
     echo "installed /Applications/Kore.app"
