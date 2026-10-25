@@ -245,5 +245,12 @@ private struct ExplorerCommands: View {
             .keyboardShortcut("f", modifiers: [.command, .shift])
             .disabled(workspace?.can(.search) != true)
         Divider()
+        Button("Reload Window") { workspace?.perform(.reload) }
+            .keyboardShortcut("r")
+            .disabled(workspace?.can(.reload) != true)
+        Button("Stop") { workspace?.perform(.stop) }
+            .keyboardShortcut(".")
+            .disabled(workspace?.can(.stop) != true)
+        Divider()
     }
 }

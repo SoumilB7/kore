@@ -647,3 +647,40 @@ struct HoverCode: Step {
         try await Press(.id(StoryID.Transcript.code(CodeBlockCopyBelow.path(ids[n])).part(.hover))).run(story)
     }
 }
+
+/// ⌘R reloads the window: an idle chat opens again from its saved history in the same tab, on a
+/// new CLI; a working one waits for its turn to end, unless ⌘R comes again.
+final class ReloadWindow: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(turns: [CLIScript.reply("First answer"), [.startTurn, .wait(.release)] + Beat.answer("Second answer") + [.finishTurn(.completed)]])
+    }
+
+    override func steps() -> [any Step] {
+        final class Seen { var chat: AnyObject?; var session: String? }
+        let seen = Seen()
+        let remember = Expect("the chat as it is") { story in
+            let chat = try story.activeChat()
+            (seen.chat, seen.session) = (chat, chat.sessionId)
+            return true
+        }
+        return super.steps() + [
+            Send("one"), TurnFinished(1), remember,
+            Command(.reload),
+            Expect("the tab opens the same chat again, anew") { story in
+                let chat = try story.activeChat()
+                return chat !== seen.chat && chat.sessionId == seen.session
+            },
+            Expect.rows("its history read back") { rows in
+                rows.filter { $0.kind == "user" }.map(\.text) == ["one"] && rows.contains { $0.text == "First answer" }
+            },
+            remember,
+            Send("two"),
+            Expect("a turn running") { try $0.activeChat().isRunning },
+            Command(.reload),
+            Expect("a working chat waits") { try $0.activeChat() === seen.chat },
+            Command(.reload),
+            Expect("asked again, it reloads at once") { try $0.activeChat() !== seen.chat },
+        ]
+    }
+}

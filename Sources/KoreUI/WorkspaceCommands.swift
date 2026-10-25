@@ -5,13 +5,15 @@ import Foundation
 /// has no focused value, so the menu can't reach it).
 package enum WorkspaceCommand: String, CaseIterable, Sendable {
     case newTab, closeTab, nextTab, previousTab, moveTabRight, moveTabLeft, save, saveAll, goToFile, goToLine, toggleExplorer, search
+    case reload, stop
 }
 
 extension Workspace {
     /// Whether the command does anything here (the menu item's enabled state).
     package func can(_ command: WorkspaceCommand) -> Bool {
         switch command {
-        case .newTab, .closeTab, .nextTab, .previousTab, .moveTabRight, .moveTabLeft, .goToFile, .toggleExplorer, .search: true
+        case .newTab, .closeTab, .nextTab, .previousTab, .moveTabRight, .moveTabLeft, .goToFile, .toggleExplorer, .search, .reload: true
+        case .stop: activeTab.chat?.status.isRunning == true
         case .save, .goToLine: activeFile?.isText == true
         case .saveAll: hasUnsavedFiles
         }
@@ -38,6 +40,8 @@ extension Workspace {
                 sidebar = .explorer
             }
         case .search: showSearch()
+        case .reload: reload()
+        case .stop: activeTab.chat?.stop()
         }
     }
 

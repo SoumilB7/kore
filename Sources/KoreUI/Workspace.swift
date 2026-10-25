@@ -266,6 +266,39 @@ package final class Workspace {
         if activeID == tab.id { activeID = tabs[min(index, tabs.count - 1)].id }
     }
 
+    // MARK: - Reload
+
+    /// ⌘R: every tab read again. A chat closes its CLI and opens again from its saved history,
+    /// on the same model with its draft; one with a turn, an agent or a command running waits
+    /// for the last to end, unless ⌘R comes again. A file reads its disk again, unless it has unsaved edits. The
+    /// history list too.
+    func reload() {
+        for tab in tabs where tab.agent == nil {
+            if let file = tab.file {
+                if !file.isDirty { file.reloadInPlace() }
+                continue
+            }
+            guard let chat = tab.chat, chat.hasConversation else { continue }
+            chat.whenFree { [weak self, weak tab, weak chat] in
+                guard let self, let tab, let chat else { return }
+                self.reopen(chat, in: tab)
+            }
+        }
+        // Only a list already read: a first read also settles the restored tabs, and would
+        // close a chat just reopened that its CLI's list leaves out.
+        if loaded { Task { await refresh() } }
+    }
+
+    private func reopen(_ chat: Chat, in tab: ChatTab) {
+        guard tab.chat === chat, tabs.contains(where: { $0 === tab }) else { return }
+        for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
+        let fresh = Self.tab(Saved.Tab(provider: chat.provider.rawValue, session: chat.sessionId, title: chat.title), in: folder).chat
+        fresh?.draft = chat.draft
+        fresh?.launchModel = chat.controls.modelId
+        chat.close()
+        tab.chat = fresh
+    }
+
     // MARK: - Tab keys
 
     /// A close that would end a running turn asks first, as sign-out does: the tab turns into the

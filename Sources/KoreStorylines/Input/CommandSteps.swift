@@ -20,6 +20,8 @@ package struct Command: Step {
         case .goToLine: "Go to line"
         case .toggleExplorer: "Show or hide the explorer"
         case .search: "Search the folder"
+        case .reload: "Reload the window"
+        case .stop: "Stop the chat"
         }
     }
     package init(_ command: WorkspaceCommand) { self.command = command }

@@ -425,6 +425,20 @@ package final class Chat: Identifiable {
         }
     }
 
+    /// ⌘R's reload of this chat, held while a turn, an agent or a command runs.
+    @ObservationIgnored private var reloadWhenFree: (@MainActor () -> Void)?
+
+    /// Runs `reload` now if nothing live would die with the CLI, else once the last thing ends.
+    /// Asked again while it waits, it runs at once: a chat stuck at work comes back too.
+    func whenFree(_ reload: @escaping @MainActor () -> Void) {
+        if holdsCLI, reloadWhenFree == nil {
+            reloadWhenFree = reload
+        } else {
+            reloadWhenFree = nil
+            reload()
+        }
+    }
+
     private func afterAccountEvent(_ event: ChatEvent) {
         switch event {
         case .turnFinished(_, .authFailed, _):
@@ -434,6 +448,10 @@ package final class Chat: Identifiable {
             relaunchIfDue()
         case .turnFinished, .agentFinished, .commandEnded:
             relaunchIfDue()
+            if !holdsCLI, let reload = reloadWhenFree {
+                reloadWhenFree = nil
+                reload()
+            }
         case .exited:
             // Its process is gone: the next send starts a new one anyway.
             relaunchDue = false
