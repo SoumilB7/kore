@@ -98,6 +98,20 @@ struct UsageAttributionTests {
         #expect(share.kore == 3 && !share.clamped)
     }
 
+    /// A reset credit used mid-window: the limit drops to near 0 and counts up again; only what
+    /// came after the reset is its.
+    @Test func aResetStartsTheCountAgain() {
+        let requests = [
+            UsageRequest(time: Self.at(10), chat: "k", units: 1, kore: true),
+            UsageRequest(time: Self.at(40), chat: "o", units: 1, kore: false),
+        ]
+        let points = [UsagePoint(time: Self.at(20), used: 60), UsagePoint(time: Self.at(30), used: 1)]
+        let window = UsageWindow(minutes: 300, resetsAt: Self.at(300), used: 5)
+        let split = UsageAttribution.split(requests, points: points, window: window, now: Self.at(60))
+        #expect(split.points == [0, 4])
+        #expect(split.elsewhere == 1)
+    }
+
     @Test func theClampCutsKoreToThePlanAndScalesTheChats() {
         let chats = [ChatShare(id: "a", points: 8, agents: 1, agentPoints: 4), ChatShare(id: "b", points: 3)]
         let cut = UsageAttribution.clamp(11, chats: chats, used: 9)

@@ -312,9 +312,16 @@ extension UsageAttribution {
     /// Each request's plan points: every rise between consecutive readings (from 0 at the
     /// window's start, through `points`, to `used` now) split across the requests made in that
     /// interval by their units. A rise with no local request is usage from elsewhere. A limit
-    /// never falls inside its window, so a lower reading (one source rounding down where another
-    /// rounded up: 47, 46, 47) is noise: a rise counts only past the highest reading so far, or
-    /// the jitter would count each point again. `requests` and `points` are those inside the window.
+    /// doesn't fall inside its window: a lower reading is an older one arriving late (each chat's
+    /// stream reports the limit as its own request saw it, so two chats' reports cross: 47, 46,
+    /// 47), so a rise counts only past the highest reading so far, or the same points would count
+    /// again. A fall past `resetDrop` is the limit reset (a reset credit used): what came before
+    /// it no longer counts, and the count starts again from 0. `requests` and `points` are those
+    /// inside the window.
+    /// A fall this large is a reset, not a late reading: late ones were 6 points at most over
+    /// 4,357 readings of every login (2026-10-29).
+    static let resetDrop: Double = 15
+
     public static func split(_ requests: [UsageRequest], points: [UsagePoint], window: UsageWindow, now: Date)
         -> (points: [Double], elsewhere: Double)
     {
@@ -332,6 +339,11 @@ extension UsageAttribution {
             while next < order.count, requests[order[next]].time <= to.time {
                 if requests[order[next]].time >= from.time { taken.append(order[next]) }
                 next += 1
+            }
+            if to.used < highest - resetDrop {
+                shares = [Double](repeating: 0, count: requests.count)
+                elsewhere = 0
+                highest = 0
             }
             let rise = max(to.used - highest, 0)
             highest = max(highest, to.used)
