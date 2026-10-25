@@ -28,7 +28,7 @@ struct SlashMenu: View {
             }
             .onChange(of: selected) { if matches.indices.contains(selected) { proxy.scrollTo(matches[selected].id) } }
         }
-        .frame(maxHeight: Size.menuMax)
+        .frame(maxHeight: Size.slashMenuMax)
         .fixedSize(horizontal: false, vertical: true)
         .panel(.panel)
         .cornerMarks(Theme.cornerOption)

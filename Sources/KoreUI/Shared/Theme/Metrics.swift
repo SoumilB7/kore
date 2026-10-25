@@ -125,6 +125,8 @@ enum Size {
     static let dropZone: CGFloat = 56
     static let dropDash: [CGFloat] = [4, 3]
     static let menuMax: CGFloat = 260
+    /// The / menu: five 28pt rows and half of the next, so it shows there are more to scroll to.
+    static let slashMenuMax: CGFloat = 158
     /// Each arm of a corner mark, from the outer corner along either edge: at most this…
     static let cornerMark: CGFloat = 20
     /// …else this share of the panel's shorter side (a 42pt card gets about 14)…
