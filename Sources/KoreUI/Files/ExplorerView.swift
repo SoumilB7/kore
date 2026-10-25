@@ -719,43 +719,9 @@ enum TreeActions {
 /// The divider between the sidebar and the content: drag to resize, double-click for 260.
 struct ExplorerSash: View {
     @Binding var width: CGFloat
-    @StateObject private var hot = Local(false)
-    @StateObject private var start = Held<CGFloat?>(nil)
-    @StateObject private var hover = Held<Task<Void, Never>?>(nil)
 
     var body: some View {
-        Rectangle()
-            .fill(hot.value ? Theme.accentLine : Theme.border)
-            .frame(width: Stroke.hairline)
-            .frame(maxHeight: .infinity)
-            .overlay {
-                Color.clear
-                    .frame(width: Layout.Explorer.sashHit)
-                    .contentShape(Rectangle())
-                    .onHover { inside in
-                        hover.value?.cancel()
-                        if inside {
-                            NSCursor.resizeLeftRight.push()
-                            hover.value = Task {
-                                try? await Task.sleep(for: .seconds(Motion.sashHover))
-                                if !Task.isCancelled { hot.value = true }
-                            }
-                        } else {
-                            NSCursor.pop()
-                            hot.value = false
-                        }
-                    }
-                    .gesture(
-                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                            .onChanged { drag in
-                                let base = start.value ?? width
-                                start.value = base
-                                width = min(max(base + drag.translation.width, Layout.Explorer.minWidth), Layout.Explorer.maxWidth)
-                            }
-                            .onEnded { _ in start.value = nil }
-                    )
-                    .onTapGesture(count: 2) { width = Layout.Explorer.width }
-            }
+        PaneSash(width: $width, range: Layout.Explorer.minWidth...Layout.Explorer.maxWidth) { width = Layout.Explorer.width }
     }
 }
 

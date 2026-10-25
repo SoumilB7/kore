@@ -35,9 +35,15 @@ struct AgentMapView: View {
                     if !narrow {
                         // Every row counts, its group open or closed: opening one, or an agent
                         // ending, doesn't move the divider.
+                        let total = geometry.size.width
+                        let width = treeWidth(rows.all, in: total)
                         tree(rows, highlight: highlight, commands: commands, pane: pane)
-                            .frame(width: paneWidth(rows.all, in: geometry.size.width))
-                        Rectangle().fill(Theme.border).frame(width: Stroke.hairline)
+                            .frame(width: width)
+                        PaneSash(
+                            width: Binding(get: { width }, set: { AgentMapPane.shared.share = $0 / max(total, 1) }),
+                            range: AgentMapPane.range(in: total)
+                        ) { AgentMapPane.shared.share = nil }
+                        .storyID(StoryID.AgentMap.sash)
                     }
                     VStack(alignment: .leading, spacing: 0) {
                         if narrow {
@@ -157,6 +163,14 @@ struct AgentMapView: View {
                 map.select(node.id)
             }
         }
+    }
+
+    /// Where the sash was dragged to, as its share of this width (within what a drag may give),
+    /// else wide enough for the deepest label.
+    private func treeWidth(_ nodes: [TranscriptStore.AgentNode], in width: CGFloat) -> CGFloat {
+        guard let share = AgentMapPane.shared.share else { return paneWidth(nodes, in: width) }
+        let range = AgentMapPane.range(in: width)
+        return min(max((width * share).rounded(), range.lowerBound), range.upperBound)
     }
 
     /// Wide enough for the deepest row's label, and never more than its share of the map.
@@ -457,7 +471,7 @@ private struct GraphRootRow: View {
                     Text((["this chat"] + [chat.controls.currentModel?.name ?? chat.controls.modelId].compactMap { $0 }
                         + [AgentMeter.clock(chat.transcript.workedFor)]).joined(separator: " · "))
                         .font(TextStyle.caption.monospacedDigit())
-                        .foregroundStyle(Theme.secondary)
+                        .foregroundStyle(Theme.tertiary)
                         .lineLimit(1)
                     CommandCue(count: commands)
                 }
@@ -599,7 +613,8 @@ struct AgentNodeMeter: View {
     }
 
     private func line(_ duration: TimeInterval?) -> some View {
-        let colour = info.status == .failed ? Theme.danger : info.status == .running ? Theme.secondary : Theme.tertiary
+        // Under the name, a step back from it: the ring says it's running.
+        let colour = info.status == .failed ? Theme.danger : Theme.tertiary
         return Text(Self.text(info, duration: duration, waiting: waiting, hidden: hidden, background: background))
             .foregroundStyle(colour)
     }

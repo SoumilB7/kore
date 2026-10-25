@@ -781,3 +781,60 @@ struct ExpectChatAsItWas: Step {
         }
     }
 }
+
+/// The sash between the map's tree and its detail drags: the tree widens by what the pointer
+/// moved, and a double-click gives it back the width that fits its labels.
+final class AgentMapSashResizes: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents, .gate] }
+    override class var script: CLIScript {
+        CLIScript(turns: [[
+            .startTurn,
+            .event(.agentSpawned(AgentInfo(
+                id: "scout", parent: .main, toolId: nil, name: "Scout the code", type: nil, model: nil, prompt: "Scout.", background: false))),
+            .event(.agentFinished(id: "scout", .completed, result: "Scouted")),
+            .stream(.answer, "Scouted."),
+            .finishTurn(.completed),
+        ]])
+    }
+
+    override func steps() -> [any Step] {
+        let sash = StoryID.AgentMap.sash
+        let x = { (_: StoryContext) in StoryElement(sash)?.frame?.midX }
+        return super.steps() + [
+            Send("Use a helper"), TurnFinished(1), WaitIdle(),
+            Press(.id(StoryID.Titlebar.agents)),
+            ExpectElement(.id(sash), .visible),
+            Remember("sash at rest") { Int(x($0) ?? 0) },
+            DragSash(by: 120),
+            Expect("the tree 120 pt wider", found: { x($0).map { "sash at \(Int($0))" } }) { story in
+                guard let now = x(story), let was = Remember.value(story, "sash at rest") else { return false }
+                return abs(Int(now) - was - 120) <= 2
+            },
+            Snapshot("agent-map-dragged"),
+            DragSash(by: 0, clicks: 2),
+            Expect("a double-click: the width that fits the labels again", found: { x($0).map { "sash at \(Int($0))" } }) { story in
+                guard let now = x(story), let was = Remember.value(story, "sash at rest") else { return false }
+                return abs(Int(now) - was) <= 1
+            },
+        ]
+    }
+
+    /// Drags the sash sideways from its middle; `clicks: 2` with no distance double-clicks it.
+    private struct DragSash: Step {
+        let by: CGFloat
+        var clicks = 1
+        var label: String { clicks == 2 ? "Double-click the sash" : "Drag the sash \(Int(by)) pt" }
+
+        func run(_ story: StoryContext) async throws {
+            guard let window = story.window, let frame = StoryElement(StoryID.AgentMap.sash)?.frame else {
+                throw StoryFailure.other("the sash has no frame")
+            }
+            let a = CGPoint(x: frame.midX, y: frame.midY)
+            if clicks == 2 {
+                await story.input.click(at: a, in: window, count: 2, modifiers: [])
+            } else {
+                await story.input.drag(from: a, to: CGPoint(x: a.x + by, y: a.y), in: window)
+            }
+        }
+    }
+}

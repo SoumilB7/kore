@@ -214,6 +214,8 @@ extension StoryID {
 
     package enum AgentMap {
         package static func row(_ agent: String) -> StoryID { StoryID(.agentmap, "row", key: agent) }
+        /// The sash between the tree and the detail.
+        package static let sash = StoryID(.agentmap, "sash")
         /// The wires drawn behind an agent's row: its elbow and the spines passing it.
         package static func wires(_ agent: String) -> StoryID { StoryID(.agentmap, "wires", key: agent) }
         /// A closed group of ended agents, "done" or "stopped": its row opens and closes it.

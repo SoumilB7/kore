@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 /// Whether the chat's agent map is showing, which agent it has selected, and whether a failure
@@ -78,5 +79,30 @@ final class AgentMapState {
     func markSeen(_ failed: [String]) {
         let new = seenFailures.union(failed)
         if new != seenFailures { seenFailures = new }
+    }
+}
+
+/// The map's tree pane as the person dragged it: a share of the map's width, so it follows the
+/// window as it grows or shrinks; nil, it fits its deepest label (`AgentMapView.paneWidth`).
+/// One for every chat, kept across launches.
+@MainActor @Observable
+final class AgentMapPane {
+    static let shared = AgentMapPane()
+    private static let key = "agentMapPaneShare"
+
+    var share: Double? = AgentMapPane.stored() {
+        didSet { UserDefaults.standard.set(share ?? 0, forKey: Self.key) }
+    }
+
+    private static func stored() -> Double? {
+        let share = UserDefaults.standard.double(forKey: key)
+        return share > 0 ? share : nil
+    }
+
+    /// What a drag may give the tree in a map this wide: never under its least, and always
+    /// leaving the detail its own.
+    static func range(in width: CGFloat) -> ClosedRange<CGFloat> {
+        let m = Layout.AgentMap.self
+        return m.paneDragMin...max(m.paneDragMin, width - m.detailMin)
     }
 }
