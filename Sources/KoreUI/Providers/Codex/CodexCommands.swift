@@ -20,6 +20,8 @@ struct CodexCommands {
     private var running: [String: Item] = [:]
     /// Rows: item id → its process, owner and whether it still runs.
     private var rows: [String: (process: String, owner: AgentID, live: Bool)] = [:]
+    /// Last process state announced by a list. An unchanged list must let polling back off.
+    private var listedProcesses: [String: ActiveCommand.Process] = [:]
     /// Lists in a row a live row was missing from.
     private var missing: [String: Int] = [:]
     private var stopAsked: Set<String> = []
@@ -55,6 +57,7 @@ struct CodexCommands {
         for (id, item) in running.sorted(by: { $0.key < $1.key }) where item.owner == agent {
             running[id] = nil
             rows[id] = (item.process, item.owner, true)
+            listedProcesses[id] = nil
             out.append(
                 .commandStarted(
                     ActiveCommand(
@@ -75,6 +78,9 @@ struct CodexCommands {
             let process = ActiveCommand.Process(
                 id: terminal["processId"]?.string ?? row.process, osPid: terminal["osPid"]?.int, cpuPercent: terminal["cpuPercent"]?.double,
                 memoryKB: terminal["rssKb"]?.int)
+            guard listedProcesses[id] != process else { continue }
+            listedProcesses[id] = process
+            rows[id] = (process.id, row.owner, true)
             out.append(.commandChanged(id: id, .process(process)))
         }
         for (id, row) in rows.sorted(by: { $0.key < $1.key }) where row.live && row.owner == owner && !seen.contains(id) {
@@ -119,6 +125,7 @@ struct CodexCommands {
     private mutating func end(_ id: String, _ state: ActiveCommand.State, at: Date, into out: inout [ChatEvent]) {
         guard let row = rows[id], row.live else { return }
         rows[id] = (row.process, row.owner, false)
+        listedProcesses[id] = nil
         missing[id] = nil
         stopAsked.remove(id)
         out.append(.commandEnded(id: id, state, at: at))
