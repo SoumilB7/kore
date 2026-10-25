@@ -39,14 +39,12 @@ struct TurnRetryTests {
         #expect(!script.store.workRunning)
     }
 
-    @Test func quietWorkRemainsRunningUntilAnExplicitEndAndIsNotAConnectionFailure() {
+    @Test func quietWorkRemainsRunningUntilAnExplicitEnd() {
         let script = Script()
         script.send("Work")
         script.start("working")
         script.tool("tool")
-        script.on(.connection(.quietWork))
         #expect(script.store.workRunning && script.store.turnIsOpen)
-        #expect(!Connection.quietWork.stuck && Connection.quietWork != .stalled)
         #expect(script.lines.contains("tool Bash running"))
         #expect(retryRows(script).isEmpty)
         script.on(.exited(status: 1))

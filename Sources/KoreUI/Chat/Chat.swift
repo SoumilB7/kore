@@ -606,7 +606,7 @@ package final class Chat: Identifiable {
         default:
             guard !Self.isReplay(event) else { return }
             lastHeard = Date()
-            if connection == .stalled || connection == .quietWork {
+            if connection == .stalled {
                 // It spoke again: the connection was fine after all.
                 connection = .ok
                 transcript.connected(.ok)
@@ -644,24 +644,23 @@ package final class Chat: Identifiable {
     private func checkStall() {
         let quiet = Date().timeIntervalSince(lastHeard)
         guard quiet > Self.stallAfter.value, NetworkWatch.shared.isOnline, !waitingForNetwork,
-            approvals.pending.isEmpty, !context.compacting else { return }
-        let state: Connection = transcript.workRunning ? .quietWork : .stalled
-        guard connection != state else { return }
-        connection = state
-        transcript.connected(state)
-        SessionLog.shared.connection(provider.id, chat: sessionId, state: Self.name(state), quiet: Int(quiet))
+            approvals.pending.isEmpty, !context.compacting, connection != .stalled else { return }
+        // A command or agent still running is busy, not stalled, however long it stays quiet.
+        guard !transcript.workRunning else { return }
+        connection = .stalled
+        transcript.connected(.stalled)
+        SessionLog.shared.connection(provider.id, chat: sessionId, state: Self.name(.stalled), quiet: Int(quiet))
     }
 
     /// A stalled turn's Retry: its CLI ends and starts again on the same chat, which is asked
     /// to carry on.
     func retryStalled() {
         guard !closed, !accountRestartPending, status.isRunning,
-              connection == .stalled || connection == .quietWork,
+              connection == .stalled,
               approvals.pending.isEmpty, !context.compacting else { return }
-        let reason = connection == .quietWork ? "quiet work" : "stalled"
         SessionLog.shared.rescue(provider.id, chat: sessionId, action: "retry")
         cancelContinue()
-        restartCLI(reason: reason)
+        restartCLI(reason: "stalled")
         deliver("Continue", [])
     }
 
@@ -729,7 +728,6 @@ package final class Chat: Identifiable {
         case .offline: "offline"
         case .retrying: "retrying"
         case .stalled: "stalled"
-        case .quietWork: "quiet-work"
         }
     }
 

@@ -556,9 +556,6 @@ package enum Connection: Sendable, Equatable {
     /// Online, waiting on the model, and nothing heard for `Chat.stallAfter` (Kore's watchdog):
     /// the connection likely died without the CLI noticing.
     case stalled
-    /// A tool/agent is still marked running, but has been quiet. This offers a manual escape
-    /// without claiming a long-running command has failed or stopping it automatically.
-    case quietWork
 
     /// What the running turn's spinner says for it; nil when fine.
     var word: String? {
@@ -568,7 +565,6 @@ package enum Connection: Sendable, Equatable {
         case .retrying(let attempt?, let of?): "Connection unstable · retrying (\(attempt) of \(of))"
         case .retrying: "Connection unstable · retrying"
         case .stalled: "No response · the connection may have dropped"
-        case .quietWork: "No recent updates · work may still be running"
         }
     }
 

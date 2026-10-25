@@ -1,31 +1,35 @@
 import KoreUI
 
-/// A tool can be genuinely slow: quietness offers an escape without failing or replaying it.
+/// A tool can be genuinely slow: however quiet, it shows no warning and nothing restarts it.
 final class QuietToolRetry: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .gate] }
     override class var script: CLIScript {
-        CLIScript(turns: [[.startTurn, .tool(name: "Bash", detail: "slow job", wait: .release)], CLIScript.reply("Resumed safely")])
+        CLIScript(turns: [[.startTurn, .tool(name: "Bash", detail: "slow job", wait: .release), .finishTurn(.completed)]])
     }
     override func steps() -> [any Step] {
         super.steps() + [
             Do("Use a short quiet-work threshold") { _ in Chat.stallAfter.value = 1 },
             Send("Start the work"),
-            Expect("quiet work stays running and offers recovery", timeout: .seconds(8)) {
-                try $0.activeChat().connection == .quietWork && $0.activeChat().isRunning
+            WaitForEvent("the tool to start") { if case .toolStarted = $0 { true } else { false } },
+            StayQuiet(),
+            Expect("quiet work stays running with no warning") {
+                try $0.activeChat().connection == .ok && $0.activeChat().isRunning
             },
+            ExpectElement(.id(StoryID.Transcript.stalledRetry), .absent),
             Expect("nothing restarted or sent automatically") { story in
                 let log = try story.scriptedBackend().log
                 return !log.contains(.relaunch) && !log.contains(.send("Continue"))
             },
-            Press(.id(StoryID.Transcript.stalledRetry)),
-            TurnFinished(2),
-            Expect("one explicit resume followed the old attempt's shutdown") { story in
-                let log = try story.scriptedBackend().log
-                return log.contains(.relaunch) && log.filter { $0 == .send("Continue") }.count == 1
-            },
-            Expect.rows("the resumed answer") { $0.contains { $0.text == "Resumed safely" } },
+            Release(),
+            TurnFinished(1),
         ]
     }
+}
+
+/// Holds past the stall wait while the tool says nothing.
+private struct StayQuiet: Step {
+    var label: String { "Stay quiet past the stall wait" }
+    func run(_ story: StoryContext) async throws { try await Task.sleep(for: .seconds(4)) }
 }
 
 /// A stopped tool has no final answer, but its folded turn still exposes Retry.
