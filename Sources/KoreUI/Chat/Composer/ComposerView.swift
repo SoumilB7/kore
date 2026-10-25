@@ -375,7 +375,8 @@ struct ComposerView: View {
     /// ↑ in an empty box brings back this chat's last sent message, as a shell does its last
     /// command; ↑ again an older one, ↓ a newer one, and past the newest the box is empty again.
     /// A message brought back steps on from its first line (↑) or its last (↓), so one of
-    /// several lines can still be moved about in. Its text only: files sent with it stay out.
+    /// several lines can still be moved about in; ↑ leaves the caret at its start and ↓ at its
+    /// end, so the same key steps on at once. Its text only: files sent with it stay out.
     private func recall(_ view: ComposerTextView, older: Bool) -> Bool {
         guard !composing, view.shown == chat.draft, view.selectedRange().length == 0 else { return false }
         let kept = recalling
@@ -400,7 +401,7 @@ struct ComposerView: View {
             chat.command = command
             chat.draft = draft
         }
-        place()
+        place(at: older ? 0 : nil)
         forgetUndo()
         return true
     }

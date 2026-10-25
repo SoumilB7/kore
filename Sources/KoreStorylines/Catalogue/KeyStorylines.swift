@@ -196,7 +196,9 @@ final class EscStops: ChatStoryline {
 /// message brought back is a draft of its own, and ↑ no longer steps.
 final class PromptRecall: ChatStoryline {
     static let first = "The first prompt"
-    static let second = "The second prompt"
+    /// Several lines: ↑ and ↓ still step past it at once, the caret left where the key goes on.
+    static let second = "The second prompt\nover two lines"
+    static let third = "The third prompt"
     override class var tags: Set<Tag> { [.chat] }
 
     /// The composer's text view in the storyline's own window: earlier storylines' windows can
@@ -209,13 +211,14 @@ final class PromptRecall: ChatStoryline {
         return story.window?.contentView.flatMap(find)
     }
 
-    static func shows(_ text: String, _ what: String) -> Expect {
+    /// The box holds `text`, the caret at its start (after ↑) or its end (after ↓, or typing).
+    static func shows(_ text: String, _ what: String, atStart: Bool = false) -> Expect {
         Expect(what, found: { story in
             let view = textView(story)
             return "draft “\((try? story.activeChat().draft) ?? "?")”, caret \(view.map { String($0.selectedRange().location) } ?? "?")"
         }) { story in
             guard try story.activeChat().draft == text, let view = textView(story), view.string == text else { return false }
-            return view.selectedRange() == NSRange(location: (text as NSString).length, length: 0)
+            return view.selectedRange() == NSRange(location: atStart ? 0 : (text as NSString).length, length: 0)
         }
     }
 
@@ -223,18 +226,21 @@ final class PromptRecall: ChatStoryline {
         super.steps() + [
             Send(Self.first), TurnFinished(1),
             Send(Self.second), TurnFinished(2),
+            Send(Self.third), TurnFinished(3),
             WaitForFocus(.id(StoryID.Composer.field)),
-            Key(.up), Self.shows(Self.second, "the second prompt back, the caret at its end"),
-            Key(.up), Self.shows(Self.first, "the first prompt back"),
-            Key(.up), Self.shows(Self.first, "the first still, the oldest"),
-            Key(.down), Self.shows(Self.second, "the second again"),
+            Key(.up), Self.shows(Self.third, "the third prompt back, the caret at its start", atStart: true),
+            Key(.up), Self.shows(Self.second, "the two-line prompt back, the caret at its start", atStart: true),
+            Key(.up), Self.shows(Self.first, "the first at once, no walking up its lines", atStart: true),
+            Key(.up), Self.shows(Self.first, "the first still, the oldest", atStart: true),
+            Key(.down), Self.shows(Self.second, "the two-line prompt again, the caret at its end"),
+            Key(.down), Self.shows(Self.third, "the third at once, no walking down its lines"),
             Key(.down), Self.shows("", "the box empty past the newest"),
             Key(.down), Self.shows("", "the box still empty"),
             // Typed into, it's a draft: ↑ moves the caret only.
-            Key(.up), Self.shows(Self.second, "the second back once more"),
-            TypeText("!"), Self.shows(Self.second + "!", "typed after it"),
+            Key(.up), Self.shows(Self.third, "the third back once more", atStart: true),
+            TypeText("!"), Expect("typed at its start") { try $0.activeChat().draft == "!" + Self.third },
             Key(.up),
-            Expect("the typed draft kept, not stepped") { try $0.activeChat().draft == Self.second + "!" },
+            Expect("the typed draft kept, not stepped") { try $0.activeChat().draft == "!" + Self.third },
         ]
     }
 }
