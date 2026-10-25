@@ -234,7 +234,7 @@ struct TranscriptTimeline: View, Equatable {
                 // more than a screen (a shorter chat sits at the bottom and moves as it grows), and
                 // only well clear of the end: our own pin aims at estimated row heights and can
                 // land a little above it.
-                if following.value, height == geometry.value.height, height > new[2] + Self.atBottom,
+                if !shift.zoomAdjusting, following.value, height == geometry.value.height, height > new[2] + Self.atBottom,
                     offset < geometry.value.offset - 1, offset + new[2] < height - Self.leftEnd
                 {
                     following.value = false
@@ -244,14 +244,14 @@ struct TranscriptTimeline: View, Equatable {
                 // even while a reply streams in. Only between gestures, and only on a move down:
                 // content arriving under a reader held just above the end doesn't move them, so
                 // it doesn't pull them along.
-                if !following.value, !gesturing.value, offset > geometry.value.offset + 1,
+                if !shift.zoomAdjusting, !following.value, !gesturing.value, offset > geometry.value.offset + 1,
                     offset + new[2] >= height - Self.atBottom
                 {
                     following.value = true
                 }
                 // Rows measured after they were placed change the height: while following, stay
                 // pinned to the end through layout as well as new content (T3 Code does both).
-                if following.value, height != geometry.value.height, glidingUntil.value.map({ Date() >= $0 }) ?? true {
+                if !shift.zoomAdjusting, following.value, height != geometry.value.height, glidingUntil.value.map({ Date() >= $0 }) ?? true {
                     proxy.scrollTo(Self.end, anchor: .bottom)
                 }
                 // Within a screen of the top on the way up: earlier turns go in above, as the top
@@ -390,6 +390,7 @@ struct TranscriptTimeline: View, Equatable {
     /// Pins the end while following: at once, or gliding for 2s after a send. A send always
     /// brings the end back into view. A tab `showing` again never glides: it's there at once.
     private func follow(_ proxy: ScrollViewProxy, showing: Bool = false) {
+        guard !shift.zoomAdjusting else { return }
         if let sent = store.sentAt, sent != lastSend.value {
             lastSend.value = sent
             following.value = true

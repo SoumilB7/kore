@@ -20,6 +20,8 @@ final class ScrollShift: ObservableObject {
     /// Its window can be seen: not minimised or covered.
     var windowVisible: Bool { scrollView?.window?.occlusionState.contains(.visible) ?? false }
 
+    var zoomAdjusting: Bool { scrollView.map(PinchZoom.isAdjusting) ?? false }
+
     /// How many layers draw in the visible part of the content: none is a blank view, whatever
     /// its geometry says.
     var drawn: Int? {

@@ -8,22 +8,41 @@ import SwiftUI
 final class Zoom {
     static let shared = Zoom()
     private static let key = "zoom"
-    private static let range: ClosedRange<CGFloat> = 0.7...1.8
+    static let range: ClosedRange<CGFloat> = 0.7...1.8
 
     private(set) var scale: CGFloat
+    @ObservationIgnored private let persist: (CGFloat) -> Void
+    @ObservationIgnored private(set) var commits = 0
 
-    private init() {
-        let saved = UserDefaults.standard.double(forKey: Self.key)
-        scale = saved == 0 ? 1 : saved
+    init(saved: CGFloat = CGFloat(UserDefaults.standard.double(forKey: Zoom.key)),
+         persist: @escaping (CGFloat) -> Void = { UserDefaults.standard.set($0, forKey: Zoom.key) }) {
+        scale = saved == 0 ? 1 : Self.bounded(saved) ?? 1
+        self.persist = persist
     }
 
     func zoomIn() { set(scale + 0.1) }
     func zoomOut() { set(scale - 0.1) }
     func reset() { set(1) }
 
+    static func bounded(_ value: CGFloat) -> CGFloat? {
+        guard value.isFinite else { return nil }
+        return min(max(value, range.lowerBound), range.upperBound)
+    }
+
+    /// Pinching previews with Core Animation; its one semantic commit keeps the chosen size
+    /// rather than jumping back onto the keyboard's ten-percent steps.
+    @discardableResult
+    func commitPinch(_ value: CGFloat) -> Bool {
+        guard let value = Self.bounded(value), abs(value - scale) > 0.0001 else { return false }
+        scale = value
+        commits += 1
+        persist(value)
+        return true
+    }
+
     private func set(_ value: CGFloat) {
-        scale = min(max((value * 10).rounded() / 10, Self.range.lowerBound), Self.range.upperBound)
-        UserDefaults.standard.set(scale, forKey: Self.key)
+        guard value.isFinite else { return }
+        commitPinch((value * 10).rounded() / 10)
     }
 }
 
