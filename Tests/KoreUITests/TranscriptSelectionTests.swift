@@ -5,7 +5,7 @@ import Testing
 @testable import KoreUI
 
 /// The transcript's selection: a text laid out again with TextKit 2 lands where SwiftUI drew it,
-/// and a clipped selection copies back as markdown with its structure.
+/// and a selection copies back as plain text, tagged by who said it when it spans messages.
 @MainActor
 @Suite("Transcript selection")
 struct TranscriptSelectionTests {
@@ -169,38 +169,37 @@ struct TranscriptSelectionTests {
 
     private func copy(from lo: TextPoint?, to hi: TextPoint?) -> String {
         let blocks = MarkdownParser.parse(Self.reply[...], base: 0, zoom: 1)
-        let clip = Clip(lo: lo, hi: hi)
+        let clip = Clip(lo: lo, hi: hi, plainText: true)
         return blocks.enumerated().compactMap { i, block in clip.block(block, [i]) }.joined(separator: "\n\n")
     }
 
     private let id = UUID()
     private func at(_ path: [Int], _ offset: Int) -> TextPoint { TextPoint(entry: id, path: path, offset: offset) }
 
-    @Test func partOfAParagraphKeepsItsInlineMarkup() {
+    @Test func partOfAParagraphDropsItsInlineMarkup() {
         // "with bold, code and a link."
-        #expect(copy(from: at([1], 12), to: at([1], 33)) == "with **bold**, `code` and a")
-        #expect(copy(from: at([1], 34), to: nil).hasPrefix("[link](https://example.com)."))
+        #expect(copy(from: at([1], 12), to: at([1], 33)) == "with bold, code and a")
+        #expect(copy(from: at([1], 34), to: nil).hasPrefix("link.\n\n"))
     }
 
-    @Test func partOfAListKeepsItsMarkersAndNesting() {
-        #expect(copy(from: at([2, 1, 0], 7), to: at([2, 2, 0], 5)) == "- item\n\n  - nested one\n- third")
+    @Test func partOfAListKeepsSimpleMarkersAndNesting() {
+        #expect(copy(from: at([2, 1, 0], 7), to: at([2, 2, 0], 5)) == "• item\n  • nested one\n• third")
     }
 
-    @Test func partOfAHeadingKeepsItsLevel() {
-        #expect(copy(from: at([0], 2), to: at([1], 1)) == "# tle\n\nA")
+    @Test func aHeadingIsAPlainLine() {
+        #expect(copy(from: at([0], 2), to: at([1], 1)) == "tle\n\nA")
     }
 
-    @Test func partOfAQuoteStaysQuoted() {
-        #expect(copy(from: at([3, 0], 2), to: at([3, 0], 13)) == "> quoted line")
+    @Test func aQuoteIsItsText() {
+        #expect(copy(from: at([3, 0], 2), to: at([3, 0], 13)) == "quoted line")
     }
 
-    @Test func partOfATableKeepsItsHeaderRow() {
-        #expect(copy(from: at([4, 2, 0], 0), to: at([4, 2, 1], 3)) == "| Name | Kind |\n|---|---|\n| beta | two |")
+    @Test func partOfATableIsTabbedRowsWithItsHeader() {
+        #expect(copy(from: at([4, 2, 0], 0), to: at([4, 2, 1], 3)) == "Name\tKind\nbeta\ttwo")
     }
 
-    @Test func aCodeBlockFenceOutgrowsTheBackticksInside() {
-        let code = copy(from: at([5], 4), to: nil)
-        #expect(code == "````swift\nfence = \"```\"\n````")
+    @Test func aCodeBlockIsItsLines() {
+        #expect(copy(from: at([5], 4), to: nil) == "fence = \"```\"")
     }
 
     @Test func blocksSelectedWholeAreTheirSource() {
@@ -238,7 +237,7 @@ struct TranscriptSelectionTests {
 
     @Test func selectionEndingInsideAnOpenCommandHeaderDoesNotCopyItsBody() throws {
         let (script, before, command) = try openCommand()
-        let copied = SelectionCopy.markdown(script.store,
+        let copied = SelectionCopy.text(script.store,
             from: TextPoint(entry: before.id, path: [0], offset: 0),
             to: TextPoint(entry: command.id, path: [-1], offset: "Bash printf".utf16.count))
         #expect(copied == "Before.\n\nBash printf")
@@ -246,13 +245,28 @@ struct TranscriptSelectionTests {
 
     @Test func selectionReachingCommandOutputKeepsItsHeaderOnlyInvocation() throws {
         let (script, before, command) = try openCommand()
-        let copied = SelectionCopy.markdown(script.store,
+        let copied = SelectionCopy.text(script.store,
             from: TextPoint(entry: before.id, path: [0], offset: 0),
             to: TextPoint(entry: command.id, path: [0], offset: "hello".utf16.count))
-        #expect(copied == "Before.\n\n```bash\nprintf hello\n```\n\n```\nhello\n```")
+        #expect(copied == "Before.\n\nprintf hello\nhello")
     }
 
-    @Test func messagesQuoteEveryLine() {
-        #expect(SelectionCopy.quote("one\n\ntwo") == "> one\n>\n> two")
+    @Test func messagesAreTaggedOnlyWhenTheCopySpansMoreThanOne() throws {
+        let script = Script()
+        script.send("hi there")
+        script.start("turn")
+        script.say("answer", "# Plan\n\nUse **bold** `code`.")
+        script.on(.finalAnswer("answer"))
+        script.finish("turn")
+        script.store.drawNow()
+        let rows = SelectionCopy.rows(script.store)
+        let user = try #require(rows.first { $0.entry.kind == .user }?.entry)
+        let answer = try #require(rows.first { $0.entry.kind == .answer }?.entry)
+        let both = SelectionCopy.text(script.store,
+            from: TextPoint(entry: user.id, path: [0], offset: 3), to: TextPoint(entry: answer.id, path: [1], offset: .max))
+        #expect(both == "You:\nthere\n\nClaude:\nPlan\n\nUse bold code.")
+        let one = SelectionCopy.text(script.store,
+            from: TextPoint(entry: answer.id, path: [1], offset: 4), to: TextPoint(entry: answer.id, path: [1], offset: 8))
+        #expect(one == "bold")
     }
 }

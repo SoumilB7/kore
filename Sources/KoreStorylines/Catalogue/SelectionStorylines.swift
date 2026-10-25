@@ -2,13 +2,12 @@ import AppKit
 import KoreUI
 
 // The transcript's one text selection (z-docs/research/transcript-selection.md): a press and a
-// drag from any text to any other, across blocks, rows and turns; ⌘C copies markdown built from
-// the model. Copies go to the storylines' own pasteboard, never the owner's clipboard.
+// drag from any text to any other, across blocks, rows and turns; ⌘C copies plain text built from
+// the model, each message tagged by who said it when it spans several. Copies go to the storylines' own pasteboard, never the owner's clipboard.
 
 /// From the middle of turn 1's paragraph into turn 2's code block: the list, the second message
-/// and turn 2's first line between are selected, both answers draw their part, and ⌘C gives the
-/// structure: inline code kept, list markers, the message as a quote, a fenced partial code
-/// block. A third turn streaming in afterwards leaves the selection as it was.
+/// and turn 2's first line between are selected, both answers draw their part, and ⌘C gives
+/// plain text: list markers, each message under its tag, a partial code block as its lines. A third turn streaming in afterwards leaves the selection as it was.
 final class SelectAcrossTurns: ChatStoryline {
     static let first = """
         ## Plan
@@ -28,21 +27,24 @@ final class SelectAcrossTurns: ChatStoryline {
 
         That's all.
         """
-    static let expected = """
-        check `port` values before anything else runs.
+    static func expected(_ agent: String) -> String {
+        """
+        \(agent):
+        check port values before anything else runs.
 
-        - one item
-        - and `another`
+        • one item
+        • and another
 
-        > Tell me more
+        You:
+        Tell me more
 
+        \(agent):
         Here is the code:
 
-        ```swift
         let answer = 42
         let question =\u{20}
-        ```
         """
+    }
 
     override class var tags: Set<Tag> { [.chat, .gate] }
     override class var script: CLIScript {
@@ -63,10 +65,11 @@ final class SelectAcrossTurns: ChatStoryline {
                 return t.highlightRects(a) > 0 && t.highlightRects(b) > 0
             },
             Expect("the transcript to hold focus") { try $0.activeChat().storyTranscript.selectionFocused },
-            CopySelection(Self.expected),
+            CopySelection(agent: Self.expected),
             Send("And a third"), TurnFinished(3), WaitIdle(),
             Expect("the selection unchanged by the third turn", found: { try? $0.activeChat().storyTranscript.selectionMarkdown }) {
-                try $0.activeChat().storyTranscript.selectionMarkdown == Self.expected
+                let t = try $0.activeChat().storyTranscript
+                return t.selectionMarkdown == Self.expected(t.agentName)
             },
         ]
     }
@@ -90,11 +93,11 @@ final class SelectWordsAndParagraphs: ChatStoryline {
         super.steps() + [
             Send("Write two paragraphs"), TurnFinished(1),
             ClickText(.answer(1, [0], at: Self.first, "old"), count: 2),
-            CopySelection("**bold**"),
+            CopySelection("bold"),
             ClickText(.answer(1, [0], at: Self.first, "words"), count: 3),
-            CopySelection("Some **bold** words and `code` here."),
+            CopySelection("Some bold words and code here."),
             DragSelect(from: .answer(1, [0], at: Self.first, "ords"), to: .answer(1, [1], at: Self.second, "aragraph"), clicks: 2),
-            CopySelection("words and `code` here.\n\nA second paragraph"),
+            CopySelection("words and code here.\n\nA second paragraph"),
             Key(.escape),
             Expect("Escape to let the selection go") { try !$0.activeChat().storyTranscript.hasSelection },
         ]
@@ -115,12 +118,12 @@ final class ShiftClickExtends: ChatStoryline {
             ClickText(.answer(1, [0], at: Self.first, "sentence")),
             Expect("a click to select nothing yet") { try !$0.activeChat().storyTranscript.hasSelection },
             ClickText(.answer(2, [0], at: Self.second, " to end"), shift: true),
-            CopySelection("sentence to start in.\n\n> Two\n\nThe second answer has one"),
+            CopySelection(agent: { "\($0):\nsentence to start in.\n\nYou:\nTwo\n\n\($0):\nThe second answer has one" }),
         ]
     }
 }
 
-/// A resumed chat shows only its last ten turns: ⌘A takes those, as quotes and answers, without
+/// A resumed chat shows only its last ten turns: ⌘A takes those, as tagged messages and answers, without
 /// laying out the texts it covers (a text selected whole fills its frame); once scrolling up has
 /// loaded the earlier turns it takes them all. A selection kept while its rows scroll away and back comes back.
 final class SelectAllLongChat: ChatStoryline {
@@ -130,8 +133,9 @@ final class SelectAllLongChat: ChatStoryline {
 
     override class var tags: Set<Tag> { [.chat] }
 
-    static func whole(_ range: ClosedRange<Int>) -> String {
-        range.map { "> Question \($0)\n\n" + answer($0) }.joined(separator: "\n\n")
+    static func whole(_ range: ClosedRange<Int>, _ agent: String) -> String {
+        range.map { "You:\nQuestion \($0)\n\n\(agent):\n" + paragraph($0) + "\n\n• point one of \($0)\n• point two of \($0)" }
+            .joined(separator: "\n\n")
     }
 
     override func steps() -> [any Step] {
@@ -154,13 +158,13 @@ final class SelectAllLongChat: ChatStoryline {
             }) { story in
                 try story.activeChat().storyTranscript.selectionWork.laidOut == Remember.value(story, "work before ⌘A")
             },
-            CopySelection(Self.whole((Self.turns - 9)...Self.turns)),
+            CopySelection(agent: { Self.whole((Self.turns - 9)...Self.turns, $0) }),
             // Up near the top, the earlier turns go in above by themselves.
             Scroll(.answer(turn: Self.turns), to: .top),
             Expect("the earlier turns loaded") { story in try story.activeChat().storyTranscript.isBuilt(try Spot.answer(1).entry(story)) },
             ClickText(.answer(1, [0], at: Self.paragraph(1), "paragraph")),
             Key(KeyChord(.character("a"), .command)),
-            CopySelection(Self.whole(1...Self.turns)),
+            CopySelection(agent: { Self.whole(1...Self.turns, $0) }),
             DragSelect(from: .answer(1, [0], at: Self.paragraph(1), "with"), to: .answer(2, [0], at: Self.paragraph(2), "with")),
             Scroll(.answer(turn: 2), to: .bottom),
             Scroll(.answer(turn: Self.turns), to: .top),
@@ -170,7 +174,7 @@ final class SelectAllLongChat: ChatStoryline {
             }) { story in
                 let t = try story.activeChat().storyTranscript
                 let first = try Spot.answer(1).entry(story)
-                return t.selectionMarkdown.hasPrefix("with **bold**") && t.highlightRects(first) > 0
+                return t.selectionMarkdown.hasPrefix("\(t.agentName):\nwith bold") && t.highlightRects(first) > 0
             },
             Scroll(.answer(turn: Self.turns), to: .bottom),
             DragPastTop(from: .answer(Self.turns, [0], at: Self.paragraph(Self.turns), "paragraph")),
@@ -196,7 +200,7 @@ struct ReplayTurns: Step {
 
 /// A turn whose steps fold into "Worked for…": a selection across it copies the turn's answer
 /// and earlier write-ups, without the folded commands. Opened, the command and its output
-/// copy as code blocks; closed again, the box is left out.
+/// copy as their lines; closed again, the box is left out.
 final class SelectAcrossTools: ChatStoryline {
     static let before = "Let me look at the folder."
     static let after = "There are two files."
@@ -214,17 +218,17 @@ final class SelectAcrossTools: ChatStoryline {
         super.steps() + [
             Send("What's here?"), TurnFinished(1), Send("Thanks"), TurnFinished(2),
             DragSelect(from: .lastAnswer(1, [0], at: Self.after, "two"), to: .answer(2, [0], at: Self.next, " is up")),
-            CopySelection("two files.\n\n> Thanks\n\nAnything else"),
+            CopySelection(agent: { "\($0):\ntwo files.\n\nYou:\nThanks\n\n\($0):\nAnything else" }),
             DragSelect(from: .message(1, at: "What's here?", "here"), to: .lastAnswer(1, [0], at: Self.after, " files")),
-            CopySelection("> here?\n\n" + Self.before + "\n\nThere are two"),
+            CopySelection(agent: { "You:\nhere?\n\n\($0):\n" + Self.before + "\n\nThere are two" }),
             Press(.fold(turn: 1)),
             Press(.tool("Bash")),
             Expect("the command's box open") { story in try story.activeChat().storyTranscript.selectableTexts(try Spot.tool("Bash").entry(story)).contains([0]) },
             DragSelect(from: .firstAnswer(1, [0], at: Self.before, "the folder"), to: .lastAnswer(1, [0], at: Self.after, " files")),
-            CopySelection("the folder.\n\n```bash\nls\n```\n\n```\na.txt\nb.txt\n```\n\nThere are two"),
+            CopySelection("the folder.\n\nls\na.txt\nb.txt\n\nThere are two"),
             DragSelect(from: Spot(row: .tool("Bash"), path: [0], offset: 1), to: Spot(row: .tool("Bash"), path: [0], offset: 7)),
             Expect("a drag inside the box to leave it open") { story in try story.activeChat().storyTranscript.selectableTexts(try Spot.tool("Bash").entry(story)).contains([0]) },
-            CopySelection("```\n.txt\nb\n```"),
+            CopySelection(".txt\nb"),
             Press(.tool("Bash")),
             DragSelect(from: .firstAnswer(1, [0], at: Self.before, "the folder"), to: .lastAnswer(1, [0], at: Self.after, " files")),
             CopySelection("the folder.\n\nBash ls\n\nThere are two"),
@@ -325,7 +329,7 @@ final class SelectCodeLineInBullet: ChatStoryline {
                 DragSelect(from: code, to: last, past: CGVector(dx: 60, dy: 0)),
                 Snapshot(name),
                 Self.onlyGlyphs("the code line's highlight on its glyphs only"),
-                CopySelection("- `\(Self.path)`"),
+                CopySelection("• \(Self.path)"),
             ]
         }
         return super.steps() + [
@@ -334,14 +338,14 @@ final class SelectCodeLineInBullet: ChatStoryline {
         ] + line("code-line-wide") + [
             ClickText(.answer(1, Self.item, at: Self.shown, "soumil"), count: 2),
             Self.onlyGlyphs("a double-click's word highlighted on its glyphs only"),
-            CopySelection("- `soumil`"),
+            CopySelection("• soumil"),
             ClickText(.answer(1, Self.item, at: Self.shown, "Projects"), count: 3),
             Self.onlyGlyphs("a triple-click's line highlighted on its glyphs only"),
-            CopySelection("- `\(Self.path)`"),
+            CopySelection("• \(Self.path)"),
             DragSelect(from: .answer(1, Self.item, at: Self.shown, "design doc"), to: last, past: CGVector(dx: 60, dy: 0)),
             Snapshot("both-lines-wide"),
             Self.onlyGlyphs("both lines highlighted on their glyphs only"),
-            CopySelection("- design doc is here: [chat-handoff.html](\(Self.path))\n  `\(Self.path)`"),
+            CopySelection("• design doc is here: chat-handoff.html\n  \(Self.path)"),
             SizeWindow(width: 620), WaitIdle(),
         ] + line("code-line-narrow") + [
             Key(KeyChord(.character("0"), .command)), WaitIdle(),
@@ -556,11 +560,17 @@ struct DragFromElement: Step {
 
 /// ⌘C, then what it left on the storylines' pasteboard.
 struct CopySelection: Step {
-    let expected: String
-    init(_ expected: String) { self.expected = expected }
-    var label: String { "⌘C copies “\(expected.count > 40 ? expected.prefix(40) + "…" : Substring(expected))”" }
+    /// What it copies, given the agent's name (the tag on its messages).
+    let text: (String) -> String
+    init(_ expected: String) { text = { _ in expected } }
+    init(agent text: @escaping (String) -> String) { self.text = text }
+    var label: String {
+        let expected = text("Agent")
+        return "⌘C copies “\(expected.count > 40 ? expected.prefix(40) + "…" : Substring(expected))”"
+    }
 
     func run(_ story: StoryContext) async throws {
+        let expected = text((try? story.activeChat().storyTranscript.agentName) ?? "Agent")
         StoryTranscript.clearCopied()
         try await Key(KeyChord(.character("c"), .command)).run(story)
         do {

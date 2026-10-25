@@ -124,6 +124,8 @@ extension StoryTranscript {
     /// Where the rows' content sits in the window (it moves as the transcript scrolls).
     package var selectionAnchorY: CGFloat? { store.selection.responder.map { $0.convert(CGPoint.zero, to: nil).y } }
     package var selectionMarkdown: String { store.selection.markdown() }
+    /// The tag a copy puts on the agent's messages.
+    package var agentName: String { store.agentName }
     /// The rects a built row draws for the selection now.
     package func highlightRects(_ entry: UUID) -> Int { store.selection.rects(entry).count }
     /// What a built row draws for the selection outside every selected text's frame (a line

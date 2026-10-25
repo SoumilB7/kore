@@ -1,12 +1,14 @@
 import Foundation
 import KoreCore
 
-/// The selection as markdown, built from the model, never from glyphs (owner, 2026-10-22):
-/// the user's messages as `> ` quotes, answers as their source markdown, a tool row only when it's
-/// open on screen (its command and output as code blocks), and nothing from a folded turn's
-/// steps. The first and last rows are clipped where the selection ends, keeping the structure
-/// around the clipped part: a heading's `#`s, list markers, a code block's fence and language,
-/// a table's header row.
+/// The selection as plain text, the way a person would paste it into a note (owner,
+/// 2026-10-30), built from the model, never from glyphs: answers as their visible text with no
+/// markdown syntax (headings as lines, lists with "• " / "1. " and their indentation, code as its
+/// lines, a table's cells split by tabs, links as their text), a tool row only when it's open on
+/// screen (its command and output as lines), and nothing from a folded turn's steps. When the
+/// selection spans more than one message, each starts with who said it on its own line ("You:",
+/// the agent's name, a peer's name). The first and last rows are clipped where the selection ends;
+/// a clipped table keeps its header row.
 @MainActor
 enum SelectionCopy {
     /// A row the timeline shows, by its entry, as copy reads it.
@@ -49,30 +51,39 @@ enum SelectionCopy {
         return out
     }
 
-    static func markdown(_ store: TranscriptStore, from start: TextPoint, to end: TextPoint) -> String {
+    static func text(_ store: TranscriptStore, from start: TextPoint, to end: TextPoint) -> String {
         guard let s = store.index(of: start.entry), let e = store.index(of: end.entry) else { return "" }
-        var parts: [String] = []
+        let agent = store.agentName
+        // Each message's parts, under who said it: an answer's rows (tools, notes) are one message.
+        var messages: [(who: String, parts: [String])] = []
         for row in rows(store) {
             guard let i = store.index(of: row.entry.id), s <= i, i <= e else { continue }
             let lo = row.entry.id == start.entry ? start : nil
             let hi = row.entry.id == end.entry ? end : nil
-            if let part = markdown(row, lo, hi), !part.isEmpty { parts.append(part) }
+            guard let part = text(row, lo, hi), !part.isEmpty else { continue }
+            let who = switch row.entry.kind {
+            case .user: "You"
+            case .peer: row.entry.from ?? "Peer"
+            default: agent
+            }
+            if row.kind != .message, messages.last?.who == who { messages[messages.count - 1].parts.append(part) }
+            else { messages.append((who, [part])) }
         }
-        return parts.joined(separator: "\n\n")
+        if messages.count == 1 { return messages[0].parts.joined(separator: "\n\n") }
+        return messages.map { $0.who + ":\n" + $0.parts.joined(separator: "\n\n") }.joined(separator: "\n\n")
     }
 
     /// One row's part: whole, or clipped at `lo` / `hi` (an end inside it).
-    private static func markdown(_ row: Shown, _ lo: TextPoint?, _ hi: TextPoint?) -> String? {
+    private static func text(_ row: Shown, _ lo: TextPoint?, _ hi: TextPoint?) -> String? {
         let e = row.entry
-        let clip = Clip(lo: lo, hi: hi)
+        let clip = Clip(lo: lo, hi: hi, plainText: true)
         switch row.kind {
         case .message:
             let text = clip.plain(messageText(e.text), [0])
-            return text.isEmpty ? nil : quote(text)
+            return text.isEmpty ? nil : text
         case .answer:
             return answer(e, clip)
         case .plan:
-            if clip.whole { return e.text.trimmingCharacters(in: .whitespacesAndNewlines) }
             return clip.span([0]).map { clip.inline(planMarkdown(e.text), $0) }
         case .notice:
             return clip.plain(e.text, [0])
@@ -85,16 +96,16 @@ enum SelectionCopy {
             var blocks = parts.enumerated().compactMap { i, part -> String? in
                 let text = clip.plain(TextPrefix.of(part.text, lines: .max, bytes: .max).text, [i])
                 guard !text.isEmpty else { return nil }
-                return fence(text, language: part.label == "IN" && ToolItem.isShell(e) ? "bash" : "")
+                return text
             }
             // A command shown only in its header (no IN row) still copies first, when the
             // selection starts above the row.
             if lo == nil, clip.touches([0]), !parts.contains(where: { $0.label == "IN" }) {
                 let command = e.input ?? e.text
-                if !command.isEmpty { blocks.insert(fence(command, language: ToolItem.isShell(e) ? "bash" : ""), at: 0) }
+                if !command.isEmpty { blocks.insert(command, at: 0) }
             }
             if lo?.path == [-1] || hi?.path == [-1], !header.isEmpty { blocks.insert(header, at: 0) }
-            return blocks.isEmpty ? nil : blocks.joined(separator: "\n\n")
+            return blocks.isEmpty ? nil : blocks.joined(separator: "\n")
         case .file:
             guard row.open, clip.whole else { return nil }
             return e.changes.compactMap(diff).joined(separator: "\n\n")
@@ -108,17 +119,18 @@ enum SelectionCopy {
         markdownText(e.done ? Substring(e.text) : MarkdownParser.settled(e.text), clip, settled: e.done)
     }
 
-    /// A markdown text as `MarkdownView` shows it, clipped: blocks selected whole as written,
-    /// the end blocks rebuilt from what's selected. `settled: false` drops an open last block.
+    /// A markdown text as `MarkdownView` shows it, clipped: as markdown, blocks selected whole
+    /// as written and the end blocks rebuilt from what's selected; as plain text (`clip.plainText`),
+    /// every block's visible text. `settled: false` drops an open last block.
     static func markdownText(_ source: Substring, _ clip: Clip, settled: Bool = true) -> String {
-        if clip.whole { return source.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if clip.whole, !clip.plainText { return source.trimmingCharacters(in: .whitespacesAndNewlines) }
         var blocks = MarkdownParser.parse(source, base: 0, zoom: Zoom.shared.scale)
         if !settled, blocks.last?.isOpen == true { blocks.removeLast() }
         let utf8 = source.utf8
         var out: [String] = []
         for (i, block) in blocks.enumerated() {
             guard clip.touches([i]) else { continue }
-            if clip.covers([i]) {
+            if clip.covers([i]), !clip.plainText {
                 // Selected whole: its own source, exactly as written.
                 let from = utf8.index(utf8.startIndex, offsetBy: block.id)
                 let to = i + 1 < blocks.count ? utf8.index(utf8.startIndex, offsetBy: blocks[i + 1].id) : utf8.endIndex
@@ -166,15 +178,17 @@ enum SelectionCopy {
                 lines.append(mark + line.text)
             }
         }
-        return fence(lines.joined(separator: "\n"), language: "diff")
+        return lines.joined(separator: "\n")
     }
 }
 
 /// Where a selection's ends fall inside one entry: `lo` and `hi` are the ends inside it (nil:
-/// the selection runs on past that side).
+/// the selection runs on past that side). `plainText`: blocks come back as their visible text,
+/// not markdown.
 struct Clip {
     let lo: TextPoint?
     let hi: TextPoint?
+    var plainText = false
 
     var whole: Bool { lo == nil && hi == nil }
 
@@ -221,8 +235,9 @@ struct Clip {
         return String(decoding: units[a..<b], as: UTF16.self)
     }
 
-    /// A parsed block, clipped, back as markdown.
+    /// A parsed block, clipped, back as markdown (or as plain text).
     func block(_ block: MarkdownBlock, _ path: [Int]) -> String? {
+        if plainText { return text(block, path) }
         switch block.kind {
         case .heading(let level, let text):
             return span(path).map { String(repeating: "#", count: level) + " " + inline(text, $0) }
@@ -272,6 +287,47 @@ struct Clip {
         blocks.enumerated().compactMap { i, block in self.block(block, prefix + [i]) }
     }
 
+    /// A parsed block, clipped, as the text it shows: no markup, list markers and a table's
+    /// cells kept so it still reads the same.
+    private func text(_ block: MarkdownBlock, _ path: [Int]) -> String? {
+        switch block.kind {
+        case .heading(_, let text), .paragraph(let text):
+            return span(path).map { inline(text, $0) }
+        case .code(_, let text):
+            return span(path).map { Self.slice(text, $0.0, $0.1) }
+        case .rule:
+            return nil
+        case .quote(let inner):
+            guard touches(path) else { return nil }
+            let body = blocks(inner, path).joined(separator: "\n\n")
+            return body.isEmpty ? nil : body
+        case .list(let list):
+            guard touches(path) else { return nil }
+            var lines: [String] = []
+            for (n, item) in list.items.enumerated() {
+                let body = blocks(item.blocks, path + [n]).joined(separator: "\n")
+                guard !body.isEmpty else { continue }
+                let marker = item.task.map { $0 ? "☑ " : "☐ " } ?? (list.ordered ? "\(list.start + n). " : "• ")
+                let pad = String(repeating: " ", count: marker.count)
+                let indented = body.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
+                    .map { $0 == 0 ? marker + $1 : ($1.isEmpty ? "" : pad + $1) }
+                lines.append(indented.joined(separator: "\n"))
+            }
+            return lines.isEmpty ? nil : lines.joined(separator: "\n")
+        case .table(let table):
+            guard touches(path) else { return nil }
+            func row(_ cells: [AttributedString], _ r: Int) -> String? {
+                let texts = cells.indices.map { c in span(path + [r, c]).map { inline(cells[c], $0) } }
+                guard texts.contains(where: { $0 != nil }) else { return nil }
+                return texts.map { $0 ?? "" }.joined(separator: "\t")
+            }
+            // The header row always, so the cells still have their names.
+            var out = [row(table.header, 0) ?? table.header.map { String($0.characters) }.joined(separator: "\t")]
+            for (r, cells) in table.rows.enumerated() { if let line = row(cells, r + 1) { out.append(line) } }
+            return out.joined(separator: "\n")
+        }
+    }
+
     /// Part of an attributed text back as inline markdown, from the attributes the parser kept:
     /// code, bold, italic, strikethrough and links.
     func inline(_ text: AttributedString, _ span: (Int, Int)) -> String {
@@ -285,6 +341,7 @@ struct Clip {
             let lo = max(start, a), hi = min(end, b)
             guard lo < hi else { continue }
             var part = Self.slice(piece, lo - start, hi - start)
+            if plainText { out += part; continue }
             let intent = run.inlinePresentationIntent ?? []
             if intent.contains(.code) { part = "`" + part + "`" }
             if intent.contains(.stronglyEmphasized) { part = "**" + part + "**" }
@@ -298,6 +355,9 @@ struct Clip {
 }
 
 extension TranscriptStore: SelectionSource {
+    /// The tag on the agent's messages in a copy: "Claude", "Codex".
+    var agentName: String { provider?.name ?? providerName }
+
     var selectionBounds: (first: UUID, last: UUID)? {
         let rows = SelectionCopy.rows(self)
         guard let first = rows.first, let last = rows.last else { return nil }
@@ -305,6 +365,6 @@ extension TranscriptStore: SelectionSource {
     }
 
     func selectionMarkdown(from start: TextPoint, to end: TextPoint) -> String {
-        SelectionCopy.markdown(self, from: start, to: end)
+        SelectionCopy.text(self, from: start, to: end)
     }
 }
