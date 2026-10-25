@@ -17,7 +17,7 @@ struct LoginMeters: View {
                 note("Sign in to see usage")
             } else {
                 switch state {
-                case .idle: hatched("usage not read").opacity(0.5)
+                case .idle: hatched("usage not read").opacity(Theme.unread)
                 case .loading: hatched("reading usage")
                 case .unavailable: note("Usage unavailable")
                 case .ready(let reading, let at):

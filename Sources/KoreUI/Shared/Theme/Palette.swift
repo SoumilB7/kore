@@ -51,6 +51,8 @@ enum Theme {
     static let dimmed: Double = 0.7
     /// Opacity for a control with nothing to set (a model without efforts: the slider's track).
     static let off: Double = 0.4
+    /// Opacity for a reading not taken yet (another login's usage before its row is hovered).
+    static let unread: Double = 0.5
 
     /// The hue's saturated steps (logo, accent, mode outlines).
     enum Blue {

@@ -107,15 +107,15 @@ struct StoppedAgentsTests {
 
     /// Every ended agent's meter starts with how it ended; a running background one says so.
     @Test func theMeterSaysHowAnAgentEnded() {
-        #expect(meter(info(.running, duration: 72, tokens: 18_400)) == "1:12 · 18.4k")
+        #expect(meter(info(.running, duration: 72, tokens: 18_400)) == "1:12 · 18k")
         #expect(meter(info(.running, duration: 495, tokens: 64_000), waiting: true, background: true) == "background · waiting · 8:15 · 64k")
         #expect(meter(info(.running, duration: 134, tokens: 31_000), background: true) == "background · 2:14 · 31k")
-        #expect(meter(info(.finished, duration: 164, tokens: 15_400)) == "done · 2:44 · 15.4k")
-        #expect(meter(info(.finished, duration: 242, tokens: 40_200), background: true) == "background · done · 4:02 · 40.2k")
+        #expect(meter(info(.finished, duration: 164, tokens: 15_400)) == "done · 2:44 · 15k")
+        #expect(meter(info(.finished, duration: 242, tokens: 40_200), background: true) == "background · done · 4:02 · 40k")
         #expect(meter(info(.failed, duration: 27, tokens: 9_000)) == "failed · 0:27")
         #expect(meter(info(.stopped, duration: 15, tokens: 3_200)) == "stopped · 0:15 · 3.2k")
         #expect(meter(info(.stopped, duration: 15, tokens: 3_200), background: true) == "background · stopped · 0:15 · 3.2k")
-        #expect(meter(info(.running, duration: 72, tokens: 18_400), hidden: 3) == "1:12 · 18.4k · +3 folded")
+        #expect(meter(info(.running, duration: 72, tokens: 18_400), hidden: 3) == "1:12 · 18k · +3 folded")
     }
 
     /// Read back, a stopped turn's agent has no true end: no time, no tokens, and its meter
