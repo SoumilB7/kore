@@ -8,6 +8,7 @@ import Testing
 /// `kore-fake-cli` playing written cassettes: a thread Codex never wrote starts fresh with the
 /// chat's settings, Codex's "no rollout found" does the same, a refused resume isn't tried again
 /// at every send, and none of it reads as a compaction.
+extension HostOverrideTests {
 @MainActor
 @Suite("a Codex chat started again", .serialized)
 struct CodexRelaunchTests {
@@ -151,6 +152,10 @@ struct CodexRelaunchTests {
         #expect(!chat.transcript.entries.contains { $0.text.contains("Couldn't compact") })
     }
 }
+
+}
+
+typealias CodexRelaunchTests = HostOverrideTests.CodexRelaunchTests
 
 /// Codex's errors as the chat says them: parsed, and without the thread ids it names.
 @Suite("Codex errors without ids")

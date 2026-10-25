@@ -4,6 +4,7 @@ import Testing
 
 @testable import KoreUI
 
+extension HostOverrideTests {
 @MainActor @Suite("SendFeedback: visible before the CLI acknowledges", .serialized)
 struct SendFeedbackTests {
     private func spinners(_ store: TranscriptStore) -> [(id: String, since: Date, word: String?)] {
@@ -199,4 +200,5 @@ struct SendFeedbackTests {
             finish(chat, backend)
         }
     }
+}
 }

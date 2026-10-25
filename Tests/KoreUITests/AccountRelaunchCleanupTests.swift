@@ -4,6 +4,7 @@ import Testing
 
 @testable import KoreUI
 
+extension HostOverrideTests {
 @MainActor @Suite("account relaunch owns only its work")
 struct AccountRelaunchCleanupTests {
     private let folder = URL(fileURLWithPath: "/tmp/account-relaunch-tests")
@@ -94,6 +95,8 @@ struct AccountRelaunchCleanupTests {
     }
 }
 
+
+}
 
 // Shares the existing serialized suite because CLIExecutable's stand-in is host-wide.
 @MainActor extension CodexRelaunchTests {

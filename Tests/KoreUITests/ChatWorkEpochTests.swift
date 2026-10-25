@@ -6,6 +6,7 @@ import Testing
 
 /// Deliberately deaf awaits ignore task cancellation: old send-chain continuations must still
 /// be unable to send or change the new account's state when they eventually return.
+extension HostOverrideTests {
 @MainActor @Suite("chat work stays on its transport", .serialized)
 struct ChatWorkEpochTests {
     private struct OldFailure: Error {}
@@ -328,4 +329,5 @@ struct ChatWorkEpochTests {
         #expect(chat.transcript.agent("external")?.status == .running)
     }
 
+}
 }
