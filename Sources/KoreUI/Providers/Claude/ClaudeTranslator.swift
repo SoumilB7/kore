@@ -119,6 +119,8 @@ package final class ClaudeTranslator {
     private var reportedContext: ContextUsage?
     /// Kore asked for this compaction (`compact()` or a typed /compact): not an automatic one.
     var compactRequested = false
+    /// A request failed and the CLI is trying it again (`api_retry`): said until the model streams.
+    private var retrying = false
     /// Live: a compaction's boundary came; its summary is the next synthetic user message.
     private var awaitingSummary = false
 
@@ -435,6 +437,10 @@ package final class ClaudeTranslator {
     }
 
     private func raw(_ json: JSONValue) {
+        if retrying, ["stream_event", "assistant", "result"].contains(json["type"]?.string ?? "") {
+            retrying = false
+            out.append(.connection(.ok))
+        }
         switch json["type"]?.string {
         case "rate_limit_event":
             if let reset = PlanLimitHit.claudeRejected(json) { limitRejected = reset }
@@ -444,6 +450,10 @@ package final class ClaudeTranslator {
             }
         case "system":
             switch json["subtype"]?.string {
+            case "api_retry":
+                // No network, or the API not answering: the CLI tries again, ten times over minutes.
+                retrying = true
+                out.append(.connection(.retrying(attempt: json["attempt"]?.int, of: json["max_retries"]?.int)))
             case "status" where json["status"]?.string == "requesting" && turn == nil:
                 // Sent before every model request; with no turn open, the CLI started one itself.
                 openTurn(.cli)

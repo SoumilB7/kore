@@ -32,6 +32,7 @@ extension Chat {
 
     package var storyTitle: String { title }
     package var isRunning: Bool { status.isRunning }
+    package var storyConnection: String? { transcript.connectionWord }
     package var pendingApprovals: [Approval] { approvals.pending }
     package var mode: String { controls.mode }
     package var isCompacting: Bool { context.compacting }

@@ -16,6 +16,9 @@ package final class CodexTranslator {
     private var planKnown = false
     /// Kore asked for the compaction now running (`compact()`); a compaction Codex starts by itself is auto.
     var compactRequested = false
+    /// A request failed and Codex is trying it again (`error` with `willRetry`): said until the
+    /// model streams.
+    private var retrying = false
     private var compacting = false
     /// The context in use (`tokenUsage.last.totalTokens`) and the model's window.
     private var contextUsed: Int?
@@ -142,6 +145,14 @@ package final class CodexTranslator {
     // MARK: - Events
 
     func translate(_ event: CodexEvent, agent: AgentID = .main) {
+        if retrying, agent == .main {
+            switch event {
+            case .textDelta, .reasoningDelta, .itemStarted, .turnCompleted:
+                retrying = false
+                out.append(.connection(.ok))
+            default: break
+            }
+        }
         switch event {
         case .threadStarted(let id, _, let raw):
             threadId = id
@@ -275,9 +286,23 @@ package final class CodexTranslator {
             turn = nil
             commands.endAll(at: .now, into: &out)
             out.append(.exited(status: status))
+        case .error(let message, let willRetry) where willRetry && agent == .main:
+            // "stream disconnected - retrying turn (2/5 in 412ms)…": which try of how many.
+            retrying = true
+            let tries = Self.tries(message)
+            out.append(.connection(.retrying(attempt: tries?.attempt, of: tries?.of)))
         case .error, .stderr:
             break
         }
+    }
+
+    /// "(2/5" in a Codex retry's message.
+    static func tries(_ message: String) -> (attempt: Int, of: Int)? {
+        guard let open = message.range(of: "("), let slash = message[open.upperBound...].firstIndex(of: "/"),
+            let attempt = Int(message[open.upperBound..<slash])
+        else { return nil }
+        let rest = message[message.index(after: slash)...].prefix { $0.isNumber }
+        return Int(rest).map { (attempt, $0) }
     }
 
     /// The turn ended: the commands it still runs become rows, their output so far with them.

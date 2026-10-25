@@ -84,3 +84,48 @@ final class CommandCommaOpensAccount: ChatStoryline {
         ]
     }
 }
+
+/// With no network: a message waits, said once, and goes when the network is back; a running
+/// turn's spinner says it's offline, and goes back once the network is.
+final class OfflineWaits: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(turns: [
+            CLIScript.reply("Sent once back online"),
+            [.startTurn, .tool(name: "Bash", detail: "sleep 600", wait: .interrupt)],
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            SetNetwork(false),
+            Send("Hello"),
+            Expect("said once, nothing sent yet", timeout: .seconds(3)) { story in
+                let notices = try story.activeChat().rows.filter { $0.kind == "notice" }.map(\.text)
+                let sent = (try? story.scriptedBackend().log.contains(.send("Hello"))) ?? false
+                return notices == ["Offline: this sends when the network is back"] && !sent
+            },
+            SetNetwork(true),
+            TurnFinished(1),
+            Expect("sent once the network was back") { try $0.scriptedBackend().log.contains(.send("Hello")) },
+            Send("Run the long job"),
+            WaitForEvent("the command to start") { if case .toolStarted = $0 { true } else { false } },
+            SetNetwork(false),
+            Expect("the spinner says it's offline", timeout: .seconds(3)) {
+                try $0.activeChat().storyConnection == "Offline · waiting for the network"
+            },
+            SetNetwork(true),
+            Expect("and goes back", timeout: .seconds(3)) { try $0.activeChat().storyConnection == nil },
+            Stop(), TurnFinished(2),
+            SetNetwork(nil),
+        ]
+    }
+}
+
+/// As if the network went (false) or came back (true); nil gives it back to the Mac's own.
+struct SetNetwork: Step {
+    let online: Bool?
+    init(_ online: Bool?) { self.online = online }
+    var label: String { online.map { $0 ? "The network comes back" : "The network goes" } ?? "The Mac's own network" }
+    func run(_ story: StoryContext) async throws { NetworkWatch.shared.pin(online) }
+}

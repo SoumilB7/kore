@@ -104,6 +104,9 @@ package enum ChatEvent: Sendable {
     /// encrypted), right after `.compacted`, live and in replay alike.
     case compactionSummary(String)
     case compactionFailed(String)
+    /// The connection to the model, while a turn waits on it: offline (no network path), the
+    /// CLI retrying a request that failed, or fine again.
+    case connection(Connection)
     /// How full the context is: when the CLI comes up, after the main agent's model calls and after
     /// a compaction, and once in a replay (the last known value). Sent only when it changes.
     case contextUsage(ContextUsage)
@@ -473,4 +476,22 @@ package enum Decision: Sendable {
     case keepPlanning
     /// Keyed by `Approval.Question.id`.
     case answers([String: String])
+}
+
+/// How a turn's connection to its model stands (`ChatEvent.connection`).
+package enum Connection: Sendable, Equatable {
+    case ok
+    case offline
+    /// The CLI's own retry of a request that failed: which try of how many, when it says.
+    case retrying(attempt: Int?, of: Int?)
+
+    /// What the running turn's spinner says for it; nil when fine.
+    var word: String? {
+        switch self {
+        case .ok: nil
+        case .offline: "Offline · waiting for the network"
+        case .retrying(let attempt?, let of?): "Reconnecting (\(attempt) of \(of))"
+        case .retrying: "Reconnecting"
+        }
+    }
 }

@@ -388,6 +388,8 @@ final class TranscriptStore {
     /// A compaction is running, since when (the live row says "Compacting…"), and the point it
     /// was started at when Kore started it by itself (auto-compact).
     @ObservationIgnored private var compactingSince: Date?
+    /// The running turn's connection, said on its spinner while it isn't fine.
+    @ObservationIgnored private var connection = Connection.ok
     @ObservationIgnored private var compactingAt: Int?
     /// The most recently started turn, for `turnChanges()`.
     @ObservationIgnored private var latestTurn: String?
@@ -540,6 +542,17 @@ final class TranscriptStore {
         changed(turn: turnShowsSpinner ? current : nil)
     }
 
+    /// The running turn's connection: its spinner says "Offline · …" or "Reconnecting (3 of 10)"
+    /// while it isn't fine, and goes back to its own word once it is.
+    /// What the running turn's spinner says of its connection; nil when fine.
+    var connectionWord: String? { connection.word }
+
+    func connected(_ state: Connection) {
+        guard state != connection else { return }
+        connection = state
+        changed(turn: turnShowsSpinner ? current : nil)
+    }
+
     /// The running turn draws its spinner: it has rows (a compaction's own turn has none).
     private var turnShowsSpinner: Bool { turnIsOpen && current.flatMap { turnFirst[$0] } != nil }
 
@@ -636,6 +649,7 @@ final class TranscriptStore {
     }
 
     func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date()) {
+        connection = .ok
         guard let id = id ?? current, var turn = turns[id] else { return }
         endThinking()
         settleAll()
@@ -1647,7 +1661,7 @@ final class TranscriptStore {
             rows.append(
                 .spinner(
                     turn: turn.id, since: turn.startedAt, claude: providerName == "Claude",
-                    word: compactingSince != nil ? "Compacting" : nil))
+                    word: compactingSince != nil ? "Compacting" : connection.word))
         }
     }
 

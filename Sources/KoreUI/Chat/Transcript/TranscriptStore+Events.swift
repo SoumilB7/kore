@@ -90,6 +90,8 @@ extension TranscriptStore {
             compacting(true)
         case .compactionFailed(let reason):
             compactionFailed(reason)
+        case .connection(let state):
+            connected(state)
         case .compacted(let at, _, let auto):
             compacted(at: at, auto: auto)
         case .compactionSummary(let text):

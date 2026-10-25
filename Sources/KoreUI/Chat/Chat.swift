@@ -58,6 +58,10 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var held: [ChatEvent] = []
     /// Messages sent while a turn ran, by Kore's id, until the CLI takes or drops them.
     @ObservationIgnored private var waiting: [String: (text: String, files: [Attachment])] = [:]
+    /// A message sent with no network waits for it (Stop gives it up); a running turn's spinner
+    /// says when the network goes.
+    @ObservationIgnored private var waitingForNetwork = false
+    @ObservationIgnored private var networkObserver: (any NSObjectProtocol)?
     /// That chat, while it's open (its "Forked from" line switches to it).
     @ObservationIgnored weak var original: Chat?
     /// The chat has been shown, so its CLI was started once (`startOnce`).
@@ -432,7 +436,19 @@ package final class Chat: Identifiable {
         }
     }
 
+    /// While a turn runs, the network going or coming back is said on its spinner.
+    private func watchNetwork() {
+        networkObserver = NotificationCenter.default.addObserver(forName: NetworkWatch.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.status.isRunning, !self.waitingForNetwork else { return }
+                self.dispatch(.connection(NetworkWatch.shared.isOnline ? .ok : .offline))
+            }
+        }
+    }
+
     func close() {
+        if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
+        networkObserver = nil
         closed = true
         cancelContinue()
         pump?.cancel()
@@ -511,6 +527,7 @@ package final class Chat: Identifiable {
     /// Sends a message the composer has given up (or Kore's own "Continue").
     private func deliver(_ text: String, _ sent: [Attachment]) {
         relaunchIfDue()
+        if networkObserver == nil { watchNetwork() }
         // The Codex extension's /plan flips the plan toggle; it isn't a message.
         if text == "/plan" && sent.isEmpty && provider.planToggle != nil {
             setPlanMode(!controls.planMode)
@@ -532,6 +549,17 @@ package final class Chat: Identifiable {
             await previous?.value
             do {
                 try await backend.start()
+                if queued == nil, !NetworkWatch.shared.isOnline {
+                    dispatch(.notice("Offline: this sends when the network is back"))
+                    waitingForNetwork = true
+                    await NetworkWatch.shared.online()
+                    waitingForNetwork = false
+                    if Task.isCancelled {
+                        status.setRunning(false)
+                        dispatch(.notice("Not sent: stopped while offline"))
+                        return
+                    }
+                }
                 let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued)
                 if !turn, queued == nil { status.setRunning(false) }
             } catch {
@@ -683,6 +711,11 @@ package final class Chat: Identifiable {
     // MARK: Actions
 
     func stop() {
+        // Not sent yet: there's no turn to interrupt, only the wait.
+        if waitingForNetwork {
+            sending?.cancel()
+            return
+        }
         continueAfterCompaction = false
         compactedInTurn = false
         let backend = backend
