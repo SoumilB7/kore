@@ -176,6 +176,7 @@ extension StoryID {
         /// The active feedback row, including delivery before the CLI acknowledges a turn.
         package static let spinner = StoryID(.transcript, "spinner")
         /// A stalled turn's spinner row: Retry and Stop.
+        package static func retry(_ turn: String) -> StoryID { StoryID(.transcript, "retry", key: turn) }
         package static let stalledRetry = StoryID(.transcript, "stalled-retry")
         package static let stalledStop = StoryID(.transcript, "stalled-stop")
         /// A refused login's notice, by its turn; `.part(.signIn)` is its Sign in.

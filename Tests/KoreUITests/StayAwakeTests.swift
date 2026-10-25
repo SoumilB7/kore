@@ -366,9 +366,9 @@ struct StayAwakeTests {
         let at = Date().addingTimeInterval(3600)
         script.store.continues(turn: "t2", at: at)
         #expect(script.lines == ["§ Go on", "message Go on", "slept API Error: Connection error.", "§ And then", "message And then", "outcome You've hit your session limit"])
-        #expect(script.items.map(\.row).contains(.outcome(turn: "t2", text: "You've hit your session limit", continues: at)))
+        #expect(script.items.map(\.row).contains(.outcome(turn: "t2", text: "You've hit your session limit", continues: at, retry: true)))
         script.store.continues(turn: nil, at: nil)
-        #expect(script.items.map(\.row).contains(.outcome(turn: "t2", text: "You've hit your session limit")))
+        #expect(script.items.map(\.row).contains(.outcome(turn: "t2", text: "You've hit your session limit", retry: true)))
     }
     /// The Mac sleeping isn't a failure: the turn is cut short as an interrupted one is.
     @Test func aSleptTurnIsCalm() {

@@ -78,7 +78,7 @@ struct TranscriptRulesTests {
             return s.lines.dropFirst(2).map { $0.replacingOccurrences(of: "tool Run", with: "tool Bash") }
         }
         let claude = try folded("claude-stop")
-        #expect(claude == ["fold interrupted", "rule", "tool Bash stopped"])
+        #expect(claude == ["fold interrupted", "rule", "tool Bash stopped", "outcome Interrupted"])
         let codex = try folded("codex-stop")
         #expect(codex.filter { !$0.hasPrefix("answer ") } == claude)
         #expect(codex.contains("answer I’ll run that exact loop in the foreground."))

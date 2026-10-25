@@ -228,7 +228,6 @@ private struct ExercisePinch: Step {
         }
         let (restoredWindow, restoredPoint) = try await spot.point(story)
         let otherChat = workspace.tabs[otherIndex].chat
-        let otherAnswer = otherChat?.storyTranscript.entries.last(where: { $0.kind == .answer })?.id
         guard PinchZoom.storySample(in: restoredWindow, amount: 0.08, phase: .began, at: restoredPoint) else {
             throw StoryFailure.other("the restored page did not start another pinch")
         }
@@ -237,11 +236,11 @@ private struct ExercisePinch: Step {
         var switchState = ""
         do {
         try await story.until("switching tabs cancels the unfinished pinch") {
-            guard let otherAnswer,
-                  let otherRow = StoryElement(StoryID.Transcript.answer(otherAnswer)),
-                  let otherScroll = otherRow.registeredView?.enclosingScrollView else { return false }
-            switchState = "native=\(otherScroll.magnification), page=\(String(describing: PinchZoom.storyPageScale(in: window))), cancellations=\(PinchZoom.storyCounts(in: window)?.cancellations ?? -1), expected=\(cancelledBeforeSwitch + 1), activeChatMatches=\(story.app.chat === otherChat)"
-            return story.app.chat === otherChat && otherScroll.magnification == 1 &&
+            // Rows can be unregistered while a retained tab hides. Inspect the native
+            // surfaces themselves: leaving this page must reset every mounted scroll view.
+            let scales = nativeScales(window.contentView)
+            switchState = "native=\(scales), page=\(String(describing: PinchZoom.storyPageScale(in: window))), cancellations=\(PinchZoom.storyCounts(in: window)?.cancellations ?? -1), expected=\(cancelledBeforeSwitch + 1), activeChatMatches=\(story.app.chat === otherChat)"
+            return story.app.chat === otherChat && !scales.isEmpty && scales.allSatisfy({ abs($0 - 1) < 0.001 }) &&
                 PinchZoom.storyPageScale(in: window) == 1 &&
                 (PinchZoom.storyCounts(in: window)?.cancellations ?? 0) == cancelledBeforeSwitch + 1
         }
@@ -257,6 +256,12 @@ private struct ExercisePinch: Step {
         }
         let note = "\(story.name): samples=120 previews=120 pageCommits=1 globalFontChanges=0 reflow=false zoomedCopy=true tabIsolation=true switchCancelled=true idleCpuMs=\(String(format: "%.2f", idleCPUMs)) idleWallMs=\(String(format: "%.2f", idleWallMs)) cpuMs=\(String(format: "%.2f", cpuMs)) wallMs=\(String(format: "%.2f", wallMs)) anchorDx=\(String(format: "%.2f", dx)) anchorDy=\(String(format: "%.2f", dy)) horizontalClamped=\(placement.horizontalClamped) anchorResidual=\(String(format: "%.2f", residual))\n"
         try note.write(to: story.outputs.appendingPathComponent(story.name + ".pinch.notes"), atomically: true, encoding: .utf8)
+    }
+
+    @MainActor private func nativeScales(_ root: NSView?) -> [CGFloat] {
+        guard let root else { return [] }
+        let own = (root as? NSScrollView).map { [$0.magnification] } ?? []
+        return own + root.subviews.flatMap { nativeScales($0) }
     }
 
     private func milliseconds(_ duration: Duration) -> Double {

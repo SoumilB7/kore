@@ -6,6 +6,7 @@ struct TranscriptActions {
     var toggleTurn: (String) -> Void = { _ in }
     /// A stalled turn's Retry and Stop (its spinner row's buttons).
     var retry: () -> Void = {}
+    var retryTurn: (String) -> Void = { _ in }
     var stop: () -> Void = {}
     /// Opens or closes a tool body, thinking, a file inside an edit ("id/path"), or an agent.
     var toggle: (String) -> Void = { _ in }
@@ -80,6 +81,7 @@ private struct OutcomeLine: View {
     let continues: Date?
     var sends: String?
     let cancel: () -> Void
+    var retry: (() -> Void)?
 
     var body: some View {
         if let continues {
@@ -102,10 +104,18 @@ private struct OutcomeLine: View {
     }
 
     private var notice: some View {
-        Text(text)
-            .font(TextStyle.body)
-            .foregroundStyle(text == "Interrupted" ? Theme.secondary : Theme.danger)
-            .selectableOnHover()
+        HStack(alignment: .firstTextBaseline, spacing: Space.md) {
+            Text(text)
+                .font(TextStyle.body)
+                .foregroundStyle(text == "Interrupted" ? Theme.secondary : Theme.danger)
+                .selectableOnHover()
+            if let retry {
+                Button("Retry", action: retry)
+                    .smallButton(prominent: true)
+                    .storyID(StoryID.Transcript.retry(turn))
+                    .help("Asks this chat to continue")
+            }
+        }
     }
 
     private func quiet(_ at: Date) -> some View {
@@ -328,8 +338,9 @@ struct RowContent: View {
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         case .rule:
             Rule()
-        case .outcome(let turn, let text, let continues, let sends):
-            OutcomeLine(turn: turn, text: text, continues: continues, sends: sends, cancel: actions.cancelContinue)
+        case .outcome(let turn, let text, let continues, let sends, let retry):
+            OutcomeLine(turn: turn, text: text, continues: continues, sends: sends, cancel: actions.cancelContinue,
+                        retry: retry ? { actions.retryTurn(turn) } : nil)
         case .signIn(let turn, let said):
             SignInNotice(turn: turn, said: said, provider: actions.provider, signIn: actions.signIn)
         case .slept(let turn, let said):

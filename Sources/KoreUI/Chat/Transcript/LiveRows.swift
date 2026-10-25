@@ -75,6 +75,12 @@ struct SpinnerRow: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .padding(.leading, Layout.Timeline.indent - Size.spinnerGlyphBox)
+            if connection == .quietWork {
+                Button("Retry", action: retry).smallButton()
+                    .storyID(StoryID.Transcript.stalledRetry)
+                    .help("Stops this attempt and asks the chat to continue")
+                    .padding(.leading, Space.md)
+            }
         }
         .frame(height: Size.spinnerRow)
         .frame(maxWidth: .infinity, alignment: .leading)

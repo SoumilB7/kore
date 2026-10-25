@@ -187,6 +187,7 @@ struct ChatView: View {
         var actions = TranscriptActions()
         actions.toggleTurn = { chat.transcript.toggle(turn: $0) }
         actions.retry = { chat.retryStalled() }
+        actions.retryTurn = { chat.retryTurn($0) }
         actions.stop = { chat.stop() }
         actions.toggle = { key in
             chat.transcript.toggle(key)

@@ -140,7 +140,7 @@ final class TranscriptStore {
         case fold(Fold)
         case rule(turn: String)
         /// `continues`: the turn ended on its plan's limit, and the chat continues at the reset.
-        case outcome(turn: String, text: String, continues: Date? = nil, sends: String? = nil)
+        case outcome(turn: String, text: String, continues: Date? = nil, sends: String? = nil, retry: Bool = false)
         /// A turn the CLI's login refused: Kore's words, the CLI's line, and Sign in.
         case signIn(turn: String, said: String)
         /// A turn that failed while the Mac slept: Kore's words, the CLI's line, and Continue.
@@ -165,7 +165,7 @@ final class TranscriptStore {
                 e.id.uuidString
             case .fold(let f): "fold-\(f.turn)"
             case .rule(let t): "rule-\(t)"
-            case .outcome(let t, _, _, _), .signIn(let t, _), .slept(let t, _): "outcome-\(t)"
+            case .outcome(let t, _, _, _, _), .signIn(let t, _), .slept(let t, _): "outcome-\(t)"
             case .changes(let t, _, _, _): "changes-\(t)"
             // The first call's: a read-only call that becomes a group keeps its identity.
             case .explored(let entries, _): entries.first?.id.uuidString ?? "explored"
@@ -406,6 +406,7 @@ final class TranscriptStore {
     @ObservationIgnored private var compactingAt: Int?
     /// The most recently started turn, for `turnChanges()`.
     @ObservationIgnored private var latestTurn: String?
+    @ObservationIgnored private var retryDismissed: String?
 
     @ObservationIgnored private(set) var entries: [Entry] = []
     /// The transcript's one text selection.
@@ -659,6 +660,7 @@ final class TranscriptStore {
         if !batching {
             // The former current turn may have a cached spinner in an older section.
             if let current, current != id { mark(turnIndex(current)) }
+            if let latestTurn, latestTurn != id { mark(turnIndex(latestTurn)) }
             liveTurn = id
             liveSendSince = pendingSendSince
             sending(false)
@@ -690,13 +692,14 @@ final class TranscriptStore {
         // Its text has stopped streaming; after a stop, calls and agents the CLI never closed
         // (Codex sends nothing more for them) end as stopped. Replayed turns too.
         let interrupted = outcome == .interrupted
+        let abandoned = outcome != .completed
         var answered = false
         for i in (turnIndex(id) ?? entries.count)..<entries.count where entries[i].turn == id {
             switch entries[i].kind {
             case .answer:
                 entries[i].done = true
                 answered = true
-            case .tool where interrupted && !entries[i].done:
+            case .tool where abandoned && !entries[i].done:
                 entries[i].done = true
                 entries[i].stopped = true
             case .agent where interrupted && entries[i].agent?.status == .running
@@ -1001,6 +1004,7 @@ final class TranscriptStore {
     // MARK: Content
 
     func user(_ text: String, attachments: [Attachment], source: String? = nil) {
+        if let latestTurn { retryDismissed = latestTurn; mark(turnIndex(latestTurn)) }
         if !batching { sentAt = Date() }
         var entry = Entry(kind: .user, text: text, attachments: attachments)
         entry.source = source
@@ -1612,7 +1616,7 @@ final class TranscriptStore {
             return calls.contains(where: \.isError) ? .failure : .success
         case .spinner, .message, .summary, .queued: return nil
         case .rule: return TimelineDot.none
-        case .outcome(_, let text, _, _): return text == "Interrupted" ? .warning : .failure
+        case .outcome(_, let text, _, _, _): return text == "Interrupted" ? .warning : .failure
         case .signIn: return .failure
         // The Mac slept: the turn was cut short, as an interrupted one is, not failed.
         case .slept: return .warning
@@ -1791,14 +1795,25 @@ final class TranscriptStore {
         return .entry(settled)
     }
 
+    /// The latest failed/interrupted attempt can be resumed until another message starts.
+    var retryableTurn: String? {
+        guard !turnIsOpen, pendingSendSince == nil, let latestTurn, latestTurn != retryDismissed,
+              let turn = turns[latestTurn], turn.finished else { return nil }
+        switch turn.outcome {
+        case .interrupted, .failed: return latestTurn
+        case .completed, .authFailed, .slept: return nil
+        }
+    }
+
     /// The outcome notice and the files-changed line, under the answer and never folded.
     private func trailer(_ turn: Turn, folded: Bool, into rows: inout [Row]) {
+        let retry = retryableTurn == turn.id
         switch turn.outcome {
         case .completed: break
-        case .interrupted: if !folded { rows.append(.outcome(turn: turn.id, text: "Interrupted")) }
+        case .interrupted: if !folded || retry { rows.append(.outcome(turn: turn.id, text: "Interrupted", retry: retry)) }
         case .failed(let message):
             let continues = continuation.flatMap { $0.turn == turn.id ? $0 : nil }
-            rows.append(.outcome(turn: turn.id, text: message, continues: continues?.at, sends: continues?.sends))
+            rows.append(.outcome(turn: turn.id, text: message, continues: continues?.at, sends: continues?.sends, retry: retry))
         case .authFailed(let said): rows.append(.signIn(turn: turn.id, said: said))
         case .slept(let said): rows.append(.slept(turn: turn.id, said: said))
         }
