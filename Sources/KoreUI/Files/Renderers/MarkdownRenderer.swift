@@ -18,8 +18,51 @@ enum MarkdownRenderer: FileRenderer {
 
 /// A Markdown tab's file as last read, and where the reader was in it.
 @MainActor final class MarkdownState: PlacedRenderer {
-    var segments: (token: Int, value: [MarkdownSegment])?
+    var segments: (token: Int, value: [MarkdownSegment])? {
+        didSet {
+            runs.show(segments?.value ?? [])
+            selection.clear()
+        }
+    }
     let place = RowPlace()
+    /// One text selection over the whole file, as the transcript has: across runs, by word or
+    /// paragraph, ⌘A and ⌘C (as markdown).
+    let runs = MarkdownRuns()
+    lazy var selection = TranscriptSelection(store: runs)
+}
+
+/// A Markdown file's runs as the rows of its selection: an id each, copied from their source.
+@MainActor final class MarkdownRuns: SelectionSource {
+    private(set) var ids: [UUID] = []
+    private var segments: [MarkdownSegment] = []
+    private var position: [UUID: Int] = [:]
+
+    func show(_ segments: [MarkdownSegment]) {
+        self.segments = segments
+        ids = segments.map { _ in UUID() }
+        position = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
+    }
+
+    func index(of entry: UUID) -> Int? { position[entry] }
+
+    var selectionBounds: (first: UUID, last: UUID)? {
+        guard let first = ids.first, let last = ids.last else { return nil }
+        return (first, last)
+    }
+
+    func selectionMarkdown(from start: TextPoint, to end: TextPoint) -> String {
+        guard let s = position[start.entry], let e = position[end.entry], s <= e else { return "" }
+        return (s...e).compactMap { i -> String? in
+            switch segments[i].kind {
+            case .text(let text):
+                let clip = Clip(lo: i == s ? start : nil, hi: i == e ? end : nil)
+                let part = SelectionCopy.markdownText(text[...], clip)
+                return part.isEmpty ? nil : part
+            // An image has no text to end in: inside the range, it's taken whole.
+            case .image(let source, let alt): return "![\(alt)](\(source))"
+            }
+        }.joined(separator: "\n\n")
+    }
 }
 
 private struct MarkdownFileView: View {
@@ -54,6 +97,7 @@ private struct MarkdownFileView: View {
                                 case .image(let source, let alt): MarkdownImage(source: source, alt: alt, base: base)
                                 }
                             }
+                            .selectionRow(state.runs.ids[segment.id])
                             .placedRow(segment.id, in: state.place)
                         }
                     }
@@ -61,9 +105,18 @@ private struct MarkdownFileView: View {
                     .padding(.top, Layout.Renderer.columnTop)
                     .padding(.bottom, Layout.Renderer.columnBottom)
                     .frame(maxWidth: ChatColumn.window.maxWidth, alignment: .leading)
+                    // The transcript's selection: texts report in this space, and the responder
+                    // at its corner follows the pointer and takes ⌘A / ⌘C.
+                    .background(alignment: .topLeading) {
+                        SelectionResponder(selection: state.selection, hidden: false, openLink: follow)
+                            .frame(width: Stroke.hairline, height: Stroke.hairline)
+                    }
+                    .coordinateSpace(.named(TranscriptSelection.space))
+                    .environment(\.transcriptSelection, state.selection)
                     .frame(maxWidth: .infinity)
                 }
                 .environment(\.openURL, OpenURLAction(handler: open))
+                .onAppear(perform: focus)
             }
         }
         .task(id: context.reloadToken) {
@@ -86,6 +139,29 @@ private struct MarkdownFileView: View {
             RenderTiming.ready(MarkdownRenderer.id)
         } catch {
             loaded.value = .failed(error.localizedDescription)
+        }
+    }
+
+    /// The keyboard to the preview, so ⌘A and ⌘C work without a click first: when the tab was
+    /// asked for it, or nothing else in the window has it (the source view just went).
+    private func focus() {
+        let (selection, takeFocus) = (state.selection, context.takeFocus)
+        DispatchQueue.main.async {
+            guard let view = selection.responder, let window = view.window else { return }
+            if takeFocus() || window.firstResponder == nil || window.firstResponder === window {
+                window.makeFirstResponder(view)
+            }
+        }
+    }
+
+    /// A link clicked in the preview's text.
+    private func follow(_ url: URL) {
+        if url.scheme == nil || url.scheme == "file" {
+            _ = open(url)
+        } else if StoryHost.installed {
+            TranscriptSelection.opened.append(url)
+        } else {
+            NSWorkspace.shared.open(url)
         }
     }
 

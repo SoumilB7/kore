@@ -77,6 +77,9 @@ struct RendererContext {
     var showSource: () -> Void = {}
     /// Switches to the editor with the file as plain text, past the editor's size limit.
     var openAsText: () -> Void = {}
+    /// True once when the tab was asked for the keyboard (opened from Quick Open, a double
+    /// click) while the renderer shows: the renderer takes it.
+    var takeFocus: () -> Bool = { false }
 }
 
 /// What a renderer keeps with its tab, since its view is made again each time the tab shows:
@@ -134,6 +137,8 @@ final class FileRendering {
     /// Why the renderer gave the file to the editor, shown over it.
     var failure: Failure?
     @ObservationIgnored let memory = RendererMemory()
+    /// The tab was asked for the keyboard before its view was up (`CodeEditorController.focus`).
+    @ObservationIgnored var focusPending = false
 
     struct Failure: Equatable {
         let reason: String

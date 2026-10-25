@@ -103,10 +103,15 @@ enum SelectionCopy {
 
     private static func answer(_ e: TranscriptStore.Entry, _ clip: Clip) -> String? {
         // As the row shows it: while it streams, only its settled blocks.
-        let source = e.done ? Substring(e.text) : MarkdownParser.settled(e.text)
+        markdownText(e.done ? Substring(e.text) : MarkdownParser.settled(e.text), clip, settled: e.done)
+    }
+
+    /// A markdown text as `MarkdownView` shows it, clipped: blocks selected whole as written,
+    /// the end blocks rebuilt from what's selected. `settled: false` drops an open last block.
+    static func markdownText(_ source: Substring, _ clip: Clip, settled: Bool = true) -> String {
         if clip.whole { return source.trimmingCharacters(in: .whitespacesAndNewlines) }
         var blocks = MarkdownParser.parse(source, base: 0, zoom: Zoom.shared.scale)
-        if !e.done, blocks.last?.isOpen == true { blocks.removeLast() }
+        if !settled, blocks.last?.isOpen == true { blocks.removeLast() }
         let utf8 = source.utf8
         var out: [String] = []
         for (i, block) in blocks.enumerated() {
@@ -287,5 +292,17 @@ struct Clip {
             out += part
         }
         return out
+    }
+}
+
+extension TranscriptStore: SelectionSource {
+    var selectionBounds: (first: UUID, last: UUID)? {
+        let rows = SelectionCopy.rows(self)
+        guard let first = rows.first, let last = rows.last else { return nil }
+        return (first.entry.id, last.entry.id)
+    }
+
+    func selectionMarkdown(from start: TextPoint, to end: TextPoint) -> String {
+        SelectionCopy.markdown(self, from: start, to: end)
     }
 }

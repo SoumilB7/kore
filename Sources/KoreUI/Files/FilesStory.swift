@@ -90,6 +90,24 @@ extension Workspace {
         return rendering.renderer?.id
     }
 
+    /// The active Markdown preview's selection: whether it has the keyboard, and what's selected.
+    package var storyPreviewSelection: (focused: Bool, markdown: String)? {
+        guard let state = activeFile?.rendering.memory.current as? MarkdownState else { return nil }
+        let responder = state.selection.responder
+        return (responder.map { $0.window?.firstResponder === $0 } ?? false, state.selection.markdown())
+    }
+
+    /// Where the glyph at `offset` of a text in the active Markdown preview starts (its run, then
+    /// the text's path), in its window; nil until it's laid out.
+    package func storyPreviewPoint(run: Int, path: [Int], offset: Int) -> (NSWindow, CGPoint)? {
+        guard let state = activeFile?.rendering.memory.current as? MarkdownState, run < state.runs.ids.count else { return nil }
+        let (selection, entry) = (state.selection, state.runs.ids[run])
+        guard let slot = selection.slots[entry]?[path], let layout = selection.layout(entry, path), let p = layout.point(at: offset),
+            let view = selection.responder, let window = view.window
+        else { return nil }
+        return (window, view.convert(CGPoint(x: slot.frame.minX + p.x + 1, y: slot.frame.minY + p.y), to: nil))
+    }
+
     /// A script's number answer from the active HTML tab's page; nil while no web view shows it.
     package func storyPageNumber(_ script: String) async -> Double? {
         guard let page = activeFile?.rendering.memory.current as? WebPageState else { return nil }

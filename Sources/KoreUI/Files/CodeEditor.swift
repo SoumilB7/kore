@@ -353,6 +353,8 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     func focus() {
         guard let window = textView.window else {
             focusPending = true
+            // Or the file's preview, when that's what shows.
+            document.rendering.focusPending = true
             return
         }
         focusPending = false
@@ -362,6 +364,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     /// The text view is in a window now: it takes the caret if that was asked for meanwhile.
     func movedToWindow() {
         guard focusPending, textView.window != nil else { return }
+        document.rendering.focusPending = false
         focus()
     }
 

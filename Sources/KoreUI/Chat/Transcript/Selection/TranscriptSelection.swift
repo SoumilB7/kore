@@ -13,6 +13,17 @@ struct TextPoint: Equatable, CustomStringConvertible {
     var description: String { "\(entry.uuidString.prefix(8))\(path)@\(offset)" }
 }
 
+/// What a selection runs over: rows by entry, in order (a chat's transcript, a Markdown file's
+/// runs), and how a range of them copies.
+@MainActor protocol SelectionSource: AnyObject {
+    /// The entry's place; nil once it has gone.
+    func index(of entry: UUID) -> Int?
+    /// The first and last rows shown (⌘A).
+    var selectionBounds: (first: UUID, last: UUID)? { get }
+    /// The range as markdown, from the model.
+    func selectionMarkdown(from start: TextPoint, to end: TextPoint) -> String
+}
+
 /// One selectable text of a built row: where it is (the timeline's content space), what it
 /// shows and how it's set.
 struct SelectionSlot {
@@ -31,7 +42,7 @@ package final class TranscriptSelection: ObservableObject {
     /// The coordinate space rows report in: the timeline's content, so scrolling moves nothing.
     nonisolated static let space = "transcript-selection"
 
-    weak var store: TranscriptStore?
+    weak var store: (any SelectionSource)?
     /// The view behind the rows that follows the pointer (its coordinates are the content space).
     weak var responder: NSView?
     @Published private(set) var anchor: TextPoint?
@@ -59,7 +70,7 @@ package final class TranscriptSelection: ObservableObject {
     package private(set) var hitTests = 0
     package private(set) var laidOut = 0
 
-    init(store: TranscriptStore?) { self.store = store }
+    init(store: (any SelectionSource)?) { self.store = store }
 
     // MARK: Rows report
 
@@ -161,13 +172,11 @@ package final class TranscriptSelection: ObservableObject {
 
     /// Every row the timeline shows, first to last (⌘A).
     func selectAll() {
-        guard let store else { return }
-        let rows = SelectionCopy.rows(store)
-        guard let first = rows.first, let last = rows.last else { return }
+        guard let (first, last) = store?.selectionBounds else { return }
         unit = .character
         anchorRange = nil
-        anchor = TextPoint(entry: first.entry.id, path: [], offset: 0)
-        focus = TextPoint(entry: last.entry.id, path: [Int.max], offset: Int.max)
+        anchor = TextPoint(entry: first, path: [], offset: 0)
+        focus = TextPoint(entry: last, path: [Int.max], offset: Int.max)
     }
 
     private func take(_ point: TextPoint, _ unit: Unit) {
@@ -339,7 +348,7 @@ package final class TranscriptSelection: ObservableObject {
 
     func markdown() -> String {
         guard let store, let range else { return "" }
-        return SelectionCopy.markdown(store, from: range.start, to: range.end)
+        return store.selectionMarkdown(from: range.start, to: range.end)
     }
 
     /// The selection as markdown on the pasteboard; false with nothing selected.

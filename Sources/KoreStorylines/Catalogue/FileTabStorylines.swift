@@ -227,3 +227,64 @@ private struct EditorScrollKept: Step {
         }
     }
 }
+
+/// A Markdown file's preview selects as the transcript does: opened from Quick Open it has the
+/// keyboard, ⌘A takes the whole file and ⌘C copies it as its markdown; a double-click takes a
+/// word, Escape lets it go.
+final class MarkdownPreviewSelects: ChatStoryline {
+    override class var tags: Set<Tag> { [.files, .gate] }
+
+    static let path = "guide.md"
+    static let text = """
+        # Guide
+
+        Read the **config** first, then check `port` values.
+
+        - one item
+        - two items
+
+        ```sh
+        make run
+        ```
+        """
+
+    override func steps() -> [any Step] {
+        [WriteFiles([(Self.path, Self.text + "\n")])] + super.steps() + FileTabState.open(Self.path) + [
+            Expect("the guide in the Markdown renderer") { $0.app.workspace?.storyActiveRenderer == "markdown" },
+            Expect("the preview to have the keyboard") { $0.app.workspace?.storyPreviewSelection?.focused == true },
+            Key(KeyChord(.character("a"), .command)),
+            CopySelection(Self.text),
+            Key(.escape),
+            CopySelectionNothing(),
+            ClickPreview(path: [1], offset: 10, count: 2),
+            CopySelection("**config**"),
+        ]
+    }
+}
+
+/// Clicks at a glyph of the active Markdown preview's first run.
+private struct ClickPreview: Step {
+    let path: [Int]
+    let offset: Int
+    var count = 1
+    var label: String { "\(count)× click the preview at \(path)@\(offset)" }
+
+    func run(_ story: StoryContext) async throws {
+        let (window, p) = try await story.wait("the preview's text") {
+            story.app.workspace?.storyPreviewPoint(run: 0, path: path, offset: offset)
+        }
+        await story.input.click(at: p, in: window, count: count, modifiers: [])
+    }
+}
+
+/// ⌘C with nothing selected copies nothing.
+private struct CopySelectionNothing: Step {
+    var label: String { "⌘C copies nothing" }
+
+    func run(_ story: StoryContext) async throws {
+        StoryTranscript.clearCopied()
+        try await Key(KeyChord(.character("c"), .command)).run(story)
+        try await Task.sleep(for: .milliseconds(200))
+        if let copied = StoryTranscript.copied { throw StoryFailure.expectation("nothing copied — it copied:\n\(copied)") }
+    }
+}

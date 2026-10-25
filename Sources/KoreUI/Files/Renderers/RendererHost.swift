@@ -55,6 +55,10 @@ struct RendererHost<Fallback: View>: View {
                 rendering.showsRaw = true
                 document.loadIfNeeded()
                 document.openAnyway()
+            },
+            takeFocus: {
+                defer { rendering.focusPending = false }
+                return rendering.focusPending
             })
     }
 
