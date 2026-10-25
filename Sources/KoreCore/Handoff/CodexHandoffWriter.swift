@@ -16,7 +16,7 @@ public struct CodexHandoffWriter: HandoffWriter {
 
     public init() {}
 
-    public func window(model: String?) -> Int { HandoffBudget.codexWindow }
+    public func window(model: String?) -> Int { HandoffBudget.codexWindow(model: model) }
 
     public func write(_ plan: HandoffPlan, into target: HandoffTarget) async throws -> HandoffWritten {
         let options = CodexSession.Options(

@@ -51,8 +51,20 @@ public struct HandoffBudget: Sendable {
     public static let share = 0.4
     public static let charsPerToken = 4
     public static let imageTokens = 1500
-    /// Codex reports 258,400 for most models (475,000 for some); `model/list` has no windows.
+    /// Codex reports 258,400 for most models (475,000 for some); `model/list` has no windows, so
+    /// the window a model last reported in a chat is kept (`rememberCodexWindow`) and used.
     public static let codexWindow = 258_400
+
+    public static func codexWindow(model: String?) -> Int {
+        guard let model else { return codexWindow }
+        let known = UserDefaults.standard.integer(forKey: "codexWindow." + model)
+        return known > 0 ? known : codexWindow
+    }
+
+    public static func rememberCodexWindow(_ window: Int, model: String) {
+        guard window > 0, UserDefaults.standard.integer(forKey: "codexWindow." + model) != window else { return }
+        UserDefaults.standard.set(window, forKey: "codexWindow." + model)
+    }
     /// The most the source's summary takes of the budget: one huge summary can't fill the target.
     static let summaryShare = 0.3
 

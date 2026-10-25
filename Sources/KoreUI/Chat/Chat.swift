@@ -178,6 +178,12 @@ package final class Chat: Identifiable {
         }
         status.apply(event)
         context.apply(event)
+        // Codex says a model's window only in a chat: kept for the next import into one.
+        if case .contextUsage(let usage) = event, provider.id == "codex", !usage.approximate, let window = usage.window,
+            let model = controls.modelId ?? launchModel
+        {
+            HandoffBudget.rememberCodexWindow(window, model: model)
+        }
         seedImportedContext(event)
         autoCompactIfDue(event)
         afterAccountEvent(event)
