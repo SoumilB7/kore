@@ -45,6 +45,13 @@ package final class CodexTranslator {
     private var lastEndedTurn: String?
     /// A queued message sent with turn/start. It may instead join work already running.
     var nextTurnQueued: String?
+    /// The codex CLI's remote control is on: its remote clients can start turns on the thread
+    /// and steer them, and their messages show as the user's own.
+    var remoteActive = false
+    /// Kore sent turn/start: the next turn to start is Kore's, its first user message Kore's.
+    var ownTurnSent = false
+    /// The running turn was started by a remote client.
+    private var remoteTurn = false
     /// Per item: its phase (agentMessage), whether text or output streamed, its changes.
     private var phases: [String: String] = [:]
     private var streamedText: Set<String> = []
@@ -124,6 +131,10 @@ package final class CodexTranslator {
         turnUserItems.removeAll()
         turnItems = []
         finalMarked = false
+        if !replaying {
+            remoteTurn = remoteActive && !ownTurnSent
+            ownTurnSent = false
+        }
         if replaying { replayChanges = [] } else { files.begin() }
         out.append(.turnStarted(id, origin: .user, at: date))
     }
@@ -314,7 +325,7 @@ package final class CodexTranslator {
             retrying = true
             let tries = Self.tries(message)
             out.append(.connection(.retrying(attempt: tries?.attempt, of: tries?.of)))
-        case .error, .stderr:
+        case .error, .stderr, .remoteControl:
             break
         }
     }
@@ -343,6 +354,7 @@ package final class CodexTranslator {
         if !replaying { commands.started(item, agent: agent, at: .now) }
         if agent == .main, !replaying {
             if item.type == "userMessage" {
+                if remoteActive, remoteMessage(item) { return }
                 // A steered message: Codex took it into the running turn.
                 acknowledgeSteer(item, via: "item-started")
                 return
@@ -412,6 +424,26 @@ package final class CodexTranslator {
         SessionLog.shared.queue("receipt", "codex", chat: threadId, id: id, via: via)
         if firstPrompt, let turn { out.append(.queuedMessage(id: id, .nextTurn(turn))) }
         else { out.append(.queuedMessage(id: id, .inTurn(after: lastItem))) }
+    }
+
+    /// A user message a remote client sent: its own turn's prompt, or one it steered into a
+    /// running turn, which joins it as a queued message of Kore's does. False for Kore's own.
+    private func remoteMessage(_ item: CodexItem) -> Bool {
+        let ids = [item.raw["clientId"]?.string, item.id].compactMap { $0 }
+        guard !turnUserItems.contains(item.id), !ids.contains(where: pendingSteer.contains) else { return false }
+        let first = turnUserItems.isEmpty
+        // The first message of a turn Kore started is Kore's prompt.
+        if first && !remoteTurn { return false }
+        turnUserItems.insert(item.id)
+        let (text, attachments) = Self.prompt(item.raw["content"] ?? [])
+        guard !text.isEmpty || !attachments.isEmpty else { return true }
+        if first, let turn {
+            out.append(.userMessage(text: text, attachments: attachments, id: turn))
+        } else {
+            out.append(.messageQueued(id: item.id, text: text, attachments: attachments))
+            out.append(.queuedMessage(id: item.id, .inTurn(after: lastItem)))
+        }
+        return true
     }
 
     private func itemCompleted(_ item: CodexItem, agent: AgentID) {
@@ -917,10 +949,7 @@ package final class CodexTranslator {
             var sawPrompt = false
             for item in (turn["items"]?.array ?? []).map(CodexItem.init) {
                 if item.type == "userMessage" {
-                    let content = item.raw["content"] ?? []
-                    let text = content.array?.compactMap { $0["text"]?.string }.filter { !Attachments.isFileNote($0) }
-                        .joined(separator: "\n") ?? ""
-                    let attachments = Self.attachments(content)
+                    let (text, attachments) = Self.prompt(item.raw["content"] ?? [])
                     // The turn's id is where a fork from its first message starts; a message steered
                     // into the turn later keeps its own item id.
                     let first = !sawPrompt
@@ -962,6 +991,13 @@ package final class CodexTranslator {
             reportContext(context.used, at: Self.date(turns.last?["completedAt"]) ?? .now)
         }
         return take().events
+    }
+
+    /// A user message's text (without Kore's file notes) and its files.
+    private static func prompt(_ content: JSONValue) -> (text: String, attachments: [SentAttachment]) {
+        let text = content.array?.compactMap { $0["text"]?.string }.filter { !Attachments.isFileNote($0) }
+            .joined(separator: "\n") ?? ""
+        return (text, attachments(content))
     }
 
     /// localImage / mention items of a user message.

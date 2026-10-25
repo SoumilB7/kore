@@ -238,6 +238,22 @@ public actor ClaudeSession {
         try await control("get_settings")
     }
 
+    /// Turns the CLI's Remote Control on or off: the session can then be continued from
+    /// claude.ai/code or the Claude app, signed in to the same account. On answers
+    /// `session_url` and `bridge_session_id`; `reattach` continues an earlier one of those.
+    /// The link's state follows as `system/bridge_state`.
+    @discardableResult
+    public func setRemoteControl(_ on: Bool, reattach: String? = nil) async throws -> JSONValue {
+        try await control("remote_control", Self.remoteControl(on, reattach: reattach))
+    }
+
+    /// The `remote_control` request's fields.
+    nonisolated static func remoteControl(_ on: Bool, reattach: String?) -> [String: JSONValue] {
+        var fields: [String: JSONValue] = ["enabled": .bool(on)]
+        if on, let reattach { fields["reattach_session_id"] = .string(reattach) }
+        return fields
+    }
+
     /// The plan's limits (`rate_limits`, `subscription_type`, `rate_limits_available`), without
     /// the behaviour breakdown, which takes seconds more. Experimental in the CLI.
     public func usage() async throws -> JSONValue {

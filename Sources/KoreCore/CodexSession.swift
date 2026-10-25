@@ -346,6 +346,27 @@ public actor CodexSession {
         try await PlanUsage.useReset(server, credit: credit, attempt: attempt)
     }
 
+    /// Turns the codex CLI's remote control of this app-server on or off (experimental API):
+    /// its remote clients can then reach the thread. `ephemeral`, so the CLI keeps no setting
+    /// for its next launch. Answers `{status, serverName, environmentId}`; changes follow as
+    /// `.remoteControl`.
+    @discardableResult
+    public func setRemoteControl(_ on: Bool) async throws -> JSONValue {
+        let request = Self.remoteControl(on)
+        return try await server.request(request.method, request.params)
+    }
+
+    /// The request that turns it on or off.
+    nonisolated static func remoteControl(_ on: Bool) -> (method: String, params: JSONValue) {
+        (on ? "remoteControl/enable" : "remoteControl/disable", ["ephemeral": true])
+    }
+
+    /// A short-lived code that pairs a new remote client with this Mac:
+    /// `{manualPairingCode, pairingCode, expiresAt}` (seconds since 1970).
+    public func remoteControlPairing() async throws -> JSONValue {
+        try await server.request("remoteControl/pairing/start", ["manualCode": true])
+    }
+
     /// Summarizes the thread to free context. Runs as a turn (turn/started → turn/completed).
     /// Codex compacts with the model the thread is loaded on, which only a turn changes: a model
     /// picked since (or the fallback for one the account can't use) is put on the thread first.
@@ -609,6 +630,10 @@ extension CodexEvent {
             case "item/plan/delta": .planDelta(itemId: itemId, delta)
             case "item/commandExecution/outputDelta": .commandOutputDelta(itemId: itemId, delta)
             case "serverRequest/resolved": .approvalResolved(requestId: params["requestId"] ?? .null)
+            case "remoteControl/status/changed":
+                .remoteControl(
+                    status: params["status"]?.string ?? "", serverName: params["serverName"]?.string,
+                    environment: params["environmentId"]?.string)
             case "error":
                 .error(
                     message: CodexError.readable(params["error"]?["message"]?.string ?? "unknown error"),

@@ -29,8 +29,12 @@ public enum ClaudeEvent: Sendable {
     /// A queued message was dropped (`interrupt {cancel_queued}`).
     case commandCancelled(id: String)
     /// A user message echoed where the CLI took it (`--replay-user-messages`); `uuid` is the one
-    /// it was sent with.
-    case userEcho(uuid: String?)
+    /// it was sent with. `content` is the message as the CLI took it; `synthetic` marks one the
+    /// CLI made itself (a peer's message, a notification), not a person's.
+    case userEcho(uuid: String?, content: JSONValue?, synthetic: Bool)
+    /// `system/bridge_state`: the CLI's Remote Control link to claude.ai/code ("ready",
+    /// "connected", "failed", "policy_disabled"), and why, when it failed.
+    case bridgeState(state: String, detail: String?)
     /// End of a turn. The process stays alive for the next `send`.
     case turnCompleted(TurnResult)
     /// The API refused the login (an assistant message with `error: "authentication_failed"`):
@@ -230,6 +234,8 @@ extension ClaudeEvent {
         switch json["type"]?.string {
         case "system" where json["subtype"]?.string == "init":
             self = .sessionStarted(SessionInfo(json))
+        case "system" where json["subtype"]?.string == "bridge_state":
+            self = .bridgeState(state: json["state"]?.string ?? "", detail: json["detail"]?.string)
         case "system" where json["subtype"]?.string == "status" && json["permissionMode"]?.string != nil:
             self = .permissionModeChanged(json["permissionMode"]?.string ?? "")
         case "stream_event":
@@ -250,7 +256,9 @@ extension ClaudeEvent {
                 content: ContentBlock.list(json["message"]?["content"]),
                 parentToolUseId: parent, usage: json["message"]?["usage"])
         case "user" where json["isReplay"]?.bool == true:
-            self = .userEcho(uuid: json["uuid"]?.string)
+            self = .userEcho(
+                uuid: json["uuid"]?.string, content: json["message"]?["content"],
+                synthetic: json["isSynthetic"]?.bool == true)
         case "user":
             self = .user(
                 content: ContentBlock.list(json["message"]?["content"]), parentToolUseId: parent,

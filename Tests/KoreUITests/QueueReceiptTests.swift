@@ -212,7 +212,7 @@ struct QueueReceiptTests {
         _ = claude.take()
         claude.pendingQueued.insert("queued")
         claude.translate(.textDelta("Received", parentToolUseId: nil))
-        claude.translate(.userEcho(uuid: "unrelated"))
+        claude.translate(.userEcho(uuid: "unrelated", content: nil, synthetic: false))
         #expect(claude.pendingQueued == ["queued"])
         #expect(!claude.take().events.contains { if case .queuedMessage = $0 { true } else { false } })
     }

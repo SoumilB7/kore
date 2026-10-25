@@ -232,6 +232,10 @@ final class ClaudeBackend: ChatBackend {
         }
         yield(.controlsLoaded(await controls(session)))
         if let fast = await session.fastMode { yield(.fastModeChanged(Self.report(fast))) }
+        let remoteOffered = await session.capabilities["remote_control_available"]?.bool
+        yield(.remoteControlUnavailable(remoteOffered == false ? Self.remoteUnavailable : nil))
+        // Remote control stays on across a relaunch, on the same remote session.
+        if remoteWanted, remoteOffered != false { linkRemote(session) }
         // The context's fill and window as soon as the CLI is up (a resumed chat's too).
         refreshContext()
     }
@@ -306,6 +310,84 @@ final class ClaudeBackend: ChatBackend {
         }
     }
 
+    // MARK: - Remote control
+
+    /// Remote control is on for this chat: made again by each launch.
+    private var remoteWanted = false
+    /// The remote session claude.ai/code shows (`bridge_session_id`): a relaunch continues it.
+    private var remoteSession: String?
+    static let remotePlace = "claude.ai/code"
+    static let remoteUnavailable = "Not available for this login"
+    static let remotePaused = "paused until the chat runs again"
+
+    func setRemoteControl(_ on: Bool) async throws {
+        if on { try await start() }
+        guard let session else {
+            remoteWanted = false
+            translator.remoteActive = false
+            yield(.remoteControl(nil))
+            return
+        }
+        if on {
+            remoteWanted = true
+            translator.remoteActive = true
+            yield(.remoteControl(RemoteControl(state: .connecting, place: Self.remotePlace)))
+            do {
+                remember(try await session.setRemoteControl(true, reattach: remoteSession))
+            } catch {
+                remoteWanted = false
+                translator.remoteActive = false
+                yield(.remoteControl(nil))
+                throw error
+            }
+        } else {
+            try await session.setRemoteControl(false)
+            remoteWanted = false
+            translator.remoteActive = false
+            remoteSession = nil
+            yield(.remoteControl(nil))
+        }
+        log.remote("claude", chat: sessionId, on: on)
+    }
+
+    /// Makes the link again after a launch; a refusal ends it, with the CLI's reason.
+    private func linkRemote(_ session: ClaudeSession) {
+        translator.remoteActive = true
+        yield(.remoteControl(RemoteControl(state: .connecting, place: Self.remotePlace)))
+        Task {
+            do {
+                remember(try await session.setRemoteControl(true, reattach: remoteSession))
+            } catch {
+                remoteWanted = false
+                translator.remoteActive = false
+                yield(.remoteControl(RemoteControl(state: .failed("\(error)"), place: Self.remotePlace)))
+            }
+        }
+    }
+
+    private func remember(_ answer: JSONValue) {
+        if let id = answer["bridge_session_id"]?.string { remoteSession = id }
+    }
+
+    /// `system/bridge_state`: "ready" and "connected" are up; "failed" says why; an organization's
+    /// policy turns it off for good.
+    private func bridge(_ state: String, _ detail: String?) {
+        guard remoteWanted else { return }
+        switch state {
+        case "ready", "connected":
+            yield(.remoteControl(RemoteControl(state: .connected, place: Self.remotePlace)))
+        case "failed":
+            yield(.remoteControl(RemoteControl(state: .failed(detail ?? "the link failed"), place: Self.remotePlace)))
+        case "policy_disabled":
+            remoteWanted = false
+            translator.remoteActive = false
+            yield(.remoteControl(nil))
+            yield(.remoteControlUnavailable(detail ?? Self.remoteUnavailable))
+        default:
+            yield(.remoteControl(RemoteControl(state: .connecting, place: Self.remotePlace)))
+        }
+    }
+
     // MARK: - Events
 
     /// What the running CLI wrote to stderr, for its exit line.
@@ -322,6 +404,8 @@ final class ClaudeBackend: ChatBackend {
             KoreUsageRefresh.soon("claude")
         case .stderr(let text):
             stderrTail.append(text)
+        case .bridgeState(let state, let detail):
+            bridge(state, detail)
         default: break
         }
         translator.translate(event)
@@ -329,6 +413,8 @@ final class ClaudeBackend: ChatBackend {
         if case .turnCompleted(let result) = event, let fast = result.fastMode { yield(.fastModeChanged(Self.report(fast))) }
         if case .sessionStarted(let info) = event, let fast = ClaudeFastMode(info.raw) { yield(.fastModeChanged(Self.report(fast))) }
         if case .exited(let status) = event {
+            // The link went with the process; the next launch makes it again.
+            if remoteWanted { yield(.remoteControl(RemoteControl(state: .failed(Self.remotePaused), place: Self.remotePlace))) }
             if let ended = session { logExit(ended, reported: status) }
             session = nil
             pump = nil
@@ -729,7 +815,7 @@ final class ClaudeBackend: ChatBackend {
         try await start()
         guard let session else { return }
         translator.compactRequested = true
-        try await session.send(instructions.isEmpty ? "/compact" : "/compact \(instructions)")
+        try await session.send(instructions.isEmpty ? "/compact" : "/compact \(instructions)", uuid: translator.ownSend())
     }
 
     // MARK: - Actions
@@ -753,14 +839,14 @@ final class ClaudeBackend: ChatBackend {
         await translator.files.ready()
         do {
             if files.isEmpty {
-                try await session.send(text, uuid: midTurn ? queued : nil)
+                try await session.send(text, uuid: midTurn ? queued : translator.ownSend())
             } else {
                 // Reading and encoding files can take a moment; keep it off the main actor.
                 let folder = options.folder
                 let content = await Task.detached {
                     Attachments.claudeContent(text: text, files: files, folder: folder, media: await AttachedMedia.read(files))
                 }.value
-                try await session.send(content: content, uuid: midTurn ? queued : nil)
+                try await session.send(content: content, uuid: midTurn ? queued : translator.ownSend())
             }
         } catch {
             if let queued, midTurn {
@@ -913,10 +999,14 @@ final class ClaudeBackend: ChatBackend {
         accountClosing = task
         let result = await task.value
         accountClosing = nil
+        // A remotely controlled chat comes back as the new login, for its remote side.
+        if result, remoteWanted { Task { try? await start() } }
         return result
     }
 
     private func stopForAccountChange() async -> Bool {
+        // The remote session belongs to the old login; the new one links a session of its own.
+        remoteSession = nil
         let startup = starting
         let opening = opening
         startup?.cancel()
@@ -967,6 +1057,8 @@ final class ClaudeBackend: ChatBackend {
         await session.close(awaitingExit: .seconds(2))
         await endOwnAgents()
         logExit(session)
+        // A chat that's remotely controlled comes back at once, for its remote side.
+        if remoteWanted { Task { try? await start() } }
     }
 
     /// The CLI's process is gone: the agents it ran end. Each one's tail reads what it wrote

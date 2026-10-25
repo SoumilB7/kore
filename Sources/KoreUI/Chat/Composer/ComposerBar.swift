@@ -83,6 +83,10 @@ struct ComposerBar: View {
                     .storyID(StoryID.Composer.model, press: { chat.togglePicker(.model) })
             }
             Spacer(minLength: 0)
+            if let remote = chat.controls.remote {
+                RemoteChip(remote: remote, cli: chat.provider.id) { chat.setRemoteControl(false) }
+                    .storyID(StoryID.Composer.remote, press: { chat.setRemoteControl(false) })
+            }
             if let plan = chat.provider.planToggle, chat.controls.planMode {
                 PlanChip(mode: plan) { chat.setPlanMode(false) }
             }

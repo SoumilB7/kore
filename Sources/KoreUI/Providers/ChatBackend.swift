@@ -76,6 +76,10 @@ package protocol ChatBackend: AnyObject {
     /// Uses one of the account's full resets of its limits (`credit`, or the CLI's pick), as
     /// the attempt `attempt`: irreversible, so only on the user's confirmed ask.
     func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome
+    /// Turns the CLI's own remote control of this chat on or off (starting the CLI if need be);
+    /// its `.remoteControl` states follow. It stays on across a relaunch. Throws the CLI's
+    /// reason when it can't.
+    func setRemoteControl(_ on: Bool) async throws
     /// Ends the CLI's process, quietly, so the next `start()` launches it again and resumes the
     /// same session: after the account changed, it runs as the new one; after a turn stalled or
     /// ignored a Stop, it's a fresh process. `reason` is logged.
@@ -190,6 +194,9 @@ extension ChatBackend {
     package func commandOutput(_ id: String) async -> String? { nil }
     package func watchCommands(_ closely: Bool) async {}
 
+    /// For a backend whose CLI has no remote control.
+    package func setRemoteControl(_ on: Bool) async throws { throw RemoteControlUnavailable() }
+
     /// For a backend whose CLI has no full resets.
     package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome { throw UsageUnavailable() }
 }
@@ -200,6 +207,10 @@ struct CompactUnavailable: Error, CustomStringConvertible {
 
 struct CommandUnavailable: LocalizedError {
     var errorDescription: String? { "this chat's CLI can't do that" }
+}
+
+struct RemoteControlUnavailable: LocalizedError {
+    var errorDescription: String? { "this chat's CLI has no remote control" }
 }
 
 struct UsageUnavailable: LocalizedError {

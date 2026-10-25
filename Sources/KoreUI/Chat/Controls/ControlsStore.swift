@@ -24,6 +24,11 @@ final class ControlsStore {
     private(set) var fastKnown = false
     private(set) var fastUnavailable: String?
     var fastChanging = false
+    /// The CLI's own remote control of the chat (`/` → Remote control); nil while it's off.
+    private(set) var remote: RemoteControl?
+    /// Why the CLI can't offer it at all; nil when it can, or can't say yet.
+    private(set) var remoteUnavailable: String?
+    var remoteChanging = false
     private(set) var commands: [SlashCommand] = []
     /// Who changed the mode last, when it was the agent ("Claude", a sub-agent's name); nil
     /// once the user sets it. The pill's help says so.
@@ -73,6 +78,10 @@ final class ControlsStore {
                 fastOffered = offered
                 fastUnavailable = offered ? nil : report.unavailable ?? "Unavailable for this account"
             }
+        case .remoteControl(let state):
+            remote = state
+        case .remoteControlUnavailable(let reason):
+            remoteUnavailable = reason
         case .replayed(let events):
             events.forEach(apply)
         default:

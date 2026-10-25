@@ -66,7 +66,7 @@ struct ClaudeEventTests {
         let queued = cassette.sent.first { $0["type"]?.string == "user" && $0["uuid"] != nil }?["uuid"]?.string
         #expect(queued != nil)
         let events = try Self.events("claude-queued-inturn")
-        #expect(events.contains { if case .userEcho(let uuid) = $0 { uuid == queued } else { false } })
+        #expect(events.contains { if case .userEcho(let uuid, _, _) = $0 { uuid == queued } else { false } })
     }
 
     @Test func aQueuedMessageStartsTheNextTurnAsACommand() throws {

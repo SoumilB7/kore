@@ -79,6 +79,11 @@ struct SessionLog: Sendable {
         log.write("queue-\(event)", ["cli": cli, "chat": chat ?? "-", "id": id, "via": via])
     }
 
+    /// The CLI's own remote control turned on or off for a chat.
+    func remote(_ cli: String, chat: String?, on: Bool) {
+        log.write("remote-control", ["cli": cli, "chat": chat ?? "-", "on": on ? "yes" : "no"])
+    }
+
     func relaunch(_ cli: String, chat: String?, reason: String) {
         log.write("relaunch", ["cli": cli, "chat": chat ?? "-", "reason": reason])
     }

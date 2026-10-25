@@ -575,7 +575,8 @@ struct ComposerView: View {
 
     private var slashMatches: [SlashCommand] {
         guard !chat.slashClosed, let token = slashToken else { return [] }
-        return SlashCommand.matches(chat.controls.commands, sigil: token.sigil, query: token.query)
+        let remote = SlashCommand.remote(on: chat.controls.remote != nil, unavailable: chat.controls.remoteUnavailable)
+        return SlashCommand.matches(chat.controls.commands, sigil: token.sigil, query: token.query, remote: remote)
     }
 
     /// An input method is composing (marked text): its keys are its own.
@@ -654,7 +655,8 @@ struct ComposerView: View {
 
     /// A pick replaces the "/word" it was filtered by: a command goes to the chip (one per
     /// message, so it replaces any there), a Codex skill in the text as "$name ". Usage and
-    /// Account only take the word out, and open their popup where the menu was. The caret stays where the
+    /// Account only take the word out, and open their popup where the menu was; Remote control
+    /// takes it out and turns the CLI's remote control on or off. The caret stays where the
     /// word was, and the field's undo starts over, as its text was set.
     private func accept(_ command: SlashCommand) {
         let insertion = command.kind == .skill ? command.insertion : ""
@@ -666,7 +668,11 @@ struct ComposerView: View {
         focused.wrappedValue = true
         forgetUndo()
         if command.kind == .kore {
-            if command.name == SlashCommand.account.name { chat.openAccount() } else { chat.openUsage() }
+            switch command.name {
+            case SlashCommand.account.name: chat.openAccount()
+            case SlashCommand.remoteName: if !command.unavailable { chat.setRemoteControl(!command.on) }
+            default: chat.openUsage()
+            }
         }
     }
 

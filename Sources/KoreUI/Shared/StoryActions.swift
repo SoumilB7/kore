@@ -135,6 +135,9 @@ extension Chat {
         return (picker.lit == .row(at) ? "*" : "") + (controls.planAllow ? "on" : "off")
     }
 
+    /// The mark of the CLI's own remote control as its line reads; nil while it's off.
+    package var storyRemote: String? { controls.remote?.line(cli: provider.id) }
+
     /// The `/` menu's names, and the command chip's.
     package var storyCommands: [String] { controls.commands.map(\.name) }
 

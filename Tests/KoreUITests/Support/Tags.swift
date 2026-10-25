@@ -12,6 +12,8 @@ func tag(_ event: ChatEvent) -> String {
     case .modeChanged(let change): "mode \(change.mode)"
     case .planModeChanged(let change): "plan \(change.on)"
     case .fastModeChanged(let report): "fast \(report.on)"
+    case .remoteControl(let state): "remote \(state.map { "\($0.state)" } ?? "off")"
+    case .remoteControlUnavailable: "remoteUnavailable"
     case .turnStarted(_, let origin, _): "turnStarted \(origin)"
     case .turnOrigin(_, let origin): "turnOrigin \(origin)"
     case .turnFinished(_, let outcome, _): "turnFinished \(outcome)"

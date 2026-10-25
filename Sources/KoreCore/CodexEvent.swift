@@ -22,6 +22,10 @@ public enum CodexEvent: Sendable {
     case approvalResolved(requestId: JSONValue)
     case turnCompleted(CodexTurnResult)
     case error(message: String, willRetry: Bool)
+    /// `remoteControl/status/changed`: the app-server's remote-control link ("disabled",
+    /// "connecting", "connected", "errored"), the name remote clients see this Mac by, and the
+    /// environment it's enrolled as once it is.
+    case remoteControl(status: String, serverName: String?, environment: String?)
     /// A notification for another thread on this app-server: a sub-agent the chat's thread
     /// spawned (`collaboration.spawn_agent`) streams its own items and turns here.
     case subThread(threadId: String, method: String, params: JSONValue)

@@ -59,6 +59,15 @@ package final class ClaudeTranslator {
     var pendingQueued: Set<String> = []
     /// Queued messages the CLI took mid-turn: their `command_lifecycle` start opens nothing.
     private var deliveredQueued: Set<String> = []
+    /// The CLI's remote control is on: messages typed on claude.ai/code or the Claude app reach
+    /// this CLI too, and show as the user's own.
+    var remoteActive = false
+    /// Kore's own messages while it's on, stamped so their echoes aren't taken for remote ones.
+    private var ownSends: Set<String> = []
+    /// Remote messages whose `command_lifecycle` start opened their turn, waiting for their echo.
+    private var remoteTurns: Set<String> = []
+    /// Remote messages echoed before their start opened a turn.
+    private var remoteEchoes: [String: JSONValue] = [:]
     private var turnStart = Date()
     /// The main agent's answer blocks and tool calls, in order, to find the final answer.
     private var turnItems: [TurnItem] = []
@@ -178,6 +187,42 @@ package final class ClaudeTranslator {
         openTurn(.user, id: id)
     }
 
+    // MARK: Remote control
+
+    /// An id for a message Kore sends while remote control is on (nil while it's off): its echo
+    /// is then known as Kore's.
+    func ownSend() -> String? {
+        guard remoteActive else { return nil }
+        let id = UUID().uuidString.lowercased()
+        ownSends.insert(id)
+        return id
+    }
+
+    /// A message echoed while remote control is on, neither Kore's nor queued by it: one typed
+    /// remotely. Its own turn shows it as the prompt; one taken mid-turn joins the turn as a
+    /// queued message of Kore's does.
+    private func remoteEcho(_ uuid: String, _ content: JSONValue) {
+        if ownSends.remove(uuid) != nil || deliveredQueued.contains(uuid) { return }
+        if remoteTurns.remove(uuid) != nil {
+            remotePrompt(content, id: uuid)
+        } else if turn != nil {
+            let text = Self.promptText(content) ?? ""
+            let attachments = Self.attachments(content)
+            guard !text.isEmpty || !attachments.isEmpty else { return }
+            out.append(.messageQueued(id: uuid, text: text, attachments: attachments))
+            out.append(.queuedMessage(id: uuid, .inTurn(after: lastItem)))
+        } else {
+            remoteEchoes[uuid] = content
+        }
+    }
+
+    private func remotePrompt(_ content: JSONValue, id: String) {
+        let text = Self.promptText(content) ?? ""
+        let attachments = Self.attachments(content)
+        guard !text.isEmpty || !attachments.isEmpty else { return }
+        out.append(.userMessage(text: text, attachments: attachments, id: id))
+    }
+
     /// Closes a turn that never reached the CLI (the send failed).
     func abandonTurn() {
         guard let turn else { return }
@@ -282,7 +327,7 @@ package final class ClaudeTranslator {
         case .commandStarted(let id, let session):
             // In a chat with nothing sent yet, this comes before system/init.
             if sessionId == nil, let session { identify(session) }
-            if deliveredQueued.remove(id) != nil { return }
+            if deliveredQueued.remove(id) != nil || ownSends.contains(id) { return }
             if pendingQueued.remove(id) != nil {
                 // A queued message the CLI runs as its own turn (no tool boundary was left).
                 if turn == nil {
@@ -292,7 +337,11 @@ package final class ClaudeTranslator {
                 }
                 return
             }
+            let opened = turn == nil
             openTurn(.cli)
+            if remoteActive, opened {
+                if let content = remoteEchoes.removeValue(forKey: id) { remotePrompt(content, id: id) } else { remoteTurns.insert(id) }
+            }
             if let turn { followups.append(.peer(uuid: id, turn: turn)) }
         case .turnCompleted(let result):
             pending.removeAll()
@@ -320,11 +369,13 @@ package final class ClaudeTranslator {
             finishTurn(outcome, duration: result.durationMs.map { .milliseconds($0) })
         case .raw(let json):
             raw(json)
-        case .userEcho(let uuid):
+        case .userEcho(let uuid, let content, let synthetic):
             // A queued message taken mid-turn, at the tool boundary it waited for.
             if let uuid, turn != nil, pendingQueued.remove(uuid) != nil {
                 deliveredQueued.insert(uuid)
                 out.append(.queuedMessage(id: uuid, .inTurn(after: lastItem)))
+            } else if remoteActive, !synthetic, let uuid, let content {
+                remoteEcho(uuid, content)
             }
         case .commandCancelled(let id):
             if pendingQueued.remove(id) != nil { out.append(.queuedMessage(id: id, .dropped)) }

@@ -1528,6 +1528,22 @@ package final class Chat: Identifiable {
         }
     }
 
+    /// `/` → Remote control, or the mark's click: the CLI's own remote control of this chat.
+    func setRemoteControl(_ on: Bool) {
+        guard !controls.remoteChanging, !on || controls.remoteUnavailable == nil else { return }
+        controls.remoteChanging = true
+        UILog.event("remote-control", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
+        let backend = connect()
+        Task {
+            defer { controls.remoteChanging = false }
+            do {
+                try await backend.setRemoteControl(on)
+            } catch {
+                fail("Couldn't turn \(on ? "on" : "off") remote control: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func answer(_ approval: Approval, _ decision: Decision) {
         approvals.remove(approval.id)
         transcript.approvalSettled(approval.id)

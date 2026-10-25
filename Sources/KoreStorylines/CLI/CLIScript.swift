@@ -22,6 +22,9 @@ package struct CLIScript: Sendable {
     package var deaf = false
     /// Agents whose work belongs to a different process and is only observed here.
     package var observedAgents: Set<String> = []
+    /// What a remote side does once remote control is on (a turn begun from claude.ai/code or
+    /// a codex remote client): played after `setRemoteControl(true)`.
+    package var remote: [Beat] = []
 
     package init(
         start: [Beat] = [.controls()], turns: [[Beat]] = [], compact: [Beat] = CLIScript.compaction(), agents: [String: [ChatEvent]] = [:],
@@ -64,6 +67,9 @@ package enum Beat: Sendable {
     case stream(TextKind, String, chunk: Int = 8, agent: AgentID = .main)
     /// Opens the turn the current send started (`.turnStarted`, origin `.user`).
     case startTurn
+    /// A turn begun by a message typed on a remote side: it opens, then shows the message as
+    /// its prompt, as both CLIs' translators report one.
+    case remotePrompt(String)
     /// Ends it.
     case finishTurn(TurnOutcome)
     /// A tool call that starts, then finishes with `output`. `wait` holds it running until Kore
@@ -136,6 +142,8 @@ package enum Call: Sendable, Equatable {
     case fork(message: String?)
     /// The conversation before a compaction was read (a page of it).
     case earlier
+    /// Remote control turned on or off.
+    case setRemoteControl(Bool)
     /// The CLI started again after the account changed.
     case relaunch
     /// Started again after a relaunch, before a send asked (its models reloaded).

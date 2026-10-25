@@ -252,6 +252,19 @@ package final class ScriptedBackend: ChatBackend {
         }
     }
 
+    /// Remote control: on, the link is up at once, and the script's remote side plays.
+    package func setRemoteControl(_ on: Bool) async throws {
+        try await start()
+        log.append(.setRemoteControl(on))
+        guard on else {
+            sink.yield(.remoteControl(nil))
+            return
+        }
+        sink.yield(.remoteControl(RemoteControl(state: .connected, place: provider == "claude" ? "claude.ai/code" : "acme-mac")))
+        let beats = script.remote
+        if !beats.isEmpty { enqueue { await $0.playTurn(beats, queued: nil) } }
+    }
+
     /// The account changed: the process would end here and start again at the next send.
     package func relaunch(reason: String) async {
         log.append(.relaunch)
@@ -343,6 +356,10 @@ package final class ScriptedBackend: ChatBackend {
                 if agent == .main { lastItem = block }
             case .startTurn:
                 await emit(.turnStarted(turn ?? ToolID.make(), origin: .user, at: Date()))
+            case .remotePrompt(let text):
+                let id = turn ?? ToolID.make()
+                await emit(.turnStarted(id, origin: .user, at: Date()))
+                await emit(.userMessage(text: text, attachments: [], id: id))
             case .finishTurn(let outcome):
                 await emit(.turnFinished(turn, outcome, duration: nil))
             case .tool(let name, let detail, let output, let isError, let wait):

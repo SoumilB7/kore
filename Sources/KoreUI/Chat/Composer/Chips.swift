@@ -24,6 +24,40 @@ struct PlanChip: View {
     }
 }
 
+/// The CLI's own remote control, on: the bar's one mark of it, beside the mode. Its tooltip is
+/// its one line ("Remote control · claude CLI · claude.ai/code"); a click turns it off.
+struct RemoteChip: View {
+    let remote: RemoteControl
+    let cli: String
+    let turnOff: () -> Void
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        Button(action: turnOff) {
+            HStack(spacing: Space.sm) {
+                Image(systemName: hovered.value ? "xmark.circle.fill" : "antenna.radiowaves.left.and.right")
+                    .font(TextStyle.label)
+                Text("Remote").font(TextStyle.labelMedium)
+            }
+            .foregroundStyle(color)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .onHover { hovered.value = $0 }
+        .help(remote.line(cli: cli))
+        .accessibilityLabel(Text(remote.line(cli: cli)))
+    }
+
+    /// Lit while a remote side can reach the chat, quiet while it links, a warning when it can't.
+    private var color: Color {
+        switch remote.state {
+        case .connected: Theme.accent
+        case .connecting: Theme.secondary
+        case .failed: Theme.warning
+        }
+    }
+}
+
 // MARK: - Attachments
 
 /// An attached image or video (thumbnail, click to view; a video's first frame, marked) or file

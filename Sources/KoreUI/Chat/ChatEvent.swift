@@ -19,6 +19,11 @@ package enum ChatEvent: Sendable {
     case planModeChanged(PlanModeChange)
     /// Fast mode as the CLI reports it: when it starts, after each turn, and after a switch.
     case fastModeChanged(FastModeReport)
+    /// The CLI's own remote control of the chat, as it changes; nil once it's off.
+    case remoteControl(RemoteControl?)
+    /// Why the CLI can't offer remote control at all (Claude's `remote_control_available`);
+    /// nil when it can, or can't say.
+    case remoteControlUnavailable(String?)
 
     // MARK: Turns
 
@@ -321,6 +326,40 @@ package struct ModelOption: Identifiable, Hashable, Sendable {
 }
 
 /// Fast mode as the CLI says it is.
+/// The CLI's own remote control of a chat (`/` → Remote control): the claude CLI's link to
+/// claude.ai/code and the Claude app, the codex CLI's to its remote clients. Their accounts carry
+/// it; Kore only turns it on and off, and shows it.
+package struct RemoteControl: Sendable, Equatable {
+    package enum State: Sendable, Equatable {
+        case connecting, connected
+        /// The CLI's reason.
+        case failed(String)
+    }
+
+    package var state: State
+    /// Where the chat is picked up: "claude.ai/code", or the name the codex CLI gives this Mac.
+    package var place: String?
+    /// The codex CLI's short code that pairs a new remote client, while it's valid.
+    package var code: String?
+
+    package init(state: State, place: String? = nil, code: String? = nil) {
+        self.state = state
+        self.place = place
+        self.code = code
+    }
+
+    /// The mark's one line: "Remote control · claude CLI · claude.ai/code".
+    package func line(cli: String) -> String {
+        let detail: String? =
+            switch state {
+            case .connecting: "connecting"
+            case .failed(let reason): reason
+            case .connected: [place, code.map { "pairing code \($0)" }].compactMap { $0 }.joined(separator: " · ")
+            }
+        return ["Remote control", "\(cli) CLI", detail].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · ")
+    }
+}
+
 package struct FastModeReport: Sendable, Equatable {
     package var on: Bool
     /// On, at standard speed for now after a rate limit (Claude's cooldown).
@@ -349,6 +388,10 @@ package struct SlashCommand: Identifiable, Hashable, Sendable {
     package let kind: Kind
     /// The SF Symbol drawn where the sigil goes (Kore's entries).
     package let glyph: String?
+    /// A Kore switch that's on (Remote control): checked in the menu.
+    package var on = false
+    /// A Kore entry this chat's CLI can't do: shown dim, with the reason as its description.
+    package var unavailable = false
     package var id: String { name }
     /// Claude runs `/name`; Codex invokes skills by mentioning `$name`.
     package var insertion: String { kind == .skill ? "$\(name) " : "/\(name) " }

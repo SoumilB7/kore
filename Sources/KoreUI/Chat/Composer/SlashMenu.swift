@@ -41,10 +41,10 @@ struct SlashMenu: View {
             Self.mark(command).frame(width: Size.slashGlyph)
             Text(command.kind == .kore ? command.label : command.name)
                 .font(TextStyle.bodyMedium)
-                .foregroundStyle(Theme.text)
+                .foregroundStyle(command.unavailable ? Theme.tertiary : Theme.text)
                 .lineLimit(1)
                 .layoutPriority(1)
-            if command.name == current, command.kind == .command {
+            if command.name == current && command.kind == .command || command.on {
                 Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
             }
             if !command.hint.isEmpty {
@@ -88,16 +88,29 @@ extension SlashCommand {
     static let account = SlashCommand(
         name: "account", description: "Sign in, switch or sign out", hint: "", kind: .kore, glyph: "person")
     static let kore = [usage, account]
-    /// The CLI's own commands these stand in for: its usage panel, and its login and logout,
-    /// which only work in its terminal.
-    private static let replaced: Set<String> = ["usage", "account", "login", "logout"]
+    /// The CLI's own commands these stand in for: its usage panel, its login and logout, and its
+    /// remote control, which only work in its terminal.
+    private static let replaced: Set<String> = ["usage", "account", "login", "logout", "remote-control"]
+
+    /// Remote control for this chat: the CLI's own, on or off; dim with the CLI's reason when it
+    /// can't.
+    static func remote(on: Bool, unavailable: String?) -> SlashCommand {
+        var command = SlashCommand(
+            name: remoteName, description: unavailable ?? "Continue on your phone or web", hint: "",
+            kind: .kore, glyph: "antenna.radiowaves.left.and.right")
+        command.on = on
+        command.unavailable = unavailable != nil
+        return command
+    }
+
+    static let remoteName = "remote-control"
 
     /// "/compact", "$pdf", "Usage".
     var label: String {
         switch kind {
         case .command: "/\(name)"
         case .skill: "$\(name)"
-        case .kore: name.prefix(1).uppercased() + name.dropFirst()
+        case .kore: (name.prefix(1).uppercased() + name.dropFirst()).replacingOccurrences(of: "-", with: " ")
         }
     }
 
@@ -105,16 +118,22 @@ extension SlashCommand {
     /// Account first).
     private var aliases: [String] {
         guard kind == .kore else { return [] }
-        return name == Self.account.name ? ["login", "logout", "sign", "switch"] : ["limits"]
+        switch name {
+        case Self.account.name: return ["login", "logout", "sign", "switch"]
+        case Self.remoteName: return ["rc", "phone", "web", "mobile"]
+        default: return ["limits"]
+        }
     }
 
     /// The menu for a typed "/word" (`query` lowercased): Usage then Account first on a bare
     /// "/", in place of the CLI's own usage, login and logout; a "$" lists skills alone. Under
     /// a query, names that start with it come first.
-    static func matches(_ commands: [SlashCommand], sigil: Character, query: String) -> [SlashCommand] {
+    /// `remote`: this chat's Remote control entry, after Account.
+    static func matches(_ commands: [SlashCommand], sigil: Character, query: String, remote: SlashCommand? = nil) -> [SlashCommand] {
+        let own = kore + (remote.map { [$0] } ?? [])
         let listed =
             sigil == "$"
-            ? commands.filter { $0.kind == .skill } : kore + commands.filter { $0.kind == .skill || !replaced.contains($0.name) }
+            ? commands.filter { $0.kind == .skill } : own + commands.filter { $0.kind == .skill || !replaced.contains($0.name) }
         // Foundation's `contains("")` is false, so a bare "/" must list everything explicitly.
         if query.isEmpty { return listed }
         let leads = { (command: SlashCommand) in

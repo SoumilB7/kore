@@ -194,6 +194,9 @@ final class CodexBackend: ChatBackend {
         fastReported = nil
         yield(.controlsLoaded(controls))
         await settleFastMode(session, model: controls.model)
+        // Remote control stays on across a launch again.
+        remoteUp = false
+        if remoteWanted { linkRemote(session) }
     }
 
     private func fastTier(_ model: String?) -> String? { model.flatMap { fastTiers[$0] } }
@@ -225,6 +228,103 @@ final class CodexBackend: ChatBackend {
         guard on != fastReported else { return }
         fastReported = on
         yield(.fastModeChanged(FastModeReport(on: on, offered: true)))
+    }
+
+    // MARK: - Remote control
+
+    /// Remote control is on for this chat: made again by each launch.
+    private var remoteWanted = false
+    /// This app-server's link has come up: a "disabled" after it means it was turned off elsewhere
+    /// (before it, it's the app-server's state from before Kore asked).
+    private var remoteUp = false
+    /// The name the codex CLI's remote clients see this Mac by.
+    private var remotePlace: String?
+    /// A short code pairing a new remote client, while it's valid.
+    private var remoteCode: String?
+
+    func setRemoteControl(_ on: Bool) async throws {
+        if on { try await start() }
+        guard let session else {
+            remoteOff()
+            return
+        }
+        if on {
+            remoteWanted = true
+            translator.remoteActive = true
+            yield(.remoteControl(RemoteControl(state: .connecting, place: remotePlace)))
+            do {
+                let answer = try await session.setRemoteControl(true)
+                remoteStatus(answer["status"]?.string ?? "", serverName: answer["serverName"]?.string)
+            } catch {
+                remoteOff()
+                throw error
+            }
+        } else {
+            try await session.setRemoteControl(false)
+            remoteOff()
+        }
+        log.remote("codex", chat: sessionId, on: on)
+    }
+
+    private func remoteOff() {
+        remoteWanted = false
+        remoteUp = false
+        remoteCode = nil
+        translator.remoteActive = false
+        yield(.remoteControl(nil))
+    }
+
+    /// Makes the link again after a launch; a refusal ends it, with the CLI's reason.
+    private func linkRemote(_ session: CodexSession) {
+        translator.remoteActive = true
+        yield(.remoteControl(RemoteControl(state: .connecting, place: remotePlace)))
+        Task {
+            do {
+                let answer = try await session.setRemoteControl(true)
+                remoteStatus(answer["status"]?.string ?? "", serverName: answer["serverName"]?.string)
+            } catch {
+                remoteWanted = false
+                translator.remoteActive = false
+                yield(.remoteControl(RemoteControl(state: .failed(error.localizedDescription), place: remotePlace)))
+            }
+        }
+    }
+
+    /// `remoteControl/status/changed`, or an answer carrying the same.
+    private func remoteStatus(_ status: String, serverName: String?) {
+        guard remoteWanted else { return }
+        if let serverName, !serverName.isEmpty { remotePlace = serverName }
+        switch status {
+        case "connected":
+            let first = !remoteUp
+            remoteUp = true
+            yield(.remoteControl(RemoteControl(state: .connected, place: remotePlace, code: remoteCode)))
+            if first, remoteCode == nil { pairRemote() }
+        case "errored":
+            yield(.remoteControl(RemoteControl(state: .failed("the link failed"), place: remotePlace)))
+        case "disabled":
+            // Turned off elsewhere (the CLI's own command), once it was up.
+            if remoteUp { remoteOff() }
+        default:
+            yield(.remoteControl(RemoteControl(state: .connecting, place: remotePlace)))
+        }
+    }
+
+    /// A short code for pairing a new remote client, shown on the mark until it expires.
+    private func pairRemote() {
+        guard let session else { return }
+        Task {
+            guard let answer = try? await session.remoteControlPairing(),
+                let code = answer["manualPairingCode"]?.string, remoteWanted
+            else { return }
+            remoteCode = code
+            yield(.remoteControl(RemoteControl(state: .connected, place: remotePlace, code: code)))
+            let until = answer["expiresAt"]?.double.map { Date(timeIntervalSince1970: $0) } ?? .now.addingTimeInterval(600)
+            try? await Task.sleep(for: .seconds(max(1, until.timeIntervalSinceNow)))
+            guard remoteCode == code else { return }
+            remoteCode = nil
+            if remoteWanted, remoteUp { yield(.remoteControl(RemoteControl(state: .connected, place: remotePlace))) }
+        }
     }
 
     /// Through the chat's app-server; once it has exited, or before it starts, a short-lived one.
@@ -388,7 +488,11 @@ final class CodexBackend: ChatBackend {
         }
         if case .stderr(let text) = event { stderrTail.append(text) }
         if case .error(let message, false) = event { stderrTail.append("error: \(message)\n") }
+        if case .remoteControl(let status, let serverName, _) = event { remoteStatus(status, serverName: serverName) }
         if case .exited(let status) = event {
+            // The link went with the app-server; the next launch makes it again.
+            remoteUp = false
+            if remoteWanted { yield(.remoteControl(RemoteControl(state: .failed(ClaudeBackend.remotePaused), place: remotePlace))) }
             if let ended = session { logExit(ended, reported: status) }
             resumeId = sessionId
             session = nil
@@ -505,11 +609,13 @@ final class CodexBackend: ChatBackend {
         // Snapshot before Codex can edit anything; the turn itself opens on turn/started.
         let began = translator.files.begin()
         await translator.files.ready()
+        translator.ownTurnSent = true
         do {
             let turn = try await session.send(input: input, clientId: queued)
             if let queued { translator.queuedAccepted(queued, turn: turn) }
             flush()
         } catch {
+            translator.ownTurnSent = false
             if let queued {
                 translator.queuedRejected(queued)
                 log.queue("rejected", "codex", chat: sessionId, id: queued, via: "start")
@@ -769,6 +875,8 @@ final class CodexBackend: ChatBackend {
         accountClosing = task
         let result = await task.value
         accountClosing = nil
+        // A remotely controlled chat comes back as the new login, for its remote side.
+        if result, remoteWanted { Task { try? await start() } }
         return result
     }
 
@@ -828,6 +936,8 @@ final class CodexBackend: ChatBackend {
         self.session = nil
         await session.close()
         logExit(session)
+        // A chat that's remotely controlled comes back at once, for its remote side.
+        if remoteWanted { Task { try? await start() } }
     }
 
     func close() async {

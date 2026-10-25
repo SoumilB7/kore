@@ -115,6 +115,8 @@ extension StoryID {
         package static func effortLevel(_ level: String) -> StoryID { StoryID(.composer, "effort.level", key: level) }
         /// The model picker's fast mode switch.
         package static let fastMode = StoryID(.composer, "fastmode")
+        /// The mark of the CLI's own remote control, while it's on (its click turns it off).
+        package static let remote = StoryID(.composer, "remote")
         /// The mode popup, and its rows by the mode's id (Codex's Plan switch by "plan").
         package static let modes = StoryID(.composer, "modes")
         package static func modeRow(_ id: String) -> StoryID { StoryID(.composer, "modes.row", key: id) }

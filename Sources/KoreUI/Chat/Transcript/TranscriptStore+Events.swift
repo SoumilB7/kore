@@ -115,8 +115,8 @@ extension TranscriptStore {
             modeChanged(change)
         case .planModeChanged(let change):
             planModeChanged(change)
-        case .sessionIdentified, .titleChanged, .controlsLoaded, .fastModeChanged, .turnOrigin,
-            .planReady, .contextUsage:
+        case .sessionIdentified, .titleChanged, .controlsLoaded, .fastModeChanged, .remoteControl,
+            .remoteControlUnavailable, .turnOrigin, .planReady, .contextUsage:
             break
         }
     }
