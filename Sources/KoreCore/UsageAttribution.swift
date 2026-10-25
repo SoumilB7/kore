@@ -311,9 +311,10 @@ extension UsageAttribution {
 
     /// Each request's plan points: every rise between consecutive readings (from 0 at the
     /// window's start, through `points`, to `used` now) split across the requests made in that
-    /// interval by their units. A rise with no local request is usage from elsewhere. A fall
-    /// (rounding, a reading from before a reset) starts the next rise from where it fell to.
-    /// `requests` and `points` are those inside the window.
+    /// interval by their units. A rise with no local request is usage from elsewhere. A limit
+    /// never falls inside its window, so a lower reading (one source rounding down where another
+    /// rounded up: 47, 46, 47) is noise: a rise counts only past the highest reading so far, or
+    /// the jitter would count each point again. `requests` and `points` are those inside the window.
     public static func split(_ requests: [UsageRequest], points: [UsagePoint], window: UsageWindow, now: Date)
         -> (points: [Double], elsewhere: Double)
     {
@@ -325,13 +326,15 @@ extension UsageAttribution {
         var shares = [Double](repeating: 0, count: requests.count)
         var elsewhere = 0.0
         var next = 0
+        var highest = 0.0
         for (from, to) in zip(marks, marks.dropFirst()) {
             var taken: [Int] = []
             while next < order.count, requests[order[next]].time <= to.time {
                 if requests[order[next]].time >= from.time { taken.append(order[next]) }
                 next += 1
             }
-            let rise = max(to.used - from.used, 0)
+            let rise = max(to.used - highest, 0)
+            highest = max(highest, to.used)
             guard rise > 0 else { continue }
             let total = taken.reduce(0.0) { $0 + requests[$1].units }
             guard total > 0 else {

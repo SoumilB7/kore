@@ -81,12 +81,21 @@ struct UsageAttributionTests {
         #expect(share.kore == 10 && share.measured)
     }
 
-    @Test func aFallStartsTheNextRiseFromWhereItFell() {
+    /// A limit never falls in its window: a lower reading is one source rounding where another
+    /// didn't (47, 46, 47), and the point it seems to win back isn't counted again.
+    @Test func jitterIsntCountedTwice() {
         let requests = [UsageRequest(time: Self.at(40), chat: "k", units: 1, kore: true)]
-        let points = [UsagePoint(time: Self.at(10), used: 9), UsagePoint(time: Self.at(30), used: 5)]
-        let split = UsageAttribution.split(requests, points: points, window: Self.window, now: Self.at(60))
-        #expect(split.points == [15])
+        let points = [
+            UsagePoint(time: Self.at(10), used: 9), UsagePoint(time: Self.at(30), used: 8),
+            UsagePoint(time: Self.at(35), used: 9), UsagePoint(time: Self.at(45), used: 12),
+            UsagePoint(time: Self.at(50), used: 11), UsagePoint(time: Self.at(55), used: 12),
+        ]
+        let window = UsageWindow(minutes: 300, resetsAt: Self.at(300), used: 12)
+        let split = UsageAttribution.split(requests, points: points, window: window, now: Self.at(60))
+        #expect(split.points == [3])
         #expect(split.elsewhere == 9)
+        let share = UsageAttribution.share(requests, points: points, window: window, now: Self.at(60))
+        #expect(share.kore == 3 && !share.clamped)
     }
 
     @Test func theClampCutsKoreToThePlanAndScalesTheChats() {
