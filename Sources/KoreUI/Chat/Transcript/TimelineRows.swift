@@ -115,7 +115,7 @@ private struct OutcomeLine: View {
                 Button("Retry", action: retry)
                     .smallButton(prominent: true)
                     .storyID(StoryID.Transcript.retry(turn))
-                    .help("Continue")
+                    .help("Retry")
             }
         }
     }
