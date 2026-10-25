@@ -65,3 +65,15 @@ extension Color {
             blue: Double(hex & 0xFF) / 255)
     }
 }
+
+/// A working chat tab's mark (working-marks.html, v3): a ring of light travelling from the
+/// mark's centre out to its edge, dim to bright and back, in the mark's own colours.
+enum WorkingMarkColors {
+    /// Dim, between, bright: Claude's starburst from a dim red to a bright orange.
+    static let claude = [Color(hex: 0x8E3426), Color(hex: 0xB54A33), Color(hex: 0xF59A55)]
+    /// The other marks (Codex's knot) from dim to bright.
+    static let neutral = [Color(hex: 0x4E575E), Color(hex: 0x7A848B), Color(hex: 0xFFFFFF)]
+
+    static func ramp(_ provider: Provider) -> [Color] { provider.id == "claude" ? claude : neutral }
+}
+

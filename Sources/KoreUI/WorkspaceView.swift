@@ -307,7 +307,8 @@ private struct TabItem: View {
                             index: info.index, name: info.name, status: info.status, background: info.background, place: .tab)
                     } else if let chat = tab.chat {
                         if chat.isBusy {
-                            ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
+                            WorkingMark(provider: chat.provider, size: Size.logoTab, slow: chat.context.compacting)
+                                .frame(width: Size.logoTab, height: Size.logoTab)
                                 .storyMark(StoryID.Tabs.tab(tab.id).part(.working))
                         } else {
                             ProviderLogo(provider: chat.provider, size: Size.logoTab)

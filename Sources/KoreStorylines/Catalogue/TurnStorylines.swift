@@ -179,3 +179,41 @@ final class CLITurnsShowWorking: ChatStoryline {
             }
     }
 }
+
+/// A working chat's tab shows its provider's mark with the wave running through it (in place of
+/// the generic spinner), and the plain mark again once the turn ends.
+final class WorkingMarkShows: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(turns: [[.startTurn, .wait(.release), .stream(.answer, "Done."), .finishTurn(.completed)]])
+    }
+
+    override func steps() -> [any Step] {
+        let mark = Locator("the chat tab's working mark") { app in
+            guard let tab = app.workspace?.activeTab else { return .failure(LocatorMiss("no tab", pending: true)) }
+            return .success(StoryID.Tabs.tab(tab.id).part(.working))
+        }
+        return super.steps() + [
+            Send("Work on it"),
+            ExpectElement(mark),
+            Expect("the wave running in it") { _ in StoryWorkingMarks.running > 0 },
+            Snapshot("working-mark"),
+            Release(), TurnFinished(1),
+            ExpectElement(mark, .absent),
+        ]
+    }
+}
+
+/// NavCost with the first chat at work the whole time: switching past a tab whose mark is
+/// moving costs what switching past an idle one does.
+final class NavCostWorking: Storyline {
+    override class var tags: Set<Tag> { [.chat] }
+    override func steps() -> [any Step] {
+        let held = CLIScript(turns: [
+            [.startTurn, .stream(.answer, NavCost.answer(9, turn: 1), chunk: 4000), .finishTurn(.completed)],
+            [.startTurn, .wait(.release), .finishTurn(.completed)],
+        ])
+        return [OpenFolder(), UseScript(held), StartChat("claude"), Send("first"), TurnFinished(1), Send("hold")]
+            + NavCost.chat(2) + NavCost.chat(3) + [WaitIdle(), MeasureNav()]
+    }
+}
