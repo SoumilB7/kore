@@ -34,6 +34,18 @@ struct ComposerView: View {
     @StateObject private var caret = Local<ComposerText.Placed?>(nil)
     /// The text view and its undo, read outside updates; never shown.
     @StateObject private var editor = ComposerEditor()
+    /// What the / button last put in: the "/" (after a space of its own when the caret ended a
+    /// word) in place of the text selected. While the text before it is the same, the button
+    /// takes the "/word" out with that space and puts the selected text back.
+    @StateObject private var slashInsert = Held<SlashInsert?>(nil)
+
+    struct SlashInsert {
+        let chat: UUID
+        /// The draft before the "/", with the space the button put.
+        let before: String
+        let spaced: Bool
+        let replaced: String
+    }
 
     /// Puts the caret at `offset` characters into the draft just set; nil, at its end (found
     /// without counting a long draft's characters, as a tab switch does it).
@@ -178,7 +190,7 @@ struct ComposerView: View {
             }
             field
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
-            ComposerBar(chat: chat, attach: attach, slash: openSlash) { slashFrame.value = $0 }
+            ComposerBar(chat: chat, attach: attach, slash: toggleSlash) { slashFrame.value = $0 }
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { barFrame.value = $0 }
         }
         .modeOutline(chat.controls.activeMode.rung, focused: focused.wrappedValue, highlighted: dropTargeted.value)
@@ -379,9 +391,49 @@ struct ComposerView: View {
         let range = selectedRange ?? draft.endIndex..<draft.endIndex
         let spaced = range.lowerBound > draft.startIndex && !draft[draft.index(before: range.lowerBound)].isWhitespace
         let offset = draft.distance(from: draft.startIndex, to: range.lowerBound) + (spaced ? 2 : 1)
+        slashInsert.value = SlashInsert(
+            chat: chat.id, before: String(draft[..<range.lowerBound]) + (spaced ? " " : ""), spaced: spaced,
+            replaced: String(draft[range]))
         draft.replaceSubrange(range, with: spaced ? " /" : "/")
         chat.draft = draft
         place(at: offset)
+    }
+
+    /// The / button: with the menu showing for a "/word", the menu closes and the word goes, the
+    /// caret where it was. One the button put in goes as it came (`SlashInsert`); one typed goes
+    /// with a space after it (`SlashToken.removal`). The text view makes the edit, so ⌘Z puts
+    /// the word back. A Codex "$skill" is the message's own text: the menu only closes over it.
+    /// Without the menu, the button opens it (`openSlash`).
+    private func toggleSlash() {
+        guard !slashMatches.isEmpty, let token = slashToken else { return openSlash() }
+        focused.wrappedValue = true
+        guard token.sigil == "/", !composing else {
+            chat.slashClosed = true
+            return
+        }
+        let draft = chat.draft
+        let inserted = slashInsert.value.flatMap { $0.chat == chat.id && draft[..<token.range.lowerBound] == $0.before ? $0 : nil }
+        slashInsert.value = nil
+        var removed = token.removal(in: draft)
+        var replacement = ""
+        if let inserted {
+            removed = (inserted.spaced ? draft.index(before: token.range.lowerBound) : token.range.lowerBound)..<token.range.upperBound
+            replacement = inserted.replaced
+        }
+        let range = NSRange(removed, in: draft)
+        if let view = editor.view, view.shown == draft, view.shouldChangeText(in: range, replacementString: replacement) {
+            view.breakUndoCoalescing()
+            view.replaceCharacters(in: range, with: replacement)
+            view.didChangeText()
+            view.breakUndoCoalescing()
+            // The text the "/" took the place of comes back selected, as it was.
+            view.setSelectedRange(NSRange(location: range.location, length: (replacement as NSString).length))
+        } else {
+            var text = draft
+            text.replaceSubrange(removed, with: replacement)
+            chat.draft = text
+            place(at: draft.distance(from: draft.startIndex, to: removed.lowerBound) + replacement.count)
+        }
     }
 
     /// A pick replaces the "/word" it was filtered by: a command goes to the chip (one per

@@ -42,6 +42,30 @@ struct SlashCommandTests {
         #expect(start.replacing(in: "/", with: "") == ("", 0))
     }
 
+    /// The text left when the / button takes a typed "/word" out, the caret at `|`.
+    func removed(_ marked: String) -> String? {
+        let caret = marked.firstIndex(of: "|") ?? marked.endIndex
+        var text = marked
+        text.remove(at: caret)
+        guard let found = token(marked) else { return nil }
+        var left = text
+        left.removeSubrange(found.removal(in: text))
+        return left
+    }
+
+    @Test func theButtonTakesATypedWordOutWithOneSpace() {
+        #expect(removed("/|") == "")
+        #expect(removed("/re|") == "")
+        #expect(removed("/re|view") == "view")
+        #expect(removed("/re|fix the bug") == "fix the bug")
+        #expect(removed("/re| the login fix") == "the login fix")
+        #expect(removed("fix /re| the login") == "fix the login")
+        #expect(removed("fix the login /re|") == "fix the login ")
+        #expect(removed("fix\n/re| more") == "fix\nmore")
+        #expect(removed("fix /re|\nmore") == "fix \nmore")
+        #expect(removed("fix  /re|  more") == "fix   more")
+    }
+
     @Test func theChipGoesFirstInTheMessage() {
         #expect(Chat.message(command: Self.review, draft: "  the login fix \n") == "/review the login fix")
         #expect(Chat.message(command: Self.review, draft: "") == "/review")

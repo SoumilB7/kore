@@ -34,4 +34,15 @@ struct SlashToken: Equatable {
         let head = before + insertion
         return (String(head + after), head.count)
     }
+
+    /// What taking the token out of `text` removes: the token, and one space after it when it
+    /// starts the text or follows whitespace, so the words it parted keep one space between.
+    /// Nothing past the caret but that space: what follows is the message's own text.
+    func removal(in text: String) -> Range<String.Index> {
+        let start = range.lowerBound
+        guard start == text.startIndex || text[text.index(before: start)].isWhitespace,
+            range.upperBound < text.endIndex, text[range.upperBound] == " "
+        else { return range }
+        return start..<text.index(after: range.upperBound)
+    }
 }

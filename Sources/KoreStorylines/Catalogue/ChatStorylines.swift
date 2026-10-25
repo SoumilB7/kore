@@ -490,6 +490,65 @@ final class SlashMenuCaret: ChatStoryline {
     }
 }
 
+/// The / key again with its menu showing closes the menu, and the "/word" goes: one the key put
+/// in goes with the space it put before it, the text it took the place of back and selected;
+/// one typed goes with a space after it, and nothing past the caret. ⌘Z puts it back.
+final class SlashKeyCloses: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { SlashMenuCaret.script }
+
+    override func steps() -> [any Step] {
+        let row = Locator.id(StoryID.Composer.command("review"))
+        let slash = Locator.id(StoryID.Composer.slash)
+        return super.steps() + [
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Press(slash),
+            WaitForElement(row),
+            Press(slash),
+            ExpectElement(row, .absent),
+            SlashMenuCaret.expectComposer("the menu closed, the “/” gone", chip: nil, ""),
+            Key(.cmd("z")),
+            Expect("⌘Z: the “/” back") { try $0.activeChat().draft == "/" },
+            Key(.cmd("a")),
+            Key(KeyChord(.backspace)),
+            SlashMenuCaret.expectComposer("cleared", chip: nil, ""),
+            TypeText("fix the bug"),
+            Press(slash),
+            WaitForElement(row),
+            SlashMenuCaret.expectComposer("“ /” after the word", chip: nil, "fix the bug /"),
+            TypeText("re"),
+            Press(slash),
+            ExpectElement(row, .absent),
+            SlashMenuCaret.expectComposer("“ /re” gone with the key's space", chip: nil, "fix the bug"),
+            TypeText(" /rev"),
+            WaitForElement(row),
+            Press(slash),
+            ExpectElement(row, .absent),
+            SlashMenuCaret.expectComposer("the typed “/rev” gone, the space before it kept", chip: nil, "fix the bug "),
+            Key(KeyChord(.left, .command)),
+            TypeText("/re"),
+            WaitForElement(row),
+            Press(slash),
+            ExpectElement(row, .absent),
+            SlashMenuCaret.expectComposer("“/re” gone, the text after the caret kept", chip: nil, "fix the bug ", at: 0),
+            Key(.cmd("a")),
+            Press(slash),
+            WaitForElement(row),
+            SlashMenuCaret.expectComposer("the selection replaced by “/”", chip: nil, "/"),
+            Press(slash),
+            ExpectElement(row, .absent),
+            Expect("the text back, selected", found: { story in
+                (SlashMenuCaret.caret(story).map { "“\($0.draft)”" } ?? "no text in focus")
+                    + ((story.window?.firstResponder as? NSTextView).map { " selected \($0.selectedRange())" } ?? "")
+            }) { story in
+                guard let editor = story.window?.firstResponder as? NSTextView else { return false }
+                let draft = try story.activeChat().draft
+                return editor.string == "fix the bug " && editor.selectedRange() == NSRange(location: 0, length: 12) && draft == "fix the bug "
+            },
+        ]
+    }
+}
+
 /// Live (`--live haiku`, `--live gpt-6-luna`): a command picked into the chip is sent and runs.
 /// Claude runs the folder's own /ping with the typed text as its arguments; Codex takes /goal as
 /// a goal, not as a prompt.
