@@ -7,9 +7,22 @@ import SwiftUI
 /// between is lost.
 @MainActor
 final class ScrollShift: ObservableObject {
+    private static let known = NSMapTable<NSScrollView, ScrollShift>(keyOptions: .weakMemory, valueOptions: .weakMemory)
     fileprivate weak var scrollView: NSScrollView?
     /// Called when its window comes back into view or to the front.
     var onReturn: (() -> Void)?
+    /// A single absolute position replaces any retained edge/row scroll target at pinch begin.
+    var onZoomBegin: ((CGFloat) -> Void)?
+
+    func attach(_ scroll: NSScrollView) {
+        if let old = scrollView, Self.known.object(forKey: old) === self { Self.known.removeObject(forKey: old) }
+        scrollView = scroll
+        Self.known.setObject(self, forKey: scroll)
+    }
+
+    static func beginZoom(in scroll: NSScrollView) {
+        known.object(forKey: scroll)?.onZoomBegin?(scroll.contentView.bounds.minY)
+    }
 
     /// AppKit's own geometry: the content's frame and the visible part of it.
     var frames: (content: CGRect, visible: CGRect)? {
@@ -72,7 +85,7 @@ final class ScrollShift: ObservableObject {
 
             override func viewDidMoveToWindow() {
                 super.viewDidMoveToWindow()
-                if let scroll = enclosingScrollView { shift?.scrollView = scroll }
+                if let scroll = enclosingScrollView { shift?.attach(scroll) }
                 observers.forEach(NotificationCenter.default.removeObserver)
                 observers = []
                 guard let window else { return }

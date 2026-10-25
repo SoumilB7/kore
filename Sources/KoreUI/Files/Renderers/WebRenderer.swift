@@ -99,8 +99,11 @@ private struct HTMLView: View {
         if recent.last?.page === page { return }
         recent.removeAll { $0.page == nil || $0.page === page }
         recent.append(Weak(page: page))
-        // The oldest that isn't on screen (another window can show one).
-        while recent.count > limit, let index = recent.firstIndex(where: { $0.page?.onScreen == false }) {
+        // The page being shown has not joined its container yet. It must survive even
+        // when every older page is still mounted (including one in another window).
+        while recent.count > limit,
+            let index = recent.firstIndex(where: { $0.page !== page && $0.page?.onScreen == false })
+        {
             recent.remove(at: index).page?.release()
         }
     }

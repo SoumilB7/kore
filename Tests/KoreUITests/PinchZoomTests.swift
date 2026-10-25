@@ -144,6 +144,25 @@ struct PinchZoomTests {
         #expect(pinch.counts.cancellations == 1)
     }
 
+    @Test func beginningAPinchReplacesTheScrollTargetOnlyOnce() {
+        let (window, scroll, _, point) = editor()
+        let shift = ScrollShift()
+        shift.attach(scroll)
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 300))
+        var frozen: [CGFloat] = []
+        shift.onZoomBegin = { frozen.append($0) }
+        let pinch = PinchZoom(zoom: Zoom(saved: 1, persist: { _ in }))
+        pinch.attach(window)
+        defer { pinch.detach(); shift.onZoomBegin = nil; window.contentView = nil }
+        let offset = scroll.contentView.bounds.minY
+        #expect(pinch.receive(0, phase: .began, at: point))
+        #expect(frozen == [offset])
+        for _ in 0..<120 { #expect(pinch.receive(0.0001, phase: .changed, at: point)) }
+        #expect(frozen == [offset])
+        #expect(pinch.receive(0, phase: .cancelled, at: point))
+        #expect(frozen == [offset])
+    }
+
     @Test func nativeMagnifyingScrollViewsAndUnphasedInputAreNotCaptured() {
         let (window, scroll, _, point) = editor()
         let zoom = Zoom(saved: 1, persist: { _ in Issue.record("Native gestures must not change app zoom") })

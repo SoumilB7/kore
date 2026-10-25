@@ -138,6 +138,7 @@ package final class PinchZoom {
             let local = clip.convert(point, from: nil)
             session = Session(scroll: scroll, layer: layer, backed: backed, base: zoom.scale, point: local,
                               anchor: capture(scroll: scroll, source: source, point: point))
+            ScrollShift.beginZoom(in: scroll)
         }
         guard let session else { return false }
         guard !phase.contains(.cancelled), !session.finishing, session.scroll?.window === window,

@@ -136,6 +136,7 @@ struct TranscriptTimeline: View, Equatable {
             .defaultScrollAnchor(.bottom, for: .alignment)
             .onScrollPhaseChange { old, new, context in
                 gesturing.value = new != .idle
+                guard !shift.zoomAdjusting else { return }
                 if new == .interacting {
                     following.value = false
                     // The reader took over: a place still being restored or kept is dropped.
@@ -158,6 +159,12 @@ struct TranscriptTimeline: View, Equatable {
                 // Under another tab, nobody reads or scrolls it: its moves are layout's and a glide's
                 // still under way, and say nothing of where the reader is. It shows as it was left.
                 if hidden {
+                    geometry.value = (height, offset)
+                    return
+                }
+                // Keep measuring, but let neither a retained bottom target nor restoration,
+                // paging or folding replace the absolute position held during a pinch.
+                if shift.zoomAdjusting {
                     geometry.value = (height, offset)
                     return
                 }
@@ -288,6 +295,16 @@ struct TranscriptTimeline: View, Equatable {
                 follow(proxy, showing: showing)
             }
             .onAppear {
+                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, insetTop] offset in
+                    glidingUntil.value = nil
+                    glideCut.value = store.sentAt
+                    var instant = Transaction()
+                    instant.disablesAnimations = true
+                    withTransaction(instant) {
+                        position.value.scrollTo(y: offset + insetTop.value)
+                        nudge.value &+= 1
+                    }
+                }
                 // Back from behind other windows, a scroll view has come back with nothing drawn.
                 shift.onReturn = { [shown] in if shown.value { checkBlank() } }
                 if StoryHost.installed {
@@ -332,6 +349,7 @@ struct TranscriptTimeline: View, Equatable {
                 }
             }
             .onDisappear {
+                shift.onZoomBegin = nil
                 // The row nearest the top of the visible area, and how far below its top that is
                 // (negative: above it). It comes back exactly, however the rows above it measure
                 // when they're built again.
@@ -463,7 +481,7 @@ struct TranscriptTimeline: View, Equatable {
             tops.value[id] = top
             answerTops.value[id] = top
             // Back on screen after turns went in above: on by what the move missed.
-            guard let top, let kept = anchor.value, kept.id == id, kept.placed, abs(top) < visible.value else { return }
+            guard !shift.zoomAdjusting, let top, let kept = anchor.value, kept.id == id, kept.placed, abs(top) < visible.value else { return }
             anchor.value = nil
             let dy = top - (kept.top - readerMoved.value.by)
             geometry.value.offset += dy
