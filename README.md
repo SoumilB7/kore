@@ -50,7 +50,9 @@ or an editor extension, and the other way round.
 3. On first launch macOS asks before opening an app from outside the App Store. Open Kore once,
    then allow it under **System Settings → Privacy & Security → Open Anyway**.
 
-Kore requires macOS 15 or later and the `claude` and/or `codex` CLI.
+Kore requires macOS 15 or later and the `claude` and/or `codex` CLI. If one is missing, a new
+tab offers to install it, with the CLI's official installer or with Homebrew or npm when the
+Mac has them.
 
 ### The `kore` command
 

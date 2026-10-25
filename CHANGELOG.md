@@ -33,6 +33,7 @@ First release.
 - Accounts: sign in, sign out and switch accounts for both CLIs.
 - Usage: plan limits and reset times, read without spending a turn.
 - Attachments by paste, drop or `+`, with an image editor for markup.
+- Install a missing `claude` or `codex` CLI from a new tab.
 - Stay-awake while chats work; a notice when the network drops.
 - The `kore` command: `kore <folder>` opens a folder, `kore setup` installs missing CLIs.
 
