@@ -87,10 +87,16 @@ enum Size {
     static let tab: CGFloat = 30
     /// A tab at its narrowest: its mark and its ×.
     static let tabMinWidth: CGFloat = 48
-    static let tabMaxWidth: CGFloat = 180
-    /// Narrower than this, tabs show their marks alone, and the active one's name shows before
-    /// them, at most `tabNameMax` wide (and a quarter of the room).
+    static let tabMaxWidth: CGFloat = 220
+    /// Narrower than this, tabs show their names' first letters, clipped, and the active one's
+    /// name shows before them, at most `tabNameMax` wide (and a quarter of the room).
     static let tabNamed: CGFloat = 90
+    /// The narrowest a tab with its first letters gets: past it the strip scrolls, and only a
+    /// strip too narrow for one such tab shows marks alone. The × lies over the letters' end,
+    /// which fade out under it, clear for its last `tabLettersClear`.
+    static let tabLetters: CGFloat = 72
+    static let tabLettersFade: CGFloat = 10
+    static let tabLettersClear: CGFloat = 14
     static let tabNameMax: CGFloat = 160
     /// `»N` after a strip that scrolls.
     static let tabOverflow: CGFloat = 36
@@ -136,6 +142,9 @@ enum Size {
     static let dropZone: CGFloat = 56
     static let dropDash: [CGFloat] = [4, 3]
     static let menuMax: CGFloat = 260
+    /// `»N`'s list: eight 28pt rows and half of the next, under `menuMax`, so it shows there are
+    /// more to scroll to.
+    static let hiddenTabsMax: CGFloat = 244
     /// The / menu: five 28pt rows and half of the next, so it shows there are more to scroll to.
     static let slashMenuMax: CGFloat = 158
     /// A message waiting for the limit's reset, quoted in its notice: at most this wide.

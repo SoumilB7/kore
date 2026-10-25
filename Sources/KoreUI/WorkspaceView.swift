@@ -199,7 +199,7 @@ struct TabBar: View {
             HStack(spacing: Size.tabGap) {
                 ForEach(Array(workspace.tabs.enumerated()), id: \.element.id) { index, tab in
                     let dragged = drag.value?.id == tab.id
-                    TabItem(tab: tab, workspace: workspace, height: tabHeight, named: strip.named, isActive: workspace.activeID == tab.id)
+                    TabItem(tab: tab, workspace: workspace, height: tabHeight, label: strip.label, isActive: workspace.activeID == tab.id)
                         // The close question takes the room it needs.
                         .frame(width: strip.width(index))
                         .offset(x: shift(index, slot: strip.slot))
@@ -287,18 +287,21 @@ extension TabBar {
     }
 }
 
-/// The tab strip's layout, from its width alone: tabs share it at 180 down to `Size.tabNamed`
-/// each, then show their marks alone, the active tab's name before them, down to
-/// `Size.tabMinWidth`; past that the strip scrolls, `»N` after it counting the tabs out of view.
+/// The tab strip's layout, from its width alone: tabs share it at 220 down to `Size.tabNamed`
+/// each, then show their names' first letters, the active tab's name before them, down to
+/// `Size.tabLetters`; past that the strip scrolls, `»N` after it counting the tabs out of view,
+/// as many whole tabs in view as fit. A strip too narrow for one such tab shows marks alone.
 /// Arithmetic, so a switch, a new tab or a scroll measures nothing.
 struct TabStrip: Equatable {
+    /// What a tab shows beside its mark.
+    enum Label { case name, letters, mark }
+
     let count: Int
     /// The tab asking before its close stops a turn: wider than the rest.
     let asking: Int?
     /// Each tab's width, but the asking one's.
     let tab: CGFloat
-    /// Wide enough for names; else marks alone.
-    let named: Bool
+    let label: Label
     /// The active tab's name before the strip, this wide; 0 while the tabs show theirs.
     let name: CGFloat
     /// More tabs than fit at their narrowest: the strip scrolls, `»N` after it.
@@ -319,17 +322,31 @@ struct TabStrip: Equatable {
             return (room - gaps) / n
         }
         var room = width
-        named = width >= required(Size.tabNamed)
-        let label = min(Size.tabNameMax, width / 4)
-        name = !named && label >= Size.tabMinWidth ? label : 0
+        let named = width >= required(Size.tabNamed)
+        let title = min(Size.tabNameMax, width / 4)
+        name = !named && title >= Size.tabMinWidth ? title : 0
         if name > 0 { room -= name + gap }
-        overflows = room < required(Size.tabMinWidth)
+        overflows = room < required(Size.tabLetters)
         if overflows { room -= Size.tabOverflow + gap }
         self.count = count
         self.asking = asking
-        tab = min(Size.tabMaxWidth, max(Size.tabMinWidth, share(room)))
+        if !overflows {
+            label = named ? .name : .letters
+            tab = min(Size.tabMaxWidth, max(Size.tabMinWidth, share(room)))
+        } else if room >= Size.tabLetters {
+            // Whole tabs across the room, scrolled to the start.
+            let fit = max(1, ((room + gap) / (Size.tabLetters + gap)).rounded(.down))
+            label = .letters
+            tab = min(Size.tabNamed, (room + gap) / fit - gap)
+        } else {
+            label = .mark
+            tab = Size.tabMinWidth
+        }
         visible = max(0, room)
     }
+
+    /// Wide enough for names.
+    var named: Bool { label == .name }
 
     var slot: CGFloat { tab + Size.tabGap }
     private var extra: CGFloat { asking == nil ? 0 : max(0, Size.tabAsking - tab) }
@@ -565,7 +582,7 @@ private struct HiddenTabsList: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: Space.xxs) {
+                LazyVStack(spacing: 0) {
                     ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
                         row(tab, lit: (lit.value ?? 0) == index)
                             .highlightRow(StoryID.Titlebar.hiddenTab(tab.id), lit: (lit.value ?? 0) == index) { lit.value = index }
@@ -578,8 +595,8 @@ private struct HiddenTabsList: View {
                 if let index, tabs.indices.contains(index) { proxy.scrollTo(tabs[index].id) }
             }
         }
-        // As tall as its rows, up to the room the window gives it.
-        .frame(width: width, height: min(max(listHeight.value, 1), room))
+        // As tall as its rows, up to eight and a half of them and the room the window gives it.
+        .frame(width: width, height: min(max(listHeight.value, 1), Size.hiddenTabsMax, room))
         .panel(.panel)
         .cornerMarks(Theme.cornerOption)
         .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
@@ -608,7 +625,8 @@ private struct HiddenTabsList: View {
                     .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
                 Spacer(minLength: 0)
             }
-            .padding(Inset.row)
+            .padding(.horizontal, Space.md)
+            .frame(height: Size.Picker.row)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -657,8 +675,8 @@ private struct TabItem: View {
     let tab: ChatTab
     let workspace: Workspace
     let height: CGFloat
-    /// Wide enough for its name; else its mark alone, centred.
-    let named: Bool
+    /// Its name; else its name's first letters, the × over their end; else its mark alone, centred.
+    let label: TabStrip.Label
     /// A switch changes only the old and new tab, rather than every tab observing activeID.
     let isActive: Bool
     @StateObject private var hovered = Local(false)
@@ -704,7 +722,7 @@ private struct TabItem: View {
         Group {
             if workspace.asking(tab) { question } else { item }
         }
-        // Width set by the tab bar (180 down to 48, like browser tabs); titles truncate, then go.
+        // Width set by the tab bar (220 down to 48, like browser tabs); titles truncate, clip, then go.
         .frame(height: height)
         .background(
             isActive ? Theme.surface : (hovered.value ? Theme.tabHover : .clear),
@@ -749,68 +767,111 @@ private struct TabItem: View {
         .transition(.opacity.animation(Motion.fade))
     }
 
+    /// The × shows: on hover, on the active tab, and as a dirty file's dot.
+    private var closeShown: Bool { hovered.value || isActive || dirty }
+
     private var item: some View {
         // Two sibling buttons (select, close) rather than tap gestures: plain clicks, nothing
         // to compete with the title bar's own window dragging.
         HStack(spacing: 0) {
-            Button {
-                workspace.select(tab)
-                // A double click on a preview tab keeps it (VS Code). Read from the event, so
-                // no second gesture competes with the button or the window drag.
-                if NSApp.mouseClickCount == 2 { workspace.keep(tab) }
-            } label: {
-                HStack(spacing: Space.md) {
-                    TabMark(tab: tab, active: isActive, story: StoryID.Tabs.tab(tab.id), tint: TabMark.fileTint(tab, in: workspace.files))
-                        .frame(maxWidth: named ? nil : .infinity)
-                    if named {
-                        Text(tab.title)
-                            .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
-                            .foregroundStyle(TabMark.fileTint(tab, in: workspace.files) ?? (isActive ? Theme.text : Theme.secondary))
-                            .strikethrough(tab.file?.notice == .deleted)
-                            .lineLimit(1)
-                            // A fork's title is cut in the middle, so " (fork)" always shows.
-                            .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
-                        if let parent = duplicateParent {
-                            Text(parent).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                }
-                .padding(.leading, named ? Space.xl : Space.sm)
-                .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            // Attach to the selection button too: its hit area owns hover over a clipped name.
-            .help(help)
-            .accessibilityLabel(tab.title)
-            .storyID(storyKey)
-            Button {
-                workspace.requestClose(tab)
-            } label: {
-                Group {
-                    if dirty && !closeHovered.value {
-                        // VS Code's dirty dot, turning back into the × under the pointer.
-                        Circle()
-                            .fill(isActive ? Theme.text : Theme.secondary)
-                            .frame(width: Size.Editor.tabDirty, height: Size.Editor.tabDirty)
-                    } else {
-                        Image(systemName: "xmark")
-                            .font(Chrome.glyphClose)
-                            .foregroundStyle(Theme.secondary)
-                    }
-                }
-                .frame(width: Size.closeGlyph, height: Size.closeGlyph)
-                .hitTarget(Self.closeReach)
-            }
-            .buttonStyle(.plain)
-            .hitTargetRoom(Self.closeRoom)
-            .onHover { closeHovered.value = $0 }
-            .opacity(hovered.value || isActive || dirty ? 1 : 0)
-            .help("Close tab")
-            // Hidden on an inactive tab until hover: pressed by its action.
-            .storyID(storyKey.part(.close), press: { workspace.requestClose(tab) })
+            select
+            if label != .letters { close }
         }
+        // Over the letters' end, so nothing moves as it shows.
+        .overlay(alignment: .trailing) {
+            if label == .letters { close }
+        }
+    }
+
+    private var select: some View {
+        Button {
+            workspace.select(tab)
+            // A double click on a preview tab keeps it (VS Code). Read from the event, so
+            // no second gesture competes with the button or the window drag.
+            if NSApp.mouseClickCount == 2 { workspace.keep(tab) }
+        } label: {
+            HStack(spacing: label == .letters ? Space.sm : Space.md) {
+                TabMark(tab: tab, active: isActive, story: StoryID.Tabs.tab(tab.id), tint: TabMark.fileTint(tab, in: workspace.files))
+                    .frame(maxWidth: label == .mark ? .infinity : nil)
+                if label == .letters {
+                    letters
+                } else if label == .name {
+                    Text(tab.title)
+                        .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
+                        .foregroundStyle(TabMark.fileTint(tab, in: workspace.files) ?? (isActive ? Theme.text : Theme.secondary))
+                        .strikethrough(tab.file?.notice == .deleted)
+                        .lineLimit(1)
+                        // A fork's title is cut in the middle, so " (fork)" always shows.
+                        .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
+                    if let parent = duplicateParent {
+                        Text(parent).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.leading, label == .name ? Space.xl : label == .letters ? Space.md : Space.sm)
+            .padding(.trailing, label == .letters ? Space.md : 0)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // Attach to the selection button too: its hit area owns hover over a clipped name.
+        .help(help)
+        .accessibilityLabel(tab.title)
+        .storyID(storyKey)
+    }
+
+    /// The name's first letters, as many as the room takes, cut with no ellipsis; fading out
+    /// under the × while it shows.
+    private var letters: some View {
+        Color.clear
+            .overlay(alignment: .leading) {
+                Text(tab.title)
+                    .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
+                    .foregroundStyle(TabMark.fileTint(tab, in: workspace.files) ?? (isActive ? Theme.text : Theme.secondary))
+                    .strikethrough(tab.file?.notice == .deleted)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .clipped()
+            .mask {
+                HStack(spacing: 0) {
+                    Rectangle()
+                    if closeShown {
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: Size.tabLettersFade)
+                        Color.clear.frame(width: Size.tabLettersClear)
+                    }
+                }
+            }
+    }
+
+    private var close: some View {
+        Button {
+            workspace.requestClose(tab)
+        } label: {
+            Group {
+                if dirty && !closeHovered.value {
+                    // VS Code's dirty dot, turning back into the × under the pointer.
+                    Circle()
+                        .fill(isActive ? Theme.text : Theme.secondary)
+                        .frame(width: Size.Editor.tabDirty, height: Size.Editor.tabDirty)
+                } else {
+                    Image(systemName: "xmark")
+                        .font(Chrome.glyphClose)
+                        .foregroundStyle(Theme.secondary)
+                }
+            }
+            .frame(width: Size.closeGlyph, height: Size.closeGlyph)
+            .hitTarget(Self.closeReach)
+        }
+        .buttonStyle(.plain)
+        .hitTargetRoom(Self.closeRoom)
+        .onHover { closeHovered.value = $0 }
+        .opacity(closeShown ? 1 : 0)
+        .help("Close tab")
+        // Hidden on an inactive tab until hover: pressed by its action.
+        .storyID(storyKey.part(.close), press: { workspace.requestClose(tab) })
     }
 
     private func startRename() {
@@ -865,14 +926,12 @@ private struct TabMark: View {
                     .storyMark(story.part(running ? .working : .done))
             } else if !running, tab.agent == nil, chat.interruptedByAccount {
                 // Its work stopped for an account switch or sign-out: worth a look.
-                Text("⚠").font(Chrome.body).foregroundStyle(Theme.warning)
-                    .frame(width: Size.spinner, height: Size.spinner)
+                TabWarning()
                     .help("Stopped by an account change")
                     .storyMark(story.part(.stoppedForAccount))
             } else if running, tab.agent == nil, chat.isBusy || chat.isWaitingForNetwork, chat.connection.stuck {
                 // Offline or stalled: nothing to spin for (the chat's row says which).
-                Text("⚠").font(Chrome.body).foregroundStyle(Theme.warning)
-                    .frame(width: Size.spinner, height: Size.spinner)
+                TabWarning()
                     .help(chat.connection.word ?? "")
                     .storyMark(story.part(.stuck))
             } else if running {
@@ -889,6 +948,17 @@ private struct TabMark: View {
                 .frame(width: Size.logoTab, height: Size.logoTab)
                 .storyMark(StoryID(.tabs, "empty", key: tab.id.uuidString))
         }
+    }
+}
+
+/// A tab's warning: the symbol in the spinner's slot, as every other mark in the strip.
+private struct TabWarning: View {
+    var body: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(Theme.warning)
+            .frame(width: Size.spinner, height: Size.spinner)
     }
 }
 

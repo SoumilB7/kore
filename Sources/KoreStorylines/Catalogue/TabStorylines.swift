@@ -162,10 +162,10 @@ final class TabMemory {
 
 
 
-/// Thirty tabs in a window a thousand points wide: they shrink to their marks, the active tab's
-/// name shows before them, and `»N` counts the tabs out of view. Its list holds them, a running
-/// chat with its spinner and a file among them; picking one shows it and brings it into view, as
-/// ⌘9 and a new tab do. Closed back down to four, the strip is as it was.
+/// Thirty tabs in a window a thousand points wide: they shrink to their first letters, the
+/// active tab's name shows before them, and `»N` counts the tabs out of view. Its list holds
+/// them, a running chat with its spinner and a file among them; picking one shows it and brings
+/// it into view, as ⌘9 and a new tab do. Closed back down to four, the strip is as it was.
 final class TabOverflow: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .gate] }
     override class var script: CLIScript { CLIScript(turns: [[.startTurn, .wait(.interrupt), .finishTurn(.interrupted)]]) }

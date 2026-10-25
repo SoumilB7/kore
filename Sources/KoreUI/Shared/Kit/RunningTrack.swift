@@ -3,15 +3,17 @@ import SwiftUI
 
 /// The Agents button's running marks. Core Animation moves one dash around the capsule;
 /// steady motion needs no SwiftUI frame callback. Count changes briefly animate the layout.
+/// `bare`, the marks alone, in the same width: no capsule, no dash.
 struct RunningTrack: View {
     let indexes: [Int]
     var background = false
+    var bare = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.hiddenTab) private var hidden
 
     var body: some View {
         Track(width: Self.width(indexes.count), indexes: Array(indexes.prefix(3)),
-              background: background, still: reduceMotion || hidden)
+              background: background, bare: bare, still: reduceMotion || hidden)
             .animation(reduceMotion || hidden ? nil : Motion.fade, value: indexes.count)
             .accessibilityHidden(true)
     }
@@ -26,6 +28,7 @@ struct RunningTrack: View {
         var width: CGFloat
         let indexes: [Int]
         let background: Bool
+        let bare: Bool
         let still: Bool
 
         nonisolated var animatableData: CGFloat {
@@ -34,7 +37,7 @@ struct RunningTrack: View {
         }
 
         var body: some View {
-            Native(indexes: indexes, background: background, still: still)
+            Native(indexes: indexes, background: background, bare: bare, still: still)
                 .frame(width: width, height: Size.agentTrack + Stroke.emphasis)
         }
     }
@@ -42,11 +45,12 @@ struct RunningTrack: View {
     private struct Native: NSViewRepresentable {
         let indexes: [Int]
         let background: Bool
+        let bare: Bool
         let still: Bool
 
         func makeNSView(context: Context) -> RunningTrackHost { RunningTrackHost() }
         func updateNSView(_ view: RunningTrackHost, context: Context) {
-            view.configure(indexes: indexes, background: background, still: still)
+            view.configure(indexes: indexes, background: background, bare: bare, still: still)
         }
         static func dismantleNSView(_ view: RunningTrackHost, coordinator: ()) { view.detach() }
     }
@@ -125,6 +129,7 @@ final class RunningTrackHost: NSView {
     private(set) var indexes: [Int] = []
     private var leaving: [Int] = []
     private var background = false
+    private var bare = false
     private var still = false
     private var laidOut = CGSize.zero
     private var observer: RunningTrackObservation?
@@ -156,12 +161,13 @@ final class RunningTrackHost: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func configure(indexes: [Int], background: Bool, still: Bool) {
+    func configure(indexes: [Int], background: Bool, bare: Bool = false, still: Bool) {
         let indexes = Array(indexes.prefix(3))
-        guard self.indexes != indexes || self.background != background || self.still != still else { return }
+        guard self.indexes != indexes || self.background != background || self.bare != bare || self.still != still else { return }
         if self.indexes != indexes { leaving = self.indexes }
         self.indexes = indexes
         self.background = background
+        self.bare = bare
         self.still = still
         refresh()
     }
@@ -231,7 +237,7 @@ final class RunningTrackHost: NSView {
 
     private func refresh() {
         let geometry = RunningTrackGeometry(size: bounds.size)
-        let running = !still && windowVisible && window != nil && !isHiddenOrHasHiddenAncestor
+        let running = !still && !bare && windowVisible && window != nil && !isHiddenOrHasHiddenAncestor
             && !indexes.isEmpty && geometry.perimeter > 0
         let time = now()
         phase.update(perimeter: geometry.perimeter, running: running, at: time)
@@ -242,6 +248,8 @@ final class RunningTrackHost: NSView {
         for layer in [track, dash] + marks { layer.frame = CGRect(origin: .zero, size: bounds.size) }
         track.path = geometry.path
         dash.path = geometry.path
+        track.isHidden = bare
+        dash.isHidden = bare
         track.lineDashPattern = background ? Stroke.backgroundDash.map { NSNumber(value: Double($0)) } : nil
         let length = min(RunningTrackGeometry.dashLength, geometry.perimeter)
         dash.lineDashPattern = geometry.perimeter > 0

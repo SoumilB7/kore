@@ -3,33 +3,43 @@ import Testing
 
 @testable import KoreUI
 
-/// The tab strip's layout from its width: names, then marks alone with the active name before
-/// them, then a strip that scrolls with `»N`; what's in view as it scrolls, and how far to
-/// scroll to bring a tab into view.
+/// The tab strip's layout from its width: names, then first letters with the active name before
+/// them, then a strip that scrolls with `»N`, marks alone only where one tab with letters won't
+/// fit; what's in view as it scrolls, and how far to scroll to bring a tab into view.
 struct TabStripTests {
     @Test func fewTabsShowTheirNamesAtFullWidth() {
-        let strip = TabStrip(count: 3, width: 3 * 184)
+        let strip = TabStrip(count: 3, width: 3 * (Size.tabMaxWidth + Size.tabGap))
         #expect(strip.named && strip.name == 0 && !strip.overflows)
         #expect(strip.tab == Size.tabMaxWidth)
         #expect(strip.content <= strip.visible)
     }
 
-    @Test func narrowTabsLoseTheirNamesAndTheActiveOneShowsBefore() {
-        // Twelve tabs in 800: 63 each, too narrow for names.
-        let strip = TabStrip(count: 12, width: 800)
-        #expect(!strip.named && !strip.overflows)
+    @Test func narrowTabsKeepTheirFirstLettersAndTheActiveNameShowsBefore() {
+        // Ten tabs in 925: 72 each beside the name, too narrow for names.
+        let strip = TabStrip(count: 10, width: 925)
+        #expect(strip.label == .letters && !strip.overflows)
         #expect(strip.name == Size.tabNameMax)
-        #expect(strip.tab >= Size.tabMinWidth && strip.tab < Size.tabNamed)
+        #expect(strip.tab >= Size.tabLetters && strip.tab < Size.tabNamed)
         // The name and the tabs fill the width, nothing scrolls.
-        #expect(abs(strip.name + Size.tabGap + strip.content - 800) < 0.01)
+        #expect(abs(strip.name + Size.tabGap + strip.content - 925) < 0.01)
         #expect(strip.visible > strip.content - 0.01)
     }
 
     @Test func pastTheirNarrowestTheStripScrollsWithRoomForN() {
         let strip = TabStrip(count: 30, width: 600)
-        #expect(strip.overflows && strip.tab == Size.tabMinWidth)
+        #expect(strip.overflows && strip.label == .letters)
+        #expect(strip.tab >= Size.tabLetters && strip.tab < Size.tabNamed)
         #expect(abs(strip.visible - (600 - strip.name - Size.tabOverflow - 2 * Size.tabGap)) < 0.01)
         #expect(strip.content > strip.visible)
+        // Whole tabs across the room, none cut at its end.
+        let slots = (strip.visible + Size.tabGap) / strip.slot
+        #expect(abs(slots - slots.rounded()) < 0.01)
+    }
+
+    @Test func marksAloneOnlyWhereOneTabWithLettersWontFit() {
+        let strip = TabStrip(count: 30, width: 100)
+        #expect(strip.overflows && strip.label == .mark && strip.tab == Size.tabMinWidth)
+        #expect(strip.visible < Size.tabLetters)
     }
 
     @Test func oneTabNeverOverflows() {

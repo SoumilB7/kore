@@ -63,12 +63,14 @@ struct FailedAgentsTests {
         var summary = script.store.agentSummary
         #expect(summary.total == 6)
         #expect(AgentsButton.label(summary) == "1 running")
+        #expect(AgentsButton.count(summary) == 1)
         #expect(MapHeader.counts(summary) == ("6 · 1 running", " · 3 failed"))
 
         script.on(.agentFinished(id: "lead", .completed, result: "Led"))
         _ = script.sections
         summary = script.store.agentSummary
         #expect(AgentsButton.label(summary) == "6 agents")
+        #expect(AgentsButton.count(summary) == 6)
         #expect(MapHeader.counts(summary) == ("6", " · 3 failed"))
     }
 
@@ -81,6 +83,7 @@ struct FailedAgentsTests {
         _ = script.sections
         let summary = script.store.agentSummary
         #expect(AgentsButton.label(summary) == "2 stopped")
+        #expect(AgentsButton.count(summary) == 2)
         #expect(MapHeader.counts(summary).counts == "2")
     }
 

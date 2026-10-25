@@ -8,16 +8,17 @@ import SwiftUI
 struct AgentAvatar: View {
     enum Status: Equatable { case running, finished, failed, stopped }
 
-    /// Where it's drawn: shape size, halo (0 for none), box.
+    /// Where it's drawn: shape size, halo (0 for none), box. In the title row's stack (`title`)
+    /// it has no status points: the Agents button's corner point is the one cue.
     enum Place {
-        case timeline, mapRow, mapDetail, approval, crumb, tab, stack
+        case timeline, mapRow, mapDetail, approval, crumb, tab, stack, title
 
         var shape: CGFloat {
             switch self {
             case .timeline, .mapRow: 16
             case .mapDetail: 20
             case .approval: 14
-            case .crumb, .tab, .stack: 12
+            case .crumb, .tab, .stack, .title: 12
             }
         }
 
@@ -27,7 +28,7 @@ struct AgentAvatar: View {
             case .mapRow: 26
             case .mapDetail: 32
             case .approval: 20
-            case .crumb, .tab, .stack: 0
+            case .crumb, .tab, .stack, .title: 0
             }
         }
 
@@ -65,8 +66,8 @@ struct AgentAvatar: View {
             }
         }
         .frame(width: place.box, height: place.box)
-        .overlay(alignment: .topTrailing) { if waiting { point(Theme.warning) } }
-        .overlay(alignment: .bottomTrailing) { if status == .failed { point(Theme.danger) } }
+        .overlay(alignment: .topTrailing) { if waiting, place != .title { point(Theme.warning) } }
+        .overlay(alignment: .bottomTrailing) { if status == .failed, place != .title { point(Theme.danger) } }
         .overlay(alignment: .bottomLeading) {
             // The ninth agent on reuses the shapes, numbered.
             if round > 0 {
