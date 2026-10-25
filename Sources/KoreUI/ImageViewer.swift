@@ -1,7 +1,10 @@
+import AVFoundation
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// An image opened from a chip: zoom, pan, and mark it up with a pen before sending it.
+/// An image opened from a chip: zoom, pan, and mark it up with a pen before sending it. An SVG
+/// is shown by WebKit (`vector`) as vectors that animate: zoom and pan, no pen.
 @MainActor @Observable
 final class ImageEditor: Identifiable {
     struct Stroke {
@@ -39,6 +42,8 @@ final class ImageEditor: Identifiable {
 
     let id = UUID()
     let image: NSImage
+    /// The SVG's page, in place of `image` and the canvas.
+    let vector: VectorPage?
     /// The composer attachment this is, or nil for an image already sent.
     let pendingID: Attachment.ID?
     /// The original file, when there is one (Claude transcripts only keep the image data).
@@ -60,13 +65,26 @@ final class ImageEditor: Identifiable {
             image.size.width > 0, image.size.height > 0
         else { return nil }
         self.image = image
+        vector = nil
         pendingID = pending ? attachment.id : nil
         url = attachment.url
+    }
+
+    /// An SVG: read and measured by its page, off the main actor.
+    init(vector: VectorPage, pendingID: Attachment.ID?) {
+        image = NSImage(size: NSSize(width: 1, height: 1))
+        self.vector = vector
+        self.pendingID = pendingID
+        url = vector.url
+        vector.zoomChanged = { [weak self] zoom in
+            if let self, abs(self.zoom - zoom) > 0.0001 { self.zoom = zoom }
+        }
     }
 
     /// An image file opened in a tab: markup is added to a chat, never written to the file.
     init(image: NSImage, file url: URL) {
         self.image = image
+        vector = nil
         pendingID = nil
         self.url = url
     }
@@ -85,10 +103,16 @@ final class ImageEditor: Identifiable {
     func undo() { if !strokes.isEmpty { strokes.removeLast() } }
     func clear() { strokes.removeAll() }
 
-    func zoomIn() { scrollView?.zoom(by: 1.25) }
-    func zoomOut() { scrollView?.zoom(by: 0.8) }
-    func zoomToFit() { scrollView?.fit() }
-    func actualSize() { scrollView?.setZoom(1) }
+    func zoomIn() { if let vector { vector.zoom(by: 1.25) } else { scrollView?.zoom(by: 1.25) } }
+    func zoomOut() { if let vector { vector.zoom(by: 0.8) } else { scrollView?.zoom(by: 0.8) } }
+    func zoomToFit() { if let vector { vector.fit() } else { scrollView?.fit() } }
+    func actualSize() { if let vector { vector.setZoom(1) } else { scrollView?.setZoom(1) } }
+
+    /// Pen markup: on pictures, not on an SVG.
+    var markable: Bool { vector == nil }
+
+    /// The window it shows in.
+    var window: NSWindow? { canvas?.window ?? vector?.window }
 
     /// The image with its markup, at full resolution, as a new PNG file.
     func render() -> URL? {
@@ -97,7 +121,7 @@ final class ImageEditor: Identifiable {
 
     /// The image with its markup, at full resolution, as PNG data.
     func renderPNG() -> Data? {
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+        guard vector == nil, let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
             let space = CGColorSpace(name: CGColorSpace.sRGB),
             let context = CGContext(
                 data: nil, width: cgImage.width, height: cgImage.height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -124,21 +148,49 @@ final class ImageEditor: Identifiable {
     }
 }
 
-/// The modal over the chat: the image, a close button, and a toolbar along the bottom.
+/// What the chat's viewer shows: a picture (an SVG among them, as vectors) or a video.
+enum ViewerContent {
+    case image(ImageEditor)
+    case video(FileInfo, id: UUID)
+
+    var id: UUID {
+        switch self {
+        case .image(let editor): editor.id
+        case .video(_, let id): id
+        }
+    }
+
+    /// A chip's file as the viewer shows it; nil when there's nothing to show.
+    @MainActor static func make(_ attachment: Attachment, pending: Bool) -> ViewerContent? {
+        if let url = attachment.url, AttachedMedia.kind(of: url).video {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let file = FileInfo(url: url, type: UTType(filenameExtension: url.pathExtension), size: Int64(size), head: Data())
+            return .video(file, id: UUID())
+        }
+        if let url = attachment.url, attachment.kind == .image, VectorPage.handles(url) {
+            return .image(ImageEditor(vector: VectorPage(url: url), pendingID: pending ? attachment.id : nil))
+        }
+        return ImageEditor(attachment, pending: pending).map(ViewerContent.image)
+    }
+}
+
+/// The modal over the chat: the picture or the video, a close button, and for a picture a
+/// toolbar along the bottom (a video has AVKit's own controls).
 struct ImageViewer: View {
-    let editor: ImageEditor
+    let content: ViewerContent
     /// "Done" for a composer image (applies the markup), "Add to message" for a sent one.
     let actionTitle: String
     let finish: () -> Void
     let close: () -> Void
     @StateObject private var keyMonitor = Local<Any?>(nil)
+    @StateObject private var video = Held(VideoHandle())
 
     var body: some View {
         ZStack {
             Theme.background
-            ImageCanvas(editor: editor)
+            surface
                 .padding(.top, Layout.Viewer.canvasTop)
-                .padding(.bottom, Layout.Viewer.canvasBottom)
+                .padding(.bottom, editor == nil ? Layout.Viewer.canvasSide : Layout.Viewer.canvasBottom)
                 .padding(.horizontal, Layout.Viewer.canvasSide)
             VStack {
                 HStack {
@@ -147,8 +199,10 @@ struct ImageViewer: View {
                 }
                 .padding(Layout.Viewer.closeInset)
                 Spacer()
-                ImageToolbar(editor: editor, actionTitle: actionTitle, finish: finish)
-                    .padding(.bottom, Layout.Viewer.toolbarBottom)
+                if let editor {
+                    ImageToolbar(editor: editor, actionTitle: actionTitle, finish: finish)
+                        .padding(.bottom, Layout.Viewer.toolbarBottom)
+                }
             }
         }
         .transition(.opacity)
@@ -158,18 +212,46 @@ struct ImageViewer: View {
         .onDisappear {
             if let monitor = keyMonitor.value { NSEvent.removeMonitor(monitor) }
             keyMonitor.value = nil
+            video.value.player?.pause()
+        }
+    }
+
+    private var editor: ImageEditor? {
+        if case .image(let editor) = content { return editor }
+        return nil
+    }
+
+    @ViewBuilder private var surface: some View {
+        switch content {
+        case .image(let editor):
+            if let vector = editor.vector {
+                VectorCanvas(page: vector)
+                    .koreContextMenu("viewer", modal: true) { MediaMenu.items(.init(url: vector.url), openInKore: nil) }
+            } else {
+                ImageCanvas(editor: editor)
+            }
+        case .video(let file, _):
+            let handle = video.value
+            MediaFileView(
+                file: file,
+                context: RendererContext(
+                    reloadToken: 0, folder: file.url.deletingLastPathComponent(), openURL: { _ in }, zoom: 1, memory: RendererMemory()),
+                playerMade: { handle.player = $0 }
+            )
+            .background(WindowReader { handle.window = $0 })
+            .koreContextMenu("viewer", modal: true) { MediaMenu.items(.init(url: file.url), openInKore: nil) }
         }
     }
 
     /// While open, the viewer has this window's keys (whatever holds focus underneath): Esc
     /// closes, Return finishes, ⌘Z undoes a stroke, ⌘= ⌘- ⌘0 zoom the image instead of the
-    /// text. Other plain keys are swallowed so nothing types into the hidden composer;
-    /// other ⌘ shortcuts (⌘W, ⌘T…) still work.
+    /// text; for a video, Space plays and pauses. Other plain keys are swallowed so nothing
+    /// types into the hidden composer; other ⌘ shortcuts (⌘W, ⌘T…) still work.
     private func handleKey(_ event: NSEvent) -> NSEvent? {
-        guard let window = editor.canvas?.window, event.window === window else { return event }
+        guard let window = editor?.window ?? video.value.window, event.window === window else { return event }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.command) {
-            guard flags.subtracting(.shift) == .command else { return event }
+            guard let editor, flags.subtracting(.shift) == .command else { return event }
             switch event.charactersIgnoringModifiers {
             case "z": editor.undo()
             case "=", "+": editor.zoomIn()
@@ -181,7 +263,9 @@ struct ImageViewer: View {
         }
         switch event.keyCode {
         case 53: close()
-        case 36, 76: finish()
+        case 36, 76: if editor != nil { finish() }
+        case 49:
+            if let player = video.value.player { player.rate == 0 ? player.play() : player.pause() }
         default: break
         }
         return nil
@@ -192,7 +276,14 @@ struct ImageViewer: View {
     }
 }
 
-/// The viewer's bottom toolbar: zoom, the pen and its colours, undo, and the action. Shared by
+/// The viewer's video: its player once made, and its window, for the keys.
+private final class VideoHandle {
+    weak var player: AVPlayer?
+    weak var window: NSWindow?
+}
+
+/// The viewer's bottom toolbar: zoom, the pen and its colours, undo, and the action (no pen on
+/// an SVG). Shared by
 /// the modal and the image file tab.
 struct ImageToolbar: View {
     let editor: ImageEditor
@@ -239,37 +330,7 @@ struct ImageToolbar: View {
             }
             toolButton("arrow.up.left.and.arrow.down.right", help: "Fit (⌘0)", action: editor.zoomToFit)
             divider
-            toolButton("pencil", help: "Pen", isOn: editor.penOn) { editor.penOn.toggle() }
-            if editor.penOn {
-                if density == .full {
-                    ForEach(ImageEditor.PenColor.allCases, id: \.self) { color in
-                        Button {
-                            editor.color = color
-                        } label: {
-                            swatch(color, selected: editor.color == color)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                } else {
-                    OptionMenuButton(source: "pen-colour", items: {
-                        ImageEditor.PenColor.allCases.map { color in
-                            OptionItem(String(describing: color).capitalized, checked: editor.color == color) { editor.color = color }
-                        }
-                    }) {
-                        swatch(editor.color, selected: true)
-                    }
-                    .buttonStyle(.plain)
-                    .fixedSize()
-                    .help("Pen colour")
-                }
-            }
-            toolButton("arrow.uturn.backward", help: "Undo (⌘Z)", action: editor.undo)
-                .disabled(editor.strokes.isEmpty)
-            if density != .minimal {
-                toolButton("trash", help: "Clear markup", action: editor.clear)
-                    .disabled(editor.strokes.isEmpty)
-            }
-            divider
+            if editor.markable { pen(density) }
             if let secondary {
                 Button(secondary.title, action: secondary.run)
                     .buttonStyle(SubtleButtonStyle())
@@ -286,6 +347,41 @@ struct ImageToolbar: View {
                 .help(actionHelp ?? "\(actionTitle) (Return)")
                 .padding(.leading, Space.xs)
         }
+    }
+
+    /// The pen, its colours, undo and clear, then a divider before the action.
+    @ViewBuilder private func pen(_ density: Density) -> some View {
+        toolButton("pencil", help: "Pen", isOn: editor.penOn) { editor.penOn.toggle() }
+        if editor.penOn {
+            if density == .full {
+                ForEach(ImageEditor.PenColor.allCases, id: \.self) { color in
+                    Button {
+                        editor.color = color
+                    } label: {
+                        swatch(color, selected: editor.color == color)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+                OptionMenuButton(source: "pen-colour", items: {
+                    ImageEditor.PenColor.allCases.map { color in
+                        OptionItem(String(describing: color).capitalized, checked: editor.color == color) { editor.color = color }
+                    }
+                }) {
+                    swatch(editor.color, selected: true)
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .help("Pen colour")
+            }
+        }
+        toolButton("arrow.uturn.backward", help: "Undo (⌘Z)", action: editor.undo)
+            .disabled(editor.strokes.isEmpty)
+        if density != .minimal {
+            toolButton("trash", help: "Clear markup", action: editor.clear)
+                .disabled(editor.strokes.isEmpty)
+        }
+        divider
     }
 
     private func swatch(_ color: ImageEditor.PenColor, selected: Bool) -> some View {

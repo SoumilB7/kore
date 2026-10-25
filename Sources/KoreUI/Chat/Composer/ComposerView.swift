@@ -223,6 +223,7 @@ struct ComposerView: View {
                             ) {
                                 chat.removeAttachment(attachment.id)
                             }
+                            .storyID(StoryID.Composer.attachment(attachment.name))
                         }
                     }
                     .padding(.horizontal, Space.xl)

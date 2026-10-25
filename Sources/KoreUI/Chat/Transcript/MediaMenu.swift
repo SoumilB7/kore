@@ -3,8 +3,8 @@ import KoreCore
 import UniformTypeIdentifiers
 
 /// The right-click menu of an image or a file in a chat (a message's chip, a tool's file, a
-/// link to one), in Kore's own popup: copy it or its path, save a picture, open it in Kore or in
-/// its app, show it in Finder. "Open" is Kore's, as in the explorer. Copies go where the transcript's do (`TranscriptSelection.pasteboard`).
+/// link to one, the viewer's SVG or video), in Kore's own popup: copy it or its path, save a
+/// picture or a video, open it in Kore or in its app, show it in Finder. "Open" is Kore's, as in the explorer. Copies go where the transcript's do (`TranscriptSelection.pasteboard`).
 @MainActor
 enum MediaMenu {
     struct Target {
@@ -24,6 +24,7 @@ enum MediaMenu {
         }
 
         var isImage: Bool { image != nil || url.map { Attachments.kind(of: $0) == .image } == true }
+        var isVideo: Bool { url.map { AttachedMedia.kind(of: $0).video } == true }
         /// Its file, when it's still there.
         var file: URL? { url.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } }
     }
@@ -32,7 +33,8 @@ enum MediaMenu {
     static func items(_ target: Target, openInKore: (() -> Void)?) -> [OptionItem] {
         let file = target.file
         let image = target.isImage
-        let kind = image ? "image" : "file"
+        let video = !image && target.isVideo
+        let kind = image ? "image" : video ? "video" : "file"
         func act(_ name: String, _ body: @escaping () -> Void) -> () -> Void {
             { UILog.event("media-menu", ["kind": kind, "action": name]); body() }
         }
@@ -46,7 +48,7 @@ enum MediaMenu {
         }
         items.append(OptionItem("Copy Path", enabled: target.url != nil,
                                 action: act("copy-path") { if let url = target.url { copyPath(url, to: TranscriptSelection.pasteboard) } }))
-        if image {
+        if image || video {
             items.append(OptionItem("Save As…", enabled: file != nil || target.image != nil, action: act("save") { saveAs(target) }))
         }
         items.append(.rule)
@@ -120,7 +122,7 @@ enum MediaMenu {
                     try png.write(to: destination, options: .atomic)
                 }
             } catch {
-                UILog.event("media-save-failed", ["kind": "image"])
+                UILog.event("media-save-failed", ["kind": target.isVideo ? "video" : "image"])
             }
         }
         if let window = NSApp.keyWindow { panel.beginSheetModal(for: window, completionHandler: write) } else { panel.begin(completionHandler: write) }

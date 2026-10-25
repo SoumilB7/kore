@@ -2,10 +2,12 @@ import AppKit
 import SwiftUI
 
 /// An image file in the chat's image viewer: fitted, zoom and pan, and the pen. Markup never
-/// touches the file; "Add to Chat" attaches the marked-up copy to this window's chat.
+/// touches the file; "Add to Chat" attaches the marked-up copy to this window's chat. An SVG
+/// (`svg`, read by `SVGRenderer`) shows as vectors that animate, with no pen.
 struct ImageFileView: View {
     let file: FileInfo
     let context: RendererContext
+    var svg: SVGFile?
     private var url: URL { file.url }
     @StateObject private var editor = Local<ImageEditor?>(nil)
     @StateObject private var failed = Local(false)
@@ -15,7 +17,7 @@ struct ImageFileView: View {
     var body: some View {
         ZStack {
             if let editor = editor.value {
-                ImageCanvas(editor: editor)
+                canvas(editor)
                     .id(ObjectIdentifier(editor))
                     .padding(.horizontal, Layout.Viewer.canvasSide)
                     .padding(.top, Layout.Viewer.canvasSide)
@@ -43,6 +45,13 @@ struct ImageFileView: View {
         .onDisappear { if let editor = editor.value { state.leave(editor, token: context.reloadToken) } }
         .task(id: context.reloadToken) {
             let url = url
+            if let svg {
+                let made = ImageEditor(vector: VectorPage(url: url, data: svg.data, size: svg.size), pendingID: nil)
+                editor.value = made
+                RenderTiming.ready(SVGRenderer.id)
+                context.setFacts(["\(Int(svg.size.width)) × \(Int(svg.size.height))", FileEditorView.size(Int(file.size))])
+                return
+            }
             let loaded = await Task.detached(priority: .userInitiated) { LoadedImage(ImageEditor.load(url)) }.value
             guard let image = loaded.image else {
                 failed.value = true
@@ -56,6 +65,10 @@ struct ImageFileView: View {
             RenderTiming.ready(ImageRenderer.id)
             context.setFacts(Self.facts(image, url: url, size: file.size))
         }
+    }
+
+    @ViewBuilder private func canvas(_ editor: ImageEditor) -> some View {
+        if let vector = editor.vector { VectorCanvas(page: vector) } else { ImageCanvas(editor: editor) }
     }
 
     /// The chat nearest before this tab (or after it, if none is before).
@@ -87,6 +100,11 @@ struct ImageFileView: View {
     /// The image, with its markup when there is any.
     private func copy(_ editor: ImageEditor) {
         let board = NSPasteboard.general
+        if editor.vector != nil {
+            // The SVG's own bytes, with a picture of it for apps that don't read SVG.
+            MediaMenu.copyImage(.init(url: url), to: board)
+            return
+        }
         board.clearContents()
         if editor.strokes.isEmpty {
             board.writeObjects([editor.image])

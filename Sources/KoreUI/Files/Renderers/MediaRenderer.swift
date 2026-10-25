@@ -4,10 +4,12 @@ import SwiftUI
 
 /// Audio and video in AVKit's player (VS Code's media preview): video fitted with the inline
 /// controls; audio as its name over the controls. It never plays on its own, pauses when the
-/// tab is left, and comes back at the same time.
+/// tab is left (or the chat's viewer closes), and comes back at the same time.
 struct MediaFileView: View {
     let file: FileInfo
     let context: RendererContext
+    /// The player, once made (the chat's viewer plays and pauses it with Space).
+    var playerMade: (AVPlayer) -> Void = { _ in }
     @StateObject private var player = Local<AVPlayer?>(nil)
     @StateObject private var state = Local(MediaState.loading)
     /// The video's own size (points), which it's never scaled past.
@@ -79,6 +81,7 @@ struct MediaFileView: View {
         if let time = positions[url] { await player.seek(to: time) }
         self.player.value?.pause()
         self.player.value = player
+        playerMade(player)
         state.value = video ? .video : .audio
         RenderTiming.ready(MediaRenderer.id)
     }
@@ -103,6 +106,7 @@ private struct PlayerHost: NSViewRepresentable {
         view.videoGravity = .resizeAspect
         view.showsFullScreenToggleButton = true
         view.player = player
+        view.setStoryID(StoryID.Viewer.player)
         return view
     }
 

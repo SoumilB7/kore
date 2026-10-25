@@ -20,9 +20,9 @@ struct ChatView: View {
     @StateObject private var kept = KeptChats()
     /// The window is covered or minimised: its chats draw as hidden ones do.
     @StateObject private var occluded = Local(false)
-    /// The image open in the viewer, and the turn whose changes are open in the modal: the
-    /// active chat's, by its id, so a switch never shows them over another chat.
-    @StateObject private var viewer = Local<(chat: UUID, editor: ImageEditor)?>(nil)
+    /// The picture or video open in the viewer, and the turn whose changes are open in the
+    /// modal: the active chat's, by its id, so a switch never shows them over another chat.
+    @StateObject private var viewer = Local<(chat: UUID, content: ViewerContent)?>(nil)
     @StateObject private var changesTurn = Local<(chat: UUID, turn: String)?>(nil)
     /// ⌘. stops the shown chat's turn from anywhere in it: the monitor, and the chat it reads.
     @StateObject private var stopKey = Held<Any?>(nil)
@@ -108,7 +108,7 @@ struct ChatView: View {
                 }
             }
         }
-        .animation(Motion.fade, value: viewer.value?.editor.id)
+        .animation(Motion.fade, value: viewer.value?.content.id)
         .animation(Motion.fade, value: changesTurn.value?.turn)
         .animation(Motion.fade, value: chat.usage.extended)
         // The composer gives up its focus to the usage card and takes it back after.
@@ -158,10 +158,10 @@ struct ChatView: View {
         if let open = changesTurn.value, open.chat == chat.id {
             ChangesView(changes: chat.transcript.changes(ofTurn: open.turn), folder: chat.folder, close: closeChanges)
         } else if let open = viewer.value, open.chat == chat.id {
-            let editor = open.editor
+            let content = open.content
             ImageViewer(
-                editor: editor, actionTitle: editor.pendingID == nil ? "Add to message" : "Done",
-                finish: { finishViewing(editor, in: chat) }, close: closeViewer
+                content: content, actionTitle: Self.pending(content) ? "Done" : "Add to message",
+                finish: { if case .image(let editor) = content { finishViewing(editor, in: chat) } }, close: closeViewer
             )
         } else if chat.usage.extended {
             UsageModal(chat: chat, state: chat.usage, wording: chat.provider.usage)
@@ -216,8 +216,15 @@ struct ChatView: View {
     // MARK: Image viewer
 
     private func view(_ attachment: Attachment, of chat: Chat, pending: Bool) {
-        viewer.value = ImageEditor(attachment, pending: pending).map { (chat.id, $0) }
+        guard let content = ViewerContent.make(attachment, pending: pending) else { return }
+        viewer.value = (chat.id, content)
         composerFocused = false
+        if case .video = content { UILog.event("video-viewer", ["chat": chat.id.uuidString]) }
+    }
+
+    private static func pending(_ content: ViewerContent) -> Bool {
+        if case .image(let editor) = content { return editor.pendingID != nil }
+        return false
     }
 
     /// A composer image takes its markup in place; a sent image (marked up or not) is added to

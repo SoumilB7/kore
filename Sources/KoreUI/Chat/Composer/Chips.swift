@@ -26,8 +26,8 @@ struct PlanChip: View {
 
 // MARK: - Attachments
 
-/// An attached image (thumbnail, click to view) or file (icon + name); removable while still
-/// in the composer. Selected with the whole draft (⌘A), it takes the text selection's colour.
+/// An attached image or video (thumbnail, click to view; a video's first frame, marked) or file
+/// (icon + name); removable while still in the composer. Selected with the whole draft (⌘A), it takes the text selection's colour.
 struct AttachmentChip: View {
     let attachment: Attachment
     var selected = false
@@ -38,7 +38,7 @@ struct AttachmentChip: View {
 
     var body: some View {
         Group {
-            if let thumbnail = attachment.thumbnail {
+            if let thumbnail = attachment.thumbnail ?? attachment.poster?.image {
                 Button {
                     open?()
                 } label: {
@@ -54,6 +54,14 @@ struct AttachmentChip: View {
                                     .strokeBorder(Theme.Selection.chip(focused: focused), lineWidth: Stroke.emphasis)
                             } else {
                                 RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.border)
+                            }
+                        }
+                        .overlay(alignment: .bottomLeading) {
+                            if attachment.poster?.video == true {
+                                Image(systemName: "play.circle.fill")
+                                    .font(TextStyle.label)
+                                    .foregroundStyle(Theme.text, Theme.background)
+                                    .padding(Space.xs)
                             }
                         }
                         .contentShape(Rectangle())
@@ -80,6 +88,7 @@ struct AttachmentChip: View {
                 .help(attachment.url?.path ?? attachment.name)
             }
         }
+        .task { attachment.poster?.make() }
         .overlay(alignment: .topTrailing) {
             if let remove {
                 Button(action: remove) {

@@ -123,6 +123,8 @@ extension StoryID {
         package static let context = StoryID(.composer, "context")
         /// The command chip before the text.
         package static let chip = StoryID(.composer, "chip")
+        /// An attached file's chip, by its name.
+        package static func attachment(_ name: String) -> StoryID { StoryID(.composer, "attachment", key: name) }
         /// A row of the slash menu, by the command's name.
         package static func command(_ name: String) -> StoryID { StoryID(.composer, "command", key: name) }
         /// A row of the @ menu, by its kind and key ("file:README.md", "model:haiku").
@@ -338,6 +340,10 @@ extension StoryID {
     package enum Viewer {
         package static let close = StoryID(.viewer, "close")
         package static let add = StoryID(.viewer, "add")
+        /// An SVG's web view (the chat's viewer, an SVG file's tab).
+        package static let svg = StoryID(.viewer, "svg")
+        /// AVKit's player (the chat's viewer, a media file's tab).
+        package static let player = StoryID(.viewer, "player")
     }
 
     /// Every fixed name, for the not-found report's near misses and the grammar test (names with
@@ -366,10 +372,12 @@ extension StoryID {
             NewTab.install.part(.cancel), NewTab.install.part(.retry), NewTab.install.part(.copy), NewTab.install.part(.working),
             NewTab.install.part(.done),
             QuickOpen.field, Search.field, Search.include, Search.exclude, Changes.done, Viewer.close, Viewer.add,
+            Viewer.svg, Viewer.player,
         ]
         let keyed: [StoryID] = [
             StoryID(.tabs, "tab", key: k), StoryID(.tabs, "tab", key: k).part(.close), StoryID(.tabs, "file", key: k),
             StoryID(.newtab, "provider", key: k), StoryID(.newtab, "missing", key: k), StoryID(.composer, "queued", key: k),
+            StoryID(.composer, "attachment", key: k),
             StoryID(.composer, "queued", key: k).part(.cancel),
             StoryID(.composer, "command", key: k), StoryID(.composer, "usage.limit", key: k), StoryID(.composer, "account.field", key: k),
             StoryID(.composer, "account.method", key: k), StoryID(.composer, "account.choice", key: k),

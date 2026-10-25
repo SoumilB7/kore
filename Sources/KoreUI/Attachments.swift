@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import ImageIO
 import KoreCore
@@ -16,13 +17,24 @@ package struct Attachment: Identifiable {
     /// A picture known only from a transcript, as it was sent: decoded only when opened or copied.
     let imageData: Data?
     private let preview: Thumbnail?
+    /// A video's or an SVG's chip picture (ImageIO reads neither), made off the main actor.
+    let poster: Poster?
 
     init(url: URL) {
         self.url = url
         name = url.lastPathComponent
         kind = Attachments.kind(of: url)
         imageData = nil
-        preview = kind == .image ? Thumbnail { CGImageSourceCreateWithURL(url as CFURL, nil) } : nil
+        if AttachedMedia.kind(of: url).video {
+            preview = nil
+            poster = Poster(url: url, video: true)
+        } else if kind == .image, url.pathExtension.lowercased() == "svg" {
+            preview = nil
+            poster = Poster(url: url, video: false)
+        } else {
+            preview = kind == .image ? Thumbnail { CGImageSourceCreateWithURL(url as CFURL, nil) } : nil
+            poster = nil
+        }
     }
 
     init(name: String, kind: Kind, imageData: Data? = nil) {
@@ -31,11 +43,15 @@ package struct Attachment: Identifiable {
         self.kind = kind
         self.imageData = imageData
         preview = imageData.map { data in Thumbnail { CGImageSourceCreateWithData(data as CFData, nil) } }
+        poster = nil
     }
 
     /// The chip's picture, decoded at the chip's size (a screenshot's full bitmap is many MB,
     /// kept for as long as its chat is open); made on first use.
     var thumbnail: NSImage? { preview?.image }
+
+    /// The chip shows a picture (a thumbnail, or a poster once made), for storylines.
+    @MainActor package var showsPicture: Bool { thumbnail != nil || poster?.image != nil }
 
     /// The whole picture, for the viewer and copying: its file, else the data it was sent as.
     /// Decoded each time it's asked for, and not kept.
@@ -73,6 +89,64 @@ final class Thumbnail: @unchecked Sendable {
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+    }
+}
+
+/// A chip's picture for a video (its first frame) or an SVG (drawn), at `Thumbnail.maxPixels`:
+/// made once, off the main actor, when its chip first shows.
+@MainActor @Observable final class Poster {
+    private(set) var image: NSImage?
+    @ObservationIgnored let video: Bool
+    @ObservationIgnored private let url: URL
+    @ObservationIgnored private var started = false
+
+    nonisolated init(url: URL, video: Bool) {
+        self.url = url
+        self.video = video
+    }
+
+    func make() {
+        guard !started else { return }
+        started = true
+        let (url, video) = (url, video)
+        Task {
+            let made = await Task.detached(priority: .utility) { video ? await Self.frame(url) : Self.drawn(url) }.value
+            UILog.event("poster", ["kind": video ? "video" : "svg", "made": made == nil ? "0" : "1"])
+            guard let made else { return }
+            image = NSImage(cgImage: made.image, size: NSSize(width: made.image.width, height: made.image.height))
+        }
+    }
+
+    private struct Frame: @unchecked Sendable {
+        let image: CGImage
+    }
+
+    private nonisolated static func frame(_ url: URL) async -> Frame? {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: Thumbnail.maxPixels, height: Thumbnail.maxPixels)
+        guard let (image, _) = try? await generator.image(at: .zero) else { return nil }
+        return Frame(image: image)
+    }
+
+    private nonisolated static func drawn(_ url: URL) -> Frame? {
+        autoreleasepool {
+            guard let data = try? Data(contentsOf: url), let image = NSImage(data: data),
+                image.size.width > 0, image.size.height > 0
+            else { return nil }
+            let scale = CGFloat(Thumbnail.maxPixels) / max(image.size.width, image.size.height)
+            let width = max(1, Int((image.size.width * scale).rounded())), height = max(1, Int((image.size.height * scale).rounded()))
+            guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+                let context = CGContext(
+                    data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return nil }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+            image.draw(in: NSRect(x: 0, y: 0, width: width, height: height))
+            NSGraphicsContext.restoreGraphicsState()
+            return context.makeImage().map(Frame.init)
+        }
     }
 }
 

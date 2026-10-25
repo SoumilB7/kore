@@ -86,7 +86,9 @@ final class OptionsMenu {
                 return $0.window === window && !$0.isHiddenOrHasHiddenAncestor
                     && $0.bounds.contains(point) && $0.visibleRect.contains(point)
             }
-            if let target = targets.min(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }) {
+            // A modal's own menu, over whatever it covers.
+            let shown = targets.contains(where: \.modal) ? targets.filter(\.modal) : targets
+            if let target = shown.min(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }) {
                 target.show(event)
                 return nil
             }
@@ -331,12 +333,15 @@ private struct OptionsList: View {
 private struct ContextOptions: NSViewRepresentable {
     let items: () -> [OptionItem]
     let source: String
+    var modal = false
     func makeNSView(context: Context) -> Target { Target() }
-    func updateNSView(_ view: Target, context: Context) { view.items = items; view.source = source }
+    func updateNSView(_ view: Target, context: Context) { view.items = items; view.source = source; view.modal = modal }
     final class Target: NSView {
         static let all = NSHashTable<Target>.weakObjects()
         var items: (() -> [OptionItem])?
         var source = ""
+        /// Over the rest of the window (the image viewer): it wins over the targets it covers.
+        var modal = false
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             if window == nil { Self.all.remove(self) } else { Self.all.add(self) }
@@ -350,8 +355,8 @@ private struct ContextOptions: NSViewRepresentable {
 }
 
 extension View {
-    func koreContextMenu(_ source: String, items: @escaping () -> [OptionItem]) -> some View {
-        overlay { ContextOptions(items: items, source: source).accessibilityHidden(true) }
+    func koreContextMenu(_ source: String, modal: Bool = false, items: @escaping () -> [OptionItem]) -> some View {
+        overlay { ContextOptions(items: items, source: source, modal: modal).accessibilityHidden(true) }
     }
 }
 
