@@ -29,11 +29,11 @@ struct LoginMeters: View {
                         }
                     } else {
                         ForEach(bars, id: \.title) { bar in
-                            // The reset beside its limit's name, "Session (3h)": every login's bars
-                            // start and end in the same place, whatever their resets say.
+                            // The Usage popup's form: the limit's name, then "↻ 3h" at the row's
+                            // end. Every login's bars start and end in the same place, whatever
+                            // their resets say.
                             HStack(spacing: Space.md) {
-                                Text(Self.title(bar, now: now))
-                                    .monospacedDigit()
+                                Text(UsageText.label(bar.title))
                                     .lineLimit(1).truncationMode(.tail)
                                     .frame(width: labelWidth, alignment: .leading)
                                 UsageBar(fraction: UsageText.fraction(bar.used), kore: 0, hatch: 0)
@@ -45,6 +45,7 @@ struct LoginMeters: View {
                                         Text(UsageText.percent(bar.used)).foregroundStyle(Theme.secondary)
                                     }
                                     .monospacedDigit().fixedSize()
+                                reset(UsageText.resetsShort(bar.resetsAt, now: now))
                             }
                             .help([UsageText.resetsAt(bar.resetsAt, now: now), UsageText.stamp(at, now: now)].compactMap { $0 }.joined(separator: " · "))
                             .accessibilityElement(children: .ignore)
@@ -58,11 +59,24 @@ struct LoginMeters: View {
         .foregroundStyle(Theme.tertiary)
     }
 
-    /// A limit's name with its reset beside it: "Session (3h)", "Weekly (3d)"; the name alone
-    /// without a reset time.
-    static func title(_ bar: PlanLimit, now: Date) -> String {
+    /// A limit's reset as its row's end reads: "↻ 3h", "↻ 3d"; nothing without a reset time.
+    static func reset(_ bar: PlanLimit, now: Date) -> String {
         let reset = UsageText.resetsShort(bar.resetsAt, now: now)
-        return UsageText.label(bar.title) + (reset.isEmpty ? "" : " (\(reset))")
+        return reset.isEmpty ? "" : "↻ \(reset)"
+    }
+
+    /// The row's end: ↻ and the reset, as wide as "88m" whatever it says (blank without one), so
+    /// every row's bar ends in the same place.
+    private func reset(_ short: String) -> some View {
+        HStack(spacing: Space.xxs) {
+            Image(systemName: "arrow.clockwise").font(Glyph.chevron)
+            Text("88m").hidden()
+                .overlay(alignment: .leading) { Text(short) }
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
+        .opacity(short.isEmpty ? 0 : 1)
     }
 
     /// While the reading comes: the two rows as they'll stand, their bars hatched. Fainter, a
@@ -74,6 +88,7 @@ struct LoginMeters: View {
                 UsageBar(fraction: 0, kore: 1, hatch: 1)
                     .frame(minWidth: Size.usageBarMin, maxWidth: .infinity)
                 Text("100%").hidden().monospacedDigit().fixedSize()
+                reset("")
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(title), \(said)")
@@ -89,9 +104,8 @@ struct LoginMeters: View {
             return []
         }
         .map { UsageText.label($0.title) }
-        // Each name with the widest reset it can show, "(88m)", and the loading rows' names
-        // too: the column doesn't move as resets count down or readings arrive.
-        let widest = Set(names + ["Session", "Weekly"]).map { ("\($0) (88m)" as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        // The loading rows' names too: the column doesn't move as readings arrive.
+        let widest = Set(names + ["Session", "Weekly"]).map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
         return min(ceil(widest) + 2, Size.usageTitleMax)
     }
 

@@ -242,12 +242,19 @@ struct PlatformFormView: View {
             } else {
                 let error = state.formError
                 let words = error ?? form.caption(platform, keyTyped: !foundryKey.value.isEmpty)
-                Text(words)
-                    .font(TextStyle.caption)
-                    .foregroundStyle(error == nil ? Theme.tertiary : Theme.danger)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .help(words)
+                // A key kept in plain text is a fact to read before Save, not a hint.
+                let plain = error == nil && words == AccountText.savedPlainSecret
+                HStack(spacing: Space.xs) {
+                    if plain {
+                        Image(systemName: "exclamationmark.triangle").font(TextStyle.caption).foregroundStyle(Theme.warning)
+                    }
+                    Text(words)
+                        .font(TextStyle.caption)
+                        .foregroundStyle(error != nil ? Theme.danger : plain ? Theme.secondary : Theme.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .help(words)
                 Spacer(minLength: 0)
                 Button("Save", action: save)
                     .smallButton(prominent: true)

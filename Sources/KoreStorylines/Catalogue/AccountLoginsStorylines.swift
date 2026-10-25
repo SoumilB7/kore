@@ -380,7 +380,8 @@ final class AccountUsageMeters: ChatStoryline {
                 return reads.logins == ["main"] && lines["main"] == ["Session · 52%", "Weekly · 18%"]
                     && lines.filter { $0.key != "main" }.values.allSatisfy { $0 == ["Not read"] }
             },
-            Press(hover("unused@example.com")), Press(hover("missing@example.com")),
+            // One row under the pointer at a time: each rests long enough to be read.
+            Press(hover("unused@example.com")), RestPastHover(), Press(hover("missing@example.com")),
             Expect("main and unused login show separate totals; a mismatch shows unavailable", found: { $0.app.chat?.storyLoginUsage.description }) { story in
                 guard let lines = story.app.chat?.storyLoginUsage,
                     let unused = CLIProfiles.added(provider).first(where: { $0.email == "unused@example.com" }),
@@ -395,7 +396,7 @@ final class AccountUsageMeters: ChatStoryline {
                     let unused = CLIProfiles.added(provider).first(where: { $0.email == "unused@example.com" }),
                     let mismatch = CLIProfiles.added(provider).first(where: { $0.email == "missing@example.com" })
                 else { return false }
-                return resets["main"] == ["Session (2h)", "Weekly (3d)"]
+                return resets["main"] == ["Session ↻ 2h", "Weekly ↻ 3d"]
                     && resets[unused.id] == [] && resets[mismatch.id] == []
             },
             Expect("each login's plan as a pill where its account says one", found: { $0.app.chat?.storyLoginPlans.description }) { story in

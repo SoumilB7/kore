@@ -890,11 +890,14 @@ private struct LoginMenuButton: View {
 /// caption its plan and method and a ✓, main's "Main"; a login last read signed out says so, and
 /// a duplicate says "Duplicate", quietly. A row switches to its login (its caption, under the
 /// pointer, the working chats that stops); its ⋯ (on hover) holds its methods and Remove. Only the
-/// active login's usage is read when the card opens; another's when its row is hovered.
+/// active login's usage is read when the card opens; another's when its row is hovered. Every row
+/// sits on the card's ground: one fill, under the pointer.
 private struct LoginList: View {
     let state: AccountState
     let provider: String
     let identity: AccountIdentity?
+    /// The row under the pointer, by login key: one at a time, as a pointer is.
+    @StateObject private var hovered = Local<String?>(nil)
     private var store: AccountStore { .shared }
 
     var body: some View {
@@ -904,12 +907,16 @@ private struct LoginList: View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let usages = keys.map { LoginUsage.shared.state($0) }
             let labelWidth = LoginMeters.labelWidth(usages, now: context.date)
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: Space.md) {
                 ForEach(Array(logins.enumerated()), id: \.element.id) { index, login in
+                    let key = AccountStore.loginKey(login.id)
                     LoginRow(
                         state: state, login: login, caption: caption(login), plan: login.active ? identity?.plan : nil,
                         reading: login.active && identity == nil && store.status(provider) == .unknown,
-                        usage: usages[index], usageKey: keys[index], now: context.date, labelWidth: labelWidth)
+                        usage: usages[index], usageKey: keys[index], now: context.date, labelWidth: labelWidth,
+                        hovered: hovered.value == key) { on in
+                        if on { hovered.value = key } else if hovered.value == key { hovered.value = nil }
+                    }
                 }
             }
         }
@@ -945,7 +952,9 @@ struct LoginRow: View {
     let usageKey: LoginUsage.Key
     let now: Date
     let labelWidth: CGFloat
-    @StateObject private var hovered = Local(false)
+    /// Under the pointer: the list keeps one row hovered at a time.
+    let hovered: Bool
+    let hover: (Bool) -> Void
     @Environment(TabStops.self) private var stops: TabStops?
 
     /// How long the pointer rests on a row before its login is read: passing over it reads nothing.
@@ -965,21 +974,18 @@ struct LoginRow: View {
                         .help(title)
                     Spacer(minLength: Space.md)
                     if let pill = LoginRow.pill(usage, plan: plan) { PlanPill(text: pill) }
-                    // One slot in every row, hovered or not: the pills line up.
-                    HStack(spacing: Space.xs) {
-                        // Its place kept while hidden: hovering never changes the row's size.
-                        if hovered.value || menuOpen {
+                    // One trailing slot in every row, ✓ or (on hover) ⋯: the pills line up beside it.
+                    ZStack {
+                        if hovered || menuOpen {
                             LoginMenuButton(state: state, login: login.id)
-                        } else {
-                            Color.clear.frame(width: Size.MessageActions.button, height: Size.MessageActions.button)
-                        }
-                        if reading {
+                        } else if reading {
                             SpinningArc().frame(width: Size.spinner, height: Size.spinner)
                         } else if login.active {
                             Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
                         }
                     }
-                    .frame(width: Size.iconButtonSmall + Space.xs + Size.spinner, alignment: .trailing)
+                    // A fixed size: hovering never changes the row's.
+                    .frame(width: Size.MessageActions.button, height: Size.MessageActions.button)
                 }
                 if let caption {
                     Text(caption).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
@@ -991,16 +997,16 @@ struct LoginRow: View {
             .padding(.horizontal, Space.sm)
             .padding(.vertical, Space.xs)
             .frame(maxWidth: .infinity, minHeight: Size.Picker.method, alignment: .leading)
-            .hoverFill(hovered.value && !login.active, Theme.Row.hover(.surface))
+            .hoverFill(hovered && !login.active, Theme.Row.hover(.surface))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .fixedSize(horizontal: false, vertical: true)
-        .onHover { hovered.value = $0 }
+        .onHover(perform: hover)
         .storyID(id)
-        .storyAction(id.part(.hover)) { hovered.value = true }
-        .task(id: !login.active && (hovered.value || stops?.current == id.raw)) {
-            guard !login.active, hovered.value || stops?.current == id.raw else { return }
+        .storyAction(id.part(.hover)) { hover(true) }
+        .task(id: !login.active && (hovered || stops?.current == id.raw)) {
+            guard !login.active, hovered || stops?.current == id.raw else { return }
             try? await Task.sleep(for: Self.hoverRead)
             guard !Task.isCancelled else { return }
             LoginUsage.shared.hover(usageKey)
@@ -1083,23 +1089,8 @@ private struct LoginFallback: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
             HStack(spacing: Space.sm) {
-                Button(callback ? "Paste callback URL…" : "Enter sign-in code…") { state.enterSignInCode() }
-                    .smallButton()
-                    .storyID(fieldID.part(.open))
-                    .tabStop(fieldID.part(.open)) { state.enterSignInCode() }
-                if store.methods(provider).contains(where: { $0.kind == .deviceCode }) {
-                    Button("Use Device Code") { state.useDeviceCode() }
-                        .smallButton()
-                        .storyID(fieldID.part(.method))
-                        .tabStop(fieldID.part(.method)) { state.useDeviceCode() }
-                }
-            }
-            if state.editor == .login {
-                Text(callback ? "Paste the full localhost URL from your browser after signing in." : "Paste the code returned by the sign-in page.")
-                    .font(TextStyle.caption)
-                    .foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: Space.sm) {
+                // The button turns into the field: its placeholder says what goes in.
+                if state.editor == .login {
                     SecureField("", text: $input.value, prompt: Text(callback ? "Callback URL" : "Sign-in code").foregroundStyle(Theme.tertiary))
                         .focused($focused)
                         .fieldWell(focused: focused)
@@ -1110,11 +1101,22 @@ private struct LoginFallback: View {
                         .smallButton(prominent: true)
                         .disabled(sending.value || input.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .storyID(fieldID.part(.submit))
+                } else {
+                    Button(callback ? "Paste callback URL…" : "Enter sign-in code…") { state.enterSignInCode() }
+                        .smallButton()
+                        .storyID(fieldID.part(.open))
+                        .tabStop(fieldID.part(.open)) { state.enterSignInCode() }
                 }
-                if let error = reason.value {
-                    Text(error).font(TextStyle.caption).foregroundStyle(Theme.danger)
-                        .fixedSize(horizontal: false, vertical: true)
+                if store.methods(provider).contains(where: { $0.kind == .deviceCode }) {
+                    Button("Use Device Code") { state.useDeviceCode() }
+                        .smallButton()
+                        .storyID(fieldID.part(.method))
+                        .tabStop(fieldID.part(.method)) { state.useDeviceCode() }
                 }
+            }
+            if state.editor == .login, let error = reason.value {
+                Text(error).font(TextStyle.caption).foregroundStyle(Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .onDisappear { input.value = "" }
