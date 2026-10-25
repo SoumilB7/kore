@@ -87,6 +87,9 @@ final class OpenedMessageView: NSScrollView {
         contentView.automaticallyAdjustsContentInsets = false
         drawsBackground = false
         contentView.drawsBackground = false
+        // Its clip's moves aren't the transcript's: SwiftUI's lazy stack took them for its own
+        // scroll, and a jump to the end after one built no rows there (a blank transcript).
+        contentView.postsBoundsChangedNotifications = false
         borderType = .noBorder
     }
 

@@ -172,3 +172,90 @@ private struct ExpectPlace: Step {
     }
 }
 
+
+/// A long message opened and closed at the top of a long answer, then a jump to the end in one
+/// go (the scroll bar, End): the transcript draws its rows there at once, in the scroll view it
+/// had, never blank until the next scroll.
+final class LongMessageJumpToEnd: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(LongMessageOpens.reply)]) }
+
+    override func steps() -> [any Step] {
+        let row = Locator.userMessage(1)
+        return super.steps() + [
+            Send(LongMessageOpens.prompt), TurnFinished(1), WaitIdle(),
+            Scroll(row, to: .top),
+            WaitForElement(row.action(.toggle)),
+            Click(row.action(.toggle)),
+            WaitForElement(row.action(.open)),
+            Wheel(row.action(.open), by: 120),
+            Key(.cmd("a")),
+            CopySelection(LongMessageOpens.prompt),
+            Key(.escape),
+            ExpectElement(row.action(.open), .absent),
+            ClickText(Spot.message(1, at: LongMessageOpens.prompt, "Line 3")),
+            WaitForElement(row.action(.open)),
+            ClickText(Spot.answer(1, [0], at: LongMessageOpens.first, "answer")),
+            ExpectElement(row.action(.open), .absent),
+            WaitIdle(),
+            KeepScrollView(row),
+            Scroll(.answer(turn: 1), to: .bottom), WaitIdle(),
+            Snapshot("long-message-jumped"),
+            ExpectDrawnAtEnd(),
+        ]
+    }
+
+    /// The transcript's scroll view before the jump: one built again for a blank isn't a pass.
+    final class Kept { weak var scroll: NSScrollView? }
+}
+
+private struct KeepScrollView: Step {
+    let box: Locator
+    init(_ box: Locator) { self.box = box }
+    var label: String { "Keep the transcript's scroll view" }
+
+    func run(_ story: StoryContext) async throws {
+        let element = try await story.element(box)
+        guard let scroll = LongMessageOpens.scrollView(element.registeredView) else { throw StoryFailure.other("\(box) isn't in a scroll view") }
+        story.stash(LongMessageJumpToEnd.Kept.self) { .init() }.scroll = scroll
+    }
+}
+
+/// Within a second (before the blank check builds the scroll view again): the visible part on
+/// the content, at its end, with layers drawing there.
+private struct ExpectDrawnAtEnd: Step {
+    var label: String { "Expect the transcript's end drawn, in the same scroll view" }
+
+    func run(_ story: StoryContext) async throws {
+        var seen = "no scroll view kept"
+        do {
+            try await story.until("the end drawn", timeout: .seconds(1)) {
+                guard let scroll = story.stash(LongMessageJumpToEnd.Kept.self, make: { .init() }).scroll, scroll.window != nil,
+                    let document = scroll.documentView
+                else { seen = "the kept scroll view is gone (built again)"; return false }
+                let visible = document.convert(scroll.contentView.bounds, from: scroll.contentView)
+                let drawn = Self.drawn(document, in: visible)
+                seen = "document \(Int(document.frame.height)), visible \(Int(visible.minY))–\(Int(visible.maxY)), \(drawn) layers drawn"
+                return document.bounds.intersects(visible) && visible.maxY >= document.bounds.maxY - 60 && drawn > 0
+            }
+        } catch StoryFailure.timedOut {
+            throw StoryFailure.expectation("rows drawn at the end (found \(seen))")
+        }
+    }
+
+    /// Layers with contents in the visible part, as the timeline's blank check counts them.
+    @MainActor static func drawn(_ document: NSView, in visible: CGRect) -> Int {
+        guard let root = document.layer else { return 0 }
+        var count = 0
+        func walk(_ layer: CALayer, depth: Int) {
+            for sub in layer.sublayers ?? [] where !sub.isHidden && sub.opacity > 0 {
+                let frame = sub.convert(sub.bounds, to: root)
+                guard frame.intersects(visible) else { continue }
+                if sub.contents != nil { count += 1 }
+                if depth < 6 { walk(sub, depth: depth + 1) }
+            }
+        }
+        walk(root, depth: 0)
+        return count
+    }
+}
