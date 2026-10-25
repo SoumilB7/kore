@@ -30,6 +30,13 @@ search_path() {
 
 find_cli() {
     local found
+    # The app's own locator first: the same places the New tab checks (npm, nvm, app bundles,
+    # editor extensions…), each one asked for --version. Tests skip it with KORE_SETUP_PATH.
+    if [[ -z "${KORE_SETUP_PATH:-}" && -x "$app/Contents/MacOS/Kore" ]] &&
+        found=$("$app/Contents/MacOS/Kore" --locate-cli "$1" 2>/dev/null) && [[ "$found" == /* ]]; then
+        print -r -- "$found"
+        return
+    fi
     found=$(PATH="$(search_path)"; command -v -- "$1" 2>/dev/null) || return 1
     [[ "$found" == /* ]] && print -r -- "$found"
 }
