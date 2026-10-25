@@ -24,4 +24,17 @@ struct LongContextModelsTests {
         let models = ClaudeBackend.withLongContext(listed, applied: "claude-fable-5-1[1m]")
         #expect(models.map(\.id).contains("fable[1m]"))
     }
+
+    /// Some CLI catalogs name models by family alone: the version comes from the resolved id.
+    @Test func bareFamilyNamesGetTheirVersion() {
+        #expect(ClaudeBackend.versioned("Opus", resolved: "claude-opus-5-5") == "Opus 5.5")
+        #expect(ClaudeBackend.versioned("Fable", resolved: "claude-fable-5-1") == "Fable 5.1")
+        #expect(ClaudeBackend.versioned("Sonnet", resolved: "claude-sonnet-5") == "Sonnet 5")
+        #expect(ClaudeBackend.versioned("Haiku", resolved: "claude-haiku-4-5-20251001") == "Haiku 4.5")
+        #expect(ClaudeBackend.versioned("Opus", resolved: "claude-opus-5-5[1m]") == "Opus 5.5")
+        // Named with a version already, or not the family the id says: as the CLI has it.
+        #expect(ClaudeBackend.versioned("Opus 5.5", resolved: "claude-opus-5-5") == "Opus 5.5")
+        #expect(ClaudeBackend.versioned("Default (recommended)", resolved: "claude-opus-5-5") == "Default (recommended)")
+        #expect(ClaudeBackend.versioned("Opus", resolved: "opus") == "Opus")
+    }
 }

@@ -224,9 +224,10 @@ final class ClaudeBackend: ChatBackend {
     private func controls(_ session: ClaudeSession) async -> ChatControls {
         let listed = (await session.capabilities["models"]?.array ?? []).compactMap { json -> ModelOption? in
             guard let value = json["value"]?.string, value != "default" else { return nil }
+            let resolved = json["resolvedModel"]?.string ?? value
             return ModelOption(
-                id: value, name: json["displayName"]?.string ?? value,
-                resolved: json["resolvedModel"]?.string ?? value,
+                id: value, name: Self.versioned(json["displayName"]?.string ?? value, resolved: resolved),
+                resolved: resolved,
                 efforts: json["supportedEffortLevels"]?.array?.compactMap(\.string) ?? [],
                 supportsAutoMode: json["supportsAutoMode"]?.bool ?? false)
         }
@@ -246,6 +247,22 @@ final class ClaudeBackend: ChatBackend {
             controls.effort = applied["effort"]?.string
         }
         return controls
+    }
+
+    /// The CLI names a model by its version ("Opus 5.5") or, with some of its catalogs, by its
+    /// family alone ("Opus"): the version then comes from the model it resolves to
+    /// (`claude-opus-5-5`), so the picker shows the same either way.
+    nonisolated static func versioned(_ name: String, resolved: String) -> String {
+        guard ModelFamily.split(name).version == nil else { return name }
+        var parts = resolved.replacingOccurrences(of: "[1m]", with: "").split(separator: "-").map(String.init)
+        guard parts.first == "claude" else { return name }
+        parts.removeFirst()
+        // A dated id ends in its date: not part of the version.
+        if let last = parts.last, last.count == 8, last.allSatisfy(\.isNumber) { parts.removeLast() }
+        let numbers = parts.reversed().prefix { $0.count <= 2 && $0.allSatisfy(\.isNumber) }.reversed()
+        let family = parts.dropLast(numbers.count).joined(separator: " ")
+        guard !numbers.isEmpty, family.caseInsensitiveCompare(name) == .orderedSame else { return name }
+        return name + " " + numbers.joined(separator: ".")
     }
 
     /// The CLI lists no 1M-context models, though it takes `opus[1m]` and `sonnet[1m]` (and a
