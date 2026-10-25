@@ -1205,6 +1205,9 @@ extension Workspace {
     }
 
     private func place(_ chat: Chat, on board: BoardModel, section: UUID?, slot: UUID?, drop: BoardDrop?) {
+        // Dropped on a slot's middle: into the slot.
+        var slot = slot
+        if slot == nil, case .swap(let target)? = drop, board.isSlot(target) { slot = target }
         if let slot, board.board.tiles.contains(where: { $0.id == slot }), board.chats[slot] == nil {
             board.place(chat, in: slot)
             board.focus(slot)

@@ -63,8 +63,7 @@ struct TileView: View {
                         if was, !now { model.turnEnded(chat) }
                     }
             } else {
-                SlotView(workspace: workspace, tab: tab, model: model, section: nil, slot: tile)
-                    .background(Theme.Board.tile, in: RoundedRectangle(cornerRadius: Radius.panel))
+                SlotTile(workspace: workspace, tab: tab, model: model, tile: tile, density: Density.of(size))
             }
         }
         .overlay {
@@ -467,6 +466,57 @@ struct SlotView: View {
     }
 }
 
+/// A slot tile: full size, the picker inline; smaller, a dashed outline and a ＋ that opens it
+/// as a Kore popup. Hovered, the ＋ lifts and × (closes it, its room back to its neighbours)
+/// shows; neither changes size.
+struct SlotTile: View {
+    let workspace: Workspace
+    let tab: ChatTab
+    let model: BoardModel
+    let tile: UUID
+    let density: Density
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        let radius = density == .chip ? Radius.control : Radius.panel
+        ZStack(alignment: density == .chip ? .trailing : .topTrailing) {
+            if density == .full {
+                SlotView(workspace: workspace, tab: tab, model: model, section: nil, slot: tile)
+                    .background(Theme.Board.tile, in: RoundedRectangle(cornerRadius: radius))
+            } else {
+                BoardMenuButton(source: "board-slot", symbol: "plus", lit: hovered.value, items: { BoardMenus.slot(tile, workspace: workspace, tab: tab) })
+                    .storyID(StoryID.Board.slotAdd(tile), press: {
+                        OptionsMenu.shared.showAtPointer(BoardMenus.slot(tile, workspace: workspace, tab: tab), in: workspace.window, source: "board-slot")
+                    })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            Button {
+                model.edit { $0.closeSlot(tile) }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(Chrome.caption)
+                    .foregroundStyle(Theme.tertiary)
+                    .frame(width: Size.Board.slotButton, height: Size.Board.slotButton)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, Space.xs)
+            .opacity(hovered.value ? 1 : 0)
+            .storyID(StoryID.Board.slotClose(tile), press: { model.edit { $0.closeSlot(tile) } })
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {
+            RoundedRectangle(cornerRadius: radius)
+                .strokeBorder(hovered.value ? Theme.Board.slotLineHover : Theme.Board.slotLine, style: StrokeStyle(lineWidth: Stroke.hairline, dash: Size.Board.slotDash))
+                .allowsHitTesting(false)
+        }
+        .contentShape(Rectangle())
+        .onHover { hovered.value = $0 }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Empty slot")
+    }
+}
+
 /// A section: its header (swatch, name, count, and ＋ / ⋯ in room it keeps for them) over its
 /// body, where its tiles are drawn by the board; an empty one shows the picker there.
 struct SectionView: View {
@@ -580,6 +630,8 @@ struct SectionView: View {
 struct BoardMenuButton: View {
     let source: String
     var symbol = "ellipsis"
+    /// Lifted as if hovered (a slot's ＋ while the slot is).
+    var lit = false
     let items: () -> [OptionItem]
     @StateObject private var hovered = Local(false)
     @StateObject private var anchor = Held(Anchor())
@@ -594,9 +646,9 @@ struct BoardMenuButton: View {
         } label: {
             Image(systemName: symbol)
                 .font(Chrome.label)
-                .foregroundStyle(hovered.value ? Theme.text : Theme.secondary)
+                .foregroundStyle(hovered.value || lit ? Theme.text : Theme.secondary)
                 .frame(width: Size.Board.headerButton, height: Size.Board.headerButton)
-                .background(hovered.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+                .background(hovered.value || lit ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

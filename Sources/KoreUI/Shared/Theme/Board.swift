@@ -23,6 +23,14 @@ extension Size {
         static let sectionGap: CGFloat = 1
         /// A section line's grab, either side of it.
         static let sectionGrab: CGFloat = 4
+        /// A divider's grab into each tile's edge: with the gap, 16pt.
+        static let grab: CGFloat = 4
+        /// The grip at a divider's middle (across, along).
+        static let grip = CGSize(width: 6, height: 28)
+        /// A slot's ＋ and ×.
+        static let slotButton: CGFloat = 22
+        /// A slot's dashed outline: dash and space.
+        static let slotDash: [CGFloat] = [4, 3]
         /// A tile's header in a card or full tile; the move handle.
         static let tileHeader: CGFloat = 30
         /// A gutter pulls to a snap point this close.
@@ -62,6 +70,13 @@ extension Theme {
         static let dropLine = accentLine
         /// A gutter under the pointer or being dragged.
         static let gutterHot = accent
+        /// The grip on a hovered divider, and under the pointer.
+        static let grip = secondary
+        static let gripHot = accent
+        /// A slot's dashed outline at rest and hovered; a room that will open draws `accentLine`.
+        static let slotLine = Color(hex: 0xBED7EB).opacity(0.22)
+        static let slotLineHover = Color(hex: 0xBED7EB).opacity(0.38)
+        static let roomLine = accentLine
         /// The tile being dragged, where it was.
         static let dragged: Double = 0.4
         /// The structure ⌥ shows dims the content to this.

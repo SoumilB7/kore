@@ -12,6 +12,8 @@ struct BoardView: View {
     /// A gutter being dragged: the lengths it gives its split, and the tiles' frames from before
     /// (full tiles keep theirs until the release, then lay out once).
     @StateObject private var gutterDrag = Local<GutterDragState?>(nil)
+    /// A grip being pulled apart: the room it opens, and the tiles' frames from before.
+    @StateObject private var roomPull = Local<RoomPullState?>(nil)
     @StateObject private var tileDrag = Local<TileDragState?>(nil)
     @StateObject private var hovered = Local<UUID?>(nil)
     @StateObject private var keys = Held<Any?>(nil)
@@ -70,8 +72,9 @@ struct BoardView: View {
                 }
             }
             ForEach(board.tiles) { tile in
-                if let rect = frames.tiles[tile.id] {
-                    let frozen = gutterDrag.value?.frozen[tile.id]
+                if let laid = frames.tiles[tile.id] {
+                    let rect = roomPull.value?.pull.moved(laid) ?? laid
+                    let frozen = (gutterDrag.value?.frozen ?? roomPull.value?.frozen)?[tile.id]
                     TileView(
                         workspace: workspace, tab: tab, model: model, tile: tile.id, size: rect.size,
                         frozen: frozen.map { Density.of($0.size) == .full && Density.of(rect.size) == .full ? $0.size : nil } ?? nil,
@@ -85,10 +88,18 @@ struct BoardView: View {
                 }
             }
             ForEach(frames.gutters, id: \.id) { gutter in
-                BoardGutterView(gutter: gutter, hot: gutterDrag.value?.gutter.id == gutter.id, gesture: gutterGesture(gutter, frames: frames))
+                BoardGutterView(
+                    gutter: gutter, hot: gutterDrag.value?.gutter.id == gutter.id || roomPull.value?.pull.gutter.id == gutter.id,
+                    gesture: gutterGesture(gutter, frames: frames)
+                ) {
+                    model.edit { $0.resize(gutter.id, lengths: GutterDrag.even(gutter)) }
+                }
             }
             if let drag = gutterDrag.value {
                 SnapTicks(gutter: drag.gutter, lengths: drag.lengths, snap: drag.snap)
+            }
+            if let pull = roomPull.value?.pull {
+                RoomView(pull: pull)
             }
             if let zone = tileDrag.value?.zone ?? model.incoming?.zone {
                 DropZone(rect: zone)
@@ -106,9 +117,17 @@ struct BoardView: View {
 
     // MARK: Gutters
 
+    /// A divider's drag: from its grip (a tile divider's middle) it pulls room apart, and a slot
+    /// opens once there's a tile's least; from anywhere else on it, it resizes.
     private func gutterGesture(_ gutter: BoardGutter, frames: BoardFrames) -> some Gesture {
-        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+        DragGesture(minimumDistance: 1, coordinateSpace: .named(Self.space))
             .onChanged { value in
+                if roomPull.value != nil || (gutterDrag.value == nil && gutter.id.section != nil && gutter.grip.contains(value.startLocation)) {
+                    let start = roomPull.value?.pull.gutter ?? gutter
+                    let delta = start.axis == .row ? value.translation.width : value.translation.height
+                    roomPull.value = RoomPullState(pull: RoomPull(start, delta: delta), frozen: roomPull.value?.frozen ?? frames.tiles)
+                    return
+                }
                 let start = gutterDrag.value?.gutter ?? gutter
                 let delta = start.axis == .row ? value.translation.width : value.translation.height
                 let lines = frames.gutters.filter { $0.axis == start.axis && $0.id != start.id }.map(\.position)
@@ -117,6 +136,15 @@ struct BoardView: View {
                 gutterDrag.value = GutterDragState(gutter: start, lengths: lengths, snap: snap, frozen: gutterDrag.value?.frozen ?? frames.tiles)
             }
             .onEnded { _ in
+                if let pull = roomPull.value?.pull {
+                    roomPull.value = nil
+                    guard pull.opens else { return }
+                    let slot = UUID()
+                    model.edit { $0.openSlot(pull.gutter.id, lengths: pull.lengths, slot: slot) }
+                    model.focus(slot)
+                    UILog.event("board-room", ["axis": pull.gutter.axis.rawValue])
+                    return
+                }
                 guard let drag = gutterDrag.value else { return }
                 gutterDrag.value = nil
                 model.edit { $0.resize(drag.gutter.id, lengths: drag.lengths) }
@@ -147,8 +175,7 @@ struct BoardView: View {
                     if drag.strip {
                         workspace.detach(tile, from: tab)
                     } else if let drop = drag.drop {
-                        let size = model.size
-                        model.edit { $0.move(tile, to: drop, in: size) }
+                        model.move(tile, to: drop)
                     }
                 })
     }
@@ -196,6 +223,11 @@ struct GutterDragState: Equatable {
     let gutter: BoardGutter
     var lengths: [CGFloat]
     var snap: GutterDrag.Snap?
+    let frozen: [UUID: CGRect]
+}
+
+struct RoomPullState: Equatable {
+    let pull: RoomPull
     let frozen: [UUID: CGRect]
 }
 
@@ -250,35 +282,110 @@ private struct DropZone: View {
 
 // MARK: - Gutters
 
-/// A boundary: the gap between tiles, or a section line with 4pt of grab either side. The
-/// pointer over it shows the resize cursor and lights it; nothing grows.
+/// A boundary: the gap between tiles with 4pt into each tile's edge (16pt), or a section line
+/// with 4pt either side. Under the pointer: the resize cursor, its hairline lit, and on a tile
+/// divider a grip at its middle that opens room (its own cursor). Nothing grows or moves.
+/// Double-click makes its two sides equal.
 private struct BoardGutterView<G: Gesture>: View {
     let gutter: BoardGutter
     let hot: Bool
     let gesture: G
-    @StateObject private var hovered = Local(false)
+    let equalise: () -> Void
+    @StateObject private var over = Local<Part?>(nil)
+
+    enum Part { case line, grip }
 
     var body: some View {
-        let grab = gutter.id.section == nil ? Size.Board.sectionGrab : 0
+        let grab = gutter.id.section == nil ? Size.Board.sectionGrab : Size.Board.grab
         let rect = gutter.axis == .row ? gutter.rect.insetBy(dx: -grab, dy: 0) : gutter.rect.insetBy(dx: 0, dy: -grab)
+        let row = gutter.axis == .row
+        let grip = Size.Board.grip
+        let gripped = gutter.id.section != nil
         ZStack {
             Color.clear.contentShape(Rectangle())
             Rectangle()
-                .fill(hot || hovered.value ? Theme.Board.gutterHot : .clear)
-                .frame(width: gutter.axis == .row ? Stroke.hairline : nil, height: gutter.axis == .column ? Stroke.hairline : nil)
+                .fill(hot || over.value != nil ? Theme.Board.gutterHot : .clear)
+                .frame(width: row ? Stroke.hairline : nil, height: row ? nil : Stroke.hairline)
+            if gripped {
+                // Drawn only: the gutter's one drag tells the grip from the line by where it starts.
+                RoundedRectangle(cornerRadius: grip.width / 2)
+                    .fill(over.value == .grip || hot ? Theme.Board.gripHot : over.value == .line ? Theme.Board.grip : .clear)
+                    .frame(width: row ? grip.width : grip.height, height: row ? grip.height : grip.width)
+                    .frame(width: gutter.grip.width, height: gutter.grip.height)
+                    .allowsHitTesting(false)
+                    .storyMark(StoryID.Board.grip(gutter.id))
+            }
         }
-        .onHover { inside in
-            hovered.value = inside
-            let cursor: NSCursor = gutter.axis == .row ? .resizeLeftRight : .resizeUpDown
-            if inside { cursor.push() } else { NSCursor.pop() }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let point):
+                let part: Part = gripped && gutter.grip.contains(CGPoint(x: rect.minX + point.x, y: rect.minY + point.y)) ? .grip : .line
+                guard part != over.value else { return }
+                if over.value != nil { NSCursor.pop() }
+                (part == .grip ? BoardCursor.room(gutter.axis) : row ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
+                over.value = part
+            case .ended:
+                if over.value != nil { NSCursor.pop() }
+                over.value = nil
+            }
         }
         .gesture(gesture)
+        .simultaneousGesture(TapGesture(count: 2).onEnded(equalise))
         .allowsWindowActivationEvents(true)
         .accessibilityElement()
-        .accessibilityLabel(gutter.axis == .row ? "Width" : "Height")
+        .accessibilityLabel(row ? "Width" : "Height")
         .accessibilityValue("\(Int((gutter.lengths[gutter.id.index] / max(gutter.extent, 1) * 100).rounded())) percent")
         .storyID(StoryID.Board.gutter(gutter.id))
         .place(rect)
+    }
+}
+
+/// The grip's cursor: arrows apart from a line, white with a dark edge as the system's are.
+@MainActor
+enum BoardCursor {
+    static let row = make("arrow.left.and.line.vertical.and.arrow.right", fallback: .resizeLeftRight)
+    static let column = make("arrow.up.and.line.horizontal.and.arrow.down", fallback: .resizeUpDown)
+
+    static func room(_ axis: SplitAxis) -> NSCursor { axis == .row ? row : column }
+
+    private static func make(_ name: String, fallback: NSCursor) -> NSCursor {
+        func symbol(_ color: NSColor) -> NSImage? {
+            NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .bold).applying(.init(paletteColors: [color])))
+        }
+        guard let white = symbol(.white), let black = symbol(.black) else { return fallback }
+        let edge: CGFloat = 1
+        let size = NSSize(width: white.size.width + edge * 2, height: white.size.height + edge * 2)
+        let image = NSImage(size: size, flipped: false) { _ in
+            for dx in [-edge, 0, edge] {
+                for dy in [-edge, 0, edge] where dx != 0 || dy != 0 {
+                    black.draw(at: NSPoint(x: edge + dx, y: edge + dy), from: .zero, operation: .sourceOver, fraction: 1)
+                }
+            }
+            white.draw(at: NSPoint(x: edge, y: edge), from: .zero, operation: .sourceOver, fraction: 1)
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: size.width / 2, y: size.height / 2))
+    }
+}
+
+/// The room a pulled grip opens: a dashed outline, accent once letting go makes it a slot, and
+/// the drag label reading Room.
+private struct RoomView: View {
+    let pull: RoomPull
+
+    var body: some View {
+        let rect = pull.rect
+        ZStack {
+            if rect.width > 0, rect.height > 0 {
+                RoundedRectangle(cornerRadius: Radius.panel)
+                    .strokeBorder(pull.opens ? Theme.Board.roomLine : Theme.Board.slotLine, style: StrokeStyle(lineWidth: Stroke.hairline, dash: Size.Board.slotDash))
+                    .place(rect)
+            }
+            DragLabel(text: "Room", at: CGPoint(x: rect.midX, y: rect.midY))
+        }
+        .allowsHitTesting(false)
+        .storyMark(StoryID.Board.room(pull.opens))
     }
 }
 
@@ -292,24 +399,42 @@ private struct SnapTicks: View {
         let i = gutter.id.index
         let at = gutter.start + lengths[...i].reduce(0, +) + gutter.gap * CGFloat(i) + gutter.gap / 2
         if let label = label {
-            Text(label)
-                .font(Chrome.caption)
-                .foregroundStyle(Theme.accent)
-                .padding(.horizontal, Space.xs)
-                .background(Theme.background, in: RoundedRectangle(cornerRadius: Radius.chip))
-                .fixedSize()
-                .position(gutter.axis == .row ? CGPoint(x: at, y: gutter.rect.maxY - Space.xxxl) : CGPoint(x: gutter.rect.maxX - Space.xxxl * 2, y: at))
-                .allowsHitTesting(false)
+            DragLabel(text: label, at: gutter.axis == .row ? CGPoint(x: at, y: gutter.rect.maxY - Space.xxxl) : CGPoint(x: gutter.rect.maxX - Space.xxxl * 2, y: at))
                 .storyMark(StoryID.Board.snap(label))
         }
     }
 
+    /// On a tile divider, what the chat it shrinks turns into (Full, Card, Chip), with the share
+    /// it pulled to; between sections, the snap alone.
     private var label: String? {
-        switch snap {
-        case .share(let name): name
-        case .density(let density): density.rawValue.capitalized
-        case .line, nil: nil
+        let share: String? = if case .share(let name) = snap { name } else { nil }
+        guard gutter.id.section != nil else {
+            if case .density(let density) = snap { return density.rawValue.capitalized }
+            return share
         }
+        let i = gutter.id.index
+        let side = lengths[i] < gutter.lengths[i] ? i : i + 1
+        let cross = gutter.axis == .row ? gutter.rect.height : gutter.rect.width
+        let size = gutter.axis == .row ? CGSize(width: lengths[side], height: cross) : CGSize(width: cross, height: lengths[side])
+        let density = Density.of(size).rawValue.capitalized
+        return share.map { "\(density) · \($0)" } ?? density
+    }
+}
+
+/// A drag's small accent label on the board's ground.
+private struct DragLabel: View {
+    let text: String
+    let at: CGPoint
+
+    var body: some View {
+        Text(text)
+            .font(Chrome.caption)
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, Space.xs)
+            .background(Theme.background, in: RoundedRectangle(cornerRadius: Radius.chip))
+            .fixedSize()
+            .position(at)
+            .allowsHitTesting(false)
     }
 }
 

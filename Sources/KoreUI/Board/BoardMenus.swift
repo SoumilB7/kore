@@ -27,6 +27,15 @@ extension StoryID {
             StoryID(.board, "gutter", key: "\(id.section?.uuidString ?? "-"):\(id.path.map(String.init).joined(separator: ".")):\(id.index)")
         }
         package static func snap(_ label: String) -> StoryID { StoryID(.board, "snap", key: label) }
+        /// A tile divider's grip: pulled, it opens room for a slot.
+        package static func grip(_ id: GutterID) -> StoryID {
+            StoryID(.board, "grip", key: "\(id.section?.uuidString ?? "-"):\(id.path.map(String.init).joined(separator: ".")):\(id.index)")
+        }
+        /// A slot tile's ＋ (the picker) and × (closes it).
+        package static func slotAdd(_ id: UUID) -> StoryID { StoryID(.board, "slot.add", key: id.uuidString) }
+        package static func slotClose(_ id: UUID) -> StoryID { StoryID(.board, "slot.close", key: id.uuidString) }
+        /// The room a pulled grip shows; keyed "open" once letting go makes a slot.
+        package static func room(_ opens: Bool) -> StoryID { StoryID(.board, "room", key: opens ? "open" : "closed") }
         package static let dropZone = StoryID(.board, "drop")
         package static let zoomed = StoryID(.board, "zoomed")
     }
@@ -73,6 +82,15 @@ enum BoardMenus {
         return chats + [.rule] + Provider.allCases.map { provider in
             OptionItem("New \(provider.name) Chat") { workspace.startChat(provider, on: tab, section: section, slot: nil) }
         }
+    }
+
+    /// A slot's ＋ (or Return on it): a new chat first, then this window's strip chats.
+    static func slot(_ tile: UUID, workspace: Workspace, tab: ChatTab) -> [OptionItem] {
+        let new = Provider.allCases.map { provider in
+            OptionItem("New \(provider.name) Chat") { workspace.startChat(provider, on: tab, section: nil, slot: tile) }
+        }
+        let chats = workspace.stripChats.map { other in OptionItem(other.title) { workspace.attach(other, to: tab, slot: tile) } }
+        return chats.isEmpty ? new : new + [.rule] + chats
     }
 
     static func tile(_ tile: UUID, workspace: Workspace, tab: ChatTab, model: BoardModel) -> [OptionItem] {
@@ -138,6 +156,14 @@ enum BoardKeys {
             let slot = UUID()
             model.edit { $0.split(focused!, flags.contains(.shift) ? .bottom : .right, new: slot) }
             model.focus(slot)
+        case ([], 51, _) where !typing && focused.map(model.isSlot) == true:
+            model.edit { $0.closeSlot(focused!) }
+        case ([], 36, _) where !typing && focused.map(model.isSlot) == true:
+            let items = BoardMenus.slot(focused!, workspace: workspace, tab: tab)
+            if let window = workspace.window, let rect = model.board.solve(in: size).tiles[focused!], let content = window.contentView {
+                let point = CGPoint(x: model.origin.x + rect.midX, y: content.bounds.height - model.origin.y - rect.midY)
+                OptionsMenu.shared.show(items, at: point, in: window, source: "board-slot")
+            }
         case ([.command, .shift], 36, _) where focused != nil:
             model.zoomed = model.zoomed == nil ? focused : nil
         case ([.option, .command], _, "t") where focused != nil:

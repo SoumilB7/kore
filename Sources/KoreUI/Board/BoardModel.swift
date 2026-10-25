@@ -103,6 +103,20 @@ package final class BoardModel {
         onChange?()
     }
 
+    /// A tile on the board with no chat.
+    package func isSlot(_ tile: UUID) -> Bool { chats[tile] == nil && board.section(of: tile) != nil }
+
+    /// A tile moved by its header: onto a slot's middle it fills the slot; else as `Board.move`.
+    package func move(_ tile: UUID, to drop: BoardDrop) {
+        if case .swap(let other) = drop, isSlot(other) {
+            edit { $0.fill(other, with: tile) }
+            focus(tile)
+            return
+        }
+        let size = size
+        edit { $0.move(tile, to: drop, in: size) }
+    }
+
     /// The tile of a chat, if it's on this board.
     package func tile(of chat: Chat) -> UUID? { chats.first { $0.value === chat }?.key }
 

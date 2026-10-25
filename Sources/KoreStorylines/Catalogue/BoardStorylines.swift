@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import KoreUI
 
 // The board (dynamic-tab.html §7's storylines): made from the + menu's New Board, sections
@@ -67,13 +68,16 @@ struct BoardDrag: Step {
     let element: @MainActor (StoryContext) throws -> StoryID
     let from: @MainActor (StoryContext) throws -> CGPoint
     let to: @MainActor (StoryContext) throws -> CGPoint
+    /// Where in the element the press lands: off a divider's middle, it's the line, not its grip.
+    var grab = UnitPoint.center
     var label: String { "Drag \(what)" }
 
     func run(_ story: StoryContext) async throws {
         let found = try await story.element(.id(try element(story)))
         guard let window = story.window, let frame = found.frame else { throw StoryFailure.other("no \(what)") }
         let a = try from(story), b = try to(story)
-        let start = CGPoint(x: frame.midX, y: frame.midY)
+        // The window's space runs up.
+        let start = CGPoint(x: frame.minX + frame.width * grab.x, y: frame.maxY - frame.height * grab.y)
         // The board's space runs down, the window's up.
         let end = CGPoint(x: start.x + b.x - a.x, y: start.y - (b.y - a.y))
         await story.input.drag(from: start, to: end, in: window, steps: 16)
@@ -222,13 +226,17 @@ final class BoardResize: BoardStoryline {
                 let tiles = model.board.sections[0].tiles.map(\.id)
                 if tiles.count == 2 { model.edit { $0.move(tiles[1], to: .beside(tiles[0], .bottom), in: model.size) } }
             },
-            BoardDrag(what: "Backend's tile gutter down to under 64pt", element: { story in StoryID.Board.gutter(try Self.tileGutter(story).id) }) { story in
+            Expect("the column's gutter drawn across") { story in
+                let frame = StoryElement(StoryID.Board.gutter(try Self.tileGutter(story).id))?.frame
+                return frame.map { $0.width > $0.height } ?? false
+            },
+            BoardDrag(what: "Backend's tile gutter down to under 64pt", element: { story in StoryID.Board.gutter(try Self.tileGutter(story).id) }, from: { story in
                 let gutter = try Self.tileGutter(story)
                 return CGPoint(x: gutter.rect.midX, y: gutter.position)
-            } to: { story in
+            }, to: { story in
                 let gutter = try Self.tileGutter(story)
                 return CGPoint(x: gutter.rect.midX, y: gutter.start + gutter.extent - 45)
-            },
+            }, grab: UnitPoint(x: 0.25, y: 0.5)),
             Expect("the lower tile a chip, pinned at 30") { story in
                 let model = try BoardProbe.model(story)
                 let tiles = model.board.sections[0].tiles.map(\.id)
@@ -263,6 +271,106 @@ final class BoardResize: BoardStoryline {
             throw StoryFailure.modelMissing("Backend's tile gutter")
         }
         return gutter
+    }
+}
+
+/// A divider's grip pulled apart (board-resize-2.html, option A): the left edge stays, the room
+/// becomes a slot; a strip tab dropped on it fills it; a second slot pulled the other way and
+/// closed by its ×; ⌘Z brings it back.
+final class BoardSlot: BoardStoryline {
+    override class var tags: Set<Tag> { ["board", .gate] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            MakeBoard(name: "Backend", take: 2),
+            Do("Remember the first tile's frame") { story in
+                let model = try BoardProbe.model(story)
+                guard let first = model.board.tiles.first?.id else { throw StoryFailure.modelMissing("a tile") }
+                Self.kept(story).frame = try BoardProbe.frames(story).tiles[first]
+            },
+            BoardDrag(what: "the divider's grip 300pt right", element: { story in StoryID.Board.grip(try Self.divider(story, 0).id) }) { _ in
+                .zero
+            } to: { _ in
+                CGPoint(x: 300, y: 0)
+            },
+            Expect("a slot between the two, the first tile where it was", found: { story in
+                let model = try? BoardProbe.model(story)
+                return "tiles \(model?.board.tiles.count ?? -1), slots \(model.map { m in m.board.tiles.filter { m.isSlot($0.id) }.count } ?? -1)"
+            }) { story in
+                let model = try BoardProbe.model(story), frames = try BoardProbe.frames(story)
+                let tiles = model.board.tiles.map(\.id)
+                guard tiles.count == 3, model.isSlot(tiles[1]), let kept = Self.kept(story).frame, let now = frames.tiles[tiles[0]] else { return false }
+                Self.kept(story).slot = tiles[1]
+                return abs(now.width - kept.width) < 1 && abs(now.minX - kept.minX) < 1 && (frames.tiles[tiles[1]]?.width ?? 0) >= 140
+            },
+            Snapshot("board-slot"),
+            BoardDrag(
+                what: "the third chat's tab down onto the slot",
+                element: { story in
+                    guard let tab = BoardProbe.chatTabs(story).first else { throw StoryFailure.modelMissing("the chat's tab") }
+                    return StoryID.Tabs.tab(tab.id)
+                }
+            ) { story in
+                guard let tab = BoardProbe.chatTabs(story).first, let frame = StoryElement(StoryID.Tabs.tab(tab.id))?.frame,
+                    let content = story.window?.contentView
+                else { throw StoryFailure.modelMissing("the chat's tab") }
+                let model = try BoardProbe.model(story)
+                return CGPoint(x: frame.midX - model.origin.x, y: content.bounds.height - frame.midY - model.origin.y)
+            } to: { story in
+                guard let slot = Self.kept(story).slot, let rect = try BoardProbe.frames(story).tiles[slot] else {
+                    throw StoryFailure.modelMissing("the slot")
+                }
+                return CGPoint(x: rect.midX, y: rect.midY)
+            },
+            Expect("the chat in the slot, three chats, none in the strip") { story in
+                let model = try BoardProbe.model(story)
+                guard let slot = Self.kept(story).slot else { return false }
+                return model.chats[slot] != nil && model.chats.count == 3 && model.board.tiles.count == 3 && BoardProbe.chatTabs(story).isEmpty
+            },
+            BoardDrag(what: "the first divider's grip 250pt left", element: { story in StoryID.Board.grip(try Self.divider(story, 0).id) }) { _ in
+                .zero
+            } to: { _ in
+                CGPoint(x: -250, y: 0)
+            },
+            Expect("a second slot, after the first tile") { story in
+                let model = try BoardProbe.model(story)
+                let tiles = model.board.tiles.map(\.id)
+                guard tiles.count == 4, model.isSlot(tiles[1]) else { return false }
+                let kept = Self.kept(story)
+                kept.slot = tiles[1]
+                kept.board = model.board
+                return true
+            },
+            BoardPress("Close the slot by its ×") { story in
+                guard let slot = Self.kept(story).slot else { throw StoryFailure.modelMissing("the slot") }
+                return StoryID.Board.slotClose(slot)
+            },
+            Expect("the slot gone, its room back to the three chats") { story in
+                let model = try BoardProbe.model(story)
+                return model.board.tiles.count == 3 && model.board.tiles.allSatisfy { !model.isSlot($0.id) }
+            },
+            UndoLayout(),
+            Expect("one ⌘Z: the slot back where it was") { story in
+                try BoardProbe.model(story).board == Self.kept(story).board
+            },
+        ]
+    }
+
+    /// The `index`th divider between Backend's tiles in a row.
+    @MainActor static func divider(_ story: StoryContext, _ index: Int) throws -> BoardGutter {
+        let model = try BoardProbe.model(story)
+        guard let gutter = try BoardProbe.frames(story).gutters.first(where: { $0.id.section == model.board.sections.first?.id && $0.axis == .row && $0.id.index == index }) else {
+            throw StoryFailure.modelMissing("Backend's divider")
+        }
+        return gutter
+    }
+
+    @MainActor static func kept(_ story: StoryContext) -> Kept { story.stash(Kept.self) { Kept() } }
+
+    final class Kept {
+        var frame: CGRect?
+        var slot: UUID?
+        var board: Board?
     }
 }
 

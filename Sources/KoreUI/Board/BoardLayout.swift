@@ -171,19 +171,27 @@ extension Split {
 
     /// The node at `path` taken out. Its share goes to the neighbour before it (after, for the
     /// first), and a split left with one child is that child. Nil when the root itself goes.
-    func removing(at path: [Int]) -> Split? {
+    func removing(at path: [Int], spread: Bool = false) -> Split? {
         guard let first = path.first else { return nil }
         guard case .split(let axis, var children) = self, children.indices.contains(first) else { return self }
         if path.count > 1 {
-            if let rest = children[first].node.removing(at: Array(path.dropFirst())) {
+            if let rest = children[first].node.removing(at: Array(path.dropFirst()), spread: spread) {
                 children[first].node = rest
                 return Split.split(axis, children).normalized()
             }
-            return removing(at: [first])
+            return removing(at: [first], spread: spread)
         }
         let removed = children.remove(at: first)
         let neighbour = max(first - 1, 0)
-        if let f = removed.share.fraction, let g = children[neighbour].share.fraction {
+        if spread, let f = removed.share.fraction {
+            // Its room to every sibling that shares by fraction, in proportion.
+            let rest = children.compactMap(\.share.fraction).reduce(0, +)
+            if rest > 0 {
+                for index in children.indices {
+                    if let g = children[index].share.fraction { children[index].share = .fraction(g * (rest + f) / rest) }
+                }
+            }
+        } else if let f = removed.share.fraction, let g = children[neighbour].share.fraction {
             children[neighbour].share = .fraction(g + f)
         }
         if children.count == 1 { return children[0].node }
@@ -281,6 +289,14 @@ package struct BoardGutter: Equatable, Sendable {
 
     /// Its middle along the axis.
     package var position: CGFloat { axis == .row ? rect.midX : rect.midY }
+    /// The grip at its middle, across its whole grab (a tile divider's): a drag from here opens
+    /// room, from the rest of it resizes.
+    package var grip: CGRect {
+        let across = gap + 2 * Size.Board.grab, along = Size.Board.grip.height
+        return axis == .row
+            ? CGRect(x: rect.midX - across / 2, y: rect.midY - along / 2, width: across, height: along)
+            : CGRect(x: rect.midX - along / 2, y: rect.midY - across / 2, width: along, height: across)
+    }
     package var extent: CGFloat { lengths.reduce(0, +) + gap * CGFloat(lengths.count - 1) }
 }
 
@@ -548,6 +564,83 @@ package enum GutterDrag {
     }
 }
 
+/// A grip pulled (board-resize-2.html, option A): the edge on the side it's pulled toward
+/// follows the pointer, the other stays, and the room between becomes a slot once it's at least
+/// a tile's least (`tileMin`) along the axis.
+package struct RoomPull: Equatable, Sendable {
+    package let gutter: BoardGutter
+    /// Along the axis, as far as the shrinking side can give; forward is right or down.
+    package let delta: CGFloat
+
+    package init(_ gutter: BoardGutter, delta: CGFloat) {
+        self.gutter = gutter
+        let i = gutter.id.index
+        let side = delta > 0 ? i + 1 : i
+        let give = max(0, gutter.lengths[side] - gutter.mins[side])
+        self.delta = delta > 0 ? min(delta, give) : -min(-delta, give)
+    }
+
+    var forward: Bool { delta > 0 }
+    /// The child that gives the room.
+    package var side: Int { forward ? gutter.id.index + 1 : gutter.id.index }
+    /// The slot's length: the pull, less the second gap it brings.
+    package var room: CGFloat { max(0, abs(delta) - gutter.gap) }
+    package var least: CGFloat { gutter.axis == .row ? Size.Board.tileMin.width : Size.Board.tileMin.height }
+    /// Let go now, it opens a slot; else the edges close again.
+    package var opens: Bool { room >= least }
+
+    /// The split's lengths with the slot in after the gutter's child.
+    package var lengths: [CGFloat] {
+        var lengths = gutter.lengths
+        lengths[side] -= abs(delta)
+        lengths.insert(room, at: gutter.id.index + 1)
+        return lengths
+    }
+
+    /// Where the giving side starts along the axis, and how long it was.
+    private var span: (start: CGFloat, length: CGFloat) {
+        let start = gutter.start + gutter.lengths[..<side].reduce(0, +) + gutter.gap * CGFloat(side)
+        return (start, gutter.lengths[side])
+    }
+
+    /// The room's rectangle, between the gaps either side of it.
+    package var rect: CGRect {
+        let (start, length) = span
+        let from = forward ? start : start + length - abs(delta) + gutter.gap
+        let r = gutter.rect
+        return gutter.axis == .row
+            ? CGRect(x: from, y: r.minY, width: room, height: r.height)
+            : CGRect(x: r.minX, y: from, width: r.width, height: room)
+    }
+
+    /// A tile's frame as the pull shows it: the giving side's, pressed from the pulled edge.
+    package func moved(_ frame: CGRect) -> CGRect {
+        let (start, length) = span
+        let row = gutter.axis == .row
+        let lo = row ? frame.minX : frame.minY, hi = row ? frame.maxX : frame.maxY
+        let cross = row ? (frame.minY, gutter.rect.minY, gutter.rect.maxY) : (frame.minX, gutter.rect.minX, gutter.rect.maxX)
+        guard length > 0, lo >= start - 0.5, hi <= start + length + 0.5, cross.0 >= cross.1 - 0.5, cross.0 <= cross.2 + 0.5 else { return frame }
+        let d = abs(delta)
+        let scale = (length - d) / length
+        let base = forward ? start + d : start
+        let a = base + (lo - start) * scale, b = base + (hi - start) * scale
+        return row ? CGRect(x: a, y: frame.minY, width: b - a, height: frame.height) : CGRect(x: frame.minX, y: a, width: frame.width, height: b - a)
+    }
+}
+
+extension GutterDrag {
+    /// Double-click: the gutter's two sides equal, as far as their minimums let them.
+    package static func even(_ gutter: BoardGutter) -> [CGFloat] {
+        let i = gutter.id.index
+        var lengths = gutter.lengths
+        let pair = lengths[i] + lengths[i + 1]
+        let a = min(max(pair / 2, gutter.mins[i]), pair - gutter.mins[i + 1])
+        lengths[i] = a
+        lengths[i + 1] = pair - a
+        return lengths
+    }
+}
+
 // MARK: - Edits
 
 extension Board {
@@ -606,6 +699,35 @@ extension Board {
     package mutating func remove(_ tile: UUID) {
         guard let section = section(of: tile), let path = section.body?.path(where: { $0.id == tile }) else { return }
         updateBody(of: section.id) { $0?.removing(at: path) }
+    }
+
+    /// A slot in the room a grip opened: after the gutter's child in its split, which takes
+    /// `lengths` (one more than it had).
+    package mutating func openSlot(_ gutter: GutterID, lengths: [CGFloat], slot: UUID) {
+        guard let section = gutter.section, let body = self.section(section)?.body,
+            case .split(let axis, var children)? = body.node(at: gutter.path), children.count + 1 == lengths.count,
+            children.indices.contains(gutter.index)
+        else { return }
+        children.insert(.init(.fraction(0), .leaf(BoardTile(id: slot))), at: gutter.index + 1)
+        updateSection(section) { $0.body = body.replacing(at: gutter.path, with: .split(axis, children)) }
+        resize(gutter, lengths: lengths)
+    }
+
+    /// A slot out: its room goes back to its siblings in proportion, as they were.
+    package mutating func closeSlot(_ slot: UUID) {
+        guard let section = section(of: slot), let path = section.body?.path(where: { $0.id == slot }) else { return }
+        updateBody(of: section.id) { $0?.removing(at: path, spread: true) }
+    }
+
+    /// A tile moved into a slot: the slot takes it, and the place it left closes.
+    package mutating func fill(_ slot: UUID, with tile: UUID) {
+        guard slot != tile, section(of: slot) != nil, section(of: tile) != nil else { return }
+        remove(tile)
+        root = root.mapLeaves { section in
+            var section = section
+            section.body = section.body?.mapLeaves { $0.id == slot ? BoardTile(id: tile) : $0 }
+            return section
+        }
     }
 
     /// Two tiles trade places.
