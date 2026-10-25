@@ -31,6 +31,8 @@ public struct HandoffPlan: Sendable, Codable {
     /// The estimate of what's carried, and the budget it was fitted to.
     public let tokens: Int
     public let budget: Int
+    /// The folder the source ran in, when it says.
+    public var sourceFolder: String?
 
     public func count(_ level: Level) -> Int { entries.count { $0.level == level } }
     public var carried: Int { entries.count }
@@ -121,6 +123,7 @@ public struct HandoffBudget: Sendable {
             notCarriedTo: to, unknown: segment.unknown, cutoff: segment.lastItem ?? taken.first?.turn.lastItem, tokens: used,
             budget: tokens)
         plan.notCarriedKnown = segment.earlier != nil
+        plan.sourceFolder = segment.cwd
         return plan
     }
 
@@ -258,11 +261,16 @@ public enum HandoffRender {
     }
 
     /// The note that opens the carried history (a developer message, or a meta user row).
-    public static func note(_ plan: HandoffPlan, folderHasInstructions: Bool = false) -> String {
+    /// `folder`: the chat's own; another one the source ran in is named, its paths as they were.
+    public static func note(_ plan: HandoffPlan, folder: URL? = nil, folderHasInstructions: Bool = false) -> String {
         let source = plan.product
         let model = plan.model.map { " (\($0))" } ?? ""
+        var place = "in this folder"
+        if let from = plan.sourceFolder, let folder, realPath(from) != realPath(folder.path) {
+            place = "in another folder, \(from) (its relative paths are relative to that folder, not this one)"
+        }
         var text =
-            "The earlier part of this conversation ran in \(source)\(model) in this folder. It is shown below as "
+            "The earlier part of this conversation ran in \(source)\(model) \(place). It is shown below as "
             + "\(source)'s own messages, with its tool calls and results labelled external_agent_tool_call / "
             + "external_agent_tool_result. Those tools belonged to \(source); your own tools are the ones available now."
         if plan.count(.condensed) + plan.count(.bare) > 0 {

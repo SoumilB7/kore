@@ -28,8 +28,8 @@ public struct CodexHandoffWriter: HandoffWriter {
 
     /// One developer note, the source's summary as a user message, then per turn the user's
     /// message and one assistant message per step, then the reply.
-    public static func items(_ plan: HandoffPlan) -> [JSONValue] {
-        var items: [JSONValue] = [message("developer", [text(HandoffRender.note(plan), output: false)])]
+    public static func items(_ plan: HandoffPlan, folder: URL? = nil) -> [JSONValue] {
+        var items: [JSONValue] = [message("developer", [text(HandoffRender.note(plan, folder: folder), output: false)])]
         if let summary = plan.summary {
             items.append(message("user", [text(HandoffRender.summary(summary, from: plan.product), output: false)]))
         }
@@ -49,7 +49,7 @@ public struct CodexHandoffWriter: HandoffWriter {
         do {
             let thread = await session.threadId
             try await session.rename(title)
-            try await session.inject(items(plan))
+            try await session.inject(items(plan, folder: options.cwd))
             await session.close()
             return thread
         } catch {
