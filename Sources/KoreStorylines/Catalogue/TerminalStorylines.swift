@@ -51,6 +51,54 @@ final class WindowTerminal: ChatStoryline {
     }
 }
 
+/// Rename the running shell through the header and themed menu without sending its name
+/// to the PTY, then cancel, reset and retain it through hiding and tab switches.
+final class RenameTerminal: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Do("Use an isolated shell home") { try $0.app.workspace?.storyPrepareTerminals() },
+            Key(.ctrl("`")),
+            Expect("the shell owns focus") { $0.app.workspace?.storyTerminal.focused == true },
+            TypeText("sleep 30"), Key(.returnKey),
+            Expect("the shell has foreground work") { $0.app.workspace?.storyTerminal.foreground == 1 },
+            Press(.id(StoryID.Terminal.rename)), WaitForFocus(.id(StoryID.Terminal.nameField)),
+            Key(.cmd("a")), TypeText("API server"), Key(.returnKey),
+            Expect("the custom name appears and focus returns") {
+                $0.app.workspace?.storyTerminalTitle == "API server" && $0.app.workspace?.storyTerminal.focused == true
+                    && $0.app.workspace?.storyTerminal.foreground == 1
+            },
+            Expect("the name never went to the shell") { $0.app.workspace?.storyTerminal.text.contains("API server") == false },
+            Key(.ctrl("c")),
+            Expect("the foreground job stops") { $0.app.workspace?.storyTerminal.foreground == 0 },
+            Press(.id(StoryID.Terminal.rename)), WaitForFocus(.id(StoryID.Terminal.nameField)),
+            Key(.cmd("a")), TypeText("Discard this"), Key(.escape),
+            Expect("Escape leaves the original name") { $0.app.workspace?.storyTerminalTitle == "API server" },
+            Press(.id(StoryID.Terminal.rename)), WaitForFocus(.id(StoryID.Terminal.nameField)),
+            Key(.cmd("a")), TypeText("Committed outside"), Click(.id(StoryID.Composer.field)),
+            TypeText("typed in chat"),
+            Expect("clicking outside commits without stealing typing") {
+                try $0.app.workspace?.storyTerminalTitle == "Committed outside" && $0.activeChat().draft == "typed in chat"
+            },
+            Key(.cmd("a")), Key(KeyChord(.backspace)),
+            RightClick(.id(StoryID.Terminal.title)), WaitForElement(.id(StoryID.Options.panel)),
+            Key(.down), Key(.returnKey), WaitForFocus(.id(StoryID.Terminal.nameField)),
+            Key(.cmd("a")), TypeText("Background worker"), Key(.returnKey),
+            Expect("the context menu renamed the terminal") { $0.app.workspace?.storyTerminalTitle == "Background worker" },
+            Press(.id(StoryID.Terminal.rename)), WaitForFocus(.id(StoryID.Terminal.nameField)),
+            Key(.cmd("a")), TypeText("Retained on hide"), Key(.ctrl("`")),
+            TypeText("back in chat"),
+            Expect("hiding during rename returns focus to chat") { try $0.activeChat().draft == "back in chat" },
+            Command(.newTab), Key(.ctrl("`")),
+            Expect("the name survives hiding and switching tabs") { $0.app.workspace?.storyTerminalTitle == "Retained on hide" },
+            Snapshot("renamed-terminal"),
+            RightClick(.id(StoryID.Terminal.title)), WaitForElement(.id(StoryID.Options.panel)),
+            Key(.down), Key(.down), Key(.returnKey),
+            Expect("default name restored") { $0.app.workspace?.storyTerminalTitle != "Retained on hide" },
+        ]
+    }
+}
+
 /// Opening an agent's command from Agents watches it without typing into the CLI; Stop goes
 /// through its owning chat. A finished command opens safely prepared in a fresh shell.
 final class AgentCommandTerminal: ChatStoryline {

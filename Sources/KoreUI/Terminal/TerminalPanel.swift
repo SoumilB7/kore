@@ -9,6 +9,7 @@ final class TerminalEntry: Identifiable {
     let id: UUID
     @ObservationIgnored let shell: TerminalShell?
     @ObservationIgnored weak var chat: Chat?
+    private(set) var customTitle: String?
     private(set) var original: ActiveCommand?
     @ObservationIgnored let output: TerminalView?
     private(set) var outputAvailable = true
@@ -48,7 +49,13 @@ final class TerminalEntry: Identifiable {
         original = command
         chat = nil
     }
-    var title: String { shell?.title ?? command?.title ?? "Command" }
+    var title: String { customTitle ?? shell?.title ?? command?.title ?? "Command" }
+
+    func rename(_ name: String) {
+        let clean = name.components(separatedBy: .controlCharacters).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        customTitle = clean.isEmpty ? nil : clean
+        UILog.event("terminal-rename", ["id": id.uuidString, "custom": "\(customTitle != nil)"])
+    }
     var view: TerminalView { shell?.view ?? output! }
 
     func refreshOutput() async {
@@ -73,6 +80,8 @@ final class TerminalPanel {
     private(set) var entries: [TerminalEntry] = []
     private(set) var selected: UUID?
     private(set) var isOpen = false
+    private(set) var renaming: UUID?
+    var nameDraft = ""
     var height = Layout.Terminal.height
     var maximized = false
     var windowVisible = true
@@ -98,8 +107,10 @@ final class TerminalPanel {
     }
 
     func hide() {
+        let wasRenaming = renaming != nil
+        finishRename(commit: true, restoreFocus: false)
         focusPending = false
-        restoreFocus()
+        restoreFocus(force: wasRenaming)
         isOpen = false
         UILog.event("terminal-hide", ["count": "\(entries.count)"])
     }
@@ -136,11 +147,36 @@ final class TerminalPanel {
     }
 
     func select(_ entry: TerminalEntry) {
-        rememberFocus()
+        let wasRenaming = renaming != nil
+        finishRename(commit: true, restoreFocus: false)
+        if !wasRenaming { rememberFocus() }
         focusPending = true
         selected = entry.id
         isOpen = true
         focusSerial += 1
+    }
+
+    func startRename(_ entry: TerminalEntry) {
+        guard entries.contains(where: { $0 === entry }) else { return }
+        if renaming == nil { rememberFocus() }
+        finishRename(commit: true, restoreFocus: false)
+        selected = entry.id
+        isOpen = true
+        focusPending = false
+        nameDraft = entry.title
+        renaming = entry.id
+    }
+
+    func finishRename(commit: Bool, restoreFocus: Bool = true) {
+        guard let id = renaming else { return }
+        renaming = nil
+        let clean = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        nameDraft = ""
+        if commit, !clean.isEmpty { entries.first(where: { $0.id == id })?.rename(clean) }
+        if restoreFocus, selected == id {
+            focusPending = true
+            focusSerial += 1
+        }
     }
 
     func requestClose(_ entry: TerminalEntry) {
@@ -149,7 +185,9 @@ final class TerminalPanel {
     }
 
     func close(_ entry: TerminalEntry) {
-        if entries.count == 1 { restoreFocus() }
+        let wasRenaming = renaming == entry.id
+        if wasRenaming { finishRename(commit: false, restoreFocus: false) }
+        if entries.count == 1 { restoreFocus(force: wasRenaming) }
         entry.shell?.close()
         entry.output?.updateUiClosed()
         let index = entries.firstIndex { $0 === entry } ?? 0
@@ -168,6 +206,7 @@ final class TerminalPanel {
     }
 
     func shutdown(immediately: Bool = false) {
+        finishRename(commit: false, restoreFocus: false)
         for entry in entries {
             entry.shell?.close(immediately: immediately)
             entry.output?.updateUiClosed()
@@ -189,8 +228,8 @@ final class TerminalPanel {
     private func rememberFocus() {
         if let responder = window?.firstResponder, !ownsFocus(responder) { returnResponder = responder }
     }
-    private func restoreFocus() {
-        guard ownsFocus(window?.firstResponder) else { return }
+    private func restoreFocus(force: Bool = false) {
+        guard force || ownsFocus(window?.firstResponder) else { return }
         if let view = returnResponder as? NSView, view.window === window { window?.makeFirstResponder(view) }
         else { window?.makeFirstResponder(nil) }
     }
@@ -241,6 +280,9 @@ extension StoryID {
         package static let maximize = StoryID(.terminal, "maximize")
         package static let sash = StoryID(.terminal, "sash")
         package static let output = StoryID(.terminal, "output")
+        package static let title = StoryID(.terminal, "title")
+        package static let rename = StoryID(.terminal, "rename")
+        package static let nameField = StoryID(.terminal, "name")
         package static let stop = StoryID(.terminal, "stop")
         package static func entry(_ id: UUID) -> StoryID { StoryID(.terminal, "entry", key: id.uuidString) }
     }

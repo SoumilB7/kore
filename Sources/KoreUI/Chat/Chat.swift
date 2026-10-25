@@ -269,6 +269,7 @@ package final class Chat: Identifiable {
         showImported(in: store)
         store.apply(.replayed(events))
         for event in sinceReplay ?? [] { store.apply(event) }
+        if let since = transcript.pendingSendSince { store.sending(true, at: since) }
         transcript = store
         let replay = ChatEvent.replayed(events)
         approvals.apply(replay)
@@ -490,6 +491,7 @@ package final class Chat: Identifiable {
         let epoch = workEpoch
         let previous = sending
         previous?.cancel()
+        transcript.sending(false)
         for id in waitingOrder.reversed() { dispatch(.queuedMessage(id: id, .dropped)) }
         sending = Task {
             guard currentWork(epoch), !Task.isCancelled else { return }
@@ -626,6 +628,7 @@ package final class Chat: Identifiable {
         let epoch = workEpoch
         relaunchDue = false
         sending?.cancel()
+        transcript.sending(false)
         waitingForNetwork = false
         // Restore synchronously: another account switch can cancel this task before it runs.
         if clearingWork {
@@ -699,6 +702,7 @@ package final class Chat: Identifiable {
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil
         closed = true
+        transcript.sending(false)
         workEpoch &+= 1
         sending?.cancel()
         waitingForNetwork = false
@@ -802,6 +806,7 @@ package final class Chat: Identifiable {
         }
         if awaitingHistory { hold(message) } else { dispatch(message) }
         status.setRunning(true)
+        if queued == nil { transcript.sending(true) }
         startWatchdog()
         let backend = connect()
         let previous = sending
@@ -827,11 +832,19 @@ package final class Chat: Identifiable {
                 guard currentWork(epoch), !Task.isCancelled else { return }
                 let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued)
                 guard currentWork(epoch), !Task.isCancelled else { return }
-                if !turn, queued == nil { status.setRunning(false) }
+                if !turn, queued == nil {
+                    transcript.sending(false)
+                    status.setRunning(false)
+                }
             } catch {
                 guard currentWork(epoch), !Task.isCancelled else { return }
                 // A queued message that couldn't go goes back to the composer.
-                if let queued { dispatch(.queuedMessage(id: queued, .dropped)) } else { status.setRunning(false) }
+                if let queued {
+                    dispatch(.queuedMessage(id: queued, .dropped))
+                } else {
+                    transcript.sending(false)
+                    status.setRunning(false)
+                }
                 fail(Self.reason(error))
             }
         }
@@ -980,8 +993,14 @@ package final class Chat: Identifiable {
     // MARK: Actions
 
     func stop() {
+        if transcript.pendingSendSince != nil {
+            sending?.cancel()
+            transcript.sending(false)
+        }
         // Not sent yet: there's no turn to interrupt, only the wait.
         if waitingForNetwork {
+            // The cancelled network wait clears running and records why nothing was sent.
+            // Keep that transition together so observers cannot see idle before the notice.
             sending?.cancel()
             return
         }

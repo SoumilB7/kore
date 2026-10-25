@@ -347,6 +347,16 @@ final class TranscriptStore {
     /// When the user last sent a message (live, not replayed): the view glides to the end for
     /// 2s after it, as the extension does.
     @ObservationIgnored private(set) var sentAt: Date?
+    /// Local delivery is waiting for the CLI to acknowledge a real turn. Never replayed.
+    @ObservationIgnored private(set) var pendingSendSince: Date?
+
+    func sending(_ on: Bool, at date: Date = Date()) {
+        guard !batching, on != (pendingSendSince != nil) else { return }
+        pendingSendSince = on ? date : nil
+        // Starting a send also suppresses an unfinished historical turn's spinner, which
+        // can live in an earlier section than the new message.
+        changed(at: turnIndex(current) ?? entries.count - 1)
+    }
     /// Where the reader was when the chat's view went away (a tab switch past the kept chats),
     /// to come back to: the message or answer row nearest the top and how far below its top the
     /// top is, or the end. Opened folds and rows stay in this store, so they need no saving.
@@ -408,6 +418,9 @@ final class TranscriptStore {
     func index(of id: UUID) -> Int? { position[id] }
     @ObservationIgnored private var turns: [String: Turn] = [:]
     @ObservationIgnored private var current: String?
+    /// Only a live acknowledgement may create the otherwise empty working row.
+    @ObservationIgnored private var liveTurn: String?
+    @ObservationIgnored private var liveSendSince: Date?
     @ObservationIgnored private var blocks: [String: UUID] = [:]
     @ObservationIgnored private var tools: [String: UUID] = [:]
     /// Each sub-agent's own entries, keyed by agent id.
@@ -643,6 +656,13 @@ final class TranscriptStore {
     // MARK: Turns
 
     func turnStarted(_ id: String, at date: Date = Date()) {
+        if !batching {
+            // The former current turn may have a cached spinner in an older section.
+            if let current, current != id { mark(turnIndex(current)) }
+            liveTurn = id
+            liveSendSince = pendingSendSince
+            sending(false)
+        }
         turns[id] = Turn(id: id, startedAt: date, startMode: effectiveMode, after: entries.last?.id)
         current = id
         latestTurn = id
@@ -662,6 +682,7 @@ final class TranscriptStore {
 
     func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date(), preserving observed: Set<String> = []) {
         connection = .ok
+        if !batching { sending(false) }
         guard let id = id ?? current, var turn = turns[id] else { return }
         endThinking()
         settleAll()
@@ -704,6 +725,7 @@ final class TranscriptStore {
             lastAnswerTurn = id
         }
         if current == id { current = nil }
+        if liveTurn == id { (liveTurn, liveSendSince) = (nil, nil) }
         if !turnIsOpen, let held = heldModeChange {
             heldModeChange = nil
             userChanged(from: held.from, to: held.to)
@@ -1464,11 +1486,19 @@ final class TranscriptStore {
         if let since = compactingSince, !turnShowsSpinner {
             rows.append(.spinner(turn: Self.compactionRow, since: since, claude: providerName == "Claude", word: "Compacting"))
         }
-        // A running turn with nothing of its own yet, offline or stalled: its live row says so
-        // (and, stalled, offers Retry and Stop).
-        if connection.stuck, compactingSince == nil, !turnShowsSpinner, turnIsOpen, let current, let turn = turns[current] {
+        // Until the CLI acknowledges a send, show local delivery without inventing a turn.
+        if let since = pendingSendSince, compactingSince == nil, (!turnIsOpen || current != liveTurn), pendingApprovals.isEmpty {
+            rows.append(.spinner(turn: "pending-send", since: since, claude: providerName == "Claude",
+                                 word: connection.word ?? "Sending", connection: connection))
+        }
+        // An acknowledged turn can be quiet while the model starts. It still needs its row;
+        // once content exists, layout(_:) supplies exactly one spinner instead.
+        if compactingSince == nil, !turnShowsSpinner, turnIsOpen, (connection.stuck || current == liveTurn),
+            pendingSendSince == nil, pendingApprovals.isEmpty,
+            let current, let turn = turns[current]
+        {
             rows.append(
-                .spinner(turn: current, since: turn.startedAt, claude: providerName == "Claude", word: connection.word, connection: connection))
+                .spinner(turn: current, since: liveSendSince ?? turn.startedAt, claude: providerName == "Claude", word: connection.word, connection: connection))
         }
         // Messages waiting for the running turn come last, after its spinner.
         rows.append(contentsOf: queued.map { .queued($0.entry) })
@@ -1698,10 +1728,10 @@ final class TranscriptStore {
     private func finish(_ turn: Turn, folded: Bool, into rows: inout [Row]) {
         if turn.finished {
             trailer(turn, folded: folded, into: &rows)
-        } else if pendingApprovals.isEmpty {
+        } else if turn.id == current, pendingApprovals.isEmpty, pendingSendSince == nil || turn.id == liveTurn {
             rows.append(
                 .spinner(
-                    turn: turn.id, since: turn.startedAt, claude: providerName == "Claude",
+                    turn: turn.id, since: turn.id == liveTurn ? liveSendSince ?? turn.startedAt : turn.startedAt, claude: providerName == "Claude",
                     word: compactingSince != nil ? "Compacting" : connection.word, connection: compactingSince != nil ? .ok : connection))
         }
     }
@@ -1951,5 +1981,14 @@ final class TranscriptStore {
         let answer = t.answerFrom?.uuidString ?? "rule-\(turn)"
         foldSeq += 1
         folded = (turn, answer, foldSeq)
+    }
+}
+
+// The built feedback rows, read by the startup storyline without inventing CLI events.
+extension StoryTranscript {
+    package var sendFeedback: [String] {
+        store.sections.flatMap(\.items).compactMap {
+            if case .spinner(_, _, _, let word, _) = $0.row { word ?? "Working" } else { nil }
+        }
     }
 }

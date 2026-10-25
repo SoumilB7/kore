@@ -78,6 +78,7 @@ extension TranscriptStore {
             break  // `CommandsStore`'s; their calls are tool rows already
 
         case .exited(let status):
+            sending(false)
             compacting(false)
             if turnIsOpen { turnFinished(nil, .interrupted, preserving: observed) }
             if status != 0 && status != 15 { notice("\(providerName) exited (\(status))", isError: true) }

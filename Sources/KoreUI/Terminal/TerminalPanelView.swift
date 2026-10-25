@@ -88,7 +88,16 @@ private struct TerminalPanelView: View {
         HStack(spacing: Space.md) {
             Text("Terminal").font(Chrome.label).foregroundStyle(Theme.secondary)
             if let active = panel.active {
-                Text(active.title).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle).layoutPriority(-1)
+                if panel.renaming == active.id {
+                    TerminalNameField(panel: panel, entryID: active.id).id(active.id).frame(maxWidth: Layout.Terminal.listWidth * 2)
+                } else {
+                    Text(active.title).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle).layoutPriority(-1)
+                        .storyID(StoryID.Terminal.title)
+                        .help(active.title)
+                        .koreContextMenu("terminal") { terminalOptions(active, panel: panel) }
+                    IconButton(symbol: "pencil", help: "Rename terminal") { panel.startRename(active) }
+                        .storyID(StoryID.Terminal.rename)
+                }
                 if active.shell == nil {
                     Text(active.command?.isLive == true ? "Read only · running" : "Read only · ended")
                         .font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1)
@@ -146,6 +155,36 @@ private struct TerminalListRow: View {
         .background(panel.selected == entry.id ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
         .onHover { hovered.value = $0 }
         .help(entry.title)
+        .koreContextMenu("terminal") { terminalOptions(entry, panel: panel) }
+        .accessibilityAction(named: "Rename") { panel.startRename(entry) }
+    }
+}
+
+@MainActor private func terminalOptions(_ entry: TerminalEntry, panel: TerminalPanel) -> [OptionItem] {
+    var items = [OptionItem("Rename…") { panel.startRename(entry) }]
+    if entry.customTitle != nil { items.append(OptionItem("Use Default Name") { entry.rename("") }) }
+    return items
+}
+
+private struct TerminalNameField: View {
+    @Bindable var panel: TerminalPanel
+    let entryID: UUID
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Terminal name", text: $panel.nameDraft)
+            .fieldWell(focused: focused)
+            .focused($focused)
+            .onSubmit { finish(commit: true) }
+            .onExitCommand { finish(commit: false) }
+            .onChange(of: focused) { _, now in if !now { finish(commit: true, restoreFocus: false) } }
+            .onAppear { focused = true }
+            .storyID(StoryID.Terminal.nameField)
+    }
+
+    private func finish(commit: Bool, restoreFocus: Bool = true) {
+        guard panel.renaming == entryID else { return }
+        panel.finishRename(commit: commit, restoreFocus: restoreFocus)
     }
 }
 
@@ -190,18 +229,20 @@ private struct TerminalHost: NSViewRepresentable {
     func makeNSView(context: Context) -> Container { Container() }
     func updateNSView(_ host: Container, context: Context) {
         let serial = panel.focusSerial
-        host.install(entry, focus: serial) { panel.appliedFocus(serial) }
+        host.install(entry, focus: serial, allowsFocus: panel.renaming == nil) { panel.appliedFocus(serial) }
     }
 
     final class Container: NSView {
         private var entry: TerminalEntry?
         private var focus = -1
         private var needsFocus = false
+        private var allowsFocus = true
         private var applied: (() -> Void)?
         override var isFlipped: Bool { true }
 
-        func install(_ entry: TerminalEntry, focus: Int, applied: @escaping () -> Void) {
+        func install(_ entry: TerminalEntry, focus: Int, allowsFocus: Bool, applied: @escaping () -> Void) {
             self.applied = applied
+            self.allowsFocus = allowsFocus
             if self.entry !== entry {
                 subviews.forEach { $0.removeFromSuperview() }
                 self.entry = entry
@@ -223,7 +264,7 @@ private struct TerminalHost: NSViewRepresentable {
                 needsFocus = false
                 let serial = focus
                 afterThisFrame { [weak self] in
-                    guard let self, self.focus == serial, self.entry === entry, let window = self.window else { return }
+                    guard let self, self.allowsFocus, self.focus == serial, self.entry === entry, let window = self.window else { return }
                     window.makeFirstResponder(entry.view)
                     self.applied?()
                 }
@@ -234,7 +275,7 @@ private struct TerminalHost: NSViewRepresentable {
 }
 
 /// Window-scoped shortcuts work even with a native terminal as first responder, and never
-/// act on another window's panel. The View menu exposes the same actions.
+/// act on another window's panel. The Terminal menu exposes the same actions.
 struct TerminalKeys: ViewModifier {
     let workspace: Workspace
     @StateObject private var monitor = Held<Any?>(nil)

@@ -215,6 +215,57 @@ struct TerminalTests {
         panel.shutdown()
     }
 
+    @Test func customNamesStayWithTheirTerminalAndDefaultNamesKeepUpdating() throws {
+        let folder = try temporary()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let panel = TerminalPanel(folder: folder)
+        defer { panel.shutdown(immediately: true) }
+        let first = panel.newShell(), shell = try #require(first.shell)
+        let id = first.id, view = first.view
+        panel.startRename(first)
+        panel.nameDraft = "  API server  "
+        panel.finishRename(commit: true)
+        shell.setTerminalTitle(source: shell.view, title: "automatic shell title")
+        #expect(first.title == "API server" && first.id == id && first.view === view)
+        let other = panel.newShell()
+        other.rename("Worker")
+        panel.select(first)
+        panel.hide()
+        panel.toggle()
+        #expect(panel.active === first && first.title == "API server" && other.title == "Worker")
+        first.rename("")
+        #expect(first.title == "automatic shell title" && first.customTitle == nil)
+        panel.startRename(first)
+        panel.nameDraft = "Discard"
+        panel.finishRename(commit: false)
+        #expect(first.title == "automatic shell title")
+        panel.startRename(first)
+        panel.nameDraft = "   "
+        panel.finishRename(commit: true)
+        #expect(first.title == "automatic shell title")
+    }
+
+    @Test func renamingReadOnlyOutputNeverChangesItsCommandOrInputAccess() throws {
+        let folder = try temporary()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let chat = Chat(provider: .codex, folder: folder, modeMemory: ModeMemory(defaults: nil))
+        defer { chat.close() }
+        let command = ActiveCommand(id: "output", kind: .shell, title: "A command", command: "sleep 30", startedAt: .now, owner: .main)
+        let panel = TerminalPanel(folder: folder)
+        defer { panel.shutdown(immediately: true) }
+        panel.open(command, from: chat)
+        let entry = try #require(panel.active), view = entry.view
+        panel.startRename(entry)
+        panel.nameDraft = "Watch\noutput"
+        panel.finishRename(commit: true)
+        #expect(entry.title == "Watch output")
+        #expect(entry.shell == nil && entry.view === view && entry.command?.id == command.id)
+        #expect(entry.command?.command == "sleep 30" && entry.command?.isLive == true)
+        panel.startRename(entry)
+        panel.close(entry)
+        #expect(panel.renaming == nil && panel.nameDraft.isEmpty && panel.entries.isEmpty)
+    }
+
     @Test func panelHeightAlwaysLeavesRoomForTheChat() {
         #expect(Layout.Terminal.fitting(240, available: 760, maximized: false) == 240)
         #expect(Layout.Terminal.fitting(900, available: 400, maximized: false) == 280)

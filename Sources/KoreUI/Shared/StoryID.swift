@@ -173,6 +173,8 @@ extension StoryID {
         /// A fenced code block, by its place in its markdown; `.part(.copy)` is its Copy.
         package static func code(_ path: [Int]) -> StoryID { StoryID(.transcript, "code", key: path.map(String.init).joined(separator: ".")) }
         package static let earlier = StoryID(.transcript, "earlier")
+        /// The active feedback row, including delivery before the CLI acknowledges a turn.
+        package static let spinner = StoryID(.transcript, "spinner")
         /// A stalled turn's spinner row: Retry and Stop.
         package static let stalledRetry = StoryID(.transcript, "stalled-retry")
         package static let stalledStop = StoryID(.transcript, "stalled-stop")
@@ -317,7 +319,7 @@ extension StoryID {
             Composer.account.part(.switch), Composer.account.part(.signOut), Composer.account.part(.allow),
             Composer.account.part(.cancel), Composer.account.part(.copy), Composer.account.part(.credentials),
             Composer.account.part(.choose), Composer.account.part(.save),
-            Transcript.earlier,
+            Transcript.earlier, Transcript.spinner,
             AgentMap.open, AgentMap.stop, AgentMap.close, AgentMap.chat, History.search,
             Explorer.newfile, Explorer.newfolder, Explorer.refresh, Explorer.collapse, Explorer.namefield,
             Explorer.filesTab, Explorer.searchTab,

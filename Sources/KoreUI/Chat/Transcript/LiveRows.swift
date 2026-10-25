@@ -24,11 +24,14 @@ struct SpinnerRow: View {
     @StateObject private var clock = SpinnerClock()
 
     var body: some View {
-        if connection.stuck {
-            stuck
-        } else {
-            moving
+        Group {
+            if connection.stuck {
+                stuck
+            } else {
+                moving
+            }
         }
+        .storyMark(StoryID.Transcript.spinner)
     }
 
     /// Nothing to animate while nothing can arrive: ⚠, what's wrong, and when stalled the way out.

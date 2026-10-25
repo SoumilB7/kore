@@ -18,6 +18,8 @@ extension Workspace {
                 entry.map { String(decoding: $0.view.getBufferAsData(), as: UTF8.self) } ?? "",
                 entry.map { window?.firstResponder === $0.view } ?? false, terminals.workingCount, entry?.id)
     }
+    package var storyTerminalTitle: String? { terminals.active?.title }
+
     package func storyPaintTerminal() {
         guard let view = terminals.active?.view else { return }
         view.needsDisplay = true

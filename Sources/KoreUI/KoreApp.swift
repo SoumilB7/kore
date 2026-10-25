@@ -270,6 +270,10 @@ private struct TerminalCommands: View {
         Button("Show / Hide Terminal") { workspace?.terminals.toggle() }
             .keyboardShortcut("`", modifiers: [.control])
             .disabled(workspace == nil)
+        Button("Rename Terminal…") {
+            if let panel = workspace?.terminals, let entry = panel.active { panel.startRename(entry) }
+        }
+        .disabled(workspace?.terminals.isOpen != true || workspace?.terminals.active == nil)
         Button("New Terminal") { workspace?.terminals.newShell() }
             .keyboardShortcut("`", modifiers: [.control, .shift])
             .disabled(workspace == nil)
