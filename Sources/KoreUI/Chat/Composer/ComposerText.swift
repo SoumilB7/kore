@@ -159,6 +159,25 @@ final class ComposerTextView: NSTextView {
 final class ComposerEditor: ObservableObject {
     weak var view: ComposerTextView?
     weak var undo: UndoManager?
+
+    /// A click beside the text, on the box's padding: the caret goes where the nearest line is
+    /// nearest the click (below the last line, its end; left of a line, its start), as a click
+    /// in the text would put it.
+    func placeCaret(at windowPoint: NSPoint) {
+        guard let view, let layout = view.layoutManager, let container = view.textContainer else { return }
+        let local = view.convert(windowPoint, from: nil)
+        // Laid out only as far as drawn (non-contiguous): what is in sight, at least, for its rect.
+        layout.ensureLayout(forBoundingRect: view.visibleRect, in: container)
+        let used = layout.usedRect(for: container)
+        let point = NSPoint(
+            x: min(max(local.x, used.minX), used.maxX),
+            y: min(max(local.y, used.minY + 1), max(used.maxY - 1, used.minY + 1)))
+        var fraction: CGFloat = 0
+        let index = layout.characterIndex(for: point, in: container, fractionOfDistanceBetweenInsertionPoints: &fraction)
+        let length = (view.string as NSString).length
+        view.window?.makeFirstResponder(view)
+        view.setSelectedRange(NSRange(location: min(index + (fraction > 0.5 ? 1 : 0), length), length: 0))
+    }
 }
 
 /// The text view's scroll view. A wheel or trackpad scroll over it moves its text; the

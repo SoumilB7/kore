@@ -211,10 +211,16 @@ struct ComposerView: View {
             textField
         }
         .padding(Inset.field)
-        // A click on the padding around the text focuses it at once rather than landing on
-        // nothing; a click in the text puts the caret there.
+        // A click on the padding around the text focuses it with the caret at the nearest
+        // point of the text (below the last line, its end) rather than landing on nothing; a
+        // click in the text puts the caret there.
         .contentShape(Rectangle())
-        .onTapGesture { focused.wrappedValue = true }
+        .onTapGesture {
+            focused.wrappedValue = true
+            if let event = NSApp.currentEvent, event.type == .leftMouseUp || event.type == .leftMouseDown {
+                editor.placeCaret(at: event.locationInWindow)
+            }
+        }
     }
 
     private var textField: some View {
