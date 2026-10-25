@@ -228,13 +228,16 @@ final class TranscriptStore {
 
     /// One user (or peer) message and what followed it. The header sticks to the top while
     /// its section scrolls by. Its id is "s-<message id>" ("start" before the first message),
-    /// distinct from the message row's own.
+    /// distinct from the message row's own. A message sent during a turn starts a section of its
+    /// own in that turn, so the latest one sticks.
     struct Section: Identifiable, Equatable {
         let id: String
         let header: Entry?
         /// A peer's message starts as one line (owner, 2026-10-21); opened, it shows in full.
         let headerOpen: Bool
         let items: [Item]
+        /// The message whose turn it's in: where a rebuild of it starts.
+        var turn: UUID? = nil
     }
 
     /// A section as the view sees it: its own observable, so a streamed token re-renders only
@@ -1373,7 +1376,9 @@ final class TranscriptStore {
         guard whole || dirtyFrom != nil else { return }
         let from = whole ? start : max(dirtyFrom ?? entries.count, start)
         dirtyFrom = nil
-        let kept = whole ? 0 : (sectionStarts.lastIndex { $0 <= from } ?? 0)
+        // A turn's sections are built together: from its first.
+        let last = sectionStarts.lastIndex { $0 <= from } ?? 0
+        let kept = whole || sectionStarts.isEmpty ? 0 : (sectionStarts.firstIndex(of: sectionStarts[last]) ?? last)
         let begin = whole ? start : sectionStarts[kept]
 
         let rows = rows(from: begin)
@@ -1396,7 +1401,7 @@ final class TranscriptStore {
             } else {
                 models.append(SectionModel(section))
             }
-            starts.append(section.header.flatMap { position[$0.id] } ?? begin)
+            starts.append(section.turn.flatMap { position[$0] } ?? begin)
         }
         sectionStarts = starts
         if models.count != sections.count || zip(models, sections).contains(where: { $0 !== $1 }) {
@@ -1505,7 +1510,14 @@ final class TranscriptStore {
                     id: Self.unique(id, &seen), actions: rowActions)
             }
             let headerOpen = header.map { $0.kind == .user || open.contains($0.id.uuidString) } ?? false
-            sections.append(Section(id: id, header: header, headerOpen: headerOpen, items: items))
+            // Split at each message sent during the turn; its rows still join up across.
+            var (partID, partHeader, partOpen, from) = (id, header, headerOpen, 0)
+            for (i, item) in items.enumerated() {
+                guard case .entry(let e) = item.row, e.kind == .user, e.inTurn, i > from else { continue }
+                sections.append(Section(id: partID, header: partHeader, headerOpen: partOpen, items: Array(items[from..<i]), turn: header?.id))
+                (partID, partHeader, partOpen, from) = ("s-" + e.id.uuidString, e, true, i)
+            }
+            sections.append(Section(id: partID, header: partHeader, headerOpen: partOpen, items: Array(items[from...]), turn: header?.id))
         }
         for row in rows {
             if case .entry(let e) = row, (e.kind == .user && !e.inTurn) || e.kind == .peer {
