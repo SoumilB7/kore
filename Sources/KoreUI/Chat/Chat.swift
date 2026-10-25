@@ -22,6 +22,8 @@ package final class Chat: Identifiable {
     let context = ContextStore()
     /// The agent map's own UI state (open, selection); not fed by events.
     let agentMap = AgentMapState()
+    /// What it runs apart from its turns: background shells, monitors, scheduled jobs.
+    let commands = CommandsStore()
 
     /// Waiting in the composer, sent with the next message.
     private(set) var attachments: [Attachment] = []
@@ -158,6 +160,7 @@ package final class Chat: Identifiable {
         let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
         if case .replayed = event { showImported(in: transcript) }
         transcript.apply(event)
+        commands.apply(event)
         noteSinceReplay(event)
         if case .replayed = event, let original = forkedFrom {
             // A fork's history ends with where it came from.
@@ -214,6 +217,7 @@ package final class Chat: Identifiable {
         let replay = ChatEvent.replayed(events)
         approvals.apply(replay)
         controls.apply(replay)
+        commands.apply(.historyReplaced(events))
         let running = status.isRunning
         status.apply(replay)
         status.setRunning(running)
@@ -724,6 +728,62 @@ package final class Chat: Identifiable {
             draft = draft.isEmpty ? message.text : message.text + "\n" + draft
         }
         attachments = message.files + attachments
+    }
+
+    // MARK: Commands
+
+    /// Stop on a command's row, confirmed: the row says "stopped" when the CLI does.
+    func stopCommand(_ id: String) {
+        guard let command = commands.command(id), command.canStop, !command.stopping, let backend else { return }
+        dispatch(.commandChanged(id: id, .stopping))
+        Task {
+            do {
+                try await backend.stopCommand(id)
+            } catch {
+                dispatch(.commandChanged(id: id, .actionFailed("Couldn't stop it: \(Self.reason(error))")))
+            }
+        }
+    }
+
+    /// Stop all: every live command but the armed jobs.
+    func stopAllCommands() {
+        for command in commands.stoppable { stopCommand(command.id) }
+    }
+
+    /// A long foreground command's Run in background: the same row runs on.
+    func runInBackground(_ id: String) {
+        guard let command = commands.command(id), command.canBackground, let backend else { return }
+        Task {
+            do {
+                try await backend.backgroundCommand(id)
+            } catch {
+                dispatch(.commandChanged(id: id, .actionFailed("Couldn't move it to the background: \(Self.reason(error))")))
+            }
+        }
+    }
+
+    /// The end of a command's output, for its opened row: its file read from the end off the
+    /// main thread, or what streamed, or the CLI's own tail when Kore can't read the file. Read
+    /// only while the row is open.
+    func commandTail(_ id: String, lines: Int = 40) async -> OutputTail? {
+        guard let command = commands.command(id) else { return nil }
+        switch command.output {
+        case .stream:
+            return OutputTail(lines: commands.streamedTail(id, lines: lines), modified: command.lastOutputAt)
+        case .file(let path):
+            let file = URL(fileURLWithPath: path)
+            if let tail = await Task.detached(priority: .utility, operation: { OutputTail.read(file, lines: lines) }).value { return tail }
+            fallthrough
+        case .none:
+            guard command.isLive, let text = await backend?.commandOutput(id) else { return nil }
+            return OutputTail(lines: OutputTail.lines(of: text, count: lines))
+        }
+    }
+
+    /// A pane listing commands is showing (or not): the CLI is asked about them more often.
+    func watchCommands(_ closely: Bool) {
+        let backend = backend
+        Task { await backend?.watchCommands(closely) }
     }
 
     func stopAgent(_ id: String) {

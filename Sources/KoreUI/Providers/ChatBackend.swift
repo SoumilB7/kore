@@ -29,6 +29,19 @@ package protocol ChatBackend: AnyObject {
     func setEffort(_ level: String) async
     func rename(_ title: String) async throws
     func stopAgent(_ id: String) async
+    /// Stops a running command (`ActiveCommand`): Claude's `stop_task`, Codex's
+    /// `backgroundTerminals/terminate`. Its `.commandEnded` follows; one the CLI says had already
+    /// ended ends as done. Throws the CLI's reason when it can't.
+    func stopCommand(_ id: String) async throws
+    /// Sends a long foreground command to the background (Claude's `background_tasks`): the call
+    /// that waits on it returns, the command runs on as the same row.
+    func backgroundCommand(_ id: String) async throws
+    /// The end of a command's output as the CLI reads it (Claude's `get_task_output`), for one
+    /// whose output Kore can't read itself; nil when there's none.
+    func commandOutput(_ id: String) async -> String?
+    /// A pane showing commands opened (true) or closed: while one is open the CLI is asked about
+    /// them more often (Codex's CPU and memory).
+    func watchCommands(_ closely: Bool) async
     /// A sub-agent's own messages and tool calls, tagged with its `AgentID`, for its card: the
     /// whole history each time. Needed for agents of a past session and for Codex children
     /// opened later; a live foreground agent's events arrive as it runs, and a Claude
@@ -149,12 +162,22 @@ extension ChatBackend {
     /// For a backend with no process of its own.
     package func relaunch() async {}
 
+    /// For a backend that runs no commands of its own.
+    package func stopCommand(_ id: String) async throws { throw CommandUnavailable() }
+    package func backgroundCommand(_ id: String) async throws { throw CommandUnavailable() }
+    package func commandOutput(_ id: String) async -> String? { nil }
+    package func watchCommands(_ closely: Bool) async {}
+
     /// For a backend whose CLI has no full resets.
     package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome { throw UsageUnavailable() }
 }
 
 struct CompactUnavailable: Error, CustomStringConvertible {
     var description: String { "This chat can't be compacted" }
+}
+
+struct CommandUnavailable: LocalizedError {
+    var errorDescription: String? { "this chat's CLI can't do that" }
 }
 
 struct UsageUnavailable: LocalizedError {

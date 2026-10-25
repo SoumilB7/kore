@@ -72,6 +72,8 @@ extension TranscriptStore {
             agentResumed(id: id)
         case .agentBackgrounded(let id):
             agentBackgrounded(id: id)
+        case .commandStarted, .commandChanged, .commandOutput, .commandEnded:
+            break  // `CommandsStore`'s; their calls are tool rows already
 
         case .exited(let status):
             compacting(false)

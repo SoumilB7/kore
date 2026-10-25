@@ -69,6 +69,17 @@ package enum ChatEvent: Sendable {
     /// child thread; Claude says so at the spawn).
     case agentBackgrounded(id: String)
 
+    // MARK: Commands
+
+    /// A command the chat runs apart from its turn (`ActiveCommand`): a background shell, a long
+    /// foreground command, a monitor, a scheduled job. In a replay, it's followed by its end.
+    case commandStarted(ActiveCommand)
+    case commandChanged(id: String, CommandChange)
+    /// Output a running command printed (Codex streams it), appended.
+    case commandOutput(id: String, String)
+    /// How it ended. A later one for the same command says more (an exit code after "failed").
+    case commandEnded(id: String, ActiveCommand.State, at: Date)
+
     // MARK: Approvals
 
     case approvalRequested(Approval)
