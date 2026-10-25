@@ -33,18 +33,20 @@ struct TranscriptRulesTests {
         #expect(s.sections.count == before)
     }
 
-    @Test func inTurnLandsAfterItsAnchorWithoutASection() {
+    /// It lands after its anchor, in the turn, and starts a section there: the latest message
+    /// is the one that sticks (owner, 2026-10-26).
+    @Test func inTurnLandsAfterItsAnchorInASectionOfItsOwn() {
         let s = running()
         s.on(.messageQueued(id: "q", text: "waiting", attachments: []))
         let before = s.sections.count
         s.on(.queuedMessage(id: "q", .inTurn(after: "b1")))
-        #expect(s.lines.suffix(3) == ["tool Bash running", "user waiting", "spinner"])
-        #expect(s.sections.count == before)
+        #expect(s.lines.suffix(4) == ["tool Bash running", "§ waiting", "user waiting", "spinner"])
+        #expect(s.sections.count == before + 1)
         // Pinned: it stays in sight, above the answer, when the turn folds.
         s.done("b1")
         s.say("a2", "answer")
         s.finish("t2")
-        #expect(Array(s.lines.suffix(4)) == ["fold", "rule", "user waiting", "answer answer"])
+        #expect(Array(s.lines.suffix(5)) == ["fold", "rule", "§ waiting", "user waiting", "answer answer"])
     }
 
     @Test func nextTurnOpensItsOwnSection() {

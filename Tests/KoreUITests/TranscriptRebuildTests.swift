@@ -17,7 +17,8 @@ struct TranscriptRebuildTests {
     private func check(_ store: TranscriptStore, _ step: @autoclosure () -> String) {
         store.drawNow()
         let incremental = shown(store)
-        let full = store.sectionsFromScratch()
+        // As the view has them: where a section's turn starts is the store's own bookkeeping.
+        let full = store.sectionsFromScratch().map { TranscriptStore.Section(id: $0.id, header: $0.header, headerOpen: $0.headerOpen, items: $0.items) }
         #expect(incremental == full, "\(step())")
     }
 
