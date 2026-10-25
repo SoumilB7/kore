@@ -4,6 +4,8 @@ set -euo pipefail
 
 cd "${0:A:h}/.."
 VERSION="0.1.0"
+# The commit built, for scripts/check-install.sh; a copy without .git (the verify cache) passes it in.
+BUILD_SHA="${KORE_BUILD_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 APP="build/Kore.app"
 
 swift build -c release --product Kore
@@ -36,6 +38,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>
+    <key>KoreBuild</key><string>$BUILD_SHA</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
@@ -55,7 +58,7 @@ EOF
 
 # Ad-hoc signature: enough to run locally. Not sandboxed, since it must spawn `claude`.
 codesign --force --sign - "$APP"
-echo "built $APP"
+echo "built $APP ($BUILD_SHA)"
 
 if [[ "${1:-}" == "--install" ]]; then
     osascript -e 'quit app "Kore"' 2>/dev/null || true
