@@ -954,7 +954,12 @@ struct LoginRow: View {
                     if let pill = LoginRow.pill(usage, plan: plan) { PlanPill(text: pill) }
                     // One slot in every row, hovered or not: the pills line up.
                     HStack(spacing: Space.xs) {
-                        if hovered.value || menuOpen { LoginMenuButton(state: state, login: login.id) }
+                        // Its place kept while hidden: hovering never changes the row's size.
+                        if hovered.value || menuOpen {
+                            LoginMenuButton(state: state, login: login.id)
+                        } else {
+                            Color.clear.frame(width: Size.MessageActions.button, height: Size.MessageActions.button)
+                        }
                         if reading {
                             SpinningArc().frame(width: Size.spinner, height: Size.spinner)
                         } else if login.active {

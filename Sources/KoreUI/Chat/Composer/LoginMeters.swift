@@ -86,10 +86,11 @@ struct LoginMeters: View {
             if case .ready(let reading, _) = state { return LoginUsage.bars(reading) }
             return []
         }
-        .map { title($0, now: now) }
-        // The loading rows' names too, so a card still reading doesn't squeeze them.
-        let widest = (names + ["Session", "Weekly"]).map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        return min(ceil(widest) + 1, Size.usageTitleMax)
+        .map { UsageText.label($0.title) }
+        // Each name with the widest reset it can show, "(88m)", and the loading rows' names
+        // too: the column doesn't move as resets count down or readings arrive.
+        let widest = Set(names + ["Session", "Weekly"]).map { ("\($0) (88m)" as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return min(ceil(widest) + 2, Size.usageTitleMax)
     }
 
     private func note(_ words: String) -> some View {
