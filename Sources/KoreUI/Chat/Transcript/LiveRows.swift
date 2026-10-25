@@ -314,7 +314,7 @@ struct CompactionSummary: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            Text("Summary from Claude")
+            Text(entry.result ?? "Summary from Claude")
                 .font(TextStyle.caption)
                 .foregroundStyle(Theme.secondary)
             HStack(alignment: .top, spacing: Space.lg) {

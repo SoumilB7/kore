@@ -103,7 +103,12 @@ public enum HandoffImport {
             cutoff: plan.cutoff, sourceTitle: segment.shownTitle, sourceModel: segment.model,
             target: .init(cli: writer.id, session: written.session), targetModel: target.model, folder: target.folder,
             carried: .init(plan), written: written.rows, instructions: target.instructions?.path)
-        try await Task.detached { try HandoffRecords.save(record, history: plan.entries.map(\.turn)) }.value
+        let history = plan.entries.map { entry in
+            var turn = entry.turn
+            turn.carriedAs = entry.level
+            return turn
+        }
+        try await Task.detached { try HandoffRecords.save(record, history: history, summary: plan.summary) }.value
         return record
     }
 }

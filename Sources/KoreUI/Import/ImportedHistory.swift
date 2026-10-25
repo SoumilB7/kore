@@ -9,6 +9,8 @@ import KoreCore
 final class ImportedHistory {
     let record: HandoffRecord
     private var turns: [HandoffTurn]?
+    /// The source's summary the target was given, once `events` has read it.
+    private(set) var summary: String?
 
     init(record: HandoffRecord, turns: [HandoffTurn]? = nil) {
         self.record = record
@@ -25,6 +27,7 @@ final class ImportedHistory {
         if turns == nil {
             let session = record.target.session
             turns = await Task.detached { HandoffRecords.history(target: session) }.value ?? []
+            if record.carried.summary { summary = await Task.detached { HandoffRecords.summary(target: session) }.value }
         }
         let turns = turns ?? []
         return await Task.detached { ImportedEvents.events(turns) }.value
@@ -45,20 +48,21 @@ final class ImportedHistory {
         (["Continued in \(product)", record.targetModel, Self.day.string(from: record.at)].compactMap { $0 }).joined(separator: " · ")
     }
 
-    /// "Carried to Codex from here" over the oldest carried turn, with what was left out:
-    /// only when turns weren't carried and no summary of the source's covers them.
+    /// "12 earlier turns not carried" over the oldest carried turn, whenever turns weren't
+    /// (a summary of the source's may cover them, shown under it): what the model has starts here.
     func cutMark(product: String) -> (text: String, help: String)? {
         let carried = record.carried
-        guard carried.notCarried > 0, !carried.summary else { return nil }
-        var parts = [
+        guard carried.notCarried > 0 || carried.notCarriedKnown == false else { return nil }
+        let text =
             carried.notCarriedKnown == false
-                ? "Earlier turns not carried"
-                : "\(carried.notCarried) earlier \(carried.notCarried == 1 ? "turn" : "turns") not carried"
-                    + ImportState.span(carried.notCarriedFrom, carried.notCarriedTo)
-        ]
+            ? "Earlier turns not carried"
+            : "\(carried.notCarried) earlier \(carried.notCarried == 1 ? "turn" : "turns") not carried"
+                + ImportState.span(carried.notCarriedFrom, carried.notCarriedTo)
+        var parts = ["Carried to \(product) from here"]
+        if carried.summary { parts.append("with the summary below") }
         if carried.condensed > 0 { parts.append("\(carried.condensed) condensed") }
         if carried.bare > 0 { parts.append("\(carried.bare) as prompt and reply") }
-        return ("Carried to \(product) from here", parts.joined(separator: " · "))
+        return (text, parts.joined(separator: " · "))
     }
 
     private static let day: DateFormatter = {
@@ -73,11 +77,25 @@ final class ImportedHistory {
 enum ImportedEvents {
     static func events(_ turns: [HandoffTurn]) -> [ChatEvent] {
         var events: [ChatEvent] = []
+        var level: HandoffPlan.Level?
         for (index, turn) in turns.enumerated() {
             let id = "import-\(index)"
+            // Where the model's copy starts being shorter than what shows: one quiet line.
+            if turn.carriedAs != level {
+                level = turn.carriedAs
+                switch level {
+                case .condensed: events.append(.notice("Carried shortened from here: steps one line each", isError: false))
+                case .bare: events.append(.notice("Carried as prompt and reply only from here", isError: false))
+                case .full: if index > 0 { events.append(.notice("Carried in full from here", isError: false)) }
+                case nil: break
+                }
+            }
             events.append(.turnStarted(id, origin: .user, at: turn.at ?? .distantPast))
-            let prompt = ([turn.prompt] + turn.files + turn.images.map { _ in "[image]" }).filter { !$0.isEmpty }
-            events.append(.userMessage(text: prompt.joined(separator: "\n"), attachments: []))
+            let prompt = ([turn.prompt] + turn.files).filter { !$0.isEmpty }
+            let images = turn.images.map { image in
+                SentAttachment(name: "Image", kind: .image, url: nil, image: Data(base64Encoded: image.data))
+            }
+            events.append(.userMessage(text: prompt.joined(separator: "\n"), attachments: images))
             for (number, step) in turn.steps.enumerated() {
                 let call = "\(id)-\(number)"
                 // Its words between calls, as Kore shows any turn's: they fold under the last ones.

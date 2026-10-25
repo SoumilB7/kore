@@ -237,6 +237,7 @@ package final class Chat: Identifiable {
         guard let imported, let events = importedEvents else { return }
         let product = provider.usage.product
         if let cut = imported.cutMark(product: product) { store.carriedFrom(cut.text, help: cut.help) }
+        if let summary = imported.summary { store.compactionSummary(summary, title: "Summary of earlier turns") }
         store.apply(.replayed(events))
         store.continued(imported.divider(product: product), help: "Open the \(imported.record.sourceProduct) chat")
     }

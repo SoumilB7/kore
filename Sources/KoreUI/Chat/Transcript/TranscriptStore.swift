@@ -562,8 +562,10 @@ final class TranscriptStore {
     }
 
     /// What the compaction kept (Claude's summary), under its divider.
-    func compactionSummary(_ text: String) {
-        append(Entry(kind: .summary, text: text))
+    func compactionSummary(_ text: String, title: String? = nil) {
+        var entry = Entry(kind: .summary, text: text)
+        entry.result = title
+        append(entry)
     }
 
     /// After a fork's history: "Forked from "Refactor theme tokens"".

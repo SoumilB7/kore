@@ -32,6 +32,19 @@ public enum ImageFit {
         return ("image/jpeg", jpeg)
     }
 
+    /// A small JPEG of a base64 image, at most `side` pixels a side, for showing it again.
+    public static func thumbnail(_ image: HandoffImage, side: Int = 240) -> HandoffImage? {
+        guard let data = Data(base64Encoded: image.data), let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: side,
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+            let jpeg = encode(thumbnail, .jpeg, [kCGImageDestinationLossyCompressionQuality: 0.7])
+        else { return nil }
+        return HandoffImage(mediaType: "image/jpeg", data: jpeg.base64EncodedString())
+    }
+
     /// A base64 image, fitted; nil when it can't be.
     public static func fit(_ image: HandoffImage) -> HandoffImage? {
         guard let data = Data(base64Encoded: image.data), let fitted = fit(data, mediaType: image.mediaType) else { return nil }

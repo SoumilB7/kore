@@ -112,7 +112,7 @@ public enum HandoffRecords {
     /// Saves a new record, and beside it the carried turns as the chat shows them above its
     /// divider (images left out): the source file may be gone or changed by the next time the
     /// chat opens. One already there for that session is an error, never replaced.
-    public static func save(_ record: HandoffRecord, history: [HandoffTurn]) throws {
+    public static func save(_ record: HandoffRecord, history: [HandoffTurn], summary: String? = nil) throws {
         let directory = directory
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
@@ -120,11 +120,13 @@ public enum HandoffRecords {
         encoder.dateEncodingStrategy = .iso8601
         let shown = history.map { turn in
             var turn = turn
-            turn.images = []
+            // Small thumbnails, so the chat shows its images again when it opens.
+            turn.images = turn.images.compactMap { ImageFit.thumbnail($0) }
             for index in turn.steps.indices { turn.steps[index].images = [] }
             return turn
         }
         try ClaudeHandoffWriter.create(file(record.target.session, in: directory, suffix: ".history"), try encoder.encode(shown))
+        if let summary { try ClaudeHandoffWriter.create(file(record.target.session, in: directory, suffix: ".summary", type: "txt"), Data(summary.utf8)) }
         encoder.outputFormatting.insert(.prettyPrinted)
         try ClaudeHandoffWriter.create(file(record.target.session, in: directory), try encoder.encode(record))
         lock.withLock {
@@ -179,9 +181,14 @@ public enum HandoffRecords {
         }
     }
 
-    private static func file(_ session: String, in directory: URL, suffix: String = "") -> URL {
+    /// The source's summary carried with this session's import, as the model got it.
+    public static func summary(target session: String) -> String? {
+        (try? Data(contentsOf: file(session, in: directory, suffix: ".summary", type: "txt"))).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    private static func file(_ session: String, in directory: URL, suffix: String = "", type: String = "json") -> URL {
         // Session ids are uuids and thread ids; anything else is kept to a safe name.
         let name = String(session.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "_" })
-        return directory.appendingPathComponent("\(name)\(suffix).json")
+        return directory.appendingPathComponent("\(name)\(suffix).\(type)")
     }
 }
