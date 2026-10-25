@@ -4,8 +4,6 @@
 <p align="center">Your agents, out of the terminal and on one team.</p>
 <p align="center"><a href="../../releases/latest">Download</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
-<p align="center"><img src="docs/images/board.png" width="100%" alt="A board of four Claude Code and Codex chats in one tab"></p>
-
 Kore runs the `claude` and `codex` CLIs on your Mac and gives them a proper interface: a window
 per folder, tabs for chats, files, terminals and history. The CLIs do the work; Kore shows it.
 
@@ -13,7 +11,9 @@ per folder, tabs for chats, files, terminals and history. The CLIs do the work; 
 
 ### Tab groups
 
-A board holds several chats in one tab, like a control panel (above).
+A board holds several chats in one tab, like a control panel.
+
+<p align="center"><img src="docs/images/board.png" width="100%" alt="A board of four Claude Code and Codex chats in one tab"></p>
 
 ### Multiple accounts
 
