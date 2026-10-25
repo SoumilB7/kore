@@ -371,4 +371,77 @@ struct HandoffTests {
         #expect(CodexRolloutFormat.threadName("thread-1", index: index) == "Renamed")
         #expect(CodexRolloutFormat.threadName("thread-9", index: index) == nil)
     }
+
+    // MARK: Carrying what the target can take
+
+    private func reply(_ uuid: String, _ parent: String, _ text: String) -> String {
+        claudeRow(uuid, parent, "assistant", [["type": "text", "text": text]])
+    }
+
+    @Test func onlyTheHarnessTagsAreLeftOutAndACommandIsItsTurn() throws {
+        let segment = try #require(HandoffFormats.read(try file("tags.jsonl", [
+            claudeRow("u1", nil, "user", "<b>bold</b> is the idea"), reply("a1", "u1", "ok"),
+            claudeRow("u2", "a1", "user", "<system-reminder>noise</system-reminder>"),
+            claudeRow("u3", "u2", "user", "<command-name>/review</command-name><command-args>the fix</command-args>"),
+            reply("a3", "u3", "reviewed"),
+        ])))
+        #expect(segment.turns.map(\.prompt) == ["<b>bold</b> is the idea", "/review the fix"])
+    }
+
+    @Test func oneHugeMessageIsCut() throws {
+        var turn = HandoffTurn(id: "t", prompt: String(repeating: "word ", count: 60_000))
+        turn.reply = "ok"
+        let rendered = HandoffRender.turn(turn, .full)
+        #expect(rendered.user.utf8.count < HandoffRender.messageChars + 200)
+    }
+
+    @Test func aTextDocumentComesInFullTurnsOnly() throws {
+        let content: [[String: Any]] = [
+            ["type": "text", "text": "Read this"],
+            ["type": "document", "title": "spec.md", "source": ["type": "text", "media_type": "text/plain", "data": "The spec says 42."]],
+        ]
+        let segment = try #require(HandoffFormats.read(try file("doc.jsonl", [claudeRow("u1", nil, "user", content), reply("a1", "u1", "ok")])))
+        let turn = try #require(segment.turns.first)
+        #expect(HandoffRender.turn(turn, .full).user.contains("The spec says 42."))
+        #expect(!HandoffRender.turn(turn, .bare).user.contains("The spec says 42."))
+        #expect(HandoffRender.turn(turn, .bare).user.contains("[document: spec.md]"))
+    }
+
+    @Test func aBackgroundAgentsResultIsItsStepsOutput() throws {
+        let segment = try #require(HandoffFormats.read(try file("agent.jsonl", [
+            claudeRow("u1", nil, "user", "Look into it"),
+            claudeRow("a1", "u1", "assistant", [["type": "tool_use", "id": "t1", "name": "Agent", "input": ["description": "dig", "prompt": "dig", "run_in_background": true]]]),
+            claudeRow("r1", "a1", "user", [["type": "tool_result", "tool_use_id": "t1", "content": "Async agent launched"]]),
+            reply("a2", "r1", "Started it."),
+            claudeRow("n1", "a2", "user", "<task-notification><task-id>x</task-id><tool-use-id>t1</tool-use-id><status>completed</status><result>Found the bug in parse()</result></task-notification>", extra: ["turnOrigin": "task_notification"]),
+        ])))
+        #expect(segment.turns.first?.steps.first?.output == "Found the bug in parse()")
+    }
+
+    @Test func whatACompactionKeptWordForWordIsCarriedAfterItsSummary() throws {
+        let segment = try #require(HandoffFormats.read(try file("kept.jsonl", [
+            claudeRow("u0", nil, "user", "Old work"), reply("a0", "u0", "done"),
+            claudeRow("p1", "a0", "user", "Keep me"),
+            json([
+                "type": "system", "subtype": "compact_boundary", "uuid": "b1", "parentUuid": NSNull(), "sessionId": "s-1",
+                "timestamp": "2026-10-20T09:00:05.000Z",
+                "compactMetadata": ["preservedMessages": ["anchorUuid": "s1", "uuids": ["p1"], "allUuids": ["p1"]]],
+            ]),
+            claudeRow("s1", "b1", "user", "Summary text", extra: ["isCompactSummary": true]),
+            claudeRow("u5", "s1", "user", "Next"), reply("a5", "u5", "ok"),
+        ])))
+        #expect(segment.summary == "Summary text")
+        #expect(segment.turns.map(\.prompt) == ["Keep me", "Next"])
+    }
+
+    @Test func aChatFromAnotherFolderIsNamed() throws {
+        var segment = HandoffSegment(source: "claude", product: "Claude Code", sessionId: "s")
+        var turn = HandoffTurn(id: "t", prompt: "hi")
+        turn.reply = "ok"
+        segment.turns = [turn]
+        segment.cwd = "/tmp/elsewhere-project"
+        let plan = HandoffBudget.plan(segment, window: 200_000)
+        #expect(HandoffRender.note(plan, folder: scratch).contains("/tmp/elsewhere-project"))
+        #expect(HandoffRender.note(plan).contains("in this folder"))
+    }
 }
