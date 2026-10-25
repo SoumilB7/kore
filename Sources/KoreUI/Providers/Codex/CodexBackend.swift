@@ -274,6 +274,15 @@ final class CodexBackend: ChatBackend {
         yield(.remoteControl(nil))
     }
 
+    func endRemoteForAccountChange() {
+        guard remoteWanted else { return }
+        remoteOff()
+        yield(.notice(remoteEndedForAccount))
+        log.remote("codex", chat: sessionId, on: false)
+        // The old login's link ends with its app-server anyway; this ends it at once.
+        if let session { Task { _ = try? await session.setRemoteControl(false) } }
+    }
+
     /// Makes the link again after a launch; a refusal ends it, with the CLI's reason.
     private func linkRemote(_ session: CodexSession) {
         translator.remoteActive = true
@@ -875,8 +884,6 @@ final class CodexBackend: ChatBackend {
         accountClosing = task
         let result = await task.value
         accountClosing = nil
-        // A remotely controlled chat comes back as the new login, for its remote side.
-        if result, remoteWanted { Task { try? await start() } }
         return result
     }
 

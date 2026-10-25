@@ -77,9 +77,12 @@ package protocol ChatBackend: AnyObject {
     /// the attempt `attempt`: irreversible, so only on the user's confirmed ask.
     func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome
     /// Turns the CLI's own remote control of this chat on or off (starting the CLI if need be);
-    /// its `.remoteControl` states follow. It stays on across a relaunch. Throws the CLI's
-    /// reason when it can't.
+    /// its `.remoteControl` states follow. It stays on across a relaunch as the same login.
+    /// Throws the CLI's reason when it can't.
     func setRemoteControl(_ on: Bool) async throws
+    /// The account is changing: remote control belongs to the login that turned it on, so it
+    /// ends here and the chat comes back as the new login without it.
+    func endRemoteForAccountChange()
     /// Ends the CLI's process, quietly, so the next `start()` launches it again and resumes the
     /// same session: after the account changed, it runs as the new one; after a turn stalled or
     /// ignored a Stop, it's a fresh process. `reason` is logged.
@@ -196,6 +199,7 @@ extension ChatBackend {
 
     /// For a backend whose CLI has no remote control.
     package func setRemoteControl(_ on: Bool) async throws { throw RemoteControlUnavailable() }
+    package func endRemoteForAccountChange() {}
 
     /// For a backend whose CLI has no full resets.
     package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome { throw UsageUnavailable() }
@@ -212,6 +216,9 @@ struct CommandUnavailable: LocalizedError {
 struct RemoteControlUnavailable: LocalizedError {
     var errorDescription: String? { "this chat's CLI has no remote control" }
 }
+
+/// Said once in the chat when an account switch ends its remote control.
+package let remoteEndedForAccount = "Remote control is off: the account changed."
 
 struct UsageUnavailable: LocalizedError {
     var errorDescription: String? { "this chat has no account to read" }

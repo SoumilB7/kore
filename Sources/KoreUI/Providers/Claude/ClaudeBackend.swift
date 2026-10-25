@@ -351,6 +351,18 @@ final class ClaudeBackend: ChatBackend {
     }
 
     /// Makes the link again after a launch; a refusal ends it, with the CLI's reason.
+    func endRemoteForAccountChange() {
+        guard remoteWanted else { return }
+        remoteWanted = false
+        remoteSession = nil
+        translator.remoteActive = false
+        yield(.remoteControl(nil))
+        yield(.notice(remoteEndedForAccount))
+        log.remote("claude", chat: sessionId, on: false)
+        // The old login's link ends with its process anyway; this ends it at once.
+        if let session { Task { _ = try? await session.setRemoteControl(false) } }
+    }
+
     private func linkRemote(_ session: ClaudeSession) {
         translator.remoteActive = true
         yield(.remoteControl(RemoteControl(state: .connecting, place: Self.remotePlace)))
@@ -999,14 +1011,10 @@ final class ClaudeBackend: ChatBackend {
         accountClosing = task
         let result = await task.value
         accountClosing = nil
-        // A remotely controlled chat comes back as the new login, for its remote side.
-        if result, remoteWanted { Task { try? await start() } }
         return result
     }
 
     private func stopForAccountChange() async -> Bool {
-        // The remote session belongs to the old login; the new one links a session of its own.
-        remoteSession = nil
         let startup = starting
         let opening = opening
         startup?.cancel()

@@ -66,11 +66,17 @@ package final class ScriptedBackend: ChatBackend {
     // MARK: - ChatBackend
 
     private var relaunched = false
+    /// Remote control is on: a start after a relaunch links it again, as the real CLIs' backends do.
+    private var remoteOn = false
 
     package func start() async throws {
         if relaunched {
             relaunched = false
             log.append(.restarted)
+            if remoteOn {
+                log.append(.setRemoteControl(true))
+                sink.yield(.remoteControl(RemoteControl(state: .connected, place: provider == "claude" ? "claude.ai/code" : "acme-mac")))
+            }
         }
         guard !started else { return }
         started = true
@@ -256,6 +262,7 @@ package final class ScriptedBackend: ChatBackend {
     package func setRemoteControl(_ on: Bool) async throws {
         try await start()
         log.append(.setRemoteControl(on))
+        remoteOn = on
         guard on else {
             sink.yield(.remoteControl(nil))
             return
@@ -263,6 +270,15 @@ package final class ScriptedBackend: ChatBackend {
         sink.yield(.remoteControl(RemoteControl(state: .connected, place: provider == "claude" ? "claude.ai/code" : "acme-mac")))
         let beats = script.remote
         if !beats.isEmpty { enqueue { await $0.playTurn(beats, queued: nil) } }
+    }
+
+    /// The account is changing: remote control ends, said once in the chat.
+    package func endRemoteForAccountChange() {
+        guard remoteOn else { return }
+        remoteOn = false
+        log.append(.setRemoteControl(false))
+        sink.yield(.remoteControl(nil))
+        sink.yield(.notice(remoteEndedForAccount))
     }
 
     /// The account changed: the process would end here and start again at the next send.

@@ -121,6 +121,48 @@ final class AccountLogins: ChatStoryline {
     }
 }
 
+/// The CLI's own remote control belongs to the login that turned it on. Switching to another
+/// login ends it: the mark goes, the chat says so once, the CLI is asked to turn it off, and the
+/// chat comes back as the new login without turning it on again, so the chat never shows up on
+/// the other login's remote side.
+final class RemoteControlEndsOnSwitch: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    override func steps() -> [any Step] {
+        let codex = variant == .codex
+        let provider = codex ? "codex" : "claude"
+        let popup = Locator.id(StoryID.Composer.account)
+        let mark = Locator.id(StoryID.Composer.remote)
+        let accounts = ScriptedAccounts.shared
+        let work = codex ? ScriptedAccounts.codex(email: "work@acme.dev", plan: "business") : ScriptedAccounts.claude(
+            email: "work@acme.dev", org: "Acme Labs", plan: "team")
+        let log = { (story: StoryContext) in try story.scriptedBackend().log }
+        return [
+            UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider), OpenFolder(), StartChat(),
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("remote-control"))),
+            WaitForElement(mark),
+            Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
+            Press(.id(StoryID.Composer.account.part(.switch))),
+            Press(.id(StoryID.Composer.accountMethod(AccountLogins.addMenu(codex)[0]))),
+            Expect("the browser finishes as work@acme.dev") { _ in
+                guard accounts.isWaiting(provider) else { return false }
+                accounts.finish(provider, as: work)
+                return true
+            },
+            Expect("the chat's CLI started again as the new login", found: { try? "\(log($0))" }) {
+                try log($0).contains(.restarted)
+            },
+            ExpectElement(mark, .absent),
+            Expect("the CLI asked to turn it off") { try log($0).contains(.setRemoteControl(false)) },
+            Expect.rows("the chat says so once") { rows in rows.filter { $0.kind == "notice" && $0.text == remoteEndedForAccount }.count == 1 },
+            Expect("not turned on again as the new login", found: { try? "\(log($0))" }) {
+                try log($0).filter { $0 == .setRemoteControl(true) }.count == 1
+            },
+        ]
+    }
+}
+
 /// A switch of login stops every working chat of the CLI: with a turn running, a background
 /// agent and a background command, a login row picked interrupts the turn is interrupted, the agent and the command stopped, and the
 /// chat's CLI starts again as the new login once they have.

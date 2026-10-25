@@ -513,7 +513,8 @@ package final class Chat: Identifiable {
     /// cannot acknowledge Stop. Other credential refreshes wait for the next safe boundary.
     func accountChanged() {
         cancelContinue()
-        guard backend != nil else { return }
+        guard let backend else { return }
+        backend.endRemoteForAccountChange()
         if stoppedForAccount || accountRestartPending {
             stoppedForAccount = false
             relaunchDue = false
