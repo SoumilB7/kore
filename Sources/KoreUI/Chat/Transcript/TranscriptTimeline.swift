@@ -1,3 +1,4 @@
+import KoreCore
 import SwiftUI
 
 /// The conversation as a timeline (look.md §2). Sections start at each user message, whose box
@@ -64,6 +65,13 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var insetTop = Held(CGFloat(0))
     /// Which sections' messages have scrolled past their pinned header.
     @StateObject private var sticky = StickyTracker()
+    /// The scroll view's last geometry: content height, offset, visible height, top inset.
+    @StateObject private var seen = Held([CGFloat]())
+    /// A shown transcript with rows and none of them on screen (`checkBlank`): the check under
+    /// way, and how often the scroll view was built again for it.
+    @StateObject private var blankCheck = Held(Task<Void, Never>?.none)
+    @StateObject private var remounts = Held(0)
+    @StateObject private var mount = Local(0)
 
     private static let end = "transcript-end"
     private static let loadRow = "transcript-load-row"
@@ -120,6 +128,8 @@ struct TranscriptTimeline: View, Equatable {
                     return .handled
                 })
             }
+            // Built again when a shown transcript draws none of its rows (`checkBlank`).
+            .id(mount.value)
             .accessibilityAction(named: Text("Copy Selection")) { store.selection.copy() }
             .scrollPosition(binding)
             .defaultScrollAnchor(.bottom, for: .alignment)
@@ -140,6 +150,7 @@ struct TranscriptTimeline: View, Equatable {
             .onScrollGeometryChange(for: [CGFloat].self) {
                 [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height, $0.contentInsets.top]
             } action: { _, new in
+                seen.value = new
                 insetTop.value = new[3]
                 let (height, offset) = (new[0], new[1])
                 visibleHeight.value = new[2]
@@ -168,8 +179,10 @@ struct TranscriptTimeline: View, Equatable {
                             proxy.scrollTo(row, anchor: .top)
                             restoreInRow.value = saved.inRow
                         } else {
-                            scroll(position, to: min(saved.offset, height))
-                            geometry.value = (height, saved.offset)
+                            // Never past the end: the content can be shorter than when it was left.
+                            let target = min(saved.offset, max(0, height - new[2]))
+                            scroll(position, to: target)
+                            geometry.value = (height, target)
                             nudge.value &+= 1
                         }
                         return
@@ -266,6 +279,7 @@ struct TranscriptTimeline: View, Equatable {
             // following when it hid, whatever came meanwhile. Nothing moves while it's hidden, and
             // a tab showing with nothing new and no glide cut short stays as it was left.
             .onChange(of: [tail, hidden ? 1 : 0], initial: true) { old, new in
+                checkBlank(hidden: new[1] == 1)
                 guard new[1] == 0 else { return }
                 let showing = old[1] == 1
                 if showing, old[0] == new[0], glidingUntil.value.map({ Date() >= $0 }) ?? true { return }
@@ -321,6 +335,43 @@ struct TranscriptTimeline: View, Equatable {
                 store.savedScroll = TranscriptStore.SavedScroll(
                     row: place?.key, inRow: place?.value ?? 0, offset: geometry.value.offset, atEnd: following.value)
             }
+        }
+    }
+
+    /// Two seconds after it shows or changes, a transcript with rows but none on screen (none
+    /// built, all below the visible area, or scrolled past its end) is logged with its geometry
+    /// in sessions.log ("blank"), and its scroll view is built again at the end, once.
+    private func checkBlank(hidden: Bool) {
+        blankCheck.value?.cancel()
+        guard !hidden else { return }
+        let (store, seen, tops, remounts, mount, position, following) = (store, seen, rowTops, remounts, mount, position, following)
+        blankCheck.value = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, !store.sections.isEmpty, seen.value.count == 4 else { return }
+            let (height, offset, visible) = (seen.value[0], seen.value[1], seen.value[2])
+            // Only where the end should show (opened, following) or past it: a reader up among
+            // a turn's tool rows has no message or answer on screen, and stays where they are.
+            let onScreen = tops.value.values.contains { $0 < visible }
+            guard (!onScreen && following.value) || offset > height else {
+                if remounts.value > 0 {
+                    KoreLog.named("sessions").write("blank-recovered", ["cli": store.providerName])
+                    remounts.value = 0
+                }
+                return
+            }
+            KoreLog.named("sessions").write(
+                "blank",
+                [
+                    "cli": store.providerName, "sections": String(store.sections.count), "rows": String(store.entries.count),
+                    "height": String(Int(height)), "offset": String(Int(offset)), "visible": String(Int(visible)),
+                    "tops": String(tops.value.count), "first_top": tops.value.values.min().map { String(Int($0)) },
+                    "following": following.value ? "yes" : "no", "remounts": String(remounts.value),
+                ])
+            guard remounts.value < 1 else { return }
+            remounts.value += 1
+            following.value = true
+            position.value = ScrollPosition(edge: .bottom)
+            mount.value &+= 1
         }
     }
 

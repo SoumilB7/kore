@@ -1490,7 +1490,9 @@ final class TranscriptStore {
         func flush() {
             guard header != nil || !run.isEmpty else { return }
             let dots = run.map(dot)
-            var ids: Set<String> = []
+            // A turn laid out more than once (split by a compaction in its middle, as Codex's
+            // are) repeats its rows' ids: each repeat is numbered, as a list needs them unique.
+            var seen: [String: Int] = [:]
             let items = run.indices.map { i in
                 let id = run[i].id
                 let rowActions: MessageActions? =
@@ -1500,7 +1502,7 @@ final class TranscriptStore {
                     row: run[i], dot: dots[i],
                     above: dots[i] != nil && i > 0 && dots[i - 1] != nil,
                     below: dots[i] != nil && i + 1 < dots.count && dots[i + 1] != nil,
-                    id: ids.insert(id).inserted ? id : id + "/call", actions: rowActions)
+                    id: Self.unique(id, &seen), actions: rowActions)
             }
             let headerOpen = header.map { $0.kind == .user || open.contains($0.id.uuidString) } ?? false
             sections.append(Section(id: id, header: header, headerOpen: headerOpen, items: items))
@@ -1520,6 +1522,13 @@ final class TranscriptStore {
         }
         flush()
         return sections
+    }
+
+    /// `id` the first time, then `id/2`, `id/3`…
+    private static func unique(_ id: String, _ seen: inout [String: Int]) -> String {
+        let n = seen[id, default: 0] + 1
+        seen[id] = n
+        return n == 1 ? id : "\(id)/\(n)"
     }
 
     static func dot(_ row: Row) -> TimelineDot? {
