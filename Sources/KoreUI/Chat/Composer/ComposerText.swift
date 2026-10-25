@@ -324,6 +324,9 @@ final class ComposerScrollView: NSScrollView {
         text.importsGraphics = false
         text.allowsUndo = true
         text.isAutomaticQuoteSubstitutionEnabled = false
+        // No Writing Tools / "Write with Siri" badge or inline predictions over Kore's own fields.
+        text.writingToolsBehavior = .none
+        text.inlinePredictionType = .no
         text.isAutomaticDashSubstitutionEnabled = false
         text.isAutomaticTextReplacementEnabled = false
         text.isAutomaticSpellingCorrectionEnabled = false
