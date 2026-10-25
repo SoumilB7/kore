@@ -427,7 +427,7 @@ public actor CodexSession {
     }
 
     /// A model's title, trimmed to one line without quotes or a full stop; nil when empty or long.
-    nonisolated static func title(_ said: String) -> String? {
+    public nonisolated static func title(_ said: String) -> String? {
         var line = said.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         line = line.trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”‘’`*#. ").union(.whitespaces))
         return line.isEmpty || line.count > 80 ? nil : line

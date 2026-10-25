@@ -292,6 +292,22 @@ struct ActiveCommandsTests {
         #expect(Self.ends(t.take().events) == [.stopped(by: .user)])
     }
 
+    @Test func aCodexCommandsRowStartsWithWhatItPrintedInItsTurn() {
+        let t = CodexTranslator(folder: Self.folder)
+        Self.codex(t, "turn/started", #"{"turn":{"id":"t1"}}"#)
+        Self.codex(t, "item/started", Self.codexItem("i-bg", "inProgress", process: "12"))
+        Self.codex(t, "item/commandExecution/outputDelta", #"{"itemId":"i-bg","delta":"Listening on 3000\n"}"#)
+        Self.codex(t, "turn/completed", #"{"turn":{"id":"t1","status":"completed"}}"#)
+        let events = t.take().events
+        #expect(events.contains { if case .commandOutput("i-bg", "Listening on 3000\n") = $0 { true } else { false } })
+    }
+
+    @Test func aCodexTitleIsOneCleanLine() {
+        #expect(CodexSession.title("\"Fix the flaky build.\"\n") == "Fix the flaky build")
+        #expect(CodexSession.title("**Add dark mode**") == "Add dark mode")
+        #expect(CodexSession.title("   ") == nil)
+    }
+
     @Test func aChildThreadsTerminalIsTheChilds() {
         let t = CodexTranslator(folder: Self.folder)
         t.translate(.subThread(threadId: "child", method: "turn/started", params: Self.json(#"{"threadId":"child","turn":{"id":"ct"}}"#)))
