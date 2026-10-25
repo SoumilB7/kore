@@ -88,6 +88,11 @@ package final class ClaudeTranslator {
     private var turnAgents: Set<String> = []
     /// Where agents' spawns and ends are logged (`AgentLog`). A replay logs none of its own.
     var log: AgentLog = .shared
+    /// Background shells, long foreground commands, monitors and cron jobs (`ActiveCommand`).
+    private(set) var commands = ClaudeCommands()
+
+    /// When what's being read happened: the transcript entry's time in a replay.
+    private var eventTime: Date { replaying ? replayTime : .now }
 
     // Modes. The CLI reports every change as `system/status {permissionMode}` (and each turn's
     // `system/init`) but not why; the cause is what came just before it.
@@ -170,7 +175,12 @@ package final class ClaudeTranslator {
     }
 
     private func finishTurn(_ outcome: TurnOutcome, duration: Duration?) {
-        if case .interrupted = outcome, !replaying { stopForeground() }
+        if case .interrupted = outcome, !replaying {
+            stopForeground()
+            commands.turnInterrupted(at: .now, into: &out)
+        } else {
+            commands.interrupting = false
+        }
         turnAgents = []
         if let answer = finalAnswer() { out.append(.finalAnswer(answer)) }
         out.append(.turnFinished(turn, outcome, duration: duration))
@@ -310,6 +320,7 @@ package final class ClaudeTranslator {
             turn = nil
             turnItems = []
             block = nil
+            commands.endAll(at: .now, into: &out)
             out.append(.exited(status: status))
         default:
             break  // sub-agents' deltas (they have none), command_lifecycle completed, stderr
@@ -349,6 +360,7 @@ package final class ClaudeTranslator {
         if agent == .main { block = nil }
         for case .toolUse(let id, let name, let input) in blocks where firstTime("start:" + id, agent) {
             toolAgent[id] = agent
+            commands.call(id, name, input, agent: agent, at: eventTime)
             if Self.agentTools.contains(name) { agentInputs[id] = input }
             if name == "SendMessage", let to = input["to"]?.string { sendCalls[id] = to }
             if Self.modeTools.contains(name) {
@@ -401,6 +413,10 @@ package final class ClaudeTranslator {
             } else {
                 out.append(.toolFinished(id: id, output: output, isError: isError, agent: agent))
             }
+            // The message's `tool_use_result` is its first result's.
+            commands.result(
+                id, text: output, isError: isError, result: id == first ? result : nil, folder: folder, session: sessionId,
+                at: eventTime, into: &out)
         }
         guard let id = first, let result else { return }
         if let change = FileChange(claudeToolResult: result) {
@@ -444,6 +460,18 @@ package final class ClaudeTranslator {
             case "status" where json["compact_result"]?.string.map({ $0 != "success" }) == true:
                 compactRequested = false
                 out.append(.compactionFailed(json["compact_error"]?.string ?? "Compaction \(json["compact_result"]?.string ?? "failed")"))
+            case "task_started" where json["task_type"]?.string.map { !$0.contains("agent") } ?? false:
+                // A shell or a monitor (`ClaudeCommands`), owned by the agent its parent task is.
+                let owner = json["parent_task_id"]?.string.flatMap { agent(forTask: $0) }.map(AgentID.sub)
+                commands.taskStarted(json, owner: owner, folder: folder, session: sessionId, at: .now, into: &out)
+            case "task_updated" where json["task_id"]?.string.map(commands.knows) == true:
+                commands.taskUpdated(json, at: .now, into: &out)
+            case "task_notification" where json["task_id"]?.string.map(commands.knows) == true:
+                commands.notification(
+                    task: json["task_id"]?.string ?? "", status: json["status"]?.string, summary: json["summary"]?.string,
+                    file: json["output_file"]?.string, at: .now, into: &out)
+            case "background_tasks_changed":
+                commands.liveTasks((json["tasks"]?.array ?? []).compactMap { $0["task_id"]?.string }, at: .now, into: &out)
             case "task_started" where !(json["task_type"]?.string.map { !$0.contains("agent") } ?? false):
                 // Background shell commands are tasks too (local_bash); only agents get a card.
                 let tool = json["tool_use_id"]?.string ?? json["task_id"]?.string ?? ""
@@ -609,7 +637,15 @@ package final class ClaudeTranslator {
     /// launch for tasks the previous process didn't see finish ("stopped", several task ids),
     /// which says nothing of agents another client still runs.
     func taskNotification(text: String) {
-        guard text.contains("<task-notification>"), let call = Self.tag("tool-use-id", in: text) else { return }
+        guard text.contains("<task-notification>") else { return }
+        if let task = Self.tag("task-id", in: text), commands.knows(task) {
+            // A command's, not an agent's.
+            commands.notification(
+                task: task, status: Self.tag("status", in: text), summary: Self.tag("summary", in: text),
+                file: Self.tag("output-file", in: text), at: eventTime, into: &out)
+            return
+        }
+        guard let call = Self.tag("tool-use-id", in: text) else { return }
         let task = Self.tag("task-id", in: text)
         // A resumed run's names the SendMessage call that ran it.
         let id = resumedBy[call] ?? (spawned.contains(call) ? call : task.flatMap(agent(forTask:)) ?? call)
@@ -641,6 +677,30 @@ package final class ClaudeTranslator {
         default: nil  // running, pending
         }
     }
+
+    // MARK: - Commands
+
+    /// The transcript entry a cron job fired (`turnOrigin: scheduled`, its prompt as content).
+    func cronFired(_ entry: JSONValue) {
+        let content = entry["message"]?["content"]
+        guard let prompt = content?.string ?? Self.promptText(content) else { return }
+        commands.fired(prompt: prompt, at: Self.date(entry["timestamp"]) ?? eventTime, into: &out)
+    }
+
+    /// Kore asked the CLI to stop a command (`stop_task`): its kill is Kore's doing.
+    func stopRequested(_ id: String) { commands.stopRequested(id) }
+
+    /// The CLI refused: its kill, if one comes, isn't Kore's.
+    func stopRefused(_ id: String) { commands.stopRefused(id) }
+
+    /// The CLI said it wasn't running any more.
+    func commandGone(_ id: String) { commands.gone(id, at: .now, into: &out) }
+
+    /// Kore asked the turn to stop: a foreground command killed meanwhile was interrupted.
+    func interruptRequested() { commands.interrupting = true }
+
+    /// The CLI's process ends without an `.exited` (a relaunch): what it ran ends with it.
+    func endCommands() { commands.endAll(at: .now, into: &out) }
 
     // MARK: - Approvals
 
@@ -961,6 +1021,7 @@ package final class ClaudeTranslator {
                     close()
                     openTurn(origin, at: time)
                     if origin == .agentFinished { taskNotification(message) }
+                    if origin == .schedule { cronFired(message) }
                     continue
                 }
                 let content = message["message"]?["content"]
@@ -985,6 +1046,8 @@ package final class ClaudeTranslator {
         close()
         block = nil
         if let used = contextUsed { reportContext(used, at: replayTime) }
+        // Nothing a history shows runs now: its CLI is gone (a command with no recorded end ended).
+        commands.endAll(at: replayTime, into: &out)
         return take().events
     }
 

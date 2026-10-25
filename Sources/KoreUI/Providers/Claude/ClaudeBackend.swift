@@ -334,6 +334,11 @@ final class ClaudeBackend: ChatBackend {
                         if let peer = PeerMessage(entry: entry) {  // else e.g. a queued prompt of ours
                             yield(.turnOrigin(turn, .peer))
                             yield(.peerMessage(from: peer.from, text: peer.text, turn: turn))
+                        } else if ClaudeTranslator.origin(entry["turnOrigin"]?.string) == .schedule {
+                            // A cron job fired: stdout says only that a turn began.
+                            yield(.turnOrigin(turn, .schedule))
+                            translator.cronFired(entry)
+                            flush()
                         }
                         return
                     }
@@ -354,6 +359,10 @@ final class ClaudeBackend: ChatBackend {
                         yield(.turnOrigin(turn, origin))
                         if origin == .agentFinished {
                             translator.taskNotification(entry)
+                            flush()
+                        }
+                        if origin == .schedule {
+                            translator.cronFired(entry)
                             flush()
                         }
                         if let peer = PeerMessage(entry: entry) {
@@ -700,6 +709,7 @@ final class ClaudeBackend: ChatBackend {
 
     /// Also drops messages queued behind the turn (Stop gives their text back to the composer).
     func interrupt() async {
+        translator.interruptRequested()
         try? await session?.interrupt(cancelQueued: !translator.pendingQueued.isEmpty)
         recheckAgents(via: "stop")
     }
@@ -753,9 +763,38 @@ final class ClaudeBackend: ChatBackend {
         try? await session?.stopTask(task)
     }
 
+    // MARK: - Commands
+
+    func stopCommand(_ id: String) async throws {
+        guard let session else { throw ClaudeSession.Failure.notRunning }
+        translator.stopRequested(id)
+        do {
+            try await session.stopTask(id)
+        } catch {
+            translator.stopRefused(id)
+            guard ClaudeSession.alreadyEnded(error) else { throw error }
+            translator.commandGone(id)
+            flush()
+        }
+    }
+
+    func backgroundCommand(_ id: String) async throws {
+        guard let session else { throw ClaudeSession.Failure.notRunning }
+        guard let call = translator.commands.toolId(of: id) else { return }
+        // False: it ended, or was moved, meanwhile; its own events say which.
+        _ = try await session.backgroundTask(toolUseId: call)
+    }
+
+    func commandOutput(_ id: String) async -> String? {
+        try? await session?.taskOutput(id)
+    }
+
     func relaunch() async {
         guard let session else { return }
         log.relaunch("claude", chat: sessionId, reason: "account changed")
+        // Its shells end with its process.
+        translator.endCommands()
+        flush()
         // Its exit isn't the chat's news: the pump goes first.
         pump?.cancel()
         pump = nil
