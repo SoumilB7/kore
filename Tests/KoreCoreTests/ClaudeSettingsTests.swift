@@ -210,7 +210,10 @@ struct ClaudeSettingsTests {
     }
 
     @Test func theTerminalHandOffRunsTheCLIInTheFolder() {
-        let script = TerminalLogin.script(claude: "/opt/my tools/claude", arguments: ["/login"], folder: URL(fileURLWithPath: "/w/it's here"))
+        // Other suites switch the active account. This case is specifically the main login.
+        let script = CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: "claude", id: nil)) {
+            TerminalLogin.script(claude: "/opt/my tools/claude", arguments: ["/login"], folder: URL(fileURLWithPath: "/w/it's here"))
+        }
         #expect(script == "#!/bin/zsh -l\nrm -f -- \"$0\"\ncd -- '/w/it'\\''s here' 2>/dev/null\nexec '/opt/my tools/claude' '/login'\n")
     }
 
