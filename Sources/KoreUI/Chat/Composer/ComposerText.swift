@@ -165,6 +165,9 @@ final class ComposerEditor: ObservableObject {
     /// in the text would put it.
     func placeCaret(at windowPoint: NSPoint) {
         guard let view, let layout = view.layoutManager, let container = view.textContainer else { return }
+        // In the box, the text view took the click itself (its press put the caret): placing it
+        // again on the release would move it.
+        if let box = view.enclosingScrollView, box.bounds.contains(box.convert(windowPoint, from: nil)) { return }
         let local = view.convert(windowPoint, from: nil)
         // Laid out only as far as drawn (non-contiguous): what is in sight, at least, for its rect.
         layout.ensureLayout(forBoundingRect: view.visibleRect, in: container)

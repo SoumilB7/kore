@@ -11,10 +11,11 @@ struct ComposerCaretTests {
     private static var kept: [NSWindow] = []
 
     private func editor(_ text: String) -> (ComposerEditor, ComposerTextView) {
+        // The box, 60pt, at the top of a taller window: below it is the composer's padding.
         let scroll = ComposerScrollView(font: .systemFont(ofSize: 13))
-        scroll.frame = NSRect(x: 0, y: 0, width: 300, height: 200)
-        let window = NSWindow(contentRect: scroll.frame, styleMask: [.borderless], backing: .buffered, defer: true)
-        window.contentView = scroll
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200), styleMask: [.borderless], backing: .buffered, defer: true)
+        scroll.frame = NSRect(x: 0, y: 140, width: 300, height: 60)
+        window.contentView?.addSubview(scroll)
         Self.kept.append(window)
         scroll.textView.string = text
         scroll.textView.setSelectedRange(NSRange(location: 0, length: 0))
@@ -51,5 +52,13 @@ struct ComposerCaretTests {
         scroll.textView.string = "one line"
         scroll.textView.setFrameSize(NSSize(width: 300, height: 20))
         #expect(scroll.hitTest(NSPoint(x: 100, y: 100)) === scroll.textView)
+    }
+
+    /// A click in the box is the text view's alone: the tap on the padding doesn't move its caret.
+    @Test func aClickInTheBoxLeavesTheCaretToTheTextView() {
+        let (editor, view) = editor("one\ntwo")
+        view.setSelectedRange(NSRange(location: 2, length: 0))
+        editor.placeCaret(at: point(view, x: 200, y: 45))
+        #expect(view.selectedRange() == NSRange(location: 2, length: 0))
     }
 }
