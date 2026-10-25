@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 /// Release builds optimise for size: a UI app gains nothing measurable from -O's larger code.
@@ -15,11 +15,14 @@ let package = Package(
         .executable(name: "kore-fake-cli", targets: ["kore-fake-cli"]),
         .executable(name: "kore-power-bench", targets: ["kore-power-bench"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", revision: "caa1bdd3f1396c5b0ed66121f299d1c8b42bc94c"),
+    ],
     targets: [
         .target(name: "KoreCore", swiftSettings: releaseForSize),
         // The app's views, stores and providers; `Kore` is its launcher. Other targets in this
         // package reach its `package` declarations.
-        .target(name: "KoreUI", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
+        .target(name: "KoreUI", dependencies: ["KoreCore", .product(name: "SwiftTerm", package: "SwiftTerm")], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         // User storylines (phase 12): the engine, steps, scripted CLI and catalogue, and the app

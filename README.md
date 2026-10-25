@@ -8,7 +8,7 @@ a simple interface: one window per folder, tabs for chats, and history for past 
 ## Requirements
 
 - macOS 15 or later
-- Swift 6 toolchain (Xcode Command Line Tools)
+- Swift 6.2 or later toolchain (Xcode Command Line Tools)
 - `claude` and/or `codex` installed and logged in
 
 ## Build

@@ -13,6 +13,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Kore"
 cp scripts/kore "$APP/Contents/Resources/kore"
+cp -R Resources/ThirdParty "$APP/Contents/Resources/ThirdParty"
 
 # App icon, rendered from the SVGs in Resources/.
 ICONSET="build/AppIcon.iconset"
