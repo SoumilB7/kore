@@ -35,7 +35,7 @@ enum Inset {
     static let row = EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
     static let control = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
     static let field = EdgeInsets(top: 12, leading: 14, bottom: 10, trailing: 14)
-    static let composerBar = EdgeInsets(top: 6, leading: 12, bottom: 10, trailing: 12)
+    static let composerBar = EdgeInsets(top: 4, leading: 12, bottom: 12, trailing: 12)
     static let floatingBar = EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)
     static let search = EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
 }
