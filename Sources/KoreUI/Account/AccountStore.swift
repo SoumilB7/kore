@@ -336,6 +336,41 @@ package final class AccountStore {
         } }
     }
 
+    /// Identity for an open fallback field: old fields cannot submit into a later sign-in.
+    func signInSerial(_ provider: String) -> Int { serials[provider, default: 0] }
+
+    func acceptsSignInInput(_ provider: String) -> Bool {
+        guard case .browser = flows[provider]?.step else { return false }
+        return handles[provider]?.submit != nil
+    }
+
+    func openManualSignIn(_ provider: String) {
+        if let url = handles[provider]?.manualURL { Self.open(url) }
+        UILog.event("account-manual-open", ["cli": provider])
+    }
+
+    func submitSignIn(_ input: String, provider: String, serial: Int) async throws {
+        guard serials[provider] == serial, acceptsSignInInput(provider), let submit = handles[provider]?.submit else {
+            throw LoginCallback.Failure.unavailable
+        }
+        UILog.event("account-manual-submit", ["cli": provider])
+        try await submit(input)
+    }
+
+    /// Changes only the login in progress, keeping the new/other login's folder and aim.
+    func useDeviceCode(_ provider: String, in folder: URL) async {
+        guard acceptsSignInInput(provider), let method = methods(provider).first(where: { $0.kind == .deviceCode }) else { return }
+        let aim: Aim = if adding[provider] != nil { .new } else if let pin = aimed[provider] { .login(pin.id) } else { .active }
+        serials[provider, default: 0] += 1
+        let serial = serials[provider, default: 0]
+        let handle = end(provider)
+        flows[provider]?.step = .starting
+        await handle?.cancel()
+        guard serials[provider] == serial else { return }
+        flows[provider] = nil
+        signIn(provider, method: method, in: folder, aim: aim)
+    }
+
     /// A typed key, sent once: the CLI takes it (Codex), or Kore keeps it in the Keychain for
     /// Claude's helper. `done` says whether it landed; on failure the row says why and the field
     /// comes back. The key goes nowhere else. A key the CLI keeps in the login's own folder

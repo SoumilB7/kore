@@ -101,4 +101,21 @@ struct CassetteTests {
             })
         #expect(header.contains(#""cwd":"/WORK""#) && header.contains(#""model":"haiku""#) && header.contains(#""cassette":1"#))
     }
+    @Test func pastedOAuthCredentialsAreExcludedFromRecordings() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("callback-recording-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("recording.jsonl")
+        StdioProcess.recorder.value = try CassetteRecorder(url: file, work: dir)
+        defer { StdioProcess.recorder.value = nil }
+        let io = try StdioProcess(executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "read line; exit 0"], cwd: dir, environment: ProcessInfo.processInfo.environment)
+        try io.write(["type": "control_request", "request_id": "demo", "request": [
+            "subtype": "claude_oauth_callback", "authorizationCode": "private-demo-code", "state": "private-demo-state"]])
+        for await _ in io.output { }
+        StdioProcess.recorder.value = nil
+        let recording = try String(contentsOf: file, encoding: .utf8)
+        #expect(!recording.contains("private-demo-code") && !recording.contains("private-demo-state"))
+    }
+
 }

@@ -250,6 +250,11 @@ public actor ClaudeSession {
         try await control("claude_authenticate", fields)
     }
 
+    /// Delivers a pasted code only to the CLI that started this sign-in.
+    public func submitSignIn(_ code: LoginCallback.Code) async throws {
+        _ = try await control("claude_oauth_callback", ["authorizationCode": .string(code.authorizationCode), "state": .string(code.state)])
+    }
+
     /// Waits for the sign-in started above to finish in the browser; answers `{account}`.
     public func waitForSignIn() async throws -> JSONValue {
         try await control("claude_oauth_wait_for_completion")

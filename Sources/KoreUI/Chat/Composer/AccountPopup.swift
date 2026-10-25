@@ -13,6 +13,8 @@ final class AccountState {
     enum Editor: Equatable {
         /// The key field, in the action row.
         case key
+        /// A browser login's pasted code or callback URL; text stays in the field's view.
+        case login
         /// A platform's form, in the whole card.
         case platform(ClaudeSettings.Platform)
     }
@@ -98,10 +100,23 @@ final class AccountState {
     var isEditing: Bool {
         switch editor {
         case .platform: true
+        case .login: store.acceptsSignInInput(provider)
         // Through its sending too: a refused key brings the field back with the keys.
         case .key: showsKeyField || store.flow(provider)?.step == .signingIn
         case nil: false
         }
+    }
+
+    func enterSignInCode() {
+        guard store.acceptsSignInInput(provider) else { return }
+        palette = nil
+        editor = .login
+        store.openManualSignIn(provider)
+    }
+
+    func useDeviceCode() {
+        closeEditor()
+        Task { await store.useDeviceCode(provider, in: folder) }
     }
 
     /// The key field shows: open, and no sign-in with it under way or done.
@@ -383,6 +398,14 @@ struct AccountPopup: View {
                         Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
                     }
                     content
+                        .onChange(of: store.acceptsSignInInput(chat.provider.id)) { _, accepting in
+                            if !accepting, state.editor == .login { state.closeEditor() }
+                        }
+                    if store.acceptsSignInInput(chat.provider.id) {
+                        LoginFallback(state: state, provider: chat.provider.id, serial: store.signInSerial(chat.provider.id))
+                            .id(store.signInSerial(chat.provider.id))
+                            .padding(.top, Space.sm)
+                    }
                 }
                 .transition(.opacity.animation(Motion.fade))
             }
@@ -940,5 +963,79 @@ private struct LoginRow: View {
         .storyAction(id.part(.hover)) { hovered.value = true }
         .tabStop(id) { state.switchLogin(login.id) }
         .accessibilityAddTraits(login.active ? .isSelected : [])
+    }
+}
+
+
+/// OAuth input exists only while this particular fallback field is on screen.
+private struct LoginFallback: View {
+    let state: AccountState
+    let provider: String
+    let serial: Int
+    @StateObject private var input = Local("")
+    @StateObject private var sending = Local(false)
+    @StateObject private var reason = Local<String?>(nil)
+    @FocusState private var focused: Bool
+    private var store: AccountStore { .shared }
+    private var callback: Bool { provider == "codex" }
+    private var fieldID: StoryID { StoryID.Composer.accountField("login") }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            HStack(spacing: Space.sm) {
+                Button(callback ? "Paste callback URL…" : "Enter sign-in code…") { state.enterSignInCode() }
+                    .smallButton()
+                    .storyID(fieldID.part(.open))
+                    .tabStop(fieldID.part(.open)) { state.enterSignInCode() }
+                if store.methods(provider).contains(where: { $0.kind == .deviceCode }) {
+                    Button("Use Device Code") { state.useDeviceCode() }
+                        .smallButton()
+                        .storyID(fieldID.part(.method))
+                        .tabStop(fieldID.part(.method)) { state.useDeviceCode() }
+                }
+            }
+            if state.editor == .login {
+                Text(callback ? "Paste the full localhost URL from your browser after signing in." : "Paste the code returned by the sign-in page.")
+                    .font(TextStyle.caption)
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: Space.sm) {
+                    SecureField("", text: $input.value, prompt: Text(callback ? "Callback URL" : "Sign-in code").foregroundStyle(Theme.tertiary))
+                        .focused($focused)
+                        .fieldWell(focused: focused)
+                        .storyID(fieldID)
+                        .onSubmit(submit)
+                        .onAppear { focused = true }
+                    Button("Submit", action: submit)
+                        .smallButton(prominent: true)
+                        .disabled(sending.value || input.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .storyID(fieldID.part(.submit))
+                }
+                if let error = reason.value {
+                    Text(error).font(TextStyle.caption).foregroundStyle(Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .onDisappear { input.value = "" }
+    }
+
+    private func submit() {
+        let sent = input.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sending.value, !sent.isEmpty else { return }
+        input.value = ""
+        reason.value = nil
+        sending.value = true
+        Task {
+            defer { sending.value = false }
+            do {
+                try await store.submitSignIn(sent, provider: provider, serial: serial)
+            } catch let reason as LoginCallback.Failure {
+                self.reason.value = reason.errorDescription
+            } catch {
+                // A CLI/network error may echo a credential: the field uses fixed words.
+                self.reason.value = "Couldn't finish signing in. Try again or start a new sign-in."
+            }
+        }
     }
 }

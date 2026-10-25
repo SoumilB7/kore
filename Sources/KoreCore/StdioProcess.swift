@@ -142,7 +142,10 @@ package final class StdioProcess: @unchecked Sendable {
 
     func write(_ message: JSONValue) throws {
         var data = try message.encoded()
-        track?.record(.in, String(decoding: data, as: UTF8.self))
+        // An OAuth code is a credential even in an explicitly requested CLI recording.
+        if message["request"]?["subtype"]?.string != "claude_oauth_callback" {
+            track?.record(.in, String(decoding: data, as: UTF8.self))
+        }
         data.append(0x0A)
         try stdin.write(contentsOf: data)
     }

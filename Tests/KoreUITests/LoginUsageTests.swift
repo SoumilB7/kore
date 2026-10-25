@@ -289,4 +289,41 @@ struct LoginUsageTests {
         #expect(!popup.extended && !popup.isOpen)
         #expect(popup.reading == nil && popup.shares == nil)
     }
+    @Test func pastedLoginInputCannotCrossCancelledFlows() async throws {
+        let previous = StorylineSeams.accounts
+        let store = AccountStore()
+        var pending: CheckedContinuation<JSONValue?, any Error>?
+        var submissions = 0
+        StorylineSeams.accounts = { _ in AccountCalls(
+            status: { ["account": nil] },
+            signIn: { @MainActor _, _ in
+                SignInHandle(url: URL(string: "https://example.com/sign-in"),
+                    wait: { @MainActor in try await withCheckedThrowingContinuation { pending = $0 } },
+                    cancel: { @MainActor in pending?.resume(throwing: CancellationError()); pending = nil },
+                    submit: { @MainActor _ in submissions += 1 })
+            }, useKey: { _ in nil }, signOut: {}) }
+        defer {
+            store.cancel("codex")
+            StorylineSeams.accounts = previous
+        }
+        let folder = FileManager.default.temporaryDirectory
+        store.signIn("codex", in: folder)
+        for _ in 0..<100 where !store.acceptsSignInInput("codex") { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(store.acceptsSignInInput("codex"))
+        let before = store.signInSerial("codex")
+        store.cancel("codex")
+        for _ in 0..<100 where pending != nil { try await Task.sleep(for: .milliseconds(5)) }
+        store.signIn("codex", in: folder)
+        for _ in 0..<100 where !store.acceptsSignInInput("codex") { try await Task.sleep(for: .milliseconds(5)) }
+        do {
+            try await store.submitSignIn("old-input", provider: "codex", serial: before)
+            Issue.record("A cancelled flow submitted into the new login")
+        } catch { }
+        #expect(submissions == 0)
+        try await store.submitSignIn("new-input", provider: "codex", serial: store.signInSerial("codex"))
+        #expect(submissions == 1)
+        store.cancel("codex")
+        for _ in 0..<100 where pending != nil { try await Task.sleep(for: .milliseconds(5)) }
+    }
+
 }

@@ -23,6 +23,8 @@ package final class ScriptedAccounts {
         case opened(String)
         /// A typed key reached the CLI (Codex) or Kore's Keychain (Claude); never the key itself.
         case key(String)
+        /// A submitted OAuth input; never records its value.
+        case loginInput(String)
         /// Terminal would have opened, running the CLI with these arguments.
         case terminal(String, String)
         /// The `awsAuthRefresh` script ran.
@@ -128,6 +130,9 @@ package final class ScriptedAccounts {
                 case .fails(let reason):
                     throw Said(reason)
                 case .browser:
+                    if case .codexLogin(let params) = mechanism, params["type"]?.string == "chatgptDeviceCode" {
+                        return handle(provider, url: Self.web("https://auth.openai.com/codex/device"), code: "DEMO-CODE")
+                    }
                     // Claude's SSO opens the page itself: Kore only offers Copy link.
                     return handle(provider, url: Self.page(provider), code: nil, opensItself: mechanism == .claudeSSO)
                 case .deviceCode(let code):
@@ -176,7 +181,16 @@ package final class ScriptedAccounts {
     }
 
     private func handle(_ provider: String, url: URL?, code: String?, opensItself: Bool = false) -> SignInHandle {
-        SignInHandle(
+        let submit: (@Sendable (String) async throws -> Void)?
+        if code == nil && url != nil {
+            submit = { @MainActor [unowned self] input in
+                if provider == "codex" { _ = try LoginCallback.localhostURL(input, authorizationURL: Self.page(provider)) }
+                else { _ = try LoginCallback.code(input, authorizationURL: Self.page(provider)) }
+                log.append(.loginInput(provider))
+                finish(provider, as: status[provider] ?? .null)
+            }
+        } else { submit = nil }
+        return SignInHandle(
             url: url, code: code, opensItself: opensItself,
             wait: { @MainActor [unowned self] in
                 try await withCheckedThrowingContinuation { waiting[provider] = $0 }
@@ -184,11 +198,14 @@ package final class ScriptedAccounts {
             cancel: { @MainActor [unowned self] in
                 log.append(.cancel(provider))
                 waiting.removeValue(forKey: provider)?.resume(throwing: CancellationError())
-            })
+            },
+            manualURL: code == nil ? url : nil,
+            submit: submit)
     }
 
     private static func page(_ provider: String) -> URL {
-        web(provider == "codex" ? "https://auth.openai.com/oauth/authorize" : "https://claude.com/cai/oauth/authorize")
+        web((provider == "codex" ? "https://auth.openai.com/oauth/authorize" : "https://claude.com/cai/oauth/authorize")
+            + "?state=demo-state&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback")
     }
 
     private static func web(_ text: String) -> URL { URL(string: text) ?? URL(fileURLWithPath: "/") }

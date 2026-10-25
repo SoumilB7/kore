@@ -1,7 +1,7 @@
 import Foundation
 
-/// Auth is owned by the CLI: Kore never handles credentials. It asks the CLI who it is logged
-/// in as, asks it to sign in (the CLI's own OAuth, in the browser) and to sign out.
+/// The CLI owns credentials and token exchange. Kore starts its OAuth, forwards an explicitly
+/// pasted authorization code to the same CLI, and asks it for status or sign-out.
 public enum ClaudeAuth {
     public struct Status: Sendable, Equatable {
         public let loggedIn: Bool
@@ -126,11 +126,12 @@ public enum ClaudeAuth {
     }
 
     /// One sign-in, on a message-less `claude -p` held for it: `claude_authenticate`, then
-    /// `claude_oauth_wait_for_completion`. Cancelling ends the process (the CLI has no request
-    /// for it). The pasted-code path (`claude_oauth_callback`) isn't used: it would pass an
-    /// authorization code through Kore.
+    /// `claude_oauth_wait_for_completion`. A pasted code goes directly to this CLI through
+    /// `claude_oauth_callback`; cancelling ends the process.
     public actor Login {
         private let session: ClaudeSession
+        private var authorizationURLs: [URL] = []
+        public private(set) var manualURL: URL?
 
         /// Starts the CLI for the sign-in; nothing is asked of it yet.
         public static func start(executable: URL? = nil) async throws -> Login {
@@ -146,6 +147,10 @@ public enum ClaudeAuth {
         public func begin(_ fields: [String: JSONValue]) async throws -> URL {
             let reply = try await session.authenticate(fields)
             guard let url = ClaudeAuth.automaticURL(reply) else { throw Failure.said("Claude Code sent no sign-in page.") }
+            manualURL = reply["manualUrl"]?.string.flatMap(URL.init(string:)).flatMap {
+                ["https", "http"].contains($0.scheme?.lowercased() ?? "") && $0.host != nil ? $0 : nil
+            }
+            authorizationURLs = [manualURL, url].compactMap { $0 }
             return url
         }
 
@@ -154,13 +159,28 @@ public enum ClaudeAuth {
             try await session.waitForSignIn()["account"] ?? .null
         }
 
+        public func submit(_ input: String) async throws {
+            guard let first = authorizationURLs.first else { throw LoginCallback.Failure.unavailable }
+            let code: LoginCallback.Code
+            do {
+                code = try LoginCallback.code(input, authorizationURL: first)
+            } catch {
+                // The manual page and automatic localhost listener have different redirects.
+                guard let alternate = authorizationURLs.dropFirst().compactMap({ try? LoginCallback.code(input, authorizationURL: $0) }).first else {
+                    throw error
+                }
+                code = alternate
+            }
+            try await session.submitSignIn(code)
+        }
+
         public func cancel() async { await session.close() }
     }
 
     /// `claude auth login --sso` over pipes: the CLI opens the browser itself and prints the page
     /// as "If the browser didn't open, visit: <url>" (plain, with `FORCE_HYPERLINK=0`). It ends
     /// with exit 0 once signed in, or "Login failed: <reason>" on stderr. Nothing is ever written
-    /// to its input: the pasted-code path stays unused. Cancelling ends the process.
+    /// to its input until the user submits a sign-in code. Cancelling ends the process.
     public final class SSOLogin: @unchecked Sendable {
         private let process = Process()
         private let lock = NSLock()
@@ -182,6 +202,8 @@ public enum ClaudeAuth {
         }
 
         private func run(_ launch: CLIExecutable.Launch) async throws -> URL {
+            // The CLI can finish between checking it and writing a pasted code.
+            signal(SIGPIPE, SIG_IGN)
             process.executableURL = launch.url
             process.arguments = ["auth", "login", "--sso"]
             process.environment = launch.environment.merging(["FORCE_HYPERLINK": "0"]) { $1 }
@@ -251,6 +273,12 @@ public enum ClaudeAuth {
             guard status != 0 else { return }
             let reason = lock.withLock { ClaudeAuth.loginReason(err) }
             throw Failure.said(reason ?? "Claude Code exited \(status).")
+        }
+
+        public func submit(_ input: String) throws {
+            guard let url = lock.withLock({ found }), process.isRunning else { throw LoginCallback.Failure.unavailable }
+            let code = try LoginCallback.code(input, authorizationURL: url)
+            try self.input.fileHandleForWriting.write(contentsOf: Data("\(code.authorizationCode)#\(code.state)\n".utf8))
         }
 
         public func cancel() {

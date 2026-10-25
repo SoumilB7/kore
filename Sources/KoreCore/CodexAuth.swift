@@ -195,6 +195,12 @@ public enum CodexAuth {
             }
         }
 
+        /// Sends a pasted callback only to this sign-in's own loopback listener.
+        public func submit(_ input: String) async throws {
+            guard let prompt, prompt.userCode == nil, ended == nil else { throw LoginCallback.Failure.unavailable }
+            try await LoginCallback.finishLocalhost(input, authorizationURL: prompt.url)
+        }
+
         /// Stops the sign-in (`account/login/cancel`), then the app-server.
         public func cancel() async {
             if let id = prompt?.loginId { _ = try? await server.request("account/login/cancel", ["loginId": .string(id)]) }

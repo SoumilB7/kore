@@ -259,18 +259,24 @@ package enum AccountReading: Equatable, Sendable {
 package struct SignInHandle: Sendable {
     package let url: URL?
     package let code: String?
-    /// The CLI opens the page itself (Claude's SSO); Kore only offers Copy link.
+    /// The CLI opens the page itself (Claude's SSO); Kore need not open it again at launch.
     package let opensItself: Bool
+    /// An explicit browser-login fallback, never a saved credential.
+    package let manualURL: URL?
+    package let submit: (@Sendable (String) async throws -> Void)?
     package let wait: @Sendable () async throws -> JSONValue?
     package let cancel: @Sendable () async -> Void
 
     package init(
         url: URL?, code: String? = nil, opensItself: Bool = false, wait: @escaping @Sendable () async throws -> JSONValue?,
-        cancel: @escaping @Sendable () async -> Void
+        cancel: @escaping @Sendable () async -> Void,
+        manualURL: URL? = nil, submit: (@Sendable (String) async throws -> Void)? = nil
     ) {
         self.url = url
         self.code = code
         self.opensItself = opensItself
+        self.manualURL = manualURL
+        self.submit = submit
         self.wait = wait
         self.cancel = cancel
     }
@@ -434,7 +440,7 @@ enum ClaudeSignIn {
                         _ = try await login.wait()
                         return JSONValue?.none
                     },
-                    cancel: { await login.cancel() })
+                    cancel: { await login.cancel() }, manualURL: await login.manualURL, submit: { try await login.submit($0) })
             } catch {
                 await login.cancel()
                 throw error
@@ -447,7 +453,7 @@ enum ClaudeSignIn {
                     try await login.wait()
                     return JSONValue?.none
                 },
-                cancel: { login.cancel() })
+                cancel: { login.cancel() }, manualURL: url, submit: { try login.submit($0) })
         case .terminal(let arguments):
             let claude = try await CLIExecutable.resolve("claude").url.path
             let file = try TerminalLogin.write(claude: claude, arguments: arguments, folder: context.folder)
@@ -537,13 +543,15 @@ extension AccountOps {
                 let login = try await CodexAuth.Login.start()
                 do {
                     let prompt = try await login.begin(params)
+                    let submit: (@Sendable (String) async throws -> Void)?
+                    if prompt.userCode == nil { submit = { try await login.submit($0) } } else { submit = nil }
                     return SignInHandle(
                         url: prompt.url, code: prompt.userCode,
                         wait: {
                             defer { Task { await login.close() } }
                             return try await login.wait()
                         },
-                        cancel: { await login.cancel() })
+                        cancel: { await login.cancel() }, submit: submit)
                 } catch {
                     await login.close()
                     throw error
