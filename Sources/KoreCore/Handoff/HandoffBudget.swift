@@ -167,6 +167,8 @@ public enum HandoffRender {
     static let messageChars = 80_000
     /// A text document sent with a prompt keeps about this much of itself.
     public static let documentChars = 20_000
+    /// The most images a turn's tools made that it carries as images.
+    static let toolImages = 3
 
     public static func turn(_ turn: HandoffTurn, _ level: HandoffPlan.Level) -> Turn {
         var user = cut(turn.prompt, to: messageChars)
@@ -191,7 +193,10 @@ public enum HandoffRender {
         } else {
             blocks.append(cut(reply(turn, full: level == .full), to: messageChars))
         }
-        return Turn(user: user, images: level == .full ? turn.images : [], pdfs: level == .full ? turn.pdfs ?? [] : [], assistant: blocks)
+        // A full turn gives the target the last images its tools made too, as images (after
+        // the prompt's own: neither CLI takes one inside an assistant's step).
+        let made = level == .full ? Array(turn.steps.flatMap(\.images).suffix(toolImages)) : []
+        return Turn(user: user, images: level == .full ? turn.images + made : [], pdfs: level == .full ? turn.pdfs ?? [] : [], assistant: blocks)
     }
 
     /// One step in full: its call, then its result.
@@ -203,7 +208,10 @@ public enum HandoffRender {
         case .error: result = step.output.isEmpty ? "(failed)" : cut(step.output)
         case .ok: result = step.output.isEmpty ? "ok" : cut(step.output)
         }
-        if !step.images.isEmpty { result += "\n" + Array(repeating: "[image]", count: step.images.count).joined(separator: " ") }
+        if !step.images.isEmpty {
+            let image = step.kind == .read ? "[image: \(step.title)]" : "[image]"
+            result += "\n" + Array(repeating: image, count: step.images.count).joined(separator: " ")
+        }
         return "[external_agent_tool_call: \(step.tool)]\n\(detail)\n[/external_agent_tool_call]\n"
             + "[external_agent_tool_result]\n\(result)\n[/external_agent_tool_result]"
     }
