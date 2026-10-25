@@ -798,7 +798,8 @@ struct ToolItem: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ToolHeader(name: entry.toolName ?? "Tool", path: entry.path, text: secondary, folder: actions.folder)
+            ToolHeader(name: entry.toolName ?? "Tool", path: entry.path, text: secondary, folder: actions.folder,
+                       selectionPath: Self.isShell(entry) ? [-1] : nil)
             if !parts.isEmpty {
                 ToolBody(parts: parts, open: open) { actions.toggle(entry.id.uuidString) }
             }
@@ -808,6 +809,14 @@ struct ToolItem: View {
     private var secondary: String {
         if entry.path != nil { return entry.summary ?? "" }
         return entry.summary ?? entry.text
+    }
+
+    /// The visible header, independent of whether its IN/OUT box is expanded.
+    static func headerText(_ entry: TranscriptStore.Entry) -> String {
+        let name = entry.toolName ?? "Tool"
+        let text = entry.summary ?? entry.text
+        let rest = entry.path.map { ($0 as NSString).lastPathComponent + (text.isEmpty ? "" : " " + text) } ?? text
+        return name + (rest.isEmpty ? "" : " " + rest)
     }
 
     /// Tools whose header says it all; they get a box only for an error.
@@ -852,17 +861,28 @@ struct ToolHeader: View {
     var removed = 0
     /// " · failed" after the secondary text, in its own colour.
     var status: (text: String, color: Color)?
+    var selectionPath: [Int]?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
             // A file link opens in a Kore tab, through the transcript's openURL.
-            Text(line)
-                .lineLimit(2)
-                .tint(Theme.secondary)
-                .help(path ?? "")
+            if let selectionPath {
+                Text(line).lineLimit(2).tint(Theme.secondary).help(path ?? "")
+                    .selectableText(selectionPath, selectionLine, .toolHeader)
+            } else {
+                Text(line).lineLimit(2).tint(Theme.secondary).help(path ?? "")
+            }
             if added > 0 || removed > 0 { ChangeCounts(added: added, removed: removed) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var selectionLine: AttributedString {
+        var selected = line
+        for run in selected.runs {
+            selected[run.range].inlinePresentationIntent = run.font == TextStyle.codeSmall ? .code : .stronglyEmphasized
+        }
+        return selected
     }
 
     private var line: AttributedString {

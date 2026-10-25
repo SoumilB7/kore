@@ -28,6 +28,7 @@ package final class AppModel {
         recents = paths.map { URL(fileURLWithPath: $0) }.filter(Self.isDirectory)
         Self.shared = self
         UILog.start()
+        OptionsMenu.install()
         accounts.watch()
     }
 

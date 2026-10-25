@@ -51,8 +51,8 @@ package struct KoreApp: App {
             CommandGroup(replacing: .printItem) {}
             CommandGroup(before: .toolbar) {
                 ExplorerCommands()
-                TerminalCommands()
             }
+            CommandMenu("Terminal") { TerminalCommands() }
             CommandGroup(after: .toolbar) {
                 Button("Zoom In") { Zoom.shared.zoomIn() }.keyboardShortcut("=")
                 Button("Zoom Out") { Zoom.shared.zoomOut() }.keyboardShortcut("-")
@@ -267,12 +267,11 @@ private struct TerminalCommands: View {
     @FocusedValue(\.workspace) private var workspace
 
     var body: some View {
-        Button("Terminal") { workspace?.terminals.toggle() }
+        Button("Show / Hide Terminal") { workspace?.terminals.toggle() }
             .keyboardShortcut("`", modifiers: [.control])
             .disabled(workspace == nil)
         Button("New Terminal") { workspace?.terminals.newShell() }
             .keyboardShortcut("`", modifiers: [.control, .shift])
             .disabled(workspace == nil)
-        Divider()
     }
 }

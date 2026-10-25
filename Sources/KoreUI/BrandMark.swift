@@ -5,12 +5,15 @@ import SwiftUI
 /// shade behind, the crossing X a lighter one in front (Resources/AppIcon.svg has the tile).
 struct BrandMark: View {
     var height: CGFloat = 56
+    var monochrome = false
 
     var body: some View {
         Image(nsImage: Self.image)
+            .renderingMode(monochrome ? .template : .original)
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(height: height)
+            .foregroundStyle(Theme.secondary)
             .accessibilityLabel("Kore")
     }
 

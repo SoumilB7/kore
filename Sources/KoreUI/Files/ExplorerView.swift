@@ -387,7 +387,7 @@ private struct TreeRow: View {
             NSItemProvider(object: URL(fileURLWithPath: row.id) as NSURL)
         }
         .onDrop(of: [.fileURL], delegate: TreeDrop(folder: dropFolder, store: store, workspace: workspace, undo: undoManager))
-        .contextMenu { TreeMenu(path: row.id, isFolder: row.isFolder, store: store, workspace: workspace) }
+        .koreContextMenu("explorer") { TreeMenu(path: row.id, isFolder: row.isFolder, store: store, workspace: workspace).items }
         .help(row.names.count > 1 ? row.names.joined(separator: "/") : "")
     }
 
@@ -601,33 +601,29 @@ private struct InlineNameField: View {
 
 // MARK: - Actions
 
-private struct TreeMenu: View {
+@MainActor private struct TreeMenu {
     let path: String
     let isFolder: Bool
     let store: FilesStore
     let workspace: Workspace
 
-    var body: some View {
-        Button("New File…") {
-            store.selection = path
-            store.startNew(folder: false)
-        }
-        Button("New Folder…") {
-            store.selection = path
-            store.startNew(folder: true)
-        }
-        Divider()
+    var items: [OptionItem] {
+        var items: [OptionItem] = [
+            OptionItem("New File…") { store.selection = path; store.startNew(folder: false) },
+            OptionItem("New Folder…") { store.selection = path; store.startNew(folder: true) }, .rule,
+        ]
         if !isFolder {
-            Button("Open") { workspace.openFile(URL(fileURLWithPath: path)) }
-            Button("Open with Default App") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+            items += [OptionItem("Open") { workspace.openFile(URL(fileURLWithPath: path)) },
+                      OptionItem("Open with Default App") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }]
         }
-        Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
-        Divider()
-        Button("Copy Path") { TreeActions.copy(path) }
-        Button("Copy Relative Path") { TreeActions.copy(store.relative(path)) }
-        Divider()
-        Button("Rename…") { store.edit = .rename(path) }
-        Button("Move to Trash") { TreeActions.trash(path, store: store) }
+        items += [
+            OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }, .rule,
+            OptionItem("Copy Path") { TreeActions.copy(path) },
+            OptionItem("Copy Relative Path") { TreeActions.copy(store.relative(path)) }, .rule,
+            OptionItem("Rename…") { store.edit = .rename(path) },
+            OptionItem("Move to Trash", destructive: true) { TreeActions.trash(path, store: store) },
+        ]
+        return items
     }
 }
 

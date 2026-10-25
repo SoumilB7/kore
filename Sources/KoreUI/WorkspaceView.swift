@@ -710,12 +710,12 @@ private struct TabItem: View {
         )
         .onHover { hovered.value = $0 }
         .help(workspace.asking(tab) ? "Closing the tab stops its turn" : help)
-        .contextMenu {
-            if tab.isPreview {
-                Button("Keep Open") { workspace.keep(tab) }
-            }
-            Button("Rename…") { startRename() }.disabled(tab.chat == nil || tab.agent != nil)
-            Button("Close Tab") { workspace.requestClose(tab) }
+        .koreContextMenu("tab") {
+            var items: [OptionItem] = []
+            if tab.isPreview { items.append(OptionItem("Keep Open") { workspace.keep(tab) }) }
+            items += [OptionItem("Rename…", enabled: tab.chat != nil && tab.agent == nil) { startRename() },
+                      OptionItem("Close Tab") { workspace.requestClose(tab) }]
+            return items
         }
         .alert("Rename chat", isPresented: $renaming.value) {
             TextField("Name", text: $newName.value)
@@ -815,9 +815,25 @@ private struct TabItem: View {
     }
 }
 
-/// A tab's mark: the file's icon, the agent's avatar, or the chat's provider logo, a spinner in
-/// its place while a turn runs and ⚠ while that turn is offline or stalled. `story` names the
-/// spinner and the ⚠ for storylines.
+/// A tab follows the work owned by its chat, including helpers and commands that outlive
+/// a turn. An agent tab follows that agent alone; sibling work stays on the parent chat.
+@MainActor
+enum TabWork {
+    static func running(_ chat: Chat, agent: String? = nil) -> Bool {
+        guard chat.hasWork else { return false }
+        guard let agent else {
+            // Armed scheduled jobs are waiting, rather than executing work.
+            return chat.isWorking || chat.isWaitingForNetwork || !chat.commands.stoppable.isEmpty
+        }
+        // agent(_:) is a lookup; observe the version that changes when its status changes.
+        _ = chat.transcript.agentsVersion
+        return chat.transcript.agent(agent)?.status == .running
+            || chat.commands.stoppable.contains { $0.owner == .sub(agent) }
+    }
+}
+
+/// File icon, agent avatar, provider mark, or Kore's muted mark for an empty tab. Work
+/// changes the owning tab's mark even when another tab is selected.
 private struct TabMark: View {
     let tab: ChatTab
     let active: Bool
@@ -826,16 +842,21 @@ private struct TabMark: View {
     var body: some View {
         if let file = tab.file {
             FileIconView(name: file.name, color: active ? Theme.text : Theme.secondary)
-        } else if let chat = tab.chat, let agent = tab.agent, let info = chat.transcript.agent(agent) {
-            AgentAvatar(index: info.index, name: info.name, status: info.status, background: info.background, place: .tab)
         } else if let chat = tab.chat {
-            if chat.isBusy, chat.connection.stuck {
+            let running = TabWork.running(chat, agent: tab.agent)
+            if let agent = tab.agent, let info = chat.transcript.agent(agent) {
+                AgentAvatar(
+                    index: info.index, name: info.name,
+                    status: running ? .running : (info.status == .running ? .stopped : info.status),
+                    background: info.background, place: .tab)
+                    .storyMark(story.part(running ? .working : .done))
+            } else if running, tab.agent == nil, chat.isBusy || chat.isWaitingForNetwork, chat.connection.stuck {
                 // Offline or stalled: nothing to spin for (the chat's row says which).
                 Text("⚠").font(Chrome.body).foregroundStyle(Theme.warning)
                     .frame(width: Size.spinner, height: Size.spinner)
                     .help(chat.connection.word ?? "")
                     .storyMark(story.part(.stuck))
-            } else if chat.isBusy {
+            } else if running {
                 // The system spinner is grey: multiplied, it takes the CLI's colour.
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
                     .colorMultiply(WorkingSpinner.tint(chat.provider))
@@ -843,6 +864,11 @@ private struct TabMark: View {
             } else {
                 ProviderLogo(provider: chat.provider, size: Size.logoTab)
             }
+        } else {
+            BrandMark(height: Size.logoTab, monochrome: true)
+                .opacity(Theme.dimmed)
+                .frame(width: Size.logoTab, height: Size.logoTab)
+                .storyMark(StoryID(.tabs, "empty", key: tab.id.uuidString))
         }
     }
 }

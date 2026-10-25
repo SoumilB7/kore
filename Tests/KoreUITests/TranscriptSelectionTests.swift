@@ -15,14 +15,14 @@ struct TranscriptSelectionTests {
     /// same baselines, the same first glyph on each line (within a point: a small heading with
     /// larger inline code in it lands half a point apart).
     @Test(arguments: [
-        SelectionStyle.body, .running, .heading(1), .heading(2), .heading(3), .heading(4), .heading(5), .code, .codeSmall, .cell(header: true),
+        SelectionStyle.body, .running, .toolHeader, .heading(1), .heading(2), .heading(3), .heading(4), .heading(5), .code, .codeSmall, .cell(header: true),
         .cell(header: false),
     ])
     func layoutMatchesSwiftUI(_ style: SelectionStyle) throws {
         let text = Self.text(style)
         let width: CGFloat = 300
         let drawn = try Self.swiftUILines(text, style, width: width)
-        let again = SlotLayout(style.attributed(text, zoom: Zoom.shared.scale), size: drawn.size).lineOrigins()
+        let again = SlotLayout(style.attributed(text, zoom: Zoom.shared.scale), size: drawn.size, maximumLines: style == .toolHeader ? 2 : 0).lineOrigins()
         #expect(drawn.lines.count == again.count, "\(style): \(drawn.lines.count) lines drawn, \(again.count) laid out")
         for (a, b) in zip(drawn.lines, again) {
             #expect(abs(a.x - b.x) < 0.5 && abs(a.y - b.y) < 1, "\(style): drawn \(a), laid out \(b)")
@@ -39,6 +39,14 @@ struct TranscriptSelectionTests {
             code.inlinePresentationIntent = .code
             code.font = TextStyle.code
             return heading + code + AttributedString(" and more words to wrap")
+        case .toolHeader:
+            var name = AttributedString("Run")
+            name.font = TextStyle.toolName
+            name.inlinePresentationIntent = .stronglyEmphasized
+            var command = AttributedString(" python3 -c \"a command long enough to wrap across several lines in a narrow transcript\"")
+            command.font = TextStyle.codeSmall
+            command.inlinePresentationIntent = .code
+            return name + command
         case .code, .codeSmall:
             return AttributedString("func hit(_ point: CGPoint) -> Int? {\n    rows.first { $0.frame.contains(point) }.map { $0.offset(at: point.x) }\n}")
         default:
@@ -82,6 +90,7 @@ struct TranscriptSelectionTests {
         case .heading(let level): AnyView(text.font(TextStyle.heading(level)))
         case .code: AnyView(text.font(TextStyle.code))
         case .codeSmall: AnyView(text.font(TextStyle.codeSmall))
+        case .toolHeader: AnyView(text.font(TextStyle.toolName).lineLimit(2))
         case .cell(let header): AnyView(text.font(TextStyle.body).bold(header))
         }
     }
@@ -208,6 +217,39 @@ struct TranscriptSelectionTests {
         #expect(!selection.isBlocked(CGPoint(x: 10, y: 200)))
         selection.blocker("message", nil)
         #expect(!selection.isBlocked(CGPoint(x: 10, y: 120)))
+    }
+
+    /// A normal shell call keeps its invocation in the header and has only an OUT block.
+    private func openCommand() throws -> (Script, TranscriptStore.Entry, TranscriptStore.Entry) {
+        let script = Script()
+        script.send("first")
+        script.start("turn")
+        script.say("before", "Before.")
+        script.on(.toolStarted(ToolCall(id: "command", name: "Bash", detail: "printf hello", input: "printf hello")))
+        script.done("command", "hello")
+        script.store.drawNow()
+        let rows = SelectionCopy.rows(script.store)
+        let before = try #require(rows.first { $0.entry.text == "Before." }?.entry)
+        let command = try #require(rows.first { $0.entry.toolId == "command" }?.entry)
+        script.store.toggle(command.id.uuidString)
+        #expect(!ToolItem.parts(command).contains { $0.label == "IN" })
+        return (script, before, command)
+    }
+
+    @Test func selectionEndingInsideAnOpenCommandHeaderDoesNotCopyItsBody() throws {
+        let (script, before, command) = try openCommand()
+        let copied = SelectionCopy.markdown(script.store,
+            from: TextPoint(entry: before.id, path: [0], offset: 0),
+            to: TextPoint(entry: command.id, path: [-1], offset: "Bash printf".utf16.count))
+        #expect(copied == "Before.\n\nBash printf")
+    }
+
+    @Test func selectionReachingCommandOutputKeepsItsHeaderOnlyInvocation() throws {
+        let (script, before, command) = try openCommand()
+        let copied = SelectionCopy.markdown(script.store,
+            from: TextPoint(entry: before.id, path: [0], offset: 0),
+            to: TextPoint(entry: command.id, path: [0], offset: "hello".utf16.count))
+        #expect(copied == "Before.\n\n```bash\nprintf hello\n```\n\n```\nhello\n```")
     }
 
     @Test func messagesQuoteEveryLine() {

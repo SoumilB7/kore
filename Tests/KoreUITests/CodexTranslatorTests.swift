@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import KoreCore
 
 @testable import KoreUI
 
@@ -55,4 +56,30 @@ struct CodexTranslatorTests {
         let used = events.compactMap { if case .contextUsage(let usage) = $0 { usage.used } else { nil } }
         #expect(used.last == 5482)
     }
+    @Test(arguments: [true, false])
+    func completedUserMessageClearsQueuedOnce(usingClientId: Bool) {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp/steer-receipt"))
+        translator.translate(.turnStarted(turnId: "turn"))
+        _ = translator.take()
+        translator.pendingSteer.insert("queued")
+        let item: KoreCore.JSONValue = usingClientId
+            ? ["type": "userMessage", "id": "server-id", "clientId": "queued", "content": []]
+            : ["type": "userMessage", "id": "queued", "clientId": nil, "content": []]
+        translator.translate(.itemCompleted(KoreCore.CodexItem(item)))
+        translator.translate(.itemCompleted(KoreCore.CodexItem(item)))
+        let deliveries = translator.take().events.filter { if case .queuedMessage("queued", .inTurn) = $0 { true } else { false } }
+        #expect(deliveries.count == 1 && translator.pendingSteer.isEmpty)
+    }
+
+    @Test func unrelatedAndChildMessagesDoNotAcknowledgeQueuedInput() {
+        let translator = CodexTranslator(folder: URL(fileURLWithPath: "/tmp/steer-receipt"))
+        translator.translate(.turnStarted(turnId: "turn"))
+        _ = translator.take()
+        translator.pendingSteer.insert("queued")
+        translator.translate(.itemCompleted(KoreCore.CodexItem(["type": "userMessage", "id": "other", "content": []])))
+        translator.translate(.itemCompleted(KoreCore.CodexItem(["type": "userMessage", "id": "queued", "content": []])), agent: .sub("child"))
+        #expect(translator.pendingSteer == ["queued"])
+        #expect(!translator.take().events.contains { if case .queuedMessage = $0 { true } else { false } })
+    }
+
 }

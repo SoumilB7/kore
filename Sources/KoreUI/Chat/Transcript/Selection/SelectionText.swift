@@ -14,6 +14,8 @@ enum SelectionStyle: Equatable {
     case code
     /// `TextStyle.codeSmall` (a tool's IN / OUT).
     case codeSmall
+    /// A shell header: bold tool name, then small monospace invocation.
+    case toolHeader
     case cell(header: Bool)
 
     /// The text with AppKit fonts and paragraph style for this style at `zoom`; inline code,
@@ -26,7 +28,7 @@ enum SelectionStyle: Equatable {
         for run in text.runs {
             var font = base
             let intent = run.inlinePresentationIntent ?? []
-            if intent.contains(.code) { font = Self.mono(12 * zoom) }
+            if intent.contains(.code) { font = Self.mono((self == .toolHeader ? 11 : 12) * zoom) }
             if intent.contains(.stronglyEmphasized) { font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
             if intent.contains(.emphasized) { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
             var attributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph]
@@ -42,6 +44,7 @@ enum SelectionStyle: Equatable {
         case .heading(let level): .systemFont(ofSize: Self.headings[min(max(level, 1), 6) - 1] * zoom, weight: .bold)
         case .code: Self.mono(12 * zoom)
         case .codeSmall: Self.mono(11 * zoom)
+        case .toolHeader: .systemFont(ofSize: 13 * zoom, weight: .bold)
         case .cell(let header): .systemFont(ofSize: 13 * zoom, weight: header ? .bold : .regular)
         }
     }
@@ -66,12 +69,14 @@ final class SlotLayout {
     /// `size` is the `Text`'s frame. At some sizes of the system font (11, 15, 20 points…)
     /// SwiftUI's lines are a point taller than TextKit's; laid out to a different height than
     /// the frame, the difference goes between the lines, as SwiftUI puts it.
-    init(_ text: NSAttributedString, size: CGSize) {
+    init(_ text: NSAttributedString, size: CGSize, maximumLines: Int = 0) {
         self.text = text
         storage.addTextLayoutManager(manager)
         // A hair over the measured width: the widest line fits as it did.
         let container = NSTextContainer(size: CGSize(width: size.width + 0.5, height: 1e7))
         container.lineFragmentPadding = 0
+        container.maximumNumberOfLines = maximumLines
+        if maximumLines > 0 { container.lineBreakMode = .byTruncatingTail }
         manager.textContainer = container
         storage.attributedString = text
         manager.ensureLayout(for: manager.documentRange)
@@ -124,7 +129,9 @@ final class SlotLayout {
 
     /// Where the glyph at `offset` starts, at its line's middle (the text's coordinates).
     func point(at offset: Int) -> CGPoint? {
-        guard let location = location(offset), let fragment = manager.textLayoutFragment(for: location) else { return nil }
+        // TextKit has no fragment at the position just after the document's last glyph.
+        let probe = min(max(0, offset), max(0, length - 1))
+        guard let location = location(probe), let fragment = manager.textLayoutFragment(for: location) else { return nil }
         let inParagraph = offset - self.offset(fragment.rangeInElement.location)
         let o = fragment.layoutFragmentFrame.origin
         for line in fragment.textLineFragments

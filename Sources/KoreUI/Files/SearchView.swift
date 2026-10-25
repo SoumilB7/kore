@@ -248,10 +248,9 @@ private struct SearchFileRow: View {
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { action() }
         .help(relative)
-        .contextMenu {
-            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) }
-            Button("Copy Path") { TreeActions.copy(file.path) }
-            Button("Copy Relative Path") { TreeActions.copy(relative) }
+        .koreContextMenu("search") {
+            [OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) },
+             OptionItem("Copy Path") { TreeActions.copy(file.path) }, OptionItem("Copy Relative Path") { TreeActions.copy(relative) }]
         }
     }
 

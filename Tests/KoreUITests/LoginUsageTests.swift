@@ -326,4 +326,110 @@ struct LoginUsageTests {
         for _ in 0..<100 where pending != nil { try await Task.sleep(for: .milliseconds(5)) }
     }
 
+    @Test func refreshAndCancellationNeverBlankConfirmedMeters() async throws {
+        var calls = 0, time = now
+        let store = LoginUsage(read: { _, _ in
+            calls += 1
+            if calls > 1 { try await Task.sleep(for: .seconds(10)) }
+            return reading()
+        }, clock: { time })
+        let main = key()
+        await store.refresh([main])
+        let confirmed = store.state(main)
+        time = time.addingTimeInterval(61)
+        let refresh = Task { await store.refresh([main]) }
+        for _ in 0..<100 where calls < 2 { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(calls == 2 && store.state(main) == confirmed)
+        refresh.cancel()
+        await refresh.value
+        #expect(store.state(main) == confirmed)
+    }
+
+    @Test func unchangedIdentitySurvivesGenerationAndNetworkFailure() async {
+        enum Offline: Error { case failed }
+        var calls = 0
+        let store = LoginUsage(read: { _, _ in
+            calls += 1
+            if calls > 1 { throw Offline.failed }
+            return reading()
+        }, clock: { now })
+        let original = key(), same = key(generation: 1), different = key(email: "other@example.com", generation: 2)
+        await store.refresh([original])
+        let confirmed = store.state(original)
+        #expect(store.state(same) == confirmed)
+        await store.refresh([same])
+        #expect(calls == 2 && store.state(same) == confirmed)
+        #expect(store.state(different) == .loading)
+        await store.refresh([different])
+        #expect(store.state(different) == .unavailable)
+        #expect(store.states[original] == nil && store.states[same] == nil)
+    }
+
+    @Test func successfulMismatchClearsTheConfirmedReadingAcrossGenerations() async throws {
+        var pending: CheckedContinuation<PlanReading, Never>?
+        var calls = 0
+        let store = LoginUsage(read: { _, _ in
+            calls += 1
+            if calls == 1 { return reading() }
+            return await withCheckedContinuation { pending = $0 }
+        }, clock: { now })
+        let original = key(), refreshed = key(generation: 1), later = key(generation: 2)
+        await store.refresh([original])
+        let verified = store.state(original)
+        let refresh = Task { await store.refresh([refreshed]) }
+        for _ in 0..<100 where pending == nil { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(store.state(refreshed) == verified)
+        let reply = try #require(pending)
+        reply.resume(returning: reading("someone-else@example.com"))
+        await refresh.value
+        #expect(store.state(refreshed) == .unavailable)
+        #expect(store.state(later) == .loading)
+        #expect(store.states[original] == nil)
+    }
+
+    @Test func confirmedValuesNeverCrossLoginProviderOrWorkspace() async {
+        let store = LoginUsage(read: { _, _ in reading() }, clock: { now })
+        let main = key()
+        await store.refresh([main])
+        let otherLogin = key("other")
+        let otherProvider = LoginUsage.Key("codex", .init(id: nil, email: "me@example.com", active: true, workspace: "Example"), generation: 1)
+        let otherWorkspace = LoginUsage.Key("claude", .init(id: nil, email: "me@example.com", active: true, workspace: "Other org"), generation: 1)
+        #expect(store.state(otherLogin) == .loading)
+        #expect(store.state(otherProvider) == .loading)
+        #expect(store.state(otherWorkspace) == .loading)
+        #expect(store.state(key(signedOut: true)) == .loading)
+        #expect(store.state(key(generation: 1)) == .ready(reading(), now))
+    }
+
+    @Test func replacedIdentityCannotRepublishAfterItsCancelledReadReturns() async throws {
+        var pending: CheckedContinuation<PlanReading, Never>?
+        var calls: [String?] = []
+        let cancelled = Flag()
+        let store = LoginUsage(read: { _, login in
+            calls.append(login)
+            if pending == nil {
+                return await withTaskCancellationHandler {
+                    await withCheckedContinuation { pending = $0 }
+                } onCancel: {
+                    Task { @MainActor in cancelled.value = true }
+                }
+            }
+            return reading("new@example.com")
+        }, clock: { now })
+        let old = key(), obsolete = key("removed"), newer = key(email: "new@example.com", generation: 1)
+        let oldRefresh = Task { await store.refresh([old, obsolete]) }
+        for _ in 0..<100 where pending == nil { try await Task.sleep(for: .milliseconds(2)) }
+        let reply = try #require(pending)
+        let newRefresh = Task { await store.refresh([newer]) }
+        for _ in 0..<100 where !cancelled.value { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(cancelled.value)
+        reply.resume(returning: reading())
+        await oldRefresh.value
+        await newRefresh.value
+        #expect(store.states[old] == nil)
+        #expect(store.states[obsolete] == nil)
+        #expect(calls == [nil, nil])
+        #expect(store.state(newer) == .ready(reading("new@example.com"), now))
+    }
+
 }

@@ -71,11 +71,11 @@ struct ChangesView: View {
     }
 
     private func fileMenu(_ proxy: ScrollViewProxy) -> some View {
-        Menu {
-            ForEach(Array(changes.enumerated()), id: \.element.id) { index, change in
-                Button(Self.name(change.path)) { selected.value = index }
+        OptionMenuButton(source: "changes", items: {
+            changes.enumerated().map { index, change in
+                OptionItem(Self.name(change.path), checked: selected.value == index) { selected.value = index }
             }
-        } label: {
+        }) {
             if changes.indices.contains(selected.value) {
                 let change = changes[selected.value]
                 HStack(spacing: Space.sm) {
@@ -84,7 +84,6 @@ struct ChangesView: View {
                 }
             }
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
         .fixedSize()
     }

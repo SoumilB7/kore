@@ -332,9 +332,7 @@ package final class CodexTranslator {
         if agent == .main, !replaying {
             if item.type == "userMessage" {
                 // A steered message: Codex took it into the running turn.
-                if let id = item.raw["clientId"]?.string, pendingSteer.remove(id) != nil {
-                    out.append(.queuedMessage(id: id, .inTurn(after: lastItem)))
-                }
+                acknowledgeSteer(item)
                 return
             }
             lastItem = item.id
@@ -364,7 +362,16 @@ package final class CodexTranslator {
         }
     }
 
+    private func acknowledgeSteer(_ item: CodexItem) {
+        // Some versions use the supplied id directly; completed-only receipts count too.
+        let candidates = [item.raw["clientId"]?.string, item.id].compactMap { $0 }
+        guard let id = candidates.first(where: { pendingSteer.contains($0) }) else { return }
+        pendingSteer.remove(id)
+        out.append(.queuedMessage(id: id, .inTurn(after: lastItem)))
+    }
+
     private func itemCompleted(_ item: CodexItem, agent: AgentID) {
+        if agent == .main, !replaying, item.type == "userMessage" { acknowledgeSteer(item) }
         let failed = ["failed", "declined"].contains(item.status ?? "")
         if !replaying { commands.completed(item, at: .now, into: &out) }
         inTurnOutput[item.id] = nil

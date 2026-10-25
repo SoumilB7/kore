@@ -281,7 +281,7 @@ package final class TranscriptSelection: ObservableObject {
             }
             return done
         }
-        let made = SlotLayout(slot.style.attributed(slot.text, zoom: Zoom.shared.scale), size: slot.frame.size)
+        let made = SlotLayout(slot.style.attributed(slot.text, zoom: Zoom.shared.scale), size: slot.frame.size, maximumLines: slot.style == .toolHeader ? 2 : 0)
         laidOut += 1
         layouts[key] = made
         layoutOrder.append(key)

@@ -33,11 +33,10 @@ struct LoginMeters: View {
                                 Text(UsageText.percent(bar.used))
                                     .monospacedDigit().fixedSize()
                             }
-                            .help(UsageText.resetsAt(bar.resetsAt, now: Date()))
+                            .help([UsageText.resetsAt(bar.resetsAt, now: Date()), UsageText.stamp(at, now: Date())].compactMap { $0 }.joined(separator: " · "))
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel("\(UsageText.label(bar.title)), \(UsageText.percent(bar.used)) used")
                         }
-                        if let stamp = UsageText.stamp(at, now: Date()) { note(stamp) }
                     }
                 }
             }

@@ -251,16 +251,14 @@ struct ImageToolbar: View {
                         .buttonStyle(.plain)
                     }
                 } else {
-                    Menu {
-                        ForEach(ImageEditor.PenColor.allCases, id: \.self) { color in
-                            Button(String(describing: color).capitalized) { editor.color = color }
+                    OptionMenuButton(source: "pen-colour", items: {
+                        ImageEditor.PenColor.allCases.map { color in
+                            OptionItem(String(describing: color).capitalized, checked: editor.color == color) { editor.color = color }
                         }
-                    } label: {
+                    }) {
                         swatch(editor.color, selected: true)
                     }
-                    .menuStyle(.button)
                     .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
                     .fixedSize()
                     .help("Pen colour")
                 }

@@ -33,7 +33,7 @@ struct StayAwakeButton: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .help(line)
-        .contextMenu { StayAwakeModes(awake: awake) }
+        .koreContextMenu("stay-awake") { StayAwakeModes(awake: awake).items }
         .accessibilityLabel(Text("Stay awake"))
         .accessibilityValue(Text(line))
         .background {
@@ -48,21 +48,14 @@ struct StayAwakeButton: View {
 
 /// The modes, the current one checked and a running timer's time left under it, then Turn Off:
 /// the cup's right-click menu and Kore ▸ Stay Awake Mode.
-struct StayAwakeModes: View {
+@MainActor struct StayAwakeModes {
     let awake: StayAwake
-
-    var body: some View {
-        ForEach(StayAwake.Mode.allCases) { mode in
+    var items: [OptionItem] {
+        StayAwake.Mode.allCases.map { mode in
             let current = awake.isOn && awake.mode == mode
-            Toggle(isOn: Binding(get: { current }, set: { _ in awake.choose(mode) })) {
-                Text(mode.title)
-                if current, mode.length != nil, let left = awake.timeLeft { Text(left) }
-            }
-        }
-        Divider()
-        Button("Turn Off") { awake.turnOff() }
-            .keyboardShortcut("a", modifiers: [.command, .option])
-            .disabled(!awake.isOn)
+            let left = current && mode.length != nil ? awake.timeLeft.map { " · " + $0 } ?? "" : ""
+            return OptionItem(mode.title + left, checked: current) { awake.choose(mode) }
+        } + [.rule, OptionItem("Turn Off", enabled: awake.isOn) { awake.turnOff() }]
     }
 }
 

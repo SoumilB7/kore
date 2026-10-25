@@ -252,10 +252,9 @@ private struct HistoryRow: View {
         // Archive is built only on hover: pressed through its action meanwhile.
         .storyAction(StoryID.History.row(session.id).part(.archive)) { toggleArchive() }
         .hoverFill(lit || isRenaming, Theme.Row.selected(.surface))
-        .contextMenu {
-            Button("Open", action: open)
-            Button("Rename…", action: startRename)
-            Button(session.archived ? "Unarchive" : "Archive", action: toggleArchive)
+        .koreContextMenu("history") {
+            [OptionItem("Open", action: open), OptionItem("Rename…", action: startRename),
+             OptionItem(session.archived ? "Unarchive" : "Archive", action: toggleArchive)]
         }
         // Built only on the lit row: VoiceOver and the keyboard reach them on any row.
         .accessibilityAction(named: "Rename", startRename)

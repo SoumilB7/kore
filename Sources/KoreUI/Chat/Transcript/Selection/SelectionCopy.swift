@@ -79,7 +79,8 @@ enum SelectionCopy {
         case .summary, .thinking:
             return row.open ? clip.plain(e.text, [0]) : nil
         case .tool:
-            guard row.open else { return nil }
+            let header = ToolItem.isShell(e) ? clip.plain(ToolItem.headerText(e), [-1]) : ""
+            guard row.open else { return header.isEmpty ? nil : header }
             let parts = ToolItem.parts(e)
             var blocks = parts.enumerated().compactMap { i, part -> String? in
                 let text = clip.plain(TextPrefix.of(part.text, lines: .max, bytes: .max).text, [i])
@@ -88,10 +89,11 @@ enum SelectionCopy {
             }
             // A command shown only in its header (no IN row) still copies first, when the
             // selection starts above the row.
-            if lo == nil, !parts.contains(where: { $0.label == "IN" }) {
+            if lo == nil, clip.touches([0]), !parts.contains(where: { $0.label == "IN" }) {
                 let command = e.input ?? e.text
                 if !command.isEmpty { blocks.insert(fence(command, language: ToolItem.isShell(e) ? "bash" : ""), at: 0) }
             }
+            if lo?.path == [-1] || hi?.path == [-1], !header.isEmpty { blocks.insert(header, at: 0) }
             return blocks.isEmpty ? nil : blocks.joined(separator: "\n\n")
         case .file:
             guard row.open, clip.whole else { return nil }

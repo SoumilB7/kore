@@ -507,21 +507,14 @@ private final class TreeCanvas: CanvasView {
         if let selectedNode { copyValue(selectedNode) }
     }
 
-    @objc private func copyValueItem(_ item: NSMenuItem) { copyValue(item.tag) }
-    @objc private func copyPathItem(_ item: NSMenuItem) { copyPath(item.tag) }
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        guard let row = rowAt(point(event)) else { return nil }
+    override func rightMouseDown(with event: NSEvent) {
+        guard let row = rowAt(point(event)), let window else { return }
         select(row)
         let node = Int(rows[row].node)
-        let menu = NSMenu()
-        for (title, action) in [("Copy Value", #selector(copyValueItem(_:))), ("Copy Path", #selector(copyPathItem(_:)))] {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.tag = node
-            menu.addItem(item)
-        }
-        return menu
+        OptionsMenu.shared.show([
+            OptionItem("Copy Value") { [weak self] in self?.copyValue(node) },
+            OptionItem("Copy Path") { [weak self] in self?.copyPath(node) },
+        ], at: event.locationInWindow, in: window, source: "json")
     }
 
     // MARK: Mouse and keys

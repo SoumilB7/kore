@@ -24,6 +24,11 @@ final class LoginUsage {
             signedOut = login.signedOut
             self.generation = generation
         }
+
+        func sameIdentity(as other: Key) -> Bool {
+            provider == other.provider && login == other.login && email == other.email
+                && workspace == other.workspace && signedOut == other.signedOut
+        }
     }
 
     enum State: Equatable {
@@ -41,6 +46,7 @@ final class LoginUsage {
     }
     @MainActor private final class Completion { var done = false }
     @ObservationIgnored private var requests: [Key: Request] = [:]
+    @ObservationIgnored private var currentKeys: [String: Set<Key>] = [:]
     @ObservationIgnored private var waiters: [UUID: Set<UUID>] = [:]
     @ObservationIgnored private var tail: Task<Void, Never>?
     @ObservationIgnored private var epoch = 0
@@ -68,12 +74,24 @@ final class LoginUsage {
         self.clock = clock
     }
 
-    func state(_ key: Key) -> State { states[key] ?? .loading }
+    func state(_ key: Key) -> State { states[key] ?? confirmed(key) ?? .loading }
+
+    /// A global account generation changes all keys, even for logins whose identity did not
+    /// change. Their own last verified reading stays visible until their new read completes.
+    private func confirmed(_ key: Key) -> State? {
+        guard !key.signedOut, key.email != nil else { return nil }
+        return states.compactMap { old, state -> (State, Date)? in
+            guard old.sameIdentity(as: key),
+                  case .ready(let reading, let at) = state, Self.matches(reading.account, key) else { return nil }
+            return (state, at)
+        }.max { $0.1 < $1.1 }?.0
+    }
 
     func reset() {
         epoch += 1
         for request in requests.values { request.task.cancel() }
         requests = [:]
+        currentKeys = [:]
         waiters = [:]
         tail = nil
         states = [:]
@@ -83,14 +101,26 @@ final class LoginUsage {
     /// Refresh in display order. Cancelling the view stops queued work and the current read;
     /// another window may join an existing request rather than start a second CLI.
     func refresh(_ keys: [Key]) async {
+        guard !Task.isCancelled else { return }
         let epoch = epoch
+        // Carry verified readings across a generation before discarding obsolete keys.
+        for key in keys where states[key] == nil {
+            if let reading = confirmed(key) { states[key] = reading }
+        }
         // Discard removed logins and prior identities, including their old percentages.
         let kept = Set(keys)
         let providers = Set(keys.map(\.provider))
+        for provider in providers { currentKeys[provider] = kept.filter { $0.provider == provider } }
+        // An old identity's cancelled read can ignore cancellation until its CLI exits.
+        // Remove its token now so it cannot restore a pruned reading when it returns.
+        for (key, request) in requests where providers.contains(key.provider) && !kept.contains(key) {
+            request.task.cancel()
+            requests[key] = nil
+        }
         states = states.filter { !providers.contains($0.key.provider) || kept.contains($0.key) }
         attempted = attempted.filter { !providers.contains($0.key.provider) || kept.contains($0.key) }
         for key in keys {
-            guard !Task.isCancelled, self.epoch == epoch else { return }
+            guard !Task.isCancelled, self.epoch == epoch, currentKeys[key.provider]?.contains(key) == true else { return }
             guard !key.signedOut, key.email != nil else {
                 states[key] = .unavailable
                 continue
@@ -99,7 +129,7 @@ final class LoginUsage {
                 await wait(request)
                 if !request.task.isCancelled { continue }
             }
-            guard !Task.isCancelled, self.epoch == epoch else { return }
+            guard !Task.isCancelled, self.epoch == epoch, currentKeys[key.provider]?.contains(key) == true else { return }
             if requests[key]?.task.isCancelled == true { attempted[key] = nil }
             if let at = attempted[key], clock().timeIntervalSince(at) < 60 { continue }
             let before = tail
@@ -109,20 +139,23 @@ final class LoginUsage {
                 defer { completion.done = true }
                 await before?.value
                 guard !Task.isCancelled, self.epoch == epoch, requests[key]?.id == token else { return }
-                states[key] = .loading
+                if case .ready = states[key] { } else { states[key] = .loading }
                 attempted[key] = clock()
                 UILog.event("account-usage-read", ["cli": key.provider, "login": AccountStore.loginKey(key.login)])
                 let reading = try? await read(key.provider, key.login)
                 guard !Task.isCancelled else {
                     if requests[key]?.id == token {
-                        states[key] = nil
+                        if case .ready = states[key] { } else { states[key] = nil }
                         attempted[key] = nil
                     }
                     return
                 }
                 guard self.epoch == epoch, requests[key]?.id == token else { return }
-                if let reading, Self.matches(reading.account, key) {
-                    states[key] = .ready(reading, clock())
+                if let reading {
+                    // A confirmed different identity must clear the old reading immediately.
+                    states[key] = Self.matches(reading.account, key) ? .ready(reading, clock()) : .unavailable
+                } else if case .ready = states[key] {
+                    // Transient failures keep the real timestamp of the last confirmed read.
                 } else {
                     states[key] = .unavailable
                 }

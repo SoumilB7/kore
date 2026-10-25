@@ -63,6 +63,7 @@ package final class Chat: Identifiable {
     /// A message sent with no network waits for it (Stop gives it up); a running turn's spinner
     /// says when the network goes.
     @ObservationIgnored private var waitingForNetwork = false
+    var isWaitingForNetwork: Bool { waitingForNetwork }
     @ObservationIgnored private var networkObserver: (any NSObjectProtocol)?
     /// The running turn's connection, as its spinner and tab show it (`Connection.stuck`: ⚠).
     package private(set) var connection = Connection.ok

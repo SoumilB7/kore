@@ -219,15 +219,15 @@ final class SelectAcrossTools: ChatStoryline {
             CopySelection("> here?\n\n" + Self.before + "\n\nThere are two"),
             Press(.fold(turn: 1)),
             Press(.tool("Bash")),
-            Expect("the command's box open") { story in try !story.activeChat().storyTranscript.selectableTexts(try Spot.tool("Bash").entry(story)).isEmpty },
+            Expect("the command's box open") { story in try story.activeChat().storyTranscript.selectableTexts(try Spot.tool("Bash").entry(story)).contains([0]) },
             DragSelect(from: .firstAnswer(1, [0], at: Self.before, "the folder"), to: .lastAnswer(1, [0], at: Self.after, " files")),
             CopySelection("the folder.\n\n```bash\nls\n```\n\n```\na.txt\nb.txt\n```\n\nThere are two"),
             DragSelect(from: Spot(row: .tool("Bash"), path: [0], offset: 1), to: Spot(row: .tool("Bash"), path: [0], offset: 7)),
-            Expect("a drag inside the box to leave it open") { story in try !story.activeChat().storyTranscript.selectableTexts(try Spot.tool("Bash").entry(story)).isEmpty },
+            Expect("a drag inside the box to leave it open") { story in try story.activeChat().storyTranscript.selectableTexts(try Spot.tool("Bash").entry(story)).contains([0]) },
             CopySelection("```\n.txt\nb\n```"),
             Press(.tool("Bash")),
             DragSelect(from: .firstAnswer(1, [0], at: Self.before, "the folder"), to: .lastAnswer(1, [0], at: Self.after, " files")),
-            CopySelection("the folder.\n\nThere are two"),
+            CopySelection("the folder.\n\nBash ls\n\nThere are two"),
         ]
     }
 }

@@ -177,7 +177,8 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
         guard let window else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown]) {
             [weak self] event in
-            self?.handle(event) ?? event
+            guard let self else { return event }
+            return self.handle(event)
         }
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
             observers.append(
@@ -248,6 +249,7 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
         if [.leftMouseDown, .leftMouseUp].contains(event.type), event.timestamp <= takenAt { return nil }
         switch event.type {
         case .leftMouseDown:
+            if event.modifierFlags.contains(.control) { return showCopyMenu(event) ? nil : event }
             stopAutoscroll()
             press = nil
             guard isTranscript(event) else { return event }
@@ -299,16 +301,19 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
             selection.clear()
             return event
         case .rightMouseDown:
-            guard isTranscript(event), selection.hasSelection, let (entry, path) = selection.text(at: point(event)),
-                selection.selected(entry, path) != nil
-            else { return event }
-            let menu = NSMenu()
-            menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "").target = self
-            NSMenu.popUpContextMenu(menu, with: event, for: self)
-            return nil
+            return showCopyMenu(event) ? nil : event
         default:
             return event
         }
+    }
+
+    private func showCopyMenu(_ event: NSEvent) -> Bool {
+        guard let selection, isTranscript(event), selection.hasSelection,
+              let (entry, path) = selection.text(at: point(event)), selection.selected(entry, path) != nil,
+              let window else { return false }
+        OptionsMenu.shared.show([OptionItem("Copy") { [weak self] in self?.copy(nil) }],
+                                at: event.locationInWindow, in: window, source: "selection")
+        return true
     }
 
     private static func releaseOutside(_ event: NSEvent) -> NSEvent? {

@@ -482,11 +482,11 @@ struct CompactionSummary: View {
         .padding(.top, Space.sm)
         .padding(.bottom, Layout.Timeline.itemPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .contextMenu {
-            Button("Copy Summary") {
+        .koreContextMenu("summary") {
+            [OptionItem("Copy Summary") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(entry.text, forType: .string)
-            }
+            }]
         }
     }
 }

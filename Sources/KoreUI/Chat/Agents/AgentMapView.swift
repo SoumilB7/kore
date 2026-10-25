@@ -172,20 +172,16 @@ struct AgentMapView: View {
     private func treeMenu(
         _ rows: AgentMapRows, selected: TranscriptStore.AgentNode?, commands: CommandsStore.Summary, pane: AgentMapState.Pane?
     ) -> some View {
-        Menu {
-            Button(chat.title + Self.cue(commands.live(.main))) { map.show(.chat) }
-            menuItems(rows.running, commands: commands)
-            ForEach(AgentMapState.Fold.allCases, id: \.self) { fold in
+        OptionMenuButton(source: "agents", items: {
+            var items = [OptionItem(chat.title + Self.cue(commands.live(.main))) { map.show(.chat) }]
+            items += menuItems(rows.running, commands: commands)
+            for fold in AgentMapState.Fold.allCases {
                 let nodes = rows.nodes(fold)
-                if !nodes.isEmpty {
-                    Menu(AgentMapRows.label(fold, nodes)) { menuItems(nodes, commands: commands) }
-                }
+                if !nodes.isEmpty { items.append(OptionItem(AgentMapRows.label(fold, nodes), children: menuItems(nodes, commands: commands))) }
             }
-            if commands.outlived > 0 {
-                Divider()
-                Button(OutlivedLine.text(commands.outlived)) { map.show(.outlived) }
-            }
-        } label: {
+            if commands.outlived > 0 { items += [.rule, OptionItem(OutlivedLine.text(commands.outlived)) { map.show(.outlived) }] }
+            return items
+        }) {
             if pane == .chat {
                 HStack(spacing: Space.sm) {
                     AgentNodeMark(kind: .root, radius: Size.statusPoint)
@@ -201,17 +197,16 @@ struct AgentMapView: View {
                 }
             }
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
         .fixedSize()
     }
 
     /// An ended agent says how it ended after its name ("Watch the build — stopped"); one
     /// running commands, how many (" · >_ 2").
-    private func menuItems(_ nodes: [TranscriptStore.AgentNode], commands: CommandsStore.Summary) -> some View {
-        ForEach(nodes) { node in
+    private func menuItems(_ nodes: [TranscriptStore.AgentNode], commands: CommandsStore.Summary) -> [OptionItem] {
+        nodes.map { node in
             let state = AgentNodeMeter.state(node.info.status).map { " — \($0)" } ?? ""
-            Button(String(repeating: "    ", count: node.depth) + node.info.name + state + Self.cue(commands.live(.sub(node.id)))) {
+            return OptionItem(String(repeating: "    ", count: node.depth) + node.info.name + state + Self.cue(commands.live(.sub(node.id)))) {
                 map.select(node.id)
             }
         }

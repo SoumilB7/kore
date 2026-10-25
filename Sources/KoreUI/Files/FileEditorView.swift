@@ -311,30 +311,25 @@ private struct StatusRow: View {
             StatusItem(
                 title: "Ln \(caret.line), Col \(caret.column)" + (caret.selected > 0 ? " (\(caret.selected) selected)" : ""),
                 help: "Go to Line (⌃G)"
-            ) {
-                Button("Go to Line…") { workspace.quickOpen = .line }
-            }
+            ) { [OptionItem("Go to Line…") { workspace.quickOpen = .line }] }
             StatusItem(title: document.indent.label, help: "Indentation") {
-                Button("Indent Using Spaces: 2") { document.setIndent(.spaces(2)) }
-                Button("Indent Using Spaces: 4") { document.setIndent(.spaces(4)) }
-                Button("Indent Using Spaces: 8") { document.setIndent(.spaces(8)) }
-                Button("Indent Using Tabs") { document.setIndent(.tabs) }
-                Divider()
-                Button("Convert Indentation to Spaces") { document.convertIndentation(toTabs: false) }
-                    .disabled(document.readOnly)
-                Button("Convert Indentation to Tabs") { document.convertIndentation(toTabs: true) }
-                    .disabled(document.readOnly)
+                [OptionItem("Indent Using Spaces: 2") { document.setIndent(.spaces(2)) },
+                 OptionItem("Indent Using Spaces: 4") { document.setIndent(.spaces(4)) },
+                 OptionItem("Indent Using Spaces: 8") { document.setIndent(.spaces(8)) },
+                 OptionItem("Indent Using Tabs") { document.setIndent(.tabs) }, .rule,
+                 OptionItem("Convert Indentation to Spaces", enabled: !document.readOnly) { document.convertIndentation(toTabs: false) },
+                 OptionItem("Convert Indentation to Tabs", enabled: !document.readOnly) { document.convertIndentation(toTabs: true) }]
             }
             .storyID(StoryID.Editor.Status.indent)
             StatusText(document.encodingName)
             StatusItem(title: document.lineEnding.rawValue, help: "Line endings") {
-                Button("LF") { document.setLineEnding(.lf) }
-                Button("CRLF") { document.setLineEnding(.crlf) }
+                [OptionItem("LF", checked: document.lineEnding == .lf) { document.setLineEnding(.lf) },
+                 OptionItem("CRLF", checked: document.lineEnding == .crlf) { document.setLineEnding(.crlf) }]
             }
             .storyID(StoryID.Editor.Status.lineEndings)
             StatusItem(title: document.language.name, help: "Language") {
-                ForEach(Language.all, id: \.id) { language in
-                    Button(language.name) {
+                Language.all.map { language in
+                    OptionItem(language.name, checked: document.language.id == language.id) {
                         document.language = language
                         document.editor.setLanguage(language)
                     }
@@ -357,24 +352,20 @@ private struct StatusText: View {
     }
 }
 
-private struct StatusItem<Items: View>: View {
+private struct StatusItem: View {
     let title: String
     let help: String
-    @ViewBuilder let items: () -> Items
+    let items: () -> [OptionItem]
     @StateObject private var hovered = Local(false)
 
     var body: some View {
-        Menu {
-            items()
-        } label: {
+        OptionMenuButton(source: "editor-status", items: items) {
             Text(title)
                 .font(Chrome.captionDigits)
                 .foregroundStyle(hovered.value ? Theme.text : Theme.secondary)
                 .lineLimit(1)
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
         .padding(.horizontal, Space.xs)
         .background(hovered.value ? Theme.Row.hover(.window) : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))

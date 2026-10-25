@@ -953,12 +953,17 @@ final class GutterView: NSRulerView {
 /// NSTextView with the editing keys of VS Code: auto-indent, tab stops, closing pairs,
 /// comment toggling, moving and copying lines, and the caret's line drawn behind the text.
 final class EditorTextView: NSTextView {
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let menu = super.menu(for: event) else { return nil }
+        return OptionsMenu.shared.showNative(menu, event: event, view: self) ? nil : menu
+    }
+
     weak var controller: CodeEditorController?
 
     /// Esc closes an open change peek first.
     override func cancelOperation(_ sender: Any?) {
-        if MainActor.assumeIsolated({ controller?.closePeek() }) == true { return }
-        super.cancelOperation(sender)
+        // NSTextView has no base cancelOperation implementation to forward to.
+        _ = MainActor.assumeIsolated { controller?.closePeek() }
     }
 
     private var indentUnit: String { MainActor.assumeIsolated { controller?.document.indent.unit ?? "    " } }
