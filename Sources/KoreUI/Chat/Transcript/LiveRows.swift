@@ -516,11 +516,9 @@ struct QueuedMessage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             MessageHeader(entry: entry, open: true, actions: actions)
-                .padding(.top, -Layout.Timeline.promptTop)
-                .padding(.bottom, -Layout.Timeline.promptBottom)
+                .padding(.vertical, -Layout.Timeline.itemPadding)
                 .opacity(Theme.queuedOpacity)
             Text("Queued").font(TextStyle.caption).foregroundStyle(Theme.secondary)
-                .padding(.leading, Layout.Timeline.indent)
         }
         .padding(.vertical, Space.sm / 2)
         .storyID(StoryID.Composer.queued(entry.id))

@@ -227,8 +227,6 @@ final class TranscriptStore {
         let always: Bool
         /// False on the message of a turn that's still running.
         let canFork: Bool
-        /// An answer's row hangs into the gap under it: nothing but a prompt (or the end) follows.
-        var hangs = false
     }
 
     /// One user (or peer) message and what followed it. The header sticks to the top while
@@ -1557,16 +1555,6 @@ final class TranscriptStore {
         touchesDirty = true
     }
 
-    /// Nothing follows the row but a prompt or the end: the gap before a new prompt is free.
-    private static func promptNext(_ run: [Row], after i: Int) -> Bool {
-        guard i + 1 < run.count else { return true }
-        switch run[i + 1] {
-        case .message: return true
-        case .entry(let e): return e.kind == .user || e.kind == .peer
-        default: return false
-        }
-    }
-
     /// Splits rows at each user or peer message, and places them on the timeline.
     private static func sections(
         _ rows: [Row], open: Set<String>, actions: [String: MessageActions] = [:], running: UUID? = nil
@@ -1583,10 +1571,9 @@ final class TranscriptStore {
             var seen: [String: Int] = [:]
             let items = run.indices.map { i in
                 let id = run[i].id
-                var rowActions: MessageActions? =
+                let rowActions: MessageActions? =
                     if case .message(let e, _, _) = run[i] { MessageActions(always: false, canFork: e.id != running) }
                     else { actions[id] }
-                if rowActions != nil, case .entry = run[i] { rowActions?.hangs = Self.promptNext(run, after: i) }
                 return Item(
                     row: run[i], dot: dots[i],
                     above: dots[i] != nil && i > 0 && dots[i - 1] != nil,
