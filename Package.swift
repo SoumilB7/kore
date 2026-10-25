@@ -13,6 +13,7 @@ let package = Package(
         .executable(name: "kore-cli", targets: ["kore-cli"]),
         .executable(name: "kore-storylines", targets: ["kore-storylines"]),
         .executable(name: "kore-fake-cli", targets: ["kore-fake-cli"]),
+        .executable(name: "kore-power-bench", targets: ["kore-power-bench"]),
     ],
     targets: [
         .target(name: "KoreCore", swiftSettings: releaseForSize),
@@ -27,6 +28,8 @@ let package = Package(
         .executableTarget(name: "kore-storylines", dependencies: ["KoreStorylines", "KoreUI"], swiftSettings: releaseForSize),
         // Plays recorded CLI sessions as `claude` / `codex` for storylines.
         .executableTarget(name: "kore-fake-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
+        // Synthetic held views, without accounts, CLIs, navigation pacing or sampling timers.
+        .executableTarget(name: "kore-power-bench", dependencies: ["KoreUI"], swiftSettings: releaseForSize),
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "KoreCore", "kore-fake-cli"]),
