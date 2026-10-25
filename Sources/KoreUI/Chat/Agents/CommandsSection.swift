@@ -22,8 +22,9 @@ struct CommandCue: View {
 }
 
 /// "BACKGROUND" in a pane, above the agent's prompt: the live commands first, newest start
-/// first, each with its age and its actions; then the finished ones, most recently ended first,
-/// one muted line each. More than 50 finished show their newest 20, then "Show N more". A row
+/// first, each with its age and its actions; then "Done N", folded at first, over the finished
+/// ones, most recently ended first, one muted line each. More than 50 finished show their newest
+/// 20, then "Show N more". A row
 /// opens in place on its click. Present only while the owner has any.
 struct CommandsSection: View {
     let chat: Chat
@@ -43,8 +44,9 @@ struct CommandsSection: View {
             VStack(alignment: .leading, spacing: 0) {
                 header(stoppable)
                 ForEach(rows.live) { row($0) }
-                ForEach(finished) { row($0) }
-                if finished.count < rows.finished.count {
+                if !rows.finished.isEmpty { doneFold(rows.finished.count) }
+                if map.finishedOpen { ForEach(finished) { row($0) } }
+                if map.finishedOpen, finished.count < rows.finished.count {
                     Button {
                         map.allFinished = true
                     } label: {
@@ -62,6 +64,23 @@ struct CommandsSection: View {
             .onAppear { chat.watchCommands(true) }
             .onDisappear { chat.watchCommands(false) }
         }
+    }
+
+    /// "Done N" with its chevron: opens and folds the finished rows.
+    private func doneFold(_ count: Int) -> some View {
+        Button {
+            map.finishedOpen.toggle()
+        } label: {
+            HStack(spacing: Space.xs) {
+                Image(systemName: map.finishedOpen ? "chevron.down" : "chevron.right").font(Glyph.chevron)
+                Text("Done \(count)").font(TextStyle.label)
+            }
+            .foregroundStyle(Theme.secondary)
+            .frame(minHeight: Size.hitTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .storyID(StoryID.AgentMap.doneCommands, press: { map.finishedOpen.toggle() })
     }
 
     /// The eyebrow, and Stop all at its right for two or more that can stop.

@@ -189,6 +189,7 @@ extension StoryID {
         package static let outlived = StoryID(.agentmap, "outlived")
         /// "Show 34 more" under the finished rows.
         package static let moreCommands = StoryID(.agentmap, "morecommands")
+        package static let doneCommands = StoryID(.agentmap, "donecommands")
         package static let open = StoryID(.agentmap, "open")
         package static let stop = StoryID(.agentmap, "stop")
         package static let close = StoryID(.agentmap, "close")

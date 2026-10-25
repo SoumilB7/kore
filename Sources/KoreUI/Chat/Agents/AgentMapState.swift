@@ -31,6 +31,8 @@ final class AgentMapState {
     var askingStop: String?
     /// "Show N more" was clicked under the finished rows.
     var allFinished = false
+    /// The finished commands are shown, under "Done N" (folded at first).
+    var finishedOpen = false
     static let stopAll = "*all"
 
     /// An agent's row: its pane, each command closed.
@@ -46,6 +48,7 @@ final class AgentMapState {
         openCommand = nil
         askingStop = nil
         allFinished = false
+        finishedOpen = false
     }
 
     func open(selecting id: String? = nil) {
