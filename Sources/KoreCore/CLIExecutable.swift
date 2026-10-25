@@ -137,6 +137,8 @@ public enum CLIExecutable {
         var env = ProcessInfo.processInfo.environment
         if let path { env["PATH"] = path }
         for name in env.keys where isForeignAuth(name) || inheritedHostVariables.contains(name) { env[name] = nil }
+        // A login folder inherited from a chat Kore was started in: main means the CLI's default.
+        for name in CLIProfiles.variables.values where env[name].map(CLIProfiles.isLoginFolder) == true { env[name] = nil }
         return env
     }
 

@@ -4,6 +4,16 @@ import Testing
 @testable import KoreCore
 
 @Suite(.serialized) struct CLIProfilesTests {
+    /// Kore started from one of its own chats inherits that login's folder: main stays the
+    /// CLI's default, while a folder of the owner's own choosing still counts.
+    @Test func anInheritedLoginFolderIsNeverMain() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let inherited = CLIProfiles.folder("claude", "ab12cd34").path
+        #expect(CLIProfiles.mainFolder("claude", environment: ["CLAUDE_CONFIG_DIR": inherited]) == home.appendingPathComponent(".claude", isDirectory: true))
+        #expect(CLIProfiles.mainFolder("codex", environment: ["CODEX_HOME": CLIProfiles.folder("codex", "ef56").path]) == home.appendingPathComponent(".codex", isDirectory: true))
+        #expect(CLIProfiles.mainFolder("claude", environment: ["CLAUDE_CONFIG_DIR": "/Users/someone/claude-work"]).path == "/Users/someone/claude-work")
+    }
+
     @Test func anAddedLoginKeepsItsOwnLoginAndSharesTheRest() throws {
         let files = FileManager.default
         let base = files.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

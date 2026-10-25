@@ -77,8 +77,18 @@ public enum CLIProfiles {
     /// The CLI's main folder: its variable as Kore was started with it, else its default.
     public static func mainFolder(_ cli: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
         if let main = mains.value[cli] { return main }
-        if let name = variables[cli], let dir = environment[name], !dir.isEmpty { return URL(fileURLWithPath: dir, isDirectory: true) }
+        if let name = variables[cli], let dir = environment[name], !dir.isEmpty, !isLoginFolder(dir) {
+            return URL(fileURLWithPath: dir, isDirectory: true)
+        }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(cli == "codex" ? ".codex" : ".claude", isDirectory: true)
+    }
+
+    /// One of Kore's own login folders: what a CLI under Kore inherits, never a main folder. Kore
+    /// started from inside one of its chats (a reinstall run there) has it in its environment.
+    static func isLoginFolder(_ path: String) -> Bool {
+        let root = directory.standardizedFileURL.path
+        let dir = URL(fileURLWithPath: path).standardizedFileURL.path
+        return dir == root || dir.hasPrefix(root + "/")
     }
 
     public static func folder(_ cli: String, _ id: String) -> URL {
