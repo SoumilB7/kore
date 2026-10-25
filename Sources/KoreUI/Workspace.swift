@@ -544,6 +544,13 @@ package final class Workspace {
 
     var unsavedFiles: [FileDocument] { tabs.compactMap { $0.file?.isDirty == true ? $0.file : nil } }
 
+    /// ⌘,: the active chat's Account popup. A tab with no chat (the picker) or an agent's has no
+    /// composer for it: nothing happens.
+    func openAccount() {
+        guard activeTab.agent == nil else { return }
+        activeTab.chat?.openAccount()
+    }
+
     /// Chats with work a quit would end: a turn or an agent running, or a background command
     /// (or an armed scheduled job) live.
     package var workingChats: Int {

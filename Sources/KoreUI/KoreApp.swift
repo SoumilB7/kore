@@ -40,6 +40,8 @@ package struct KoreApp: App {
         .defaultPosition(.center)
         .commands {
             CommandGroup(after: .appInfo) { StayAwakeCommands() }
+            // Kore keeps its settings in the / menu, with no Settings window: ⌘, opens Account there.
+            CommandGroup(replacing: .appSettings) { AccountCommands() }
             CommandGroup(replacing: .newItem) { FileCommands(app: app) }
             // SwiftUI has no save slot outside document apps.
             CommandGroup(after: .newItem) { SaveCommands() }
@@ -217,6 +219,18 @@ private struct SaveCommands: View {
         Button("Go to Line…") { workspace?.perform(.goToLine) }
             .keyboardShortcut("g", modifiers: .control)
             .disabled(workspace?.can(.goToLine) != true)
+    }
+}
+
+/// ⌘,: the active chat's Account popup, as the / menu's Account opens it.
+private struct AccountCommands: View {
+    @FocusedValue(\.workspace) private var workspace
+
+    var body: some View {
+        // A tab with no chat (the picker) or an agent's has no composer for it: nothing happens.
+        Button("Account…") { workspace?.openAccount() }
+        .keyboardShortcut(",")
+        .disabled(workspace == nil)
     }
 }
 

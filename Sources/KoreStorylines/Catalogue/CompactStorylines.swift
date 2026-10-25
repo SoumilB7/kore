@@ -72,3 +72,15 @@ final class QuitCountsWorkingChats: ChatStoryline {
         ]
     }
 }
+
+/// ⌘, opens the chat's Account popup: Kore's settings live in the / menu, with no Settings window.
+final class CommandCommaOpensAccount: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Key(.cmd(",")),
+            Expect("the Account popup open", timeout: .seconds(3)) { try $0.activeChat().isAccountOpen },
+        ]
+    }
+}

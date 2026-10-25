@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 
 /// A key the folder window's tabs take, as a Mac app's tabs do (Safari, Terminal): ⌘W closes
-/// the tab, ⌃⇥ and ⌃⇧⇥ show the next and previous, ⌘1–8 that tab and ⌘9 the last.
+/// the tab, ⌃⇥ and ⌃⇧⇥ show the next and previous, ⌘1–8 that tab and ⌘9 the last; and ⌘,
+/// opens the chat's Account popup, Kore's settings being in the / menu.
 enum TabKey: Equatable {
-    case close, next, previous, number(Int)
+    case close, next, previous, number(Int), account
 
     /// The tab key a key press is, if any.
     static func of(_ characters: String?, keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> TabKey? {
@@ -19,6 +20,7 @@ enum TabKey: Equatable {
         }
         guard flags == .command, let key = characters?.lowercased() else { return nil }
         if key == "w" { return .close }
+        if key == "," { return .account }
         if let n = Int(key), (1...9).contains(n) { return .number(n) }
         return nil
     }
@@ -46,6 +48,7 @@ struct TabKeys: ViewModifier {
                     case .next: workspace.perform(.nextTab)
                     case .previous: workspace.perform(.previousTab)
                     case .number(let n): workspace.selectNumber(n)
+                    case .account: workspace.openAccount()
                     }
                     return nil
                 }
