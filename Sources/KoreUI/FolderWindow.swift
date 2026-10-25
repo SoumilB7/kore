@@ -11,7 +11,7 @@ struct FolderWindow: View {
     init(folder: URL) {
         self.folder = folder
         // Dev runs that start or resume a chat begin from a single clean tab.
-        _workspace = StateObject(wrappedValue: Local(Workspace(folder: folder, restore: !DevSnapshot.singleTab)))
+        _workspace = StateObject(wrappedValue: Local(Workspace.forWindow(folder, restore: !DevSnapshot.singleTab)))
     }
 
     var body: some View {
@@ -161,7 +161,8 @@ struct FolderWindow: View {
         // The folder's chats, for history, and to check the restored tabs against them.
         .task { if !DevSnapshot.singleTab { await workspace.value.refresh() } }
         .onChange(of: workspace.value.saved) { workspace.value.save() }
-        .onDisappear { workspace.value.closeAll() }
+        // The chats end with the window (`Workspace.window`), not with this view: SwiftUI may
+        // build it again while the window stays.
     }
 }
 

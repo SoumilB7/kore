@@ -32,8 +32,42 @@ package final class ChatTab: Identifiable {
 package final class Workspace {
     package let folder: URL
     package private(set) var tabs: [ChatTab]
-    /// The folder's window, once it's on screen (a storyline host sizes and snapshots it).
-    @ObservationIgnored package weak var window: NSWindow?
+    /// The folder's window, once it's on screen (a storyline host sizes and snapshots it). Its
+    /// close, not its view's, ends the chats.
+    @ObservationIgnored package weak var window: NSWindow? {
+        didSet {
+            guard let window, window !== oldValue else { return }
+            if let closer { NotificationCenter.default.removeObserver(closer) }
+            closer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) {
+                [weak self] _ in MainActor.assumeIsolated { self?.windowClosed() }
+            }
+        }
+    }
+    @ObservationIgnored private var closer: NSObjectProtocol?
+
+    /// Each open folder's workspace. SwiftUI may build a window's content again (switching to
+    /// another app and back has), and the chats in it must outlive that: only the window's
+    /// close ends them.
+    private static var open: [String: Workspace] = [:]
+
+    /// The folder's workspace while its window is open, else a new one with its saved tabs.
+    static func forWindow(_ folder: URL, restore: Bool) -> Workspace {
+        let key = folder.standardizedFileURL.path
+        if let workspace = open[key] { return workspace }
+        let workspace = Workspace(folder: folder, restore: restore)
+        open[key] = workspace
+        SessionLog.shared.window("opened", folder: folder, tabs: workspace.tabs.count)
+        return workspace
+    }
+
+    private func windowClosed() {
+        if let closer { NotificationCenter.default.removeObserver(closer) }
+        closer = nil
+        SessionLog.shared.window("closed", folder: folder, tabs: tabs.count)
+        closeAll()
+        let key = folder.standardizedFileURL.path
+        if Self.open[key] === self { Self.open[key] = nil }
+    }
     private(set) var activeID: UUID {
         // A tab's close question goes with a switch.
         didSet { if closing != nil, activeID != oldValue { closing = nil } }
@@ -295,7 +329,7 @@ package final class Workspace {
         let fresh = Self.tab(Saved.Tab(provider: chat.provider.rawValue, session: chat.sessionId, title: chat.title), in: folder).chat
         fresh?.draft = chat.draft
         fresh?.launchModel = chat.controls.modelId
-        chat.close()
+        chat.close(reason: "reload")
         tab.chat = fresh
     }
 
@@ -389,7 +423,7 @@ package final class Workspace {
         if saveQueued, Self.persists(folder) {
             UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: Self.key(Self.savedKey, folder))
         }
-        for tab in tabs where tab.agent == nil && tab.file == nil { tab.chat?.close() }
+        for tab in tabs where tab.agent == nil && tab.file == nil { tab.chat?.close(reason: "window closed") }
         files?.stop()
     }
 

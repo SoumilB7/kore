@@ -34,6 +34,23 @@ struct SessionLog: Sendable {
             ["cli": cli, "chat": chat ?? "-", "pid": pid.map(String.init) ?? "-", field.key: field.value, "asked": asked ? "yes" : "no"])
     }
 
+    /// Kore ending a chat's CLI and the chat with it: "tab closed", "window closed", "reload",
+    /// "archived", "gone from list".
+    func closing(_ cli: String, chat: String?, reason: String) {
+        log.write("closing", ["cli": cli, "chat": chat ?? "-", "reason": reason])
+    }
+
+    /// A folder window's chats made (`opened`, with its restored tabs) or ended (`closed`).
+    func window(_ event: String, folder: URL, tabs: Int) {
+        log.write("window-\(event)", ["folder": folder.lastPathComponent, "tabs": String(tabs)])
+    }
+
+    /// The history a chat waited for reached its transcript: its rows then, and the messages
+    /// sent meanwhile; `late`: they were shown before it came, after `Chat.heldPatience`.
+    func shown(_ cli: String, chat: String?, rows: Int, held: Int, late: Bool = false) {
+        log.write("shown", ["cli": cli, "chat": chat ?? "-", "rows": String(rows), "held": String(held), "late": late ? "yes" : nil])
+    }
+
     func relaunch(_ cli: String, chat: String?, reason: String) {
         log.write("relaunch", ["cli": cli, "chat": chat ?? "-", "reason": reason])
     }

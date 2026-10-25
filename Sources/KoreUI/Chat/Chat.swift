@@ -274,12 +274,28 @@ package final class Chat: Identifiable {
         store.continued(imported.divider(product: product), help: "Open the \(imported.record.sourceProduct) chat")
     }
 
-    /// The user's messages that waited for the history.
-    private func showHeld() {
+    /// The user's messages that waited for the history. `late`: the history hasn't come after
+    /// `heldPatience`, and they show without it rather than leave the chat blank.
+    private func showHeld(late: Bool = false) {
+        guard awaitingHistory else { return }
         awaitingHistory = false
         let waiting = held
         held = []
         waiting.forEach(dispatch)
+        SessionLog.shared.shown(provider.id, chat: sessionId, rows: transcript.entries.count, held: waiting.count, late: late)
+    }
+
+    /// How long a message sent before the history came waits for it.
+    static let heldPatience: Duration = .seconds(8)
+
+    /// A message held for the history: shown after `heldPatience` if the history hasn't come.
+    private func hold(_ message: ChatEvent) {
+        held.append(message)
+        guard held.count == 1 else { return }
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.heldPatience)
+            self?.showHeld(late: true)
+        }
     }
 
     private static func isReplay(_ event: ChatEvent) -> Bool {
@@ -470,7 +486,8 @@ package final class Chat: Identifiable {
         }
     }
 
-    func close() {
+    func close(reason: String = "tab closed") {
+        if !closed, backend != nil { SessionLog.shared.closing(provider.id, chat: sessionId, reason: reason) }
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil
         closed = true
@@ -536,7 +553,7 @@ package final class Chat: Identifiable {
             draft = ""
             command = nil
             let message = ChatEvent.userMessage(text: text, attachments: [])
-            if awaitingHistory { held.append(message) } else { dispatch(message) }
+            if awaitingHistory { hold(message) } else { dispatch(message) }
             compact(instructions: instructions)
             return
         }
@@ -565,7 +582,7 @@ package final class Chat: Identifiable {
             queued.map { .messageQueued(id: $0, text: text, attachments: shown) }
             ?? .userMessage(text: text, attachments: shown)
         if let queued { waiting[queued] = (text, sent) }
-        if awaitingHistory { held.append(message) } else { dispatch(message) }
+        if awaitingHistory { hold(message) } else { dispatch(message) }
         status.setRunning(true)
         let backend = connect()
         let previous = sending
