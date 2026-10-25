@@ -195,7 +195,7 @@ struct ReplayTurns: Step {
 }
 
 /// A turn whose steps fold into "Worked for…": a selection across it copies the turn's answer
-/// and not the folded steps. Opened, with its command's box open, the command and its output
+/// and earlier write-ups, without the folded commands. Opened, the command and its output
 /// copy as code blocks; closed again, the box is left out.
 final class SelectAcrossTools: ChatStoryline {
     static let before = "Let me look at the folder."
@@ -216,7 +216,7 @@ final class SelectAcrossTools: ChatStoryline {
             DragSelect(from: .lastAnswer(1, [0], at: Self.after, "two"), to: .answer(2, [0], at: Self.next, " is up")),
             CopySelection("two files.\n\n> Thanks\n\nAnything else"),
             DragSelect(from: .message(1, at: "What's here?", "here"), to: .lastAnswer(1, [0], at: Self.after, " files")),
-            CopySelection("> here?\n\nThere are two"),
+            CopySelection("> here?\n\n" + Self.before + "\n\nThere are two"),
             Press(.fold(turn: 1)),
             Press(.tool("Bash")),
             Expect("the command's box open") { story in try !story.activeChat().storyTranscript.selectableTexts(try Spot.tool("Bash").entry(story)).isEmpty },

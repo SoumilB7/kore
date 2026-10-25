@@ -69,8 +69,8 @@ struct TranscriptRulesTests {
 
     // MARK: Stop
 
-    /// Both CLIs' recorded stops fold alike: interrupted, the cut-off call stopped below the
-    /// rule. Codex's command completes after the turn ends; it stays stopped.
+    /// Both CLIs fold interrupted work alike. Any earlier assistant write-up stays readable;
+    /// Codex's command completes after the turn ends and stays stopped.
     @Test func aStoppedTurnFoldsTheSameForBothCLIs() throws {
         func folded(_ name: String) throws -> [String] {
             let s = Script(name.hasPrefix("codex") ? .codex : .claude)
@@ -79,7 +79,9 @@ struct TranscriptRulesTests {
         }
         let claude = try folded("claude-stop")
         #expect(claude == ["fold interrupted", "rule", "tool Bash stopped"])
-        #expect(try folded("codex-stop") == claude)
+        let codex = try folded("codex-stop")
+        #expect(codex.filter { !$0.hasPrefix("answer ") } == claude)
+        #expect(codex.contains("answer I’ll run that exact loop in the foreground."))
     }
 
     @Test func anInterruptClosesOpenCalls() {

@@ -1667,7 +1667,11 @@ final class TranscriptStore {
             turn: turn.id, label: label, outcome: foldOutcome(turn), denied: turn.denied, open: open, live: live,
             count: live && !tools.isEmpty ? Self.count(tools.count, failed: failed) : nil, failed: failed > 0, now: now)))
         let rest = work.dropFirst(prompts.count)
-        rows.append(contentsOf: open ? grouped(rest) : rest.filter(Self.pinned).compactMap(visibleRow))
+        // Completed assistant write-ups stay readable when commands and thinking fold away.
+        // Keep their own entries and order so opening the work cannot duplicate the text.
+        rows.append(contentsOf: open ? grouped(rest) : rest.filter {
+            Self.pinned($0) || (turn.finished && $0.kind == .answer)
+        }.compactMap(visibleRow))
         if let split {
             rows.append(.rule(turn: turn.id))
             let answer = grouped(group[split...])
