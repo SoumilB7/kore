@@ -72,7 +72,14 @@ struct LoginCallbackTests {
         defer {
             if process.isRunning { process.terminate(); process.waitUntilExit() }
         }
-        let line = String(decoding: output.fileHandleForReading.availableData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        // The whole port line: under load its newline can arrive in a later read.
+        var head = Data()
+        while !head.contains(UInt8(ascii: "\n")) {
+            let chunk = output.fileHandleForReading.availableData
+            if chunk.isEmpty { break }
+            head.append(chunk)
+        }
+        let line = String(decoding: head, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         let port = try #require(Int(line))
         var auth = URLComponents(string: "https://example.com/authorize")!
         auth.queryItems = [URLQueryItem(name: "state", value: "current"),
