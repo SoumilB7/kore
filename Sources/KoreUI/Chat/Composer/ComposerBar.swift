@@ -23,7 +23,14 @@ struct ComposerBar: View {
                         .hitBox()
                 }
                 .buttonStyle(.plain)
-                .onHover { plusHovered.value = $0 }
+                .onHover { hovering in
+                    plusHovered.value = hovering
+                    // Resting on +: the picker connects now, so the click opens it at once.
+                    guard hovering else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [plusHovered] in
+                        MainActor.assumeIsolated { if plusHovered.value { AttachPanel.warm() } }
+                    }
+                }
                 .help("Attach")
                 .accessibilityLabel(Text("Attach files"))
                 .storyID(StoryID.Composer.attach)

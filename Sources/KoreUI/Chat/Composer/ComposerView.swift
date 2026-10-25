@@ -540,13 +540,10 @@ struct ComposerView: View {
     }
 
     private func attach() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
-        panel.directoryURL = chat.folder
-        if panel.runModal() == .OK { chat.attach(panel.urls) }
-        focused.wrappedValue = true
+        AttachPanel.choose(in: chat.folder) { [chat, focused] urls in
+            if !urls.isEmpty { chat.attach(urls) }
+            focused.wrappedValue = true
+        }
     }
 
     // MARK: Slash commands

@@ -53,6 +53,7 @@ package final class AppModel {
         Self.shared = self
         UILog.start()
         OptionsMenu.install()
+        AttachPanel.install()
         accounts.watch()
     }
 
