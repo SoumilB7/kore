@@ -76,29 +76,35 @@ struct ModelPicker: View {
                         .gridCellColumns(2)
                         .padding(.vertical, Space.sm)
                 }
-                if !scale.isEmpty {
+                if !scale.isEmpty || controls.fastModeShown {
                     GridRow(alignment: .top) {
                         let offered = controls.currentModel?.efforts ?? []
-                        Text("Effort")
+                        Text(scale.isEmpty ? "Speed" : "Effort")
                             .font(TextStyle.bodyMedium)
-                            .foregroundStyle(offered.isEmpty ? Theme.tertiary : Theme.text)
+                            .foregroundStyle(offered.isEmpty && !scale.isEmpty ? Theme.tertiary : Theme.text)
                             .frame(minHeight: Size.hitTarget)
-                        EffortSlider(
-                            scale: scale, offered: offered, current: controls.effort, lit: state.lit == .effort,
-                            set: { chat.setEffort($0) })
+                        // Fast mode beside the effort, a gap apart: one bolt, filled while it's on.
+                        HStack(alignment: .top, spacing: Space.xl) {
+                            if !scale.isEmpty {
+                                EffortSlider(
+                                    scale: scale, offered: offered, current: controls.effort, lit: state.lit == .effort,
+                                    set: { chat.setEffort($0) })
+                            } else {
+                                Spacer(minLength: 0)
+                            }
+                            if controls.fastModeShown {
+                                FastBolt(
+                                    on: controls.fastMode, paused: controls.fastPaused, unavailable: controls.fastUnavailable,
+                                    enabled: controls.fastModeEnabled, lit: state.lit == .fast) {
+                                    flipFast()
+                                } hover: {
+                                    hover(.fast, $0)
+                                }
+                                .storyID(StoryID.Composer.fastMode)
+                                .tabStop(StoryID.Composer.fastMode) { flipFast() }
+                            }
+                        }
                     }
-                }
-                if controls.fastModeShown {
-                    FastModeRow(
-                        on: controls.fastMode, paused: controls.fastPaused, unavailable: controls.fastUnavailable,
-                        enabled: controls.fastModeEnabled, lit: state.lit == .fast) {
-                        flipFast()
-                    } hover: {
-                        hover(.fast, $0)
-                    }
-                    .gridCellColumns(2)
-                    .storyID(StoryID.Composer.fastMode)
-                    .tabStop(StoryID.Composer.fastMode) { flipFast() }
                 }
             }
         }
@@ -297,9 +303,9 @@ private struct VersionChip: View {
     }
 }
 
-/// Fast mode: its name in line with the families', a switch at the end; the hover says what it
-/// costs, or that a rate limit has it at standard speed for now.
-private struct FastModeRow: View {
+/// Fast mode: a bolt, hollow while off and filled in the accent while on; the hover says what
+/// it costs, or that a rate limit has it at standard speed for now.
+private struct FastBolt: View {
     let on: Bool
     let paused: Bool
     let unavailable: String?
@@ -310,62 +316,20 @@ private struct FastModeRow: View {
 
     var body: some View {
         Button(action: flip) {
-            HStack(spacing: Space.md) {
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    Text("Fast mode")
-                        .font(TextStyle.bodyMedium)
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(1)
-                    if let unavailable {
-                        Text(unavailable)
-                            .font(TextStyle.caption)
-                            .foregroundStyle(Theme.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                Spacer(minLength: Space.xl)
-                Toggle("", isOn: Binding(get: { on }, set: { if $0 != on { flip() } }))
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .tint(Theme.accent)
-            }
-            .padding(.horizontal, Space.md)
-            .frame(maxWidth: .infinity, minHeight: Size.Picker.row, alignment: .leading)
-            .hoverFill(lit, Theme.Row.selected(.surface))
-            .contentShape(Rectangle())
+            Image(systemName: on ? "bolt.fill" : "bolt")
+                .font(TextStyle.title)
+                .foregroundStyle(on ? Theme.accent : lit ? Theme.text : Theme.secondary)
+                .frame(width: Size.hitTarget, height: Size.hitTarget)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        // Its name in line with the families' names, its fill reaching past it.
-        .padding(.horizontal, -Space.md)
         .onHover(perform: hover)
-        .help(unavailable ?? (paused ? "Standard speed for now, after a rate limit" : "Uses extra usage"))
+        .help(unavailable ?? (paused ? "Standard speed for now, after a rate limit" : on ? "Fast mode · uses extra usage" : "Fast mode: uses extra usage"))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Fast mode"))
         .accessibilityValue(Text(unavailable ?? (on ? "On" : "Off")))
         .accessibilityAddTraits(.isButton)
-    }
-}
-
-/// The "…" chip of a row whose versions don't all fit: pressed, the row wraps to show them.
-private struct MoreChip: View {
-    let unfold: () -> Void
-    @StateObject private var hovered = Local(false)
-
-    var body: some View {
-        Button(action: unfold) {
-            Text("…")
-                .font(TextStyle.label)
-                .foregroundStyle(hovered.value ? Theme.text : Theme.tertiary)
-                .padding(.horizontal, Space.md)
-                .frame(height: Size.Picker.chip)
-                .hoverFill(hovered.value, Theme.Row.selected(.surface))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered.value = $0 }
-        .help("More versions")
     }
 }
 

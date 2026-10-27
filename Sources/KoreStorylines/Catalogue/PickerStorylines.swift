@@ -393,8 +393,8 @@ final class FastModeSwitch: ChatStoryline {
     }
 }
 
-/// "Allow commands in Plan", under the mode popup's modes: a click flips it and the popup stays.
-/// Planning with it on, a command's permission is answered allow at once, with no card, and its
+/// "Allow commands while planning", a line above the composer only while Plan is the mode: a
+/// click flips it. Planning with it on, a command's permission is answered allow at once, with no card, and its
 /// row still shows what ran; a question still waits for its card.
 final class PlanAllowSwitch: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .approvals] }
@@ -420,19 +420,19 @@ final class PlanAllowSwitch: ChatStoryline {
         }
         let submit = StoryID.Approval.card("q1").part(.submit)
         var steps: [any Step] = super.steps() + [WaitForFocus(.id(StoryID.Composer.field))]
-        // 1 · Plan on (Claude's mode closes the popup; Codex's switch stays), then the switch.
+        // 1 · No line until Plan is on; then the line above the composer, flipped on.
+        steps += [ExpectElement(row, .absent)]
         steps += open + [Press(.id(StoryID.Composer.modeRow("plan")))]
-        if !codex { steps += [ExpectElement(popup, .absent)] + open }
+        if codex { steps += [Key(.escape)] }
         steps += [
+            ExpectElement(popup, .absent),
             Expect("planning") { $0.app.chat?.storyPlanning == true },
-            reads("the switch, off", "off"),
+            WaitForElement(row),
+            reads("the line, off", "off"),
             Press(row),
             reads("on", "on"),
-            Expect("the popup still open") { $0.app.chat?.isModePickerOpen == true },
             FadesEnd(),
-            Snapshot("mode-picker-plan-allow"),
-            Key(.escape),
-            ExpectElement(popup, .absent),
+            Snapshot("plan-allow-line"),
         ]
         // 2 · A command's permission: allowed at once, no card; its row shows it ran.
         steps += [

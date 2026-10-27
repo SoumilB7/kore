@@ -108,7 +108,7 @@ extension StoryID {
         /// The mode popup, and its rows by the mode's id (Codex's Plan switch by "plan").
         package static let modes = StoryID(.composer, "modes")
         package static func modeRow(_ id: String) -> StoryID { StoryID(.composer, "modes.row", key: id) }
-        /// The mode popup's "Allow commands in Plan" switch.
+        /// "Allow commands while planning", above the composer while Plan is the mode.
         package static let planAllow = StoryID(.composer, "modes.planallow")
         package static let context = StoryID(.composer, "context")
         /// The command chip before the text.

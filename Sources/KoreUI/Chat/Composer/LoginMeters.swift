@@ -14,7 +14,7 @@ struct LoginMeters: View {
                 note("Sign in to see usage")
             } else {
                 switch state {
-                case .loading: note("Reading usage…")
+                case .loading: reading
                 case .unavailable: note("Usage unavailable")
                 case .ready(let reading, let at):
                     let bars = LoginUsage.bars(reading)
@@ -56,6 +56,20 @@ struct LoginMeters: View {
     static func title(_ bar: PlanLimit, now: Date) -> String {
         let reset = UsageText.resetsShort(bar.resetsAt, now: now)
         return UsageText.label(bar.title) + (reset.isEmpty ? "" : " (\(reset))")
+    }
+
+    /// While the reading comes: the two rows as they'll stand, their bars hatched.
+    private var reading: some View {
+        ForEach(["Session", "Weekly"], id: \.self) { title in
+            HStack(spacing: Space.sm) {
+                Text(title).lineLimit(1).frame(width: Size.usageTitleMax, alignment: .leading)
+                UsageBar(fraction: 0, kore: 1, hatch: 1)
+                    .frame(minWidth: Size.usageBarMin, maxWidth: .infinity)
+                Text("100%").hidden().monospacedDigit().fixedSize()
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(title), reading usage")
+        }
     }
 
     private func note(_ words: String) -> some View {

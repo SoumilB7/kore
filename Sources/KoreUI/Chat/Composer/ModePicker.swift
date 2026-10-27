@@ -37,25 +37,12 @@ struct ModePicker: View {
                     }
                     .storyID(StoryID.Composer.modeRow(plan.id))
                     .tabStop(StoryID.Composer.modeRow(plan.id)) { chat.setPlanMode(!chat.controls.planMode) }
-                } else {
-                    Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
                 }
-                PlanAllowRow(on: chat.controls.planAllow, lit: state.lit == .row(allowIndex)) {
-                    flipAllow()
-                } hover: {
-                    hover(.row(allowIndex), $0)
-                }
-                .storyID(StoryID.Composer.planAllow)
-                .tabStop(StoryID.Composer.planAllow) { flipAllow() }
             }
         }
     }
 
-    /// The "Allow commands in Plan" row: after the modes and Codex's Plan switch.
-    private var allowIndex: Int { modes.count + (chat.provider.planToggle == nil ? 0 : 1) }
-    private var count: Int { allowIndex + 1 }
-
-    private func flipAllow() { chat.setPlanAllow(!chat.controls.planAllow) }
+    private var count: Int { modes.count + (chat.provider.planToggle == nil ? 0 : 1) }
 
     /// The pointer moves the one highlight, unless it rests where the keys moved it from.
     private func hover(_ spot: PickerSpot, _ inside: Bool) {
@@ -161,42 +148,6 @@ private struct PlanRow: View {
         .onHover(perform: hover)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(mode.label))
-        .accessibilityValue(Text(on ? "On" : "Off"))
-        .accessibilityAddTraits(.isButton)
-    }
-}
-
-/// "Allow commands in Plan": while planning, Kore answers every permission with allow.
-private struct PlanAllowRow: View {
-    let on: Bool
-    let lit: Bool
-    let flip: () -> Void
-    let hover: (Bool) -> Void
-
-    var body: some View {
-        Button(action: flip) {
-            HStack(spacing: Space.md) {
-                Text("Allow commands in Plan")
-                    .font(on ? TextStyle.bodyMedium : TextStyle.body)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                Spacer(minLength: Space.xl)
-                Toggle("", isOn: Binding(get: { on }, set: { if $0 != on { flip() } }))
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .tint(Theme.accent)
-            }
-            .padding(.horizontal, Space.lg)
-            .frame(maxWidth: .infinity, minHeight: Size.Picker.row, alignment: .leading)
-            .hoverFill(lit, Theme.Row.selected(.surface))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover(perform: hover)
-        .help("Runs every command without asking while planning")
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("Allow commands in Plan"))
         .accessibilityValue(Text(on ? "On" : "Off"))
         .accessibilityAddTraits(.isButton)
     }

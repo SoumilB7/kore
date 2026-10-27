@@ -65,6 +65,9 @@ struct ChatView: View {
                 if Self.offersImport(chat) {
                     ImportLine(state: chat.importer) { openImport(chat) }
                 }
+                if chat.controls.planning {
+                    PlanAllowLine(chat: chat)
+                }
                 ComposerView(chat: chat, workspace: workspace, focused: $composerFocused) { view($0, of: chat, pending: true) }
                     // Hidden under another tab, it takes no focus.
                     .disabled(active == nil)

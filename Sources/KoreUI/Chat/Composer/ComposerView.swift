@@ -287,12 +287,12 @@ struct ComposerView: View {
             if acceptSlash() == .ignored { chat.send() }
             return true
         // Shift+Tab switches mode, as in both CLIs; plain Tab accepts a slash command, else
-        // moves on as a field's Tab does.
+        // indents by four spaces, as in an editor.
         case #selector(NSResponder.insertBacktab(_:)):
             chat.cycleMode()
             return true
         case #selector(NSResponder.insertTab(_:)):
-            if acceptSlash() == .ignored { view.window?.selectNextKeyView(nil) }
+            if acceptSlash() == .ignored { view.insertText("    ", replacementRange: view.selectedRange()) }
             return true
         case #selector(NSResponder.cancelOperation(_:)):
             // Taken either way: the text view's own Esc would open a completion list.
