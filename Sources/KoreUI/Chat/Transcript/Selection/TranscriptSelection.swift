@@ -323,6 +323,13 @@ package final class TranscriptSelection: ObservableObject {
     /// Where the chat's window opens a link (`Workspace.openLink`: a file in a Kore tab); nil
     /// for a transcript outside one, whose links go to the system.
     var openLink: ((URL) -> Void)?
+    /// The chat's folder, where a link's relative path is.
+    var folder: URL?
+
+    /// A link to a file that's there: its right-click menu (`MediaMenu`); nil for anything else.
+    func fileMenu(_ url: URL) -> [OptionItem]? {
+        MediaMenu.items(link: url, folder: folder) { [weak self] in self?.open($0) }
+    }
 
     /// Opens a link clicked in a text. Under storylines the system never gets one: it's noted.
     func open(_ url: URL) {

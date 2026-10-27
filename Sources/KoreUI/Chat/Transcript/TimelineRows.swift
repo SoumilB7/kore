@@ -497,12 +497,20 @@ struct MessageHeader: View {
         }
     }
 
+    /// A chip's file in a Kore tab; a picture known only from history, in the image viewer.
+    static func openInKore(_ attachment: Attachment, _ actions: TranscriptActions) -> (() -> Void)? {
+        if let url = attachment.url, let openLink = actions.openLink { return { openLink(url) } }
+        return attachment.kind == .image && attachment.thumbnail != nil ? { actions.openImage(attachment) } : nil
+    }
+
     private var user: some View {
         VStack(alignment: .leading, spacing: Space.md) {
             if !entry.attachments.isEmpty && place == .row {
                 HStack(spacing: Space.md) {
                     ForEach(entry.attachments) { attachment in
                         AttachmentChip(attachment: attachment, open: { actions.openImage(attachment) })
+                            .koreContextMenu("attachment") { MediaMenu.items(.init(attachment), openInKore: Self.openInKore(attachment, actions)) }
+                            .storyID(StoryID.Transcript.attachment(attachment.name))
                     }
                 }
             }
@@ -888,6 +896,7 @@ struct ToolHeader: View {
             if added > 0 || removed > 0 { ChangeCounts(added: added, removed: removed) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(FileMenu(url: path.map { OpenInEditor.url($0, in: folder) }))
     }
 
     private var selectionLine: AttributedString {
@@ -923,6 +932,21 @@ struct ToolHeader: View {
         var gap = AttributedString(" ")
         gap.font = TextStyle.codeSmall
         return name + gap + rest
+    }
+}
+
+/// A tool's file: right-click for its menu (`MediaMenu`), when the file is there. Resolved at
+/// the click, so a row costs no file check while it draws.
+private struct FileMenu: ViewModifier {
+    let url: URL?
+    @Environment(\.transcriptSelection) private var selection
+
+    func body(content: Content) -> some View {
+        if let url {
+            content.koreContextMenu("file") { selection?.fileMenu(url) ?? [] }
+        } else {
+            content
+        }
     }
 }
 

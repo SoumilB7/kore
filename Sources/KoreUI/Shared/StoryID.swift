@@ -167,6 +167,8 @@ extension StoryID {
     package enum Transcript {
         /// `.part(.copy)` and `.part(.fork)` on both.
         package static func user(_ entry: UUID) -> StoryID { StoryID(.transcript, "user", key: entry.uuidString) }
+        /// An image or file chip on a sent message, by its name; right-click opens its menu.
+        package static func attachment(_ name: String) -> StoryID { StoryID(.transcript, "attachment", key: name) }
         package static func answer(_ entry: UUID) -> StoryID { StoryID(.transcript, "answer", key: entry.uuidString) }
         package static func fold(_ turn: String) -> StoryID { StoryID(.transcript, "fold", key: turn) }
         package static func tool(_ id: String) -> StoryID { StoryID(.transcript, "tool", key: id) }
@@ -346,7 +348,7 @@ extension StoryID {
             StoryID(.composer, "modes.row", key: k),
             StoryID(.composer, "usage.reset", key: k), StoryID(.composer, "usage.reset", key: k).part(.use),
             StoryID(.composer, "usage.reset", key: k).part(.allow), StoryID(.composer, "usage.reset", key: k).part(.cancel),
-            StoryID(.transcript, "user", key: k), StoryID(.transcript, "user", key: k).part(.copy),
+            StoryID(.transcript, "user", key: k), StoryID(.transcript, "attachment", key: k), StoryID(.transcript, "user", key: k).part(.copy),
             StoryID(.transcript, "user", key: k).part(.fork), StoryID(.transcript, "answer", key: k),
             StoryID(.transcript, "answer", key: k).part(.copy), StoryID(.transcript, "answer", key: k).part(.fork),
             StoryID(.transcript, "fold", key: k), StoryID(.transcript, "tool", key: k),

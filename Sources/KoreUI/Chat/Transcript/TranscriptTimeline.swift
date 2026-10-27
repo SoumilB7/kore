@@ -119,7 +119,7 @@ struct TranscriptTimeline: View, Equatable {
                 // One text selection over every row: rows report their texts in this space, and
                 // the responder at its corner follows the pointer in it.
                 .background(alignment: .topLeading) {
-                    SelectionResponder(selection: store.selection, hidden: hidden, openLink: actions.openLink)
+                    SelectionResponder(selection: store.selection, hidden: hidden, openLink: actions.openLink, folder: actions.folder)
                         .frame(width: Stroke.hairline, height: Stroke.hairline)
                     ScrollShift.Finder(shift).frame(width: Stroke.hairline, height: Stroke.hairline)
                 }

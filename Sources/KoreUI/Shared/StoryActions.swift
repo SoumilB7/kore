@@ -42,6 +42,9 @@ extension Chat {
     /// The context card's auto-compact point (a percent), nil for Off.
     package func storySetAutoCompact(_ point: Int?) { setAutoCompact(point) }
 
+    /// Files picked with +.
+    package func storyAttach(_ urls: [URL]) { attach(urls) }
+
     /// The composer's Send (or a queued send, while a turn runs).
     package func storySend(_ text: String) {
         draft = text

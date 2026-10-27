@@ -115,6 +115,8 @@ struct SelectionResponder: NSViewRepresentable {
     let hidden: Bool
     /// Where its links open (the chat's window).
     var openLink: ((URL) -> Void)?
+    /// The chat's folder, for its links' relative paths.
+    var folder: URL?
     /// A preview can take a pending keyboard request once its responder actually mounts.
     var onReady: ((SelectionResponderView) -> Void)?
 
@@ -124,6 +126,7 @@ struct SelectionResponder: NSViewRepresentable {
         view.hiddenTab = hidden
         view.onReady = onReady
         selection.openLink = openLink
+        selection.folder = folder
         return view
     }
 
@@ -132,6 +135,7 @@ struct SelectionResponder: NSViewRepresentable {
         view.hiddenTab = hidden
         view.onReady = onReady
         selection.openLink = openLink
+        selection.folder = folder
         view.notifyReady()
     }
 }
@@ -324,11 +328,20 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
     }
 
     private func showCopyMenu(_ event: NSEvent) -> Bool {
-        guard let selection, isTranscript(event), selection.hasSelection,
-              let (entry, path) = selection.text(at: point(event)), selection.selected(entry, path) != nil,
-              let window else { return false }
+        guard let selection, isTranscript(event), let window else { return false }
+        guard selection.hasSelection, let (entry, path) = selection.text(at: point(event)), selection.selected(entry, path) != nil else {
+            return showFileMenu(event)
+        }
         OptionsMenu.shared.show([OptionItem("Copy") { [weak self] in self?.copy(nil) }],
                                 at: event.locationInWindow, in: window, source: "selection")
+        return true
+    }
+
+    /// A right-click on a link to a file that's there: its menu (`MediaMenu`).
+    private func showFileMenu(_ event: NSEvent) -> Bool {
+        guard let selection, isTranscript(event), let window, let url = selection.link(at: point(event)),
+              let items = selection.fileMenu(url) else { return false }
+        OptionsMenu.shared.show(items, at: event.locationInWindow, in: window, source: "file-link")
         return true
     }
 
