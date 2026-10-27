@@ -82,14 +82,13 @@ struct LoginMeters: View {
     /// `Size.usageTitleMax`), so the bars start together and get the rest of the row.
     static func labelWidth(_ states: [LoginUsage.State], now: Date) -> CGFloat {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        let widest = states.flatMap { state -> [PlanLimit] in
+        let names = states.flatMap { state -> [PlanLimit] in
             if case .ready(let reading, _) = state { return LoginUsage.bars(reading) }
             return []
         }
         .map { title($0, now: now) }
         // The loading rows' names too, so a card still reading doesn't squeeze them.
-        .appending(contentsOf: ["Session", "Weekly"])
-        .map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        let widest = (names + ["Session", "Weekly"]).map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
         return min(ceil(widest) + 1, Size.usageTitleMax)
     }
 
