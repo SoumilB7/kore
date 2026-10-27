@@ -185,11 +185,12 @@ final class AtSearch: ObservableObject {
         candidates.files = files
         candidates.folders = folders
         last = (query, candidates)
+        let snapshot = candidates
         ranking?.cancel()
         ranking = Task { [weak self] in
             if wait { try? await Task.sleep(for: Self.debounce) }
             guard !Task.isCancelled else { return }
-            let ranked = await Task.detached(priority: .userInitiated) { AtRank.rank(query, candidates) }.value
+            let ranked = await Task.detached(priority: .userInitiated) { [snapshot] in AtRank.rank(query, snapshot) }.value
             guard let self, !Task.isCancelled else { return }
             if ranked != results { results = ranked }
         }
