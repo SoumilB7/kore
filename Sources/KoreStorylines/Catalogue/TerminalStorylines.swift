@@ -137,7 +137,7 @@ final class AgentCommandTerminal: ChatStoryline {
             Press(.id(StoryID.AgentMap.chat)),
             Press(.id(StoryID.AgentMap.doneCommands)),
             Press(.id(StoryID.AgentMap.command(Self.endedID).part(.open))),
-            Expect("a fresh shell with the command prepared") {
+            Expect("a fresh shell showing the command as run, then prepared at its prompt") {
                 $0.app.workspace?.storyTerminal.shell == true && $0.app.workspace?.storyTerminal.count == 2
                     && $0.app.workspace?.storyTerminal.text.contains("terminal-should-not-run") == true
             },
@@ -152,6 +152,51 @@ final class AgentCommandTerminal: ChatStoryline {
             Expect("the prepared command runs only on Return", found: { "focused=\($0.app.workspace?.storyTerminal.focused ?? false) screen=" + ($0.app.workspace?.storyTerminal.text ?? "") }) {
                 FileManager.default.fileExists(atPath: $0.folder.appendingPathComponent("terminal-should-not-run").path)
             },
+        ]
+    }
+}
+
+/// An ended command opens as a shell shows one it ran: its line, the output Kore kept, its exit
+/// in a faint line, then a live prompt. Nothing runs again.
+final class EndedCommandHistory: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents] }
+    static let id = "terminal-history"
+    static let line = "/usr/bin/touch history-should-not-run"
+    override class var script: CLIScript {
+        let ended = ActiveCommand(id: id, kind: .shell, title: "Build the site", command: line, startedAt: .now, owner: .main,
+                                  output: .stream)
+        return CLIScript(turns: [[.startTurn, .event(.commandStarted(ended)),
+                                 .event(.commandOutput(id: id, "compiled 12 pages\nwarning: one link is broken\n")),
+                                 .event(.commandEnded(id: id, .failed(exit: 2), at: .now)),
+                                 .stream(.answer, "The build ended."), .finishTurn(.completed)]])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Do("Use an isolated shell home") { try $0.app.workspace?.storyPrepareTerminals() },
+            Send("Build the site"), TurnFinished(1),
+            Press(.id(StoryID.Titlebar.agents)),
+            Press(.id(StoryID.AgentMap.chat)),
+            Press(.id(StoryID.AgentMap.doneCommands)),
+            Press(.id(StoryID.AgentMap.command(Self.id).part(.open))),
+            ExpectElement(.id(StoryID.Terminal.panel), .visible),
+            Expect("a live shell", found: { $0.app.workspace?.storyTerminal.text ?? "" }) {
+                $0.app.workspace?.storyTerminal.shell == true
+            },
+            Expect("the command line, its output and its exit, then the prompt", found: { $0.app.workspace?.storyTerminal.text ?? "" }) {
+                let text = $0.app.workspace?.storyTerminal.text ?? ""
+                guard let line = text.range(of: "$ " + Self.line), let output = text.range(of: "compiled 12 pages"),
+                      let warning = text.range(of: "warning: one link is broken"), let exit = text.range(of: "exit 2"),
+                      let prompt = text.range(of: "ready>", range: exit.upperBound..<text.endIndex) else { return false }
+                return line.upperBound <= output.lowerBound && output.upperBound <= warning.lowerBound
+                    && warning.upperBound <= exit.lowerBound && exit.upperBound <= prompt.lowerBound
+            },
+            Expect("showing it never ran it again") {
+                !FileManager.default.fileExists(atPath: $0.folder.appendingPathComponent("history-should-not-run").path)
+            },
+            Expect("the shell owns keyboard focus") { $0.app.workspace?.storyTerminal.focused == true },
+            Do("Paint the offscreen native terminal") { $0.app.workspace?.storyPaintTerminal() },
+            Snapshot("ended-command-history"),
         ]
     }
 }

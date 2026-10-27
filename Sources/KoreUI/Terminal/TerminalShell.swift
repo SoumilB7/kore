@@ -20,12 +20,15 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate {
     @ObservationIgnored private let arguments: [String]
     @ObservationIgnored private var environment: [String: String]
     @ObservationIgnored private var startup: TerminalDraft?
+    /// What the screen shows before the shell's first prompt (`TerminalHistory`): written once, at start.
+    @ObservationIgnored private var history: String?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var closed = false
 
-    init(folder: URL, draft: String? = nil, executable: String? = nil, arguments: [String] = ["-l"],
+    init(folder: URL, draft: String? = nil, history: String? = nil, executable: String? = nil, arguments: [String] = ["-l"],
          environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.folder = folder
+        self.history = history
         var environment = environment
         // A prepared command uses zsh's BUFFER, which cannot execute the text. Plain shells
         // follow the user's login shell. Never inject the command into a shell argument.
@@ -66,6 +69,9 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate {
     func start() {
         guard !started, !closed, !ended else { return }
         started = true
+        // At its laid-out width, so the scrollback wraps as the shell's own lines do.
+        if let history { view.feed(text: history) }
+        history = nil
         let started = Disclaim.wrap(executable, arguments)
         view.startProcess(executable: started.executable, args: started.arguments,
                           environment: environment.map { "\($0.key)=\($0.value)" }, currentDirectory: folder.path)

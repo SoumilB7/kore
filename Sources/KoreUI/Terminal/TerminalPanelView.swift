@@ -99,6 +99,7 @@ private struct TerminalPanelView: View {
                         .storyID(StoryID.Terminal.rename)
                 }
                 if active.shell == nil {
+                    if active.command?.isLive == true { BlinkingDot() }
                     Text(active.command?.isLive == true ? "Read only · running" : "Read only · ended")
                         .font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1)
                     if let command = active.command, command.canStop, let chat = active.chat {

@@ -63,13 +63,13 @@ final class TerminalEntry: Identifiable {
         let tail = await chat.commandTail(command.id, lines: Layout.Terminal.tailLines)
         guard !Task.isCancelled else { return }
         outputAvailable = tail != nil
-        guard let tail else { return }
-        truncated = tail.truncated || tail.lines.count >= Layout.Terminal.tailLines
-        let text = tail.lines.joined(separator: "\n")
+        truncated = tail.map { $0.truncated || $0.lines.count >= Layout.Terminal.tailLines } ?? false
+        // Its prompt line, its output, and its exit line once it ends; the footer says the rest.
+        let text = TerminalHistory.text(chat.commands.command(command.id) ?? command, tail: OutputTail(lines: tail?.lines ?? []))
         guard text != lastText else { return }
         lastText = text
         output?.resetToInitialState()
-        output?.feed(text: text.replacingOccurrences(of: "\n", with: "\r\n"))
+        output?.feed(text: text)
     }
 }
 
@@ -115,8 +115,8 @@ final class TerminalPanel {
         UILog.event("terminal-hide", ["count": "\(entries.count)"])
     }
 
-    @discardableResult func newShell(draft: String? = nil) -> TerminalEntry {
-        let entry = TerminalEntry(shell: TerminalShell(folder: folder, draft: draft, environment: environment))
+    @discardableResult func newShell(draft: String? = nil, history: String? = nil) -> TerminalEntry {
+        let entry = TerminalEntry(shell: TerminalShell(folder: folder, draft: draft, history: history, environment: environment))
         entry.view.suspendsRenderingWhenNotVisible = suspendsRenderingWhenNotVisible
         entries.append(entry)
         select(entry)
@@ -125,7 +125,8 @@ final class TerminalPanel {
     }
 
     /// Called only by the command control in Agents. A live command stays read-only; an ended
-    /// command makes a fresh shell with its text prepared but never executed.
+    /// command makes a fresh shell that first shows it as run (its line, its kept output, its
+    /// exit), then a prompt with its text prepared but never executed.
     func open(_ command: ActiveCommand, from chat: Chat) {
         // The map belongs to the upper pane; close it before that pane changes size.
         var transaction = Transaction(animation: nil)
@@ -140,10 +141,18 @@ final class TerminalPanel {
                 entries.append(entry)
                 select(entry)
             }
+            UILog.event("terminal-command", ["command": command.id, "chat": chat.id.uuidString, "live": "true"])
         } else {
-            newShell(draft: command.command ?? command.title)
+            Task { [weak self, weak chat] in
+                guard let chat else { return }
+                let tail = await chat.commandTail(command.id, lines: Layout.Terminal.tailLines)
+                guard let self else { return }
+                self.newShell(draft: command.command ?? command.title,
+                              history: TerminalHistory.text(chat.commands.command(command.id) ?? command, tail: tail))
+                UILog.event("terminal-command", ["command": command.id, "chat": chat.id.uuidString, "live": "false",
+                                                 "lines": "\(tail?.lines.count ?? -1)"])
+            }
         }
-        UILog.event("terminal-command", ["command": command.id, "chat": chat.id.uuidString, "live": "\(command.isLive)"])
     }
 
     func select(_ entry: TerminalEntry) {

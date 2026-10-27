@@ -266,6 +266,29 @@ struct TerminalTests {
         #expect(panel.renaming == nil && panel.nameDraft.isEmpty && panel.entries.isEmpty)
     }
 
+    @Test func anEndedCommandShowsItsLineOutputAndExitBeforeThePrompt() async throws {
+        let folder = try temporary()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try "PROMPT='ready> '\nRPROMPT=''\n".write(to: folder.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        var command = ActiveCommand(id: "c1", kind: .shell, title: "Build", command: "make site\u{1b}[2J", startedAt: Date(timeIntervalSince1970: 0),
+                                    owner: .main, output: .stream)
+        command.state = .failed(exit: 2)
+        command.endedAt = Date(timeIntervalSince1970: 3)
+        let history = TerminalHistory.text(command, tail: OutputTail(lines: ["one", "two"], truncated: true))
+        #expect(TerminalHistory.status(command) == "exit 2 · 3s")
+        #expect(!TerminalHistory.line(command).contains("\u{1b}"))
+        let shell = TerminalShell(folder: folder, draft: "make site", history: history, environment: environment(folder))
+        defer { shell.close(immediately: true) }
+        shell.start()
+        #expect(await until { text(shell).contains("ready>") })
+        let screen = text(shell)
+        let order = ["$ make site", "…", "one", "two", "exit 2 · 3s", "ready> make site"].map { screen.range(of: $0)?.lowerBound }
+        #expect(order.allSatisfy { $0 != nil } && zip(order, order.dropFirst()).allSatisfy { $0! < $1! }, "\(screen)")
+        command.state = .running
+        #expect(TerminalHistory.status(command) == nil)
+        #expect(TerminalHistory.text(command, tail: nil).contains("Output is no longer available"))
+    }
+
     @Test func panelHeightAlwaysLeavesRoomForTheChat() {
         #expect(Layout.Terminal.fitting(240, available: 760, maximized: false) == 240)
         #expect(Layout.Terminal.fitting(900, available: 400, maximized: false) == 280)
