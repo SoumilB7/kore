@@ -115,6 +115,8 @@ extension StoryID {
         package static let chip = StoryID(.composer, "chip")
         /// A row of the slash menu, by the command's name.
         package static func command(_ name: String) -> StoryID { StoryID(.composer, "command", key: name) }
+        /// A row of the @ menu, by its kind and key ("file:README.md", "model:haiku").
+        package static func mention(_ id: String) -> StoryID { StoryID(.composer, "mention", key: id) }
         /// The usage popup; `.part(.open)` is its "Manage usage" link, `.part(.extended)` the button
         /// to its extended view, `.part(.reset)` its count of full resets, which unfolds them.
         package static let usage = StoryID(.composer, "usage")

@@ -14,6 +14,9 @@ struct ComposerView: View {
     var focused: FocusState<Bool>.Binding
     let openImage: (Attachment) -> Void
     @StateObject private var slashSelection = Local(0)
+    /// The @ menu's search and its lit row.
+    @StateObject private var mentions = AtSearch()
+    @StateObject private var mentionSelection = Local(0)
     /// The window and the ⌘V monitor: kept for the monitor, never shown, so setting them as the
     /// composer appears doesn't draw it again.
     @StateObject private var window = Held<NSWindow?>(nil)
@@ -93,6 +96,15 @@ struct ComposerView: View {
                         // Its bottom a gap above the box's top, its height its own.
                         .padding(.bottom, Space.lg)
                         .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
+                } else if mentionShown {
+                    let items = mentions.results
+                    AtMenu(
+                        items: items, selected: min(mentionSelection.value, items.count - 1),
+                        select: { mentionSelection.value = $0 }, accept: acceptMention)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { menuFrame.value = $0 }
+                        .onDisappear { menuFrame.value = nil }
+                        .padding(.bottom, Space.lg)
+                        .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 } else if chat.usage.isOpen {
                     // In the menu's place, its height at most the room above the box.
                     let box = boxFrame.value
@@ -158,6 +170,8 @@ struct ComposerView: View {
             // The caret goes to the end of this chat's draft, ready to go on typing.
             place()
             slashSelection.value = 0
+            mentionSelection.value = 0
+            mentions.close()
             if chat.slashClosed { chat.slashClosed = false }
             forgetUndo()
         }
@@ -272,6 +286,8 @@ struct ComposerView: View {
         }
         // One popup at a time: the menu showing closes the rest.
         .onChange(of: slashMatches.isEmpty) { _, empty in if !empty { chat.closePopups(keeping: .slash) } }
+        .onChange(of: mentionToken) { old, new in mentionChanged(old, new) }
+        .onChange(of: mentionShown) { _, shown in if shown { chat.closePopups(keeping: .slash) } }
     }
 
     /// The keys the composer gives a meaning, as the text view's commands: true when taken.
@@ -284,7 +300,7 @@ struct ComposerView: View {
                 view.insertNewlineIgnoringFieldEditor(nil)
                 return true
             }
-            if acceptSlash() == .ignored { chat.send() }
+            if acceptSlash() == .ignored, acceptMentionKey() == .ignored { chat.send() }
             return true
         // Shift+Tab switches mode, as in both CLIs; plain Tab accepts a slash command, else
         // indents by four spaces, as in an editor.
@@ -292,16 +308,16 @@ struct ComposerView: View {
             chat.cycleMode()
             return true
         case #selector(NSResponder.insertTab(_:)):
-            if acceptSlash() == .ignored { view.insertText("    ", replacementRange: view.selectedRange()) }
+            if acceptSlash() == .ignored, acceptMentionKey() == .ignored { view.insertText("    ", replacementRange: view.selectedRange()) }
             return true
         case #selector(NSResponder.cancelOperation(_:)):
             // Taken either way: the text view's own Esc would open a completion list.
             escape(view)
             return true
         case #selector(NSResponder.moveUp(_:)):
-            return moveSlash(-1) == .handled
+            return moveSlash(-1) == .handled || moveMention(-1) == .handled
         case #selector(NSResponder.moveDown(_:)):
-            return moveSlash(1) == .handled
+            return moveSlash(1) == .handled || moveMention(1) == .handled
         case #selector(NSResponder.deleteBackward(_:)) where !view.wholeDraft:
             return removeCommand(view)
         default:
@@ -321,7 +337,7 @@ struct ComposerView: View {
     private func escape(_ view: NSTextView) {
         let selection = chat.transcript.selection
         switch EscStep.next(
-            overlay: workspace.hasOverlay, slashMenu: !slashMatches.isEmpty, popup: chat.hasPopup, selection: selection.hasSelection,
+            overlay: workspace.hasOverlay, slashMenu: !slashMatches.isEmpty || mentionShown, popup: chat.hasPopup, selection: selection.hasSelection,
             running: chat.status.isRunning, sheet: view.window?.attachedSheet != nil || NSApp.modalWindow != nil)
         {
         case .closeOverlay: workspace.closeOverlay()
@@ -596,6 +612,92 @@ struct ComposerView: View {
         if command.kind == .kore {
             if command.name == SlashCommand.account.name { chat.openAccount() } else { chat.openUsage() }
         }
+    }
+
+    // MARK: @ mentions
+
+    /// The "@word" at the caret: the @ menu's search.
+    private var mentionToken: SlashToken? {
+        guard let caret = caretIndex, let token = SlashToken(in: chat.draft, caret: caret, skills: false, mentions: true),
+            token.sigil == "@"
+        else { return nil }
+        return token
+    }
+
+    private var mentionShown: Bool {
+        !chat.slashClosed && !mentions.results.isEmpty && slashMatches.isEmpty && mentionToken != nil
+    }
+
+    /// What the search runs over, read here: the folder's files join it in `AtSearch`.
+    private var mentionCandidates: AtCandidates {
+        let controls = chat.controls
+        let tabs = workspace.tabs.filter { $0.id != workspace.activeTab.id && !$0.isEmpty }
+        return AtCandidates(
+            recent: workspace.recentFiles.map(workspace.relativePath), models: controls.models, currentModel: controls.modelId,
+            skills: controls.commands.filter { $0.kind == .skill },
+            tabs: tabs.map { AtCandidates.Tab(id: $0.id.uuidString, title: $0.title) })
+    }
+
+    /// A new "@" lists the folder again; each keystroke in it searches (`AtSearch` waits a
+    /// moment and ranks off the main thread). Esc closes the menu for this "@word" only.
+    private func mentionChanged(_ old: SlashToken?, _ new: SlashToken?) {
+        mentionSelection.value = 0
+        guard let new else { return mentions.close() }
+        PointerGate.keyed()
+        if new.range.lowerBound != old?.range.lowerBound {
+            if chat.slashClosed { chat.slashClosed = false }
+            if old == nil { mentions.open(chat.folder) }
+        }
+        mentions.search(new.query, mentionCandidates, wait: !new.query.isEmpty)
+    }
+
+    private func moveMention(_ delta: Int) -> KeyPress.Result {
+        let count = mentions.results.count
+        guard mentionShown, count > 0, !composing else { return .ignored }
+        mentionSelection.value = min(max(mentionSelection.value + delta, 0), count - 1)
+        PointerGate.keyed()
+        return .handled
+    }
+
+    private func acceptMentionKey() -> KeyPress.Result {
+        let items = mentions.results
+        guard mentionShown, !items.isEmpty, !composing else { return .ignored }
+        acceptMention(items[min(mentionSelection.value, items.count - 1)])
+        return .handled
+    }
+
+    /// A pick takes the "@word" out: a file or folder goes in as a chip, as + attaches it (a
+    /// Codex chip reaches the model as a note with its path, `Attachments.codexInput`); a model
+    /// becomes the chat's; a skill goes in as "$name "; a tab comes to the front.
+    private func acceptMention(_ item: AtItem) {
+        let shown = mentions.results
+        let insertion = item.kind == .skill ? "$\(item.key) " : ""
+        let (draft, caret) = mentionToken.map { $0.replacing(in: chat.draft, with: insertion) } ?? (chat.draft, chat.draft.count)
+        chat.draft = draft
+        place(at: caret)
+        mentions.close()
+        chat.slashClosed = false
+        focused.wrappedValue = true
+        forgetUndo()
+        switch item.kind {
+        case .file, .folder:
+            let url = chat.folder.appendingPathComponent(item.key, isDirectory: item.kind == .folder)
+            if !chat.attachments.contains(where: { $0.url?.standardizedFileURL == url.standardizedFileURL }) { chat.attach([url]) }
+        case .model:
+            if item.key != chat.controls.modelId, let option = chat.controls.models.first(where: { $0.id == item.key }) {
+                chat.setModel(option)
+            }
+        case .skill:
+            break
+        case .tab:
+            if let tab = workspace.tabs.first(where: { $0.id.uuidString == item.key }) { workspace.select(tab) }
+        }
+        UILog.event(
+            "composer-mention",
+            [
+                "cli": chat.provider.id, "kind": item.kind.name, "rows": String(shown.count),
+                "kinds": AtItem.Kind.allCases.filter { kind in shown.contains { $0.kind == kind } }.map(\.name).joined(separator: ","),
+            ])
     }
 
     /// A click outside the menu and the box closes the menu, and a press on the bar under the
