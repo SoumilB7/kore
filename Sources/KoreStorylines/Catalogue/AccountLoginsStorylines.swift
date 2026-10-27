@@ -47,6 +47,10 @@ final class AccountLogins: ChatStoryline {
             },
             logins("the new login kept and active", ["you@example.com", "✓ work@acme.dev"]),
             WaitForElement(.id(StoryID.Composer.accountLogin("main"))),
+            Expect("the active login's plan as its pill, no plan line under it", found: { $0.app.chat?.storyLoginPlans.description }) { story in
+                guard let id = CLIProfiles.added(provider).first?.id else { return false }
+                return story.app.chat?.storyLoginPlans[id] == (codex ? "Business" : "Team")
+            },
             Expect("the chat's CLI started again", found: { try? "\(relaunches($0)) relaunches" }) { try relaunches($0) == 1 },
             Expect("the active login's folder goes to the CLI") { _ in
                 CLIProfiles.overrides(provider).values.first?.hasPrefix(CLIProfiles.root.value?.path ?? "-") == true
@@ -118,8 +122,7 @@ final class AccountLogins: ChatStoryline {
 }
 
 /// A switch of login stops every working chat of the CLI: with a turn running, a background
-/// agent and a background command, a login row's caption under the pointer says "Stops 1
-/// working chat."; picked, the turn is interrupted, the agent and the command stopped, and the
+/// agent and a background command, a login row picked interrupts the turn is interrupted, the agent and the command stopped, and the
 /// chat's CLI starts again as the new login once they have.
 class AccountSwitchStops: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
@@ -171,7 +174,6 @@ class AccountSwitchStops: ChatStoryline {
                     return true
                 },
                 logins("the new login active", ["you@example.com", "✓ work@acme.dev"]),
-                Expect("nothing working: no caption on a switch") { $0.app.chat?.storyLoginSwitchCaption == nil },
                 Key(.escape),
                 ExpectElement(popup, .absent),
                 // At work: a turn, a background agent and a background command.
@@ -184,9 +186,6 @@ class AccountSwitchStops: ChatStoryline {
             ] + (Self.checkQueue ? [Queue("first queued") as any Step, Queue("second queued")] : []) + open + [
                 WaitForElement(.id(main)),
                 Press(.id(main.part(.hover))),
-                Expect("under the pointer, what a switch stops", found: { $0.app.chat?.storyLoginSwitchCaption }) {
-                    $0.app.chat?.storyLoginSwitchCaption == "Stops 1 working chat."
-                },
                 FadesEnd(),
                 Snapshot("account-switch-stops"),
                 Expect("main's status, as its folder reads") { _ in
@@ -372,7 +371,33 @@ final class AccountUsageMeters: ChatStoryline {
                 return resets["main"] == ["Session (2h)", "Weekly (3d)"]
                     && resets[unused.id] == [] && resets[mismatch.id] == []
             },
+            Expect("each login's plan as a pill where its account says one", found: { $0.app.chat?.storyLoginPlans.description }) { story in
+                guard let plans = story.app.chat?.storyLoginPlans,
+                    let unused = CLIProfiles.added(provider).first(where: { $0.email == "unused@example.com" }),
+                    let mismatch = CLIProfiles.added(provider).first(where: { $0.email == "missing@example.com" })
+                else { return false }
+                return plans["main"] == (provider == "codex" ? "Pro Lite" : "Max")
+                    && plans[unused.id] == (provider == "codex" ? "Pro Lite" : nil) && plans[mismatch.id] == nil
+            },
             FadesEnd(), Snapshot("account-usage-meters"),
+            // Privacy mode: every email masked, kept across a close and reopen, then shown again.
+            Do("Privacy mode off to start") { story in
+                _ = story.stash(PrivacyWas.self) { PrivacyWas(Chat.storyAccountPrivacy) }
+                Chat.storyAccountPrivacy = false
+            },
+            Press(.id(StoryID.Composer.accountPrivacy)),
+            Expect("every email masked to two characters and its domain", found: { $0.app.chat?.storyLoginTitles.description }) { story in
+                story.app.chat?.storyLoginTitles.sorted() == ["mi••••@example.com", "un••••@example.com", "yo••••@example.com"]
+            },
+            FadesEnd(), Snapshot("account-privacy"),
+            Key(.escape), ExpectElement(popup, .absent),
+            Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
+            Expect("still masked when the card opens again") { _ in Chat.storyAccountPrivacy },
+            Press(.id(StoryID.Composer.accountPrivacy)),
+            Expect("the emails shown again") { story in
+                story.app.chat?.storyLoginTitles.sorted() == ["missing@example.com", "unused@example.com", "you@example.com"]
+            },
+            Do("Privacy mode back as it was") { story in Chat.storyAccountPrivacy = story.stash(PrivacyWas.self) { PrivacyWas(false) }.on },
             Key(.escape), ExpectElement(popup, .absent),
             Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
             Expect("reopening keeps each login's own bars", found: { $0.app.chat?.storyLoginUsage.description }) { story in
@@ -383,6 +408,12 @@ final class AccountUsageMeters: ChatStoryline {
             },
         ]
     }
+}
+
+/// Privacy mode as it was before a storyline set it.
+private final class PrivacyWas {
+    let on: Bool
+    init(_ on: Bool) { self.on = on }
 }
 
 /// Armed jobs cannot acknowledge Stop; switching still closes their old CLI.

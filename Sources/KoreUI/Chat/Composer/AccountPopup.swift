@@ -468,6 +468,13 @@ struct AccountPopup: View {
     /// With more than main: the logins in the header's place, then the row.
     private func loginList(_ identity: AccountIdentity?, signedIn: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Space.sm) {
+                Text("\(chat.provider.name) logins").font(TextStyle.label).foregroundStyle(Theme.secondary).lineLimit(1)
+                PrivacyButton()
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: Size.MessageActions.button)
+            .padding(.bottom, Space.xs)
             LoginList(state: state, provider: chat.provider.id, identity: identity)
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
             row(signedIn: signedIn)
@@ -477,13 +484,16 @@ struct AccountPopup: View {
     /// The email in the title style, truncated in the middle; the spinner while the first read
     /// is under way. Where the CLI keeps several logins, its ⋯ (`menu`) as a listed login's.
     private func header(_ title: String, menu: Bool = false) -> some View {
-        HStack(spacing: Space.md) {
-            Text(title)
+        let email = state.identity?.email.map { $0 == title } ?? false
+        let shown = email ? AccountPrivacy.shared.shown(title) : title
+        return HStack(spacing: Space.md) {
+            Text(shown)
                 .font(TextStyle.title)
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(title)
+                .help(shown)
+            if email { PrivacyButton() }
             Spacer(minLength: 0)
             if store.status(chat.provider.id) == .unknown, store.isReading(chat.provider.id) {
                 SpinningArc().frame(width: Size.spinner, height: Size.spinner)
@@ -887,18 +897,18 @@ private struct LoginList: View {
     private var store: AccountStore { .shared }
 
     var body: some View {
-        let stops = AccountText.switchCaption(working: store.workingChats(provider))
         let logins = store.logins(provider)
         let keys = logins.map { LoginUsage.Key(provider, $0, generation: store.generation(provider)) }
         // One visible-card clock updates every login's countdown; reads keep their own cache.
         TimelineView(.periodic(from: .now, by: 60)) { context in
+            let usages = keys.map { LoginUsage.shared.state($0) }
+            let labelWidth = LoginMeters.labelWidth(usages, now: context.date)
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(logins) { login in
+                ForEach(Array(logins.enumerated()), id: \.element.id) { index, login in
                     LoginRow(
-                        state: state, login: login, caption: caption(login), stops: login.active ? nil : stops,
+                        state: state, login: login, caption: caption(login), plan: login.active ? identity?.plan : nil,
                         reading: login.active && identity == nil && store.status(provider) == .unknown,
-                        usage: LoginUsage.shared.state(LoginUsage.Key(provider, login, generation: store.generation(provider))),
-                        now: context.date)
+                        usage: usages[index], now: context.date, labelWidth: labelWidth)
                 }
             }
         }
@@ -907,57 +917,58 @@ private struct LoginList: View {
     }
 
     private func caption(_ login: AccountStore.Login) -> String? {
+        // The plan is the row's pill: the caption keeps only what the login is to Kore.
         let main = login.id == nil ? "Main" : nil
         let state = login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil
-        let account = login.active ? identity.map(AccountText.caption) : nil
-        let words = [main, account, state].compactMap { $0 }.filter { !$0.isEmpty }
+        let words = [main, state].compactMap { $0 }
         return words.isEmpty ? nil : words.joined(separator: " · ")
     }
 }
 
-private struct LoginRow: View {
+struct LoginRow: View {
     let state: AccountState
     let login: AccountStore.Login
     let caption: String?
-    /// What switching to it stops, said under the pointer in the caption's place; nil for none.
-    let stops: String?
+    /// The active login's plan, as its account reads; a row's own usage reading says it first.
+    let plan: String?
     /// Its account being read, just switched to: the spinner in the ✓'s place.
     let reading: Bool
     let usage: LoginUsage.State
     let now: Date
+    let labelWidth: CGFloat
     @StateObject private var hovered = Local(false)
 
     var body: some View {
         let id = StoryID.Composer.accountLogin(AccountStore.loginKey(login.id))
-        let title = login.email ?? (login.id == nil ? "Main account" : "Account")
+        let title = login.email.map(AccountPrivacy.shared.shown) ?? (login.id == nil ? "Main account" : "Account")
         let menuOpen = state.palette == .login(login.id)
-        let shown = hovered.value ? stops ?? caption : caption
         Button { if !login.active { state.switchLogin(login.id) } } label: {
-            HStack(spacing: Space.md) {
-                VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: Space.sm) {
                     Text(title)
                         .font(login.active ? TextStyle.title : TextStyle.body)
                         .foregroundStyle(login.active ? Theme.text : Theme.secondary)
                         .lineLimit(1).truncationMode(.middle)
                         .help(title)
-                    if let shown {
-                        Text(shown).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: Space.md)
+                    if let pill = LoginRow.pill(usage, plan: plan) { PlanPill(text: pill) }
+                    // One slot in every row, hovered or not: the pills line up.
+                    HStack(spacing: Space.xs) {
+                        if hovered.value || menuOpen { LoginMenuButton(state: state, login: login.id) }
+                        if reading {
+                            SpinningArc().frame(width: Size.spinner, height: Size.spinner)
+                        } else if login.active {
+                            Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
+                        }
                     }
-                    LoginMeters(state: usage, signedOut: login.signedOut, now: now)
-                        .padding(.top, Space.xs)
+                    .frame(width: Size.iconButtonSmall + Space.xs + Size.spinner, alignment: .trailing)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: Space.md)
-                // One slot in every row, hovered or not: every login's bars end in the same place.
-                HStack(spacing: Space.xs) {
-                    if hovered.value || menuOpen { LoginMenuButton(state: state, login: login.id) }
-                    if reading {
-                        SpinningArc().frame(width: Size.spinner, height: Size.spinner)
-                    } else if login.active {
-                        Image(systemName: "checkmark").font(TextStyle.label).foregroundStyle(Theme.accent)
-                    }
+                if let caption {
+                    Text(caption).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
                 }
-                .frame(width: Size.iconButtonSmall + Space.xs + Size.spinner, alignment: .trailing)
+                // Under the slot too: the bars run to the card's edge.
+                LoginMeters(state: usage, signedOut: login.signedOut, now: now, labelWidth: labelWidth)
+                    .padding(.top, Space.xs)
             }
             .padding(.horizontal, Space.sm)
             .padding(.vertical, Space.xs)
@@ -972,6 +983,62 @@ private struct LoginRow: View {
         .storyAction(id.part(.hover)) { hovered.value = true }
         .tabStop(id) { state.switchLogin(login.id) }
         .accessibilityAddTraits(login.active ? .isSelected : [])
+    }
+
+    /// The row's plan pill: its own usage reading's plan, else the active login's.
+    static func pill(_ usage: LoginUsage.State, plan: String?) -> String? {
+        if case .ready(let reading, _) = usage {
+            let perToken = if case .perToken = reading.account.access { true } else { false }
+            if let pill = AccountPrivacy.pill(plan: reading.account.plan, perToken: perToken) { return pill }
+        }
+        return AccountPrivacy.pill(plan: plan, perToken: false)
+    }
+}
+
+/// A login's plan, small, on its row: "Max", "Team", "API".
+private struct PlanPill: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(TextStyle.caption)
+            .fontWeight(.medium)
+            .foregroundStyle(Theme.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, Space.xs)
+            .frame(height: Size.Account.pill)
+            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Size.Account.pillRadius))
+            .fixedSize()
+    }
+}
+
+/// Privacy mode's block beside the card's heading: a bare eye while emails show; a crossed eye
+/// and "Private" in the accent while they're masked. Kept across opens and launches.
+struct PrivacyButton: View {
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        let privacy = AccountPrivacy.shared
+        let id = StoryID.Composer.accountPrivacy
+        let flip = { privacy.on.toggle() }
+        Button(action: flip) {
+            HStack(spacing: Space.xs) {
+                Image(systemName: privacy.on ? "eye.slash" : "eye").font(TextStyle.caption)
+                if privacy.on { Text("Private").font(TextStyle.caption) }
+            }
+            .foregroundStyle(privacy.on ? Theme.accent : hovered.value ? Theme.text : Theme.secondary)
+            .padding(.horizontal, Space.sm)
+            .frame(height: Size.smallButton)
+            .background(privacy.on ? Theme.Account.privateFill : hovered.value ? Theme.surfaceHover : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
+        .help(privacy.on ? "Show emails" : "Hide emails")
+        .storyID(id)
+        .tabStop(id, action: flip)
+        .accessibilityLabel(Text("Private emails"))
+        .accessibilityValue(Text(privacy.on ? "On" : "Off"))
     }
 }
 

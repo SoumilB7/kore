@@ -132,6 +132,8 @@ extension StoryID {
         /// A login in the card's list, by its id ("main" for main): Switch is `.part(.switch)`,
         /// Remove `.part(.cancel)`; "add" is Add account.
         package static func accountLogin(_ id: String) -> StoryID { StoryID(.composer, "account.login", key: id) }
+        /// Privacy mode's block beside the card's heading (or its email).
+        package static let accountPrivacy = StoryID(.composer, "account.privacy")
         /// A choice a form's picker unfolds, by the picker and the choice ("credentials/apiKey",
         /// "profile/dev").
         package static func accountChoice(_ picker: String, _ value: String) -> StoryID {

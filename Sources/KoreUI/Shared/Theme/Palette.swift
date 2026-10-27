@@ -73,3 +73,11 @@ enum WorkingSpinner {
     static func tint(_ provider: Provider) -> Color { provider.id == "claude" ? claude : .white }
 }
 
+
+extension Theme {
+    /// The Account card (account-privacy.html).
+    enum Account {
+        /// Privacy mode's block while it's on.
+        static let privateFill = accent.opacity(0.12)
+    }
+}

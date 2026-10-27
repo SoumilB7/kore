@@ -75,6 +75,13 @@ extension Size {
     static let usageTitleMax: CGFloat = 120
     /// A limit's bar at its narrowest.
     static let usageBarMin: CGFloat = 48
+
+    /// The Account card's login rows (account-privacy.html).
+    enum Account {
+        /// A login's plan pill.
+        static let pill: CGFloat = 16
+        static let pillRadius: CGFloat = 4
+    }
     /// The least height the popup keeps however little room the window has above the composer.
     static let usageMinRoom: CGFloat = 72
     /// A full reset's row: its small "Use reset" button and a little room around it.

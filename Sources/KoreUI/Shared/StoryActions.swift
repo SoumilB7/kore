@@ -229,9 +229,24 @@ extension Chat {
             return (AccountStore.loginKey(login.id), lines)
         })
     }
-    /// What a login row's caption says under the pointer, a switch to it stopping chats: nil when
-    /// none work.
-    package var storyLoginSwitchCaption: String? { AccountText.switchCaption(working: AccountStore.shared.workingChats(provider.id)) }
+    /// The logins' emails as the card shows them (masked in privacy mode), in its order.
+    package var storyLoginTitles: [String] {
+        AccountStore.shared.logins(provider.id).map { $0.email.map(AccountPrivacy.shared.shown) ?? "?" }
+    }
+    /// Each login's plan pill, by login id; logins without one are left out.
+    package var storyLoginPlans: [String: String] {
+        let store = AccountStore.shared
+        let identity: AccountIdentity? = if case .signedIn(let identity) = store.status(provider.id) { identity } else { nil }
+        return Dictionary(uniqueKeysWithValues: store.logins(provider.id).compactMap { login in
+            let usage = LoginUsage.shared.state(LoginUsage.Key(provider.id, login, generation: store.generation(provider.id)))
+            return LoginRow.pill(usage, plan: login.active ? identity?.plan : nil).map { (AccountStore.loginKey(login.id), $0) }
+        })
+    }
+    /// Privacy mode, as its block in the card sets it; a storyline puts it back as it was.
+    package static var storyAccountPrivacy: Bool {
+        get { AccountPrivacy.shared.on }
+        set { AccountPrivacy.shared.on = newValue }
+    }
     /// Whether the chat has a turn, a background agent or a command a switch would stop, and
     /// how many of its agents run.
     package var storyHasWork: Bool { hasWork }
