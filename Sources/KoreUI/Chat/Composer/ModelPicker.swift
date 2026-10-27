@@ -333,6 +333,27 @@ private struct FastBolt: View {
     }
 }
 
+/// The "…" chip of a row whose versions don't all fit: pressed, the row wraps to show them.
+private struct MoreChip: View {
+    let unfold: () -> Void
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        Button(action: unfold) {
+            Text("…")
+                .font(TextStyle.label)
+                .foregroundStyle(hovered.value ? Theme.text : Theme.tertiary)
+                .padding(.horizontal, Space.md)
+                .frame(height: Size.Picker.chip)
+                .hoverFill(hovered.value, Theme.Row.selected(.surface))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
+        .help("More versions")
+    }
+}
+
 /// Effort as a slider over every level the CLI's models offer, so it keeps its length: levels
 /// this model lacks are hollow stops with tertiary labels, and the thumb skips them. A model
 /// with none dims the track and has no thumb. Narrower than `labelsMin`, only the current

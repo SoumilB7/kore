@@ -50,15 +50,13 @@ struct ModePicker: View {
         if inside { state.lit = spot } else { state.leave(spot) }
     }
 
-    /// A mode row picks it and closes; the plan rows flip their switches.
+    /// A mode row picks it and closes; Codex's Plan row flips its switch.
     private func pick(_ index: Int) {
         if modes.indices.contains(index) {
             if modes[index].id != chat.controls.mode { chat.setMode(modes[index].id) }
             state.close()
         } else if index == modes.count, chat.provider.planToggle != nil {
             chat.setPlanMode(!chat.controls.planMode)
-        } else if index == allowIndex {
-            flipAllow()
         }
     }
 
