@@ -1,0 +1,1 @@
+{"t":"attn.event","seq":15,"aid":10,"op":"turn","turn":{"chatId":"c1","provider":"claude","window":"acme-api","chatTitle":"Checkout totals","turnId":"r2","outcome":"failed","at":1793489100000}}

@@ -1,0 +1,1 @@
+{"t":"delta","seq":16,"rev":4,"later":{"x":1},"chats":[{"id":"c1","provider":"gemini","title":"New CLI","state":"dreaming","mode":{"id":"yolo","level":4},"modeIds":["yolo"],"allowedModeIds":[],"queued":0,"running":false,"cards":[{"id":"k","kind":"hologram","title":"?","actions":[{"id":"teleport","label":"Go","style":"sparkly"}]}],"can":{"send":false,"stop":false}}]}

@@ -1,0 +1,197 @@
+{
+ "version": 1,
+ "fixtures": [
+  {
+   "file": "ack.json",
+   "t": "ack",
+   "future": false,
+   "kotlin": true
+  },
+  {
+   "file": "attn.event.clear.json",
+   "t": "attn.event",
+   "future": false,
+   "kotlin": true
+  },
+  {
+   "file": "attn.event.open.json",
+   "t": "attn.event",
+   "future": false,
+   "kotlin": true
+  },
+  {
+   "file": "attn.event.turn.json",
+   "t": "attn.event",
+   "future": false,
+   "kotlin": true
+  },
+  {
+   "file": "attn.state.json",
+   "t": "attn.state",
+   "future": false,
+   "kotlin": true
+  },
+  {
+   "file": "bye.json",
+   "t": "bye",
+   "future": false,
+   "kotlin": true
+  },
+  {
+   "file": "cmd.answer.json",
+   "t": "cmd",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "cmd.new.json",
+   "t": "cmd",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "cmd.planReady.json",
+   "t": "cmd",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "cmd.send.json",
+   "t": "cmd",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "cmd.setMode.json",
+   "t": "cmd",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "cmd.setPlan.json",
+   "t": "cmd",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "cmd.stop.json",
+   "t": "cmd",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "delta.json",
+   "t": "delta",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "delta.windows.json",
+   "t": "delta",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "entry.chunk.json",
+   "t": "entry.chunk",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "entry.more.json",
+   "t": "entry.more",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "future.unknown-values.json",
+   "t": "delta",
+   "future": true,
+   "kotlin": false
+  },
+  {
+   "file": "hello.first.json",
+   "t": "hello",
+   "future": false,
+   "kotlin": true
+  },
+  {
+   "file": "hello.resume.json",
+   "t": "hello",
+   "future": false,
+   "kotlin": true
+  },
+  {
+   "file": "presence.json",
+   "t": "presence",
+   "future": false,
+   "kotlin": true
+  },
+  {
+   "file": "result.denied.json",
+   "t": "result",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "result.ok.json",
+   "t": "result",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "snapshot.json",
+   "t": "snapshot",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "tx.close.json",
+   "t": "tx.close",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "tx.delta.json",
+   "t": "tx.delta",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "tx.delta.order.json",
+   "t": "tx.delta",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "tx.more.json",
+   "t": "tx.more",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "tx.open.json",
+   "t": "tx.open",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "tx.page.json",
+   "t": "tx.page",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "tx.reset.json",
+   "t": "tx.reset",
+   "future": false,
+   "kotlin": false
+  },
+  {
+   "file": "welcome.json",
+   "t": "welcome",
+   "future": false,
+   "kotlin": true
+  }
+ ]
+}

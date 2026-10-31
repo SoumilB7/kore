@@ -1,0 +1,3 @@
+# Installs only versions published at least a week ago, and runs no package's install scripts.
+minimumReleaseAge: 10080
+onlyBuiltDependencies: []

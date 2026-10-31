@@ -1,0 +1,1 @@
+{"t":"attn.state","seq":12,"aid":7,"open":[{"key":"c1/toolu_1","chatId":"c1","provider":"claude","window":"acme-api","chatTitle":"Checkout totals","kind":"approval","cardId":"toolu_1"}],"recent":[{"chatId":"c2","provider":"codex","window":"acme-api","chatTitle":"Nightly build","turnId":"r9","outcome":"finished","at":1793489000000}]}
