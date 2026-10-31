@@ -196,6 +196,19 @@ package final class Workspace {
         return true
     }
 
+    /// A new chat of the provider in a tab of its own at the end, from outside the window (the
+    /// phone remote): the tab the owner is on stays selected, and the chat starts in the
+    /// provider's first mode (Manual). Nil for an unknown provider.
+    package func startRemote(provider id: String) -> Chat? {
+        guard let provider = Registry.provider(id) else { return nil }
+        let tab = ChatTab()
+        let chat = Chat(provider: provider, folder: folder)
+        chat.setMode(provider.modes[0].id, remember: false)
+        tab.chat = chat
+        tabs.append(tab)
+        return chat
+    }
+
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.
     package func open(_ session: SessionSummary) {
         if let tab = tab(for: session.id, provider: Registry.provider(for: session.agent).id) {

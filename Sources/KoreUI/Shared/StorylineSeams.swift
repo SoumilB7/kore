@@ -8,8 +8,6 @@ package enum StorylineSeams {
     /// Makes every chat's backend in place of its provider's (the scripted CLI), from the
     /// provider's id and what the chat would launch with.
     package static var backend: ((_ provider: String, BackendOptions) -> any ChatBackend)?
-    /// Every event a chat applies, in order, once its stores have it.
-    package static var events: ((Chat, ChatEvent) -> Void)?
     /// Each CLI's login calls (status, sign-in, sign-out) in place of the CLI's own, by
     /// provider id; nil for one left as it is.
     package static var accounts: ((_ provider: String) -> AccountCalls?)?

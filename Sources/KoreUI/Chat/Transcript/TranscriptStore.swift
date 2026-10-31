@@ -7,43 +7,43 @@ import Observation
 /// `sections` is rebuilt from the entries after every change, and each row compares by value, so
 /// SwiftUI redraws only the rows that changed. Views see only `sections`, `tail` and `folded`.
 @MainActor @Observable
-final class TranscriptStore {
-    struct Entry: Identifiable, Equatable {
+package final class TranscriptStore {
+    package struct Entry: Identifiable, Equatable {
         /// `divider`: a quiet line across the transcript ("Conversation compacted · 14:32",
         /// "Forked from …"), off the timeline.
         /// `mode`: a permission mode change (look.md §8): the user's is a divider between turns,
         /// the agent's (with `modeLead`) an item on its turn's timeline.
         /// `summary`: what a compaction left (Claude), under its divider, off the timeline.
-        enum Kind: Equatable { case user, answer, thinking, plan, tool, agent, notice, peer, divider, mode, summary }
+        package enum Kind: Equatable { case user, answer, thinking, plan, tool, agent, notice, peer, divider, mode, summary }
 
-        let id = UUID()
-        var kind: Kind
-        var text: String
-        var toolName: String?
+        package let id = UUID()
+        package var kind: Kind
+        package var text: String
+        package var toolName: String?
         var toolId: String?
         /// A tool's full input (the IN box), its header text, and the file it works on.
-        var input: String?
-        var summary: String?
-        var path: String?
-        var result: String?
-        var done = false
-        var isError = false
+        package var input: String?
+        package var summary: String?
+        package var path: String?
+        package var result: String?
+        package var done = false
+        package var isError = false
         var attachments: [Attachment] = []
         /// Who sent a `.peer` message.
         var from: String?
         /// Files an edit tool changed.
-        var changes: [FileChange] = []
+        package var changes: [FileChange] = []
         /// Set for `.agent`: the sub-agent this card stands for.
-        var agent: AgentInfo?
+        package var agent: AgentInfo?
         /// The turn the entry belongs to; nil for the user's own message.
-        var turn: String?
+        package var turn: String?
         /// Thinking: when it began, and how long it took once the next block started.
         var startedAt: Date?
         var duration: TimeInterval?
         /// A tool that only reads, searches or lists (grouped into "Explored N").
-        var readOnly = false
+        package var readOnly = false
         /// A tool call cut off by Stop: no output, a muted dot.
-        var stopped = false
+        package var stopped = false
         /// `.mode`: the mode it became (or, for "Left", the one left), and the agent's words
         /// before it ("Entered", "Plan approved ·", "Left"); nil words: the user's divider.
         var mode: ModeMark?
@@ -53,12 +53,12 @@ final class TranscriptStore {
         /// A notice with a warning dot (a mode the CLI refused).
         var warning = false
         /// A user message the CLI took into a running turn (look.md §10): it doesn't open a section.
-        var inTurn = false
+        package var inTurn = false
         /// A user message's id in its CLI's history (where a fork from it starts); nil for one
         /// sent in this run. `forkSource` on a fork's "Forked from" line.
         var source: String?
 
-        static func == (a: Self, b: Self) -> Bool {
+        package static func == (a: Self, b: Self) -> Bool {
             a.id == b.id && a.kind == b.kind && a.text == b.text && a.result == b.result && a.done == b.done
                 && a.isError == b.isError && a.stopped == b.stopped && a.toolName == b.toolName && a.from == b.from
                 && a.mode == b.mode && a.modeLead == b.modeLead && a.warning == b.warning
@@ -67,12 +67,12 @@ final class TranscriptStore {
         }
     }
 
-    struct AgentInfo: Equatable {
+    package struct AgentInfo: Equatable {
         typealias Status = AgentAvatar.Status
-        let id: String
+        package let id: String
         /// Spawn order in the chat: picks the agent's mark.
         let index: Int
-        var name: String
+        package var name: String
         var type: String?
         var model: String?
         /// What it was asked to do.
@@ -97,14 +97,14 @@ final class TranscriptStore {
 
     /// `authFailed`: the CLI's login was refused, in its own words. `slept`: it failed while the
     /// Mac slept, the CLI's line kept for the hover.
-    enum Outcome: Equatable { case completed, interrupted, failed(String), authFailed(String), slept(String) }
+    package enum Outcome: Equatable { case completed, interrupted, failed(String), authFailed(String), slept(String) }
 
-    struct Turn {
-        let id: String
-        var startedAt: Date
-        var duration: TimeInterval?
-        var finished = false
-        var outcome = Outcome.completed
+    package struct Turn {
+        package let id: String
+        package var startedAt: Date
+        package var duration: TimeInterval?
+        package var finished = false
+        package var outcome = Outcome.completed
         /// Where the answer starts (Codex's first final-answer text). Unset, it's found when
         /// the turn finishes: the text after the turn's last piece of work.
         var answerFrom: UUID?
@@ -423,7 +423,7 @@ final class TranscriptStore {
     @ObservationIgnored private var latestTurn: String?
     @ObservationIgnored private var retryDismissed: String?
 
-    @ObservationIgnored private(set) var entries: [Entry] = []
+    @ObservationIgnored package private(set) var entries: [Entry] = []
     /// The transcript's one text selection.
     @ObservationIgnored lazy var selection = TranscriptSelection(store: self)
     /// Scrolls the timeline to a row by its id: set by the timeline for storylines only
@@ -1022,7 +1022,7 @@ final class TranscriptStore {
     func lane(_ id: String) -> [Entry] { lanes[id] ?? [] }
 
     /// A sub-agent's card details, for an approval it asks for.
-    func agent(_ id: String) -> AgentInfo? {
+    package func agent(_ id: String) -> AgentInfo? {
         if let card = agentCards[id], let i = position[card] { return entries[i].agent }
         if let (parent, card) = laneAgents[id] { return lanes[parent]?.first { $0.id == card }?.agent }
         return nil
@@ -1564,6 +1564,7 @@ final class TranscriptStore {
     /// Everything is built again on the next rebuild (the window moved, or entries shifted).
     private func invalidateAll() {
         sectionStarts = []
+        if Self.remoteTracking { remoteDirtyFrom = 0 }
         touchesDirty = true
     }
 
@@ -1930,7 +1931,16 @@ final class TranscriptStore {
     private func mark(_ index: Int?) {
         let i = max(index ?? 0, 0)
         dirtyFrom = min(dirtyFrom ?? i, i)
+        if Self.remoteTracking { remoteDirtyFrom = min(remoteDirtyFrom ?? i, i) }
     }
+
+    /// A phone remote follows transcripts: changes are also marked for it (`remoteDirtyFrom`).
+    package static var remoteTracking = false
+    /// The lowest entry index changed since the phone remote last looked; it clears it.
+    @ObservationIgnored package var remoteDirtyFrom: Int?
+
+    /// A turn as it stands, for the phone remote.
+    package func remoteTurn(_ id: String) -> Turn? { turns[id] }
 
     /// A change to a turn: its rows are laid out together.
     private func changed(turn id: String?) {

@@ -186,6 +186,7 @@ struct TabBar: View {
             if let awake = StayAwake.current {
                 StayAwakeButton(awake: awake, size: tabHeight).storyID(StoryID.Titlebar.awake)
             }
+            ModuleTitleButtons(workspace: workspace, size: tabHeight)
             HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight).storyID(StoryID.Titlebar.history)
         }
         .padding(.leading, leadingInset)
