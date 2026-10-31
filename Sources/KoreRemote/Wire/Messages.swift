@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // The phone remote's wire protocol, version 1, as Swift values. `protocol/src/schema.ts` is the
@@ -317,6 +318,9 @@ package struct WireCard: Codable, Sendable, Equatable {
     package var questions: [WireQuestion]?
     package var agent: String?
     package var actions: [CardAction]
+    /// SHA-256 of the card as shown (everything above, as sorted JSON): what an answer's
+    /// signature covers, and checked again against the card as it is when the answer arrives.
+    package var digest: String?
 
     package init(
         id: String, kind: Kind, title: String, detail: String? = nil, body: String? = nil, bodyLen: Int? = nil,
@@ -554,7 +558,9 @@ package enum RemoteCommand: Codable, Sendable, Equatable {
 
     case send(chatId: String, text: String)
     case stop(chatId: String)
-    case answer(chatId: String, cardId: String, action: CardAction.ID, answers: [String: [String]]?)
+    /// `proof`: the phone's signature over this answer to the card as shown (its digest); every
+    /// answer but a refusal needs one.
+    case answer(chatId: String, cardId: String, action: CardAction.ID, answers: [String: [String]]?, proof: AnswerProof? = nil)
     case setMode(chatId: String, modeId: String)
     case setPlan(chatId: String, on: Bool)
     case planReady(chatId: String, choice: PlanChoice)
@@ -563,7 +569,7 @@ package enum RemoteCommand: Codable, Sendable, Equatable {
     /// The chat it acts on; nil for a new chat.
     package var chatId: String? {
         switch self {
-        case .send(let id, _), .stop(let id), .answer(let id, _, _, _), .setMode(let id, _), .setPlan(let id, _), .planReady(let id, _): id
+        case .send(let id, _), .stop(let id), .answer(let id, _, _, _, _), .setMode(let id, _), .setPlan(let id, _), .planReady(let id, _): id
         case .new: nil
         }
     }
@@ -581,7 +587,7 @@ package enum RemoteCommand: Codable, Sendable, Equatable {
         }
     }
 
-    private enum Key: String, CodingKey { case type, chatId, text, cardId, action, answers, modeId, on, choice, windowId, provider }
+    private enum Key: String, CodingKey { case type, chatId, text, cardId, action, answers, proof, modeId, on, choice, windowId, provider }
 
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
@@ -594,7 +600,8 @@ package enum RemoteCommand: Codable, Sendable, Equatable {
             self = .answer(
                 chatId: try chat(), cardId: try c.decode(String.self, forKey: .cardId),
                 action: try c.decode(CardAction.ID.self, forKey: .action),
-                answers: try c.decodeIfPresent([String: [String]].self, forKey: .answers))
+                answers: try c.decodeIfPresent([String: [String]].self, forKey: .answers),
+                proof: try c.decodeIfPresent(AnswerProof.self, forKey: .proof))
         case "chat.setMode": self = .setMode(chatId: try chat(), modeId: try c.decode(String.self, forKey: .modeId))
         case "chat.setPlan": self = .setPlan(chatId: try chat(), on: try c.decode(Bool.self, forKey: .on))
         case "chat.planReady": self = .planReady(chatId: try chat(), choice: try c.decode(PlanChoice.self, forKey: .choice))
@@ -612,11 +619,12 @@ package enum RemoteCommand: Codable, Sendable, Equatable {
             try c.encode(text, forKey: .text)
         case .stop(let chatId):
             try c.encode(chatId, forKey: .chatId)
-        case .answer(let chatId, let cardId, let action, let answers):
+        case .answer(let chatId, let cardId, let action, let answers, let proof):
             try c.encode(chatId, forKey: .chatId)
             try c.encode(cardId, forKey: .cardId)
             try c.encode(action, forKey: .action)
             try c.encodeIfPresent(answers, forKey: .answers)
+            try c.encodeIfPresent(proof, forKey: .proof)
         case .setMode(let chatId, let modeId):
             try c.encode(chatId, forKey: .chatId)
             try c.encode(modeId, forKey: .modeId)
@@ -641,6 +649,12 @@ package enum ResultCode: String, LenientEnum {
     case command = "denied.command"
     case signIn = "denied.signIn"
     case action = "denied.action"
+    /// The phone has alerts only: unlock it first.
+    case access = "denied.access"
+    /// The answer's signature doesn't check out.
+    case signature = "denied.signature"
+    /// The card changed since the phone saw it.
+    case staleCard = "stale.digest"
     case goneChat = "gone.chat"
     case goneCard = "gone.card"
     case goneWindow = "gone.window"
@@ -648,4 +662,34 @@ package enum ResultCode: String, LenientEnum {
     case invalid
     case rateLimited
     case unknown
+}
+
+/// A phone's signature over its answer to a card, and the card's digest it saw.
+package struct AnswerProof: Codable, Sendable, Equatable {
+    package var digest: String
+    package var sig: String
+
+    package init(digest: String, sig: String) {
+        self.digest = digest
+        self.sig = sig
+    }
+}
+
+extension WireCard {
+    /// The card's digest as shown: SHA-256 hex over its sorted JSON without the digest itself.
+    package var contentDigest: String {
+        var shown = self
+        shown.digest = nil
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = (try? encoder.encode(shown)) ?? Data()
+        return Data(SHA256.hash(data: data)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The card with its digest filled in.
+    package var digested: WireCard {
+        var card = self
+        card.digest = contentDigest
+        return card
+    }
 }

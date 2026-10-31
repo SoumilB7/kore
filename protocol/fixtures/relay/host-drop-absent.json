@@ -1,0 +1,67 @@
+{
+ "name": "host-drop-absent",
+ "description": "A host that drops (no goodbye) leaves its phones told it's absent, and present again when it's back.",
+ "hostToken": "6060606060606060606060606060606060606060606060606060606060606060",
+ "tokens": {
+  "pair": "1111111111111111111111111111111111111111111111111111111111111111",
+  "phone": "2222222222222222222222222222222222222222222222222222222222222222",
+  "other": "3333333333333333333333333333333333333333333333333333333333333333"
+ },
+ "steps": [
+  {
+   "op": "connect",
+   "as": "host",
+   "role": "host",
+   "token": "host",
+   "expect": "ok"
+  },
+  {
+   "op": "send",
+   "as": "host",
+   "frame": "10{hash:pair}"
+  },
+  {
+   "op": "connect",
+   "as": "p1",
+   "role": "phone",
+   "token": "pair",
+   "expect": "ok"
+  },
+  {
+   "op": "recv",
+   "as": "p1",
+   "frame": "02"
+  },
+  {
+   "op": "recv",
+   "as": "host",
+   "frame": "0200"
+  },
+  {
+   "op": "drop",
+   "as": "host"
+  },
+  {
+   "op": "recv",
+   "as": "p1",
+   "frame": "03"
+  },
+  {
+   "op": "connect",
+   "as": "host2",
+   "role": "host",
+   "token": "host",
+   "expect": "ok"
+  },
+  {
+   "op": "recv",
+   "as": "p1",
+   "frame": "02"
+  },
+  {
+   "op": "recv",
+   "as": "host2",
+   "frame": "0200"
+  }
+ ]
+}

@@ -1,0 +1,65 @@
+{
+ "name": "third-phone",
+ "description": "Two phones at most.",
+ "hostToken": "6060606060606060606060606060606060606060606060606060606060606060",
+ "tokens": {
+  "pair": "1111111111111111111111111111111111111111111111111111111111111111",
+  "phone": "2222222222222222222222222222222222222222222222222222222222222222",
+  "other": "3333333333333333333333333333333333333333333333333333333333333333"
+ },
+ "steps": [
+  {
+   "op": "connect",
+   "as": "host",
+   "role": "host",
+   "token": "host",
+   "expect": "ok"
+  },
+  {
+   "op": "send",
+   "as": "host",
+   "frame": "10{hash:pair}"
+  },
+  {
+   "op": "connect",
+   "as": "p1",
+   "role": "phone",
+   "token": "pair",
+   "expect": "ok"
+  },
+  {
+   "op": "recv",
+   "as": "p1",
+   "frame": "02"
+  },
+  {
+   "op": "recv",
+   "as": "host",
+   "frame": "0200"
+  },
+  {
+   "op": "connect",
+   "as": "p2",
+   "role": "phone",
+   "token": "pair",
+   "expect": "ok"
+  },
+  {
+   "op": "recv",
+   "as": "p2",
+   "frame": "02"
+  },
+  {
+   "op": "recv",
+   "as": "host",
+   "frame": "0201"
+  },
+  {
+   "op": "connect",
+   "as": "p3",
+   "role": "phone",
+   "token": "pair",
+   "expect": 429
+  }
+ ]
+}

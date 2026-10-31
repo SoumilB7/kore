@@ -8,6 +8,12 @@ package protocol RemoteLink: AnyObject, Sendable {
     var incoming: AsyncStream<Data> { get }
     func send(_ data: Data)
     func close()
+    /// What the phone may see and do on this link now.
+    var access: RemoteAccess { get }
+    /// Called whenever `access` changes.
+    func observeAccess(_ handler: @escaping @Sendable (RemoteAccess) -> Void)
+    /// Whether `proof` is this phone's signature over that answer, on this session.
+    func authorizes(_ proof: ApprovalProof) -> Bool
 }
 
 /// Both ends of an in-memory link, for tests and storylines: what one end sends, the other
@@ -48,4 +54,10 @@ package final class LoopbackLink: RemoteLink {
     }
 
     package var bytesSent: Int { sentBytes.withLock { $0 } }
+
+    // A loopback is a test's phone with full access: it carries no keys, and stands in for an
+    // unlocked phone whose answers are signed.
+    package var access: RemoteAccess { .full }
+    package func observeAccess(_ handler: @escaping @Sendable (RemoteAccess) -> Void) {}
+    package func authorizes(_ proof: ApprovalProof) -> Bool { true }
 }

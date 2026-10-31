@@ -145,6 +145,9 @@ export const Card = z.object({
   questions: z.array(Question).optional(),
   agent: z.string().optional(),
   actions: z.array(CardAction),
+  /** SHA-256 hex of the card as shown (its sorted JSON without this field): what an answer's
+   * signature covers, checked again against the card as it is when the answer arrives. */
+  digest: z.string().optional(),
 });
 
 export const ChatMeta = z.object({
@@ -239,6 +242,9 @@ export const Command = z.discriminatedUnion("type", [
     action: CardAction.shape.id,
     /** submitAnswers: question id → the labels picked, or what was typed under Other. */
     answers: z.record(z.string(), z.array(z.string())).optional(),
+    /** The phone's act-key signature over this answer to the card as shown; every answer but a
+     * refusal (deny, keepPlanning, stay) needs one. */
+    proof: z.object({ digest: z.string(), sig: z.string() }).optional(),
   }),
   z.object({ type: z.literal("chat.setMode"), chatId: z.string(), modeId: z.string() }),
   z.object({ type: z.literal("chat.setPlan"), chatId: z.string(), on: z.boolean() }),
@@ -253,6 +259,12 @@ export const ResultCode = lenient([
   "denied.command",
   "denied.signIn",
   "denied.action",
+  /** Alerts-only access: the phone must unlock first. */
+  "denied.access",
+  /** The answer's signature doesn't check out. */
+  "denied.signature",
+  /** The card changed since the phone saw it. */
+  "stale.digest",
   "gone.chat",
   "gone.card",
   "gone.window",
@@ -364,3 +376,29 @@ export type Message = z.infer<typeof Message>;
 
 /** Every message type, for the fixture manifest's coverage check. */
 export const MESSAGE_TYPES = Message.options.map((o) => o.shape.t.value);
+
+// MARK: - The link's own messages
+
+/** Pairing and access, apart from the sync layer: JSON records with a `t` in `pair.*` or
+ * `link.*`, handled by each side's link layer (Kotlin on the phone, the gate on the Mac). */
+export const LinkControl = z.object({
+  t: z.enum([
+    "pair.hello", "pair.ok", "pair.actkey", "pair.done", "pair.stored",
+    "link.stepup.req", "link.stepup.chal", "link.stepup", "link.level", "link.lock", "link.state",
+  ]),
+  /** pair.hello: the name the phone gives itself (shown on the Mac as a claim); pair.ok/done: the Mac's. */
+  name: z.string().optional(),
+  model: z.string().optional(),
+  /** pair.actkey: the act key (X.509 SubjectPublicKeyInfo, base64). */
+  key: z.string().optional(),
+  /** pair.actkey, link.stepup: a DER ECDSA signature (base64). */
+  sig: z.string().optional(),
+  /** pair.done: R, base64. */
+  r: z.string().optional(),
+  /** link.stepup.chal: 32 random bytes, base64. */
+  nonce: z.string().optional(),
+  level: z.enum(["watch", "full"]).optional(),
+  screen: z.boolean().optional(),
+  app: z.enum(["foreground", "background"]).optional(),
+});
+export type LinkControl = z.infer<typeof LinkControl>;

@@ -74,7 +74,7 @@ package enum RemotePolicy {
             return .allow
         case .stop:
             return .allow
-        case .answer(_, let cardId, let action, _):
+        case .answer(_, let cardId, let action, _, _):
             guard let card = chat.cards[cardId] else { return .deny(.goneCard, "That was answered or withdrawn.") }
             if card.kind == .signIn { return .deny(.signIn, "Answer sign-ins on the Mac.") }
             switch action {
