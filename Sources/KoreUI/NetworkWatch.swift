@@ -7,7 +7,7 @@ import Observation
 @MainActor @Observable
 package final class NetworkWatch {
     package static let shared = NetworkWatch()
-    static let changed = Notification.Name("KoreNetworkChanged")
+    package static let changed = Notification.Name("KoreNetworkChanged")
 
     private(set) var isOnline = true
     /// Set by a test or storyline: the monitor's word no longer counts.

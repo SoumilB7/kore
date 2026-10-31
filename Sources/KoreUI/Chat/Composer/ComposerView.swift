@@ -141,6 +141,10 @@ struct ComposerView: View {
                     }
                     .padding(.bottom, Space.lg)
                     .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
+                } else if let popup = KoreModules.openPopup(in: chat) {
+                    popup.view(chat, max(boxFrame.value.minY - Size.titleRow - Space.lg - Space.xxxl, Size.usageMinRoom))
+                        .padding(.bottom, Space.lg)
+                        .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 } else if chat.importer.isOpen {
                     ImportPopup(chat: chat, state: chat.importer) {
                         ImportFilePanel.choose(for: chat.provider, in: window.value) { chat.importer.add(file: $0) }
@@ -166,6 +170,7 @@ struct ComposerView: View {
             chat.account.close()
             chat.importer.close()
             chat.picker.close()
+            for popup in KoreModules.popups where popup.isOpen(chat) { popup.close(chat) }
         }
         // A field or form in the Account popup had the keys: when it goes, the composer has them
         // again, as it has throughout everything else in the popup.

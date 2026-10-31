@@ -121,7 +121,8 @@ extension SlashCommand {
         switch name {
         case Self.account.name: return ["login", "logout", "sign", "switch"]
         case Self.remoteName: return ["rc", "phone", "web", "mobile"]
-        default: return ["limits"]
+        case Self.usage.name: return ["limits"]
+        default: return moduleAliases
         }
     }
 

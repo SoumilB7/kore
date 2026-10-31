@@ -85,7 +85,7 @@ final class RemoteAnswerApproval: ChatStoryline {
             Expect.phone("an alert open for it") { phone, id in phone.open["\(id)/first"]?.kind == .approval },
             PhoneCommand(what: "always allow", command: { .answer(chatId: $0, cardId: "first", action: .allowAlways, answers: nil) }, refused: .alwaysAllow),
             Expect("the card still waiting on the Mac") { try !$0.activeChat().pendingApprovals.isEmpty },
-            PhoneCommand(what: "allow") { .answer(chatId: $0, cardId: "first", action: .allow, answers: nil) },
+            PhoneAnswer(card: "first", action: .allow),
             Expect("the CLI was told yes") { try $0.scriptedBackend().log.contains(.respond(approval: "first", allowed: true)) },
             TurnFinished(1),
             Expect.phone("no card and no alert left") { phone, id in phone.chats[id]?.cards.isEmpty == true && phone.open.isEmpty },

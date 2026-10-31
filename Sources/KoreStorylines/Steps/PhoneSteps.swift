@@ -8,6 +8,11 @@ import KoreUI
 @MainActor
 final class StoryPhone: StoryFinishing {
     private(set) var client: RemoteTestClient?
+    /// The phone's keys, the Mac it paired with, and its encrypted link (the secure path).
+    let identity = PhoneIdentity(name: "Story phone")
+    var paired: PairedMac?
+    var secure: SecureLink?
+    var secureFailure: (any Error)?
 
     func connect(mode: WireMessage.Presence, attnAfter: Int?) {
         let (host, phone) = LoopbackLink.pair()
@@ -22,9 +27,28 @@ final class StoryPhone: StoryFinishing {
         client = nil
     }
 
+    private var installedKorePhone = false
+
+    /// Kore Phone's controls for this storyline; taken out again as it finishes.
+    func installKorePhone() {
+        guard !KorePhone.installed else { return }
+        KorePhone.install()
+        installedKorePhone = true
+    }
+
+    func use(_ link: SecureLink) {
+        secure = link
+        client = RemoteTestClient(link: link)
+    }
+
     func finish() {
         disconnect()
+        secure?.close()
+        secure = nil
+        RemoteHost.shared.service.disable()
         RemoteHost.shared.turnOff()
+        PhoneService.dialer = nil
+        if installedKorePhone { KorePhone.uninstall() }
     }
 }
 
@@ -83,6 +107,32 @@ struct PhoneOpensChat: Step {
         let id = try story.activeChatID()
         client.open(id)
         try await story.until("the transcript on the phone") { client.transcripts[id] != nil }
+    }
+}
+
+/// The phone answers the active chat's card `card` with `action`, signed over the card's
+/// digest as the phone was shown it.
+struct PhoneAnswer: Step {
+    let card: String
+    let action: CardAction.ID
+    var refused: ResultCode?
+    var label: String { "The phone answers “\(card)”: \(action.rawValue)" + (refused.map { " (refused: \($0.rawValue))" } ?? "") }
+
+    func run(_ story: StoryContext) async throws {
+        let client = try story.phoneClient()
+        let chat = try story.activeChatID()
+        let shown = try await story.wait("the card on the phone") { client.chats[chat]?.cards.first { $0.id == card } }
+        let digest = shown.digest ?? ""
+        let sig = story.phone.secure.map { PhoneSide.approve($0, identity: story.phone.identity, cardId: card, digest: digest, action: action.rawValue) } ?? "loopback"
+        let id = client.command(.answer(chatId: chat, cardId: card, action: action, answers: nil, proof: AnswerProof(digest: digest, sig: sig)))
+        let result = try await story.wait("the result of answering") { client.results[id] }
+        if let refused {
+            guard !result.ok, result.code == refused else {
+                throw StoryFailure.expectation("answering refused with \(refused.rawValue) (got ok \(result.ok), \(result.code?.rawValue ?? "no code"))")
+            }
+        } else if !result.ok {
+            throw StoryFailure.expectation("answering to go through (refused: \(result.code?.rawValue ?? "?"))")
+        }
     }
 }
 

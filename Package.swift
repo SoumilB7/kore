@@ -12,6 +12,7 @@ let package = Package(
         .executable(name: "Kore", targets: ["Kore"]),
         .executable(name: "kore-cli", targets: ["kore-cli"]),
         .executable(name: "kore-phone", targets: ["kore-phone"]),
+        .executable(name: "kore-remote-probe", targets: ["kore-remote-probe"]),
         .executable(name: "kore-storylines", targets: ["kore-storylines"]),
         .executable(name: "kore-fake-cli", targets: ["kore-fake-cli"]),
         .executable(name: "kore-power-bench", targets: ["kore-power-bench"]),
@@ -39,6 +40,8 @@ let package = Package(
             name: "kore-phone", dependencies: ["KorePhone", "KoreUI", "KoreCore"], path: "Sources/KorePhoneApp",
             swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
+        // A phone without a phone: pairs, links and tries the attacks against a Kore Phone.
+        .executableTarget(name: "kore-remote-probe", dependencies: ["KoreRemote"], swiftSettings: releaseForSize),
         // User storylines (phase 12): the engine, steps, scripted CLI and catalogue, and the app
         // with them inside. Neither is part of Kore.app.
         .target(name: "KoreStorylines", dependencies: ["KoreUI", "KoreCore", "KoreRemote", "KorePhone"], swiftSettings: releaseForSize),

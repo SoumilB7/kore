@@ -442,3 +442,49 @@ private final class HandDefaults: UserDefaults, @unchecked Sendable {
     override func set(_ value: Any?, forKey key: String) { values[key] = value }
     override func set(_ value: Bool, forKey key: String) { values[key] = value }
 }
+
+/// Kore Phone's connected phones keep the Mac awake whatever the user's own setting, and say so.
+@MainActor
+@Suite("Stay awake for a phone")
+struct StayAwakePhoneTests {
+    @Test func aConnectedPhoneHoldsAndTheLastOneLeavingLetsGo() {
+        let (hold, system, power) = (RecordedHold(), RecordedHold(), HandPower(PowerState(onBattery: false, percent: 100)))
+        let awake = StayAwake(hold: hold, systemHold: system, clock: HandClock(), power: power, defaults: nil)
+        #expect(awake.state == .off)
+        awake.setPhones(1)
+        #expect(awake.state == .holding)
+        #expect(hold.current == "Kore: a phone is connected")
+        #expect(system.current == "Kore: a phone is connected")
+        #expect(awake.line == "Phone connected")
+        #expect(!awake.isOn)  // the user's own setting is untouched
+        awake.setPhones(2)
+        awake.setPhones(0)
+        #expect(hold.current == nil)
+        #expect(system.current == nil)
+        #expect(awake.state == .off)
+    }
+
+    @Test func onBatteryOnlyIdleSleepIsHeldAndTheFloorLetsGo() {
+        let (hold, system, power) = (RecordedHold(), RecordedHold(), HandPower(PowerState(onBattery: true, percent: 50)))
+        let awake = StayAwake(hold: hold, systemHold: system, clock: HandClock(), power: power, defaults: nil)
+        awake.setPhones(1)
+        #expect(hold.current == "Kore: a phone is connected")
+        #expect(system.current == nil)
+        power.set(PowerState(onBattery: true, percent: 19))
+        #expect(hold.current == nil)
+        #expect(awake.state == .paused(19))
+        power.set(PowerState(onBattery: false, percent: 19))
+        #expect(hold.current == "Kore: a phone is connected")
+        #expect(system.current == "Kore: a phone is connected")
+    }
+
+    @Test func theUsersOwnReasonComesFirst() {
+        let (hold, system, power) = (RecordedHold(), RecordedHold(), HandPower(PowerState(onBattery: false, percent: 100)))
+        let awake = StayAwake(hold: hold, systemHold: system, clock: HandClock(), power: power, defaults: nil)
+        awake.choose(.always)
+        awake.setPhones(1)
+        #expect(hold.current == "Kore: Stay awake is on")
+        #expect(awake.line == "Awake until turned off")
+        #expect(system.current == "Kore: a phone is connected")
+    }
+}

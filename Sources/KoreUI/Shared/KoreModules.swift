@@ -16,6 +16,28 @@ package enum KoreModules {
     }
 
     package static var commands: [Command] = []
+
+    /// A popup over the composer that a module opens (its "/" entry's): shown in the menu's place,
+    /// one at a time with Kore's own. `view` gets the room it may take.
+    package struct Popup {
+        package let isOpen: @MainActor (Chat) -> Bool
+        package let close: @MainActor (Chat) -> Void
+        package let view: @MainActor (Chat, CGFloat) -> AnyView
+
+        package init(
+            isOpen: @escaping @MainActor (Chat) -> Bool, close: @escaping @MainActor (Chat) -> Void,
+            view: @escaping @MainActor (Chat, CGFloat) -> AnyView
+        ) {
+            self.isOpen = isOpen
+            self.close = close
+            self.view = view
+        }
+    }
+
+    package static var popups: [Popup] = []
+
+    /// The module popup open over `chat`, if any.
+    static func openPopup(in chat: Chat) -> Popup? { popups.first { $0.isOpen(chat) } }
     /// A title-row button, given the window's workspace and the row's control size.
     package static var titleButtons: [@MainActor (Workspace, CGFloat) -> AnyView] = []
 

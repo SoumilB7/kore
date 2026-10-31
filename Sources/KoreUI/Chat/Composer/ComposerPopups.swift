@@ -6,14 +6,14 @@ import Foundation
 /// + opens the system's panel. A press on the composer's bar closes the rest as it goes
 /// down, before they open, all but the picker whose chip it lands on (its chip closes it).
 enum OpenPopup: Equatable {
-    case slash, usage, usageCard, account, importer, contextCard, agentMap, menu, model, mode
+    case slash, usage, usageCard, account, importer, contextCard, agentMap, menu, model, mode, module
 }
 
 extension Chat {
     /// Something other than the / menu open over the composer.
     var hasPopup: Bool {
         usage.isOpen || usage.extended || account.isOpen || importer.isOpen || contextCard.shown || agentMap.isOpen
-            || picker.open != nil
+            || picker.open != nil || KoreModules.openPopup(in: self) != nil
     }
 
     /// Closes everything open over the composer except `kept`, the one opening.
@@ -26,7 +26,11 @@ extension Chat {
         if kept != .contextCard { contextCard.close() }
         if kept != .agentMap, agentMap.isOpen { agentMap.close() }
         if let open = picker.open, kept != open.popup { picker.close() }
+        if kept != .module { for popup in KoreModules.popups where popup.isOpen(self) { popup.close(self) } }
     }
+
+    /// A module's popup is opening: everything else closes.
+    package func openingModulePopup() { closePopups(keeping: .module) }
 
     /// The context card and the agent map open from more than one place (a hover, a key, a
     /// button): each closes the rest as it opens.

@@ -131,7 +131,8 @@ package enum RemoteSnapshot {
                     id: planReadyID, kind: .planReady, title: "Implement this plan?",
                     actions: [.init(id: .implement, label: "Yes, implement it", style: .primary), .init(id: .stay, label: "Stay in Plan", style: .neutral)]))
         }
-        return out
+        // Each with its digest: what the phone's signature over an answer covers.
+        return out.map(\.digested)
     }
 
     static func card(_ approval: Approval, in chat: Chat) -> WireCard {

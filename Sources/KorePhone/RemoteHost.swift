@@ -13,6 +13,8 @@ package final class RemoteHost {
     /// One phone, while it's connected.
     final class Connection {
         let session: RemoteSession
+        /// The paired phone's id (nil: a test's loopback phone).
+        var phoneID: String?
         var device = "a phone"
         var presence = WireMessage.Presence.foreground
         var visibleChat: String?
@@ -32,7 +34,8 @@ package final class RemoteHost {
         }
 
         init(session: RemoteSession) { self.session = session }
-        var foreground: Bool { presence != .background }
+        /// It's sent Kore's state: open on the phone, and unlocked (full access).
+        var foreground: Bool { presence != .background && session.link.access == .full }
     }
 
     package private(set) var isOn = false
@@ -45,6 +48,12 @@ package final class RemoteHost {
     let bridge = RemoteBridge()
     private var tap: UUID?
     private let log = KoreLog.named("remote")
+    private let activityLog = KoreLog.named("remote-activity")
+
+    /// What the Phone popup and the title-row button show.
+    package let phone = PhoneModel()
+    /// The switch, the relay and pairing.
+    package private(set) lazy var service = PhoneService(host: self)
 
     /// Phones connected now.
     package var phones: Int { connections.count }
@@ -71,6 +80,25 @@ package final class RemoteHost {
         log.write("off", [:])
     }
 
+    // MARK: Phones' rows
+
+    /// The popup's rows for the paired phones, with what each connection is now.
+    func rows(_ records: [PhoneRecord]) -> [PhoneModel.Row] {
+        records.map { record in
+            let live = connections.first { $0.phoneID == record.id }
+            return PhoneModel.Row(
+                id: record.id, name: record.name, connected: live != nil, access: live?.session.link.access ?? .watch, lastSeen: record.lastSeen)
+        }
+    }
+
+    func refreshRows() {
+        for index in phone.rows.indices {
+            let live = connections.first { $0.phoneID == phone.rows[index].id }
+            phone.rows[index].connected = live != nil
+            phone.rows[index].access = live?.session.link.access ?? .watch
+        }
+    }
+
     private func noted(_ chat: Chat, _ event: ChatEvent) {
         if let turn = attention.noted(chat, event) { broadcast(turn) }
         guard !connections.isEmpty else { return }
@@ -81,11 +109,20 @@ package final class RemoteHost {
 
     /// A phone on `link` (R0: a loopback; the paired, encrypted transport comes later).
     @discardableResult
-    package func connect(_ link: any RemoteLink) -> RemoteSession {
+    package func connect(_ link: any RemoteLink, phoneID: String? = nil) -> RemoteSession {
         turnOn()
         let session = RemoteSession(link: link)
         let connection = Connection(session: session)
+        connection.phoneID = phoneID
         connections.append(connection)
+        AwakeInputs.phonesConnected(connections.count)
+        let sessionID = session.id
+        link.observeAccess { [weak self] access in
+            Task { @MainActor in
+                guard let self, let connection = self.connections.first(where: { $0.session.id == sessionID }) else { return }
+                self.accessChanged(connection, access)
+            }
+        }
         connection.tasks.append(Task.detached { await session.run() })
         connection.tasks.append(
             Task { [weak self] in
@@ -99,9 +136,23 @@ package final class RemoteHost {
         return session
     }
 
+    /// Unlocked: Kore's state goes to it. Locked: only alerts.
+    private func accessChanged(_ connection: Connection, _ access: RemoteAccess) {
+        if access == .full {
+            connection.snapshotDue = connection.foreground
+            bridge.start(self)
+        } else {
+            connection.subs = [:]
+            connection.session.enqueue(.forget)
+        }
+        refreshRows()
+    }
+
     private func ended(_ connection: Connection) {
         guard let index = connections.firstIndex(where: { $0 === connection }) else { return }
         connections.remove(at: index)
+        AwakeInputs.phonesConnected(connections.count)
+        refreshRows()
         connection.tasks.forEach { $0.cancel() }
         log.write("disconnected", ["phones": "\(connections.count)"])
         if connections.isEmpty {
@@ -137,6 +188,7 @@ package final class RemoteHost {
             session.enqueue(.message(attention.ledger.state(after: attnAfter)))
             connection.snapshotDue = connection.foreground
             log.write("connected", ["mode": mode.rawValue])
+            refreshRows()
         case .presence(let mode, let visible):
             connection.visibleChat = visible
             guard mode != connection.presence else { return }
@@ -161,17 +213,33 @@ package final class RemoteHost {
             connection.subs[chatId] = nil
             session.enqueue(.close(chatId: chatId))
         case .entryMore(let id, let chatId, let entryId, let field, let offset):
+            guard connection.foreground else { return }
             session.enqueue(.message(RemoteBridge.chunk(id: id, chatId: chatId, entryId: entryId, field: field, offset: offset)))
         case .cmd(let id, let command):
-            let limited = !connection.actions.take() || (command.type == "chat.send" && !connection.sends.take())
-            let outcome =
-                limited ? RemoteActions.Outcome.failed(.rateLimited, "Too many at once; try again in a minute.") : RemoteActions.apply(command, grant: grant)
+            let outcome: RemoteActions.Outcome
+            if session.link.access != .full {
+                outcome = .failed(.access, "Unlock Kore on the phone first.")
+            } else if !connection.actions.take() || (command.type == "chat.send" && !connection.sends.take()) {
+                outcome = .failed(.rateLimited, "Too many at once; try again in a minute.")
+            } else {
+                outcome = RemoteActions.apply(command, grant: grant, link: session.link)
+            }
             session.enqueue(.result(id: id, ok: outcome.ok, code: outcome.code, message: outcome.message))
             log.write("cmd", ["type": command.type, "ok": outcome.ok ? "yes" : "no", "code": outcome.code?.rawValue])
+            act(connection, command, outcome)
             if let chatId = command.chatId { bridge.dirty(id: chatId) }
         default:
             break
         }
+    }
+
+    /// The Activity list's line for a phone's command: what was done, to which chat (by title),
+    /// never what was said.
+    private func act(_ connection: Connection, _ command: RemoteCommand, _ outcome: RemoteActions.Outcome) {
+        let title = command.chatId.flatMap(Self.chat).map(\.title)
+        let name = connection.phoneID.flatMap { id in phone.rows.first { $0.id == id }?.name } ?? connection.device
+        phone.note(PhoneActivity.command(command, ok: outcome.ok, title: title), phone: name)
+        activityLog.write("cmd", ["type": command.type, "ok": outcome.ok ? "yes" : "no", "chat": title, "phone": connection.phoneID])
     }
 
     /// To every phone, in the foreground or not (attention).

@@ -14,5 +14,14 @@ package enum KorePhone {
         guard !installed else { return }
         installed = true
         _ = RemoteHost.shared
+        PhoneUI.install()
+    }
+
+    /// Takes the Mac's controls out again (a storyline that installed them, finished).
+    package static func uninstall() {
+        guard installed else { return }
+        installed = false
+        RemoteHost.shared.service.disable()
+        PhoneUI.uninstall()
     }
 }
