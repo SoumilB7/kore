@@ -1,0 +1,51 @@
+{
+ "name": "rate-burst",
+ "description": "Three seconds' worth of frames at once ends the socket: each socket has a token bucket of a second's worth (400), refilled by the millisecond.",
+ "hostToken": "6060606060606060606060606060606060606060606060606060606060606060",
+ "tokens": {
+  "pair": "1111111111111111111111111111111111111111111111111111111111111111",
+  "phone": "2222222222222222222222222222222222222222222222222222222222222222",
+  "other": "3333333333333333333333333333333333333333333333333333333333333333"
+ },
+ "steps": [
+  {
+   "op": "connect",
+   "as": "host",
+   "role": "host",
+   "token": "host",
+   "expect": "ok"
+  },
+  {
+   "op": "send",
+   "as": "host",
+   "frame": "10{hash:pair}"
+  },
+  {
+   "op": "connect",
+   "as": "p1",
+   "role": "phone",
+   "token": "pair",
+   "expect": "ok"
+  },
+  {
+   "op": "recv",
+   "as": "p1",
+   "frame": "02"
+  },
+  {
+   "op": "recv",
+   "as": "host",
+   "frame": "0200"
+  },
+  {
+   "op": "send",
+   "as": "p1",
+   "frame": "01aa",
+   "repeat": 1200
+  },
+  {
+   "op": "closed",
+   "as": "p1"
+  }
+ ]
+}

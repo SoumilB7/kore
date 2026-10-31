@@ -3,6 +3,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { FRAMES_PER_SECOND, frame, hex, mailboxOf, sha256 } from "../src/frame";
+import { TokenBucket } from "../src/rate";
 import { join } from "./socket";
 
 async function hostWithPhone() {
@@ -31,8 +32,23 @@ describe("relay", () => {
 
   it("ends a socket that sends too fast", async () => {
     const { phone } = await hostWithPhone();
-    for (let i = 0; i <= FRAMES_PER_SECOND + 5; i++) phone.ws.send(frame(0x01, new Uint8Array([i & 0xff])));
-    expect(await phone.closedWithin(3000)).toBe(true);
+    // Three seconds' worth at once: past the bucket whatever the clock does meanwhile.
+    for (let i = 0; i < FRAMES_PER_SECOND * 3; i++) phone.ws.send(frame(0x01, new Uint8Array([i & 0xff])));
+    expect(await phone.closedWithin(5000)).toBe(true);
+  });
+
+  it("allows a second's worth at once, then refills by the millisecond", () => {
+    const bucket = new TokenBucket(0);
+    for (let i = 0; i < FRAMES_PER_SECOND; i++) expect(bucket.take(0)).toBe(true);
+    expect(bucket.take(0)).toBe(false);
+    // 1000 / FRAMES_PER_SECOND ms gives one frame back; a boundary gives nothing extra.
+    expect(bucket.take(1000 / FRAMES_PER_SECOND)).toBe(true);
+    expect(bucket.take(1000 / FRAMES_PER_SECOND)).toBe(false);
+    // Half a second on, half a bucket: never a second bucket on top of the first, as a fixed
+    // window's boundary would give.
+    let taken = 0;
+    while (bucket.take(500 + 1000 / FRAMES_PER_SECOND)) taken++;
+    expect(Math.abs(taken - FRAMES_PER_SECOND / 2)).toBeLessThanOrEqual(1);
   });
 
   it("ends a socket that sends text", async () => {

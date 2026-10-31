@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { hex, mailboxOf, sha256 } from "../src/frame";
 import { Client, fromHex, join } from "./socket";
 
-type Step = { op: string; as?: string; role?: string; token?: string; mailbox?: string; expect?: "ok" | number; frame?: string; pad?: number };
+type Step = { op: string; as?: string; role?: string; token?: string; mailbox?: string; expect?: "ok" | number; frame?: string; pad?: number; repeat?: number };
 type Fixture = { name: string; hostToken: string; tokens: Record<string, string>; steps: Step[] };
 
 const fixtures = import.meta.glob<Fixture>("../../protocol/fixtures/relay/*.json", { eager: true, import: "default" });
@@ -35,17 +35,19 @@ describe("relay fixtures", () => {
             if (client) sockets[who] = client;
             break;
           }
-          case "send":
-            sockets[who].ws.send(await frame(step.frame!, step.pad));
+          case "send": {
+            const bytes = await frame(step.frame!, step.pad);
+            for (let i = 0; i < (step.repeat ?? 1); i++) sockets[who].ws.send(bytes);
             await new Promise((r) => setTimeout(r, 20));
             break;
+          }
           case "recv": {
             const got = await sockets[who].next();
             expect(got && hex(got), `${f.name}: ${who} got`).toEqual(hex(await frame(step.frame!)));
             break;
           }
           case "closed":
-            expect(await sockets[who].closedWithin(), `${f.name}: ${who} closed`).toBe(true);
+            expect(await sockets[who].closedWithin(5000), `${f.name}: ${who} closed`).toBe(true);
             break;
           case "close":
             sockets[who].ws.close(1000, "bye");

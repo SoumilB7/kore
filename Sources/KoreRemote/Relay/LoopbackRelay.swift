@@ -69,11 +69,9 @@ package actor LoopbackRelay {
 
     private nonisolated func listen(_ socket: MemorySocket, mailbox: Data, slot: UInt8?) {
         Task {
-            var recent: [Date] = []
+            var rate = RelayRate(now: Date().timeIntervalSinceReferenceDate)
             while let bytes = await socket.next() {
-                let t = Date()
-                recent = recent.filter { t.timeIntervalSince($0) < 1 } + [t]
-                guard recent.count <= RelayLimits.framesPerSecond else { break }
+                guard rate.take(now: Date().timeIntervalSinceReferenceDate) else { break }
                 guard await take(bytes, mailbox: mailbox, slot: slot, from: socket) else { break }
             }
             await gone(socket, mailbox: mailbox, slot: slot)

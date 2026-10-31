@@ -2,8 +2,9 @@
 // It keeps nothing: no storage, only each socket's attachment (its role, slot and token hash,
 // and on the host's the hashes it allowed), so it can sleep between frames (hibernation).
 import { DurableObject } from "cloudflare:workers";
+import { TokenBucket } from "./rate";
 import {
-  ALLOW, CLOSE, DATA, FRAMES_PER_SECOND, HOST_GRACE_MS, MAX_ALLOWED, MAX_PAYLOAD, MAX_PHONES, OPEN, REVOKE,
+  ALLOW, CLOSE, DATA, HOST_GRACE_MS, MAX_ALLOWED, MAX_PAYLOAD, MAX_PHONES, OPEN, REVOKE,
   frame, fromBase64URL, hex, mailboxOf, sha256,
 } from "./frame";
 
@@ -15,8 +16,8 @@ const NORMAL = 1000;
 const PUT_OUT = 4000;
 
 export class Mailbox extends DurableObject {
-  /** Frames each socket sent this second (in memory only; a wake starts over). */
-  private rates = new WeakMap<WebSocket, { second: number; count: number }>();
+  /** Each socket's frame allowance (in memory only; a wake starts it full). */
+  private rates = new WeakMap<WebSocket, TokenBucket>();
 
   async fetch(request: Request): Promise<Response> {
     const mailbox = new URL(request.url).pathname.slice(3);
@@ -148,14 +149,13 @@ export class Mailbox extends DurableObject {
   }
 
   private withinRate(ws: WebSocket): boolean {
-    const second = Math.floor(Date.now() / 1000);
-    const r = this.rates.get(ws);
-    if (!r || r.second !== second) {
-      this.rates.set(ws, { second, count: 1 });
-      return true;
+    const now = Date.now();
+    let bucket = this.rates.get(ws);
+    if (!bucket) {
+      bucket = new TokenBucket(now);
+      this.rates.set(ws, bucket);
     }
-    r.count += 1;
-    return r.count <= FRAMES_PER_SECOND;
+    return bucket.take(now);
   }
 
   private host(): WebSocket | undefined {

@@ -17,6 +17,7 @@ struct RelayFixtureTests {
             let expect: Expectation?
             let frame: String?
             let pad: Int?
+            let `repeat`: Int?
         }
 
         enum Expectation: Decodable, Equatable {
@@ -66,7 +67,8 @@ struct RelayFixtureTests {
                     #expect(step.expect == .status(refusal.rawValue), "\(f.name): \(who) refused \(refusal.rawValue)")
                 }
             case "send":
-                try? await sockets[who]?.send(frame(step.frame!, pad: step.pad))
+                let bytes = frame(step.frame!, pad: step.pad)
+                for _ in 0..<(step.repeat ?? 1) { try? await sockets[who]?.send(bytes) }
                 // The relay takes a sent frame in its own time, as the real one does.
                 try await Task.sleep(for: .milliseconds(20))
             case "recv":
@@ -75,13 +77,34 @@ struct RelayFixtureTests {
             case "closed":
                 let socket = sockets[who]!
                 await #expect(throws: (any Error).self, "\(f.name): \(who) closed") {
-                    while true { _ = try await withDeadline(2) { try await socket.receive() } }
+                    while true { _ = try await withDeadline(5) { try await socket.receive() } }
                 }
             case "close": sockets[who]?.close()
             case "drop": (sockets[who] as? MemorySocket)?.drop()
             default: Issue.record("unknown op \(step.op)")
             }
         }
+    }
+}
+
+/// The relay's frame allowance: a second's worth at once, refilled by the millisecond, and no
+/// more across a second's boundary.
+@Suite("relay rate")
+struct RelayRateTests {
+    @Test func aBucketOfASecondsWorth() {
+        let per = Double(RelayLimits.framesPerSecond)
+        var rate = RelayRate(now: 0)
+        var first = 0
+        while rate.take(now: 0) { first += 1 }
+        #expect(first == RelayLimits.framesPerSecond)
+        let one = rate.take(now: 1 / per)
+        let none = rate.take(now: 1 / per)
+        #expect(one && !none)
+        // Half a second on, half a bucket: never a second bucket on top of the first, as a fixed
+        // window's boundary would give.
+        var later = 0
+        while rate.take(now: 0.5 + 1 / per) { later += 1 }
+        #expect(abs(later - RelayLimits.framesPerSecond / 2) <= 1)
     }
 }
 
