@@ -39,9 +39,16 @@ package final class ChatTab: Identifiable {
 package final class Workspace {
     package let folder: URL
     let terminals: TerminalPanel
-    package private(set) var tabs: [ChatTab] {
-        didSet { bindTabs(previous: oldValue) }
+    package internal(set) var tabs: [ChatTab] {
+        didSet {
+            bindTabs(previous: oldValue)
+            if !tabGroups.isEmpty { tabGroups.normalize(order: tabs.map(\.id)) }
+        }
     }
+    /// Browser-style groups of the tabs (TabGroups.swift).
+    package internal(set) var tabGroups = TabGroups()
+    /// The group whose popup is open, and whether its name field takes the keys.
+    package internal(set) var groupEdit: TabGroupEdit?
     /// The folder's window, once it's on screen (a storyline host sizes and snapshots it). Its
     /// close, not its view's, ends the chats.
     @ObservationIgnored package weak var window: NSWindow? {
@@ -144,7 +151,11 @@ package final class Workspace {
         let saved = pending ?? (restore ? Self.saved(for: folder) : nil)
         drafts = saved?.drafts ?? [:]
         closedTabs = Array((saved?.closed ?? []).suffix(20))
-        var restored = saved?.tabs.map { Self.tab($0, in: folder) } ?? []
+        let savedTabs = saved?.tabs ?? []
+        var restored = savedTabs.map { Self.tab($0, in: folder) }
+        var groups = TabGroups()
+        for group in saved?.groups ?? [] { groups.add(group) }
+        for (tab, savedTab) in zip(restored, savedTabs) where savedTab.group != nil { groups.set(tab.id, to: savedTab.group) }
         // A file open twice (saved under two spellings of its path) comes back once.
         var seen: Set<String> = []
         restored.removeAll { tab in
@@ -153,6 +164,8 @@ package final class Workspace {
         }
         if restored.isEmpty { restored = [ChatTab()] }
         tabs = restored
+        groups.normalize(order: restored.map(\.id))
+        tabGroups = groups
         restoredChats = Set(restored.compactMap { $0.chat.map(ObjectIdentifier.init) })
         activeID = restored[min(max(saved?.active ?? 0, 0), restored.count - 1)].id
         if restore, let explorer = Self.savedExplorer(for: folder) {
@@ -169,6 +182,10 @@ package final class Workspace {
     package var activeTab: ChatTab { tabs.first { $0.id == activeID } ?? tabs[0] }
 
     func select(_ tab: ChatTab) {
+        // A tab of a folded group, picked from elsewhere (⌘P, History, the »N list): the group opens.
+        if tab.id != activeID, let group = tabGroups.group(of: tab.id), group.folded {
+            tabGroups.update(group.id) { $0.folded = false }
+        }
         activeID = tab.id
         if let file = tab.file, explorerOpen, let files {
             Task { await files.reveal(file.path) }
@@ -474,18 +491,21 @@ package final class Workspace {
     /// The tab showing the close question: asked, and its turn still running.
     func asking(_ tab: ChatTab) -> Bool { closing?.tab == tab.id && tab.chat?.isBusy == true }
 
-    /// ⌃⇥ / ⌃⇧⇥: the next or previous tab, round from the last to the first.
+    /// ⌃⇥ / ⌃⇧⇥: the next or previous tab, round from the last to the first; a folded group's
+    /// tabs are passed over.
     func selectAdjacent(_ step: Int) {
-        guard let index = tabs.firstIndex(where: { $0.id == activeID }) else { return }
-        let count = tabs.count
-        select(tabs[((index + step) % count + count) % count])
+        let shown = stripTabs
+        guard let index = shown.firstIndex(where: { $0.id == activeID }) else { return }
+        let count = shown.count
+        select(shown[((index + step) % count + count) % count])
     }
 
-    /// ⌘1–8: that tab, when there is one; ⌘9: the last, as in Safari.
+    /// ⌘1–8: that tab, when there is one; ⌘9: the last, as in Safari. Counted along the strip.
     func selectNumber(_ n: Int) {
-        let index = n == 9 ? tabs.count - 1 : n - 1
-        guard tabs.indices.contains(index) else { return }
-        select(tabs[index])
+        let shown = stripTabs
+        let index = n == 9 ? shown.count - 1 : n - 1
+        guard shown.indices.contains(index) else { return }
+        select(shown[index])
     }
 
     /// Open over the window, and closed by Esc before anything in the chat: a tab's close
@@ -594,12 +614,28 @@ package final class Workspace {
 
     /// Puts a tab at `index` among the tabs (a drag in the tab bar). A preview tab that's moved is
     /// kept, as in VS Code: placing it says it's wanted. The order is saved with the folder.
+    /// In groups, the tab joins a group it lands inside, keeps its own while it still touches it,
+    /// and otherwise leaves it.
     func moveTab(_ tab: ChatTab, to index: Int) {
         guard let from = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         let to = min(max(index, 0), tabs.count - 1)
         keep(tab)
         guard to != from else { return }
-        tabs.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        var order = tabs
+        order.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        if !tabGroups.isEmpty {
+            let left = to > 0 ? tabGroups.member[order[to - 1].id] : nil
+            let right = to + 1 < order.count ? tabGroups.member[order[to + 1].id] : nil
+            let own = tabGroups.member[tab.id]
+            if let left, left == right {
+                tabGroups.set(tab.id, to: left)
+            } else if let own, own == left || own == right {
+                // Still beside its own group.
+            } else {
+                tabGroups.set(tab.id, to: nil)
+            }
+        }
+        tabs = order
     }
 
     /// Moves the active tab one place right (`+1`) or left (`-1`): ⌃⇧⇟ / ⌃⇧⇞.
@@ -924,6 +960,8 @@ package final class Workspace {
             var draft: ChatDraft? = nil
             /// A board tab's layout and chats.
             var board: SavedBoard? = nil
+            /// The tab group it's in.
+            var group: UUID? = nil
         }
 
         struct Closed: Codable, Equatable {
@@ -938,20 +976,32 @@ package final class Workspace {
         var active: Int
         var closed: [Closed]? = nil
         var drafts: [String: ChatDraft]? = nil
+        var groups: [TabGroup]? = nil
     }
 
     /// Agent tabs and preview tabs aren't saved: they come back by opening them again.
     var saved: Saved {
         let kept = tabs.filter { $0.agent == nil && !$0.isPreview }
+        let groups = tabGroups
+        let savedGroups = groups.groups.filter { group in kept.contains { groups.member[$0.id] == group.id } }
         return Saved(
             tabs: kept.map { tab in
-                if let file = tab.file { return Saved.Tab(file: file.path) }
-                if let board = tab.board { return Saved.Tab(board: board.saved(Self.savedChat)) }
-                guard let chat = tab.chat else { return Saved.Tab() }
-                let resumable = chat.hasConversation ? chat.listedId : nil
-                return Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title })
+                var saved: Saved.Tab
+                if let file = tab.file {
+                    saved = Saved.Tab(file: file.path)
+                } else if let board = tab.board {
+                    saved = Saved.Tab(board: board.saved(Self.savedChat))
+                } else if let chat = tab.chat {
+                    let resumable = chat.hasConversation ? chat.listedId : nil
+                    saved = Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title })
+                } else {
+                    saved = Saved.Tab()
+                }
+                saved.group = groups.member[tab.id]
+                return saved
             },
-            active: kept.firstIndex { $0.id == activeID } ?? kept.firstIndex { $0.chat === activeTab.chat } ?? 0)
+            active: kept.firstIndex { $0.id == activeID } ?? kept.firstIndex { $0.chat === activeTab.chat } ?? 0,
+            groups: savedGroups.isEmpty ? nil : savedGroups)
     }
 
     /// Builds the persistence value outside SwiftUI observation: typing never changes `saved`.

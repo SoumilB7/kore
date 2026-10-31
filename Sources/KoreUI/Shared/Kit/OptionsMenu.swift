@@ -334,20 +334,24 @@ private struct ContextOptions: NSViewRepresentable {
     let items: () -> [OptionItem]
     let source: String
     var modal = false
+    /// A secondary click that opens a popup of its own rather than a list of items.
+    var perform: (() -> Void)? = nil
     func makeNSView(context: Context) -> Target { Target() }
-    func updateNSView(_ view: Target, context: Context) { view.items = items; view.source = source; view.modal = modal }
+    func updateNSView(_ view: Target, context: Context) { view.items = items; view.source = source; view.modal = modal; view.perform = perform }
     final class Target: NSView {
         static let all = NSHashTable<Target>.weakObjects()
         var items: (() -> [OptionItem])?
         var source = ""
         /// Over the rest of the window (the image viewer): it wins over the targets it covers.
         var modal = false
+        var perform: (() -> Void)?
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             if window == nil { Self.all.remove(self) } else { Self.all.add(self) }
         }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         func show(_ event: NSEvent) {
+            if let perform { return perform() }
             guard let window else { return }
             OptionsMenu.shared.show(items?() ?? [], at: event.locationInWindow, in: window, source: source)
         }
@@ -357,6 +361,12 @@ private struct ContextOptions: NSViewRepresentable {
 extension View {
     func koreContextMenu(_ source: String, modal: Bool = false, items: @escaping () -> [OptionItem]) -> some View {
         overlay { ContextOptions(items: items, source: source, modal: modal).accessibilityHidden(true) }
+    }
+
+    /// A secondary click (right or ⌃-click) that opens the view's own popup: the same routing as
+    /// `koreContextMenu`, so it wins over the views under it.
+    func koreSecondaryClick(_ source: String, perform: @escaping () -> Void) -> some View {
+        overlay { ContextOptions(items: { [] }, source: source, perform: perform).accessibilityHidden(true) }
     }
 }
 
