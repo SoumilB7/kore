@@ -2,6 +2,26 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.2.3] - 2026-11-01
+
+### Added
+- Tab groups: hold a tab over another to group them; each group has a name, a colour and a
+  chip that folds it. Close or ungroup a whole group from its menu.
+- Remote control: "/" → Remote control turns on the claude or codex CLI's own remote control
+  for a chat, with a Remote chip while it's on. It ends on an account switch.
+- File tree: ⌘- and ⇧-click multi-select; cut, copy, paste and duplicate; undo and redo for
+  file changes; Open in Terminal; Find in Folder; the open file is revealed in the tree.
+- A usage mark from 80% of a plan limit, stepping every 5%, that can be dismissed until the
+  next step or reset.
+- Click a command's box to scroll and select its full input and output.
+- A local link that lets an app you allow, once per run, follow and act on your chats.
+
+### Changed
+- Plain URLs in replies are links.
+- A window follows its folder when the folder is renamed, and offers Locate… if it's gone.
+- A sub-agent tab's prompt scrolls with its timeline and folds when long.
+- Live agents get distinct shapes; usage rows name the folder a chat belongs to.
+
 ## [0.1.1] - 2026-10-25
 
 ### Fixed
