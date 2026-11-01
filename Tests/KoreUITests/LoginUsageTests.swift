@@ -343,6 +343,8 @@ struct LoginUsageTests {
     }
     @Test func pastedLoginInputCannotCrossCancelledFlows() async throws {
         let previous = StorylineSeams.accounts
+        let previousOpened = StorylineSeams.opened
+        StorylineSeams.opened = { _ in }
         let store = AccountStore()
         var pending: CheckedContinuation<JSONValue?, any Error>?
         var submissions = 0
@@ -357,6 +359,7 @@ struct LoginUsageTests {
         defer {
             store.cancel("codex")
             StorylineSeams.accounts = previous
+            StorylineSeams.opened = previousOpened
         }
         let folder = FileManager.default.temporaryDirectory
         store.signIn("codex", in: folder)

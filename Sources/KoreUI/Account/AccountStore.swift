@@ -721,9 +721,9 @@ package final class AccountStore {
     /// Opens a sign-in page in the browser. Under a storyline host nothing opens: the host
     /// is told instead.
     private static func open(_ url: URL) {
-        if StoryHost.installed {
-            StorylineSeams.opened?(url)
-        } else {
+        if let opened = StorylineSeams.opened {
+            opened(url)
+        } else if !StoryHost.installed {
             NSWorkspace.shared.open(url)
         }
     }
