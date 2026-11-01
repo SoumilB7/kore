@@ -58,9 +58,11 @@ final class ScrollShift: ObservableObject {
     var zoomAdjusting: Bool { scrollView.map(PinchZoom.isAdjusting) ?? false }
 
     /// How many layers draw in the visible part of the content: none is a blank view, whatever
-    /// its geometry says.
+    /// its geometry says. Under a hidden or see-through layer (a tab's fade left at nothing)
+    /// none of them shows.
     var drawn: Int? {
         guard let scroll = scrollView, let document = scroll.documentView, let root = document.layer else { return nil }
+        if scroll.isHiddenOrHasHiddenAncestor || Self.faded(scroll.layer) { return 0 }
         let visible = document.convert(scroll.contentView.bounds, from: scroll.contentView)
         var count = 0
         func walk(_ layer: CALayer, depth: Int) {
@@ -73,6 +75,16 @@ final class ScrollShift: ObservableObject {
         }
         walk(root, depth: 0)
         return count
+    }
+
+    /// A layer or one above it hidden or see-through.
+    static func faded(_ layer: CALayer?) -> Bool {
+        var layer = layer
+        while let current = layer {
+            if current.isHidden || current.opacity < 0.01 { return true }
+            layer = current.superlayer
+        }
+        return false
     }
 
     /// Moves the view `dy` points towards the content's end; false while no scroll view is known.

@@ -55,8 +55,12 @@ package final class TranscriptSelection: ObservableObject {
     weak var responder: NSView?
     @Published private(set) var anchor: TextPoint?
     @Published private(set) var focus: TextPoint?
-    /// The transcript has focus in the key window: the highlight is the active colour.
-    @Published var active = false
+    /// The transcript has focus in the key window: the highlight is the active colour. Heard only
+    /// while there's a selection: with none, no row draws the colour, and every kept chat's rows
+    /// would draw again at each key change.
+    var active = false {
+        willSet { if newValue != active, anchor != nil { objectWillChange.send() } }
+    }
 
     /// Built rows' frames, their texts, and what floats over them (a pinned message), in the
     /// content space.

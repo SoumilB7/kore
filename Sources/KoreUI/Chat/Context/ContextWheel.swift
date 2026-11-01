@@ -207,7 +207,7 @@ struct ContextCardAnchor: PreferenceKey {
 }
 
 extension View {
-    /// Shows the context wheel's card above the wheel, inside this view (the chat), so the
+    /// Shows the context wheel's card above the wheel, from this view (the composer's column), so the
     /// composer's box doesn't clip it. Under it, a bridge as wide as the wheel spans the gap, so
     /// the pointer can go from one to the other without leaving.
     func contextCard(_ chat: Chat) -> some View {

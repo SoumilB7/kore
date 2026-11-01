@@ -213,7 +213,7 @@ struct UsageCueCardAnchor: PreferenceKey {
 }
 
 extension View {
-    /// The usage mark's card above the mark, inside this view (the chat), so the composer's box
+    /// The usage mark's card above the mark, from this view (the composer's column), so the box
     /// doesn't clip it: one opaque line, its trailing edge on the mark's.
     func usageCueCard() -> some View {
         overlayPreferenceValue(UsageCueCardAnchor.self) { shown in

@@ -88,10 +88,12 @@ struct ChatView: View {
             .padding(.horizontal, column.composerPadding)
             .padding(.bottom, Space.xxxl)
             .frame(maxWidth: column.composerMaxWidth)
+            // The composer's cards rise over the transcript from here: read over the composer's
+            // views alone, not every transcript row.
+            .contextCard(chat)
+            .usageCueCard()
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height.value = $0 }
-        .contextCard(chat)
-        .usageCueCard()
         .environment(\.hiddenTab, active == nil)
         // The approvals' and the changes modal's files open in Kore, as the transcript's do.
         .environment(\.openURL, OpenURLAction { [workspace] url in

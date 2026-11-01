@@ -17,8 +17,9 @@ struct TranscriptTimeline: View, Equatable {
     @Environment(\.hiddenTab) private var hidden
     /// A board tile: the pinned message is a band the transcript is inset under.
     @Environment(\.pinnedBand) private var band
-    /// The sections and the end as they were when the chat's tab hid.
-    @StateObject private var frozen = Frozen<(sections: [TranscriptStore.SectionModel], tail: Int)>()
+    /// The sections as they were when the chat's tab hid. The end (`store.tail`, a change per
+    /// streamed token) is read by `TailWatch` alone, so a token doesn't draw the timeline again.
+    @StateObject private var frozen = Frozen<[TranscriptStore.SectionModel]>()
     @StateObject private var following = Local(true)
     /// Long messages open, and whether the end was followed when the first opened: followed
     /// again once they've all closed.
@@ -78,12 +79,20 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var insetSettling = Held(false)
     /// Which sections' messages have scrolled past their pinned header.
     @StateObject private var sticky = StickyTracker()
+    /// The rows' actions, built once (their closures hold only references), so a section drawn
+    /// again with the same model is skipped.
+    @StateObject private var built = Held((rows: TranscriptActions, reveal: TranscriptActions)?.none)
     /// The scroll view's last geometry: content height, offset, visible height, top inset.
     @StateObject private var seen = Held([CGFloat]())
     /// A shown transcript with rows and none of them on screen (`checkBlank`): the check under
-    /// way, and how often the scroll view was built again for it.
-    @StateObject private var blankCheck = Held(Task<Void, Never>?.none)
+    /// way and when it looks (each call moves that on), how often the scroll view was built again
+    /// for it, and when it was lately (a few a minute at most).
+    @StateObject private var blankCheck = Held((task: Task<Void, Never>?.none, due: Date.distantPast))
     @StateObject private var remounts = Held(0)
+    @StateObject private var remountedAt = Held([Date]())
+    /// A view new or built again, until its layout settles (each change of height puts that off,
+    /// up to `limit`): the offset it's held at, or none to only keep it within the measured end.
+    @StateObject private var settling = Held((offset: CGFloat?, until: Date, limit: Date)?.none)
     @StateObject private var mount = Local(0)
     @StateObject private var shown = Held(false)
 
@@ -95,12 +104,15 @@ struct TranscriptTimeline: View, Equatable {
     private static let leftEnd: CGFloat = 150
     /// After a send, new content glides into view for this long.
     private static let glide: TimeInterval = 2
+    /// A scroll view new or built again has laid out this long after its height last changed,
+    /// and within `settleLimit` in all.
+    private static let settle: TimeInterval = 0.5
+    private static let settleLimit: TimeInterval = 1.5
 
     var body: some View {
-        let (sections, tail) = frozen(hidden) { (store.sections, store.tail) }
+        let sections = frozen(hidden) { store.sections }
         return ScrollViewReader { proxy in
-            let rowActions = rowActions(proxy)
-            let reveal = reveal(proxy)
+            let (rowActions, reveal) = builtActions(proxy)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     // One row at the top, never two: earlier turns of this history first, then the
@@ -155,12 +167,9 @@ struct TranscriptTimeline: View, Equatable {
                     .accessibilityHidden(true)
             }
             // A board tile's pinned message takes its height: the transcript is inset under it.
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if band, let section = sections.last(where: { $0.header.map { sticky.stuck.contains($0.id.uuidString) } == true }),
-                    let header = section.header {
-                    PinnedBand(entry: header, open: section.headerOpen, actions: reveal, tracker: sticky)
-                }
-            }
+            // Elsewhere there's no inset at all, so the lazy stack's estimates don't measure up
+            // through one.
+            .modifier(BandInset(band: band, sections: sections, reveal: reveal, tracker: sticky))
             .accessibilityAction(named: Text("Copy Selection")) { store.selection.copy() }
             .scrollPosition(binding)
             .defaultScrollAnchor(.bottom, for: .alignment)
@@ -174,6 +183,7 @@ struct TranscriptTimeline: View, Equatable {
                     following.value = false
                     // The reader took over: a place still being restored or kept is dropped.
                     restore.value = nil
+                    settling.value = nil
                     restoreInRow.value = nil
                     anchor.value = nil
                     paged.value = nil
@@ -231,6 +241,7 @@ struct TranscriptTimeline: View, Equatable {
                     restore.value = nil
                     if !saved.atEnd {
                         following.value = false
+                        settle(at: nil)
                         if let row = saved.row {
                             proxy.scrollTo(row, anchor: .top)
                             restoreInRow.value = saved.inRow
@@ -242,6 +253,29 @@ struct TranscriptTimeline: View, Equatable {
                             nudge.value &+= 1
                         }
                         return
+                    }
+                }
+                if let place = settling.value, height > 0 {
+                    // A view new or built again lays out, takes its inset and its default anchor,
+                    // and measures the rows it only estimated, over a few passes: meanwhile it's
+                    // never past the measured end (where nothing draws), and a rebuilt one is held
+                    // where the reader was, with nothing following.
+                    let now = Date()
+                    if height != geometry.value.height { settling.value?.until = min(now + Self.settle, place.limit) }
+                    if let until = settling.value?.until, now < until {
+                        let target = min(max(place.offset ?? offset, -insetTop.value), max(0, height - new[2]))
+                        if abs(offset - target) > 0.5 {
+                            scroll(position, to: target)
+                            nudge.value &+= 1
+                            geometry.value = (height, target)
+                            return
+                        }
+                        if place.offset != nil {
+                            geometry.value = (height, target)
+                            return
+                        }
+                    } else {
+                        settling.value = nil
                     }
                 }
                 if anchor.value != nil {
@@ -340,13 +374,15 @@ struct TranscriptTimeline: View, Equatable {
             // New content follows the end; a tab showing again is at its end at once if it was
             // following when it hid, whatever came meanwhile. Nothing moves while it's hidden, and
             // a tab showing with nothing new and no glide cut short stays as it was left.
-            .onChange(of: [tail, hidden ? 1 : 0], initial: true) { old, new in
-                shown.value = new[1] == 0
-                checkBlank()
-                guard new[1] == 0 else { return }
-                let showing = old[1] == 1
-                if showing, old[0] == new[0], glidingUntil.value.map({ Date() >= $0 }) ?? true { return }
-                follow(proxy, showing: showing)
+            .background {
+                TailWatch(store: store, hidden: hidden) { old, new in
+                    shown.value = new[1] == 0
+                    checkBlank()
+                    guard new[1] == 0 else { return }
+                    let showing = old[1] == 1
+                    if showing, old[0] == new[0], glidingUntil.value.map({ Date() >= $0 }) ?? true { return }
+                    follow(proxy, showing: showing)
+                }
             }
             .onAppear {
                 shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop, following, zoomFollowing, zoomRejoining, zoomBegan] native in
@@ -414,10 +450,11 @@ struct TranscriptTimeline: View, Equatable {
                 // A selection dragged past the edge scrolls as the reader would: nothing pulls it
                 // back to the end, or to a place still being restored. Turns going in above as it
                 // nears the top keep what's on screen, as for a wheel.
-                store.selection.draggedScroll = { [following, restore, restoreInRow] in
+                store.selection.draggedScroll = { [following, restore, restoreInRow, settling] in
                     following.value = false
                     restore.value = nil
                     restoreInRow.value = nil
+                    settling.value = nil
                 }
                 restore.value = store.savedScroll
                 lastSend.value = store.sentAt
@@ -458,12 +495,7 @@ struct TranscriptTimeline: View, Equatable {
                 shift.onZoomBegin = nil
                 shift.onZoomEnd = nil
                 shift.onZoomInput = nil
-                // The row nearest the top of the visible area, and how far below its top that is
-                // (negative: above it). It comes back exactly, however the rows above it measure
-                // when they're built again.
-                let place = rowTops.value.min { abs($0.value) < abs($1.value) }.map { (key: $0.key, value: -$0.value) }
-                store.savedScroll = TranscriptStore.SavedScroll(
-                    row: place?.key, inRow: place?.value ?? 0, offset: geometry.value.offset, atEnd: following.value)
+                store.savedScroll = place(atEnd: following.value)
             }
         }
     }
@@ -474,13 +506,23 @@ struct TranscriptTimeline: View, Equatable {
     /// first where the reader was, then at the end. Never while its window is covered: macOS may
     /// drop what it drew until it shows again.
     private func checkBlank() {
-        blankCheck.value?.cancel()
-        guard shown.value else { return }
-        let (store, seen, tops, remounts, shift, following) = (store, seen, rowTops, remounts, shift, following)
+        guard shown.value else {
+            blankCheck.value.task?.cancel()
+            blankCheck.value.task = nil
+            return
+        }
+        // One check under way, put off by each call (a stream's every move) rather than made anew.
+        blankCheck.value.due = Date().addingTimeInterval(2)
+        guard blankCheck.value.task == nil else { return }
+        let (store, seen, tops, remounts, remountedAt, shift, following, blankCheck) = (store, seen, rowTops, remounts, remountedAt, shift, following, blankCheck)
         let rebuild = rebuild
-        blankCheck.value = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled, !store.sections.isEmpty, seen.value.count == 4, shift.windowVisible || StoryHost.installed else { return }
+        blankCheck.value.task = Task { @MainActor in
+            while blankCheck.value.due.timeIntervalSinceNow > 0 {
+                try? await Task.sleep(for: .seconds(blankCheck.value.due.timeIntervalSinceNow))
+                if Task.isCancelled { return }
+            }
+            blankCheck.value.task = nil
+            guard !store.sections.isEmpty, seen.value.count == 4, shift.windowVisible || StoryHost.installed else { return }
             let (height, offset, visible) = (seen.value[0], seen.value[1], seen.value[2])
             let frames = shift.frames
             let drawn = shift.drawn
@@ -505,7 +547,11 @@ struct TranscriptTimeline: View, Equatable {
                     "ak_height": frames.map { String(Int($0.content.height)) }, "ak_y": frames.map { String(Int($0.visible.minY)) },
                     "ak_visible": frames.map { String(Int($0.visible.height)) }, "drawn": drawn.map { String($0) },
                 ])
-            guard remounts.value < 2 else { return }
+            // Twice for one blank (where the reader was, then the end), and a few times a minute
+            // in all: each build measures the rows again.
+            remountedAt.value.removeAll { $0.timeIntervalSinceNow < -60 }
+            guard remounts.value < 2, remountedAt.value.count < 4 else { return }
+            remountedAt.value.append(Date())
             rebuild(offset)
             // Then looked at again: drawn now ("blank-recovered"), or logged once more.
             checkBlank()
@@ -515,16 +561,12 @@ struct TranscriptTimeline: View, Equatable {
     /// The scroll view built again, which measures the rows afresh: a lazy stack can keep a height
     /// well past its last row, and nothing draws down there until the view scrolls back above it
     /// (a pin to the end doesn't reach it). A reader above the end comes back to `offset` the
-    /// first time, or to the true end if that's past it; if it's blank again, or they were
-    /// following, it goes to the end.
+    /// first time (never past the true end); if it's blank again, or they were following, it
+    /// goes to the end.
     private func rebuild(_ offset: CGFloat) {
         if !following.value, remounts.value == 0 {
-            // A new scroll view takes its default anchor first: the place goes to it once it's there.
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(100))
-                scroll(position, to: offset)
-                nudge.value &+= 1
-            }
+            // The new view's geometry takes it there (`settling`), before anything follows.
+            settle(at: offset)
         } else {
             following.value = true
             // Over any glide under way: layout pins the new view to the end at once.
@@ -534,6 +576,20 @@ struct TranscriptTimeline: View, Equatable {
         }
         remounts.value += 1
         mount.value &+= 1
+    }
+
+    /// Holds the view at `offset`, or within the measured end, while it lays out (`settling`).
+    private func settle(at offset: CGFloat?) {
+        let now = Date()
+        settling.value = (offset, now + Self.settle, now + Self.settleLimit)
+    }
+
+    /// Where the reader is: the row nearest the top of the visible area, and how far below its
+    /// top that is (negative: above it). It comes back exactly, however the rows above it
+    /// measure when they're built again.
+    private func place(atEnd: Bool) -> TranscriptStore.SavedScroll {
+        let place = rowTops.value.min { abs($0.value) < abs($1.value) }.map { (key: $0.key, value: -$0.value) }
+        return TranscriptStore.SavedScroll(row: place?.key, inRow: place?.value ?? 0, offset: geometry.value.offset, atEnd: atEnd)
     }
 
     /// Pins the end while following: at once, or gliding for 2s after a send. A send always
@@ -590,6 +646,14 @@ struct TranscriptTimeline: View, Equatable {
     private var binding: Binding<ScrollPosition> {
         _ = nudge.value
         return Binding(get: { position.value }, set: { position.value = $0 })
+    }
+
+    /// The rows' and the messages' actions, built the first time.
+    private func builtActions(_ proxy: ScrollViewProxy) -> (rows: TranscriptActions, reveal: TranscriptActions) {
+        if let built = built.value { return built }
+        let made = (rows: rowActions(proxy), reveal: reveal(proxy))
+        built.value = made
+        return made
     }
 
     /// Rows' actions: scrolling back to a message, and reporting where messages are.
@@ -653,9 +717,57 @@ extension TranscriptTimeline {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.store === b.store }
 }
 
+/// The transcript's end (`store.tail`), read here alone: each change is handed on, with whether
+/// the tab is hidden, as `[tail, hidden ? 1 : 0]`. Under another tab it holds what it was.
+private struct TailWatch: View {
+    let store: TranscriptStore
+    let hidden: Bool
+    let changed: (_ old: [Int], _ new: [Int]) -> Void
+    @StateObject private var frozen = Frozen<Int>()
+
+    var body: some View {
+        let tail = frozen(hidden) { store.tail }
+        Color.clear.onChange(of: [tail, hidden ? 1 : 0], initial: true) { changed($0, $1) }
+    }
+}
+
+/// A board tile's pinned message: the band the transcript is inset under, reading which
+/// messages are stuck. Without a band, no inset.
+private struct BandInset: ViewModifier {
+    let band: Bool
+    let sections: [TranscriptStore.SectionModel]
+    let reveal: TranscriptActions
+    let tracker: StickyTracker
+
+    func body(content: Content) -> some View {
+        if band {
+            content.safeAreaInset(edge: .top, spacing: 0) {
+                Band(sections: sections, reveal: reveal, tracker: tracker)
+            }
+        } else {
+            content
+        }
+    }
+
+    private struct Band: View {
+        let sections: [TranscriptStore.SectionModel]
+        let reveal: TranscriptActions
+        @ObservedObject var tracker: StickyTracker
+
+        var body: some View {
+            if let section = sections.last(where: { $0.header.map { tracker.stuck.contains($0.id.uuidString) } == true }),
+                let header = section.header
+            {
+                PinnedBand(entry: header, open: section.headerOpen, actions: reveal, tracker: tracker)
+            }
+        }
+    }
+}
+
 /// One section, reading only its own model: a streamed token re-renders the section it lands
-/// in, not the transcript.
-private struct TimelineSection: View {
+/// in, not the transcript. Equal by model (its actions are built once). Never wrapped
+/// (`.equatable()`): the lazy stack must see its `Section`, or nothing in it is lazy or pinned.
+private struct TimelineSection: View, Equatable {
     let section: TranscriptStore.SectionModel
     let actions: TranscriptActions
     let reveal: TranscriptActions
@@ -663,6 +775,8 @@ private struct TimelineSection: View {
     @Environment(\.hiddenTab) private var hidden
     /// Its rows as they were when the chat's tab hid.
     @StateObject private var frozen = Frozen<(items: [TranscriptStore.Item], header: TranscriptStore.Entry?, open: Bool)>()
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.section === b.section && a.sticky === b.sticky }
 
     var body: some View {
         let (items, header, open) = frozen(hidden) { (section.items, section.header, section.headerOpen) }

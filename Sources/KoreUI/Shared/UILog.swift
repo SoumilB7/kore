@@ -7,7 +7,7 @@ import KoreCore
 /// file's text, in `ui.log` (kept a week, like every Kore log):
 ///
 ///   2026-10-26T12:41:03.118Z	window-key folder=kore
-///   2026-10-26T12:41:09.502Z	stall ms=412
+///   2026-10-26T12:41:09.502Z	stall ms=412 busy=430 active=yes shown=yes
 @MainActor
 package enum UILog {
     package static func event(_ name: String, _ fields: KeyValuePairs<String, String?> = [:]) {
@@ -109,21 +109,33 @@ package enum UILog {
         return (info.phys_footprint, UInt64(info.ledger_phys_footprint_peak))
     }
 
-    /// A pass of the main run loop that held it past `stallAfter`: the moment the interface
-    /// didn't answer. Two clock reads a pass, nothing more.
+    /// One piece of main-thread work (a timer, an event, a commit) that held it past
+    /// `stallAfter`: the moment the interface didn't answer. Timed between the run loop's own
+    /// steps, so several frames of a busy pass aren't summed into one; the pass's whole length
+    /// goes with it (`busy`), and whether Kore was in front and its window showing (a covered
+    /// window isn't drawn, and its stalls aren't seen). A clock read per step, nothing more.
     private static let stallAfter: Double = 0.25
 
     private static func watchStalls() {
-        var began = 0.0
-        let observer = CFRunLoopObserverCreateWithHandler(
-            kCFAllocatorDefault, CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue, true, 0
-        ) { _, activity in
+        var began = 0.0, last = 0.0, worst = 0.0
+        let steps: CFRunLoopActivity = [.afterWaiting, .beforeTimers, .beforeSources, .beforeWaiting]
+        // Last of each step's observers: the commit before waiting counts as the work it is.
+        let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, steps.rawValue, true, CFIndex.max) { _, activity in
             let now = CACurrentMediaTime()
             if activity == .afterWaiting {
-                began = now
-            } else if began > 0, now - began > stallAfter {
-                let ms = Int((now - began) * 1000)
-                MainActor.assumeIsolated { UILog.event("stall", ["ms": String(ms)]) }
+                (began, last, worst) = (now, now, 0)
+                return
+            }
+            guard last > 0 else { return }
+            worst = max(worst, now - last)
+            last = now
+            guard activity == .beforeWaiting else { return }
+            last = 0
+            guard worst > stallAfter else { return }
+            let (ms, busy) = (Int(worst * 1000), Int((now - began) * 1000))
+            MainActor.assumeIsolated {
+                let shown = NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
+                UILog.event("stall", ["ms": String(ms), "busy": String(busy), "active": NSApp.isActive ? "yes" : "no", "shown": shown ? "yes" : "no"])
             }
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)

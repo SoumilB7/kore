@@ -70,6 +70,79 @@ final class TabSwitching: Storyline {
     }
 }
 
+/// A chat left mid-way up its transcript, then let go as three other chats show (only the last
+/// three shown keep their views), comes back after a while with its rows drawn where the reader
+/// was: never parked past the real rows on a height that only estimates them.
+final class TabComesBackDrawn: Storyline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var variants: [Variant] { [.claude, .codex] }
+
+    static let turns = 8
+
+    /// Answers of very different heights (a line, then screens of paragraphs, lists and code), so
+    /// the lazy stack's estimates for rows it hasn't built are well off.
+    static func answer(_ chat: Int, turn: Int) -> String {
+        guard turn % 2 == 0 else { return "Chat \(chat), answer \(turn): short." }
+        let paragraphs = (1...(10 * turn)).map { i in
+            i % 7 == 0
+                ? "```swift\nlet chat = \(chat), turn = \(turn), line = \(i)\nprint(chat + turn + line)\n```"
+                : i % 5 == 0 ? "- one point\n- another point, \(i)\n- a last one" : String(repeating: "Chat \(chat), turn \(turn), paragraph \(i), wrapping. ", count: 1 + i % 4)
+        }
+        return paragraphs.joined(separator: "\n\n")
+    }
+
+    static func chat(_ n: Int) -> [any Step] {
+        let script = CLIScript(turns: (1...turns).map { turn in [.startTurn, .stream(.answer, answer(n, turn: turn), chunk: 2000), .finishTurn(.completed)] })
+        return [UseScript(script), StartChat()] + (1...turns).flatMap { turn -> [any Step] in [Send("chat \(n), turn \(turn)"), TurnFinished(turn)] }
+    }
+
+    override func steps() -> [any Step] {
+        [OpenFolder()] + Self.chat(1) + [
+            // Mid-way up: well away from both ends.
+            Scroll(.answer(turn: Self.turns), to: .by(-6000)), WaitIdle(),
+        ] + Self.chat(2) + Self.chat(3) + Self.chat(4) + [
+            Press(.tab(2)), WaitIdle(), Press(.tab(3)), WaitIdle(), Press(.tab(4)), WaitIdle(),
+            Linger(seconds: 3),
+            Press(.tab(1)), WaitIdle(),
+            ExpectRowsDrawn(),
+            // And once the blank check has looked (two seconds after the last move).
+            Linger(seconds: 3),
+            ExpectRowsDrawn(),
+        ]
+    }
+}
+
+/// Nothing for a while.
+private struct Linger: Step {
+    let seconds: Double
+    var label: String { "Wait \(Int(seconds)) s" }
+    func run(_ story: StoryContext) async throws { try await Task.sleep(for: .seconds(seconds)) }
+}
+
+/// The active transcript shows rows: one of its messages or answers in view, inside AppKit's
+/// content.
+private struct ExpectRowsDrawn: Step {
+    var label: String { "Expect the transcript's rows drawn" }
+
+    func run(_ story: StoryContext) async throws {
+        let chat = try story.activeChat()
+        var seen = "no scroll view"
+        do {
+            try await story.until("rows drawn", timeout: .seconds(4)) {
+                guard let scroll = chat.storyTranscript.scrollView, scroll.window != nil, let document = scroll.documentView else { return false }
+                let visible = document.convert(scroll.contentView.bounds, from: scroll.contentView)
+                let shown = SwitchTab.rowIDs(chat).filter { SwitchTab.top(of: $0) != nil }.count
+                let faded = scroll.isHiddenOrHasHiddenAncestor
+                    || sequence(first: scroll.layer, next: { $0?.superlayer }).contains { $0.map { $0.isHidden || $0.opacity < 0.01 } ?? false }
+                seen = "document \(Int(document.frame.height)), visible \(Int(visible.minY))–\(Int(visible.maxY)), \(shown) rows in view\(faded ? ", faded" : "")"
+                return document.bounds.intersects(visible) && shown > 0 && !faded
+            }
+        } catch StoryFailure.timedOut {
+            throw StoryFailure.expectation("rows drawn (found \(seen))")
+        }
+    }
+}
+
 /// Text deltas a second for the scripted CLI's replies from here on, in every chat.
 struct Pace: Step {
     let rate: Double

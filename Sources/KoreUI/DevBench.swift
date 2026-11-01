@@ -11,7 +11,8 @@ import OSLog
 ///     scroll:top@<px/s>[/<px>] | scroll:bottom@<px/s>[/<px>] [,clip]   hitches while scrolling
 ///                               up to <px> (default 10000: a long chat's whole height is minutes),
 ///                               as trackpad events (in-process); clip sets the offset directly,
-///                               which the transcript's pinning to the bottom undoes
+///                               which the transcript's pinning to the bottom undoes; stream has a
+///                               reply streaming in meanwhile (local, no CLI: a turn, words at 30 Hz)
 ///     fling*<n>:<px>            n momentum flings of about px, alternating up and down
 ///     earlier*<n>               "Load earlier turns" n times (earlier_ms, earlier_drift_pt)
 ///     earlierconv               "Load earlier conversation" once (earlier_conv_ms)
@@ -276,7 +277,10 @@ enum DevBench {
             }
             let id = signposter.makeSignpostID()
             let interval = signposter.beginInterval("ScrollRun", id: id)
+            let streaming = parts.contains("stream") ? stream() : nil
             let result = await DevScroller.run(scroll, toTop: toTop, speed: speed, mode: mode, limit: limit)
+            streaming?.cancel()
+            await streaming?.value
             signposter.endInterval("ScrollRun", interval)
             record["px"] = round1(result.movedPX)
             if !result.valid {
@@ -284,6 +288,23 @@ enum DevBench {
                 record["reason"] = "the scroll didn't move"
             }
             return await pacer.waitSettled()
+        }
+
+        /// A reply streaming into the active chat until cancelled, as a CLI's would: its turn
+        /// starts, then a few words every 33 ms, a paragraph every dozen; finished when cancelled.
+        private func stream() -> Task<Void, Never>? {
+            guard let store = workspace.activeTab.chat?.transcript else { return nil }
+            let turn = "bench-\(UUID().uuidString)"
+            store.turnStarted(turn)
+            return Task { @MainActor in
+                var i = 0
+                while !Task.isCancelled {
+                    i += 1
+                    store.text("\(turn)-answer", .answer, i % 12 == 0 ? "streamed words \(i).\n\n" : "word \(i) ")
+                    try? await Task.sleep(for: .milliseconds(33))
+                }
+                store.turnFinished(turn, .completed)
+            }
         }
 
         private func flings(_ step: String, _ record: inout [String: Any]) async -> CFTimeInterval? {

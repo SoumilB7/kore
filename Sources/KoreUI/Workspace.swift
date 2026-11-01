@@ -1219,8 +1219,11 @@ package final class Workspace {
         let path = folder.standardizedFileURL.path
         let temporary = ["/private/tmp/", "/tmp/", "/private/var/folders/", "/var/folders/", NSTemporaryDirectory()]
         if temporary.contains(where: { path.hasPrefix($0) }) { return false }
-        return !ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KORE_") }
+        return !devRun
     }
+
+    /// Read once: the environment is copied at each read.
+    private static let devRun = ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KORE_") }
 
     private static func tab(_ saved: Saved.Tab, in folder: URL) -> ChatTab {
         let tab = ChatTab()
