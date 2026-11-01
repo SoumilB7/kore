@@ -1319,14 +1319,46 @@ package final class Chat: Identifiable {
         }
     }
 
+    /// The user message that starts the turn after this answer.
+    private func nextMessage(after answer: TranscriptStore.Entry) -> TranscriptStore.Entry? {
+        let entries = transcript.entries
+        return entries.firstIndex { $0.id == answer.id }.flatMap { index in
+            // A message taken into a running turn isn't a new turn: cutting there would cut it in half.
+            entries[(index + 1)...].first { ($0.kind == .user || $0.kind == .peer) && !$0.inTurn }
+        }
+    }
+
+    /// Takes this chat back to before a user message: it and everything after it go, and its text
+    /// returns to the composer. Files stay as they are.
+    func rollBack(_ entry: TranscriptStore.Entry) { rollBack(to: entry, draft: entry.text) }
+
+    /// Takes this chat back to this answer: what came after its turn goes.
+    func rollBack(after answer: TranscriptStore.Entry) {
+        if let next = nextMessage(after: answer) { rollBack(to: next, draft: "") }
+    }
+
+    private func rollBack(to entry: TranscriptStore.Entry, draft: String) {
+        Task {
+            // A running turn ends first, as Stop ends it (at most 5 s: `stopFallback`).
+            stop()
+            for _ in 0..<60 where isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+            do {
+                let left = try await connect().rollback(message: entry.source, text: entry.text)
+                sinceReplay = []
+                replaceHistory(left.events)
+                dispatch(.earlierHistory(left.more))
+                dispatch(.notice("Rolled back. Files not changed."))
+                if !draft.isEmpty { restoreDraft(draft, commands: controls.commands) }
+            } catch {
+                fail("Couldn't roll back: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Where a fork from an answer starts: through that answer's turn. That's the history before
     /// the next user message, or the whole conversation when the answer is in the last turn.
     func forkStart(after answer: TranscriptStore.Entry) async -> ForkStart? {
-        let entries = transcript.entries
-        let next = entries.firstIndex { $0.id == answer.id }.flatMap { index in
-            // A message taken into a running turn isn't a new turn: forking there would cut it in half.
-            entries[(index + 1)...].first { ($0.kind == .user || $0.kind == .peer) && !$0.inTurn }
-        }
+        let next = nextMessage(after: answer)
         do {
             let backend = connect()
             if let next { return try await backend.fork(message: next.source, text: next.text) }

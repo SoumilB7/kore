@@ -275,6 +275,118 @@ final class ForkFromAnswer: ChatStoryline {
     }
 }
 
+/// Roll back to before a message, in the same chat: two presses, then that message and what came
+/// after it are gone, its text is back in the composer, and the chat goes on from there. Files
+/// aren't touched, and it says so.
+final class RollbackFromMessage: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript {
+        CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer"), CLIScript.reply("Third answer")])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1), Send("two"), TurnFinished(2), WaitIdle(),
+            Press(Locator.userMessage(2).action(.rollback)),
+            Expect.rows("nothing gone after the first press") { rows in rows.contains { $0.text == "Second answer" } },
+            Press(Locator.userMessage(2).action(.rollback)),
+            Expect.rows("only what came before message 2") { rows in
+                rows.filter { $0.kind == "user" }.map(\.text) == ["one"] && rows.contains { $0.text == "First answer" }
+                    && !rows.contains { $0.text == "Second answer" }
+            },
+            Expect.rows("it says files stay") { rows in rows.contains { $0.text.contains("Files not changed") } },
+            Expect("message 2 back in the composer") { try $0.activeChat().draft == "two" },
+            Expect("the same tab") { $0.app.workspace?.tabs.count == 1 },
+            Expect("the rollback asked of the CLI") { story in
+                try story.scriptedBackend().log.contains { if case .rollback = $0 { true } else { false } }
+            },
+            Send("three"), TurnFinished(3),
+            Expect.rows("the chat goes on from there") { rows in
+                rows.filter { $0.kind == "user" }.map(\.text) == ["one", "three"] && rows.contains { $0.text == "Third answer" }
+            },
+        ]
+    }
+}
+
+/// Roll back to an answer: it stays, what came after goes, and the composer stays empty. The
+/// newest answer and the first message have nothing to roll back to.
+final class RollbackFromAnswer: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer")]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1), Send("two"), TurnFinished(2), WaitIdle(),
+            Press(Locator.answer(turn: 2).action(.rollback)), Press(Locator.answer(turn: 2).action(.rollback)),
+            Press(Locator.userMessage(1).action(.rollback)), Press(Locator.userMessage(1).action(.rollback)),
+            Expect.rows("nothing gone from the newest answer or the first message") { rows in
+                rows.filter { $0.kind == "user" }.map(\.text) == ["one", "two"]
+            },
+            Press(Locator.answer(turn: 1).action(.rollback)),
+            Press(Locator.answer(turn: 1).action(.rollback)),
+            Expect.rows("the conversation through answer 1") { rows in
+                rows.filter { $0.kind == "user" }.map(\.text) == ["one"] && rows.last { $0.kind == "assistant" }?.text == "First answer"
+            },
+            Expect("an empty composer") { try $0.activeChat().draft.isEmpty },
+        ]
+    }
+}
+
+/// Live (`--live haiku`, `--live gpt-6-luna`): rolled back in the same chat, the CLI itself has
+/// forgotten the later message, and a reload shows the cut before and after the next message.
+final class RollbackLive: Storyline {
+    override class var tags: Set<Tag> { [.live] }
+    override class var variants: [Variant] { [.claude, .codex] }
+
+    private static func turns(_ n: Int) -> Expect {
+        Expect("\(n) finished turns", timeout: .seconds(120)) { story in
+            let chat = try story.activeChat()
+            return story.chatEvents(chat).filter { if case .turnFinished = $0 { true } else { false } }.count >= n
+        }
+    }
+
+    override func steps() -> [any Step] {
+        let second = Locator.userMessage(2).action(.rollback)
+        return [
+            OpenFolder(), StartChat(),
+            Send("Remember the word APPLE. Reply only OK."), Self.turns(1),
+            Send("Also remember the word BANANA. Reply only OK."), Self.turns(2), WaitIdle(),
+            Press(second), Press(second),
+            Expect.rows("the second message gone") { rows in rows.filter { $0.kind == "user" }.count == 1 },
+            ReloadChat(),
+            Expect("still gone after a reload, before anything is sent", timeout: .seconds(60)) { story in
+                let users = (story.app.chat?.rows ?? []).filter { $0.kind == "user" }
+                return users.count == 1 && users[0].text.contains("APPLE")
+            },
+            Do("clear the composer") { try $0.activeChat().draft = "" },
+            Send("List every word I asked you to remember. Reply only the words."), Self.turns(1), WaitIdle(),
+            Expect.rows("the CLI remembers only the first word") { rows in
+                let last = rows.last { $0.kind == "assistant" }?.text.uppercased() ?? ""
+                return last.contains("APPLE") && !last.contains("BANANA")
+            },
+            ReloadChat(),
+            Expect("the chat as it went on, after a reload", timeout: .seconds(60)) { story in
+                let users = (story.app.chat?.rows ?? []).filter { $0.kind == "user" }
+                return users.count == 2 && users[0].text.contains("APPLE") && users[1].text.contains("List")
+            },
+        ]
+    }
+}
+
+/// ⌘R: a new chat in the tab, with its history replayed from what the CLI saved.
+private struct ReloadChat: Step {
+    var label: String { "Reload the chat from its saved history" }
+
+    func run(_ story: StoryContext) async throws {
+        let old = try story.activeChat()
+        story.app.workspace?.storyReload()
+        try await story.until("the reopened chat's history", timeout: .seconds(60)) {
+            guard let chat = story.app.chat, chat !== old else { return false }
+            return story.chatEvents(chat).contains { if case .replayed = $0 { true } else { false } }
+        }
+    }
+}
+
 /// A fork is in History as soon as it's made, before anything is sent in it (Claude makes its
 /// session only with the first message; Codex as the fork opens). A message later, there's
 /// still one entry for it, under its title, and Kore's own record of it has given way to the

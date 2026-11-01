@@ -43,10 +43,15 @@ final class ClaudeBackend: ChatBackend {
     /// The session whose transcript holds the history: a fork reads the one it was made from
     /// until its own exists.
     private var source: String? { sessionId ?? options.fork?.from }
+    /// The message this session is cut back to, until the next one makes that real:
+    /// `--resume-session-at` leaves the file as it is, and history reads from its newest line
+    /// (`RollbackPoints`).
+    private var rollbackAt: String?
 
     /// History pages for `id`, read off the main thread.
     private func page(_ id: String, before: String? = nil, userTurns: Int? = nil) async -> ClaudeHistory.Page {
         let reader = reader(id)
+        let before = before ?? rollbackAt
         return shown(await Task.detached(priority: .userInitiated) { reader.page(before: before, userTurns: userTurns) }.value)
     }
 
@@ -91,6 +96,7 @@ final class ClaudeBackend: ChatBackend {
         self.translator = translator ?? ClaudeTranslator(folder: options.folder, sessionId: options.fork == nil ? options.resume?.id : nil)
         replayPending = options.resume != nil
         titled = options.resume != nil
+        if options.fork == nil { rollbackAt = options.resume.flatMap { RollbackPoints.at($0.id) } }
     }
 
     func start() async throws {
@@ -120,7 +126,7 @@ final class ClaudeBackend: ChatBackend {
             } else if let history = fork?.history {
                 Task { (page: history, latest: ClaudeTranscript.Latest?.none) }
             } else {
-                source.map { id in Task { await firstPage(id, before: fork?.at) } }
+                source.map { id in Task { await firstPage(id, before: fork?.at ?? rollbackAt) } }
             }
         // Only needed once: the transcript holds it from here.
         options.fork?.history = nil
@@ -132,6 +138,8 @@ final class ClaudeBackend: ChatBackend {
             launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at]
             // The new session takes the id Kore lists the fork under (`KoreForks`) before it exists.
             if let id = fork.id, UUID(uuidString: id) != nil { launch.extraArgs += ["--session-id", id] }
+        } else if let rollbackAt {
+            launch.extraArgs += ["--resume-session-at", rollbackAt]
         }
         if let instructions = options.instructions { launch.extraArgs += ["--append-system-prompt-file", instructions.path] }
         let starting = Task { try await ClaudeSession.start(launch) }
@@ -790,14 +798,39 @@ final class ClaudeBackend: ChatBackend {
         // by its text from the end of the current history.
         let found = await page(source, before: id)
         let messages = found.messages
-        let target = id.flatMap { id in messages.lastIndex { $0["uuid"]?.string == id } }
-            ?? messages.lastIndex { $0["type"]?.string == "user" && ClaudeTranslator.promptText($0["message"]?["content"]) == text }
+        let target = Self.message(id, text, in: messages)
         guard let target else { throw ForkError.notFound }
         guard let before = messages[..<target].lastIndex(where: { !ClaudeHistory.isBoundary($0) }),
             let at = messages[before]["uuid"]?.string
         else { return .fresh }
         let history = ClaudeHistory.Page(messages: Array(messages[...before]), earlier: found.earlier)
         return .pending(ForkPoint(from: source, at: at, history: history))
+    }
+
+    /// A message by its id (replayed), or by its text from the end (sent in this run).
+    private static func message(_ id: String?, _ text: String, in messages: [JSONValue]) -> Int? {
+        id.flatMap { id in messages.lastIndex { $0["uuid"]?.string == id } }
+            ?? messages.lastIndex { $0["type"]?.string == "user" && ClaudeTranslator.promptText($0["message"]?["content"]) == text }
+    }
+
+    /// Cut back in place: the CLI starts again at the message before (`--resume-session-at`,
+    /// no `--fork-session`), so the same session goes on from there.
+    func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        guard let sessionId else { throw ForkError.notFound }
+        let found = await page(sessionId, before: id)
+        let messages = found.messages
+        guard let target = Self.message(id, text, in: messages),
+            let before = messages[..<target].lastIndex(where: { !ClaudeHistory.isBoundary($0) }),
+            let at = messages[before]["uuid"]?.string
+        else { throw ForkError.notFound }
+        rollbackAt = at
+        RollbackPoints.set(at, for: sessionId)
+        replayPending = false
+        await relaunch(reason: "rollback")
+        let replayed = await ClaudeTranslator.replayed(Array(messages[...before]), folder: options.folder, sessionId: sessionId)
+        translator.adopt(replayed.carried)
+        earlierFrom = found.earlier
+        return (replayed.events, found.earlier != nil)
     }
 
     /// Through the last message of the current history (`--resume-session-at` takes an
@@ -870,6 +903,11 @@ final class ClaudeBackend: ChatBackend {
             }
             flush()
             throw error
+        }
+        // In the file now, on the branch the rollback left: a resume finds it by itself.
+        if rollbackAt != nil, let sessionId {
+            rollbackAt = nil
+            RollbackPoints.forget(sessionId)
         }
         // A fork's session exists from its first message: give it its "(fork)" title.
         if let title = options.forkTitle, !forkNamed {

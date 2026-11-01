@@ -31,7 +31,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
     }
 
     package enum Part: String, Sendable, CaseIterable {
-        case fork, copy, stop, close, chevron, open, cancel, allow, always, deny, approveplan, keepplanning, archive
+        case fork, rollback, copy, stop, close, chevron, open, cancel, allow, always, deny, approveplan, keepplanning, archive
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
         case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track, outside, extended
         case signIn = "signin", signOut = "signout"

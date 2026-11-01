@@ -297,6 +297,8 @@ extension Size {
 extension Motion {
     /// Copy's glyph is a check for this long.
     static let copied: Double = 1.2
+    /// How long Roll back waits for its second press.
+    static let rollBackArmed: TimeInterval = 4
 }
 
 // MARK: Mode changes (phase 10 look.md §8)

@@ -223,11 +223,16 @@ package final class TranscriptStore {
         var actions: MessageActions?
     }
 
+    /// The chat's first message: nothing comes before it to roll back to.
+    private var firstMessage: UUID? { entries.first { $0.kind == .user || $0.kind == .peer }?.id }
+
     struct MessageActions: Equatable {
         /// Always shown (the chat's newest finished answer); otherwise only under the pointer.
         let always: Bool
         /// False on the message of a turn that's still running.
         let canFork: Bool
+        /// False where nothing would go or nothing would stay: the newest answer, the first message.
+        let canRollBack: Bool
     }
 
     /// One user (or peer) message and what followed it. The header sticks to the top while
@@ -1494,7 +1499,7 @@ package final class TranscriptStore {
         var models = Array(sections.prefix(kept))
         var starts = Array(sectionStarts.prefix(kept))
         var changed = false
-        for section in Self.sections(rows, open: openKeys, actions: answerActions, running: runningMessage) {
+        for section in Self.sections(rows, open: openKeys, actions: answerActions, running: runningMessage, first: firstMessage) {
             if let model = old[section.id] {
                 if model.update(section) { changed = true }
                 models.append(model)
@@ -1586,7 +1591,7 @@ package final class TranscriptStore {
         let kept = answerActions
         defer { answerActions = kept }
         let rows = rows(from: windowStartIndex)
-        return Self.sections(rows, open: openKeys, actions: answerActions, running: runningMessage)
+        return Self.sections(rows, open: openKeys, actions: answerActions, running: runningMessage, first: firstMessage)
     }
 
     /// Runs a rebuild that's waiting for the next draw now, so a test doesn't wait on the clock.
@@ -1601,7 +1606,7 @@ package final class TranscriptStore {
 
     /// Splits rows at each user or peer message, and places them on the timeline.
     private static func sections(
-        _ rows: [Row], open: Set<String>, actions: [String: MessageActions] = [:], running: UUID? = nil
+        _ rows: [Row], open: Set<String>, actions: [String: MessageActions] = [:], running: UUID? = nil, first: UUID? = nil
     ) -> [Section] {
         var sections: [Section] = []
         var header: Entry?
@@ -1616,7 +1621,7 @@ package final class TranscriptStore {
             let items = run.indices.map { i in
                 let id = run[i].id
                 let rowActions: MessageActions? =
-                    if case .message(let e, _, _) = run[i] { MessageActions(always: false, canFork: e.id != running) }
+                    if case .message(let e, _, _) = run[i] { MessageActions(always: false, canFork: e.id != running, canRollBack: e.id != first) }
                     else { actions[id] }
                 return Item(
                     row: run[i], dot: dots[i],
@@ -1787,7 +1792,7 @@ package final class TranscriptStore {
         guard turn.finished else { return }
         for row in rows.reversed() {
             if case .entry(let e) = row, e.kind == .answer, e.done {
-                answerActions[row.id] = MessageActions(always: turn.id == lastAnswerTurn, canFork: true)
+                answerActions[row.id] = MessageActions(always: turn.id == lastAnswerTurn, canFork: true, canRollBack: turn.id != lastAnswerTurn)
                 return
             }
         }

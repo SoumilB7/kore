@@ -130,7 +130,7 @@ final class CodexBackend: ChatBackend {
         // A resumed or forked thread's newest turns, read while Codex resumes it.
         let newest: (turns: [JSONValue], earlier: String?)?
         do {
-            newest = try await session.open(page: replayPending ? Self.pageTurns : nil)
+            newest = try await open(session, page: replayPending ? Self.pageTurns : nil)
         } catch {
             log.startFailed("codex", chat: resume, launch: kind)
             await session.close()
@@ -823,15 +823,62 @@ final class CodexBackend: ChatBackend {
         guard let session, let thread = sessionId else { return .fresh }
         // A replayed message by its turn's id; one sent in this run by its text from the end.
         if let id, let start = try await fork(session, thread, view: .notLoaded, at: { $0["id"]?.string == id }) { return start }
-        let match = { (turn: JSONValue) in
+        if let start = try await fork(session, thread, view: .summary, at: Self.sent(text)) { return start }
+        throw ForkError.notFound
+    }
+
+    /// Opens the thread. The app-server before this one can still hold it for a moment (a reload
+    /// right after a rollback): Codex says so, and a refusal that way isn't its last word.
+    private func open(_ session: CodexSession, page: Int?) async throws -> (turns: [JSONValue], earlier: String?)? {
+        for _ in 0..<10 {
+            do {
+                return try await session.open(page: page)
+            } catch CodexAppServer.Failure.rpc(_, let message) where message.contains("active writer") {
+                try await Task.sleep(for: .milliseconds(500))
+            }
+        }
+        return try await session.open(page: page)
+    }
+
+    /// A turn holding this message as sent.
+    private static func sent(_ text: String) -> (JSONValue) -> Bool {
+        { turn in
             (turn["items"]?.array ?? []).contains { item in
                 item["type"]?.string == "userMessage"
                     && (item["content"]?.array ?? []).compactMap { $0["text"]?.string }.filter { !Attachments.isFileNote($0) }
                         .joined(separator: "\n") == text
             }
         }
-        if let start = try await fork(session, thread, view: .summary, at: match) { return start }
-        throw ForkError.notFound
+    }
+
+    /// Cut back in place (`thread/revert`): the same thread goes on from the turn before.
+    func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        try await start()
+        guard let session, let thread = sessionId else { throw ForkError.notFound }
+        var turn: String?
+        if let id { turn = try await newestTurn(session, thread, view: .notLoaded) { $0["id"]?.string == id } }
+        if turn == nil { turn = try await newestTurn(session, thread, view: .summary, at: Self.sent(text)) }
+        guard let turn else { throw ForkError.notFound }
+        try await session.revert(thread, before: turn)
+        let page = try await session.turns(of: thread, limit: Self.pageTurns)
+        earlierFrom = page.earlier
+        rollout = await session.rolloutPath.map(CodexRolloutReader.init)
+        let replayed = await replay(page.turns, session)
+        translator.adopt(replayed.carried)
+        return (replayed.events, page.earlier != nil)
+    }
+
+    /// The newest turn `match` accepts, a page at a time from the end.
+    private func newestTurn(
+        _ session: CodexSession, _ thread: String, view: CodexSession.TurnsView, at match: (JSONValue) -> Bool
+    ) async throws -> String? {
+        var cursor: String?
+        repeat {
+            let page = try await session.turns(of: thread, before: cursor, limit: 50, view: view)
+            if let found = page.turns.last(where: match) { return found["id"]?.string }
+            cursor = page.earlier
+        } while cursor != nil
+        return nil
     }
 
     /// Finds the newest turn `at` matches, a page at a time from the end (a long thread's turns

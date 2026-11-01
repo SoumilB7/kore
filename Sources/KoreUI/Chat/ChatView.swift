@@ -385,6 +385,8 @@ extension TranscriptActions {
                 if let start = await chat.forkStart(after: entry) { workspace.fork(chat, start, text: "") }
             }
         }
+        actions.rollBack = { chat.rollBack($0) }
+        actions.rollBackAfter = { chat.rollBack(after: $0) }
         actions.loadEarlierConversation = { chat.loadEarlierConversation() }
         actions.openOriginal = workspace.openOriginal(of: chat)
         // Held by the chat's selection: neither the chat nor the window is kept by it.

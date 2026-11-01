@@ -208,6 +208,18 @@ package final class ScriptedBackend: ChatBackend {
         return .pending(ForkPoint(from: sessionId, at: String(index)))
     }
 
+    package func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        log.append(.rollback(message: id))
+        let index = history.indices.last { i in
+            guard case .userMessage(let body, _, let messageId) = history[i] else { return false }
+            return id.map { $0 == messageId } ?? (body == text)
+        }
+        guard let index else { throw ScriptedError.noSuchMessage(id ?? text) }
+        history = Array(history[..<index])
+        if let sessionId { world.sessions[sessionId] = history }
+        return (history, false)
+    }
+
     package func forkAtEnd() async throws -> ForkStart {
         log.append(.fork(message: nil))
         guard let sessionId else { return .fresh }

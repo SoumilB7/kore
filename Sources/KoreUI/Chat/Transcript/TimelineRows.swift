@@ -21,6 +21,10 @@ struct TranscriptActions {
     var fork: (TranscriptStore.Entry) -> Void = { _ in }
     /// Forks the conversation through an answer's turn (its actions), into a new tab.
     var forkAfter: (TranscriptStore.Entry) -> Void = { _ in }
+    /// Takes the chat back to before a user message, in this chat.
+    var rollBack: (TranscriptStore.Entry) -> Void = { _ in }
+    /// Takes the chat back to an answer, in this chat.
+    var rollBackAfter: (TranscriptStore.Entry) -> Void = { _ in }
     /// Loads the conversation before a compaction.
     var loadEarlierConversation: () -> Void = {}
     /// A fork's "Forked from" line: switches to the original chat's tab; nil when there's none.
@@ -443,8 +447,9 @@ struct MessageHeader: View {
             if place == .row, let messageActions {
                 MessageActionsRow(
                     text: entry.text, shown: messageActions.always || hovered.value, canFork: messageActions.canFork,
-                    story: entry.kind == .peer ? StoryID.Transcript.peer(entry.id) : StoryID.Transcript.user(entry.id)
-                ) { actions.fork(entry) }
+                    canRollBack: messageActions.canRollBack,
+                    story: entry.kind == .peer ? StoryID.Transcript.peer(entry.id) : StoryID.Transcript.user(entry.id),
+                    fork: { actions.fork(entry) }, rollBack: { actions.rollBack(entry) })
             }
         }
         .padding(.vertical, Layout.Timeline.itemPadding)
@@ -823,27 +828,29 @@ private struct AnswerWithActions: View {
             RowContent(row: .entry(entry), actions: actions)
             MessageActionsRow(
                 text: entry.text, shown: messageActions.always || hovered.value, canFork: messageActions.canFork,
-                story: StoryID.Transcript.answer(entry.id)
-            ) {
-                actions.forkAfter(entry)
-            }
+                canRollBack: messageActions.canRollBack, story: StoryID.Transcript.answer(entry.id),
+                fork: { actions.forkAfter(entry) }, rollBack: { actions.rollBackAfter(entry) })
         }
         .onHover { if hovered.value != $0 { hovered.value = $0 } }
         .messageActions(text: entry.text, canFork: messageActions.canFork) { actions.forkAfter(entry) }
     }
 }
 
-/// Copy and Fork under a message (look §11): a reserved 22pt row, so showing it never moves
+/// Copy, Fork and Roll back under a message (look §11): a reserved 22pt row, so showing it never moves
 /// anything. Hidden but kept in place until the message is under the pointer (always shown
 /// under the chat's last answer). Nothing here measures or animates while it's hidden.
 struct MessageActionsRow: View {
     let text: String
     let shown: Bool
     let canFork: Bool
-    /// The message's or answer's storyline name; Copy and Fork are its `.copy` and `.fork`.
+    let canRollBack: Bool
+    /// The message's or answer's storyline name; its controls are `.copy`, `.fork` and `.rollback`.
     let story: StoryID
     let fork: () -> Void
+    let rollBack: () -> Void
     @StateObject private var copied = Local(false)
+    /// The first press of Roll back: what's below goes on the second, which says what it does.
+    @StateObject private var armed = Local(false)
 
     var body: some View {
         HStack(spacing: Size.MessageActions.gap) {
@@ -853,6 +860,16 @@ struct MessageActionsRow: View {
                 IconButton(symbol: "arrow.triangle.branch", kind: .mini, font: Chrome.label, help: "Fork", action: fork)
                     .disabled(!canFork)
                     .storyID(story.part(.fork))
+                if canRollBack {
+                    IconButton(symbol: "arrow.uturn.backward", kind: .mini, font: Chrome.label, help: "Roll back to here", action: pressRollBack)
+                        .storyID(story.part(.rollback))
+                    if armed.value {
+                        Button("Roll back, files stay", action: pressRollBack)
+                            .buttonStyle(.plain)
+                            .font(Chrome.label)
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
             }
         }
         .frame(height: Size.MessageActions.row, alignment: .leading)
@@ -860,6 +877,21 @@ struct MessageActionsRow: View {
         // Hidden until hover: pressed through their actions meanwhile.
         .storyAction(story.part(.copy)) { copy() }
         .storyAction(story.part(.fork)) { if canFork { fork() } }
+        .storyAction(story.part(.rollback)) { if canRollBack { pressRollBack() } }
+        .onChange(of: shown) { _, shown in if !shown { armed.value = false } }
+    }
+
+    private func pressRollBack() {
+        if armed.value {
+            armed.value = false
+            rollBack()
+        } else {
+            armed.value = true
+            Task {
+                try? await Task.sleep(for: .seconds(Motion.rollBackArmed))
+                armed.value = false
+            }
+        }
     }
 
     private func copy() {

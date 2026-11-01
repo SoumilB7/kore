@@ -140,6 +140,7 @@ package enum Call: Sendable, Equatable {
     /// The usage popup used a full reset: the credit it named.
     case useReset(credit: String?)
     case fork(message: String?)
+    case rollback(message: String?)
     /// The conversation before a compaction was read (a page of it).
     case earlier
     /// Remote control turned on or off.

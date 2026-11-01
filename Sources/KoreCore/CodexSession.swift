@@ -239,6 +239,14 @@ public actor CodexSession {
         case notLoaded
     }
 
+    /// Cuts `thread`'s history back to before `turn`, which goes with every later one. History
+    /// only: files stay as they are.
+    public func revert(_ thread: String, before turn: String) async throws {
+        let result = try await server.request(
+            "thread/revert", .object(["threadId": .string(thread), "beforeTurnId": .string(turn)]))
+        if let path = result["thread"]?["path"]?.string { rolloutPath = path }
+    }
+
     /// Up to `limit` turns of `thread` (this one by default) before `cursor` (nil: the newest),
     /// oldest first, and the cursor for the ones before them (nil when there are none).
     public func turns(

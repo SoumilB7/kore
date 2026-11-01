@@ -60,6 +60,10 @@ package protocol ChatBackend: AnyObject {
     /// A fork of the whole conversation so far, in a new session (forking from the last answer;
     /// an earlier answer forks before the next user message instead).
     func forkAtEnd() async throws -> ForkStart
+    /// Takes this session back to before a user message, in place: the message and everything
+    /// after it leave the CLI's history (`id` and `text` as for `fork`). Gives back the history
+    /// left, and whether more comes before it. Files aren't touched.
+    func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool)
     /// The page of conversation before what's shown (before a compaction), oldest first, and
     /// whether more comes before it; nil when there's none.
     func earlier() async -> (events: [ChatEvent], more: Bool)?

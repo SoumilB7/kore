@@ -127,6 +127,7 @@ struct SendFeedbackTests {
         func agentHistory(_ id: String) async -> [ChatEvent] { [] }
         func fork(message id: String?, text: String) async throws -> ForkStart { .fresh }
         func forkAtEnd() async throws -> ForkStart { .fresh }
+        func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) { ([], false) }
         func earlier() async -> (events: [ChatEvent], more: Bool)? { nil }
         func close() async { release(); sink.finish() }
     }
