@@ -38,6 +38,9 @@ enum SelectionStyle: Equatable {
         return out
     }
 
+    /// One line of this style's text at `zoom`, as AppKit lays it out.
+    @MainActor func lineHeight(zoom: CGFloat) -> CGFloat { NSLayoutManager().defaultLineHeight(for: font(zoom)) }
+
     private func font(_ zoom: CGFloat) -> NSFont {
         switch self {
         case .body, .running: .systemFont(ofSize: 13 * zoom)

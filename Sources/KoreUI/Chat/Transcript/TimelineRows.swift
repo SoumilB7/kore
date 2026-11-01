@@ -908,10 +908,16 @@ struct ToolItem: View {
             ToolHeader(name: entry.toolName ?? "Tool", path: entry.path, text: secondary, folder: actions.folder,
                        selectionPath: Self.isShell(entry) ? [-1] : nil)
             if !parts.isEmpty {
-                ToolBody(parts: parts, open: open) { actions.toggle(entry.id.uuidString) }
+                ToolBody(parts: parts, open: open, key: entry.id.uuidString, story: Self.story(entry)) {
+                    actions.messageOpened(!open)
+                    actions.toggle(entry.id.uuidString)
+                }
             }
         }
     }
+
+    /// The row's storyline name (`TimelineItem.story`).
+    static func story(_ entry: TranscriptStore.Entry) -> StoryID { StoryID.Transcript.tool(entry.toolId ?? entry.id.uuidString) }
 
     private var secondary: String {
         if entry.path != nil { return entry.summary ?? "" }

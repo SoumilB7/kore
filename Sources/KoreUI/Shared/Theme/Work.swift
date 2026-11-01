@@ -211,6 +211,8 @@ extension Layout.Timeline {
     /// Opened, it grows to at most this many lines (two and a half clipped ones) and its text
     /// scrolls inside: a long message never pushes the chat a screen away.
     static let openedLines = 20
+    /// A command's IN or OUT, clicked: it grows to at most this many lines and scrolls inside.
+    static let toolOpenedLines = 24
     /// About this many characters fill a line at the window column (the estimate before measuring).
     static let charsPerLine = 100
 }

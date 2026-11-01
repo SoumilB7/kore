@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A timeline item's dot: its state, or a sub-agent's avatar. `.none` is a piece of line with
@@ -119,8 +120,45 @@ struct ToolBody: View {
     }
 
     let parts: [Part]
+    /// Clicked: its texts scroll inside a capped box and take the keys, so ⌘A takes just them.
     let open: Bool
+    /// Its tool's key: its texts' keys are "tool-<key>/<row>".
+    var key = ""
+    var story: StoryID?
     let toggle: () -> Void
+
+    var body: some View {
+        Group {
+            if open {
+                OpenToolBody(parts: parts, key: key, story: story, toggle: toggle)
+            } else {
+                // A tap gesture, not a button: one element VoiceOver and Full Keyboard Access can open.
+                ToolGrid(parts: parts) { index, part in ClippedText(text: part.text, isError: part.isError) }
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: focus)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { focus() }
+                    .storyID(story?.part(.toggle), press: focus)
+            }
+        }
+        .padding(.vertical, Space.bodyMargin)
+    }
+
+    /// Opens it with the last text (the output) taking the keys.
+    private func focus() {
+        OpenedMessageText.opening = toolTextKey(key, parts.count - 1)
+        toggle()
+    }
+}
+
+/// An open box's text's key: "tool-<tool key>/<row>".
+private func toolTextKey(_ key: String, _ index: Int) -> String { "tool-\(key)/\(index)" }
+
+/// The IN / OUT rows, with a rule between them.
+private struct ToolGrid<Cell: View>: View {
+    let parts: [ToolBody.Part]
+    @ViewBuilder let cell: (Int, ToolBody.Part) -> Cell
 
     var body: some View {
         Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
@@ -134,20 +172,61 @@ struct ToolBody: View {
                         .foregroundStyle(Theme.toolLabel)
                         .padding(Inset.toolLabel)
                         .gridColumnAlignment(.leading)
-                    ClippedText(text: part.text, isError: part.isError, open: open, index: index)
+                    cell(index, part)
                         .padding(Inset.toolRow)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
         .panel(.toolBody)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: toggle)
-        // A tap gesture, not a button: one element VoiceOver and Full Keyboard Access can open.
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { toggle() }
-        .padding(.vertical, Space.bodyMargin)
+    }
+}
+
+/// A clicked box: each text scrolls inside it, capped, and the output takes the keys. A press
+/// outside it, Escape, or the keys going anywhere but its other text closes it. Only an open box
+/// has these views; a closed one is a plain clipped `Text`.
+private struct OpenToolBody: View {
+    let parts: [ToolBody.Part]
+    let key: String
+    let story: StoryID?
+    let toggle: () -> Void
+
+    /// Its box, global: a press inside it isn't a press elsewhere.
+    @StateObject private var box = Held(CGRect.zero)
+    /// A close asked for once: its two texts both see the same press outside.
+    @StateObject private var closing = Held(false)
+
+    var body: some View {
+        ToolGrid(parts: parts) { index, part in
+            OpenedMessageText(
+                text: part.text, key: textKey(index), box: box, style: .codeSmall,
+                lines: Layout.Timeline.toolOpenedLines, keeps: keeps, close: close
+            )
+            .storyID(story?.part(index == parts.count - 1 ? .open : .input))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.accentLine, lineWidth: Stroke.fine)
+                .allowsHitTesting(false)
+        }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { box.value = $0 }
+    }
+
+    private func textKey(_ index: Int) -> String { toolTextKey(key, index) }
+
+    /// The keys moved to its other text: still open.
+    private var keeps: @MainActor () -> Bool {
+        let prefix = "tool-\(key)/"
+        return {
+            guard let text = NSApp.keyWindow?.firstResponder as? NSTextView, let opened = text.enclosingScrollView as? OpenedMessageView
+            else { return false }
+            return opened.key.hasPrefix(prefix)
+        }
+    }
+
+    private func close() {
+        guard !closing.value else { return }
+        closing.value = true
+        toggle()
     }
 }
 
@@ -156,18 +235,14 @@ struct ToolBody: View {
 private struct ClippedText: View {
     let text: String
     let isError: Bool
-    let open: Bool
-    /// Its row in the box: its path in the transcript's selection, which takes it only open.
-    let index: Int
 
     var body: some View {
-        let prefix = TextPrefix.of(text, lines: open ? .max : Size.clipLines, bytes: open ? .max : Size.clipBytes)
-        let clip = !open && Self.mayOverflow(prefix)
+        let prefix = TextPrefix.of(text, lines: Size.clipLines, bytes: Size.clipBytes)
+        let clip = Self.mayOverflow(prefix)
         Text(prefix.text)
             .font(TextStyle.codeSmall)
             .foregroundStyle(Theme.text)
             .fixedSize(horizontal: false, vertical: true)
-            .selectableText([index], prefix.text, .codeSmall, enabled: open)
             .frame(maxHeight: clip ? Size.clip : nil, alignment: .top)
             .clipped()
             // The fade is the box's own fill drawn over the last lines, not a mask: a mask costs

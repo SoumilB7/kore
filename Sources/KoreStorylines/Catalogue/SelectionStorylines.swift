@@ -199,8 +199,8 @@ struct ReplayTurns: Step {
 }
 
 /// A turn whose steps fold into "Worked for…": a selection across it copies the turn's answer
-/// and earlier write-ups, without the folded commands. Opened, the command and its output
-/// copy as their lines; closed again, the box is left out.
+/// and earlier write-ups, without the folded commands. A clicked command box closes at a press
+/// elsewhere, so a drag across it copies its header, not its lines.
 final class SelectAcrossTools: ChatStoryline {
     static let before = "Let me look at the folder."
     static let after = "There are two files."
@@ -222,15 +222,11 @@ final class SelectAcrossTools: ChatStoryline {
             DragSelect(from: .message(1, at: "What's here?", "here"), to: .lastAnswer(1, [0], at: Self.after, " files")),
             CopySelection(agent: { "You:\nhere?\n\n\($0):\n" + Self.before + "\n\nThere are two" }),
             Press(.fold(turn: 1)),
-            Press(.tool("Bash")),
-            Expect("the command's box open") { story in try story.activeChat().storyTranscript.selectableTexts(try Spot.tool("Bash").entry(story)).contains([0]) },
+            Press(Locator.tool("Bash").action(.toggle)),
+            WaitForElement(Locator.tool("Bash").action(.open)),
+            // A press elsewhere (the drag's start) closes the box: the copy leaves its lines out.
             DragSelect(from: .firstAnswer(1, [0], at: Self.before, "the folder"), to: .lastAnswer(1, [0], at: Self.after, " files")),
-            CopySelection("the folder.\n\nls\na.txt\nb.txt\n\nThere are two"),
-            DragSelect(from: Spot(row: .tool("Bash"), path: [0], offset: 1), to: Spot(row: .tool("Bash"), path: [0], offset: 7)),
-            Expect("a drag inside the box to leave it open") { story in try story.activeChat().storyTranscript.selectableTexts(try Spot.tool("Bash").entry(story)).contains([0]) },
-            CopySelection(".txt\nb"),
-            Press(.tool("Bash")),
-            DragSelect(from: .firstAnswer(1, [0], at: Self.before, "the folder"), to: .lastAnswer(1, [0], at: Self.after, " files")),
+            ExpectElement(Locator.tool("Bash").action(.open), .absent),
             CopySelection("the folder.\n\nBash ls\n\nThere are two"),
         ]
     }

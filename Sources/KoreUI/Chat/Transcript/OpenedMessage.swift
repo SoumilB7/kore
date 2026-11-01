@@ -13,6 +13,12 @@ struct OpenedMessageText: NSViewRepresentable {
     let key: String
     /// Its box, global: a press inside it isn't a press elsewhere.
     let box: Held<CGRect>
+    /// How it's set and how many lines it grows to: a message's body, or a command's code.
+    var style = SelectionStyle.body
+    var lines = Layout.Timeline.openedLines
+    /// When the keys leave its text: whether they went somewhere that keeps it open (the other
+    /// text of the same command's box). Nil: they always close it.
+    var keeps: (@MainActor () -> Bool)?
     let close: () -> Void
 
     /// The message a click just opened, until its text view takes the keys.
@@ -28,6 +34,9 @@ struct OpenedMessageText: NSViewRepresentable {
     func updateNSView(_ view: OpenedMessageView, context: Context) {
         view.box = box
         view.close = close
+        view.keeps = keeps
+        view.style = style
+        view.lines = lines
         view.show(text, color: NSColor(color))
     }
 
@@ -45,6 +54,9 @@ final class OpenedMessageView: NSScrollView {
     let textView = OpenedTextView(usingTextLayoutManager: false)
     var box = Held(CGRect.zero)
     var close: () -> Void = {}
+    var keeps: (@MainActor () -> Bool)?
+    var style = SelectionStyle.body
+    var lines = Layout.Timeline.openedLines
     /// Its message's `OpenedMessageText.key`.
     var key = ""
     /// What had the keys before it took them, to have them back when it closes.
@@ -58,6 +70,15 @@ final class OpenedMessageView: NSScrollView {
         super.init(frame: .zero)
         let text = textView
         text.close = { [weak self] in self?.closeSoon() }
+        // Asked once the keys have landed: they may have gone to text that keeps it open.
+        text.keysLeft = { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.keeps?() != true else { return }
+                    self.closeSoon()
+                }
+            }
+        }
         text.isEditable = false
         text.isSelectable = true
         text.isRichText = false
@@ -97,17 +118,23 @@ final class OpenedMessageView: NSScrollView {
 
     func show(_ string: String, color: NSColor) {
         let scale = Zoom.shared.scale
-        guard string != textView.string || scale != zoom || textView.textColor != color else { return }
+        guard string != textView.string || scale != zoom || textView.textColor != color || shownStyle != style else { return }
         zoom = scale
-        textView.textStorage?.setAttributedString(SelectionStyle.body.attributed(AttributedString(string), zoom: scale))
+        shownStyle = style
+        textView.textStorage?.setAttributedString(style.attributed(AttributedString(string), zoom: scale))
         textView.textColor = color
         invalidateIntrinsicContentSize()
     }
 
-    /// The text's height at `width`, up to `openedLines`; only that much is laid out for it.
+    private var shownStyle: SelectionStyle?
+
+    /// One line of its text.
+    var lineHeight: CGFloat { style == .body ? MessageText.lineHeight : style.lineHeight(zoom: Zoom.shared.scale) }
+
+    /// The text's height at `width`, up to `lines`; only that much is laid out for it.
     func fittingHeight(width: CGFloat) -> CGFloat {
-        let line = MessageText.lineHeight
-        let cap = (line * CGFloat(Layout.Timeline.openedLines)).rounded(.up)
+        let line = lineHeight
+        let cap = (line * CGFloat(lines)).rounded(.up)
         guard let layout = textView.layoutManager, let container = textView.textContainer else { return cap }
         if abs(container.size.width - width) > 0.5 { container.size = NSSize(width: width, height: .greatestFiniteMagnitude) }
         layout.ensureLayout(forBoundingRect: NSRect(x: 0, y: 0, width: width, height: cap + line), in: container)
@@ -116,11 +143,11 @@ final class OpenedMessageView: NSScrollView {
 
     /// A turn of the wheel moves the text while it can, then the transcript. Inside the
     /// transcript's own scroll view AppKit leaves a turn here unread; the text is at most
-    /// `openedLines` tall, so moving it by hand costs nothing.
+    /// `lines` tall, so moving it by hand costs nothing.
     override func scrollWheel(with event: NSEvent) {
         guard let document = documentView, abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) else { return super.scrollWheel(with: event) }
         let clip = contentView
-        let step = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * MessageText.lineHeight
+        let step = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * lineHeight
         let (low, high) = (document.frame.minY, max(document.frame.minY, document.frame.maxY - clip.bounds.height))
         let y = min(max(clip.bounds.minY - step, low), high)
         guard abs(y - clip.bounds.minY) > 0.1 else { return super.scrollWheel(with: event) }
@@ -176,12 +203,14 @@ final class OpenedMessageView: NSScrollView {
 /// own). ⌘C copies to the transcript's pasteboard (a named one under storylines).
 final class OpenedTextView: NSTextView {
     var close: () -> Void = {}
+    /// The keys went elsewhere.
+    var keysLeft: () -> Void = {}
 
     override func cancelOperation(_ sender: Any?) { close() }
 
     override func resignFirstResponder() -> Bool {
         guard super.resignFirstResponder() else { return false }
-        close()
+        keysLeft()
         return true
     }
 

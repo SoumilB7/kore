@@ -47,6 +47,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         /// A list row's stand-in for the pointer entering it; there while it's lit; a popup
         /// button's keyboard focus ring.
         case hover, lit, focus
+        /// An opened command's IN text (its OUT is `open`).
+        case input
     }
 }
 
