@@ -66,6 +66,8 @@ package enum LinkPolicy {
 
     /// The longest title a rename may set.
     package static let maxTitle = 200
+    /// The longest code a sign-in takes back from its manual page.
+    package static let maxSignInInput = 4096
 
     package static func check(_ command: LinkCommand, _ chat: ChatFacts?, control: LinkControlLevel = .standard) -> Verdict {
         switch command {
@@ -136,6 +138,20 @@ package enum LinkPolicy {
             guard (args.text ?? "").utf8.count <= maxText else { return .deny(.invalid, "Too long.") }
         case .chatSetAutoCompact:
             if let at = args.at, !(1...100).contains(at) { return .deny(.invalid, "A percentage from 1 to 100, or off.") }
+        case .accountSignIn:
+            guard args.provider != nil, [nil, "active", "new", "login"].contains(args.aim), args.aim != "login" || args.login != nil else {
+                return .deny(.invalid, "A sign-in names its CLI, and a login when it's for one.")
+            }
+        case .accountSubmit:
+            let input = (args.input ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard args.provider != nil, args.serial != nil, !input.isEmpty, input.utf8.count <= maxSignInInput, !input.contains(where: \.isNewline)
+            else { return .deny(.invalid, "The code is one line.") }
+        case .accountSwitch, .accountRemove:
+            guard args.provider != nil, args.login != nil else { return .deny(.invalid, "Name the CLI and the login.") }
+        case .accountCancel, .accountSignOut, .accountRefresh:
+            guard args.provider != nil else { return .deny(.invalid, "Name the CLI.") }
+        case .accountPrivacy:
+            guard args.on != nil else { return .deny(.invalid, "Say on or off.") }
         default: break
         }
         return .allow

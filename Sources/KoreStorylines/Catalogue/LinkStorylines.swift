@@ -224,6 +224,91 @@ final class LinkFullControl: ChatStoryline {
     }
 }
 
+/// Link 1.2 accounts: with full control, a Codex sign-in by device code started over the link shows
+/// the link its page and code and opens nothing on the Mac; Claude's sign-in shows its manual
+/// page and takes the pasted code back; a method only the Mac can finish is refused
+/// `denied.mac`; no message carries a key or a token.
+final class LinkAccounts: ChatStoryline {
+    static let secrets = ["access_token", "refresh_token", "id_token", "sk-ant", "\"apiKey\":"]
+
+    /// Each secret-looking marker in `text`, with what precedes it; nil when there's none.
+    static func leaks(_ text: String) -> String? {
+        var found: [String] = []
+        for marker in secrets {
+            guard let range = text.range(of: marker) else { continue }
+            let start = text.index(range.lowerBound, offsetBy: -60, limitedBy: text.startIndex) ?? text.startIndex
+            found.append(String(text[start..<range.upperBound]))
+        }
+        return found.isEmpty ? nil : found.joined(separator: " | ")
+    }
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Done.")]) }
+
+    override func steps() -> [any Step] {
+        let client = LinkStoryClient()
+        let accounts = ScriptedAccounts.shared
+        var opensBefore = 0
+        let opened = { accounts.log.filter { if case .opened = $0 { true } else { false } }.count }
+        return super.steps() + [
+            Do("start with no link, and the CLIs signed in") { _ in
+                LinkStoryClient.reset()
+                accounts.reset()
+                for provider in ["claude", "codex"] { Task { await AccountStore.shared.refresh(provider) } }
+            },
+            Expect("both CLIs read signed in") { _ in
+                ["claude", "codex"].allSatisfy { if case .signedIn = AccountStore.shared.status($0) { true } else { false } }
+            },
+            Do("ring") { _ in try client.ring() },
+            WaitForElement(.id(StoryID.Link.card)),
+            Expect("the card's Allows take a press") { _ in LinkPanel.allowsReady },
+            Press(.id(StoryID.Link.allowFull)),
+            Do("connect") { _ in client.connect() },
+            Expect("welcomed, with each CLI's account and its methods", found: { _ in client.account("codex").map { "\($0.methods.map(\.id))" } }) { _ in
+                client.welcomed && client.account("codex")?.methods.contains { $0.kind == "deviceCode" && $0.where == .link } == true
+                    && client.account("claude")?.status == "signedIn"
+            },
+            Do("sign Codex in by device code, over the link") { _ in
+                opensBefore = opened()
+                let device = client.account("codex")?.methods.first { $0.kind == "deviceCode" }?.id
+                client.send(.cmd(id: "device", .control(.accountSignIn, ControlArgs(provider: "codex", method: device, aim: "active"))))
+            },
+            Expect("the link has the page and the code; nothing opened on the Mac", found: { _ in client.account("codex")?.flow.map { "\($0)" } }) { _ in
+                guard client.result("device")?.ok == true, let flow = client.account("codex")?.flow else { return false }
+                return flow.startedByLink && flow.step == "code" && flow.code == "DEMO-CODE" && flow.url?.hasPrefix("https://") == true
+                    && opened() == opensBefore
+            },
+            Do("the code is entered on the page") { _ in accounts.finish("codex", as: ScriptedAccounts.codex(email: "demo@example.com", plan: "pro")) },
+            Expect("Codex signed in, the flow done") { _ in
+                let flow = client.account("codex")?.flow
+                return flow == nil || ["signedIn", "same", "switched"].contains(flow?.step ?? "")
+            },
+            Do("start Claude's sign-in over the link") { _ in
+                let method = client.account("claude")?.methods.first { $0.where == .link && $0.kind == "browserOAuth" }?.id
+                client.send(.cmd(id: "claude", .control(.accountSignIn, ControlArgs(provider: "claude", method: method, aim: "active"))))
+            },
+            Expect("the link has the manual page, which takes a paste; nothing opened on the Mac", found: { _ in client.account("claude")?.flow.map { "\($0)" } }) { _ in
+                guard client.result("claude")?.ok == true, let flow = client.account("claude")?.flow else { return false }
+                return flow.startedByLink && flow.step == "page" && flow.takesPaste && flow.url?.contains("localhost:") == false
+                    && opened() == opensBefore
+            },
+            Do("paste the page's code back") { _ in
+                let serial = client.account("claude")?.flow?.serial
+                client.send(.cmd(id: "paste", .control(.accountSubmit, ControlArgs(provider: "claude", serial: serial, input: "democode#demo-state"))))
+            },
+            Expect("the CLI took the code", found: { _ in client.result("paste").map { "\($0)" } }) { _ in
+                client.result("paste")?.ok == true && accounts.log.contains { if case .loginInput("claude") = $0 { true } else { false } }
+            },
+            Do("ask for a sign-in only the Mac can finish") { _ in
+                let mac = client.account("claude")?.methods.first { $0.where == .mac }?.id
+                client.send(.cmd(id: "mac", .control(.accountSignIn, ControlArgs(provider: "claude", method: mac, aim: "active"))))
+            },
+            Expect("refused: denied.mac", found: { _ in client.result("mac").map { "\($0)" } }) { _ in client.result("mac")?.code == .deniedMac },
+            Expect("no message carried a key or a token", found: { _ in Self.leaks(client.rawText) }) { _ in Self.leaks(client.rawText) == nil },
+            Do("disconnect") { _ in LinkRun.current?.revoke() },
+        ]
+    }
+}
+
 /// Link 1.1: the chat's "/" commands in its meta and sendable, Kore's own entries and "!" refused;
 /// an image and a text file uploaded, checked and attached to a message; a bad hash and an
 /// oversize upload refused; the message's image read back as a thumbnail, and a ref the
@@ -447,6 +532,23 @@ final class LinkStoryClient: @unchecked Sendable {
 
     /// The welcome's capabilities.
     var caps: [String] { lock.withLock { messages.lazy.compactMap { if case .welcome(let w) = $0 { w.caps } else { nil } }.first ?? [] } }
+
+    /// A CLI's latest account, from snapshots and deltas.
+    func account(_ provider: String) -> LinkAccountState? {
+        lock.withLock {
+            messages.reversed().lazy.compactMap { message -> LinkAccountState? in
+                switch message {
+                case .snapshot(_, _, _, let extras), .delta(_, _, _, _, let extras): extras?.clis?.first { $0.provider == provider }?.account
+                default: nil
+                }
+            }.first
+        }
+    }
+
+    /// Every message received, as its JSON.
+    var rawText: String {
+        lock.withLock { messages.compactMap { try? $0.encoded() }.map { String(decoding: $0, as: UTF8.self) }.joined(separator: "\n") }
+    }
 
     /// A chat's latest meta, from snapshots and deltas.
     func meta(_ chatId: String) -> ChatMeta? {

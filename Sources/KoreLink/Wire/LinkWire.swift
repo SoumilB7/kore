@@ -849,6 +849,12 @@ package enum ResultCode: String, LenientEnum {
     case goneGroup = "gone.group"
     case goneSession = "gone.session"
     case goneFolder = "gone.folder"
+    /// Accounts (1.2 steps 3–4).
+    case deniedMac = "denied.mac"
+    case busyAccount = "busy.account"
+    case goneLogin = "gone.login"
+    case goneFlow = "gone.flow"
+    case staleFlow = "stale.flow"
     case busy
     case invalid
     case rateLimited

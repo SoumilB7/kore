@@ -939,6 +939,12 @@ struct LoginPick {
     fileprivate init() {}
 }
 
+extension LoginPick {
+    /// A login picked by hand on a companion granted full control (link 1.2's `account.switch`):
+    /// still the user's own pick, made on another screen.
+    static func byHandOnLink() -> LoginPick { LoginPick() }
+}
+
 struct LoginRow: View {
     let state: AccountState
     let login: AccountStore.Login

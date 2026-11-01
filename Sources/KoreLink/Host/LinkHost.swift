@@ -57,6 +57,8 @@ package final class LinkHost {
         var bucket = MessageBucket()
         var commands = RateLimiter(limit: 30, per: 60)
         var sends = RateLimiter(limit: 10, per: 60)
+        /// `account.*`: ten a minute.
+        var accounts = RateLimiter(limit: 10, per: 60)
         /// History pages, two a second.
         var reads = RateLimiter(limit: 2, per: 1)
         /// Files on their way in, and finished ones waiting for a send (by blob id, kept 10 min).
@@ -410,6 +412,7 @@ package final class LinkHost {
     /// comes when it's done.
     private func performControl(_ id: String, _ kind: ControlKind, _ args: ControlArgs, _ session: Session) {
         guard session.commands.take() else { return send(.result(.init(id: id, ok: false, code: .rateLimited))) }
+        if kind.onAccount, !session.accounts.take() { return send(.result(.init(id: id, ok: false, code: .rateLimited))) }
         var files: [URL] = []
         if kind == .chatSendAtReset, let blobs = args.blobs {
             files = blobs.compactMap { session.blobs[$0]?.url }
@@ -420,7 +423,12 @@ package final class LinkHost {
             let outcome = await LinkControlActions.apply(kind, args, control: control, files: files)
             guard let self, LinkHost.current === self else { return }
             if outcome.ok, kind == .chatSendAtReset { for blob in args.blobs ?? [] { session.blobs[blob] = nil } }
-            UILog.event("link-cmd", ["type": kind.rawValue, "chat": args.chatId, "code": outcome.code?.rawValue ?? "ok"])
+            // An account command logs its CLI and login id only: never an email, code or page.
+            UILog.event(
+                "link-cmd",
+                kind.onAccount
+                    ? ["type": kind.rawValue, "cli": args.provider, "login": args.login, "code": outcome.code?.rawValue ?? "ok"]
+                    : ["type": kind.rawValue, "chat": args.chatId, "code": outcome.code?.rawValue ?? "ok"])
             let chat = args.chatId.flatMap { LinkSnapshot.chatsByID()[$0] } ?? outcome.newChat
             if outcome.ok { self.mark.record(Self.describe(.control(kind, args), chat: chat)) }
             self.send(
@@ -489,6 +497,14 @@ package final class LinkHost {
         case .historyRename: "Renamed a past chat"
         case .historyArchive: "Archived a past chat"
         case .macStayAwake: "Changed Stay awake"
+        case .accountSignIn: "Started a sign-in"
+        case .accountSubmit: "Sent a sign-in code"
+        case .accountCancel: "Cancelled a sign-in"
+        case .accountSwitch: "Switched login"
+        case .accountRemove: "Removed a login"
+        case .accountSignOut: "Signed out"
+        case .accountRefresh: "Read the account"
+        case .accountPrivacy: "Changed email privacy"
         }
     }
 

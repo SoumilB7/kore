@@ -19,6 +19,7 @@ enum LinkControlActions {
             guard let chat else { return .failed(.goneChat, "That chat isn't open in Kore any more.") }
             return await onChat(kind, args, chat, files: files)
         }
+        if kind.onAccount { return await onAccount(kind, args) }
         return await onWindow(kind, args, files: files)
     }
 
@@ -74,6 +75,57 @@ enum LinkControlActions {
     }
 
     // MARK: Windows, tabs, groups, boards, history
+
+    // MARK: Accounts
+
+    /// A CLI's account, as the Account popup does it. A sign-in started here opens nothing on the
+    /// Mac; one that only the Mac can finish is refused `denied.mac`.
+    private static func onAccount(_ kind: ControlKind, _ args: ControlArgs) async -> Outcome {
+        if kind == .accountPrivacy {
+            AccountStore.linkSetPrivacy(args.on == true)
+            return .done
+        }
+        guard let provider = args.provider, Registry.provider(provider) != nil else {
+            return .failed(.invalid, "Kore doesn't know that CLI.")
+        }
+        let store = AccountStore.shared
+        let outcome: AccountStore.LinkOutcome
+        switch kind {
+        case .accountSignIn:
+            let aim: AccountStore.LinkAim =
+                switch args.aim {
+                case "new": .new
+                case "login": .login(args.login ?? "")
+                default: .active
+                }
+            outcome = store.linkSignIn(provider, method: args.method, aim: aim)
+        case .accountSubmit:
+            outcome = await store.linkSubmit(provider, serial: args.serial ?? -1, input: args.input ?? "")
+        case .accountCancel:
+            outcome = store.linkCancel(provider)
+        case .accountSwitch:
+            outcome = store.linkSwitch(provider, to: args.login ?? "")
+        case .accountRemove:
+            outcome = store.linkRemove(provider, args.login ?? "")
+        case .accountSignOut:
+            outcome = store.linkSignOut(provider)
+        case .accountRefresh:
+            await store.refresh(provider)
+            outcome = .ok
+        default:
+            outcome = .invalid("Kore doesn't know that command.")
+        }
+        switch outcome {
+        case .ok: return .done
+        case .busy: return .failed(.busyAccount, "A sign-in, switch or sign-out is under way for that CLI.")
+        case .mac: return .failed(.deniedMac, "That sign-in needs the Mac.")
+        case .goneLogin: return .failed(.goneLogin, "That login isn't there any more.")
+        case .goneFlow: return .failed(.goneFlow, "No sign-in is under way.")
+        case .staleFlow: return .failed(.staleFlow, "The sign-in moved on; look again.")
+        case .invalid(let message): return .failed(.invalid, message)
+        case .failed(let message): return .failed(.busy, message)
+        }
+    }
 
     private static func onWindow(_ kind: ControlKind, _ args: ControlArgs, files: [URL]) async -> Outcome {
         switch kind {

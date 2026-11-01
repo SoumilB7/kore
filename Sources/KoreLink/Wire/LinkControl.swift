@@ -44,6 +44,18 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case historyRename = "history.rename"
     case historyArchive = "history.archive"
     case macStayAwake = "mac.stayAwake"
+    // Steps 3–4: accounts. There is no `account.useKey`: no message carries a key.
+    case accountSignIn = "account.signIn"
+    case accountSubmit = "account.submit"
+    case accountCancel = "account.cancel"
+    case accountSwitch = "account.switch"
+    case accountRemove = "account.remove"
+    case accountSignOut = "account.signOut"
+    case accountRefresh = "account.refresh"
+    case accountPrivacy = "account.privacy"
+
+    /// It acts on a CLI's account.
+    package var onAccount: Bool { rawValue.hasPrefix("account.") }
 
     /// It acts on one chat, named by `chatId`.
     package var onChat: Bool {
@@ -105,6 +117,13 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var recentId: String?
     package var sessionId: String?
     package var mode: String?
+    /// `account.*`: the sign-in method, its aim ("active", "new" or "login"), a login's id
+    /// ("main" for main), the flow's serial, and the code the user typed from the manual page.
+    package var method: String?
+    package var aim: String?
+    package var login: String?
+    package var serial: Int?
+    package var input: String?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -113,7 +132,8 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         sourceId: String? = nil, provider: String? = nil, place: ChatPlace? = nil, tabId: String? = nil, index: Int? = nil,
         groupId: String? = nil, name: String? = nil, color: String? = nil, folded: Bool? = nil, boardTabId: String? = nil,
         sectionId: String? = nil, toTab: Bool? = nil, swatch: String? = nil, mergeInto: String? = nil, remove: Bool? = nil,
-        recentId: String? = nil, sessionId: String? = nil, mode: String? = nil
+        recentId: String? = nil, sessionId: String? = nil, mode: String? = nil, method: String? = nil, aim: String? = nil,
+        login: String? = nil, serial: Int? = nil, input: String? = nil
     ) {
         self.chatId = chatId
         self.windowId = windowId
@@ -148,6 +168,11 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         self.recentId = recentId
         self.sessionId = sessionId
         self.mode = mode
+        self.method = method
+        self.aim = aim
+        self.login = login
+        self.serial = serial
+        self.input = input
     }
 }
 
@@ -256,7 +281,100 @@ package struct MacState: Codable, Sendable, Equatable {
     }
 }
 
-/// A CLI's models (1.2 step 1; its account comes in a later step).
+/// A CLI's account (1.2 steps 3–4): who it's signed in as, its logins, how it can sign in, and
+/// the sign-in under way. Emails are masked while Kore's privacy mode is on.
+package struct LinkAccountState: Codable, Sendable, Equatable {
+    package struct Login: Codable, Sendable, Equatable {
+        package var id: String
+        package var email: String?
+        package var workspace: String?
+        package var active: Bool
+        package var signedOut: Bool
+        package var duplicate: Bool
+        package init(id: String, email: String?, workspace: String?, active: Bool, signedOut: Bool, duplicate: Bool) {
+            self.id = id
+            self.email = email
+            self.workspace = workspace
+            self.active = active
+            self.signedOut = signedOut
+            self.duplicate = duplicate
+        }
+    }
+
+    package struct Method: Codable, Sendable, Equatable {
+        package enum Where: String, LenientEnum { case link, mac, unknown }
+        package var id: String
+        package var label: String
+        package var hint: String?
+        package var group: String?
+        package var kind: String
+        package var `where`: Where
+        package init(id: String, label: String, hint: String?, group: String?, kind: String, where place: Where) {
+            self.id = id
+            self.label = label
+            self.hint = hint
+            self.group = group
+            self.kind = kind
+            self.where = place
+        }
+    }
+
+    /// A sign-in under way. One the Mac started carries only its step; one the link started also
+    /// its page (never a callback on the Mac) and, for a device code, the code.
+    package struct Flow: Codable, Sendable, Equatable {
+        package var serial: Int
+        package var method: String?
+        package var startedByLink: Bool
+        package var switching: Bool
+        package var step: String
+        package var url: String?
+        package var code: String?
+        package var takesPaste: Bool
+        package var error: String?
+        package init(
+            serial: Int, method: String?, startedByLink: Bool, switching: Bool, step: String, url: String?, code: String?,
+            takesPaste: Bool, error: String?
+        ) {
+            self.serial = serial
+            self.method = method
+            self.startedByLink = startedByLink
+            self.switching = switching
+            self.step = step
+            self.url = url
+            self.code = code
+            self.takesPaste = takesPaste
+            self.error = error
+        }
+    }
+
+    package var status: String
+    package var email: String?
+    package var plan: String?
+    package var workspace: String?
+    package var method: String?
+    package var privacy: Bool
+    package var logins: [Login]
+    package var methods: [Method]
+    package var workingChats: Int
+    package var flow: Flow?
+    package init(
+        status: String, email: String?, plan: String?, workspace: String?, method: String?, privacy: Bool, logins: [Login],
+        methods: [Method], workingChats: Int, flow: Flow?
+    ) {
+        self.status = status
+        self.email = email
+        self.plan = plan
+        self.workspace = workspace
+        self.method = method
+        self.privacy = privacy
+        self.logins = logins
+        self.methods = methods
+        self.workingChats = workingChats
+        self.flow = flow
+    }
+}
+
+/// A CLI's models (1.2 step 1) and account (steps 3–4).
 package struct CLIState: Codable, Sendable, Equatable {
     package struct Model: Codable, Sendable, Equatable {
         package var id: String
@@ -276,10 +394,12 @@ package struct CLIState: Codable, Sendable, Equatable {
     package var provider: String
     package var models: [Model]
     package var effortScale: [String]
-    package init(provider: String, models: [Model], effortScale: [String]) {
+    package var account: LinkAccountState?
+    package init(provider: String, models: [Model], effortScale: [String], account: LinkAccountState? = nil) {
         self.provider = provider
         self.models = models
         self.effortScale = effortScale
+        self.account = account
     }
 }
 

@@ -150,15 +150,33 @@ enum LinkSnapshot {
         return (out, change.isTruncated)
     }
 
-    /// Each CLI's models, read from its open chats (a CLI says them once it runs).
+    /// Each CLI's models, read from its open chats (a CLI says them once it runs), and its account.
     static func clis(_ chats: [Chat]) -> [CLIState] {
         Registry.all.compactMap { provider in
-            guard let chat = chats.first(where: { $0.provider.id == provider.id && !$0.linkModels.isEmpty }) else { return nil }
+            let chat = chats.first(where: { $0.provider.id == provider.id && !$0.linkModels.isEmpty })
+            let account = self.account(provider.id)
             return CLIState(
                 provider: provider.id,
-                models: chat.linkModels.map { .init(id: $0.id, name: $0.name, efforts: $0.efforts, fast: $0.supportsFastMode, auto: $0.supportsAutoMode) },
-                effortScale: chat.linkEffortScale)
+                models: (chat?.linkModels ?? []).map {
+                    .init(id: $0.id, name: $0.name, efforts: $0.efforts, fast: $0.supportsFastMode, auto: $0.supportsAutoMode)
+                },
+                effortScale: chat?.linkEffortScale ?? [], account: account)
         }
+    }
+
+    /// A CLI's account as the link sees it (`AccountStore.linkAccount`).
+    static func account(_ provider: String) -> LinkAccountState {
+        let a = AccountStore.shared.linkAccount(provider)
+        return LinkAccountState(
+            status: a.status, email: a.email, plan: a.plan, workspace: a.workspace, method: a.method, privacy: a.privacy,
+            logins: a.logins.map { .init(id: $0.id, email: $0.email, workspace: $0.workspace, active: $0.active, signedOut: $0.signedOut, duplicate: $0.duplicate) },
+            methods: a.methods.map { .init(id: $0.id, label: $0.label, hint: $0.hint, group: $0.group, kind: $0.kind, where: $0.onLink ? .link : .mac) },
+            workingChats: a.workingChats,
+            flow: a.flow.map {
+                .init(
+                    serial: $0.serial, method: $0.method, startedByLink: $0.startedByLink, switching: $0.switching, step: $0.step, url: $0.url,
+                    code: $0.code, takesPaste: $0.takesPaste, error: $0.error)
+            })
     }
 
     /// Every chat open in a window: its tabs' chats, then its boards'.

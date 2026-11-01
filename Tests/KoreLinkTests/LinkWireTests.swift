@@ -331,16 +331,54 @@ struct LinkUploadTests {
 struct LinkControlTests {
     static let chat = LinkPolicy.ChatFacts(level: .manual, modes: ["default": .manual])
 
+    /// Every field any 1.2 command reads, filled in.
+    static let args = ControlArgs(
+        chatId: "x", windowId: "w", title: "A name", on: true, text: "hi", provider: "claude", login: "main", serial: 1,
+        input: "CODE-FROM-PAGE")
+
     @Test(arguments: ControlKind.allCases)
     func refusedWithoutTheGrant(_ kind: ControlKind) {
-        let args = ControlArgs(chatId: "x", windowId: "w", title: "A name", text: "hi")
-        #expect(LinkPolicy.check(.control(kind, args), Self.chat, control: .standard) == .deny(.deniedControl, "Full control isn't granted in Kore for this run."))
+        #expect(LinkPolicy.check(.control(kind, Self.args), Self.chat, control: .standard) == .deny(.deniedControl, "Full control isn't granted in Kore for this run."))
     }
 
     @Test(arguments: ControlKind.allCases)
     func allowedWithTheGrant(_ kind: ControlKind) {
-        let args = ControlArgs(chatId: "x", windowId: "w", title: "A name", text: "hi")
-        #expect(LinkPolicy.check(.control(kind, args), Self.chat, control: .full) == .allow)
+        #expect(LinkPolicy.check(.control(kind, Self.args), Self.chat, control: .full) == .allow)
+    }
+
+    /// No command takes a key: `account.useKey` isn't one, so it decodes as unknown and is refused,
+    /// even with the grant.
+    @Test func noKeyCommandEvenWithTheGrant() throws {
+        #expect(!ControlKind.allCases.contains { $0.rawValue.lowercased().contains("key") })
+        let json = #"{"cmd":{"key":"sk-ant-api03-secret","provider":"claude","type":"account.useKey"},"id":"k1","t":"cmd"}"#
+        guard case .cmd(_, let command) = try LinkMessage.decode(Data(json.utf8)) else {
+            Issue.record("not a cmd")
+            return
+        }
+        #expect(LinkPolicy.check(command, Self.chat, control: .full) == .deny(.invalid, "Kore doesn't know that command."))
+    }
+
+    /// Account commands carry what they name, and a sign-in code is one line.
+    @Test func accountCommandsAreChecked() {
+        let check = { (kind: ControlKind, args: ControlArgs) in LinkPolicy.check(.control(kind, args), nil, control: .full) }
+        #expect(check(.accountSignIn, ControlArgs(provider: "codex", method: "device", aim: "active")) == .allow)
+        #expect(check(.accountSignIn, ControlArgs(provider: "codex", aim: "login")) != .allow)
+        #expect(check(.accountSignIn, ControlArgs(aim: "active")) != .allow)
+        #expect(check(.accountSubmit, ControlArgs(provider: "claude", serial: 2, input: "two\nlines")) != .allow)
+        #expect(check(.accountSubmit, ControlArgs(provider: "claude", input: "CODE")) != .allow)
+        #expect(check(.accountSwitch, ControlArgs(provider: "claude")) != .allow)
+        #expect(check(.accountPrivacy, ControlArgs()) != .allow)
+    }
+
+    /// No fixture carries a key or a token: what crosses for a sign-in is a page and a code.
+    @Test func noFixtureCarriesAKeyOrToken() throws {
+        let folder = LinkFixtureTests.folder
+        for name in try FileManager.default.contentsOfDirectory(atPath: folder.path) where name.hasSuffix(".json") {
+            let text = try String(contentsOf: folder.appendingPathComponent(name), encoding: .utf8)
+            for marker in ["sk-ant", "sk-proj", "access_token", "refresh_token", "id_token", "\"apiKey\":", "Bearer "] {
+                #expect(!text.contains(marker), "\(name) contains \(marker)")
+            }
+        }
     }
 
     @Test func shellLinesStayRefusedWithTheGrant() {

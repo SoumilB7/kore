@@ -210,6 +210,26 @@
     {
       "file": "cmd.group.json",
       "type": "cmd"
+    },
+    {
+      "file": "cmd.account.signIn.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.account.submit.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.account.switch.json",
+      "type": "cmd"
+    },
+    {
+      "file": "result.account.json",
+      "type": "result"
+    },
+    {
+      "file": "delta.account.json",
+      "type": "delta"
     }
   ],
   "proto": {

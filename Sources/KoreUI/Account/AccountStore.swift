@@ -105,6 +105,8 @@ package final class AccountStore {
     @ObservationIgnored private var timers: [String: Task<Void, Never>] = [:]
     /// Each flow's own number: an answer for a flow cancelled or replaced since is dropped.
     @ObservationIgnored private var serials: [String: Int] = [:]
+    /// Sign-ins the local link started, by their serial: Kore opens no page on the Mac for them.
+    @ObservationIgnored private(set) var linkStarted: [String: Int] = [:]
     @ObservationIgnored private var reads: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var chats: [WeakChat] = []
     @ObservationIgnored private var watches: [String: FileWatch] = [:]
@@ -271,13 +273,14 @@ package final class AccountStore {
     /// old login works until the new one lands, and the working chats stop when it does. For
     /// another listed login (`aim`), it runs in that login's folder and switches nothing. One flow
     /// at a time per CLI.
-    func signIn(_ provider: String, method: SignInMethod? = nil, in folder: URL, aim: Aim = .active) {
+    func signIn(_ provider: String, method: SignInMethod? = nil, in folder: URL, aim: Aim = .active, quiet: Bool = false) {
         guard flows[provider]?.step.live != true, let ops = ops(provider), let method = method ?? currentMethod(provider), method.runs,
             !method.opensEditor
         else { return }
         if case .login(let id) = aim, CLIProfiles.active(provider) != id { aimed[provider] = CLIProfiles.Pin(cli: provider, id: id) }
         let serial = (serials[provider] ?? 0) + 1
         serials[provider] = serial
+        if quiet { linkStarted[provider] = serial } else { linkStarted[provider] = nil }
         let before: AccountIdentity? = if case .signedIn(let identity) = status(provider) { identity } else { nil }
         let other = aimed[provider] != nil
         if !other { lastMethod[provider] = method.id }
@@ -293,7 +296,7 @@ package final class AccountStore {
                 guard serials[provider] == serial else { return await handle.cancel() }
                 handles[provider] = handle
                 if let url = handle.url {
-                    if !handle.opensItself { Self.open(url) }
+                    if !handle.opensItself, !quiet { Self.open(url) }
                     flows[provider]?.step = handle.code.map { .code($0, url) } ?? .browser(url)
                 } else if !refreshing {
                     flows[provider]?.step = .terminal
@@ -356,6 +359,10 @@ package final class AccountStore {
         guard case .browser = flows[provider]?.step else { return false }
         return handles[provider]?.submit != nil
     }
+
+    /// The CLI's manual sign-in page for the flow under way, if it has one: a page that shows a
+    /// code to paste back, never a callback on this Mac.
+    func manualSignInURL(_ provider: String) -> URL? { handles[provider]?.manualURL }
 
     func openManualSignIn(_ provider: String) {
         if let url = handles[provider]?.manualURL { Self.open(url) }
@@ -587,10 +594,10 @@ package final class AccountStore {
 
     /// Adds a login: a sign-in in a folder of its own, kept and switched to if it lands on an
     /// account not listed yet.
-    func addLogin(_ provider: String, method: SignInMethod? = nil, in folder: URL) {
+    func addLogin(_ provider: String, method: SignInMethod? = nil, in folder: URL, quiet: Bool = false) {
         guard flows[provider]?.step.live != true, let id = try? CLIProfiles.prepare(provider) else { return }
         adding[provider] = id
-        signIn(provider, method: method, in: folder)
+        signIn(provider, method: method, in: folder, quiet: quiet)
         if flows[provider]?.step.live != true { dropAdding(provider) }
     }
 
