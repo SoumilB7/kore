@@ -227,7 +227,7 @@ struct UsageModal: View {
                         }
                         UsageChatRow(
                             name: current ? "This chat" : name,
-                            folder: showFolders ? chatShare.folder.map { ($0 as NSString).lastPathComponent } : nil, share: chatShare,
+                            folder: showFolders ? (UsageChats.folder(chatShare.id) ?? chatShare.folder).map { ($0 as NSString).lastPathComponent } : nil, share: chatShare,
                             used: limit.used, bar: bar, current: current, go: go
                         )
                         .storyID(StoryID.UsageModal.chat(chatShare.id), press: current ? nil : go)
@@ -489,6 +489,13 @@ private struct AgentRings: View {
 /// Finding and opening the chats the extended view lists.
 @MainActor
 enum UsageChats {
+    /// The folder of the open window a chat belongs to: its tab's, else its history's.
+    static func folder(_ id: String) -> String? {
+        Workspace.all.allObjects.first { workspace in
+            workspace.tabs.contains { $0.agent == nil && $0.chat?.sessionId == id } || workspace.chats.contains { $0.id == id }
+        }?.folder.path
+    }
+
     /// A chat's name from an open window: its tab's, else its folder's history.
     static func name(_ id: String) -> String? {
         for workspace in Workspace.all.allObjects {

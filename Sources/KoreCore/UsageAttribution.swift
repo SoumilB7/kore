@@ -379,9 +379,10 @@ extension UsageAttribution {
         var chats: [String: ChatShare] = [:]
         var agents: [String: Set<String>] = [:]
         for (request, share) in zip(requests, points) where request.kore {
-            var chat = chats[request.chat] ?? ChatShare(id: request.chat, folder: request.folder, points: 0)
+            // The chat's folder comes from its own lines only: an agent may work elsewhere.
+            var chat = chats[request.chat] ?? ChatShare(id: request.chat, folder: request.agent == nil ? request.folder : nil, points: 0)
             chat.points += share
-            if chat.folder == nil { chat.folder = request.folder }
+            if chat.folder == nil, request.agent == nil { chat.folder = request.folder }
             if let agent = request.agent {
                 chat.agentPoints += share
                 agents[request.chat, default: []].insert(agent)

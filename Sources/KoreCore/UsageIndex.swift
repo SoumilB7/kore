@@ -140,6 +140,7 @@ struct ClaudeUsageIndex {
 
     static let assistant = Array(#""type":"assistant""#.utf8)
     static let usage = Array(#""usage":"#.utf8)
+    static let cwdKey = Array(#""cwd":"#.utf8)
 
     /// Reads what's new in every file touched since `since`; drops files and records older.
     /// Returns whether anything changed.
@@ -187,6 +188,11 @@ struct ClaudeUsageIndex {
         var cwd = file.cwd
         var models = self.models
         file.offset = UsageFileScan.lines(url, from: file.offset) { line in
+            // The chat's folder is where its session began: the first line that names one, not
+            // a later turn's, which may have moved into a subfolder.
+            if cwd == nil, UsageFileScan.contains(line, Self.cwdKey), let entry = UsageFileScan.object(line) {
+                cwd = entry["cwd"] as? String
+            }
             guard UsageFileScan.contains(line, Self.assistant), UsageFileScan.contains(line, Self.usage),
                 let entry = UsageFileScan.object(line), entry["type"] as? String == "assistant",
                 let message = entry["message"] as? [String: Any], let usage = message["usage"] as? [String: Any]
@@ -197,7 +203,6 @@ struct ClaudeUsageIndex {
             else { return }
             let id = message["id"] as? String ?? entry["uuid"] as? String ?? stamp
             let lineCwd = entry["cwd"] as? String
-            if cwd == nil { cwd = lineCwd }
             let creation = usage["cache_creation"] as? [String: Any]
             let write5m = creation.map { UsageFileScan.number($0["ephemeral_5m_input_tokens"]) } ?? UsageFileScan.number(usage["cache_creation_input_tokens"])
             let write1h = creation.map { UsageFileScan.number($0["ephemeral_1h_input_tokens"]) } ?? 0
@@ -537,7 +542,7 @@ struct CodexUsageIndex {
 /// The index as one file in Kore's Caches: a JSON header (each file's place and counts, the
 /// name lists), then each file's records as they are in memory.
 enum UsageIndexStore {
-    static let version = 1
+    static let version = 2
 
     struct Header<File: Codable>: Codable {
         var version: Int
