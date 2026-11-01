@@ -392,6 +392,8 @@ package struct SlashCommand: Identifiable, Hashable, Sendable {
     package var on = false
     /// A Kore entry this chat's CLI can't do: shown dim, with the reason as its description.
     package var unavailable = false
+    /// A Kore entry's own label, where its name isn't one ("Disconnect <companion>").
+    package var title: String?
     package var id: String { name }
     /// Claude runs `/name`; Codex invokes skills by mentioning `$name`.
     package var insertion: String { kind == .skill ? "$\(name) " : "/\(name) " }

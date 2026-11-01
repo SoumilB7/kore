@@ -110,7 +110,7 @@ extension SlashCommand {
         switch kind {
         case .command: "/\(name)"
         case .skill: "$\(name)"
-        case .kore: (name.prefix(1).uppercased() + name.dropFirst()).replacingOccurrences(of: "-", with: " ")
+        case .kore: title ?? (name.prefix(1).uppercased() + name.dropFirst()).replacingOccurrences(of: "-", with: " ")
         }
     }
 
@@ -121,16 +121,20 @@ extension SlashCommand {
         switch name {
         case Self.account.name: return ["login", "logout", "sign", "switch"]
         case Self.remoteName: return ["rc", "phone", "web", "mobile"]
-        default: return ["limits"]
+        case Self.usage.name: return ["limits"]
+        default: return []
         }
     }
 
     /// The menu for a typed "/word" (`query` lowercased): Usage then Account first on a bare
     /// "/", in place of the CLI's own usage, login and logout; a "$" lists skills alone. Under
     /// a query, names that start with it come first.
-    /// `remote`: this chat's Remote control entry, after Account.
-    static func matches(_ commands: [SlashCommand], sigil: Character, query: String, remote: SlashCommand? = nil) -> [SlashCommand] {
-        let own = kore + (remote.map { [$0] } ?? [])
+    /// `remote`: this chat's Remote control entry, after Account. `link`: a companion's entries,
+    /// while one is allowed this run.
+    static func matches(
+        _ commands: [SlashCommand], sigil: Character, query: String, remote: SlashCommand? = nil, link: [SlashCommand] = []
+    ) -> [SlashCommand] {
+        let own = kore + (remote.map { [$0] } ?? []) + link
         let listed =
             sigil == "$"
             ? commands.filter { $0.kind == .skill } : own + commands.filter { $0.kind == .skill || !replaced.contains($0.name) }
@@ -138,8 +142,9 @@ extension SlashCommand {
         if query.isEmpty { return listed }
         let leads = { (command: SlashCommand) in
             command.name.lowercased().hasPrefix(query) || command.aliases.contains { $0.hasPrefix(query) }
+                || command.title?.lowercased().hasPrefix(query) == true
         }
-        let hits = listed.filter { leads($0) || $0.name.lowercased().contains(query) }
+        let hits = listed.filter { leads($0) || $0.name.lowercased().contains(query) || $0.title?.lowercased().contains(query) == true }
         return hits.filter(leads) + hits.filter { !leads($0) }
     }
 }

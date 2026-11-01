@@ -424,6 +424,10 @@ struct TabBar: View {
             if let awake = StayAwake.current {
                 StayAwakeButton(awake: awake, size: tabHeight).storyID(StoryID.Titlebar.awake)
             }
+            if let mark = workspace.linkMark {
+                LinkMarkButton(mark: mark, size: tabHeight)
+                    .storyID(StoryID.Link.mark) { LinkPanel.toggleMarkPopup(mark, under: .zero) }
+            }
             HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight).storyID(StoryID.Titlebar.history)
         }
         .padding(.leading, leadingInset)

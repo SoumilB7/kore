@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import KoreLink
 import KoreUI
 
 // Started as a CLI's or a shell's trampoline, this becomes that program and goes no further.
@@ -9,4 +10,6 @@ if let status = CLIExecutable.headless(CommandLine.arguments) { exit(status) }
 Disclaim.trampoline = Bundle.main.executablePath
 // Tooltips (a tab's full name) at 90% of the system's usual second.
 UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 900])
+// The local link's doorbell: a ring wakes it; nothing of it runs before.
+LinkTaps.doorbell = { LinkDoorbell.ring($0, $1) }
 KoreApp.main()

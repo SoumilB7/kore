@@ -26,11 +26,15 @@ let package = Package(
             name: "KoreUI", dependencies: ["KoreCore", .product(name: "SwiftTerm", package: "SwiftTerm")],
             // mermaid.js for the diagram preview: bundled, so it never loads from the network.
             resources: [.copy("Resources/mermaid.min.js")], swiftSettings: releaseForSize),
-        .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore"], swiftSettings: releaseForSize),
+        // The local link (`z-docs/link-protocol.md`): a companion app on the same Mac, allowed by
+        // the user at a ring, follows chats and acts in them under Kore's rules. Asleep (no
+        // socket, timer or observer) until then.
+        .target(name: "KoreLink", dependencies: ["KoreUI", "KoreCore"], swiftSettings: releaseForSize),
+        .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         // User storylines (phase 12): the engine, steps, scripted CLI and catalogue, and the app
         // with them inside. Neither is part of Kore.app.
-        .target(name: "KoreStorylines", dependencies: ["KoreUI", "KoreCore"], swiftSettings: releaseForSize),
+        .target(name: "KoreStorylines", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-storylines", dependencies: ["KoreStorylines", "KoreUI"], swiftSettings: releaseForSize),
         // Plays recorded CLI sessions as `claude` / `codex` for storylines.
         .executableTarget(name: "kore-fake-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
@@ -39,6 +43,7 @@ let package = Package(
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "KoreCore", "kore-fake-cli"]),
+        .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "KoreUI", "KoreCore"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "KoreCore"]),
     ]
 )

@@ -1,0 +1,1 @@
+{"client":{"build":"1.0 (12)","name":"Companion"},"commands":[{"id":"qr","label":"Show code"},{"id":"activity","label":"Activity"}],"proof":"aGVsbG8tcHJvb2YtYmFzZTY0LWJ5dGVzLWV4YW1wbGU=","proto":{"major":1,"minor":0},"t":"hello"}

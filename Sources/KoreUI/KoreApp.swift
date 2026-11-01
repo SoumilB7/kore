@@ -110,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The CLIs end with Kore: one left running would go on acting in a session Kore resumes
     /// in a new process next launch.
     func applicationWillTerminate(_ notification: Notification) {
+        LinkTaps.quit?()
         for workspace in Workspace.all.allObjects { workspace.terminals.shutdown(immediately: true) }
         ProcessChild.finishClosing()
         StdioProcess.closeAll()
@@ -126,6 +127,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(DockItem("New Window") { app.showWelcome() })
         return menu
+    }
+
+    /// The local link's doorbell (`z-docs/link-protocol.md` §1): one Apple Event handler, and the
+    /// only thing the link does at launch. A ring is handed to `LinkTaps.doorbell`.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(ring(_:reply:)), forEventClass: Self.linkClass, andEventID: Self.linkRing)
+    }
+
+    static let linkClass: AEEventClass = 0x4B6F_5265  // 'KoRe'
+    static let linkRing: AEEventID = 0x7269_6E67  // 'ring'
+
+    @objc private func ring(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let doorbell = LinkTaps.doorbell else {
+            reply.setParam(NSAppleEventDescriptor(int32: -1743), forKeyword: keyErrorNumber)
+            reply.setParam(NSAppleEventDescriptor(string: "denied"), forKeyword: keyErrorString)
+            return
+        }
+        doorbell(event, reply)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

@@ -9,8 +9,8 @@ import KoreCore
 ///   2026-10-26T12:41:03.118Z	window-key folder=kore
 ///   2026-10-26T12:41:09.502Z	stall ms=412
 @MainActor
-enum UILog {
-    static func event(_ name: String, _ fields: KeyValuePairs<String, String?> = [:]) {
+package enum UILog {
+    package static func event(_ name: String, _ fields: KeyValuePairs<String, String?> = [:]) {
         log.write(name, fields)
     }
 

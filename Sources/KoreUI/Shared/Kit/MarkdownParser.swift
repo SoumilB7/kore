@@ -3,8 +3,8 @@ import SwiftUI
 
 /// One block of a markdown reply. Inline text is parsed into styled `AttributedString`s once, here,
 /// so a render only lays them out.
-struct MarkdownBlock: Identifiable, Equatable, Sendable {
-    enum Kind: Equatable, Sendable {
+package struct MarkdownBlock: Identifiable, Equatable, Sendable {
+    package enum Kind: Equatable, Sendable {
         case heading(level: Int, text: AttributedString)
         case paragraph(AttributedString)
         case code(language: String, text: String)
@@ -16,27 +16,27 @@ struct MarkdownBlock: Identifiable, Equatable, Sendable {
 
     /// Top level: the UTF-8 offset of the block's first line in the reply (stable while the reply
     /// grows). Nested: its line number inside the parent.
-    let id: Int
-    let kind: Kind
+    package let id: Int
+    package let kind: Kind
     /// A code fence somewhere inside isn't closed yet.
-    let isOpen: Bool
+    package let isOpen: Bool
 }
 
-struct MarkdownList: Equatable, Sendable {
-    struct Item: Equatable, Sendable {
+package struct MarkdownList: Equatable, Sendable {
+    package struct Item: Equatable, Sendable {
         /// nil: not a task item; otherwise whether it's checked.
-        let task: Bool?
-        let blocks: [MarkdownBlock]
+        package let task: Bool?
+        package let blocks: [MarkdownBlock]
     }
 
-    let ordered: Bool
-    let start: Int
-    let items: [Item]
+    package let ordered: Bool
+    package let start: Int
+    package let items: [Item]
 }
 
-struct MarkdownTable: Equatable, Sendable {
-    let header: [AttributedString]
-    let rows: [[AttributedString]]
+package struct MarkdownTable: Equatable, Sendable {
+    package let header: [AttributedString]
+    package let rows: [[AttributedString]]
 }
 
 /// A reply's parsed blocks, kept between renders. When the text grows by appending (a streaming
@@ -88,7 +88,7 @@ final class MarkdownDocument {
 /// Block markdown as Claude and Codex write it (CommonMark blocks plus GFM tables and task lists),
 /// line by line, with no regular expressions. Inline syntax goes through Foundation's parser one
 /// block at a time. It touches nothing shared, so replies can be parsed off the main thread.
-enum MarkdownParser {
+package enum MarkdownParser {
     struct Line {
         let text: Substring
         let offset: Int
@@ -118,7 +118,7 @@ enum MarkdownParser {
     }
 
     /// `zoom`: the text zoom the styles are for (inline code's font follows it).
-    static func parse(_ text: Substring, base: Int, zoom: CGFloat) -> [MarkdownBlock] {
+    package static func parse(_ text: Substring, base: Int, zoom: CGFloat) -> [MarkdownBlock] {
         var lines: [Line] = []
         var offset = base
         for part in text.utf8.split(separator: 0x0A, omittingEmptySubsequences: false) {

@@ -47,6 +47,8 @@ package final class Workspace {
     }
     /// Browser-style groups of the tabs (TabGroups.swift).
     package internal(set) var tabGroups = TabGroups()
+    /// The local link's mark while a companion is linked; nil otherwise.
+    package var linkMark: LinkMark?
     /// The group whose popup is open, and whether its name field takes the keys.
     package internal(set) var groupEdit: TabGroupEdit?
     /// The folder's window, once it's on screen (a storyline host sizes and snapshots it). Its
@@ -211,6 +213,19 @@ package final class Workspace {
         // Before its view appears and starts the CLI: it launches with this model.
         if let model { activeTab.chat?.launchModel = model }
         return true
+    }
+
+    /// A new chat of the provider in a tab of its own at the end, from outside the window (the
+    /// local link): the tab the owner is on stays selected, and the chat starts in the
+    /// provider's first mode (Manual). Nil for an unknown provider.
+    package func startChatFromLink(provider id: String) -> Chat? {
+        guard let provider = Registry.provider(id) else { return nil }
+        let tab = ChatTab()
+        let chat = Chat(provider: provider, folder: folder)
+        chat.setMode(provider.modes[0].id, remember: false)
+        tab.chat = chat
+        tabs.append(tab)
+        return chat
     }
 
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.

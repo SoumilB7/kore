@@ -1,0 +1,150 @@
+{
+  "cardDigest": {
+    "file": "card-digest.json"
+  },
+  "fixtures": [
+    {
+      "file": "challenge.json",
+      "type": "challenge"
+    },
+    {
+      "file": "hello.json",
+      "type": "hello"
+    },
+    {
+      "file": "hello.commands.json",
+      "type": "hello"
+    },
+    {
+      "file": "welcome.json",
+      "type": "welcome"
+    },
+    {
+      "file": "bye.json",
+      "type": "bye"
+    },
+    {
+      "file": "command.json",
+      "type": "command"
+    },
+    {
+      "file": "snapshot.json",
+      "type": "snapshot"
+    },
+    {
+      "file": "delta.json",
+      "type": "delta"
+    },
+    {
+      "file": "tx.open.json",
+      "type": "tx.open"
+    },
+    {
+      "file": "tx.more.json",
+      "type": "tx.more"
+    },
+    {
+      "file": "tx.close.json",
+      "type": "tx.close"
+    },
+    {
+      "file": "tx.page.json",
+      "type": "tx.page"
+    },
+    {
+      "file": "tx.delta.json",
+      "type": "tx.delta"
+    },
+    {
+      "file": "tx.reset.json",
+      "type": "tx.reset"
+    },
+    {
+      "file": "entry.more.json",
+      "type": "entry.more"
+    },
+    {
+      "file": "entry.chunk.json",
+      "type": "entry.chunk"
+    },
+    {
+      "file": "card.more.json",
+      "type": "card.more"
+    },
+    {
+      "file": "card.chunk.json",
+      "type": "card.chunk"
+    },
+    {
+      "file": "cmd.send.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.stop.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.answer.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.answer.questions.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.setMode.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.setPlan.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.planReady.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.new.json",
+      "type": "cmd"
+    },
+    {
+      "file": "result.ok.json",
+      "type": "result"
+    },
+    {
+      "file": "result.new.json",
+      "type": "result"
+    },
+    {
+      "file": "result.denied.json",
+      "type": "result"
+    },
+    {
+      "file": "result.stale.json",
+      "type": "result"
+    },
+    {
+      "file": "attn.state.json",
+      "type": "attn.state"
+    },
+    {
+      "file": "attn.event.open.json",
+      "type": "attn.event"
+    },
+    {
+      "file": "attn.event.clear.json",
+      "type": "attn.event"
+    },
+    {
+      "file": "attn.event.turn.json",
+      "type": "attn.event"
+    }
+  ],
+  "proto": {
+    "major": 1,
+    "minor": 0
+  },
+  "ringProof": {
+    "file": "ring-proof.json"
+  }
+}
