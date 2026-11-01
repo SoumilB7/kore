@@ -147,6 +147,8 @@ private struct AgentTabTimeline: View {
     @StateObject private var gesturing = Held(false)
     /// The last content height and offset.
     @StateObject private var geometry = Held((height: CGFloat(0), offset: CGFloat(0)))
+    /// Holds the end through a new width, as the chat's does.
+    @StateObject private var shift = ScrollShift()
 
     private static let end = "agent-end"
     /// "At the bottom" within this, as in the chat.
@@ -173,6 +175,9 @@ private struct AgentTabTimeline: View {
                 .padding(.bottom, Layout.Transcript.bottom)
                 .frame(maxWidth: column.maxWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
+                .background(alignment: .topLeading) {
+                    ScrollShift.Finder(shift).frame(width: Stroke.hairline, height: Stroke.hairline)
+                }
             }
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .alignment)
@@ -180,14 +185,17 @@ private struct AgentTabTimeline: View {
                 gesturing.value = new != .idle
                 if new == .interacting {
                     following.value = false
+                    shift.release()
                 } else if new == .idle, old == .interacting || old == .decelerating {
                     let g = context.geometry
                     following.value = g.contentOffset.y + g.containerSize.height >= g.contentSize.height - Self.atBottom
                 }
             }
             .onScrollGeometryChange(for: [CGFloat].self) {
-                [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height]
-            } action: { _, new in
+                [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height, $0.containerSize.width]
+            } action: { old, new in
+                // A new width wraps the rows anew: at the end, the view stays there through it.
+                if following.value, old.count == new.count, old[3] > 0, new[3] != old[3] { shift.hold(.end, until: Date() + 0.5) }
                 scrolled(new, proxy)
             }
         }
@@ -197,9 +205,10 @@ private struct AgentTabTimeline: View {
     /// stop once the reader moves up.
     private func scrolled(_ new: [CGFloat], _ proxy: ScrollViewProxy) {
         let (height, offset, visible) = (new[0], new[1], new[2])
+        let endHeld = following.value && shift.keep()
         // Moved up, away from the end, with no new content (the scroll bar, Page Up): stop
         // following. And back down to the end the same way: follow again.
-        if following.value, height == geometry.value.height, height > visible + Self.atBottom,
+        if following.value, !endHeld, height == geometry.value.height, height > visible + Self.atBottom,
             offset < geometry.value.offset - 1, offset + visible < height - 3 * Self.atBottom
         {
             following.value = false
@@ -209,7 +218,7 @@ private struct AgentTabTimeline: View {
         }
         // New rows (a loaded history, a running agent's), or rows measured after they were
         // placed: stay at the end while following.
-        if following.value, height != geometry.value.height { proxy.scrollTo(Self.end, anchor: .bottom) }
+        if following.value, !endHeld, height != geometry.value.height { proxy.scrollTo(Self.end, anchor: .bottom) }
         geometry.value = (height, offset)
     }
 }

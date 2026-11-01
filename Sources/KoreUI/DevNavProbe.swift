@@ -235,6 +235,39 @@ package enum DevNavProbe {
         return await DevScroller.run(view, toTop: true, speed: speed, mode: .clip, limit: px).requestedPX
     }
 
+    /// The window's content taken through `widths` (its height kept), a step every `pause` (two
+    /// frames, as a fast drag goes; none runs the steps together into one layout): after each,
+    /// the registered row `id`'s frame in window coordinates (nil while it isn't built) and how
+    /// far the transcript's visible bottom is above its end, the first entry before any step.
+    /// Then the size it had.
+    package static func resize(_ workspace: Workspace, widths: [CGFloat], row id: String?, pause: Duration = .milliseconds(33)) async -> (steps: [(row: CGRect?, fromEnd: Double)], frames: Frames) {
+        guard let window = workspace.window else { return ([], Frames()) }
+        let (pacer, scroll) = start(window, workspace)
+        defer { pacer.stop() }
+        let original = window.contentRect(forFrameRect: window.frame).size
+        func step() -> (row: CGRect?, fromEnd: Double) {
+            let view = scroll.value ?? DevScroller.transcript(in: window)
+            let fromEnd = view.map { v in Double((v.documentView?.frame.height ?? 0) - v.contentView.bounds.maxY) } ?? 0
+            return (id.flatMap { StoryRegistry.entry($0)?.frame }, fromEnd)
+        }
+        var steps = [step()]
+        pacer.beginRecording()
+        for width in widths {
+            window.setContentSize(NSSize(width: width, height: original.height))
+            if pause > .zero { try? await Task.sleep(for: pause) }
+            steps.append(step())
+        }
+        if pause == .zero {
+            // Run together, it's measured once laid out.
+            try? await Task.sleep(for: .milliseconds(100))
+            steps.append(step())
+        }
+        var result = Frames()
+        fill(&result, pacer.endRecording())
+        window.setContentSize(original)
+        return (steps, result)
+    }
+
     private static func start(_ window: NSWindow, _ workspace: Workspace) -> (DevFramePacer, Held<NSScrollView?>) {
         let pacer = DevFramePacer()
         let scroll = Held<NSScrollView?>(nil)

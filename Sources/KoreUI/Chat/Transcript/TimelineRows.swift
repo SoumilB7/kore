@@ -43,6 +43,9 @@ struct TranscriptActions {
     /// An answer row's top moved, or it left the built rows (nil): a long answer marks the
     /// reader's place where no message is near.
     var answerMoved: (String, CGFloat?) -> Void = { _, _ in }
+    /// A message or answer row's frame in the content: it changes as rows are laid out again (a
+    /// new width), never as the view scrolls.
+    var rowPlaced: (String, CGRect) -> Void = { _, _ in }
     /// Opens a link clicked in the transcript: a file in a Kore tab (`Workspace.openLink`).
     var openLink: ((URL) -> Void)?
     var folder: URL?
@@ -204,6 +207,7 @@ struct TimelineRow: View, Equatable {
             let (id, actions) = (item.id, actions)
             row
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { actions.answerMoved(id, $0) }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TranscriptSelection.space)) } action: { actions.rowPlaced(id, $0) }
                 .onDisappear { actions.answerMoved(id, nil) }
         } else {
             row
@@ -466,6 +470,9 @@ struct MessageHeader: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
             guard place == .row else { return }
             actions.messageMoved(entry.id.uuidString, frame)
+        }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TranscriptSelection.space)) } action: { frame in
+            if place == .row { actions.rowPlaced(entry.id.uuidString, frame) }
         }
         .onDisappear { if place == .row { actions.messageMoved(entry.id.uuidString, nil) } }
     }

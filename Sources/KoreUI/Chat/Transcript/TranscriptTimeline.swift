@@ -49,6 +49,8 @@ struct TranscriptTimeline: View, Equatable {
     /// Built message and answer rows' tops from the top of the visible area (below the title
     /// bar), as they report them, for saving the place.
     @StateObject private var rowTops = Held([String: CGFloat]())
+    /// The reader's place kept as the width changes.
+    @StateObject private var widthHold = WidthHold()
     /// The built answers' tops among them. Not messages: a message sticks to the top, so where
     /// it is on screen isn't where it is in the content.
     @StateObject private var answerTops = Held([String: CGFloat]())
@@ -82,7 +84,7 @@ struct TranscriptTimeline: View, Equatable {
     /// The rows' actions, built once (their closures hold only references), so a section drawn
     /// again with the same model is skipped.
     @StateObject private var built = Held((rows: TranscriptActions, reveal: TranscriptActions)?.none)
-    /// The scroll view's last geometry: content height, offset, visible height, top inset.
+    /// The scroll view's last geometry: content height, offset, visible height, top inset, width.
     @StateObject private var seen = Held([CGFloat]())
     /// A shown transcript with rows and none of them on screen (`checkBlank`): the check under
     /// way and when it looks (each call moves that on), how often the scroll view was built again
@@ -181,6 +183,7 @@ struct TranscriptTimeline: View, Equatable {
                 if new == .interacting {
                     zoomRejoining.value = false
                     following.value = false
+                    letGo()
                     // The reader took over: a place still being restored or kept is dropped.
                     restore.value = nil
                     settling.value = nil
@@ -193,9 +196,16 @@ struct TranscriptTimeline: View, Equatable {
                 }
             }
             .onScrollGeometryChange(for: [CGFloat].self) {
-                [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height, $0.contentInsets.top]
-            } action: { _, new in
+                [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height, $0.contentInsets.top, $0.containerSize.width]
+            } action: { old, new in
                 seen.value = new
+                // Where the reader left it (`WidthHold`): at an unchanged width, and not while a
+                // new one is still being laid out (held).
+                if !shift.keep(), !widthHold.holding, old.count == new.count, new[4] == old[4] {
+                    // The content's height is partly estimated: at its end only with no built row
+                    // reaching past the bottom of the view.
+                    widthHold.rest = (new[1], new[1] + new[2] >= new[0] - Self.atBottom && widthHold.rowsEnd(above: new[1] + new[3] + new[2] + Self.atBottom))
+                }
                 let insetMoved = new[3] != insetTop.value
                 insetTop.value = new[3]
                 let (height, offset) = (new[0], new[1])
@@ -219,6 +229,26 @@ struct TranscriptTimeline: View, Equatable {
                 }
                 // A new top inset moves the clip (`insetSettling`): pinned again below.
                 if insetMoved, following.value { insetSettling.value = true }
+                // A new width wraps the rows anew: at the end, the view stays there through every
+                // pass of it (`WidthHold` keeps a reader's place above it), and a glide stops.
+                if following.value, old.count == new.count, old[4] > 0, new[4] != old[4] {
+                    if widthHold.rest?.atEnd ?? true {
+                        glidingUntil.value = nil
+                        glideCut.value = store.sentAt
+                        shift.hold(.end, until: Date() + WidthHold.lasts)
+                    } else {
+                        // Left above the end by a move with no scroll phase: not followed.
+                        following.value = false
+                    }
+                }
+                // Held through a new width: nothing else moves the view meanwhile. A kept row
+                // laid out off screen is sought again until it's built.
+                let widthHeld = shift.keep() || widthHold.holding
+                if let id = widthHold.seeking, widthHold.holding {
+                    var instant = Transaction()
+                    instant.disablesAnimations = true
+                    withTransaction(instant) { proxy.scrollTo(id, anchor: .top) }
+                }
                 // Native reset geometry may arrive after the ending layout pass. It is not
                 // a reader scrolling away: wait for the explicit bottom target to land.
                 if zoomRejoining.value {
@@ -326,7 +356,7 @@ struct TranscriptTimeline: View, Equatable {
                 if insetSettling.value, !following.value || gesturing.value || offset + new[2] >= height - Self.atBottom {
                     insetSettling.value = false
                 }
-                if !shift.zoomAdjusting, following.value, !insetSettling.value, height == geometry.value.height, height > new[2] + Self.atBottom,
+                if !shift.zoomAdjusting, following.value, !widthHeld, !insetSettling.value, height == geometry.value.height, height > new[2] + Self.atBottom,
                     offset < geometry.value.offset - 1, offset + new[2] < height - Self.leftEnd
                 {
                     following.value = false
@@ -336,7 +366,7 @@ struct TranscriptTimeline: View, Equatable {
                 // even while a reply streams in. Only between gestures, and only on a move down:
                 // content arriving under a reader held just above the end doesn't move them, so
                 // it doesn't pull them along.
-                if !shift.zoomAdjusting, !following.value, !gesturing.value, offset > geometry.value.offset + 1,
+                if !shift.zoomAdjusting, !following.value, !widthHeld, !gesturing.value, offset > geometry.value.offset + 1,
                     offset + new[2] >= height - Self.atBottom
                 {
                     following.value = true
@@ -344,7 +374,7 @@ struct TranscriptTimeline: View, Equatable {
                 // Rows measured after they were placed change the height: while following, stay
                 // pinned to the end through layout (an inset's move, the visible height's too) as
                 // well as new content (T3 Code does both).
-                if !shift.zoomAdjusting, following.value, height != geometry.value.height || insetSettling.value || visibleMoved,
+                if !shift.zoomAdjusting, following.value, !widthHeld, height != geometry.value.height || insetSettling.value || visibleMoved,
                     glidingUntil.value.map({ Date() >= $0 }) ?? true
                 {
                     proxy.scrollTo(Self.end, anchor: .bottom)
@@ -353,7 +383,7 @@ struct TranscriptTimeline: View, Equatable {
                 // row's press does, with what's on screen kept where it is. Only the reader's own
                 // scroll: never a place being restored (a tab coming back).
                 if !following.value, restore.value == nil, restoreInRow.value == nil, anchor.value == nil, paged.value == nil,
-                    !fetching.value, offset < geometry.value.offset - 1, offset + insetTop.value < new[2]
+                    !fetching.value, !widthHeld, offset < geometry.value.offset - 1, offset + insetTop.value < new[2]
                 {
                     if store.hiddenTurns > 0 {
                         loadEarlier()
@@ -363,7 +393,10 @@ struct TranscriptTimeline: View, Equatable {
                 }
                 geometry.value = (height, offset)
             }
-            .onChange(of: store.folded?.seq) { pendingFold.value = true }
+            .onChange(of: store.folded?.seq) {
+                pendingFold.value = true
+                letGo()
+            }
             .onChange(of: store.loadingEarlier) { _, loading in
                 // The earlier conversation is in (and laid out next): what's on screen stays.
                 if !loading, fetching.value {
@@ -433,6 +466,7 @@ struct TranscriptTimeline: View, Equatable {
                 shift.onZoomInput = { [zoomRejoining] in
                     if zoomRejoining.value { zoomRejoining.value = false }
                 }
+                shift.onLetGo = { [widthHold] in widthHold.drop() }
                 // Back from behind other windows, a scroll view has come back with nothing drawn.
                 shift.onReturn = { [shown] in if shown.value { checkBlank() } }
                 if StoryHost.installed {
@@ -495,6 +529,7 @@ struct TranscriptTimeline: View, Equatable {
                 shift.onZoomBegin = nil
                 shift.onZoomEnd = nil
                 shift.onZoomInput = nil
+                shift.onLetGo = nil
                 store.savedScroll = place(atEnd: following.value)
             }
         }
@@ -522,7 +557,7 @@ struct TranscriptTimeline: View, Equatable {
                 if Task.isCancelled { return }
             }
             blankCheck.value.task = nil
-            guard !store.sections.isEmpty, seen.value.count == 4, shift.windowVisible || StoryHost.installed else { return }
+            guard !store.sections.isEmpty, seen.value.count == 5, shift.windowVisible || StoryHost.installed else { return }
             let (height, offset, visible) = (seen.value[0], seen.value[1], seen.value[2])
             let frames = shift.frames
             let drawn = shift.drawn
@@ -575,7 +610,15 @@ struct TranscriptTimeline: View, Equatable {
             position.value = ScrollPosition(edge: .bottom)
         }
         remounts.value += 1
+        widthHold.reset()
+        shift.release()
         mount.value &+= 1
+    }
+
+    /// The reader's place isn't kept through a new width any longer (`WidthHold`).
+    private func letGo() {
+        widthHold.drop()
+        shift.release()
     }
 
     /// Holds the view at `offset`, or within the measured end, while it lays out (`settling`).
@@ -639,6 +682,7 @@ struct TranscriptTimeline: View, Equatable {
 
     private func keepPlace() {
         following.value = false
+        letGo()
         anchor.value = answerTops.value.filter { $0.value >= 0 }.min { $0.value < $1.value }.map { ($0.key, $0.value, false, false, nil) }
         readerMoved.value = (0, false)
     }
@@ -660,21 +704,46 @@ struct TranscriptTimeline: View, Equatable {
     private func rowActions(_ proxy: ScrollViewProxy) -> TranscriptActions {
         var actions = reveal(proxy)
         let sticky = sticky
-        let (tops, answerTops) = (rowTops, answerTops)
+        let (tops, answerTops, hold) = (rowTops, answerTops, widthHold)
         let (anchor, readerMoved, geometry, position, nudge, shift, visible) = (anchor, readerMoved, geometry, position, nudge, shift, visibleHeight)
+        let (following, opened) = (following, openMessages)
         let scroll = scroll
-        actions.messageMoved = { id, frame in
-            guard let frame else {
-                tops.value[id] = nil
-                sticky.row(id, nil)
-                return
+        // Each row's new frame, and the reader's place kept as the width changes (`WidthHold`).
+        let put = { (put: WidthHold.Put?) in
+            guard let put, !shift.zoomAdjusting else { return }
+            switch put {
+            case .hold(let place):
+                // Where it's left once the hold ends, with no scroll to report it.
+                if case .offset(let offset) = place {
+                    geometry.value.offset = offset
+                    hold.rest = (offset, false)
+                    // Not at the end (a move with no scroll phase left it set): not followed.
+                    following.value = false
+                } else {
+                    hold.rest?.atEnd = true
+                }
+                shift.hold(place, until: hold.until)
+            case .seek(let id):
+                shift.release()
+                var instant = Transaction()
+                instant.disablesAnimations = true
+                withTransaction(instant) { proxy.scrollTo(id, anchor: .top) }
             }
-            sticky.row(id, frame.maxY)
-            tops.value[id] = frame.minY
+        }
+        let moved = { (id: String, top: CGFloat?) in
+            tops.value[id] = top
+            if top == nil { put(hold.left(id)) }
+        }
+        let inset = insetTop
+        actions.rowPlaced = { id, frame in
+            put(hold.placed(id, frame, offset: shift.frames?.visible.minY, inset: inset.value, visible: visible.value, following: following.value))
+        }
+        actions.messageMoved = { id, frame in
+            sticky.row(id, frame?.maxY)
+            moved(id, frame?.minY)
         }
         // A long message opening grows down from where it is, and closing gives back just that:
         // the end isn't followed meanwhile, so the rows on screen stay put.
-        let (following, opened) = (following, openMessages)
         actions.messageOpened = { open in
             if open {
                 if opened.value.count == 0 { opened.value.followed = following.value }
@@ -686,8 +755,8 @@ struct TranscriptTimeline: View, Equatable {
             }
         }
         actions.answerMoved = { id, top in
-            tops.value[id] = top
             answerTops.value[id] = top
+            moved(id, top)
             // Back on screen after turns went in above: on by what the move missed.
             guard !shift.zoomAdjusting, let top, let kept = anchor.value, kept.id == id, kept.placed, abs(top) < visible.value else { return }
             anchor.value = nil
@@ -715,6 +784,120 @@ extension TranscriptTimeline {
     /// One timeline per store: a chat view drawn again with new action closures doesn't draw it
     /// again.
     nonisolated static func == (a: Self, b: Self) -> Bool { a.store === b.store }
+}
+
+/// A new width (a window's edge or a sash dragged) wraps the rows anew and the lazy stack
+/// measures them again, so a place held in points slides. A reader scrolled up is kept by a built
+/// row: the one whose top is nearest the top of the visible area at the old width. The view is
+/// held where it was (`ScrollShift.hold`), and moved by as much as that row moves in the content
+/// as it's laid out again, through the whole drag, however its passes are spread or run together;
+/// when it starts above the top, the share of it above stays above, as its text wraps the same way
+/// all through. The reader's scroll moves no row in the content, so it's never answered.
+@MainActor
+private final class WidthHold: ObservableObject {
+    enum Put {
+        case hold(ScrollShift.Place)
+        /// The row was laid out off screen and isn't built: to it, and on from its next frame.
+        case seek(String)
+    }
+
+    /// For this long after the width last changed, or the row kept last moved, it's held.
+    static let lasts: TimeInterval = 1
+    private(set) var until = Date.distantPast
+    /// The offset the reader left the view at, and whether that was at the end, as the scroll
+    /// view last had them at an unchanged width: SwiftUI can move the view for a new width before
+    /// any row reports it.
+    var rest: (offset: CGFloat, atEnd: Bool)?
+    /// The width the rows were last laid out at.
+    private var width: CGFloat?
+    /// Built message and answer rows' frames in the content.
+    private var places: [String: CGRect] = [:]
+    /// The row kept: its frame in the content at the width it was taken at, the share of it
+    /// above the top of the visible area then, and the view's offset then.
+    private var row: (id: String, place: CGRect, share: CGFloat, offset: CGFloat)?
+
+    /// A row is kept: nothing else moves the view or reads where the reader left it meanwhile.
+    var holding: Bool { row != nil && Date() < until }
+    /// The row kept left the built rows: the view is taken to it until it's built again.
+    private(set) var seeking: String?
+    /// The other built rows' frames when the row was kept: laid out again with it, they say about
+    /// where it went when it leaves the built rows.
+    private var witnesses: [String: CGRect] = [:]
+
+    /// A row left the built rows: if it's the row kept, the view is taken to it, and kept.
+    func left(_ id: String) -> Put? {
+        places[id] = nil
+        guard holding, let row, row.id == id else { return nil }
+        until = Date() + Self.lasts
+        // As far as the nearest row still built at this width moved, at once; it's sought only
+        // when none is.
+        let moved = witnesses.compactMap { key, was in
+            places[key].flatMap { now in abs(now.width - (width ?? now.width)) <= 0.5 ? (abs(was.minY - row.place.minY), now.minY - was.minY) : nil }
+        }.min { $0.0 < $1.0 }
+        if let moved { return .hold(.offset(row.offset + moved.1)) }
+        seeking = id
+        return .seek(id)
+    }
+
+    /// A row's frame in the content: where the view goes, if it's the row kept. `offset` is the
+    /// view's now, `inset` the top inset (the visible area's top is that far below the offset).
+    func placed(_ id: String, _ frame: CGRect, offset: CGFloat?, inset: CGFloat, visible: CGFloat, following: Bool) -> Put? {
+        let put = take(at: frame.width, offset: offset, inset: inset, visible: visible, following: following)
+        places[id] = frame
+        // A frame still at the width it was kept at is the lazy stack placing it by its guesses
+        // for the rows around while they're laid out again: the next, at the new width, says.
+        guard holding, let row, row.id == id, abs(frame.width - (width ?? frame.width)) <= 0.5 else { return put }
+        seeking = nil
+        until = max(until, Date() + Self.lasts / 4)
+        let moved = (frame.minY + row.share * frame.height) - (row.place.minY + row.share * row.place.height)
+        return .hold(.offset(row.offset + moved))
+    }
+
+    /// The first frame at a new width: unless a row is kept already (a drag under way), the row
+    /// kept is taken from the frames still at the old width.
+    private func take(at width: CGFloat, offset: CGFloat?, inset: CGFloat, visible: CGFloat, following: Bool) -> Put? {
+        defer { self.width = width }
+        guard let old = self.width, abs(width - old) > 0.5 else { return nil }
+        if following, rest?.atEnd ?? true {
+            until = Date() + Self.lasts
+            row = nil
+            return .hold(.end)
+        }
+        if holding {
+            until = Date() + Self.lasts
+            return nil
+        }
+        until = Date() + Self.lasts
+        guard let offset = rest?.offset ?? offset else { return nil }
+        // Tops from the top of the visible area.
+        let top = offset + inset
+        let built = places.filter { abs($0.value.width - old) <= 0.5 }
+        row = built.filter { $0.value.minY - top < visible && $0.value.maxY > top }
+            .min { abs($0.value.minY - top) < abs($1.value.minY - top) }
+            .map { kept in (kept.key, kept.value, kept.value.minY < top && kept.value.height > 0 ? (top - kept.value.minY) / kept.value.height : 0, offset) }
+        witnesses = row.map { kept in built.filter { $0.key != kept.id } } ?? [:]
+        return .hold(.offset(offset))
+    }
+
+    /// No built row reaches below `y` in the content.
+    func rowsEnd(above y: CGFloat) -> Bool { places.values.allSatisfy { $0.maxY <= y } }
+
+    /// The reader scrolled, or the view keeps its place another way: nothing is held.
+    func drop() {
+        row = nil
+        seeking = nil
+        witnesses = [:]
+    }
+
+    /// A scroll view built anew lays its rows out afresh: none of it is a new width.
+    func reset() {
+        row = nil
+        seeking = nil
+        witnesses = [:]
+        width = nil
+        rest = nil
+        places = [:]
+    }
 }
 
 /// The transcript's end (`store.tail`), read here alone: each change is handed on, with whether

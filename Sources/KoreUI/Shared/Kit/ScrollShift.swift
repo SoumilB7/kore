@@ -22,6 +22,7 @@ final class ScrollShift: ObservableObject {
 
     func attach(_ scroll: NSScrollView) {
         if let old = scrollView, Self.known.object(forKey: old) === self { Self.known.removeObject(forKey: old) }
+        release()
         scrollView = scroll
         Self.known.setObject(self, forKey: scroll)
     }
@@ -95,6 +96,91 @@ final class ScrollShift: ObservableObject {
         origin.y += document.isFlipped ? dy : -dy
         clip.scroll(to: origin)
         scroll.reflectScrolledClipView(clip)
+        return true
+    }
+
+    /// Where the view is held while the transcript's width changes (`hold`).
+    enum Place: Equatable {
+        /// The content's end, as AppKit sizes it.
+        case end
+        /// The top of the view this far down the content (as SwiftUI's geometry counts it: minus
+        /// the top inset at the top).
+        case offset(CGFloat)
+    }
+
+    /// The place held, and until when.
+    private(set) var held: (place: Place, until: Date)?
+    /// The reader took over a held view (the scroll bar, a gesture): it's let go.
+    var onLetGo: (() -> Void)?
+    private var holders: [NSObjectProtocol] = []
+    /// The notifications the views posted before the hold, given back after it.
+    private var posted: (clip: NSClipView, bounds: Bool, frame: Bool, document: NSView, documentFrame: Bool)?
+    private var holding = false
+
+    /// Holds the view at `place` until `until`, in the same pass as anything moves it: the content
+    /// laid out again, the visible part resized, or SwiftUI keeping its own offset. A
+    /// `ScrollPosition` lands an update later, after a frame drawn where layout left it (as the
+    /// pinch holds its viewport, `PinchZoom`).
+    func hold(_ place: Place, until: Date) {
+        held = (place, until)
+        if holders.isEmpty, let scroll = scrollView, let document = scroll.documentView {
+            let clip = scroll.contentView
+            posted = (clip, clip.postsBoundsChangedNotifications, clip.postsFrameChangedNotifications, document, document.postsFrameChangedNotifications)
+            clip.postsBoundsChangedNotifications = true
+            document.postsFrameChangedNotifications = true
+            clip.postsFrameChangedNotifications = true
+            let center = NotificationCenter.default
+            holders = [(document, NSView.frameDidChangeNotification), (clip, NSView.frameDidChangeNotification), (clip, NSView.boundsDidChangeNotification)].map { view, name in
+                center.addObserver(forName: name, object: view, queue: nil) { [weak self] _ in
+                    MainActor.assumeIsolated { _ = self?.keep() }
+                }
+            }
+            holders.append(center.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: scroll, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.release()
+                    self?.onLetGo?()
+                }
+            })
+        }
+        keep()
+    }
+
+    func release() {
+        held = nil
+        holders.forEach(NotificationCenter.default.removeObserver)
+        holders = []
+        if let posted {
+            posted.clip.postsBoundsChangedNotifications = posted.bounds
+            posted.clip.postsFrameChangedNotifications = posted.frame
+            posted.document.postsFrameChangedNotifications = posted.documentFrame
+        }
+        posted = nil
+    }
+
+    /// Puts the view back at the place held; false when there's none (or it's let go past its
+    /// time) or no scroll view to hold.
+    @discardableResult
+    func keep() -> Bool {
+        guard let held else { return false }
+        guard Date() < held.until else {
+            release()
+            return false
+        }
+        guard let scroll = scrollView, let document = scroll.documentView, document.isFlipped else { return false }
+        guard !holding else { return true }
+        let clip = scroll.contentView
+        var place = clip.bounds
+        switch held.place {
+        case .end: place.origin.y = document.frame.height
+        case .offset(let y): place.origin.y = y
+        }
+        let origin = clip.constrainBoundsRect(place).origin
+        if abs(origin.y - clip.bounds.minY) > 0.5 {
+            holding = true
+            defer { holding = false }
+            clip.scroll(to: origin)
+            scroll.reflectScrolledClipView(clip)
+        }
         return true
     }
 
