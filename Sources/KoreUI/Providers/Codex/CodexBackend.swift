@@ -480,8 +480,11 @@ final class CodexBackend: ChatBackend {
 
     private func handle(_ event: CodexEvent) {
         if case .raw("account/rateLimits/updated", let params) = event {
-            // The plan's windows as Codex pushed them during a turn: kept for usage attribution.
-            PlanSnapshotLog.shared.append(PlanSnapshot.codex(rateLimits: params, account: nil, source: "stream"))
+            // The plan's windows as Codex pushed them during a turn: kept for usage attribution,
+            // and the usage mark.
+            let snapshot = PlanSnapshot.codex(rateLimits: params, account: nil, source: "stream")
+            PlanSnapshotLog.shared.append(snapshot)
+            UsageCues.shared.take("codex", snapshot: snapshot)
         }
         translator.translate(event)
         flush()

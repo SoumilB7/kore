@@ -217,6 +217,7 @@ final class LoginUsage {
             if let reading {
                 // A confirmed different identity must clear the old reading immediately.
                 states[key] = Self.matches(reading.account, key) ? .ready(reading, clock()) : .unavailable
+                if key.active, Self.matches(reading.account, key) { UsageCues.shared.take(key.provider, reading: reading) }
             } else if case .ready = states[key] {
                 // Transient failures keep the real timestamp of the last confirmed read.
             } else {

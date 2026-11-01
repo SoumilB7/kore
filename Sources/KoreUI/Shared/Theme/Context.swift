@@ -115,3 +115,28 @@ extension Size {
     /// A chat's agents: two rings side by side.
     static let usageAgentsGlyph = CGSize(width: 11, height: 8)
 }
+
+// The composer's usage mark (usage-limit-cues.html, option A): from 80% of a limit, left of the
+// mode pill.
+
+extension Theme {
+    /// The step's percent: amber from 80%, red at the limit.
+    static func usageCue(_ step: Int) -> Color { step >= 100 ? danger : warning }
+    /// A bar of the mark: quiet under 80%, then the popup's amber and red.
+    static func usageCueBar(_ fraction: Double) -> Color {
+        fraction >= 1 ? danger : fraction >= 0.8 ? warning : secondary
+    }
+    static let usageCueTrack = contextTrack
+}
+
+extension Size {
+    /// The two bars' box, each bar's line, and the gap between them.
+    static let usageCueBars = CGSize(width: 14, height: 8)
+    static let usageCueBar: CGFloat = 2
+    static let usageCueBarGap: CGFloat = 2
+}
+
+extension Glyph {
+    /// The × the bars become under the pointer.
+    @MainActor static var usageCueClose: Font { .kore(9, .bold) }
+}

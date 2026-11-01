@@ -49,6 +49,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case hover, lit, focus
         /// An opened command's IN text (its OUT is `open`).
         case input
+        /// A hover card, while it shows.
+        case card
     }
 }
 
@@ -133,6 +135,9 @@ extension StoryID {
         package static func command(_ name: String) -> StoryID { StoryID(.composer, "command", key: name) }
         /// A row of the @ menu, by its kind and key ("file:README.md", "model:haiku").
         package static func mention(_ id: String) -> StoryID { StoryID(.composer, "mention", key: id) }
+        /// The usage mark left of the mode pill, from 80% of a limit: `.part(.hover)` stands in
+        /// for the pointer, `.part(.close)` is the × its bars become then, `.part(.card)` its card.
+        package static let usageCue = StoryID(.composer, "usagecue")
         /// The usage popup; `.part(.open)` is its "Manage usage" link, `.part(.extended)` the button
         /// to its extended view, `.part(.reset)` its count of full resets, which unfolds them.
         package static let usage = StoryID(.composer, "usage")
@@ -370,7 +375,8 @@ extension StoryID {
             Titlebar.explorer, Titlebar.history, Titlebar.agents, Titlebar.newtab, Titlebar.awake, Titlebar.overflow,
             Titlebar.hiddenTabs, Titlebar.tabName, Tabs.strip,
             Composer.field, Composer.send, Composer.stop, Composer.attach, Composer.slash, Composer.mode,
-            Composer.model, Composer.models, Composer.effort, Composer.modes, Composer.planAllow, Composer.context, Composer.chip, Composer.usage, Composer.usage.part(.open),
+            Composer.model, Composer.models, Composer.effort, Composer.modes, Composer.planAllow, Composer.context, Composer.chip, Composer.usageCue, Composer.usageCue.part(.hover),
+            Composer.usageCue.part(.close), Composer.usageCue.part(.card), Composer.usage, Composer.usage.part(.open),
             Composer.usage.part(.reset), Composer.account, Composer.account.part(.signIn), Composer.account.part(.method),
             Composer.account.part(.switch), Composer.account.part(.signOut), Composer.account.part(.allow),
             Composer.account.part(.cancel), Composer.account.part(.copy), Composer.account.part(.credentials),

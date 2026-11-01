@@ -360,6 +360,31 @@ extension Workspace {
     }
 }
 
+/// The usage mark, for storylines: windows handed to it as a turn's report would, and what each
+/// CLI's composers show.
+@MainActor
+package enum StoryUsageCue {
+    /// A turn's report of the account's windows, in percent; nil leaves a window out.
+    package static func report(_ cli: String, fiveHour: Double?, weekly: Double?, fiveHourResets: Date, weeklyResets: Date) {
+        var readings: [UsageCueBook.Reading] = []
+        if let fiveHour { readings.append(.init(.init(.fiveHour), used: fiveHour, resetsAt: fiveHourResets)) }
+        if let weekly { readings.append(.init(.init(.weekly), used: weekly, resetsAt: weeklyResets)) }
+        UsageCues.shared.take(cli, account: nil, readings)
+    }
+
+    /// The mark's short form ("85%"); nil while none shows.
+    package static func mark(_ cli: String) -> String? { UsageCues.shared.cue(cli).map(UsageCueText.percent) }
+    /// Its card's line.
+    package static func line(_ cli: String) -> String? { UsageCues.shared.cue(cli).map { UsageCueText.line($0, now: Date()) } }
+    /// The step each dismissal hid, as kept in the defaults.
+    package static var kept: [Int] {
+        UsageCueBook.load(.standard).dismissed.values.sorted()
+    }
+
+    /// Nothing read, nothing dismissed.
+    package static func reset() { UsageCues.shared.reset() }
+}
+
 /// Stay awake, for a storyline host: what it shows and holds, in plain terms. Under a host its
 /// hold only records (`RecordedHold`), so no storyline keeps the Mac awake.
 @MainActor

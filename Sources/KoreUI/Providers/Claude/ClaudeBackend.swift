@@ -410,8 +410,10 @@ final class ClaudeBackend: ChatBackend {
         case .sessionStarted(let info):
             KoreSessions.shared.record(cli: "claude", session: info.sessionId, folder: options.folder, launch: "started", account: planAccount)
         case .raw(let json) where json["type"]?.string == "rate_limit_event":
-            // The plan's windows as this turn began: kept for usage attribution.
-            PlanSnapshotLog.shared.append(PlanSnapshot.claude(rateLimitEvent: json, account: planAccount))
+            // The plan's windows as this turn began: kept for usage attribution, and the usage mark.
+            let snapshot = PlanSnapshot.claude(rateLimitEvent: json, account: planAccount)
+            PlanSnapshotLog.shared.append(snapshot)
+            UsageCues.shared.take("claude", snapshot: snapshot)
         case .turnCompleted:
             KoreUsageRefresh.soon("claude")
         case .stderr(let text):

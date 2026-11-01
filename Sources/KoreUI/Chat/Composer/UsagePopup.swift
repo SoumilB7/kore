@@ -182,6 +182,7 @@ final class UsageState {
             }
             if case .success(let new) = outcome, new.limits != nil || new.account.access != .plan {
                 Self.kept[provider] = (new, Date())
+                UsageCues.shared.take(cli, reading: new)
             }
             guard let self, self.serial == open else { return }
             self.land(outcome, last: last)
@@ -365,12 +366,18 @@ final class UsageState {
             }
             guard current() else { return }
             guard let self, self.serial == open else {
-                if let new = try? await read(), current(), new.limits != nil { Self.kept[provider] = (new, Date()) }
+                if let new = try? await read(), current(), new.limits != nil {
+                    Self.kept[provider] = (new, Date())
+                    UsageCues.shared.take(cli, reading: new)
+                }
                 return
             }
             (self.resetSteps[credit], self.rereading) = (step, true)
             let new = try? await read()
-            if let new, current(), new.limits != nil { Self.kept[provider] = (new, Date()) }
+            if let new, current(), new.limits != nil {
+                Self.kept[provider] = (new, Date())
+                UsageCues.shared.take(cli, reading: new)
+            }
             guard current(), self.serial == open else { return }
             if let new, new.limits != nil {
                 (self.reading, self.readAt, self.status) = (new, Date(), .fresh)
