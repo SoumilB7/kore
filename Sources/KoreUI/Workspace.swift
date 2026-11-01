@@ -213,7 +213,8 @@ package final class Workspace {
             tabGroups.update(group.id) { $0.folded = false }
         }
         activeID = tab.id
-        if let file = tab.file, explorerOpen, let files {
+        // A file the tree's own click opened shows there already: nothing to reveal or redraw.
+        if let file = tab.file, explorerOpen, let files, !files.shows(file.path) {
             Task { await files.reveal(file.path) }
         }
     }

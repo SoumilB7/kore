@@ -87,24 +87,29 @@ public struct TextFile: Sendable {
     /// Text files up to this size open in the editor.
     public static let editLimit = 5 * 1024 * 1024
 
-    public static func read(_ url: URL) -> TextFile {
+    public static func read(_ url: URL) -> TextFile { readWithBytes(url).file }
+
+    /// The file, and the bytes it was read from when it was read whole (text up to the edit
+    /// limit, or binary): one read for a caller that keeps them too.
+    public static func readWithBytes(_ url: URL) -> (file: TextFile, bytes: Data?) {
         let stamp = Stamp.of(url)
         guard let stamp else {
             let exists = FileManager.default.fileExists(atPath: url.path)
-            return TextFile(content: exists ? .unreadable("Kore can't read this file.") : .missing)
+            return (TextFile(content: exists ? .unreadable("Kore can't read this file.") : .missing), nil)
         }
-        if isImage(url) { return TextFile(content: .image, stamp: stamp) }
-        if stamp.size > editLimit { return TextFile(content: .tooLarge(stamp.size), stamp: stamp) }
+        if isImage(url) { return (TextFile(content: .image, stamp: stamp), nil) }
+        if stamp.size > editLimit { return (TextFile(content: .tooLarge(stamp.size), stamp: stamp), nil) }
         let data: Data
         do { data = try Data(contentsOf: url) } catch {
-            return TextFile(content: .unreadable(error.localizedDescription), stamp: stamp)
+            return (TextFile(content: .unreadable(error.localizedDescription), stamp: stamp), nil)
         }
-        guard let (text, encoding, bom) = decode(data) else { return TextFile(content: .binary, stamp: stamp) }
+        guard let (text, encoding, bom) = decode(data) else { return (TextFile(content: .binary, stamp: stamp), data) }
         let crlf = text.contains("\r\n")
         let normal = crlf ? text.replacingOccurrences(of: "\r\n", with: "\n") : text
-        return TextFile(
+        let file = TextFile(
             content: .text(normal), lineEnding: crlf ? .crlf : .lf, encoding: encoding, hasBOM: bom,
             indent: detectIndent(normal), stamp: stamp)
+        return (file, data)
     }
 
     /// Writes `text` back with the file's own line endings and encoding, atomically.

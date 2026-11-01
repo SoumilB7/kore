@@ -57,6 +57,9 @@ final class FilesStore {
     private(set) var git = GitStatus.empty
     private(set) var rootLoaded = false
     private(set) var rootError = false
+    /// Any rows to show; the explorer's frame reads this, not `rows`, so a folder opening
+    /// redraws only the list.
+    private(set) var hasRows = false
     /// The row the keys are on (VS Code's focus). With one item chosen, also the choice.
     var selection: String? {
         didSet {
@@ -69,6 +72,12 @@ final class FilesStore {
     private(set) var picked: Set<String> = []
     /// Where a ⇧ range starts: the last row clicked without ⇧.
     @ObservationIgnored private(set) var anchor: String?
+    /// The row a click chose: it's in view, so the list doesn't scroll to it (the keys' and a
+    /// reveal's selection does).
+    @ObservationIgnored var pointed: String?
+    /// Counts reveals and clicks: a reveal still listing its folders when a later one or a click
+    /// comes doesn't take the selection back.
+    @ObservationIgnored private var choices = 0
     /// ⌘C / ⌘X in the tree: the paths and whether ⌘V moves them.
     @ObservationIgnored var clipboard: (paths: [String], cut: Bool)?
     /// The window's undo manager, from the explorer that shows this tree (for storylines' ⌘Z).
@@ -97,6 +106,17 @@ final class FilesStore {
     @ObservationIgnored private var gitAgain = false
     @ObservationIgnored private var moved: Set<String> = []
     @ObservationIgnored private var movedReport: Task<Void, Never>?
+    /// Folders to list again, and the pass listing them: reloads asked for meanwhile join it,
+    /// and the rows are rebuilt once at its end.
+    @ObservationIgnored private var reloadQueue: Set<String> = []
+    /// Folders whose listing `place` or `unplace` changed since it was last read from disk.
+    @ObservationIgnored private var placed: Set<String> = []
+    @ObservationIgnored private var reloading: Task<Void, Never>?
+    /// The last paste, duplicate or drop: the next waits for it, so its " copy" names see the
+    /// files the one before made.
+    @ObservationIgnored private var fileWork: Task<Void, Never>?
+    /// Pastes, duplicates and drops running or waiting.
+    @ObservationIgnored private(set) var fileWorks = 0
 
     /// `.git` and Finder's litter are hidden; other dotfiles show (VS Code's `files.exclude`).
     nonisolated private static let hidden: Set<String> = [".git", ".DS_Store", ".svn", ".hg"]
@@ -130,11 +150,9 @@ final class FilesStore {
 
     func expand(_ path: String) {
         expanded.insert(path)
-        if children[path] == nil {
-            Task { await load(path) }
-        } else {
-            rebuild()
-        }
+        // The chevron turns at once; a folder not listed yet fills in when its listing comes.
+        rebuild()
+        if children[path] == nil { Task { await load(path) } }
     }
 
     func collapse(_ path: String) {
@@ -147,8 +165,14 @@ final class FilesStore {
         rebuild()
     }
 
+    /// The tree shows `path` selected already (the file a click in it opened).
+    func shows(_ path: String) -> Bool { selection == path && rows.contains { $0.id == path } }
+
     /// Opens the folders down to `path` and selects it (a file opened elsewhere, the path row).
     func reveal(_ path: String) async {
+        guard !shows(path) else { return }
+        choices += 1
+        let choice = choices
         var folder = (path as NSString).deletingLastPathComponent
         var chain: [String] = []
         while folder.count > root.count, folder.hasPrefix(root) {
@@ -159,23 +183,24 @@ final class FilesStore {
             expanded.insert(folder)
             if children[folder] == nil { await load(folder, rebuilding: false) }
         }
-        selection = path
+        if choice == choices, selection != path { selection = path }
         rebuild()
     }
 
     func refresh() {
-        let loaded = Array(children.keys)
-        Task {
-            for folder in loaded { await load(folder, rebuilding: false) }
-            rebuild()
-        }
+        reload(Set(children.keys))
         refreshGit()
     }
 
     /// Lists a folder off the main thread. A folder holding just one folder lists that one too,
     /// so the chain shows as one row.
     private func load(_ folder: String, rebuilding: Bool = true) async {
-        let listed = await Task.detached { Self.list(folder) }.value
+        var listed: [Node]?
+        repeat {
+            placed.remove(folder)
+            listed = await Task.detached { Self.list(folder) }.value
+            // Changed here meanwhile (a restore, a rename): this listing is older than that; again.
+        } while placed.contains(folder)
         if folder == root {
             rootLoaded = true
             rootError = listed == nil
@@ -208,9 +233,55 @@ final class FilesStore {
             // Packages (.app, .xcodeproj) are folders here, as in VS Code.
             return Node(path: folder + "/" + name, name: name, isFolder: values?.isDirectory == true)
         }
-        .sorted { a, b in
-            a.isFolder != b.isFolder ? a.isFolder : a.name.localizedStandardCompare(b.name) == .orderedAscending
+        .sorted(by: ordered)
+    }
+
+    /// The tree's order: folders first, then by name as Finder sorts.
+    nonisolated private static func ordered(_ a: Node, _ b: Node) -> Bool {
+        a.isFolder != b.isFolder ? a.isFolder : a.name.localizedStandardCompare(b.name) == .orderedAscending
+    }
+
+    /// Lists `folders` again (those shown or listed before) and rebuilds the rows once.
+    private func reload(_ folders: Set<String>) {
+        reloadQueue.formUnion(folders)
+        guard reloading == nil else { return }
+        reloading = Task {
+            while !reloadQueue.isEmpty {
+                let folders = reloadQueue
+                reloadQueue = []
+                for folder in folders where folder == root || children[folder] != nil || expanded.contains(folder) {
+                    await load(folder, rebuilding: false)
+                }
+            }
+            reloading = nil
+            rebuild()
         }
+    }
+
+    // MARK: - Listings changed in place
+
+    /// What we just made, renamed, moved or trashed shows at once: the listings we hold change
+    /// here, and the folder's listing from disk follows. Only folders listed already change.
+    private func place(_ path: String, isFolder: Bool) {
+        let folder = parent(of: path)
+        guard var list = children[folder], !list.contains(where: { $0.path == path }) else { return }
+        list.append(Node(path: path, name: (path as NSString).lastPathComponent, isFolder: isFolder))
+        children[folder] = list.sorted(by: Self.ordered)
+        placed.insert(folder)
+    }
+
+    private func unplace(_ path: String) {
+        let folder = parent(of: path)
+        guard children[folder]?.contains(where: { $0.path == path }) == true else { return }
+        children[folder]?.removeAll { $0.path == path }
+        placed.insert(folder)
+    }
+
+    /// Whether `path` is a folder: its listed row's kind, else the disk's.
+    private func isFolder(_ path: String) -> Bool {
+        if let node = children[parent(of: path)]?.first(where: { $0.path == path }) { return node.isFolder }
+        var folder: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &folder) && folder.boolValue
     }
 
     // MARK: - Rows
@@ -219,6 +290,7 @@ final class FilesStore {
         var rows: [Row] = []
         append(children: root, depth: 0, into: &rows)
         if self.rows != rows { self.rows = rows }
+        if hasRows == rows.isEmpty { hasRows = !rows.isEmpty }
     }
 
     private func append(children folder: String, depth: Int, into rows: inout [Row]) {
@@ -297,12 +369,7 @@ final class FilesStore {
             if children[parent] != nil { folders.insert(parent) }
             if children[path] != nil { folders.insert(path) }
         }
-        if !folders.isEmpty {
-            Task {
-                for folder in folders { await load(folder, rebuilding: false) }
-                rebuild()
-            }
-        }
+        if !folders.isEmpty { reload(folders) }
         if gitChanged { refreshGit() }
         if !trees.isEmpty { report(moved: trees) }
         if !files.isEmpty { onChange?(files) }
@@ -381,7 +448,9 @@ final class FilesStore {
         } catch {
             return .failure(.system(error.localizedDescription))
         }
-        Task { await reload(parent) }
+        place(path, isFolder: folder)
+        rebuild()
+        reload([parent])
         return .success(path)
     }
 
@@ -394,9 +463,11 @@ final class FilesStore {
         do { try FileManager.default.moveItem(atPath: path, toPath: target) } catch {
             return .failure(.system(error.localizedDescription))
         }
-        if expanded.remove(path) != nil { expanded.insert(target) }
+        // The new name shows at once, not after the folder is listed again.
+        follow(path, to: target)
         if selection == path { selection = target }
-        Task { await reload(parent) }
+        rebuild()
+        reload([parent])
         return .success(target)
     }
 
@@ -417,6 +488,8 @@ final class FilesStore {
             if let trashed = trashed as URL? { done.append(Trashed(path: path, trashed: trashed)) }
         }
         if !paths.isEmpty, picked.contains(where: paths.contains) || selection.map(paths.contains) == true { pickOnly(nil) }
+        for item in done { unplace(item.path) }
+        rebuild()
         reloadFolders(of: paths)
         return (done, failure)
     }
@@ -435,19 +508,15 @@ final class FilesStore {
                 failure = .system(error.localizedDescription)
             }
         }
-        reloadFolders(of: items.map(\.path))
+        for item in items { place(item.path, isFolder: isFolder(item.path)) }
         if let last = items.last { selection = last.path }
+        rebuild()
+        reloadFolders(of: items.map(\.path))
         return failure
     }
 
     private func reloadFolders(of paths: [String]) {
-        let folders = Set(paths.map { ($0 as NSString).deletingLastPathComponent })
-        Task {
-            for folder in folders where folder == root || children[folder] != nil || expanded.contains(folder) {
-                await load(folder, rebuilding: false)
-            }
-            rebuild()
-        }
+        reload(Set(paths.map(parent(of:))))
     }
 
     // MARK: - Choosing several (VS Code's ⌘ and ⇧ clicks)
@@ -475,9 +544,11 @@ final class FilesStore {
 
     /// A plain click or arrow: just this row.
     func pickOnly(_ path: String?) {
-        picked = []
+        // Unchanged is left alone: a write tells every row that reads it to draw again.
+        choices += 1
+        if !picked.isEmpty { picked = [] }
         anchor = path
-        selection = path
+        if selection != path { selection = path }
     }
 
     /// ⌘-click: this row in or out of the choice; the keys go to it.
@@ -486,8 +557,8 @@ final class FilesStore {
         if next.contains(path) { next.remove(path) } else { next.insert(path) }
         anchor = path
         if next.count <= 1 {
-            picked = []
-            selection = next.first
+            if !picked.isEmpty { picked = [] }
+            if selection != next.first { selection = next.first }
         } else {
             picked = next
             selection = next.contains(path) ? path : chosen.first(where: next.contains)
@@ -500,12 +571,11 @@ final class FilesStore {
         let span = Self.span(rows.map(\.id), from: from, to: path)
         anchor = from
         if span.count <= 1 {
-            picked = []
-            selection = path
-        } else {
+            if !picked.isEmpty { picked = [] }
+        } else if picked != Set(span) {
             picked = Set(span)
-            selection = path
         }
+        if selection != path { selection = path }
     }
 
     /// ⌘A: every row shown.
@@ -636,11 +706,22 @@ final class FilesStore {
 
     /// Moves or copies each of `sources` into `folder`, asking `collision` when a name is
     /// taken (Cancel stops the rest). Moved folders stay open; the selection follows the last
-    /// item; `moved` is told each move so open tabs follow.
+    /// item; `moved` is told each move so open tabs follow. The copying and moving run off the
+    /// main thread (a big folder takes a while), one transfer after another.
     func transfer(
         _ sources: [String], into folder: String, copy: Bool, collision: (String) -> Collision,
         moved: (String, String) -> Void
-    ) -> (done: [Transfer], failure: Failure?) {
+    ) async -> (done: [Transfer], failure: Failure?) {
+        // In turn: this one's end is what the next waits for.
+        let (end, ended) = AsyncStream<Void>.makeStream()
+        let previous = fileWork
+        fileWork = Task { for await _ in end {} }
+        fileWorks += 1
+        defer {
+            fileWorks -= 1
+            ended.finish()
+        }
+        await previous?.value
         var done: [Transfer] = []
         var failure: Failure?
         let manager = FileManager.default
@@ -657,23 +738,32 @@ final class FilesStore {
                 case .keepBoth:
                     target = Self.unusedName(for: name, in: folder)
                 case .replace:
-                    var trashed: NSURL?
-                    do { try manager.trashItem(at: URL(fileURLWithPath: target), resultingItemURL: &trashed) } catch {
-                        failure = .system(error.localizedDescription)
+                    let taken = target
+                    switch await Self.offMain({ () throws -> URL? in
+                        var trashed: NSURL?
+                        try FileManager.default.trashItem(at: URL(fileURLWithPath: taken), resultingItemURL: &trashed)
+                        return trashed as URL?
+                    }) {
+                    case .success(let trashed): replaced = trashed
+                    case .failure(let error):
+                        failure = error
                         continue items
                     }
-                    replaced = trashed as URL?
                 }
             }
-            do {
-                if copy { try manager.copyItem(atPath: source, toPath: target) } else { try manager.moveItem(atPath: source, toPath: target) }
-            } catch {
-                failure = .system(error.localizedDescription)
+            let to = target
+            let result = await Self.offMain {
+                if copy { try FileManager.default.copyItem(atPath: source, toPath: to) } else { try FileManager.default.moveItem(atPath: source, toPath: to) }
+            }
+            if case .failure(let error) = result {
+                failure = error
                 // What the replace sent to the Trash goes back where it was.
                 if let replaced { try? manager.moveItem(at: replaced, to: URL(fileURLWithPath: target)) }
                 continue
             }
-            if !copy {
+            if copy {
+                place(target, isFolder: isFolder(source))
+            } else {
                 follow(source, to: target)
                 moved(source, target)
             }
@@ -683,8 +773,16 @@ final class FilesStore {
             if folder != root { expanded.insert(folder) }
             selection = last.to
         }
+        rebuild()
         reloadAround(done)
         return (done, failure)
+    }
+
+    /// File work on a background thread; its error as a failure.
+    nonisolated private static func offMain<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async -> Result<T, Failure> {
+        await Task.detached(priority: .userInitiated) {
+            do { return .success(try work()) } catch { return .failure(.system(error.localizedDescription)) }
+        }.value
     }
 
     /// Puts transfers back: a copy goes to the Trash, a move goes home, and what a replace sent
@@ -696,6 +794,7 @@ final class FilesStore {
             do {
                 if transfer.copied {
                     try manager.trashItem(at: URL(fileURLWithPath: transfer.to), resultingItemURL: nil)
+                    unplace(transfer.to)
                 } else {
                     try manager.moveItem(atPath: transfer.to, toPath: transfer.from)
                     follow(transfer.to, to: transfer.from)
@@ -707,6 +806,7 @@ final class FilesStore {
             }
         }
         if let first = transfers.first { selection = first.from }
+        rebuild()
         reloadAround(transfers)
         return failure
     }
@@ -726,6 +826,7 @@ final class FilesStore {
                 }
                 if transfer.copied {
                     try manager.copyItem(atPath: transfer.from, toPath: transfer.to)
+                    place(transfer.to, isFolder: isFolder(transfer.from))
                 } else {
                     try manager.moveItem(atPath: transfer.from, toPath: transfer.to)
                     follow(transfer.from, to: transfer.to)
@@ -737,32 +838,32 @@ final class FilesStore {
             }
         }
         if let last = done.last { selection = last.to }
+        rebuild()
         reloadAround(done)
         return (done, failure)
     }
 
-    /// A moved folder keeps its open folders, at their new paths.
+    /// A renamed or moved item shows at its new place at once, and a moved folder keeps its
+    /// open folders and listings, at their new paths.
     private func follow(_ old: String, to new: String) {
+        let folder = isFolder(old)
+        unplace(old)
+        place(new, isFolder: folder)
         let moved = expanded.filter { $0 == old || $0.hasPrefix(old + "/") }
         for path in moved {
             expanded.remove(path)
             expanded.insert(new + path.dropFirst(old.count))
         }
-        for key in children.keys where key == old || key.hasPrefix(old + "/") { children[key] = nil }
+        for (key, nodes) in children where key == old || key.hasPrefix(old + "/") {
+            children[key] = nil
+            children[new + key.dropFirst(old.count)] = nodes.map {
+                Node(path: new + $0.path.dropFirst(old.count), name: $0.name, isFolder: $0.isFolder)
+            }
+        }
     }
 
     private func reloadAround(_ transfers: [Transfer]) {
-        var folders = Set<String>()
-        for transfer in transfers {
-            folders.insert((transfer.from as NSString).deletingLastPathComponent)
-            folders.insert((transfer.to as NSString).deletingLastPathComponent)
-        }
-        Task {
-            for folder in folders where folder == root || children[folder] != nil || expanded.contains(folder) {
-                await load(folder, rebuilding: false)
-            }
-            rebuild()
-        }
+        reload(Set(transfers.flatMap { [parent(of: $0.from), parent(of: $0.to)] }))
     }
 
     /// "name copy.ext", then "name copy 2.ext"…, as VS Code names a kept or duplicated item.

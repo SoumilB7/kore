@@ -92,11 +92,6 @@ final class FileDocument: Identifiable {
         autoSave.register(self)
     }
 
-    private func sourceBytesForLoading() -> Data? {
-        guard let size = TextFile.Stamp.of(url)?.size, size <= TextFile.editLimit else { return nil }
-        return try? Data(contentsOf: url)
-    }
-
     private static func wraps(_ language: Language) -> Bool {
         language.id == "markdown" || language.id == "plaintext"
     }
@@ -128,8 +123,8 @@ final class FileDocument: Identifiable {
     func load() {
         cancelAutoSave()
         loaded = true
-        savedBytes = sourceBytesForLoading()
-        file = TextFile.read(url)
+        // One read: the text and the bytes an auto-save compares the disk with.
+        (file, savedBytes) = TextFile.readWithBytes(url)
         diskStamp = file.stamp
         notice = nil
         if case .text(let text) = file.content {
@@ -314,8 +309,8 @@ final class FileDocument: Identifiable {
     /// lines for the flash.
     func reloadInPlace() {
         cancelAutoSave()
-        savedBytes = sourceBytesForLoading()
-        let next = TextFile.read(url)
+        let (next, bytes) = TextFile.readWithBytes(url)
+        savedBytes = bytes
         guard case .text(let text) = next.content else {
             file = next
             return

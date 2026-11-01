@@ -84,7 +84,7 @@ final class ExplorerMultiSelect: FilesStoryline {
             Expect("a and b chosen", found: { chosen($0).joined(separator: ", ") }) { chosen($0) == ["a.txt", "b.txt"] },
             Do("drag them on dest") { $0.app.workspace?.storyTreeDragChosen(into: "dest") },
             Expect("both moved with one question", found: { [confirms] _ in confirms.asked.joined(separator: ", ") }) { [confirms] story in
-                guard let w = story.app.workspace else { return false }
+                guard let w = story.app.workspace, w.storyTreeSettled else { return false }
                 return confirms.asked == ["trash", "move"] && w.storyHasFile("dest/a.txt") && w.storyHasFile("dest/b.txt")
                     && !w.storyHasFile("a.txt") && !w.storyHasFile("b.txt")
             },
@@ -122,8 +122,10 @@ final class ExplorerFileOps: FilesStoryline {
             // Cut, then Paste on dest: moved.
             TreeMenuItem("a copy.txt", "Cut"),
             TreeMenuItem("dest", "Paste"),
+            // Settled: the move runs off the main thread, and its undo is registered when it ends.
             Expect("cut and pasted into dest") { s in
                 s.app.workspace?.storyHasFile("dest/a copy.txt") == true && s.app.workspace?.storyHasFile("a copy.txt") == false
+                    && s.app.workspace?.storyTreeSettled == true
             },
             Do("⌘Z") { $0.app.workspace?.storyUndo() },
             Expect("⌘Z put it back") { s in
@@ -183,6 +185,130 @@ final class ExplorerFileOps: FilesStoryline {
                 confirms.remove()
                 try? FileManager.default.removeItem(at: Self.outside)
             },
+        ]
+    }
+}
+
+/// Holds for `span`, checked every few milliseconds: the first time it doesn't, the step fails.
+struct Holds: Step {
+    let what: String
+    let span: Duration
+    let check: @MainActor (StoryContext) -> Bool
+    var label: String { "Holds: \(what)" }
+    init(_ what: String, for span: Duration = .milliseconds(400), _ check: @escaping @MainActor (StoryContext) -> Bool) {
+        self.what = what
+        self.span = span
+        self.check = check
+    }
+
+    func run(_ story: StoryContext) async throws {
+        let end = ContinuousClock.now + span
+        repeat {
+            guard check(story) else { throw StoryFailure.expectation(what) }
+            try await Task.sleep(for: .milliseconds(5))
+        } while ContinuousClock.now < end
+    }
+}
+
+/// An element that stays where it is for `span`: a list that doesn't slide.
+struct StaysPut: Step {
+    let target: Locator
+    let span: Duration
+    var label: String { "\(target) stays put" }
+    init(_ target: Locator, for span: Duration = .milliseconds(400)) {
+        self.target = target
+        self.span = span
+    }
+
+    func run(_ story: StoryContext) async throws {
+        let element = try await story.element(target)
+        guard let first = element.frame else { throw StoryFailure.expectation("\(target) on screen") }
+        let end = ContinuousClock.now + span
+        while ContinuousClock.now < end {
+            try await Task.sleep(for: .milliseconds(5))
+            if let frame = element.frame, frame != first {
+                throw StoryFailure.expectation("\(target) still (it moved from y \(Int(first.minY)) to \(Int(frame.minY)))")
+            }
+        }
+    }
+}
+
+@MainActor private func rows(_ story: StoryContext) -> [String] { story.app.workspace?.storyTreeRows ?? [] }
+
+/// Every click on a folder opens or closes it, the quick second and third of a run too: a
+/// double click opens and closes, a triple click leaves it open.
+final class ExplorerFolderClicks: FilesStoryline {
+    override class var tags: Set<Tag> { [.files] }
+    override class var files: [(path: String, text: String)] { [("docs/a.txt", "a\n"), ("docs/b.txt", "b\n"), ("z.txt", "z\n")] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            WaitForElement(.treeRow("z.txt")),
+            Click(.treeRow("docs"), count: 2),
+            Expect("a double click opened and closed docs", found: { rows($0).joined(separator: ", ") }) { rows($0) == ["docs", "z.txt"] },
+            Click(.treeRow("docs"), count: 3),
+            Expect("a triple click left docs open", found: { rows($0).joined(separator: ", ") }) {
+                rows($0) == ["docs", "docs/a.txt", "docs/b.txt", "z.txt"]
+            },
+            Click(.treeRow("docs")),
+            Expect("one more click closed it", found: { rows($0).joined(separator: ", ") }) { rows($0) == ["docs", "z.txt"] },
+        ]
+    }
+}
+
+/// A rename shows the new name from the first frame after Return, never the old one: a file's,
+/// and an open folder's with its rows still under it.
+final class ExplorerRenameAtOnce: FilesStoryline {
+    override class var tags: Set<Tag> { [.files] }
+    override class var files: [(path: String, text: String)] { [("b.txt", "b\n"), ("docs/a.txt", "a\n"), ("docs/c.txt", "c\n")] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            WaitForElement(.treeRow("b.txt")),
+            TreeMenuItem("b.txt", "Rename…"),
+            WaitForFocus(.id(StoryID.Explorer.namefield)),
+            Key(.cmd("a")),
+            TypeText("renamed.txt"),
+            Key(.returnKey),
+            Holds("“renamed.txt” shows, “b.txt” never") { rows($0).contains("renamed.txt") && !rows($0).contains("b.txt") },
+            Click(.treeRow("docs")),
+            Expect("docs open") { rows($0).contains("docs/a.txt") },
+            TreeMenuItem("docs", "Rename…"),
+            WaitForFocus(.id(StoryID.Explorer.namefield)),
+            Key(.cmd("a")),
+            TypeText("notes"),
+            Key(.returnKey),
+            Holds("“notes” shows open with its files, “docs” never") {
+                let shown = rows($0)
+                return shown.contains("notes/a.txt") && shown.contains("notes/c.txt") && !shown.contains { $0.hasPrefix("docs") }
+            },
+        ]
+    }
+}
+
+/// The selection never slides the list: a clicked row stays where it was, and ↓ past the
+/// bottom brings the next row in at once, not in an animation.
+final class ExplorerSelectionStill: FilesStoryline {
+    override class var tags: Set<Tag> { [.files] }
+    override class var needs: Needs { Needs(window: CGSize(width: 900, height: 480)) }
+    override class var files: [(path: String, text: String)] {
+        (1...40).map { (String(format: "f%02d.txt", $0), "\($0)\n") }
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            WaitForElement(.treeRow("f01.txt")),
+            Click(.treeRow("f04.txt")),
+            StaysPut(.treeRow("f04.txt")),
+            Click(.treeRow("f01.txt")),
+        ] + (0..<29).map { _ in Key(.down) as any Step } + [
+            Expect("↓ chose f30.txt", found: { $0.app.workspace?.storyTreeSelection ?? "none" }) {
+                $0.app.workspace?.storyTreeSelection == "f30.txt"
+            },
+            StaysPut(.treeRow("f30.txt")),
         ]
     }
 }

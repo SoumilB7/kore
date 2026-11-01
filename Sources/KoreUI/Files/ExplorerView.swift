@@ -127,63 +127,30 @@ struct ExplorerSidebar: View {
                 workspace.followFolder()
                 store.refresh()
             }
-        } else if store.rows.isEmpty {
+        } else if !store.hasRows {
             ExplorerState(message: "This folder is empty", color: Theme.tertiary, button: "New File") { store.startNew(folder: false) }
         } else {
             tree
         }
     }
 
+    /// The turns' changes are read here, apart from the rows: a click, which only moves the
+    /// selection, redraws the list and the rows it changed, without walking the chats again.
     private var tree: some View {
-        let rows = store.rows
-        let active = activeGuide(rows)
         let touches = workspace.turnTouches
-        let touchedFolders = Workspace.folders(of: touches)
-        let marked = store.markedFolder
-        // A drag over a chain's upper name fills that name, not the rows under it.
-        let drop = store.dropTarget
-        let dropSegment = drop.flatMap { target in store.row(showing: target).flatMap { $0.id == target ? nil : target } }
         return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(rows) { row in
-                        TreeRow(
-                            row: row, store: store, workspace: workspace, focused: focused,
-                            activeGuide: active.flatMap { row.id.hasPrefix($0.path + "/") ? $0.depth : nil },
-                            touch: row.isFolder ? nil : touches[row.id],
-                            folderTouched: row.isFolder && touchedFolders.contains(row.id),
-                            typed: store.selection == row.id ? typed.value : "",
-                            marked: marked,
-                            drop: dropSegment == nil ? drop : nil,
-                            dropSegment: dropSegment,
-                            // Focus with nothing selected marks where the keys start (look §3).
-                            outlined: focused && store.selection == nil && row.id == rows.first?.id,
-                            focus: { focused = true }
-                        )
-                        .id(row.id)
-                    }
-                }
-                .padding(.bottom, Space.md)
-                // The empty part below the rows: a click there puts the keyboard in the tree
-                // without selecting anything, as in VS Code.
-                Button {
-                    focused = true
-                } label: {
-                    Color.clear
-                        .frame(height: max(treeHeight.value - CGFloat(rows.count) * Size.Tree.row - Space.md, 0))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .accessibilityHidden(true)
-                // Dropped below the rows: into the folder itself.
-                .onDrop(of: [.fileURL], delegate: TreeDrop(folder: store.root, store: store, workspace: workspace, undo: undoManager))
+                TreeList(
+                    store: store, workspace: workspace, touches: touches, focused: focused, typed: typed.value,
+                    height: treeHeight.value, proxy: proxy, undo: undoManager, focus: { focused = true }
+                )
+                .equatable()
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { treeHeight.value = $0 }
             .focusable(interactions: .edit)
             .focused($focused)
             .focusEffectDisabled()
-            .onKeyPress(phases: .down) { press in key(press, rows: rows) }
+            .onKeyPress(phases: .down) { press in key(press, rows: store.rows) }
             // The Edit menu's ⌘A ⌘C ⌘X ⌘V while the tree has the keys (VS Code's tree).
             .onCommand(#selector(NSResponder.selectAll(_:))) { if store.edit == nil { store.pickAll() } }
             .onCommand(#selector(NSText.copy(_:))) { TreeActions.copy(store.chosenTops, cut: false, store: store) }
@@ -195,18 +162,7 @@ struct ExplorerSidebar: View {
                 store.undo = undoManager
                 DevFileHooks.explorerShown(store: store, workspace: workspace, undo: undoManager)
             }
-            .onChange(of: store.selection) { _, selection in
-                if let selection { withAnimation(Motion.fade) { proxy.scrollTo(store.row(showing: selection)?.id ?? selection) } }
-            }
         }
-    }
-
-    /// The selected row's parent folder, whose guide is brighter.
-    private func activeGuide(_ rows: [FilesStore.Row]) -> (path: String, depth: Int)? {
-        guard let selection = store.selection, let row = rows.first(where: { $0.shows(selection) }) else { return nil }
-        let parent = row.isFolder && row.isOpen ? row.id : store.parent(of: row.id)
-        guard parent != store.root, let folder = rows.first(where: { $0.id == parent }) else { return nil }
-        return (parent, folder.depth)
     }
 
     // MARK: Keys (VS Code's tree keys)
@@ -346,10 +302,106 @@ private struct ExplorerState: View {
 
 // MARK: - Rows
 
-private struct TreeRow: View {
+/// The rows and the space under them. Each row gets only what it shows, worked out here, so
+/// a click redraws the rows whose look it changed and no others.
+private struct TreeList: View, Equatable {
+    let store: FilesStore
+    let workspace: Workspace
+    let touches: [String: Workspace.Touch]
+    let focused: Bool
+    let typed: String
+    /// The tree's visible height, for the empty area below the rows.
+    let height: CGFloat
+    let proxy: ScrollViewProxy
+    let undo: UndoManager?
+    let focus: () -> Void
+
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.store === b.store && a.touches == b.touches && a.focused == b.focused && a.typed == b.typed && a.height == b.height
+    }
+
+    var body: some View {
+        let rows = store.rows
+        let selection = store.selection
+        let edit = store.edit
+        let active = activeGuide(rows)
+        let touchedFolders = Workspace.folders(of: touches)
+        let marked = store.markedFolder
+        // A drag over a chain's upper name fills that name, not the rows under it.
+        let target = store.dropTarget
+        let dropSegment = target.flatMap { target in store.row(showing: target).flatMap { $0.id == target ? nil : target } }
+        let drop = dropSegment == nil ? target : nil
+        LazyVStack(spacing: 0) {
+            ForEach(rows) { row in
+                let isSelected = store.isChosen(row)
+                TreeRow(
+                    row: row, store: store, workspace: workspace,
+                    isSelected: isSelected,
+                    editing: row.kind != .node || edit == .rename(row.id),
+                    state: store.state(of: row.id),
+                    focused: focused && isSelected,
+                    activeGuide: active.flatMap { row.id.hasPrefix($0.path + "/") ? $0.depth : nil },
+                    touch: row.isFolder ? nil : touches[row.id],
+                    folderTouched: row.isFolder && touchedFolders.contains(row.id),
+                    typed: selection == row.id ? typed : "",
+                    marked: marked.flatMap { row.shows($0) ? $0 : nil },
+                    inDropTarget: drop.map { row.id == $0 || row.id.hasPrefix($0 + "/") } ?? false,
+                    dropSegment: dropSegment.flatMap { row.shows($0) ? $0 : nil },
+                    // Focus with nothing selected marks where the keys start (look §3).
+                    outlined: focused && selection == nil && row.id == rows.first?.id,
+                    focus: focus
+                )
+                .equatable()
+                .id(row.id)
+            }
+        }
+        .padding(.bottom, Space.md)
+        .onChange(of: selection) { _, selection in
+            let pointed = store.pointed
+            store.pointed = nil
+            // A clicked row is in view already. The keys' and a reveal's row scrolls into view
+            // at once, without a slide.
+            guard let selection, selection != pointed else { return }
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) { proxy.scrollTo(store.row(showing: selection)?.id ?? selection) }
+        }
+        // The empty part below the rows: a click there puts the keyboard in the tree
+        // without selecting anything, as in VS Code.
+        Button {
+            focus()
+        } label: {
+            Color.clear
+                .frame(height: max(height - CGFloat(rows.count) * Size.Tree.row - Space.md, 0))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .accessibilityHidden(true)
+        // Dropped below the rows: into the folder itself.
+        .onDrop(of: [.fileURL], delegate: TreeDrop(folder: store.root, store: store, workspace: workspace, undo: undo))
+    }
+
+    /// The selected row's parent folder, whose guide is brighter.
+    private func activeGuide(_ rows: [FilesStore.Row]) -> (path: String, depth: Int)? {
+        guard let selection = store.selection, let row = rows.first(where: { $0.shows(selection) }) else { return nil }
+        let parent = row.isFolder && row.isOpen ? row.id : store.parent(of: row.id)
+        guard parent != store.root, let folder = rows.first(where: { $0.id == parent }) else { return nil }
+        return (parent, folder.depth)
+    }
+}
+
+/// One row; drawn again only when what it shows changes (`==`).
+private struct TreeRow: View, Equatable {
     let row: FilesStore.Row
     let store: FilesStore
     let workspace: Workspace
+    /// The row, or one of its chain's folders, is chosen.
+    let isSelected: Bool
+    /// A rename's field, or a new item's.
+    let editing: Bool
+    let state: GitStatus.State?
+    /// Chosen while the tree has the keys.
     let focused: Bool
     let activeGuide: Int?
     /// Changed by the running or latest agent turn (look §8).
@@ -357,38 +409,33 @@ private struct TreeRow: View {
     let folderTouched: Bool
     /// Type to find's text, shown on the selected row's name.
     let typed: String
-    /// The folder whose name is underlined (`FilesStore.markedFolder`).
+    /// The folder whose name is underlined (`FilesStore.markedFolder`), when it's this row's.
     let marked: String?
-    /// The folder a drag is over, unless it's a chain's upper name (`dropSegment`).
-    let drop: String?
-    /// The chain's upper folder a drag is over: only its name fills.
+    /// Under a drag: the target folder, or a row inside it.
+    let inDropTarget: Bool
+    /// The chain's upper folder a drag is over, when it's this row's: only its name fills.
     let dropSegment: String?
     /// The tree has focus and nothing is selected: this first row gets the focus line.
-    var outlined = false
+    let outlined: Bool
     /// A click puts the keyboard in the tree, as in VS Code.
     let focus: () -> Void
     @StateObject private var hovered = Local(false)
     @Environment(\.undoManager) private var undoManager
     @Environment(\.listGround) private var ground
 
-    /// The row, or one of its chain's folders, is the selection.
-    private var isSelected: Bool { store.isChosen(row) }
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        guard a.row == b.row, a.isSelected == b.isSelected, a.editing == b.editing, a.state == b.state else { return false }
+        guard a.focused == b.focused, a.activeGuide == b.activeGuide, a.touch == b.touch, a.folderTouched == b.folderTouched else {
+            return false
+        }
+        return a.typed == b.typed && a.marked == b.marked && a.inDropTarget == b.inDropTarget && a.dropSegment == b.dropSegment
+            && a.outlined == b.outlined
+    }
 
     /// Where a drop on this row goes: into it if it's a folder, else beside it.
     private var dropFolder: String { row.isFolder ? row.id : (row.id as NSString).deletingLastPathComponent }
 
-    /// Under a drag: the target folder, or a row inside it.
-    private var inDropTarget: Bool {
-        guard let target = drop else { return false }
-        return row.id == target || row.id.hasPrefix(target + "/")
-    }
-    private var editing: Bool {
-        if row.kind != .node { return true }
-        return store.edit == .rename(row.id)
-    }
-
     var body: some View {
-        let state = store.state(of: row.id)
         let tint = state.map(Theme.Git.color)
         HStack(spacing: 0) {
             Spacer().frame(width: Size.Tree.leading + CGFloat(row.depth) * Size.Tree.indent)
@@ -423,7 +470,7 @@ private struct TreeRow: View {
         // action its own.
         .accessibilityElement(children: editing ? .contain : .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction { click(double: false) }
+        .accessibilityAction { click(count: 1, flags: []) }
         // Pressed through its action.
         .storyID(StoryID.Explorer.row(store.relative(row.id)), press: click)
         // The pointer's stand-in: no synthetic event reaches `.onHover`.
@@ -434,7 +481,12 @@ private struct TreeRow: View {
             TreeDrag.paths = store.isChosen(row) && !store.picked.isEmpty ? store.chosenTops : [row.id]
             return NSItemProvider(object: URL(fileURLWithPath: row.id) as NSURL)
         }
-        .onDrop(of: [.fileURL], delegate: TreeDrop(folder: dropFolder, store: store, workspace: workspace, undo: undoManager))
+        // A press that moved a few points starts a drag; dropped back on this row, it's the click.
+        .onDrop(
+            of: [.fileURL],
+            delegate: TreeDrop(
+                folder: dropFolder, store: store, workspace: workspace, undo: undoManager, row: row.id,
+                click: { click(count: 1, flags: []) }))
         .koreContextMenu("explorer") {
             // A right-click outside the choice chooses just that row, as VS Code does.
             if !store.isChosen(row) { store.pickOnly(row.id) }
@@ -445,7 +497,7 @@ private struct TreeRow: View {
     private var fill: Color {
         if inDropTarget { return Theme.Tree.dropTarget }
         if isSelected { return focused ? Theme.Row.selectedFocused : Theme.Row.selected(ground) }
-        return hovered.value ? Theme.Row.hover(ground) : .clear
+        return hovered.value ? Theme.Row.hoverQuiet(ground) : .clear
     }
 
     @ViewBuilder private var chevron: some View {
@@ -558,26 +610,30 @@ private struct TreeRow: View {
     /// One click selects (a folder opens or closes; a file opens in the preview tab); the
     /// second click of a double click keeps the file's tab and puts the caret in it. The count
     /// comes from the event, as AppKit sends both clicks.
-    private func click() { click(double: NSApp.mouseClickCount >= 2) }
+    private func click() {
+        click(count: NSApp.mouseClickCount, flags: NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? [])
+    }
 
     /// A chain's upper folder: selected (underlined), the row left open as it is.
     private func pick(_ path: String) {
         guard !editing else { return }
         focus()
+        store.pointed = path
         store.pickOnly(path)
     }
 
-    private func click(double: Bool) {
+    private func click(count: Int, flags: NSEvent.ModifierFlags) {
         guard !editing else { return }
         focus()
+        store.pointed = row.id
         // ⌘ adds or drops this row, ⇧ takes the rows from the anchor (VS Code's tree).
-        let flags = NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
         if flags.contains(.command) { return store.pickToggle(row.id) }
         if flags.contains(.shift) { return store.pickRange(to: row.id) }
         store.pickOnly(row.id)
         if row.isFolder {
-            if !double { store.toggle(row.id) }
-        } else if double {
+            // Every click opens or closes it, the quick second and third of a run too.
+            store.toggle(row.id)
+        } else if count >= 2 {
             workspace.openFile(URL(fileURLWithPath: row.id), preview: false)
             workspace.activeFile?.editor.focus()
         } else {
@@ -884,22 +940,27 @@ enum TreeActions {
         let paths = urls.map { realPath($0.path) }
         guard !paths.isEmpty else { return }
         let cut = store.clipboard.map { $0.cut && Set($0.paths) == Set(paths) } ?? false
-        let result = store.transfer(paths, into: folder, copy: !cut, collision: { _ in .keepBoth }, moved: workspace.renamed)
-        if let failure = result.failure { show(failure) }
-        // A cut pastes once; a copy can paste again.
-        if cut, !result.done.isEmpty { store.clipboard = nil; board.clearContents() }
-        registerUndo(result.done, store: store, workspace: workspace, undo: undo)
+        Task {
+            let result = await store.transfer(paths, into: folder, copy: !cut, collision: { _ in .keepBoth }, moved: workspace.renamed)
+            if let failure = result.failure { show(failure) }
+            // A cut pastes once; a copy can paste again.
+            if cut, !result.done.isEmpty { store.clipboard = nil; board.clearContents() }
+            registerUndo(result.done, store: store, workspace: workspace, undo: undo)
+        }
     }
 
     /// Duplicate: a copy beside each, named " copy". One undo.
     static func duplicate(_ paths: [String], store: FilesStore, workspace: Workspace, undo: UndoManager?) {
-        var done: [FilesStore.Transfer] = []
-        for path in paths {
-            let result = store.transfer([path], into: store.parent(of: path), copy: true, collision: { _ in .keepBoth }, moved: workspace.renamed)
-            if let failure = result.failure { show(failure) }
-            done += result.done
+        Task {
+            var done: [FilesStore.Transfer] = []
+            for path in paths {
+                let result = await store.transfer(
+                    [path], into: store.parent(of: path), copy: true, collision: { _ in .keepBoth }, moved: workspace.renamed)
+                if let failure = result.failure { show(failure) }
+                done += result.done
+            }
+            registerUndo(done, store: store, workspace: workspace, undo: undo)
         }
-        registerUndo(done, store: store, workspace: workspace, undo: undo)
     }
 
     /// From outside the folder (Finder, another app): a drop copies, as in VS Code.
@@ -936,8 +997,15 @@ enum TreeActions {
             alert.addButton(withTitle: "Cancel")
             guard StorylineSeams.confirm?(copy ? "copy" : "move") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
         }
+        Task { await transfer(sources, into: folder, folderName: folderName, copy: copy, store: store, workspace: workspace, undo: undo, answer: answer) }
+    }
+
+    private static func transfer(
+        _ sources: [String], into folder: String, folderName: String, copy: Bool, store: FilesStore, workspace: Workspace,
+        undo: UndoManager?, answer: FilesStore.Collision?
+    ) async {
         var always = answer
-        let result = store.transfer(sources, into: folder, copy: copy, collision: { name in
+        let result = await store.transfer(sources, into: folder, copy: copy, collision: { name in
             if let always { return always }
             let alert = NSAlert()
             alert.messageText = "“\(name)” already exists in “\(folderName)”."
@@ -1003,17 +1071,26 @@ private struct TreeDrop: DropDelegate {
     let store: FilesStore
     let workspace: Workspace
     let undo: UndoManager?
+    /// The row it's on, and its click: a drag from the row dropped back on it is a click whose
+    /// press moved a few points (AppKit started a drag, and the tap was lost).
+    var row: String?
+    var click: (@MainActor () -> Void)?
+
+    /// The drag started on this row alone: nothing fills, as it can't go anywhere.
+    private var fromHere: Bool { row != nil && TreeDrag.paths == [row] }
 
     func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.fileURL]) }
 
-    func dropEntered(info: DropInfo) { store.dropTarget = folder }
+    func dropEntered(info: DropInfo) {
+        if !fromHere { store.dropTarget = folder }
+    }
 
     func dropExited(info: DropInfo) {
         if store.dropTarget == folder { store.dropTarget = nil }
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        if store.dropTarget != folder { store.dropTarget = folder }
+        if !fromHere, store.dropTarget != folder { store.dropTarget = folder }
         return DropProposal(operation: NSEvent.modifierFlags.contains(.option) ? .copy : .move)
     }
 
@@ -1021,12 +1098,16 @@ private struct TreeDrop: DropDelegate {
         store.dropTarget = nil
         let option = NSEvent.modifierFlags.contains(.option)
         let providers = info.itemProviders(for: [.fileURL])
-        let (folder, store, workspace, undo) = (folder, store, workspace, undo)
+        let (folder, store, workspace, undo, row, click) = (folder, store, workspace, undo, row, click)
         Task { @MainActor in
             var paths: [String] = []
             var urls: [URL] = []
             for provider in providers {
                 if let url = await Self.url(provider) { urls.append(url) }
+            }
+            if let row, let click, TreeDrag.paths == [row], urls.count == 1, realPath(urls[0].path) == row {
+                TreeDrag.paths = []
+                return click()
             }
             paths = TreeDrag.expand(urls).map { realPath($0.path) }
             TreeActions.drop(paths, into: folder, copy: option || TreeActions.fromOutside(paths, store: store), store: store, workspace: workspace, undo: undo)

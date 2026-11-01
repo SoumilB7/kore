@@ -16,9 +16,14 @@ extension Theme {
         static func hover(_ ground: Ground) -> Color { ground == .window ? hoverOnWindow : hoverOnSurface }
         static func selected(_ ground: Ground) -> Color { ground == .window ? surface : surfaceHover }
         static let selectedFocused = accent.opacity(0.16)
+        /// A dense list a person runs the pointer over all the time (the tree): a faint hover,
+        /// well apart from the selection.
+        static func hoverQuiet(_ ground: Ground) -> Color { ground == .window ? quietOnWindow : quietOnSurface }
 
         private static let hoverOnWindow = surface.opacity(0.6)
         private static let hoverOnSurface = surfaceHover.opacity(0.6)
+        private static let quietOnWindow = surface.opacity(0.3)
+        private static let quietOnSurface = surfaceHover.opacity(0.3)
     }
 }
 

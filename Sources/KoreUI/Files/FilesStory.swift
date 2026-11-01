@@ -39,6 +39,9 @@ extension Workspace {
     /// The tree's selected row, relative to the folder.
     package var storyTreeSelection: String? { files.flatMap { store in store.selection.map(store.relative) } }
 
+    /// No paste, duplicate or drop is running in the tree (their undo is registered).
+    package var storyTreeSettled: Bool { (files?.fileWorks ?? 0) == 0 }
+
     /// The folder the tree underlines (a chain's chosen folder), relative to the folder.
     package var storyTreeMark: String? { files.flatMap { store in store.markedFolder.map(store.relative) } }
 
