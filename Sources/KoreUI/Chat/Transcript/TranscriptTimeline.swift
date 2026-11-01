@@ -166,6 +166,8 @@ struct TranscriptTimeline: View, Equatable {
             .defaultScrollAnchor(.bottom, for: .alignment)
             .onScrollPhaseChange { old, new, context in
                 gesturing.value = new != .idle
+                // The end the view was taken to can lie below the rows: the check looks when it stops.
+                if new == .idle { checkBlank() }
                 guard !shift.zoomAdjusting else { return }
                 if new == .interacting {
                     zoomRejoining.value = false
@@ -197,6 +199,8 @@ struct TranscriptTimeline: View, Equatable {
                     geometry.value = (height, offset)
                     return
                 }
+                // A move with no scroll phase (the scroll bar, End) never reaches `.idle` above.
+                if !gesturing.value, offset != geometry.value.offset { checkBlank() }
                 // Keep measuring, but let neither a retained bottom target nor restoration,
                 // paging or folding replace the absolute position held during a pinch.
                 if shift.zoomAdjusting {
@@ -400,6 +404,12 @@ struct TranscriptTimeline: View, Equatable {
                         following.value = false
                         proxy.scrollTo(id, anchor: .center)
                     }
+                    store.storyRebuild = {
+                        // A first rebuild each time, whatever the last one left.
+                        remounts.value = 0
+                        rebuild(geometry.value.offset)
+                    }
+                    store.storyScrollView = { shift.current }
                 }
                 // A selection dragged past the edge scrolls as the reader would: nothing pulls it
                 // back to the end, or to a place still being restored. Turns going in above as it
@@ -459,24 +469,26 @@ struct TranscriptTimeline: View, Equatable {
     }
 
     /// Two seconds after it shows, changes or its window comes back, a transcript with rows but
-    /// nothing on screen (scrolled past its end, AppKit's content not under the visible part, or
-    /// no layer drawing there) is logged with its geometry
-    /// in sessions.log ("blank"), and its scroll view is built again at the end, once. Never while
-    /// its window is covered: macOS may drop what it drew until it shows again.
+    /// nothing on screen (AppKit's content not under the visible part, or no layer drawing there)
+    /// is logged with its geometry in sessions.log ("blank"), and its scroll view is built again:
+    /// first where the reader was, then at the end. Never while its window is covered: macOS may
+    /// drop what it drew until it shows again.
     private func checkBlank() {
         blankCheck.value?.cancel()
         guard shown.value else { return }
-        let (store, seen, tops, remounts, mount, position, following, shift) = (store, seen, rowTops, remounts, mount, position, following, shift)
+        let (store, seen, tops, remounts, shift, following) = (store, seen, rowTops, remounts, shift, following)
+        let rebuild = rebuild
         blankCheck.value = Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled, !store.sections.isEmpty, seen.value.count == 4, shift.windowVisible else { return }
+            guard !Task.isCancelled, !store.sections.isEmpty, seen.value.count == 4, shift.windowVisible || StoryHost.installed else { return }
             let (height, offset, visible) = (seen.value[0], seen.value[1], seen.value[2])
             let frames = shift.frames
             let drawn = shift.drawn
             let unseen = (frames.map { $0.content.height < 1 || !$0.content.intersects($0.visible) } ?? false) || drawn == 0
             // By what's drawn, not by which rows reported: a new chat, or a turn showing only its
-            // tool rows, has no message or answer on screen and is fine.
-            guard offset > height || unseen else {
+            // tool rows, has no message or answer on screen and is fine. SwiftUI's offset can run
+            // past its height while AppKit's view is drawn, so it isn't asked.
+            guard unseen else {
                 if remounts.value > 0 {
                     KoreLog.named("sessions").write("blank-recovered", ["cli": store.providerName])
                     remounts.value = 0
@@ -486,21 +498,42 @@ struct TranscriptTimeline: View, Equatable {
             KoreLog.named("sessions").write(
                 "blank",
                 [
-                    "cli": store.providerName, "sections": String(store.sections.count), "rows": String(store.entries.count),
+                    "cli": store.providerName, "chat": store.chatID?(), "sections": String(store.sections.count), "rows": String(store.entries.count),
                     "height": String(Int(height)), "offset": String(Int(offset)), "visible": String(Int(visible)),
                     "tops": String(tops.value.count), "first_top": tops.value.values.min().map { String(Int($0)) },
                     "following": following.value ? "yes" : "no", "remounts": String(remounts.value),
                     "ak_height": frames.map { String(Int($0.content.height)) }, "ak_y": frames.map { String(Int($0.visible.minY)) },
                     "ak_visible": frames.map { String(Int($0.visible.height)) }, "drawn": drawn.map { String($0) },
                 ])
-            guard remounts.value < 1 else { return }
-            remounts.value += 1
-            following.value = true
-            position.value = ScrollPosition(edge: .bottom)
-            mount.value &+= 1
+            guard remounts.value < 2 else { return }
+            rebuild(offset)
             // Then looked at again: drawn now ("blank-recovered"), or logged once more.
             checkBlank()
         }
+    }
+
+    /// The scroll view built again, which measures the rows afresh: a lazy stack can keep a height
+    /// well past its last row, and nothing draws down there until the view scrolls back above it
+    /// (a pin to the end doesn't reach it). A reader above the end comes back to `offset` the
+    /// first time, or to the true end if that's past it; if it's blank again, or they were
+    /// following, it goes to the end.
+    private func rebuild(_ offset: CGFloat) {
+        if !following.value, remounts.value == 0 {
+            // A new scroll view takes its default anchor first: the place goes to it once it's there.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(100))
+                scroll(position, to: offset)
+                nudge.value &+= 1
+            }
+        } else {
+            following.value = true
+            // Over any glide under way: layout pins the new view to the end at once.
+            glidingUntil.value = nil
+            glideCut.value = store.sentAt
+            position.value = ScrollPosition(edge: .bottom)
+        }
+        remounts.value += 1
+        mount.value &+= 1
     }
 
     /// Pins the end while following: at once, or gliding for 2s after a send. A send always

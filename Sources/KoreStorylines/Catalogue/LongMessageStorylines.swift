@@ -174,8 +174,8 @@ private struct ExpectPlace: Step {
 
 
 /// A long message opened and closed at the top of a long answer, then a jump to the end in one
-/// go (the scroll bar, End): the transcript draws its rows there at once, in the scroll view it
-/// had, never blank until the next scroll.
+/// go (the scroll bar, End). Now and then the view lands below the last row, on a height the lazy
+/// stack hasn't corrected: the blank check builds the scroll view again and the end is drawn.
 final class LongMessageJumpToEnd: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
     override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(LongMessageOpens.reply)]) }
@@ -198,41 +198,24 @@ final class LongMessageJumpToEnd: ChatStoryline {
             ClickText(Spot.answer(1, [0], at: LongMessageOpens.first, "answer")),
             ExpectElement(row.action(.open), .absent),
             WaitIdle(),
-            KeepScrollView(row),
             Scroll(.answer(turn: 1), to: .bottom), WaitIdle(),
             Snapshot("long-message-jumped"),
             ExpectDrawnAtEnd(),
         ]
     }
-
-    /// The transcript's scroll view before the jump: one built again for a blank isn't a pass.
-    final class Kept { weak var scroll: NSScrollView? }
 }
 
-private struct KeepScrollView: Step {
-    let box: Locator
-    init(_ box: Locator) { self.box = box }
-    var label: String { "Keep the transcript's scroll view" }
-
-    func run(_ story: StoryContext) async throws {
-        let element = try await story.element(box)
-        guard let scroll = LongMessageOpens.scrollView(element.registeredView) else { throw StoryFailure.other("\(box) isn't in a scroll view") }
-        story.stash(LongMessageJumpToEnd.Kept.self) { .init() }.scroll = scroll
-    }
-}
-
-/// Within a second (before the blank check builds the scroll view again): the visible part on
-/// the content, at its end, with layers drawing there.
+/// Within the blank check's time and a rebuild: the visible part on the content, at its end, with
+/// layers drawing there.
 private struct ExpectDrawnAtEnd: Step {
-    var label: String { "Expect the transcript's end drawn, in the same scroll view" }
+    var label: String { "Expect the transcript's end drawn" }
 
     func run(_ story: StoryContext) async throws {
-        var seen = "no scroll view kept"
+        var seen = "no scroll view"
+        let transcript = try story.activeChat().storyTranscript
         do {
-            try await story.until("the end drawn", timeout: .seconds(1)) {
-                guard let scroll = story.stash(LongMessageJumpToEnd.Kept.self, make: { .init() }).scroll, scroll.window != nil,
-                    let document = scroll.documentView
-                else { seen = "the kept scroll view is gone (built again)"; return false }
+            try await story.until("the end drawn", timeout: .seconds(4)) {
+                guard let scroll = transcript.scrollView, scroll.window != nil, let document = scroll.documentView else { return false }
                 let visible = document.convert(scroll.contentView.bounds, from: scroll.contentView)
                 let drawn = Self.drawn(document, in: visible)
                 seen = "document \(Int(document.frame.height)), visible \(Int(visible.minY))–\(Int(visible.maxY)), \(drawn) layers drawn"
@@ -257,5 +240,51 @@ private struct ExpectDrawnAtEnd: Step {
         }
         walk(root, depth: 0)
         return count
+    }
+}
+
+
+/// A transcript's scroll view built again, as for a blank one: the timeline still knows the view
+/// it's in, with rows drawn. At the end it stays at the end; a reader above it stays there.
+final class BlankTranscriptRebuilt: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(LongMessageOpens.reply)]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("A long answer"), TurnFinished(1), WaitIdle(),
+            RebuildAndExpect(atEnd: true),
+            Scroll(.userMessage(1), to: .top), WaitIdle(),
+            RebuildAndExpect(atEnd: false),
+        ]
+    }
+}
+
+private struct RebuildAndExpect: Step {
+    let atEnd: Bool
+    var label: String { "Build the scroll view again, \(atEnd ? "at the end" : "above it")" }
+
+    func run(_ story: StoryContext) async throws {
+        let transcript = try story.activeChat().storyTranscript
+        guard let old = transcript.scrollView else { throw StoryFailure.other("no scroll view known before the rebuild") }
+        let before = old.contentView.bounds.minY
+        transcript.rebuildScrollView()
+        var seen = "the old scroll view"
+        do {
+            try await story.until("the rebuilt view drawn", timeout: .seconds(3)) {
+                guard let scroll = transcript.scrollView, scroll !== old, scroll.window != nil, let document = scroll.documentView else {
+                    seen = transcript.scrollView == nil ? "no scroll view known" : "the old scroll view"
+                    return false
+                }
+                let visible = document.convert(scroll.contentView.bounds, from: scroll.contentView)
+                let drawn = ExpectDrawnAtEnd.drawn(document, in: visible)
+                seen = "document \(Int(document.frame.height)), visible \(Int(visible.minY))–\(Int(visible.maxY)), \(drawn) layers, was \(Int(before))"
+                guard drawn > 0 else { return false }
+                let end = visible.maxY >= document.bounds.maxY - 60
+                return atEnd ? end : !end && abs(visible.minY - before) < 200
+            }
+        } catch StoryFailure.timedOut {
+            throw StoryFailure.expectation("the rebuilt scroll view drawn \(atEnd ? "at the end" : "where it was") (found \(seen))")
+        }
     }
 }

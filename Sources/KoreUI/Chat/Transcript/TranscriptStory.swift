@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// A chat's transcript as a storyline reads it (phase 12, §3): its entries in order, in the
@@ -21,6 +22,12 @@ package struct StoryTranscript {
     }
 
     let store: TranscriptStore
+
+    /// Builds the transcript's scroll view again, as for a blank one.
+    package func rebuildScrollView() { store.storyRebuild?() }
+
+    /// The scroll view the timeline knows it's in.
+    package var scrollView: NSScrollView? { store.storyScrollView?() }
 
     /// Every entry, including those above the built window.
     package var entries: [Entry] {

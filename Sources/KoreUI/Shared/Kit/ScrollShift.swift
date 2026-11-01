@@ -49,6 +49,9 @@ final class ScrollShift: ObservableObject {
         return (document.frame, scroll.contentView.bounds)
     }
 
+    /// The scroll view it found, for a storyline to read.
+    var current: NSScrollView? { scrollView }
+
     /// Its window can be seen: not minimised or covered.
     var windowVisible: Bool { scrollView?.window?.occlusionState.contains(.visible) ?? false }
 
@@ -104,7 +107,9 @@ final class ScrollShift: ObservableObject {
 
             override func viewDidMoveToWindow() {
                 super.viewDidMoveToWindow()
-                if let scroll = enclosingScrollView { shift?.attach(scroll) }
+                // Leaving its window (a rebuilt scroll view's old content, after the new one
+                // attached), it no longer says which scroll view is current.
+                if window != nil, let scroll = enclosingScrollView { shift?.attach(scroll) }
                 observers.forEach(NotificationCenter.default.removeObserver)
                 observers = []
                 guard let window else { return }

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import KoreCore
 import Observation
@@ -438,6 +439,8 @@ package final class TranscriptStore {
     /// Scrolls the timeline to a row by its id: set by the timeline for storylines only
     /// (`StoryTranscript.show`).
     @ObservationIgnored var storyScroll: ((String) -> Void)?
+    @ObservationIgnored var storyRebuild: (() -> Void)?
+    @ObservationIgnored var storyScrollView: (() -> NSScrollView?)?
     @ObservationIgnored private var position: [UUID: Int] = [:]
     /// An entry's place in the chat (its index in `entries`); nil once it has gone.
     func index(of id: UUID) -> Int? { position[id] }
@@ -460,6 +463,8 @@ package final class TranscriptStore {
 
     /// For notices: "Claude exited (1)".
     @ObservationIgnored var providerName = "The CLI"
+    /// The chat's id for the logs, once it has one.
+    @ObservationIgnored var chatID: (() -> String?)?
     /// Cards of agents spawned by other sub-agents, in their parent's lane.
     @ObservationIgnored private var laneAgents: [String: (parent: String, entry: UUID)] = [:]
     /// Every agent id in spawn order.

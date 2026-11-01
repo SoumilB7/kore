@@ -179,6 +179,7 @@ package final class Chat: Identifiable {
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
         transcript.providerName = provider.name
+        transcript.chatID = { [weak self] in self?.sessionId }
         transcript.provider = provider
         AccountStore.shared.register(self)
         StayAwake.register(self)
@@ -309,6 +310,7 @@ package final class Chat: Identifiable {
     private func replaceHistory(_ events: [ChatEvent]) {
         let store = TranscriptStore()
         store.providerName = transcript.providerName
+        store.chatID = transcript.chatID
         store.provider = transcript.provider
         showImported(in: store)
         store.apply(.replayed(events))
