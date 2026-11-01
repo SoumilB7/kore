@@ -84,6 +84,9 @@ final class FilesStore {
     /// the index or a branch: commit, checkout, reset, stash, pull. Their open files' change
     /// bars are against a `HEAD` that's gone.
     @ObservationIgnored var onGitMove: (([String]) -> Void)?
+    /// The root itself was renamed, moved or deleted, or can't be listed: the window checks
+    /// where its folder went.
+    @ObservationIgnored var onRootMoved: (() -> Void)?
 
     @ObservationIgnored private var children: [String: [Node]] = [:]
     @ObservationIgnored private var expanded: Set<String> = []
@@ -101,6 +104,7 @@ final class FilesStore {
     init(folder: URL) {
         root = realPath(folder.path)
         watcher = FolderWatcher(URL(fileURLWithPath: root)) { [weak self] paths in self?.changed(paths) }
+        watcher?.rootChanged = { [weak self] in self?.onRootMoved?() }
         Task { await load(root) }
         refreshGit()
     }
@@ -175,6 +179,7 @@ final class FilesStore {
         if folder == root {
             rootLoaded = true
             rootError = listed == nil
+            if listed == nil { onRootMoved?() }
         }
         guard let listed else {
             children[folder] = nil

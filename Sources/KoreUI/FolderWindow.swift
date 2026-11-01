@@ -3,13 +3,16 @@ import SwiftUI
 /// A window bound to one folder, holding that folder's chat tabs.
 struct FolderWindow: View {
     let folder: URL
+    /// The scene's value: it follows the folder when it's renamed, so restore finds it.
+    var moved: (URL) -> Void = { _ in }
     @StateObject private var workspace: Local<Workspace>
     @StateObject private var fullScreen = Local(false)
     @StateObject private var historyOpen = Local(false)
     @StateObject private var clockFrame = Local(CGRect.zero)
 
-    init(folder: URL) {
+    init(folder: URL, moved: @escaping (URL) -> Void = { _ in }) {
         self.folder = folder
+        self.moved = moved
         // Dev runs that start or resume a chat begin from a single clean tab.
         _workspace = StateObject(wrappedValue: Local(Workspace.forWindow(folder, restore: !DevSnapshot.singleTab)))
     }
@@ -105,11 +108,12 @@ struct FolderWindow: View {
         })
         // Small minimum: every part has to work as a tile, not just as a full window.
         .frame(minWidth: Layout.Window.minWidth, minHeight: Layout.Window.minHeight)
-        .navigationTitle(folder.lastPathComponent)
+        .navigationTitle(workspace.value.folder.lastPathComponent)
         .focusedSceneValue(\.workspace, workspace.value)
         .modifier(TabKeys(workspace: workspace.value))
         .modifier(TerminalKeys(workspace: workspace.value))
         .onAppear {
+            workspace.value.onFolderMoved = moved
             if let provider = DevSnapshot.startProvider {
                 workspace.value.start(provider, in: workspace.value.activeTab)
                 workspace.value.activeTab.chat?.launchModel = DevSnapshot.model

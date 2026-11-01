@@ -63,7 +63,7 @@ package struct KoreApp: App {
         // One window per folder. Opening a folder that already has a window focuses it.
         WindowGroup(for: URL.self) { $folder in
             if let folder {
-                FolderWindow(folder: folder)
+                FolderWindow(folder: folder) { $folder.wrappedValue = $0 }
                     .modifier(WindowActions(app: app))
                     .containerBackground(Theme.background, for: .window)
                     .preferredColorScheme(.dark)

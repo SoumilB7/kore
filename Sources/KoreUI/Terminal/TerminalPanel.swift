@@ -76,7 +76,7 @@ final class TerminalEntry: Identifiable {
 /// Window-owned, including while hidden or while another chat/file tab is selected.
 @MainActor @Observable
 final class TerminalPanel {
-    let folder: URL
+    var folder: URL
     private(set) var entries: [TerminalEntry] = []
     private(set) var selected: UUID?
     private(set) var isOpen = false

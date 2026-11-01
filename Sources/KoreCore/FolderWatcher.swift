@@ -6,16 +6,23 @@ import Foundation
 public final class FolderWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private let handler: @MainActor ([String]) -> Void
+    /// The watched folder itself was renamed, moved or deleted (FSEvents' root-changed flag).
+    @MainActor public var rootChanged: (() -> Void)?
 
     public init(_ folder: URL, latency: TimeInterval = 0.2, handler: @escaping @MainActor ([String]) -> Void) {
         self.handler = handler
         var context = FSEventStreamContext(
             version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
-        let callback: FSEventStreamCallback = { _, info, count, paths, _, _ in
+        let callback: FSEventStreamCallback = { _, info, count, paths, flags, _ in
             guard let info else { return }
             let watcher = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
             let list = unsafeBitCast(paths, to: NSArray.self) as? [String] ?? []
-            MainActor.assumeIsolated { watcher.handler(Array(list.prefix(count))) }
+            let rootFlag = FSEventStreamEventFlags(kFSEventStreamEventFlagRootChanged)
+            let root = (0..<count).contains { flags[$0] & rootFlag != 0 }
+            MainActor.assumeIsolated {
+                if root { watcher.rootChanged?() }
+                watcher.handler(Array(list.prefix(count)))
+            }
         }
         let flags = FSEventStreamCreateFlags(
             kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot)

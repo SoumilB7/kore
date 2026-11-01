@@ -37,7 +37,20 @@ package final class ChatTab: Identifiable {
 /// popover. The tabs are what was open in this folder last time, restored as they were.
 @MainActor @Observable
 package final class Workspace {
-    package let folder: URL
+    /// The window's folder. It follows the folder when it's renamed or moved
+    /// (`followFolder()`), so it changes only then.
+    package private(set) var folder: URL
+    /// The folder by identity, to find it again after a rename (FolderIdentity).
+    @ObservationIgnored private var identity: FolderIdentity
+    /// Where this folder was before renames in this run, oldest first: the CLIs keep its
+    /// earlier chats under those paths, so history lists them too.
+    package private(set) var earlierFolders: [URL] = []
+    /// The folder is gone (deleted, in the Trash, or its volume ejected): the explorer offers
+    /// Locate….
+    package private(set) var folderLost = false
+    /// Tells the window its folder moved, so its scene value (and restore) follows.
+    @ObservationIgnored var onFolderMoved: ((URL) -> Void)?
+    @ObservationIgnored private var activation: NSObjectProtocol?
     let terminals: TerminalPanel
     package internal(set) var tabs: [ChatTab] {
         didSet {
@@ -93,6 +106,8 @@ package final class Workspace {
     private func windowClosed() {
         if let closer { NotificationCenter.default.removeObserver(closer) }
         closer = nil
+        if let activation { NotificationCenter.default.removeObserver(activation) }
+        activation = nil
         SessionLog.shared.window("closed", folder: folder, tabs: tabs.count)
         AppModel.shared?.rememberClosedWorkspace(folder: folder, snapshot: persistenceSnapshot())
         closeAll()
@@ -152,6 +167,7 @@ package final class Workspace {
 
     init(folder: URL, restore: Bool = true) {
         self.folder = folder
+        identity = FolderIdentity(folder)
         terminals = TerminalPanel(folder: folder)
         let pending = Self.pendingRestores.removeValue(forKey: folder.standardizedFileURL.path)
         let saved = pending ?? (restore ? Self.saved(for: folder) : nil)
@@ -183,6 +199,10 @@ package final class Workspace {
         Self.all.add(self)
         // Restored file tabs follow the disk too.
         if tabs.contains(where: { $0.file != nil }) { _ = filesStore() }
+        // Coming back to Kore checks the folder is still where it was (one lookup, no polling).
+        activation = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.followFolder() } }
     }
 
     package var activeTab: ChatTab { tabs.first { $0.id == activeID } ?? tabs[0] }
@@ -576,6 +596,7 @@ package final class Workspace {
         let store = FilesStore(folder: folder)
         store.onChange = { [weak self] paths in self?.diskChanged(paths) }
         store.onGitMove = { [weak self] trees in self?.gitMoved(trees) }
+        store.onRootMoved = { [weak self] in self?.followFolder() }
         files = store
         return store
     }
@@ -838,15 +859,27 @@ package final class Workspace {
 
     private func load() async {
         let folder = folder
+        // The folder's earlier paths too: a renamed folder's chats stay under its old path.
+        let earlier = earlierFolders
         var lists: [String: [SessionSummary]] = [:]
         let scripted = StorylineSeams.sessions
         await withTaskGroup(of: (String, [SessionSummary]?).self) { group in
             for provider in Registry.all {
                 let stand = scripted?(provider.id, folder)
+                let earlierStands = earlier.map { scripted?(provider.id, $0) }
                 group.addTask {
                     let own: [SessionSummary]? = stand?.own == false ? [] : await provider.sessions(folder)
+                    var older: [SessionSummary] = []
+                    for (path, earlierStand) in zip(earlier, earlierStands) {
+                        if earlierStand?.own != false, let listed = await provider.sessions(path) { older += listed }
+                        older += earlierStand?.extra ?? []
+                    }
                     // Kore's forks its CLI doesn't list yet, or lists under another title.
-                    return (provider.id, own.map { KoreForks.shared.merged($0 + (stand?.extra ?? []), cli: provider.id, agent: provider.historyAgent, folder: folder) })
+                    return (provider.id, own.map { list in
+                        var seen = Set(list.map(\.id))
+                        let all = list + older.filter { seen.insert($0.id).inserted }
+                        return KoreForks.shared.merged(all + (stand?.extra ?? []), cli: provider.id, agent: provider.historyAgent, folder: folder)
+                    })
                 }
             }
             // Each CLI's list shows as it comes (Claude's is a quick file read; Codex asks its
@@ -1351,5 +1384,67 @@ extension Workspace {
         let resumable = chat.hasConversation ? chat.listedId : nil
         let draft = chat.composerDraft
         return Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title }, draft: draft.isEmpty ? nil : draft)
+    }
+}
+
+// MARK: - The folder moving
+
+extension Workspace {
+    /// Checks the folder is where the window thinks: after a rename or move it follows it, and
+    /// once it's gone it says so (Locate…). Runs on the explorer's root event, a root that
+    /// can't be read, and Kore coming to the front.
+    func followFolder() {
+        guard !isClosed else { return }
+        guard let now = identity.current() else {
+            if !FileManager.default.fileExists(atPath: folder.path) { folderLost = true }
+            return
+        }
+        folderLost = false
+        if realPath(now.path) != realPath(folder.path) { move(to: now) }
+    }
+
+    /// Locate…: a folder picked for a lost one becomes this window's folder.
+    func locateFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = folder.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        identity = FolderIdentity(url)
+        folderLost = false
+        move(to: url)
+    }
+
+    /// Everything that holds the folder's path takes the new one: the window's key and saved
+    /// state, the explorer and Search, file tabs under it, terminals and chats (running CLIs
+    /// keep their place: their working folder is the same folder).
+    func move(to new: URL) {
+        let old = folder
+        let oldKey = old.standardizedFileURL.path
+        guard new.standardizedFileURL.path != oldKey else { return }
+        let defaults = UserDefaults.standard
+        for base in [Self.savedKey, Self.explorerKey] { defaults.removeObject(forKey: Self.key(base, old)) }
+        earlierFolders.append(old)
+        folder = new
+        if Self.open[oldKey] === self { Self.open[oldKey] = nil }
+        Self.open[new.standardizedFileURL.path] = self
+        files?.stop()
+        files = nil
+        search = nil
+        let from = realPath(old.path), to = realPath(new.path)
+        for tab in tabs {
+            if let file = tab.file, let path = remapped(file.path, from: from, to: to) ?? remapped(file.path, from: old.path, to: new.path) {
+                file.moved(to: URL(fileURLWithPath: path))
+            }
+            tab.chat?.folder = new
+        }
+        terminals.folder = new
+        if tabs.contains(where: { $0.file != nil }) || explorerOpen { _ = filesStore() }
+        SessionLog.shared.window("folder-moved", folder: new, tabs: tabs.count)
+        persistNow()
+        saveExplorer()
+        onFolderMoved?(new)
+        Task { await refresh() }
     }
 }

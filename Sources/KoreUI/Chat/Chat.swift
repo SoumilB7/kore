@@ -13,7 +13,7 @@ import Observation
 package final class Chat: Identifiable {
     package let id = UUID()
     package let provider: ProviderDescriptor
-    package let folder: URL
+    package internal(set) var folder: URL
     /// Replaced only when a replayed history is corrected (`.historyReplaced`).
     package private(set) var transcript = TranscriptStore()
     package let approvals = ApprovalsStore()

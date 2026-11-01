@@ -8,6 +8,15 @@ extension Workspace {
     /// The active file tab's path, relative to the folder.
     package var storyActiveFile: String? { activeFile.map { relativePath($0.path) } }
 
+    /// The folder's chat ids as history lists them (both CLIs, earlier folder paths included).
+    package var storyHistoryIDs: [String] { chats.map(\.id) }
+    /// The paths that follow the folder: file tabs', chats' and the terminals' folder.
+    package var storyFilePaths: [String] { tabs.compactMap { $0.file?.path } }
+    package var storyChatFolders: [URL] { tabs.compactMap { $0.chat?.folder } }
+    package var storyTerminalsFolder: URL { terminals.folder }
+    /// The explorer's rows, relative to the folder, once its root is listed.
+    package var storyTreeRows: [String] { files.map { store in store.rows.map { store.relative($0.id) } } ?? [] }
+
     package func storyHasFile(_ relativePath: String) -> Bool {
         FileManager.default.fileExists(atPath: folder.appendingPathComponent(relativePath).path)
     }

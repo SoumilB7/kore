@@ -118,8 +118,15 @@ struct ExplorerSidebar: View {
             SearchView(workspace: workspace, store: workspace.searchStore())
         } else if !store.rootLoaded {
             DelayedSpinner().padding(.top, Layout.Explorer.stateTop)
+        } else if workspace.folderLost {
+            ExplorerState(message: "This folder was moved or deleted.", color: Theme.secondary, button: "Locate…") {
+                workspace.locateFolder()
+            }
         } else if store.rootError {
-            ExplorerState(message: "Kore can't read this folder.", color: Theme.secondary, button: "Try Again") { store.refresh() }
+            ExplorerState(message: "Kore can't read this folder.", color: Theme.secondary, button: "Try Again") {
+                workspace.followFolder()
+                store.refresh()
+            }
         } else if store.rows.isEmpty {
             ExplorerState(message: "This folder is empty", color: Theme.tertiary, button: "New File") { store.startNew(folder: false) }
         } else {
