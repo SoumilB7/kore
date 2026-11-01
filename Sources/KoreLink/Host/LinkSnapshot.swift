@@ -41,25 +41,124 @@ enum LinkSnapshot {
 
     static func windowID(_ workspace: Workspace) -> String { StableID.of(workspace.folder.path, prefix: "w_") }
 
-    static func window(_ workspace: Workspace) -> LinkWindow {
+    static func window(_ workspace: Workspace) -> LinkWindow { window(workspace, full: false) }
+
+    /// `full`: with the run's full control, its groups and whether a closed tab can come back too.
+    static func window(_ workspace: Workspace, full: Bool) -> LinkWindow {
+        let groups = workspace.tabGroups
         let tabs = workspace.tabs.map { tab -> LinkTab in
-            let id = tab.id.uuidString
-            if let board = tab.board {
-                let sections = board.board.sections.map { section in
-                    LinkTab.Section(
-                        id: section.id.uuidString, name: section.name,
-                        chatIds: section.tiles.compactMap { board.chats[$0.id]?.id.uuidString })
-                }
-                return LinkTab(id: id, kind: .board, title: tab.title, board: .init(sections: sections))
-            }
-            if let chat = tab.chat {
-                return LinkTab(id: id, kind: tab.agentID == nil ? .chat : .agent, title: tab.title, chatId: chat.id.uuidString)
-            }
-            return LinkTab(id: id, kind: tab.isFile ? .file : .empty, title: tab.title)
+            var made = linkTab(tab)
+            if full { made.groupId = groups.member[tab.id]?.uuidString }
+            return made
         }
         return LinkWindow(
             id: windowID(workspace), name: workspace.folder.lastPathComponent, path: homeRelative(workspace.folder.path), tabs: tabs,
-            activeTabId: workspace.activeTab.id.uuidString)
+            activeTabId: workspace.activeTab.id.uuidString,
+            groups: full ? groups.groups.map { LinkGroup(id: $0.id.uuidString, name: $0.name, color: $0.color.rawValue, folded: $0.folded) } : nil,
+            canReopenTab: full ? workspace.linkCanReopenTab : nil)
+    }
+
+    private static func linkTab(_ tab: ChatTab) -> LinkTab {
+        let id = tab.id.uuidString
+        if let board = tab.board {
+            let sections = board.board.sections.map { section in
+                LinkTab.Section(
+                    id: section.id.uuidString, name: section.name,
+                    chatIds: section.tiles.compactMap { board.chats[$0.id]?.id.uuidString })
+            }
+            return LinkTab(id: id, kind: .board, title: tab.title, board: .init(sections: sections))
+        }
+        if let chat = tab.chat {
+            return LinkTab(id: id, kind: tab.agentID == nil ? .chat : .agent, title: tab.title, chatId: chat.id.uuidString)
+        }
+        return LinkTab(id: id, kind: tab.isFile ? .file : .empty, title: tab.title)
+    }
+
+    /// The window a chat is open in.
+    static func workspace(of chat: Chat) -> Workspace? { workspaces().first { chats($0).contains { $0 === chat } } }
+
+    /// The chat's own tab (not an agent's) in `workspace`.
+    static func tab(of chat: Chat, in workspace: Workspace) -> ChatTab? { workspace.tabs.first { $0.chat === chat && $0.agentID == nil } }
+
+    /// The board tab holding the chat.
+    static func board(of chat: Chat, in workspace: Workspace) -> ChatTab? {
+        workspace.tabs.first { $0.board?.orderedChats.contains { $0 === chat } == true }
+    }
+
+    // MARK: The Mac (full control)
+
+    /// A recent folder's opaque id: the link names folders only by Kore's recents.
+    static func recentID(_ folder: URL) -> String { StableID.of(folder.path, prefix: "r_") }
+
+    static func recent(_ id: String) -> URL? { AppModel.shared?.linkRecents.first { recentID($0) == id } }
+
+    static func mac() -> MacState {
+        let recents = (AppModel.shared?.linkRecents ?? []).prefix(20).map {
+            MacState.Recent(id: recentID($0), name: $0.lastPathComponent, path: homeRelative($0.path))
+        }
+        return MacState(
+            recents: Array(recents), canReopenWindow: AppModel.shared?.linkCanReopenWindow ?? false,
+            stayAwake: LinkAwake.state.map { MacState.StayAwake(mode: $0.mode, on: $0.on) })
+    }
+
+    // MARK: Reads (full control)
+
+    /// History rows a page holds.
+    static let historyPage = 50
+
+    /// A window's past chats, newest first: archived ones or the rest, filtered by title.
+    static func history(_ workspace: Workspace, query: String?, archived: Bool, offset: Int) -> ([HistorySession], Bool) {
+        let words = (query ?? "").lowercased().split(separator: " ")
+        let openIds = Set(chats(workspace).compactMap(\.sessionId))
+        let rows = workspace.linkSessions.filter { session in
+            session.archived == archived && words.allSatisfy { session.title.lowercased().contains($0) }
+        }
+        let start = min(max(offset, 0), rows.count)
+        let page = rows[start..<min(start + historyPage, rows.count)].map { session in
+            HistorySession(
+                id: session.id, provider: session.agent.rawValue, title: String(session.title.prefix(LinkPolicy.maxTitle)), updatedAt: ms(session.updated),
+                archived: session.archived, open: openIds.contains(session.id))
+        }
+        return (page, start + historyPage < rows.count)
+    }
+
+    /// The most of a diff sent: 256 KiB of lines.
+    static let diffCap = 256 * 1024
+
+    /// A file's change as hunks, with "+", "-" or " " before each line; cut at `diffCap`.
+    static func hunks(_ change: FileChange) -> ([LinkMessage.Hunk], Bool) {
+        var size = 0
+        var out: [LinkMessage.Hunk] = []
+        for hunk in change.hunks {
+            var lines: [String] = []
+            for line in hunk.lines {
+                let mark = switch line.kind {
+                case .add: "+"
+                case .remove: "-"
+                case .context: " "
+                }
+                let text = mark + line.text
+                size += text.utf8.count + 1
+                if size > diffCap {
+                    out.append(.init(oldStart: hunk.oldStart, newStart: hunk.newStart, lines: lines))
+                    return (out, true)
+                }
+                lines.append(text)
+            }
+            out.append(.init(oldStart: hunk.oldStart, newStart: hunk.newStart, lines: lines))
+        }
+        return (out, change.isTruncated)
+    }
+
+    /// Each CLI's models, read from its open chats (a CLI says them once it runs).
+    static func clis(_ chats: [Chat]) -> [CLIState] {
+        Registry.all.compactMap { provider in
+            guard let chat = chats.first(where: { $0.provider.id == provider.id && !$0.linkModels.isEmpty }) else { return nil }
+            return CLIState(
+                provider: provider.id,
+                models: chat.linkModels.map { .init(id: $0.id, name: $0.name, efforts: $0.efforts, fast: $0.supportsFastMode, auto: $0.supportsAutoMode) },
+                effortScale: chat.linkEffortScale)
+        }
     }
 
     /// Every chat open in a window: its tabs' chats, then its boards'.
@@ -114,7 +213,31 @@ enum LinkSnapshot {
             .map { LinkSlash(name: $0.name, description: String($0.description.prefix(descriptionCap)), kind: $0.kind == .skill ? .skill : .command) }
     }
 
-    static func meta(_ chat: Chat) -> ChatMeta {
+    static func meta(_ chat: Chat) -> ChatMeta { meta(chat, full: false) }
+
+    /// `full`: with the run's full control, the chat's controls, rescue and wider `can` too.
+    static func meta(_ chat: Chat, full: Bool) -> ChatMeta {
+        var made = baseMeta(chat)
+        guard full else { return made }
+        let c = chat.linkControlState
+        made.controls = ChatControls(
+            modelId: c.modelId, effort: c.effort, fast: c.fast, fastOffered: c.fastOffered, planAllow: c.planAllow, contextPct: c.contextPct,
+            autoCompactAt: c.autoCompactAt, compacting: c.compacting, remote: ChatControls.Remote(rawValue: c.remote) ?? .unknown)
+        let r = chat.linkRescueState
+        made.rescue = ChatRescue(
+            connection: r.offline ? .offline : r.stalled ? .stalled : .ok, retryTurn: r.retryTurn, slept: r.slept ? true : nil,
+            limitReset: r.limitReset.map(Self.ms), continuesAt: r.continuesAt.map(Self.ms), sendsAtReset: r.sendsAtReset ? true : nil)
+        made.can.compact = chat.linkCanCompact
+        made.can.fork = chat.linkCanFork
+        made.can.rename = true
+        made.can.close = true
+        made.can.sendAtReset = chat.linkCanSendAtReset
+        return made
+    }
+
+    static func ms(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }
+
+    private static func baseMeta(_ chat: Chat) -> ChatMeta {
         let facts = facts(chat)
         let state: ChatMeta.State =
             switch chat.attention {

@@ -80,7 +80,7 @@ struct LinkFixtureTests {
         #expect(String(decoding: digest.canonical, as: UTF8.self) == fixture.canonical)
         #expect(digest.digest == fixture.digest)
         // The snapshot's card carries the same digest.
-        guard case .snapshot(_, _, let chats) = try LinkMessage.decode(Self.bytes("snapshot")) else {
+        guard case .snapshot(_, _, let chats, _) = try LinkMessage.decode(Self.bytes("snapshot")) else {
             Issue.record("not a snapshot")
             return
         }
@@ -115,7 +115,7 @@ struct LinkFixtureTests {
     }
 
     @Test func unknownTypesAndCommandsAreKeptAsUnknown() throws {
-        #expect(try LinkMessage.decode(Data(#"{"t":"diff.get","path":"a"}"#.utf8)) == .unknown("diff.get"))
+        #expect(try LinkMessage.decode(Data(#"{"t":"files.list","path":"a"}"#.utf8)) == .unknown("files.list"))
         let cmd = try LinkMessage.decode(Data(#"{"t":"cmd","id":"x","cmd":{"type":"files.read","path":"/etc"}}"#.utf8))
         #expect(cmd == .cmd(id: "x", .unknown("files.read")))
         #expect(LinkPolicy.check(.unknown("files.read"), nil) == .deny(.invalid, "Kore doesn't know that command."))
@@ -322,5 +322,35 @@ struct LinkUploadTests {
         #expect(LinkUploads.safeName("..hidden") == "hidden")
         #expect(LinkUploads.safeName("a\u{0}b:c.txt") == "abc.txt")
         #expect(LinkUploads.safeName("") == "file")
+    }
+}
+
+/// Link 1.2: every new command needs full control granted on the Mac this run, and the grant
+/// never lets a `!` line through.
+@Suite("link full control")
+struct LinkControlTests {
+    static let chat = LinkPolicy.ChatFacts(level: .manual, modes: ["default": .manual])
+
+    @Test(arguments: ControlKind.allCases)
+    func refusedWithoutTheGrant(_ kind: ControlKind) {
+        let args = ControlArgs(chatId: "x", windowId: "w", title: "A name", text: "hi")
+        #expect(LinkPolicy.check(.control(kind, args), Self.chat, control: .standard) == .deny(.deniedControl, "Full control isn't granted in Kore for this run."))
+    }
+
+    @Test(arguments: ControlKind.allCases)
+    func allowedWithTheGrant(_ kind: ControlKind) {
+        let args = ControlArgs(chatId: "x", windowId: "w", title: "A name", text: "hi")
+        #expect(LinkPolicy.check(.control(kind, args), Self.chat, control: .full) == .allow)
+    }
+
+    @Test func shellLinesStayRefusedWithTheGrant() {
+        #expect(LinkPolicy.check(.send(chatId: "x", text: "!ls"), Self.chat, control: .full) != .allow)
+        let atReset = LinkPolicy.check(.control(.chatSendAtReset, ControlArgs(chatId: "x", text: "!rm -rf ~")), Self.chat, control: .full)
+        #expect(atReset != .allow)
+    }
+
+    @Test func titlesAreOneShortLine() {
+        let full = LinkPolicy.check(.control(.chatRename, ControlArgs(chatId: "x", title: "two\nlines")), Self.chat, control: .full)
+        #expect(full != .allow)
     }
 }

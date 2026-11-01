@@ -61,6 +61,7 @@ extension StoryID {
         /// The Allow card a ring shows, and its buttons.
         package static let card = StoryID(.welcome, "link.card")
         package static let allow = card.part(.allow)
+        package static let allowFull = StoryID(.welcome, "link.card.full")
         package static let deny = card.part(.deny)
     }
 }

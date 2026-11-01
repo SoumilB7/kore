@@ -178,11 +178,43 @@
     {
       "file": "tx.page.attachments.json",
       "type": "tx.page"
+    },
+    {
+      "file": "policy.json",
+      "type": "policy"
+    },
+    {
+      "file": "tx.earlier.json",
+      "type": "tx.earlier"
+    },
+    {
+      "file": "history.list.json",
+      "type": "history.list"
+    },
+    {
+      "file": "history.page.json",
+      "type": "history.page"
+    },
+    {
+      "file": "diff.get.json",
+      "type": "diff.get"
+    },
+    {
+      "file": "diff.hunks.json",
+      "type": "diff.hunks"
+    },
+    {
+      "file": "cmd.rename.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.group.json",
+      "type": "cmd"
     }
   ],
   "proto": {
     "major": 1,
-    "minor": 1
+    "minor": 2
   },
   "ringProof": {
     "file": "ring-proof.json"

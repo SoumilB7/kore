@@ -777,6 +777,12 @@ package final class TranscriptStore {
 
     func changes(ofTurn id: String) -> [FileChange] { turns[id]?.changes ?? [] }
 
+    /// The latest turn ended because the Mac slept (the link's Continue).
+    var latestTurnSlept: Bool {
+        guard let id = latestTurn, let turn = turns[id], case .slept = turn.outcome else { return false }
+        return true
+    }
+
     /// Why the latest turn failed, or the chat's last word was an error; nil when it didn't (a
     /// board tile's red mark). Follows the drawn rows.
     var lastTurnFailed: String? {

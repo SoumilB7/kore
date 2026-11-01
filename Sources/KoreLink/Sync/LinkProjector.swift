@@ -10,12 +10,17 @@ package struct LinkBatch: Sendable {
     package var chatIds: Set<String>?
     /// Transcripts the client follows.
     package var tx: [TxSlice]
+    /// The Mac's state and the CLIs' models, with full control (nil: not looked at; unchanged).
+    package var extras: LinkExtras?
 
-    package init(windows: [LinkWindow]? = nil, chats: [ChatMeta] = [], chatIds: Set<String>? = nil, tx: [TxSlice] = []) {
+    package init(
+        windows: [LinkWindow]? = nil, chats: [ChatMeta] = [], chatIds: Set<String>? = nil, tx: [TxSlice] = [], extras: LinkExtras? = nil
+    ) {
         self.windows = windows
         self.chats = chats
         self.chatIds = chatIds
         self.tx = tx
+        self.extras = extras
     }
 }
 
@@ -48,6 +53,8 @@ package struct TxSlice: Sendable {
 package struct LinkProjector: Sendable {
     package private(set) var rev = 0
     private var windows: [LinkWindow]?
+    private var mac: MacState?
+    private var clis: [CLIState]?
     private var chats: [String: ChatMeta] = [:]
     private var subs: [String: Sub] = [:]
 
@@ -76,10 +83,17 @@ package struct LinkProjector: Sendable {
             rev = 1
             self.windows = windows
             chats = Dictionary(batch.chats.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
-            out.append(.snapshot(rev: rev, windows: windows, chats: batch.chats))
+            mac = batch.extras?.mac
+            clis = batch.extras?.clis
+            out.append(.snapshot(rev: rev, windows: windows, chats: batch.chats, extras: batch.extras))
         } else {
             let windows = batch.windows.flatMap { $0 == self.windows ? nil : $0 }
             if let windows { self.windows = windows }
+            let mac = batch.extras?.mac.flatMap { $0 == self.mac ? nil : $0 }
+            if let mac { self.mac = mac }
+            let clis = batch.extras?.clis.flatMap { $0 == self.clis ? nil : $0 }
+            if let clis { self.clis = clis }
+            let extras = mac == nil && clis == nil ? nil : LinkExtras(mac: mac, clis: clis)
             var upserts: [ChatMeta] = []
             for chat in batch.chats where chats[chat.id] != chat {
                 chats[chat.id] = chat
@@ -90,10 +104,12 @@ package struct LinkProjector: Sendable {
                 removed = chats.keys.filter { !ids.contains($0) }.sorted()
                 for id in removed { chats[id] = nil }
             }
-            if windows != nil || !upserts.isEmpty || !removed.isEmpty {
+            if windows != nil || !upserts.isEmpty || !removed.isEmpty || extras != nil {
                 rev += 1
                 out.append(
-                    .delta(rev: rev, windows: windows, chats: upserts.isEmpty ? nil : upserts, removed: removed.isEmpty ? nil : removed))
+                    .delta(
+                        rev: rev, windows: windows, chats: upserts.isEmpty ? nil : upserts, removed: removed.isEmpty ? nil : removed,
+                        extras: extras))
             }
         }
         for slice in batch.tx { out += apply(slice) }

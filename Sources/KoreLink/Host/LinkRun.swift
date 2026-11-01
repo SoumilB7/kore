@@ -24,6 +24,9 @@ package final class LinkRun {
     }
 
     package let name: String
+    /// The card's "Allow with full control": link 1.2's commands and state, for this run only.
+    package let fullControl: Bool
+    package var control: LinkControlLevel { fullControl ? .full : .standard }
     let requirement: SecRequirement
     /// The requirement's text: the key a Deny is remembered by.
     let key: String
@@ -38,8 +41,9 @@ package final class LinkRun {
     /// Re-ring proofs already taken, by their time: none is taken twice.
     private var seen: [String: Int] = [:]
 
-    private init(name: String, requirement: SecRequirement, key: String, appURL: URL?) {
+    private init(name: String, requirement: SecRequirement, key: String, appURL: URL?, fullControl: Bool) {
         self.name = name
+        self.fullControl = fullControl
         self.requirement = requirement
         self.key = key
         self.appURL = appURL
@@ -50,14 +54,14 @@ package final class LinkRun {
     }
 
     /// The user allowed `name`: a new run, in place of any earlier one.
-    package static func allow(name: String, requirement: SecRequirement, key: String, appURL: URL? = nil) -> LinkRun {
+    package static func allow(name: String, requirement: SecRequirement, key: String, appURL: URL? = nil, fullControl: Bool = false) -> LinkRun {
         current?.revoke()
-        let run = LinkRun(name: name, requirement: requirement, key: key, appURL: appURL)
+        let run = LinkRun(name: name, requirement: requirement, key: key, appURL: appURL, fullControl: fullControl)
         current = run
         LinkTaps.slash = { LinkRun.current?.slashEntries() ?? [] }
         LinkTaps.slashChosen = { LinkRun.current?.chose($0) }
         LinkTaps.quit = { LinkRun.current?.revoke(.quit) }
-        UILog.event("link-allowed", [:])
+        UILog.event("link-allowed", ["control": run.control.rawValue])
         return run
     }
 

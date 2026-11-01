@@ -166,6 +166,64 @@ final class LinkOpensUnstartedChat: ChatStoryline {
     }
 }
 
+/// Link 1.2: "Allow with full control" lets the link rename a chat and group its tab; a `!` line
+/// stays refused; a plain Allow answers the same rename `denied.control`.
+final class LinkFullControl: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Done.")]) }
+
+    override func steps() -> [any Step] {
+        let full = LinkStoryClient()
+        let plain = LinkStoryClient()
+        var chatId = ""
+        var window = ""
+        var tabId = ""
+        return super.steps() + [
+            Do("start with no link") { _ in LinkStoryClient.reset() },
+            Do("ring") { _ in try full.ring() },
+            WaitForElement(.id(StoryID.Link.card)),
+            Expect("a moment before Allow takes a press") { _ in Date() > full.rungAt.addingTimeInterval(0.9) },
+            Press(.id(StoryID.Link.allowFull)),
+            Do("connect") { _ in full.connect() },
+            Expect("welcomed, with a window") { _ in full.welcomed && !full.snapshotWindows.isEmpty },
+            Do("rename the chat and group its tab, over the link") { story in
+                let chat = try story.activeChat()
+                chatId = chat.id.uuidString
+                let folder = story.app.workspace?.folder.lastPathComponent
+                guard let id = full.snapshotWindows.first(where: { $0.name == folder })?.id else { throw StoryFailure.other("no window") }
+                window = id
+                tabId = story.app.workspace?.activeTab.id.uuidString ?? ""
+                full.send(.cmd(id: "rename", .control(.chatRename, ControlArgs(chatId: chatId, title: "Renamed from the link"))))
+                full.send(.cmd(id: "group", .control(.groupSet, ControlArgs(windowId: window, tabId: tabId, groupId: "new"))))
+                full.send(.cmd(id: "shell", .send(chatId: chatId, text: "!ls")))
+            },
+            Expect("renamed and grouped; the ! line refused", found: { _ in ["rename", "group", "shell"].map { "\(full.result($0).map { "\($0)" } ?? "-")" }.joined(separator: " ") }) { story in
+                let chat = try story.activeChat()
+                let grouped = story.app.workspace.map { w in w.tabs.contains { $0.id.uuidString == tabId && w.tabGroups.member[$0.id] != nil } } ?? false
+                return full.result("rename")?.ok == true && chat.title == "Renamed from the link" && full.result("group")?.ok == true && grouped
+                    && full.result("shell")?.ok == false
+            },
+            Do("disconnect, then ring again") { _ in
+                LinkRun.current?.revoke()
+                LinkStoryClient.reset()
+                try plain.ring(key: "plain-sender")
+            },
+            WaitForElement(.id(StoryID.Link.card)),
+            Expect("a moment before Allow takes a press") { _ in Date() > plain.rungAt.addingTimeInterval(0.9) },
+            Press(.id(StoryID.Link.allow)),
+            Do("connect") { _ in plain.connect() },
+            Expect("welcomed") { _ in plain.welcomed },
+            Do("rename without full control") { _ in
+                plain.send(.cmd(id: "rename", .control(.chatRename, ControlArgs(chatId: chatId, title: "Not allowed"))))
+            },
+            Expect("refused: denied.control", found: { _ in plain.result("rename").map { "\($0)" } }) { story in
+                plain.result("rename")?.code == .deniedControl && (try? story.activeChat().title) == "Renamed from the link"
+            },
+            Do("disconnect") { _ in LinkRun.current?.revoke() },
+        ]
+    }
+}
+
 /// Link 1.1: the chat's "/" commands in its meta and sendable, Kore's own entries and "!" refused;
 /// an image and a text file uploaded, checked and attached to a message; a bad hash and an
 /// oversize upload refused; the message's image read back as a thumbnail, and a ref the
@@ -369,13 +427,13 @@ final class LinkStoryClient: @unchecked Sendable {
 
     var snapshotChats: [String] {
         lock.withLock {
-            messages.compactMap { if case .snapshot(_, _, let chats) = $0 { chats.map(\.id) } else { nil } }.flatMap { $0 }
+            messages.compactMap { if case .snapshot(_, _, let chats, _) = $0 { chats.map(\.id) } else { nil } }.flatMap { $0 }
         }
     }
 
     /// The windows of the first snapshot.
     var snapshotWindows: [LinkWindow] {
-        lock.withLock { messages.lazy.compactMap { if case .snapshot(_, let windows, _) = $0 { windows } else { nil } }.first ?? [] }
+        lock.withLock { messages.lazy.compactMap { if case .snapshot(_, let windows, _, _) = $0 { windows } else { nil } }.first ?? [] }
     }
 
     /// The chats a `tx.page` came for.
@@ -395,7 +453,7 @@ final class LinkStoryClient: @unchecked Sendable {
         lock.withLock {
             messages.reversed().lazy.compactMap { message -> ChatMeta? in
                 switch message {
-                case .snapshot(_, _, let chats), .delta(_, _, .some(let chats), _): chats.first { $0.id == chatId }
+                case .snapshot(_, _, let chats, _), .delta(_, _, .some(let chats), _, _): chats.first { $0.id == chatId }
                 default: nil
                 }
             }.first

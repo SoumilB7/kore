@@ -66,11 +66,15 @@ struct LinkMarkPopup: View {
     }
 }
 
-/// What a ring asks: "<name> wants to connect". Deny is the default (Return and Esc); Allow
-/// takes a moment to enable, so a key already on its way can't press it.
+/// The card's answer: Deny, Allow (follow and act under Kore's rules), or Allow with full control
+/// (also arrange chats, tabs, boards, windows and history, for this run only).
+package enum LinkCardChoice: Sendable { case deny, allow, allowFull }
+
+/// What a ring asks: "<name> wants to connect". Deny is the default (Return and Esc); the Allows
+/// take a moment to enable, so a key already on its way can't press them.
 struct LinkCardView: View {
     let name: String
-    let answer: (Bool) -> Void
+    let answer: (LinkCardChoice) -> Void
     @StateObject private var ready = Local(false)
 
     var body: some View {
@@ -82,21 +86,26 @@ struct LinkCardView: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: Space.sm) {
                 Spacer(minLength: 0)
-                Button("Allow for this session") { answer(true) }
+                Button("Allow with full control") { answer(.allowFull) }
                     .buttonStyle(SubtleButtonStyle())
                     .disabled(!ready.value)
-                    .storyID(StoryID.Link.allow) { if ready.value { answer(true) } }
-                Button("Deny") { answer(false) }
+                    .help("It could also open, close and arrange chats, tabs, boards and windows, until Kore quits.")
+                    .storyID(StoryID.Link.allowFull) { if ready.value { answer(.allowFull) } }
+                Button("Allow for this session") { answer(.allow) }
+                    .buttonStyle(SubtleButtonStyle())
+                    .disabled(!ready.value)
+                    .storyID(StoryID.Link.allow) { if ready.value { answer(.allow) } }
+                Button("Deny") { answer(.deny) }
                     .buttonStyle(SubtleButtonStyle(prominent: true))
                     .keyboardShortcut(.defaultAction)
-                    .storyID(StoryID.Link.deny) { answer(false) }
+                    .storyID(StoryID.Link.deny) { answer(.deny) }
             }
         }
         .padding(Space.lg)
         .frame(width: Size.Link.cardWidth, alignment: .leading)
         .panel(.panel)
         .cornerMarks(Theme.cornerOption)
-        .onExitCommand { answer(false) }
+        .onExitCommand { answer(.deny) }
         .storyID(StoryID.Link.card)
         .task {
             try? await Task.sleep(for: Size.Link.allowDelay)
@@ -115,14 +124,14 @@ package enum LinkPanel {
     static weak var anchorWindow: NSWindow?
 
     /// Shows the card over the front window (or the screen's middle), and brings Kore forward.
-    package static func showCard(name: String, answer: @escaping (Bool) -> Void) {
+    package static func showCard(name: String, answer: @escaping (LinkCardChoice) -> Void) {
         closeCard()
         var answered = false
-        let panel = makePanel(LinkCardView(name: name) { allow in
+        let panel = makePanel(LinkCardView(name: name) { choice in
             guard !answered else { return }
             answered = true
             closeCard()
-            answer(allow)
+            answer(choice)
         })
         let size = panel.frame.size
         let base = NSApp.keyWindow?.frame ?? NSApp.mainWindow?.frame ?? NSScreen.main?.visibleFrame ?? .zero

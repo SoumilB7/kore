@@ -12,14 +12,18 @@ enum LinkActions {
         /// A `chat.new`'s chat and window.
         var newChat: Chat?
         var newWindowId: String?
+        /// A `board.new`'s board.
+        var newTabId: String?
 
         static let done = Outcome(ok: true)
         static func failed(_ code: ResultCode, _ message: String) -> Outcome { Outcome(ok: false, code: code, message: message) }
     }
 
     /// `files`: a send's blobs, already saved where Kore keeps attachments.
-    static func apply(_ command: LinkCommand, chat: Chat?, files: [URL] = []) -> Outcome {
-        if case .deny(let code, let message) = LinkPolicy.check(command, chat.map(LinkSnapshot.facts)) { return .failed(code, message) }
+    static func apply(_ command: LinkCommand, chat: Chat?, files: [URL] = [], control: LinkControlLevel = .standard) -> Outcome {
+        if case .deny(let code, let message) = LinkPolicy.check(command, chat.map(LinkSnapshot.facts), control: control) {
+            return .failed(code, message)
+        }
         switch command {
         case .send(_, let text, _):
             guard let chat else { return .failed(.goneChat, "") }
@@ -59,6 +63,9 @@ enum LinkActions {
             }
             guard let chat = workspace.startChatFromLink(provider: provider) else { return .failed(.invalid, "No such CLI.") }
             return Outcome(ok: true, newChat: chat, newWindowId: windowId)
+        case .control:
+            // Carried out by `LinkControlActions`, which may wait (a fork, a history rename).
+            return .failed(.invalid, "Kore doesn't know that command.")
         case .unknown:
             return .failed(.invalid, "Kore doesn't know that command.")
         }

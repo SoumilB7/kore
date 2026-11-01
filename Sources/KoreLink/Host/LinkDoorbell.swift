@@ -106,14 +106,14 @@ package enum LinkDoorbell {
             answered = true
             respond(answer)
         }
-        LinkPanel.showCard(name: shown(name)) { allow in
-            guard allow else {
+        LinkPanel.showCard(name: shown(name)) { choice in
+            guard choice != .deny else {
                 refused.insert(key)
                 UILog.event("link-denied", [:])
                 return finish(.denied)
             }
             do {
-                let run = LinkRun.allow(name: shown(name), requirement: requirement, key: key, appURL: appURL)
+                let run = LinkRun.allow(name: shown(name), requirement: requirement, key: key, appURL: appURL, fullControl: choice == .allowFull)
                 let host = try LinkHost.wake(run: run, directory: directory)
                 finish(.allowed(socket: host.socketPath, secret: host.secret, runSecret: run.runSecret))
             } catch {

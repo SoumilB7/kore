@@ -57,6 +57,8 @@ package final class LinkHost {
         var bucket = MessageBucket()
         var commands = RateLimiter(limit: 30, per: 60)
         var sends = RateLimiter(limit: 10, per: 60)
+        /// History pages, two a second.
+        var reads = RateLimiter(limit: 2, per: 1)
         /// Files on their way in, and finished ones waiting for a send (by blob id, kept 10 min).
         var uploads = LinkUploads()
         var blobs: [String: (url: URL, made: Date)] = [:]
@@ -81,10 +83,13 @@ package final class LinkHost {
     }
 
     /// Allows `name` for this run and wakes its first connection (tests and storylines).
-    package static func wake(name: String, requirement: SecRequirement, directory: URL = defaultDirectory) throws -> LinkHost {
+    package static func wake(
+        name: String, requirement: SecRequirement, directory: URL = defaultDirectory, fullControl: Bool = false
+    ) throws -> LinkHost {
         var text: CFString?
         SecRequirementCopyString(requirement, [], &text)
-        return try wake(run: LinkRun.allow(name: name, requirement: requirement, key: (text as String?) ?? ""), directory: directory)
+        return try wake(
+            run: LinkRun.allow(name: name, requirement: requirement, key: (text as String?) ?? "", fullControl: fullControl), directory: directory)
     }
 
     /// `~/Library/Application Support/Kore/link`.
@@ -235,7 +240,8 @@ package final class LinkHost {
             .welcome(
                 .init(
                     proto: LinkProto.version, epoch: LinkRun.epoch, host: .init(name: Host.current().localizedName ?? "Mac", koreVersion: Self.version),
-                    providers: LinkSnapshot.providers(), policy: .init(sendMaxLevel: LinkPolicy.sendMaxLevel), caps: ["tx", "attn", "blob", "commands"])))
+                    providers: LinkSnapshot.providers(), policy: .init(sendMaxLevel: LinkPolicy.sendMaxLevel, control: run.control),
+                    caps: ["tx", "attn", "blob", "commands", "control"])))
         session.snapshotDue = true
         tick()
         send(attention.ledger.state(after: 0))
@@ -331,11 +337,36 @@ package final class LinkHost {
                 let piece = file.data[file.data.startIndex + start..<file.data.startIndex + min(start + LinkFiles.piece, file.data.count)]
                 send(.blobChunk(id: id, mime: file.mime, offset: start, total: file.data.count, data: Data(piece).base64EncodedString()))
             }
+        case .cmd(let id, .control(let kind, let args)):
+            performControl(id, kind, args, session)
         case .cmd(let id, let command):
             send(.result(perform(id, command, session)))
             tick()
+        case .txEarlier(let chatId):
+            guard run.fullControl else { return send(.result(.init(id: "tx.earlier:" + chatId, ok: false, code: .deniedControl))) }
+            guard let chat = LinkSnapshot.chatsByID()[chatId], session.subs[chatId] != nil else {
+                return send(.result(.init(id: "tx.earlier:" + chatId, ok: false, code: .goneChat, message: "Follow that chat first.")))
+            }
+            // The earlier turns arrive in its transcript; the next tick sends them as a delta.
+            chat.linkLoadEarlier()
+        case .historyList(let id, let windowId, let query, let archived, let offset):
+            guard run.fullControl else { return send(.result(.init(id: "history.list:" + id, ok: false, code: .deniedControl))) }
+            guard session.reads.take() else { return send(.result(.init(id: "history.list:" + id, ok: false, code: .rateLimited))) }
+            guard let workspace = LinkSnapshot.workspaces().first(where: { LinkSnapshot.windowID($0) == windowId }) else {
+                return send(.result(.init(id: "history.list:" + id, ok: false, code: .goneWindow)))
+            }
+            let (sessions, more) = LinkSnapshot.history(workspace, query: query, archived: archived, offset: offset)
+            send(.historyPage(id: id, windowId: windowId, sessions: sessions, more: more))
+        case .diffGet(let id, let chatId, let turnId, let path):
+            guard run.fullControl else { return send(.result(.init(id: "diff.get:" + id, ok: false, code: .deniedControl))) }
+            guard let chat = LinkSnapshot.chatsByID()[chatId] else { return send(.result(.init(id: "diff.get:" + id, ok: false, code: .goneChat))) }
+            guard let change = chat.linkChanges(turn: turnId, path: path) else {
+                return send(.result(.init(id: "diff.get:" + id, ok: false, code: .invalid, message: "That turn didn't change that file.")))
+            }
+            let (hunks, more) = LinkSnapshot.hunks(change)
+            send(.diffHunks(id: id, path: path, hunks: hunks, more: more))
         case .challenge, .hello, .welcome, .command, .snapshot, .delta, .txPage, .txDelta, .txReset, .entryChunk, .cardChunk, .result, .attnState,
-            .attnEvent, .blobChunk, .unknown:
+            .attnEvent, .blobChunk, .policy, .historyPage, .diffHunks, .unknown:
             // Kore's own messages, or a type from a newer client: skipped.
             break
         }
@@ -375,6 +406,32 @@ package final class LinkHost {
             windowId: outcome.newWindowId)
     }
 
+    /// A 1.2 command, with full control: some wait (a fork, a history rename), so its result
+    /// comes when it's done.
+    private func performControl(_ id: String, _ kind: ControlKind, _ args: ControlArgs, _ session: Session) {
+        guard session.commands.take() else { return send(.result(.init(id: id, ok: false, code: .rateLimited))) }
+        var files: [URL] = []
+        if kind == .chatSendAtReset, let blobs = args.blobs {
+            files = blobs.compactMap { session.blobs[$0]?.url }
+            guard files.count == blobs.count else { return send(.result(.init(id: id, ok: false, code: .goneBlob, message: "A file wasn't uploaded, or expired."))) }
+        }
+        let control = run.control
+        Task { [weak self] in
+            let outcome = await LinkControlActions.apply(kind, args, control: control, files: files)
+            guard let self, LinkHost.current === self else { return }
+            if outcome.ok, kind == .chatSendAtReset { for blob in args.blobs ?? [] { session.blobs[blob] = nil } }
+            UILog.event("link-cmd", ["type": kind.rawValue, "chat": args.chatId, "code": outcome.code?.rawValue ?? "ok"])
+            let chat = args.chatId.flatMap { LinkSnapshot.chatsByID()[$0] } ?? outcome.newChat
+            if outcome.ok { self.mark.record(Self.describe(.control(kind, args), chat: chat)) }
+            self.send(
+                .result(
+                    .init(
+                        id: id, ok: outcome.ok, code: outcome.code, message: outcome.message, chatId: outcome.newChat?.id.uuidString,
+                        windowId: outcome.newWindowId, tabId: outcome.newTabId)))
+            self.tick()
+        }
+    }
+
     /// An action as the mark lists it: what it did, and in which chat. Never what was said.
     static func describe(_ command: LinkCommand, chat: Chat?) -> String {
         let what: String =
@@ -396,9 +453,43 @@ package final class LinkHost {
             case .setPlan(_, let on): on ? "Turned plan on" : "Turned plan off"
             case .planReady(_, let choice): choice == .implement ? "Implemented the plan" : "Stayed in plan"
             case .new: "Started a chat"
+            case .control(let kind, _): Self.describe(kind)
             case .unknown: "Acted"
             }
         return chat.map { "\(what) · \($0.title)" } ?? what
+    }
+
+    static func describe(_ kind: ControlKind) -> String {
+        switch kind {
+        case .chatRename: "Renamed"
+        case .chatClose: "Closed"
+        case .chatSelect: "Showed"
+        case .chatSetModel: "Changed the model"
+        case .chatSetEffort: "Changed the effort"
+        case .chatSetFast: "Changed fast mode"
+        case .chatCompact: "Compacted"
+        case .chatSetAutoCompact: "Changed auto-compact"
+        case .chatFork: "Forked"
+        case .chatRetry: "Retried"
+        case .chatContinue: "Continued"
+        case .chatSendAtReset: "Set a message for the reset"
+        case .chatCancelContinue: "Cancelled the continue"
+        case .chatNew: "Started a chat"
+        case .chatSetDraft: "Changed the draft"
+        case .tabMove: "Moved a tab"
+        case .tabReopen: "Reopened a tab"
+        case .groupSet, .groupEdit, .groupUngroup: "Changed a tab group"
+        case .groupClose: "Closed a tab group"
+        case .boardNew: "Made a board"
+        case .boardAttach, .boardDetach, .boardSection: "Changed a board"
+        case .windowOpen: "Opened a folder"
+        case .windowReopen: "Reopened a window"
+        case .windowClose: "Closed a window"
+        case .historyOpen: "Opened a past chat"
+        case .historyRename: "Renamed a past chat"
+        case .historyArchive: "Archived a past chat"
+        case .macStayAwake: "Changed Stay awake"
+        }
     }
 
     // MARK: Kore's side
@@ -440,9 +531,11 @@ package final class LinkHost {
         }
         let txDue = session.subs.contains { $0.value.fresh } || !changedFrom.isEmpty || !dirtyChats.intersection(followed).isEmpty
         guard wantsAll || !dirtyChats.isEmpty || txDue else { return }
-        let windows = wantsAll ? LinkSnapshot.workspaces().map(LinkSnapshot.window) : nil
+        let full = run.fullControl
+        let windows = wantsAll ? LinkSnapshot.workspaces().map { LinkSnapshot.window($0, full: full) } : nil
         let metaIds = wantsAll ? Set(chats.keys) : dirtyChats.intersection(chats.keys)
-        let metas = metaIds.sorted().compactMap { chats[$0].map(LinkSnapshot.meta) }
+        let metas = metaIds.sorted().compactMap { id in chats[id].map { LinkSnapshot.meta($0, full: full) } }
+        let extras = full && wantsAll ? LinkExtras(mac: LinkSnapshot.mac(), clis: LinkSnapshot.clis(Array(chats.values))) : nil
         var tx: [TxSlice] = []
         for (id, sub) in session.subs {
             guard let chat = chats[id] else { continue }
@@ -454,7 +547,7 @@ package final class LinkHost {
         }
         session.snapshotDue = false
         dirtyChats = []
-        let batch = LinkBatch(windows: windows, chats: metas, chatIds: wantsAll ? Set(chats.keys) : nil, tx: tx)
+        let batch = LinkBatch(windows: windows, chats: metas, chatIds: wantsAll ? Set(chats.keys) : nil, tx: tx, extras: extras)
         for message in session.projector.apply(batch) { send(message) }
         cache = cache.filter { followed.contains($0.key) }
     }

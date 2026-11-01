@@ -7,7 +7,7 @@ import Foundation
 
 package enum LinkProto {
     package static let major = 1
-    package static let minor = 1
+    package static let minor = 2
     package static var version: LinkVersion { LinkVersion(major: major, minor: minor) }
 }
 
@@ -261,13 +261,16 @@ package struct LinkTab: Codable, Sendable, Equatable {
     package var title: String
     package var chatId: String?
     package var board: Board?
+    /// Its tab group (1.2, with full control).
+    package var groupId: String?
 
-    package init(id: String, kind: Kind, title: String, chatId: String? = nil, board: Board? = nil) {
+    package init(id: String, kind: Kind, title: String, chatId: String? = nil, board: Board? = nil, groupId: String? = nil) {
         self.id = id
         self.kind = kind
         self.title = title
         self.chatId = chatId
         self.board = board
+        self.groupId = groupId
     }
 }
 
@@ -277,13 +280,20 @@ package struct LinkWindow: Codable, Sendable, Equatable {
     package var path: String
     package var tabs: [LinkTab]
     package var activeTabId: String?
+    /// Its tab groups, and whether a closed tab can come back (1.2, with full control).
+    package var groups: [LinkGroup]?
+    package var canReopenTab: Bool?
 
-    package init(id: String, name: String, path: String, tabs: [LinkTab], activeTabId: String?) {
+    package init(
+        id: String, name: String, path: String, tabs: [LinkTab], activeTabId: String?, groups: [LinkGroup]? = nil, canReopenTab: Bool? = nil
+    ) {
         self.id = id
         self.name = name
         self.path = path
         self.tabs = tabs
         self.activeTabId = activeTabId
+        self.groups = groups
+        self.canReopenTab = canReopenTab
     }
 }
 
@@ -440,10 +450,26 @@ package struct ChatMeta: Codable, Sendable, Equatable {
     package struct Can: Codable, Sendable, Equatable {
         package var send: Bool
         package var stop: Bool
+        /// 1.2, with full control.
+        package var compact: Bool?
+        package var fork: Bool?
+        package var rename: Bool?
+        package var close: Bool?
+        package var sendAtReset: Bool?
+        package var `import`: Bool?
 
-        package init(send: Bool, stop: Bool) {
+        package init(
+            send: Bool, stop: Bool, compact: Bool? = nil, fork: Bool? = nil, rename: Bool? = nil, close: Bool? = nil,
+            sendAtReset: Bool? = nil, import: Bool? = nil
+        ) {
             self.send = send
             self.stop = stop
+            self.compact = compact
+            self.fork = fork
+            self.rename = rename
+            self.close = close
+            self.sendAtReset = sendAtReset
+            self.import = `import`
         }
     }
 
@@ -462,10 +488,14 @@ package struct ChatMeta: Codable, Sendable, Equatable {
     /// The "/" commands the chat offers that the link may send (1.1). Kore's own entries are left
     /// out: they open Kore's popups and send the CLI nothing.
     package var commands: [LinkSlash]?
+    /// The composer's controls, and what the chat offers to get going again (1.2, with full control).
+    package var controls: ChatControls?
+    package var rescue: ChatRescue?
 
     package init(
         id: String, provider: String, title: String, state: State, mode: Mode, modeIds: [String], allowedModeIds: [String],
-        model: String?, queued: Int, running: Bool, cards: [LinkCard], can: Can, commands: [LinkSlash]? = nil
+        model: String?, queued: Int, running: Bool, cards: [LinkCard], can: Can, commands: [LinkSlash]? = nil,
+        controls: ChatControls? = nil, rescue: ChatRescue? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -480,6 +510,8 @@ package struct ChatMeta: Codable, Sendable, Equatable {
         self.cards = cards
         self.can = can
         self.commands = commands
+        self.controls = controls
+        self.rescue = rescue
     }
 }
 
@@ -692,6 +724,8 @@ package enum LinkCommand: Codable, Sendable, Equatable {
     case setPlan(chatId: String, on: Bool)
     case planReady(chatId: String, choice: PlanChoice)
     case new(windowId: String, provider: String)
+    /// A 1.2 command (§11), for a companion granted full control.
+    case control(ControlKind, ControlArgs)
     /// A command type this Kore doesn't know: answered `invalid`.
     case unknown(String)
 
@@ -699,6 +733,7 @@ package enum LinkCommand: Codable, Sendable, Equatable {
     package var chatId: String? {
         switch self {
         case .send(let id, _, _), .stop(let id), .answer(let id, _, _, _, _), .setMode(let id, _), .setPlan(let id, _), .planReady(let id, _): id
+        case .control(_, let args): args.chatId
         case .new, .unknown: nil
         }
     }
@@ -713,11 +748,14 @@ package enum LinkCommand: Codable, Sendable, Equatable {
         case .setPlan: "chat.setPlan"
         case .planReady: "chat.planReady"
         case .new: "chat.new"
+        case .control(let kind, _): kind.rawValue
         case .unknown(let type): type
         }
     }
 
-    private enum Key: String, CodingKey { case type, chatId, text, blobs, cardId, action, digest, answers, modeId, on, choice, windowId, provider }
+    private enum Key: String, CodingKey {
+        case type, chatId, text, blobs, cardId, action, digest, answers, modeId, on, choice, windowId, provider, modelId, place
+    }
 
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
@@ -737,8 +775,14 @@ package enum LinkCommand: Codable, Sendable, Equatable {
         case "chat.setMode": self = .setMode(chatId: try chat(), modeId: try c.decode(String.self, forKey: .modeId))
         case "chat.setPlan": self = .setPlan(chatId: try chat(), on: try c.decode(Bool.self, forKey: .on))
         case "chat.planReady": self = .planReady(chatId: try chat(), choice: try c.decode(PlanChoice.self, forKey: .choice))
-        case "chat.new": self = .new(windowId: try c.decode(String.self, forKey: .windowId), provider: try c.decode(String.self, forKey: .provider))
-        default: self = .unknown(type)
+        case "chat.new" where !c.contains(.modelId) && !c.contains(.place):
+            self = .new(windowId: try c.decode(String.self, forKey: .windowId), provider: try c.decode(String.self, forKey: .provider))
+        default:
+            if let kind = ControlKind(rawValue: type) {
+                self = .control(kind, try ControlArgs(from: decoder))
+            } else {
+                self = .unknown(type)
+            }
         }
     }
 
@@ -770,6 +814,8 @@ package enum LinkCommand: Codable, Sendable, Equatable {
         case .new(let windowId, let provider):
             try c.encode(windowId, forKey: .windowId)
             try c.encode(provider, forKey: .provider)
+        case .control(_, let args):
+            try args.encode(to: encoder)
         case .unknown:
             break
         }
@@ -795,6 +841,14 @@ package enum ResultCode: String, LenientEnum {
     case badType = "blob.badType"
     case goneBlob = "gone.blob"
     case deniedRef = "denied.ref"
+    /// 1.2: full control isn't granted this run.
+    case deniedControl = "denied.control"
+    /// It would stop work: send again with `force`.
+    case confirmClose = "confirm.close"
+    case goneTab = "gone.tab"
+    case goneGroup = "gone.group"
+    case goneSession = "gone.session"
+    case goneFolder = "gone.folder"
     case busy
     case invalid
     case rateLimited

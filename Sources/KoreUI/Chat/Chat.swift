@@ -26,7 +26,7 @@ package final class Chat: Identifiable {
     let commands = CommandsStore()
 
     /// Waiting in the composer, sent with the next message.
-    package private(set) var attachments: [Attachment] = [] {
+    package internal(set) var attachments: [Attachment] = [] {
         didSet { if attachments.map(\.id) != oldValue.map(\.id) { composerDraftChanged() } }
     }
     package var draft = "" {

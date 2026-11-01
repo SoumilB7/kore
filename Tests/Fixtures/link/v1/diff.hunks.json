@@ -1,0 +1,1 @@
+{"hunks":[{"lines":[" a","-b","+c"],"newStart":12,"oldStart":12}],"id":"d1","more":false,"path":"src/a.ts","t":"diff.hunks"}

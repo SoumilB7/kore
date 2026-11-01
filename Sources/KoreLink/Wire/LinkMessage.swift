@@ -38,7 +38,24 @@ package enum LinkMessage: Sendable, Equatable {
 
     package struct Policy: Codable, Sendable, Equatable {
         package var sendMaxLevel: ModeLevel
-        package init(sendMaxLevel: ModeLevel) { self.sendMaxLevel = sendMaxLevel }
+        /// 1.2: whether the Mac granted full control for this run.
+        package var control: LinkControlLevel?
+        package init(sendMaxLevel: ModeLevel, control: LinkControlLevel? = nil) {
+            self.sendMaxLevel = sendMaxLevel
+            self.control = control
+        }
+    }
+
+    /// A diff hunk (1.2 `diff.hunks`).
+    package struct Hunk: Codable, Sendable, Equatable {
+        package var oldStart: Int
+        package var newStart: Int
+        package var lines: [String]
+        package init(oldStart: Int, newStart: Int, lines: [String]) {
+            self.oldStart = oldStart
+            self.newStart = newStart
+            self.lines = lines
+        }
     }
 
     package struct Welcome: Sendable, Equatable {
@@ -90,9 +107,11 @@ package enum LinkMessage: Sendable, Equatable {
         package var windowId: String?
         /// Set on a finished upload's result (1.1).
         package var blobId: String?
+        /// Set on a `board.new`'s result (1.2).
+        package var tabId: String?
         package init(
             id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, chatId: String? = nil, windowId: String? = nil,
-            blobId: String? = nil
+            blobId: String? = nil, tabId: String? = nil
         ) {
             self.id = id
             self.ok = ok
@@ -101,6 +120,7 @@ package enum LinkMessage: Sendable, Equatable {
             self.chatId = chatId
             self.windowId = windowId
             self.blobId = blobId
+            self.tabId = tabId
         }
     }
 
@@ -112,8 +132,10 @@ package enum LinkMessage: Sendable, Equatable {
     /// Kore to the client: the user chose one of its commands in "/". No reply.
     case command(id: String)
     // State
-    case snapshot(rev: Int, windows: [LinkWindow], chats: [ChatMeta])
-    case delta(rev: Int, windows: [LinkWindow]?, chats: [ChatMeta]?, removed: [String]?)
+    case snapshot(rev: Int, windows: [LinkWindow], chats: [ChatMeta], extras: LinkExtras? = nil)
+    case delta(rev: Int, windows: [LinkWindow]?, chats: [ChatMeta]?, removed: [String]?, extras: LinkExtras? = nil)
+    /// 1.2: the run's grant changed.
+    case policy(control: LinkControlLevel)
     // Transcripts
     case txOpen(chatId: String, last: Int?)
     case txMore(chatId: String, count: Int)
@@ -121,6 +143,8 @@ package enum LinkMessage: Sendable, Equatable {
     case txPage(chatId: String, txRev: Int, entries: [LinkEntry], turns: [LinkTurn], hasEarlier: Bool)
     case txDelta(TxDelta)
     case txReset(chatId: String)
+    /// 1.2: the conversation before a compaction, ten turns at a time, as `tx.delta`.
+    case txEarlier(chatId: String)
     case entryMore(id: String, chatId: String, entryId: String, field: Field, offset: Int)
     case entryChunk(id: String, text: String, offset: Int, total: Int)
     case cardMore(id: String, chatId: String, cardId: String, offset: Int)
@@ -132,6 +156,11 @@ package enum LinkMessage: Sendable, Equatable {
     case blobPutEnd(uploadId: String)
     case blobGet(id: String, chatId: String, ref: String, variant: Variant, offset: Int)
     case blobChunk(id: String, mime: String, offset: Int, total: Int, data: String)
+    // Reads (1.2, with full control): a window's history, and a turn's changes to one file.
+    case historyList(id: String, windowId: String, query: String?, archived: Bool, offset: Int)
+    case historyPage(id: String, windowId: String, sessions: [HistorySession], more: Bool)
+    case diffGet(id: String, chatId: String, turnId: String, path: String)
+    case diffHunks(id: String, path: String, hunks: [Hunk], more: Bool)
     // Commands
     case cmd(id: String, LinkCommand)
     case result(Result)
@@ -157,6 +186,12 @@ package enum LinkMessage: Sendable, Equatable {
         case .txPage: "tx.page"
         case .txDelta: "tx.delta"
         case .txReset: "tx.reset"
+        case .txEarlier: "tx.earlier"
+        case .policy: "policy"
+        case .historyList: "history.list"
+        case .historyPage: "history.page"
+        case .diffGet: "diff.get"
+        case .diffHunks: "diff.hunks"
         case .entryMore: "entry.more"
         case .entryChunk: "entry.chunk"
         case .cardMore: "card.more"
@@ -179,6 +214,7 @@ package enum LinkMessage: Sendable, Equatable {
         "challenge", "hello", "welcome", "bye", "command", "snapshot", "delta", "tx.open", "tx.more", "tx.close", "tx.page", "tx.delta", "tx.reset",
         "entry.more", "entry.chunk", "card.more", "card.chunk", "cmd", "result", "attn.state", "attn.event",
         "blob.put.begin", "blob.put.chunk", "blob.put.end", "blob.get", "blob.chunk",
+        "tx.earlier", "policy", "history.list", "history.page", "diff.get", "diff.hunks",
     ]
 }
 
@@ -186,7 +222,8 @@ extension LinkMessage: Codable {
     private enum Key: String, CodingKey {
         case t, nonce, proto, client, proof, commands, epoch, host, providers, policy, caps, reason, rev, windows, chats, removed, chatId, last,
             count, txRev, entries, turns, hasEarlier, upserts, order, id, entryId, field, offset, text, total, cardId, cmd, ok, code,
-            message, windowId, aid, open, recent, op, item, key, turn, uploadId, name, mime, size, sha256, index, data, ref, variant, blobId
+            message, windowId, aid, open, recent, op, item, key, turn, uploadId, name, mime, size, sha256, index, data, ref, variant, blobId,
+            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId
     }
 
     package init(from decoder: any Decoder) throws {
@@ -194,6 +231,11 @@ extension LinkMessage: Codable {
         let t = try c.decode(String.self, forKey: .t)
         func d<T: Decodable>(_ key: Key) throws -> T { try c.decode(T.self, forKey: key) }
         func o<T: Decodable>(_ key: Key) throws -> T? { try c.decodeIfPresent(T.self, forKey: key) }
+        func extras() throws -> LinkExtras? {
+            let mac: MacState? = try o(.mac)
+            let clis: [CLIState]? = try o(.clis)
+            return mac == nil && clis == nil ? nil : LinkExtras(mac: mac, clis: clis)
+        }
         switch t {
         case "challenge": self = .challenge(nonce: try d(.nonce))
         case "hello": self = .hello(proto: try d(.proto), client: try d(.client), proof: try d(.proof), commands: try o(.commands))
@@ -204,8 +246,17 @@ extension LinkMessage: Codable {
                     caps: try d(.caps)))
         case "bye": self = .bye(try d(.reason))
         case "command": self = .command(id: try d(.id))
-        case "snapshot": self = .snapshot(rev: try d(.rev), windows: try d(.windows), chats: try d(.chats))
-        case "delta": self = .delta(rev: try d(.rev), windows: try o(.windows), chats: try o(.chats), removed: try o(.removed))
+        case "snapshot": self = .snapshot(rev: try d(.rev), windows: try d(.windows), chats: try d(.chats), extras: try extras())
+        case "delta":
+            self = .delta(rev: try d(.rev), windows: try o(.windows), chats: try o(.chats), removed: try o(.removed), extras: try extras())
+        case "policy": self = .policy(control: try d(.control))
+        case "tx.earlier": self = .txEarlier(chatId: try d(.chatId))
+        case "history.list":
+            self = .historyList(
+                id: try d(.id), windowId: try d(.windowId), query: try o(.query), archived: try o(.archived) ?? false, offset: try o(.offset) ?? 0)
+        case "history.page": self = .historyPage(id: try d(.id), windowId: try d(.windowId), sessions: try d(.sessions), more: try d(.more))
+        case "diff.get": self = .diffGet(id: try d(.id), chatId: try d(.chatId), turnId: try d(.turnId), path: try d(.path))
+        case "diff.hunks": self = .diffHunks(id: try d(.id), path: try d(.path), hunks: try d(.hunks), more: try d(.more))
         case "tx.open": self = .txOpen(chatId: try d(.chatId), last: try o(.last))
         case "tx.more": self = .txMore(chatId: try d(.chatId), count: try d(.count))
         case "tx.close": self = .txClose(chatId: try d(.chatId))
@@ -234,7 +285,7 @@ extension LinkMessage: Codable {
             self = .result(
                 .init(
                     id: try d(.id), ok: try d(.ok), code: try o(.code), message: try o(.message), chatId: try o(.chatId), windowId: try o(.windowId),
-                    blobId: try o(.blobId)))
+                    blobId: try o(.blobId), tabId: try o(.tabId)))
         case "attn.state": self = .attnState(aid: try d(.aid), open: try d(.open), recent: try d(.recent))
         case "attn.event": self = .attnEvent(aid: try d(.aid), op: try d(.op), item: try o(.item), key: try o(.key), turn: try o(.turn))
         default: self = .unknown(t)
@@ -260,15 +311,42 @@ extension LinkMessage: Codable {
             try c.encode(w.caps, forKey: .caps)
         case .bye(let reason): try c.encode(reason, forKey: .reason)
         case .command(let id): try c.encode(id, forKey: .id)
-        case .snapshot(let rev, let windows, let chats):
+        case .snapshot(let rev, let windows, let chats, let extras):
             try c.encode(rev, forKey: .rev)
             try c.encode(windows, forKey: .windows)
             try c.encode(chats, forKey: .chats)
-        case .delta(let rev, let windows, let chats, let removed):
+            try c.encodeIfPresent(extras?.mac, forKey: .mac)
+            try c.encodeIfPresent(extras?.clis, forKey: .clis)
+        case .delta(let rev, let windows, let chats, let removed, let extras):
             try c.encode(rev, forKey: .rev)
             try c.encodeIfPresent(windows, forKey: .windows)
             try c.encodeIfPresent(chats, forKey: .chats)
             try c.encodeIfPresent(removed, forKey: .removed)
+            try c.encodeIfPresent(extras?.mac, forKey: .mac)
+            try c.encodeIfPresent(extras?.clis, forKey: .clis)
+        case .policy(let control): try c.encode(control, forKey: .control)
+        case .txEarlier(let chatId): try c.encode(chatId, forKey: .chatId)
+        case .historyList(let id, let windowId, let query, let archived, let offset):
+            try c.encode(id, forKey: .id)
+            try c.encode(windowId, forKey: .windowId)
+            try c.encodeIfPresent(query, forKey: .query)
+            try c.encode(archived, forKey: .archived)
+            try c.encode(offset, forKey: .offset)
+        case .historyPage(let id, let windowId, let sessions, let more):
+            try c.encode(id, forKey: .id)
+            try c.encode(windowId, forKey: .windowId)
+            try c.encode(sessions, forKey: .sessions)
+            try c.encode(more, forKey: .more)
+        case .diffGet(let id, let chatId, let turnId, let path):
+            try c.encode(id, forKey: .id)
+            try c.encode(chatId, forKey: .chatId)
+            try c.encode(turnId, forKey: .turnId)
+            try c.encode(path, forKey: .path)
+        case .diffHunks(let id, let path, let hunks, let more):
+            try c.encode(id, forKey: .id)
+            try c.encode(path, forKey: .path)
+            try c.encode(hunks, forKey: .hunks)
+            try c.encode(more, forKey: .more)
         case .txOpen(let chatId, let last):
             try c.encode(chatId, forKey: .chatId)
             try c.encodeIfPresent(last, forKey: .last)
@@ -342,6 +420,7 @@ extension LinkMessage: Codable {
             try c.encodeIfPresent(r.chatId, forKey: .chatId)
             try c.encodeIfPresent(r.windowId, forKey: .windowId)
             try c.encodeIfPresent(r.blobId, forKey: .blobId)
+            try c.encodeIfPresent(r.tabId, forKey: .tabId)
         case .attnState(let aid, let open, let recent):
             try c.encode(aid, forKey: .aid)
             try c.encode(open, forKey: .open)

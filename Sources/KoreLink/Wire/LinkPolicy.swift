@@ -64,10 +64,14 @@ package enum LinkPolicy {
         case deny(ResultCode, String)
     }
 
-    package static func check(_ command: LinkCommand, _ chat: ChatFacts?) -> Verdict {
+    /// The longest title a rename may set.
+    package static let maxTitle = 200
+
+    package static func check(_ command: LinkCommand, _ chat: ChatFacts?, control: LinkControlLevel = .standard) -> Verdict {
         switch command {
         case .unknown: return .deny(.invalid, "Kore doesn't know that command.")
         case .new: return .allow
+        case .control(let kind, let args): return check(kind, args, chat, control: control)
         default: break
         }
         guard let chat else { return .deny(.goneChat, "That chat isn't open in Kore any more.") }
@@ -109,9 +113,32 @@ package enum LinkPolicy {
             guard chat.cards.values.contains(where: { $0.kind == .planReady }) else { return .deny(.goneCard, "No plan is waiting.") }
             return choice == .stay || chat.level <= leavePlanMaxLevel
                 ? .allow : .deny(.raiseMode, "Implementing leaves plan, which raises the mode; do it in Kore.")
-        case .new, .unknown:
+        case .new, .unknown, .control:
             return .allow
         }
+    }
+
+    /// A 1.2 command: only with full control granted on the Mac this run. Full control widens
+    /// what the link may arrange (chats, tabs, boards, windows, history), never how much an agent
+    /// may do without asking: raising a mode, Always allow and `!` lines stay refused.
+    static func check(_ kind: ControlKind, _ args: ControlArgs, _ chat: ChatFacts?, control: LinkControlLevel) -> Verdict {
+        guard control == .full else { return .deny(.deniedControl, "Full control isn't granted in Kore for this run.") }
+        if kind.onChat, chat == nil { return .deny(.goneChat, "That chat isn't open in Kore any more.") }
+        switch kind {
+        case .chatRename, .historyRename:
+            let title = (args.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty, title.count <= maxTitle, !title.contains(where: \.isNewline) else { return .deny(.invalid, "A title is one line, up to 200 characters.") }
+        case .chatSendAtReset:
+            if let chat, case .deny(let code, let message) = check(.send(chatId: "", text: args.text ?? "", blobs: args.blobs ?? []), chat) {
+                return .deny(code, message)
+            }
+        case .chatSetDraft:
+            guard (args.text ?? "").utf8.count <= maxText else { return .deny(.invalid, "Too long.") }
+        case .chatSetAutoCompact:
+            if let at = args.at, !(1...100).contains(at) { return .deny(.invalid, "A percentage from 1 to 100, or off.") }
+        default: break
+        }
+        return .allow
     }
 
     /// The answers each kind of card takes over the link. `approvePlan` starts the work in Manual.
