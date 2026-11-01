@@ -48,7 +48,6 @@ struct AgentAvatar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var shape: AgentShape { AgentShape(rawValue: index % AgentShape.allCases.count)! }
-    private var round: Int { index / AgentShape.allCases.count }
 
     var body: some View {
         ZStack {
@@ -68,12 +67,6 @@ struct AgentAvatar: View {
         .frame(width: place.box, height: place.box)
         .overlay(alignment: .topTrailing) { if waiting, place != .title { point(Theme.warning) } }
         .overlay(alignment: .bottomTrailing) { if status == .failed, place != .title { point(Theme.danger) } }
-        .overlay(alignment: .bottomLeading) {
-            // The ninth agent on reuses the shapes, numbered.
-            if round > 0 {
-                Text("\(round + 1)").font(TextStyle.caption).foregroundStyle(Theme.agentMark)
-            }
-        }
         .help(label)
         .accessibilityLabel(label)
     }

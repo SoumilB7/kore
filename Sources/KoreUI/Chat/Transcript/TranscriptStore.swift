@@ -316,6 +316,15 @@ package final class TranscriptStore {
         var failed: [String] = []
     }
 
+    /// Up to `limit` agents with different shapes, in order: a stack never shows one shape twice.
+    static func distinctShapes(_ refs: [AgentRef], limit: Int = 3) -> [AgentRef] {
+        var seen = Set<Int>(), picked: [AgentRef] = []
+        for ref in refs where picked.count < limit && seen.insert(ref.index % AgentShape.allCases.count).inserted {
+            picked.append(ref)
+        }
+        return picked
+    }
+
     struct AgentRef: Equatable, Identifiable {
         let id: String
         let index: Int
@@ -945,7 +954,7 @@ package final class TranscriptStore {
         let working = refs.filter { $0.status != .stopped }
         return AgentSummary(
             count: working.count, stopped: refs.count - working.count, running: refs.filter { $0.status == .running },
-            waiting: infos.contains { $0.waiting > 0 }, first: Array((working.isEmpty ? refs : working).prefix(3)),
+            waiting: infos.contains { $0.waiting > 0 }, first: Self.distinctShapes(working.isEmpty ? refs : working),
             failed: infos.filter { $0.status == .failed }.map(\.id))
     }
 

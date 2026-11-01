@@ -17,7 +17,7 @@ struct AgentsButton: View {
         if agents {
             let running = !summary.running.isEmpty
             let filled = hovered.value || chat.agentMap.isOpen
-            let stack = Array((running ? summary.running : summary.first).prefix(3))
+            let stack = running ? TranscriptStore.distinctShapes(summary.running) : summary.first
             Button {
                 chat.agentMap.toggle()
             } label: {

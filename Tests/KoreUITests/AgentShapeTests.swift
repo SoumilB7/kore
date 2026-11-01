@@ -47,4 +47,26 @@ struct AgentShapeTests {
         store.agentFinished(id: "a", status: .finished, result: nil)
         #expect(store.agent("a")?.index == before)
     }
+
+    @Test func stacksNeverShowAShapeTwice() {
+        let count = AgentShape.allCases.count
+        let refs = [0, count, 1, count + 1, 2].map {
+            TranscriptStore.AgentRef(id: "a\($0)", index: $0, name: "a\($0)", status: .finished)
+        }
+        let stack = TranscriptStore.distinctShapes(refs)
+        #expect(stack.map(\.index) == [0, 1, 2])
+    }
+
+    @Test func theIdleStackSkipsRepeatedShapes() {
+        let store = TranscriptStore()
+        let count = AgentShape.allCases.count
+        for i in 0..<(count + 2) {
+            store.agentSpawned(id: "a\(i)", name: "a\(i)", type: nil, tool: nil)
+            store.agentFinished(id: "a\(i)", status: .finished, result: nil)
+        }
+        store.drawNow()
+        let shapes = store.agentSummary.first.map { $0.index % count }
+        #expect(shapes.count == 3)
+        #expect(Set(shapes).count == shapes.count)
+    }
 }
