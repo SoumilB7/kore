@@ -3,10 +3,10 @@ import Observation
 /// What the CLI is waiting on the user for: permission, questions and plan cards, and Codex's
 /// "Implement this plan?" offer.
 @MainActor @Observable
-package final class ApprovalsStore {
-    package private(set) var pending: [Approval] = []
+final class ApprovalsStore {
+    private(set) var pending: [Approval] = []
     /// A plan finished in plan mode: offer "Implement this plan?" like the Codex CLI.
-    package var offerImplementPlan = false
+    var offerImplementPlan = false
 
     func apply(_ event: ChatEvent) {
         switch event {

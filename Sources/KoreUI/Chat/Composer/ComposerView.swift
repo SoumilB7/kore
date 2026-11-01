@@ -141,10 +141,6 @@ struct ComposerView: View {
                     }
                     .padding(.bottom, Space.lg)
                     .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
-                } else if let popup = KoreModules.openPopup(in: chat) {
-                    popup.view(chat, max(boxFrame.value.minY - Size.titleRow - Space.lg - Space.xxxl, Size.usageMinRoom))
-                        .padding(.bottom, Space.lg)
-                        .frame(height: 0, alignment: .bottom)  // lint:allow a zero-height anchor, not a size
                 } else if chat.importer.isOpen {
                     ImportPopup(chat: chat, state: chat.importer) {
                         ImportFilePanel.choose(for: chat.provider, in: window.value) { chat.importer.add(file: $0) }
@@ -170,7 +166,6 @@ struct ComposerView: View {
             chat.account.close()
             chat.importer.close()
             chat.picker.close()
-            for popup in KoreModules.popups where popup.isOpen(chat) { popup.close(chat) }
         }
         // A field or form in the Account popup had the keys: when it goes, the composer has them
         // again, as it has throughout everything else in the popup.
@@ -581,8 +576,7 @@ struct ComposerView: View {
     private var slashMatches: [SlashCommand] {
         guard !chat.slashClosed, let token = slashToken else { return [] }
         let remote = SlashCommand.remote(on: chat.controls.remote != nil, unavailable: chat.controls.remoteUnavailable)
-        return SlashCommand.matches(
-            chat.controls.commands, sigil: token.sigil, query: token.query, remote: remote, modules: KoreModules.commands.map { $0.command(chat) })
+        return SlashCommand.matches(chat.controls.commands, sigil: token.sigil, query: token.query, remote: remote)
     }
 
     /// An input method is composing (marked text): its keys are its own.
@@ -673,9 +667,7 @@ struct ComposerView: View {
         chat.slashClosed = false
         focused.wrappedValue = true
         forgetUndo()
-        if command.kind == .kore, let module = KoreModules.command(named: command.name, in: chat) {
-            module.perform(chat)
-        } else if command.kind == .kore {
+        if command.kind == .kore {
             switch command.name {
             case SlashCommand.account.name: chat.openAccount()
             case SlashCommand.remoteName: if !command.unavailable { chat.setRemoteControl(!command.on) }

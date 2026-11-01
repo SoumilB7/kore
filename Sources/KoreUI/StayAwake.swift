@@ -1,6 +1,5 @@
 import AppKit
 import IOKit.ps
-import IOKit.pwr_mgt
 import Observation
 
 /// Stay awake (caffeinated mode): while on, Kore keeps the Mac from idle sleep so agents keep
@@ -71,12 +70,6 @@ final class StayAwake {
     static let batteryFloor = 20
 
     @ObservationIgnored let hold: any AwakeHold
-    /// On power, while a phone is connected: no system sleep at all (Kore Phone).
-    @ObservationIgnored let systemHold: any AwakeHold
-    @ObservationIgnored private var heldSystem: String?
-    /// Phones connected to Kore Phone: while any is, the Mac stays awake whatever the user's own
-    /// setting, down to the battery floor.
-    private(set) var phones = 0
     @ObservationIgnored let clock: any AwakeClock
     @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private var held: String?
@@ -92,12 +85,8 @@ final class StayAwake {
     private static let modeKey = "stayAwake.mode"
 
     /// `defaults` nil keeps and reads nothing.
-    init(
-        hold: any AwakeHold, systemHold: any AwakeHold = RecordedHold(), clock: any AwakeClock = SystemClock(), power: (any PowerSource)? = nil,
-        defaults: UserDefaults? = nil
-    ) {
+    init(hold: any AwakeHold, clock: any AwakeClock = SystemClock(), power: (any PowerSource)? = nil, defaults: UserDefaults? = nil) {
         self.hold = hold
-        self.systemHold = systemHold
         self.clock = clock
         self.defaults = defaults
         self.power = power
@@ -122,7 +111,7 @@ final class StayAwake {
         let awake =
             StoryHost.installed
             ? StayAwake(hold: RecordedHold(), defaults: nil)
-            : StayAwake(hold: ActivityHold(), systemHold: SystemSleepHold(), power: BatteryWatch(), defaults: dev ? nil : .standard)
+            : StayAwake(hold: ActivityHold(), power: BatteryWatch(), defaults: dev ? nil : .standard)
         current = awake
         awake.watchSleep()
         awake.track()
@@ -204,26 +193,14 @@ final class StayAwake {
         return percent < Self.batteryFloor
     }
 
-    /// Phones connected now (Kore Phone tells it).
-    func setPhones(_ count: Int) {
-        guard count != phones else { return }
-        phones = count
-        apply()
-    }
-
-    private static let phoneReason = "Kore: a phone is connected"
-
     var state: State {
-        guard isOn || phones > 0 else { return .off }
+        guard isOn else { return .off }
         if paused { return .paused(battery.percent ?? 0) }
         return reason == nil ? .waiting : .holding
     }
 
     /// Why it holds, as `pmset -g assertions` shows it; nil when it doesn't.
-    var reason: String? { ownReason ?? (phones > 0 && !paused ? Self.phoneReason : nil) }
-
-    /// Why the user's own setting holds.
-    private var ownReason: String? {
+    var reason: String? {
         guard isOn, !paused else { return nil }
         switch mode {
         case .always: return "Kore: Stay awake is on"
@@ -244,7 +221,6 @@ final class StayAwake {
         case .paused(let percent): return "Paused · battery \(percent)%"
         case .waiting: return "Awake while agents work"
         case .holding:
-            if ownReason == nil { return "Phone connected" }
             switch mode {
             case .always: return "Awake until turned off"
             case .hour, .fourHours: return "Awake · " + Self.left(until: endsAt ?? now, now: now)
@@ -291,12 +267,6 @@ final class StayAwake {
         if want != held {
             held = want
             hold.hold(want)
-        }
-        // A connected phone on power: no system sleep, lid closed included where macOS allows.
-        let system = phones > 0 && !battery.onBattery ? Self.phoneReason : nil
-        if system != heldSystem {
-            heldSystem = system
-            systemHold.hold(system)
         }
     }
 
@@ -387,30 +357,6 @@ final class ActivityHold: AwakeHold {
         // The new one is taken before the old one goes, so a changed reason never lets go.
         if let previous { ProcessInfo.processInfo.endActivity(previous) }
     }
-}
-
-/// An IOKit PreventSystemSleep assertion: the system doesn't sleep while it's held (on power).
-final class SystemSleepHold: AwakeHold {
-    private var id: IOPMAssertionID = 0
-
-    func hold(_ reason: String?) {
-        if id != 0 {
-            IOPMAssertionRelease(id)
-            id = 0
-        }
-        guard let reason else { return }
-        IOPMAssertionCreateWithName(kIOPMAssertionTypePreventSystemSleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn), reason as CFString, &id)
-    }
-}
-
-/// What a module tells Stay awake.
-@MainActor
-package enum AwakeInputs {
-    /// Kore Phone's connected phones: the cup holds and says so while any is.
-    package static func phonesConnected(_ count: Int) { StayAwake.current?.setPhones(count) }
-    /// What it holds for now, and the cup's line (storylines).
-    package static var holding: String? { StayAwake.current?.reason }
-    package static var line: String? { StayAwake.current?.line }
 }
 
 /// Holds nothing, and keeps what it was asked: a storyline host's and the tests'.

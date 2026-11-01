@@ -11,8 +11,6 @@ let package = Package(
         .library(name: "KoreCore", targets: ["KoreCore"]),
         .executable(name: "Kore", targets: ["Kore"]),
         .executable(name: "kore-cli", targets: ["kore-cli"]),
-        .executable(name: "kore-phone", targets: ["kore-phone"]),
-        .executable(name: "kore-remote-probe", targets: ["kore-remote-probe"]),
         .executable(name: "kore-storylines", targets: ["kore-storylines"]),
         .executable(name: "kore-fake-cli", targets: ["kore-fake-cli"]),
         .executable(name: "kore-power-bench", targets: ["kore-power-bench"]),
@@ -22,29 +20,17 @@ let package = Package(
     ],
     targets: [
         .target(name: "KoreCore", swiftSettings: releaseForSize),
-        // The phone remote's host side apart from the app: the wire protocol, sessions, sync,
-        // attention and the policy. No views and no app state; KoreUI bridges Kore to it.
-        .target(name: "KoreRemote", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         // The app's views, stores and providers; `Kore` is its launcher. Other targets in this
         // package reach its `package` declarations.
         .target(
             name: "KoreUI", dependencies: ["KoreCore", .product(name: "SwiftTerm", package: "SwiftTerm")],
             // mermaid.js for the diagram preview: bundled, so it never loads from the network.
             resources: [.copy("Resources/mermaid.min.js")], swiftSettings: releaseForSize),
-        // The phone remote's bridge to Kore: its host, sync, actions and Mac UI. Only Kore Phone
-        // has it; Kore itself carries none of it.
-        .target(name: "KorePhone", dependencies: ["KoreUI", "KoreCore", "KoreRemote"], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore"], swiftSettings: releaseForSize),
-        // Kore Phone: the same app with the phone remote installed at launch.
-        .executableTarget(
-            name: "kore-phone", dependencies: ["KorePhone", "KoreUI", "KoreCore"], path: "Sources/KorePhoneApp",
-            swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
-        // A phone without a phone: pairs, links and tries the attacks against a Kore Phone.
-        .executableTarget(name: "kore-remote-probe", dependencies: ["KoreRemote"], swiftSettings: releaseForSize),
         // User storylines (phase 12): the engine, steps, scripted CLI and catalogue, and the app
         // with them inside. Neither is part of Kore.app.
-        .target(name: "KoreStorylines", dependencies: ["KoreUI", "KoreCore", "KoreRemote", "KorePhone"], swiftSettings: releaseForSize),
+        .target(name: "KoreStorylines", dependencies: ["KoreUI", "KoreCore"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-storylines", dependencies: ["KoreStorylines", "KoreUI"], swiftSettings: releaseForSize),
         // Plays recorded CLI sessions as `claude` / `codex` for storylines.
         .executableTarget(name: "kore-fake-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
@@ -53,8 +39,6 @@ let package = Package(
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "KoreCore", "kore-fake-cli"]),
-        .testTarget(name: "KoreRemoteTests", dependencies: ["KoreRemote"]),
-        .testTarget(name: "KorePhoneTests", dependencies: ["KorePhone", "KoreRemote", "KoreUI", "KoreCore"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "KoreCore"]),
     ]
 )

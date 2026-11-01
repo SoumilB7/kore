@@ -12,12 +12,12 @@ import Observation
 @MainActor @Observable
 package final class Chat: Identifiable {
     package let id = UUID()
-    package let provider: ProviderDescriptor
+    let provider: ProviderDescriptor
     package let folder: URL
     /// Replaced only when a replayed history is corrected (`.historyReplaced`).
-    package private(set) var transcript = TranscriptStore()
-    package let approvals = ApprovalsStore()
-    package let controls: ControlsStore
+    private(set) var transcript = TranscriptStore()
+    let approvals = ApprovalsStore()
+    let controls: ControlsStore
     let status: ChatStatus
     let context = ContextStore()
     /// The agent map's own UI state (open, selection); not fed by events.
@@ -129,7 +129,7 @@ package final class Chat: Identifiable {
     /// Every asynchronous send/start belongs to one transport lifetime. Cancelling the last
     /// task alone cannot stop earlier tasks waiting in the send chain.
     @ObservationIgnored private var workEpoch: UInt64 = 0
-    package private(set) var accountRestartPending = false
+    private(set) var accountRestartPending = false
     /// An account switch or sign-out stopped its work: its tab shows ⚠ until the next send.
     private(set) var interruptedByAccount = false
 
@@ -191,7 +191,7 @@ package final class Chat: Identifiable {
     var listedId: String? { sessionId ?? fork?.id }
     var resumed: Bool { status.resumed }
     var hasConversation: Bool { status.hasConversation }
-    package var title: String { status.title(fallback: provider.name) }
+    var title: String { status.title(fallback: provider.name) }
     /// Its CLI's id ("claude", "codex"), for storylines.
     package var providerID: String { provider.id }
 
@@ -219,7 +219,7 @@ package final class Chat: Identifiable {
         let event = stoppedCompaction(sleptOutcome(event))
         if case .historyReplaced(let events) = event {
             replaceHistory(events)
-            if RemoteTaps.active { RemoteTaps.post(self, event) }
+            StorylineSeams.events?(self, event)
             return
         }
         let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
@@ -269,7 +269,7 @@ package final class Chat: Identifiable {
         showBeforeCompaction(event)
         if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
-        if RemoteTaps.active { RemoteTaps.post(self, event) }
+        StorylineSeams.events?(self, event)
         // A stopped turn took the compaction in it along, whether or not the CLI said so.
         if case .turnFinished = event, stoppingCompaction, context.compacting { dispatch(.compactionStopped) }
     }
@@ -483,7 +483,7 @@ package final class Chat: Identifiable {
     // MARK: Account
 
     /// A turn or a background agent is running.
-    package var isWorking: Bool { !closed && (isBusy || !transcript.agentSummary.running.isEmpty) }
+    var isWorking: Bool { !closed && (isBusy || !transcript.agentSummary.running.isEmpty) }
 
     /// A turn, a background agent or a command Stop applies to is running: what a sign-out or
     /// a switch of its login stops.
@@ -503,7 +503,7 @@ package final class Chat: Identifiable {
 
     /// Its turn runs, or it compacts (Kore's own compaction, the wheel's, /compact): the chat is
     /// at work, as its tab shows, until the Continue after it, if any, starts its turn.
-    package var isBusy: Bool { status.isRunning || context.compacting }
+    var isBusy: Bool { status.isRunning || context.compacting }
 
     /// Starting the CLI again would end something: a turn, a background agent, or a command left
     /// live (a dev server, a port-forward, an armed scheduled job), which dies with its process.
@@ -877,28 +877,6 @@ package final class Chat: Identifiable {
         deliver(text, sent)
     }
 
-    /// A message from outside the composer (the phone remote): sent as the composer's would be,
-    /// queued while a turn runs, without touching the draft or its attachments on the Mac.
-    /// False when it can't go now (a compaction, an account switch, a chat closed).
-    @discardableResult
-    package func sendRemote(_ text: String, files: [URL] = []) -> Bool {
-        guard !closed, !accountRestartPending, !context.compacting else { return false }
-        let sent = files.map(Attachment.init(url:))
-        if sent.isEmpty, let instructions = Self.compactCommand(text) {
-            guard canCompact else { return false }
-            let message = ChatEvent.userMessage(text: text, attachments: [])
-            if awaitingHistory { hold(message) } else { dispatch(message) }
-            compact(instructions: instructions)
-            return true
-        }
-        cancelContinue()
-        deliver(text, sent)
-        return true
-    }
-
-    /// Messages waiting while a turn runs.
-    package var queuedCount: Int { waitingOrder.count }
-
     /// Sends a message the composer has given up (or Kore's own "Continue").
     private func deliver(_ text: String, _ sent: [Attachment]) {
         guard !closed, !accountRestartPending else { return }
@@ -1132,7 +1110,7 @@ package final class Chat: Identifiable {
     /// a compaction as a turn (`thread/compact/start`, or within the user's): `turn/interrupt`
     /// ends it "interrupted" before its history is replaced. With nothing at work (the
     /// compaction finished as Stop was pressed) it does nothing.
-    package func stop() {
+    func stop() {
         guard isBusy || waitingForNetwork || transcript.pendingSendSince != nil else { return }
         if context.compacting { stoppingCompaction = true }
         if transcript.pendingSendSince != nil {
@@ -1447,7 +1425,7 @@ package final class Chat: Identifiable {
     }
 
     /// `remember`: the user picked it, so new chats start in it.
-    package func setMode(_ id: String, remember: Bool = true) {
+    func setMode(_ id: String, remember: Bool = true) {
         controls.changedBy = nil
         let previous = controls.mode
         controls.mode = id
@@ -1464,7 +1442,7 @@ package final class Chat: Identifiable {
         }
     }
 
-    package func setPlanMode(_ on: Bool) {
+    func setPlanMode(_ on: Bool) {
         controls.changedBy = nil
         controls.planMode = on
         let backend = backend
@@ -1506,7 +1484,7 @@ package final class Chat: Identifiable {
         send()
     }
 
-    package func stayInPlanMode() {
+    func stayInPlanMode() {
         approvals.offerImplementPlan = false
     }
 
@@ -1567,7 +1545,7 @@ package final class Chat: Identifiable {
         }
     }
 
-    package func answer(_ approval: Approval, _ decision: Decision) {
+    func answer(_ approval: Approval, _ decision: Decision) {
         approvals.remove(approval.id)
         transcript.approvalSettled(approval.id)
         if case .deny = decision { transcript.actionDenied() }

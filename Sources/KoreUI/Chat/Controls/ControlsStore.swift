@@ -4,12 +4,12 @@ import SwiftUI
 /// The chat's mode, model, effort and `/` commands: what the composer bar shows. Model and
 /// effort changes are optimistic; `Chat` sends them to the backend.
 @MainActor @Observable
-package final class ControlsStore {
+final class ControlsStore {
     let provider: ProviderDescriptor
     /// The provider's mode id (Claude permission mode / Codex permissions preset).
-    package var mode: String
+    var mode: String
     /// The provider's plan toggle (Codex); Claude's plan is a mode.
-    package var planMode = false
+    var planMode = false
     /// "Allow commands in Plan": while planning, Kore answers each permission with allow.
     var planAllow = false
     private(set) var models: [ModelOption] = []
@@ -89,7 +89,7 @@ package final class ControlsStore {
         }
     }
 
-    package var availableModes: [ModeOption] { provider.availableModes(currentModel) }
+    var availableModes: [ModeOption] { provider.availableModes(currentModel) }
 
     /// The mode is one this model offers (a model without Auto doesn't).
     var modeOffered: Bool { availableModes.contains { $0.id == mode } }
@@ -115,7 +115,7 @@ package final class ControlsStore {
     /// The chat's highlight colour for the active mode; nil when neutral.
     var tint: Color? { activeMode.tint }
 
-    package var currentModel: ModelOption? { models.first { $0.id == modelId } }
+    var currentModel: ModelOption? { models.first { $0.id == modelId } }
 
     /// A supported model and a CLI that reports fast mode. Unknown account availability
     /// allows an explicit opt-in; an actual blocker stays visible with its reason.

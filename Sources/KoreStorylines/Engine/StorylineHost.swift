@@ -32,7 +32,7 @@ package enum StorylineHost {
         UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": false])
         // The app's own story registry runs only under a host.
         StoryHost.installed = true
-        RemoteTaps.add { chat, event in Runner.current?.record(chat, event) }
+        StorylineSeams.events = { chat, event in Runner.current?.record(chat, event) }
         // A run happens out of sight unless it drives the real pointer.
         if !options.flags.realInput { OffscreenWindows.install() }
         let runner = Runner(selection: options.selection, flags: options.flags, out: options.out)

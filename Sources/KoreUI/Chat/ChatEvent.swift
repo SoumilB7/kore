@@ -392,8 +392,6 @@ package struct SlashCommand: Identifiable, Hashable, Sendable {
     package var on = false
     /// A Kore entry this chat's CLI can't do: shown dim, with the reason as its description.
     package var unavailable = false
-    /// A module's entry: the other words a query may start with to find it.
-    package var moduleAliases: [String] = []
     package var id: String { name }
     /// Claude runs `/name`; Codex invokes skills by mentioning `$name`.
     package var insertion: String { kind == .skill ? "$\(name) " : "/\(name) " }

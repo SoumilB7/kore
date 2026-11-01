@@ -121,20 +121,16 @@ extension SlashCommand {
         switch name {
         case Self.account.name: return ["login", "logout", "sign", "switch"]
         case Self.remoteName: return ["rc", "phone", "web", "mobile"]
-        case Self.usage.name: return ["limits"]
-        default: return moduleAliases
+        default: return ["limits"]
         }
     }
 
     /// The menu for a typed "/word" (`query` lowercased): Usage then Account first on a bare
     /// "/", in place of the CLI's own usage, login and logout; a "$" lists skills alone. Under
     /// a query, names that start with it come first.
-    /// `remote`: this chat's Remote control entry, after Account; `modules`: entries installed
-    /// modules add, after it.
-    static func matches(
-        _ commands: [SlashCommand], sigil: Character, query: String, remote: SlashCommand? = nil, modules: [SlashCommand] = []
-    ) -> [SlashCommand] {
-        let own = kore + (remote.map { [$0] } ?? []) + modules
+    /// `remote`: this chat's Remote control entry, after Account.
+    static func matches(_ commands: [SlashCommand], sigil: Character, query: String, remote: SlashCommand? = nil) -> [SlashCommand] {
+        let own = kore + (remote.map { [$0] } ?? [])
         let listed =
             sigil == "$"
             ? commands.filter { $0.kind == .skill } : own + commands.filter { $0.kind == .skill || !replaced.contains($0.name) }

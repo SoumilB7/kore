@@ -3,17 +3,17 @@ import KoreCore
 
 /// Everything Kore knows about one CLI. A new CLI is a folder under `Providers/` (its backend
 /// and its descriptor) plus one line in `Registry`; nothing else switches on which CLI it is.
-package struct ProviderDescriptor: Identifiable, Sendable {
+struct ProviderDescriptor: Identifiable, Sendable {
     /// Stored in saved tabs.
-    package let id: String
-    package let name: String
+    let id: String
+    let name: String
     /// SVG, and whether it takes the surrounding foreground colour.
     let logoSVG: String
     let logoIsTemplate: Bool
     /// Permission modes as the CLI's VS Code extension shows them; the first is the default.
-    package let modes: [ModeOption]
+    let modes: [ModeOption]
     /// A plan switch kept apart from the modes (Codex); nil where plan is a mode (Claude).
-    package let planToggle: ModeOption?
+    let planToggle: ModeOption?
     /// How `SessionSummary` (KoreCore) names this CLI.
     let historyAgent: SessionSummary.Agent
     /// The modes to offer with this model.
@@ -75,8 +75,8 @@ enum ModeStep {
 }
 
 extension ProviderDescriptor: Hashable {
-    package static func == (a: Self, b: Self) -> Bool { a.id == b.id }
-    package func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    static func == (a: Self, b: Self) -> Bool { a.id == b.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 extension ProviderDescriptor {
@@ -106,10 +106,10 @@ extension ProviderDescriptor {
 typealias Provider = ProviderDescriptor
 
 /// The CLIs Kore can run, in picker order.
-package enum Registry {
-    package static let all: [ProviderDescriptor] = [.claude, .codex]
+enum Registry {
+    static let all: [ProviderDescriptor] = [.claude, .codex]
 
-    package static func provider(_ id: String) -> ProviderDescriptor? { all.first { $0.id == id } }
+    static func provider(_ id: String) -> ProviderDescriptor? { all.first { $0.id == id } }
 
     static func provider(for agent: SessionSummary.Agent) -> ProviderDescriptor {
         all.first { $0.historyAgent == agent } ?? all[0]

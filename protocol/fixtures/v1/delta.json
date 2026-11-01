@@ -1,1 +1,0 @@
-{"t":"delta","seq":3,"rev":2,"chats":[{"id":"c1","provider":"claude","title":"Checkout totals","state":"working","mode":{"id":"default","level":1},"modeIds":["default","acceptEdits","plan","auto"],"allowedModeIds":["default","plan"],"queued":0,"running":true,"cards":[],"can":{"send":true,"stop":true}}],"removed":["c9"]}
