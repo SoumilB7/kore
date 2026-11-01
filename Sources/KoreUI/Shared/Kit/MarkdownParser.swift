@@ -283,7 +283,11 @@ package enum MarkdownParser {
     private static func inline(_ text: Substring, _ code: Font) -> AttributedString {
         // Plain text (most cells, items and many paragraphs) skips Foundation's parser.
         let markup: Set<UInt8> = [0x2A, 0x5F, 0x60, 0x5B, 0x7E, 0x5C, 0x3C, 0x26, 0x21]  // * _ ` [ ~ \ < & !
-        if !text.utf8.contains(where: markup.contains) { return AttributedString(text) }
+        if !text.utf8.contains(where: markup.contains) {
+            var plain = AttributedString(text)
+            if text.contains("://") { autolink(&plain) }
+            return plain
+        }
         let options = AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: false, interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible)
@@ -294,8 +298,8 @@ package enum MarkdownParser {
             if run.inlinePresentationIntent?.contains(.code) == true { spans.append(run.range) }
             if run.link != nil { links.append(run.range) }
         }
-        // Only markdown links ([text](url), <url>) link: a bare URL the parser linked by itself
-        // stays text, as it does on a line without markup.
+        // A bare URL the parser linked by itself is dropped here and linked again by `autolink`,
+        // whose rules (trailing punctuation, parentheses) are the same with or without markup.
         links.removeAll { range in
             let shown = String(string[range].characters)
             guard text.contains("[" + shown + "](") == false, text.contains("<" + shown + ">") == false,
@@ -311,7 +315,63 @@ package enum MarkdownParser {
             string[range].foregroundColor = Theme.link
             string[range].underlineStyle = .single
         }
+        if text.contains("://") { autolink(&string) }
         return string
+    }
+
+    /// Bare `http://` and `https://` URLs link, outside code spans and existing links (GitHub's
+    /// autolink rules): the URL runs to whitespace or `<`; trailing `?!.,:*_~'"` and `;` are left
+    /// out, and a closing `)` only when it has no `(` to match inside the URL.
+    static func autolink(_ string: inout AttributedString) {
+        var found: [(Range<AttributedString.Index>, URL)] = []
+        for run in string.runs where run.link == nil && run.inlinePresentationIntent?.contains(.code) != true {
+            let chars = Array(string[run.range].characters)
+            var i = 0
+            while i < chars.count {
+                guard chars[i] == "h", let scheme = Self.scheme(chars, at: i),
+                      i == 0 || !(chars[i - 1].isLetter || chars[i - 1].isNumber) else { i += 1; continue }
+                var end = i + scheme
+                while end < chars.count, !chars[end].isWhitespace, chars[end] != "<" { end += 1 }
+                end = Self.trimmed(chars, from: i, to: end)
+                if end > i + scheme, let url = URL(string: String(chars[i..<end])), url.host() != nil {
+                    let lower = string.characters.index(run.range.lowerBound, offsetBy: i)
+                    let upper = string.characters.index(run.range.lowerBound, offsetBy: end)
+                    found.append((lower..<upper, url))
+                }
+                i = max(end, i + 1)
+            }
+        }
+        for (range, url) in found {
+            string[range].link = url
+            string[range].foregroundColor = Theme.link
+            string[range].underlineStyle = .single
+        }
+    }
+
+    /// The length of `http://` or `https://` at `i`, if one starts there.
+    private static func scheme(_ chars: [Character], at i: Int) -> Int? {
+        for prefix in ["https://", "http://"] where chars.count - i >= prefix.count {
+            if zip(chars[i...], prefix).allSatisfy({ $0.lowercased() == String($1) }) { return prefix.count }
+        }
+        return nil
+    }
+
+    /// Where a URL found at `start` really ends: trailing punctuation off, unmatched `)` off.
+    private static func trimmed(_ chars: [Character], from start: Int, to end: Int) -> Int {
+        var end = end
+        while end > start {
+            let last = chars[end - 1]
+            if "?!.,:*_~'\";".contains(last) {
+                end -= 1
+            } else if last == ")" {
+                let opens = chars[start..<end].filter { $0 == "(" }.count
+                let closes = chars[start..<end].filter { $0 == ")" }.count
+                if closes > opens { end -= 1 } else { break }
+            } else {
+                break
+            }
+        }
+        return end
     }
 
     // MARK: - Line tests

@@ -649,3 +649,22 @@ struct DragPastTop: Step {
         }
     }
 }
+
+/// A bare URL in a reply is a link like a markdown one: drawn as a link, and a click opens it
+/// (noted, not opened, under storylines). Its trailing full stop stays text.
+final class BareLinkOpens: ChatStoryline {
+    static let reply = "Fix PR (needs approval and merge): https://example.com/pull/5768."
+
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            ReplayTurns([("Where's the fix?", Self.reply)]),
+            Snapshot("bare-link"),
+            ClickText(.answer(1, [0], at: Self.reply, "5768")),
+            Expect("the bare URL's click to open it, without the full stop") { _ in
+                StoryTranscript.openedLinks.last?.absoluteString == "https://example.com/pull/5768"
+            },
+        ]
+    }
+}
