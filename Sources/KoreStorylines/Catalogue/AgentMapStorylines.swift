@@ -812,6 +812,9 @@ final class AgentMapSashResizes: ChatStoryline {
                 return abs(Int(now) - was - 120) <= 2
             },
             Snapshot("agent-map-dragged"),
+            // The pane beside it holds through a drag, and wraps once on release.
+            SashHolds(.id(sash), held: { _ in StoryID.AgentMap.pane }, by: 80),
+            Drag(.id(sash), by: CGVector(dx: -80, dy: 0)),
             DoubleClick(.id(sash)),
             Expect("a double-click: the width that fits the labels again", found: { x($0).map { "sash at \(Int($0))" } }) { story in
                 guard let now = x(story), let was = Remember.value(story, "sash at rest") else { return false }

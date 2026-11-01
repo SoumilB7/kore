@@ -409,6 +409,11 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
 
     override func mouseMoved(with event: NSEvent) {
         guard !hiddenTab, let selection else { return }
+        // Tracking goes by geometry: a sash drawn over the view has the cursor.
+        guard !SashPointer.over else {
+            iBeam = false
+            return
+        }
         let over = selection.text(at: point(event)) != nil && !selection.isBlocked(point(event)) && isTranscript(event)
         if over {
             NSCursor.iBeam.set()
@@ -419,7 +424,7 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
     }
 
     override func mouseExited(with event: NSEvent) {
-        if iBeam { NSCursor.arrow.set() }
+        if iBeam, !SashPointer.over { NSCursor.arrow.set() }
         iBeam = false
     }
 

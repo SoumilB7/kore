@@ -40,5 +40,9 @@ extension Workspace {
     }
     package var storyTerminalChildren: [ProcessChild] { terminals.entries.compactMap { $0.shell?.child } }
     package var storyTerminalHeight: CGFloat { terminals.height }
+    /// The docked sidebar's width, its limits and its own.
+    package var storyExplorerWidth: CGFloat { explorerWidth }
+    package static var storyExplorerRange: ClosedRange<CGFloat> { Layout.Explorer.minWidth...Layout.Explorer.maxWidth }
+    package static var storyExplorerOwnWidth: CGFloat { Layout.Explorer.width }
     package var storyTerminalMaximized: Bool { terminals.maximized }
 }

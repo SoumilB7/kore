@@ -9,6 +9,8 @@ struct FolderWindow: View {
     @StateObject private var fullScreen = Local(false)
     @StateObject private var historyOpen = Local(false)
     @StateObject private var clockFrame = Local(CGRect.zero)
+    /// The content's width while the sidebar's sash drags: it lays out once, as the drag ends.
+    @StateObject private var heldContent = Local<CGFloat?>(nil)
 
     init(folder: URL, moved: @escaping (URL) -> Void = { _ in }) {
         self.folder = folder
@@ -22,8 +24,8 @@ struct FolderWindow: View {
             let workspace = workspace.value
             let floating = geometry.size.width < Layout.Explorer.overlayBelow
             let docked = workspace.explorerOpen && !floating
-            let column = ChatColumn.fitting(
-                geometry.size.width - (docked ? workspace.explorerWidth + Stroke.hairline : 0))
+            let content = geometry.size.width - (docked ? workspace.explorerWidth + Stroke.hairline : 0)
+            let column = ChatColumn.fitting(heldContent.value ?? content)
             VStack(spacing: 0) {
                 // Above the chat: its scroll view extends up under the title bar and would
                 // otherwise take the tab bar's clicks.
@@ -43,13 +45,18 @@ struct FolderWindow: View {
                     if docked, let store = workspace.files {
                         ExplorerSidebar(workspace: workspace, store: store, floating: false)
                             .frame(width: workspace.explorerWidth)
-                        ExplorerSash(width: Binding(get: { workspace.explorerWidth }, set: { workspace.explorerWidth = $0 }))
+                            // Over the held content, which reaches under it as it widens.
+                            .zIndex(heldContent.value == nil ? 0 : 1)
+                        ExplorerSash(width: Binding(get: { workspace.explorerWidth }, set: { workspace.explorerWidth = $0 })) { held in
+                            heldContent.value = held ? content : nil
+                        }
                     }
                     TerminalWorkspace(workspace: workspace)
                         // The columns follow the content's width: the window less a docked sidebar.
                         .environment(\.chatColumn, column)
                         // Widths follow the drag frame by frame; nothing animates them.
                         .animation(nil, value: column)
+                        .heldBesideSash(heldContent.value)
                         // History hangs under the clock, inside the window whatever its size. It
                         // sits on the content, below the title bar (a text field in an overlay
                         // reaching into the title bar took no typing).

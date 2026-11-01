@@ -205,6 +205,11 @@ final class BoardResize: BoardStoryline {
             },
             // By a person's mouse: the window key, the press AppKit's to route.
             ExpectHittable(Self.sectionGutterLocator),
+            Expect("a section line's grab 12 pt wide", found: { story in
+                (try? Self.sectionGutter(story)).flatMap { StoryElement(StoryID.Board.gutter($0.id))?.frame }.map { "\($0.width) wide" }
+            }) { story in
+                StoryElement(StoryID.Board.gutter(try Self.sectionGutter(story).id))?.frame?.width == 12
+            },
             Drag(Self.sectionGutterLocator) { story in
                 let gutter = try Self.sectionGutter(story)
                 return CGVector(dx: gutter.extent * 2 / 3 - 5 - gutter.position, dy: 0)

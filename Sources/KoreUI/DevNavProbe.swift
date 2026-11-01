@@ -268,6 +268,30 @@ package enum DevNavProbe {
         return (steps, result)
     }
 
+    /// The active tab's scroll view in window coordinates.
+    package static func transcriptFrame(_ workspace: Workspace) -> CGRect? {
+        guard let window = workspace.window, let view = DevScroller.transcript(in: window) else { return nil }
+        return view.convert(view.bounds, to: nil)
+    }
+
+    /// How many layers draw in the visible part of the active tab's transcript.
+    package static func transcriptDrawn(_ workspace: Workspace) -> Int? {
+        guard let window = workspace.window, let view = DevScroller.transcript(in: window) else { return nil }
+        return ScrollShift.drawn(in: view)
+    }
+
+    /// Frame times while `body` runs.
+    package static func recording(_ workspace: Workspace, _ body: () async throws -> Void) async rethrows -> Frames {
+        guard let window = workspace.window else { return Frames() }
+        let (pacer, _) = start(window, workspace)
+        defer { pacer.stop() }
+        pacer.beginRecording()
+        try await body()
+        var result = Frames()
+        fill(&result, pacer.endRecording())
+        return result
+    }
+
     private static func start(_ window: NSWindow, _ workspace: Workspace) -> (DevFramePacer, Held<NSScrollView?>) {
         let pacer = DevFramePacer()
         let scroll = Held<NSScrollView?>(nil)

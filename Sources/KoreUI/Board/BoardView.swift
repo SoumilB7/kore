@@ -93,10 +93,13 @@ struct BoardView: View {
             ForEach(frames.gutters, id: \.id) { gutter in
                 BoardGutterView(
                     gutter: gutter, hot: gutterDrag.value?.gutter.id == gutter.id || roomPull.value?.pull.gutter.id == gutter.id,
-                    gesture: gutterGesture(gutter, frames: frames)
-                ) {
-                    model.edit { $0.resize(gutter.id, lengths: GutterDrag.even(gutter)) }
-                }
+                    gesture: gutterGesture(gutter, frames: frames),
+                    equalise: { model.edit { $0.resize(gutter.id, lengths: GutterDrag.even(gutter)) } },
+                    cut: {
+                        gutterDrag.value = nil
+                        roomPull.value = nil
+                    }
+                )
             }
             if let drag = gutterDrag.value {
                 SnapTicks(gutter: drag.gutter, lengths: drag.lengths, snap: drag.snap)
@@ -370,7 +373,10 @@ private struct BoardGutterView<G: Gesture>: View {
     let hot: Bool
     let gesture: G
     let equalise: () -> Void
+    /// The drag's end never reached it (`SashDragWatch`): back to before it.
+    let cut: @MainActor () -> Void
     @StateObject private var over = Local<Part?>(nil)
+    @StateObject private var watch = SashDragWatch()
 
     enum Part { case line, grip }
 
@@ -380,6 +386,8 @@ private struct BoardGutterView<G: Gesture>: View {
         let row = gutter.axis == .row
         let grip = Size.Board.grip
         let gripped = gutter.id.section != nil
+        let line: PointerStyle = row ? .columnResize : .rowResize
+        let cursor = over.value == .grip ? BoardCursor.room(gutter.axis) : line
         ZStack {
             Color.clear.contentShape(Rectangle())
             Rectangle()
@@ -395,17 +403,21 @@ private struct BoardGutterView<G: Gesture>: View {
                     .storyMark(StoryID.Board.grip(gutter.id))
             }
         }
+        .pointerStyle(cursor)
+        // Inside the hover: however far the pointer outruns the line, it never left the gutter.
+        .overlay { if hot { SashDragCursor(style: cursor) } }
         .onContinuousHover { phase in
             switch phase {
             case .active(let point):
+                // A drag keeps the part it started on.
+                guard !hot else { return }
                 let part: Part = gripped && gutter.grip.contains(CGPoint(x: rect.minX + point.x, y: rect.minY + point.y)) ? .grip : .line
                 guard part != over.value else { return }
-                if over.value != nil { NSCursor.pop() }
-                (part == .grip ? BoardCursor.room(gutter.axis) : row ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
                 over.value = part
+                SashPointer.over = true
             case .ended:
-                if over.value != nil { NSCursor.pop() }
                 over.value = nil
+                SashPointer.over = false
             }
         }
         .gesture(gesture)
@@ -415,6 +427,13 @@ private struct BoardGutterView<G: Gesture>: View {
         .accessibilityLabel(row ? "Width" : "Height")
         .accessibilityValue("\(Int((gutter.lengths[gutter.id.index] / max(gutter.extent, 1) * 100).rounded())) percent")
         .storyID(StoryID.Board.gutter(gutter.id))
+        .onChange(of: hot) { _, now in
+            if now { watch.start(cut) } else { watch.stop() }
+        }
+        .onDisappear {
+            watch.stop()
+            if over.value != nil { SashPointer.over = false }
+        }
         .place(rect)
     }
 }
@@ -422,12 +441,12 @@ private struct BoardGutterView<G: Gesture>: View {
 /// The grip's cursor: arrows apart from a line, white with a dark edge as the system's are.
 @MainActor
 enum BoardCursor {
-    static let row = make("arrow.left.and.line.vertical.and.arrow.right", fallback: .resizeLeftRight)
-    static let column = make("arrow.up.and.line.horizontal.and.arrow.down", fallback: .resizeUpDown)
+    static let row = make("arrow.left.and.line.vertical.and.arrow.right", fallback: .columnResize)
+    static let column = make("arrow.up.and.line.horizontal.and.arrow.down", fallback: .rowResize)
 
-    static func room(_ axis: SplitAxis) -> NSCursor { axis == .row ? row : column }
+    static func room(_ axis: SplitAxis) -> PointerStyle { axis == .row ? row : column }
 
-    private static func make(_ name: String, fallback: NSCursor) -> NSCursor {
+    private static func make(_ name: String, fallback: PointerStyle) -> PointerStyle {
         func symbol(_ color: NSColor) -> NSImage? {
             NSImage(systemSymbolName: name, accessibilityDescription: nil)?
                 .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .bold).applying(.init(paletteColors: [color])))
@@ -444,7 +463,7 @@ enum BoardCursor {
             white.draw(at: NSPoint(x: edge, y: edge), from: .zero, operation: .sourceOver, fraction: 1)
             return true
         }
-        return NSCursor(image: image, hotSpot: NSPoint(x: size.width / 2, y: size.height / 2))
+        return .image(Image(nsImage: image), hotSpot: .center)
     }
 }
 

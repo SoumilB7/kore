@@ -241,8 +241,9 @@ extension StoryID {
 
     package enum AgentMap {
         package static func row(_ agent: String) -> StoryID { StoryID(.agentmap, "row", key: agent) }
-        /// The sash between the tree and the detail.
+        /// The sash between the tree and the detail, and the pane beside it.
         package static let sash = StoryID(.agentmap, "sash")
+        package static let pane = StoryID(.agentmap, "pane")
         /// The wires drawn behind an agent's row: its elbow and the spines passing it.
         package static func wires(_ agent: String) -> StoryID { StoryID(.agentmap, "wires", key: agent) }
         /// A closed group of ended agents, "done" or "stopped": its row opens and closes it.
@@ -298,6 +299,8 @@ extension StoryID {
         package static let namefield = StoryID(.explorer, "namefield")
         package static let filesTab = StoryID(.explorer, "tab.files")
         package static let searchTab = StoryID(.explorer, "tab.search")
+        /// The sash between the sidebar and the content.
+        package static let sash = StoryID(.explorer, "sash")
     }
 
     package enum Editor {
@@ -382,9 +385,9 @@ extension StoryID {
             Composer.account.part(.cancel), Composer.account.part(.copy), Composer.account.part(.credentials),
             Composer.account.part(.choose), Composer.account.part(.save),
             Transcript.earlier, Transcript.spinner,
-            AgentMap.open, AgentMap.stop, AgentMap.close, AgentMap.chat, History.search,
+            AgentMap.open, AgentMap.stop, AgentMap.close, AgentMap.chat, AgentMap.pane, History.search,
             Explorer.newfile, Explorer.newfolder, Explorer.refresh, Explorer.collapse, Explorer.namefield,
-            Explorer.filesTab, Explorer.searchTab,
+            Explorer.filesTab, Explorer.searchTab, Explorer.sash,
             Editor.Find.field, Editor.Find.replaceField, Editor.Find.next, Editor.Find.previous, Editor.Find.close,
             Editor.Find.toggleReplace, Editor.Find.replace, Editor.Find.replaceAll, Editor.Find.ticks,
             Editor.Status.indent, Editor.Status.lineEndings, Editor.Status.language,

@@ -151,7 +151,7 @@ extension Layout {
         static let overlayMargin: CGFloat = 48
         static let header: CGFloat = 34
         static let headerInset: CGFloat = 10
-        static let sashHit: CGFloat = 6
+        static let sashHit: CGFloat = 12
         static let stateTop: CGFloat = 24
     }
 }

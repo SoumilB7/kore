@@ -1058,9 +1058,11 @@ enum TreeActions {
 /// The divider between the sidebar and the content: drag to resize, double-click for 260.
 struct ExplorerSash: View {
     @Binding var width: CGFloat
+    let dragging: (Bool) -> Void
 
     var body: some View {
-        PaneSash(width: $width, range: Layout.Explorer.minWidth...Layout.Explorer.maxWidth) { width = Layout.Explorer.width }
+        PaneSash(width: $width, range: Layout.Explorer.minWidth...Layout.Explorer.maxWidth, dragging: dragging) { width = Layout.Explorer.width }
+            .storyID(StoryID.Explorer.sash)
     }
 }
 

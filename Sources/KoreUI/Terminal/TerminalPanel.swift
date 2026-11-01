@@ -280,6 +280,8 @@ extension Layout {
         static let minimum: CGFloat = 120
         static let chatMinimum: CGFloat = 120
         static let header: CGFloat = 32
+        /// The sash's height, laid out between the chat and the panel.
+        static let sash: CGFloat = 6
         static let listWidth: CGFloat = 150
         /// The text's inset from the panel's sides and header.
         static let side = Space.xxxl

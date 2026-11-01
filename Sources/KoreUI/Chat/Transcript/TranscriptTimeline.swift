@@ -89,7 +89,7 @@ struct TranscriptTimeline: View, Equatable {
     /// A shown transcript with rows and none of them on screen (`checkBlank`): the check under
     /// way and when it looks (each call moves that on), how often the scroll view was built again
     /// for it, and when it was lately (a few a minute at most).
-    @StateObject private var blankCheck = Held((task: Task<Void, Never>?.none, due: Date.distantPast))
+    @StateObject private var blankCheck = Held((task: Task<Void, Never>?.none, due: Date.distantPast, soon: false))
     @StateObject private var remounts = Held(0)
     @StateObject private var remountedAt = Held([Date]())
     /// A view new or built again, until its layout settles (each change of height puts that off,
@@ -220,6 +220,8 @@ struct TranscriptTimeline: View, Equatable {
                     return
                 }
                 // A move with no scroll phase (the scroll bar, End) never reaches `.idle` above.
+                // A new width can leave the content's height past its rows: looked at soon.
+                if old.count == new.count, old[4] > 0, new[4] != old[4] { checkBlank(soon: true) }
                 if !gesturing.value, offset != geometry.value.offset { checkBlank() }
                 // Keep measuring, but let neither a retained bottom target nor restoration,
                 // paging or folding replace the absolute position held during a pinch.
@@ -535,19 +537,31 @@ struct TranscriptTimeline: View, Equatable {
         }
     }
 
+    /// After a new width, how soon it's looked at for nothing drawn.
+    private static let blankSoon: TimeInterval = 0.3
+
     /// Two seconds after it shows, changes or its window comes back, a transcript with rows but
     /// nothing on screen (AppKit's content not under the visible part, or no layer drawing there)
     /// is logged with its geometry in sessions.log ("blank"), and its scroll view is built again:
     /// first where the reader was, then at the end. Never while its window is covered: macOS may
     /// drop what it drew until it shows again.
-    private func checkBlank() {
+    private func checkBlank(soon: Bool = false) {
         guard shown.value else {
             blankCheck.value.task?.cancel()
             blankCheck.value.task = nil
+            blankCheck.value.soon = false
             return
         }
-        // One check under way, put off by each call (a stream's every move) rather than made anew.
-        blankCheck.value.due = Date().addingTimeInterval(2)
+        if soon {
+            // A sooner one, which the moves a new width brings don't put off.
+            blankCheck.value.task?.cancel()
+            blankCheck.value.task = nil
+            blankCheck.value.due = Date().addingTimeInterval(Self.blankSoon)
+            blankCheck.value.soon = true
+        } else if !blankCheck.value.soon {
+            // One check under way, put off by each call (a stream's every move) rather than made anew.
+            blankCheck.value.due = Date().addingTimeInterval(2)
+        }
         guard blankCheck.value.task == nil else { return }
         let (store, seen, tops, remounts, remountedAt, shift, following, blankCheck) = (store, seen, rowTops, remounts, remountedAt, shift, following, blankCheck)
         let rebuild = rebuild
@@ -557,6 +571,7 @@ struct TranscriptTimeline: View, Equatable {
                 if Task.isCancelled { return }
             }
             blankCheck.value.task = nil
+            blankCheck.value.soon = false
             guard !store.sections.isEmpty, seen.value.count == 5, shift.windowVisible || StoryHost.installed else { return }
             let (height, offset, visible) = (seen.value[0], seen.value[1], seen.value[2])
             let frames = shift.frames

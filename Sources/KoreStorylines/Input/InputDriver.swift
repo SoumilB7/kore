@@ -170,6 +170,33 @@ package final class InputDriver {
         await drag(from: start, to: CGPoint(x: start.x + delta.dx, y: start.y + delta.dy), in: window, steps: steps)
     }
 
+    /// A press on the element that stays down, the point it landed on, for a drag looked at
+    /// between moves or never let go: `moved` and `release` carry it on.
+    package func press(_ element: StoryElement, offset: CGVector = .zero) async throws -> (window: NSWindow, point: CGPoint) {
+        let (window, point) = try await pointerAim(element, offset)
+        mouse(.leftMouseDown, at: point, in: window)
+        return (window, point)
+    }
+
+    /// The pressed pointer moved to a window point, a run-loop pass before it.
+    package func moved(to point: CGPoint, in window: NSWindow) async {
+        await pass()
+        mouse(.leftMouseDragged, at: point, in: window)
+    }
+
+    /// The press let go at a window point.
+    package func release(at point: CGPoint, in window: NSWindow) async {
+        await pass()
+        mouse(.leftMouseUp, at: point, in: window)
+        await pass()
+    }
+
+    /// The pointer moved with no button down.
+    package func movedFree(to point: CGPoint, in window: NSWindow) async {
+        mouse(.mouseMoved, at: point, in: window)
+        await pass()
+    }
+
     /// What a press at the element's point would land on instead of it, or nil when it's the
     /// element's. AppKit sees SwiftUI's content as its hosting view, so a SwiftUI view counts as
     /// hit when the view under the point is a SwiftUI view holding it: an AppKit view, another

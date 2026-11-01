@@ -725,7 +725,7 @@ private final class GridPart: NSView {
     override func scrollWheel(with event: NSEvent) { grid?.scroller?.scrollWheel(with: event) }
 
     override func mouseMoved(with event: NSEvent) {
-        guard kind == .header, let grid else { return }
+        guard kind == .header, let grid, !SashPointer.over else { return }
         (grid.edge(atX: x(event)) != nil ? NSCursor.resizeLeftRight : NSCursor.arrow).set()
     }
 

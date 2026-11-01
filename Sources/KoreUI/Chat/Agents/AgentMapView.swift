@@ -16,6 +16,8 @@ struct AgentMapView: View {
     /// Kept, never shown: setting them as the map appears doesn't build it again.
     @StateObject private var keyMonitor = Held<Any?>(nil)
     @StateObject private var window = Held<NSWindow?>(nil)
+    /// The right pane's width while the sash drags: it lays out once, as the drag ends.
+    @StateObject private var heldPane = Local<CGFloat?>(nil)
 
     private var map: AgentMapState { chat.agentMap }
 
@@ -39,9 +41,13 @@ struct AgentMapView: View {
                         let width = treeWidth(rows.all, in: total)
                         tree(rows, highlight: highlight, commands: commands, pane: pane)
                             .frame(width: width)
+                            // Over the held pane, which reaches under it as it widens.
+                            .background(Theme.background)
+                            .zIndex(heldPane.value == nil ? 0 : 1)
                         PaneSash(
                             width: Binding(get: { width }, set: { AgentMapPane.shared.share = $0 / max(total, 1) }),
-                            range: AgentMapPane.range(in: total)
+                            range: AgentMapPane.range(in: total),
+                            dragging: { heldPane.value = $0 ? total - width - Stroke.hairline : nil }
                         ) { AgentMapPane.shared.share = nil }
                         .storyID(StoryID.AgentMap.sash)
                     }
@@ -56,6 +62,8 @@ struct AgentMapView: View {
                             if let selected { AgentDetail(chat: chat, info: selected.info, openAgent: openAgent) }
                         }
                     }
+                    .storyMark(StoryID.AgentMap.pane)
+                    .heldBesideSash(narrow ? nil : heldPane.value)
                 }
                 // The tree keeps its place at the left whatever is selected.
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

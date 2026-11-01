@@ -10,12 +10,12 @@ struct TerminalWorkspace: View {
     var body: some View {
         let panel = workspace.terminals
         GeometryReader { geometry in
-            let height = Layout.Terminal.fitting(panel.height, available: geometry.size.height - Layout.Explorer.sashHit, maximized: panel.maximized)
+            let height = Layout.Terminal.fitting(panel.height, available: geometry.size.height - Layout.Terminal.sash, maximized: panel.maximized)
             VStack(spacing: 0) {
                 WorkspaceView(workspace: workspace)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if panel.isOpen {
-                    TerminalSash(panel: panel, available: geometry.size.height - Layout.Explorer.sashHit)
+                    TerminalSash(panel: panel, available: geometry.size.height - Layout.Terminal.sash)
                     TerminalPanelView(panel: panel)
                         .frame(height: height)
                 }
@@ -203,33 +203,50 @@ private struct TerminalSash: View {
     let panel: TerminalPanel
     let available: CGFloat
     @StateObject private var hovered = Local(false)
+    @StateObject private var held = Local(false)
     @StateObject private var start = Held<CGFloat?>(nil)
+    @StateObject private var watch = SashDragWatch()
 
     var body: some View {
         Color.clear
-            .frame(height: Layout.Explorer.sashHit)
+            .frame(height: Layout.Terminal.sash)
             .overlay { Rectangle().fill(hovered.value ? Theme.accentLine : Theme.border).frame(height: Stroke.hairline) }
             .contentShape(Rectangle())
+            .pointerStyle(.rowResize)
+            .overlay { if held.value { SashDragCursor(style: .rowResize) } }
             .allowsWindowActivationEvents(true)
             .onHover { inside in
                 hovered.value = inside
-                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+                SashPointer.over = inside
             }
             .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { drag in
                     let base = start.value ?? Layout.Terminal.fitting(panel.height, available: available, maximized: panel.maximized)
+                    if start.value == nil {
+                        held.value = true
+                        watch.start { end() }
+                    }
                     start.value = base
                     panel.maximized = false
                     panel.height = Layout.Terminal.fitting(base - drag.translation.height, available: available, maximized: false)
                 }
                 .onEnded { _ in
-                    start.value = nil
+                    end()
                     UILog.event("terminal-resize", ["height": "\(Int(panel.height))"])
                 })
             .onTapGesture(count: 2) { panel.height = Layout.Terminal.height; panel.maximized = false }
             .zIndex(2)
             .storyMark(StoryID.Terminal.sash)
-            .onDisappear { if hovered.value { NSCursor.pop() } }
+            .onDisappear {
+                end()
+                if hovered.value { SashPointer.over = false }
+            }
+    }
+
+    private func end() {
+        start.value = nil
+        held.value = false
+        watch.stop()
     }
 }
 

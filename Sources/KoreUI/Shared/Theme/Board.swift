@@ -21,8 +21,8 @@ extension Size {
         static let gap: CGFloat = 8
         /// Between sections: a hairline of the window ground.
         static let sectionGap: CGFloat = 1
-        /// A section line's grab, either side of it.
-        static let sectionGrab: CGFloat = 4
+        /// A section line's grab, either side of it: with the line, 12pt.
+        static let sectionGrab: CGFloat = 5.5
         /// A divider's grab into each tile's edge: with the gap, 16pt.
         static let grab: CGFloat = 4
         /// The grip at a divider's middle (across, along).

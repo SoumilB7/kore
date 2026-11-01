@@ -61,9 +61,11 @@ final class ScrollShift: ObservableObject {
     /// How many layers draw in the visible part of the content: none is a blank view, whatever
     /// its geometry says. Under a hidden or see-through layer (a tab's fade left at nothing)
     /// none of them shows.
-    var drawn: Int? {
-        guard let scroll = scrollView, let document = scroll.documentView, let root = document.layer else { return nil }
-        if scroll.isHiddenOrHasHiddenAncestor || Self.faded(scroll.layer) { return 0 }
+    var drawn: Int? { scrollView.flatMap(Self.drawn) }
+
+    static func drawn(in scroll: NSScrollView) -> Int? {
+        guard let document = scroll.documentView, let root = document.layer else { return nil }
+        if scroll.isHiddenOrHasHiddenAncestor || faded(scroll.layer) { return 0 }
         let visible = document.convert(scroll.contentView.bounds, from: scroll.contentView)
         var count = 0
         func walk(_ layer: CALayer, depth: Int) {
