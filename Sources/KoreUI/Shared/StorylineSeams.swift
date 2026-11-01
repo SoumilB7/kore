@@ -17,6 +17,8 @@ package enum StorylineSeams {
     package static var loginUsage: ((_ provider: String, _ login: String?) async throws -> PlanReading)?
     /// A sign-in page Kore would have opened in the browser (under a host nothing opens).
     package static var opened: ((URL) -> Void)?
+    /// A confirmation Kore would ask in an alert ("trash"), answered by the host instead.
+    package static var confirm: ((String) -> Bool)?
     /// The file an open panel would have given (a Vertex key file); nil, none picked.
     package static var chooseFile: (() -> URL?)?
     /// The scripted CLI's chats in a folder's history, by provider id: added to the CLI's own

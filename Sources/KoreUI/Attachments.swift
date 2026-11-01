@@ -237,7 +237,8 @@ package enum Attachments {
             if provider.canLoadObject(ofClass: URL.self) {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
                     guard let url, url.isFileURL else { return }
-                    Task { @MainActor in deliver([url]) }
+                    // Several rows dragged from the tree arrive as one file; the rest join here.
+                    Task { @MainActor in deliver(TreeDrag.expand([url])) }
                 }
             } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
                 _ = provider.loadDataRepresentation(for: .image) { data, _ in

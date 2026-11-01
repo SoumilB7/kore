@@ -177,7 +177,17 @@ struct ExplorerSidebar: View {
             .focused($focused)
             .focusEffectDisabled()
             .onKeyPress(phases: .down) { press in key(press, rows: rows) }
-            .onAppear { DevFileHooks.explorerShown(store: store, workspace: workspace, undo: undoManager) }
+            // The Edit menu's ⌘A ⌘C ⌘X ⌘V while the tree has the keys (VS Code's tree).
+            .onCommand(#selector(NSResponder.selectAll(_:))) { if store.edit == nil { store.pickAll() } }
+            .onCommand(#selector(NSText.copy(_:))) { TreeActions.copy(store.chosenTops, cut: false, store: store) }
+            .onCommand(#selector(NSText.cut(_:))) { TreeActions.copy(store.chosenTops, cut: true, store: store) }
+            .onCommand(#selector(NSText.paste(_:))) {
+                TreeActions.paste(into: store.targetFolder(), store: store, workspace: workspace, undo: undoManager)
+            }
+            .onAppear {
+                store.undo = undoManager
+                DevFileHooks.explorerShown(store: store, workspace: workspace, undo: undoManager)
+            }
             .onChange(of: store.selection) { _, selection in
                 if let selection { withAnimation(Motion.fade) { proxy.scrollTo(store.row(showing: selection)?.id ?? selection) } }
             }
@@ -199,9 +209,15 @@ struct ExplorerSidebar: View {
         let index = store.selection.flatMap { selection in rows.firstIndex { $0.shows(selection) } }
         func select(_ i: Int) {
             guard rows.indices.contains(i) else { return }
-            store.selection = rows[i].id
+            store.pickOnly(rows[i].id)
+        }
+        func extend(_ i: Int) {
+            guard rows.indices.contains(i) else { return }
+            store.pickRange(to: rows[i].id)
         }
         switch press.key {
+        case .downArrow where press.modifiers.contains(.shift): extend((index ?? -1) + 1)
+        case .upArrow where press.modifiers.contains(.shift): extend((index ?? rows.count) - 1)
         case .downArrow where press.modifiers.contains(.command):
             if let index, !rows[index].isFolder { workspace.openFile(URL(fileURLWithPath: rows[index].id)) }
         case .downArrow: select((index ?? -1) + 1)
@@ -228,9 +244,12 @@ struct ExplorerSidebar: View {
             if row.isFolder { store.toggle(row.id) } else { workspace.openFile(URL(fileURLWithPath: row.id), preview: true) }
         case .return:
             // VS Code: Return renames (a chain's chosen folder, not just its last).
-            if index != nil, let selection = store.selection { store.edit = .rename(selection) }
-        case .delete where press.modifiers.contains(.command):
-            if index != nil, let selection = store.selection { TreeActions.trash(selection, store: store) }
+            if index != nil, store.picked.isEmpty, let selection = store.selection { store.edit = .rename(selection) }
+        // ⌘⌫: the key sends U+007F, which SwiftUI's `.delete` (U+0008) doesn't match.
+        case _ where (press.key == .delete || press.key.character == "\u{7F}") && press.modifiers.contains(.command):
+            if index != nil { TreeActions.trash(store.chosenTops, store: store, undo: undoManager) }
+        case .escape where !store.picked.isEmpty:
+            store.pickOnly(store.selection)
         case .escape where !typed.value.isEmpty:
             typed.value = ""
         default:
@@ -346,7 +365,7 @@ private struct TreeRow: View {
     @Environment(\.listGround) private var ground
 
     /// The row, or one of its chain's folders, is the selection.
-    private var isSelected: Bool { store.selection.map(row.shows) ?? false }
+    private var isSelected: Bool { store.isChosen(row) }
 
     /// Where a drop on this row goes: into it if it's a folder, else beside it.
     private var dropFolder: String { row.isFolder ? row.id : (row.id as NSString).deletingLastPathComponent }
@@ -404,10 +423,16 @@ private struct TreeRow: View {
         .storyAction(StoryID.Explorer.row(store.relative(row.id)).part(.hover)) { hovered.value = true }
         // As a file URL: it drops into another folder here, or into Finder.
         .onDrag {
-            NSItemProvider(object: URL(fileURLWithPath: row.id) as NSURL)
+            // A chosen row carries the whole choice; the others only themselves.
+            TreeDrag.paths = store.isChosen(row) && !store.picked.isEmpty ? store.chosenTops : [row.id]
+            return NSItemProvider(object: URL(fileURLWithPath: row.id) as NSURL)
         }
         .onDrop(of: [.fileURL], delegate: TreeDrop(folder: dropFolder, store: store, workspace: workspace, undo: undoManager))
-        .koreContextMenu("explorer") { TreeMenu(path: row.id, isFolder: row.isFolder, store: store, workspace: workspace).items }
+        .koreContextMenu("explorer") {
+            // A right-click outside the choice chooses just that row, as VS Code does.
+            if !store.isChosen(row) { store.pickOnly(row.id) }
+            return TreeMenu(path: row.id, isFolder: row.isFolder, store: store, workspace: workspace, undo: undoManager).items
+        }
     }
 
     private var fill: Color {
@@ -455,7 +480,7 @@ private struct TreeRow: View {
                         text
                             .onTapGesture { pick(path) }
                             .onDrop(of: [.fileURL], delegate: TreeDrop(folder: path, store: store, workspace: workspace, undo: undoManager))
-                            .koreContextMenu("explorer") { TreeMenu(path: path, isFolder: true, store: store, workspace: workspace).items }
+                            .koreContextMenu("explorer") { TreeMenu(path: path, isFolder: true, store: store, workspace: workspace, undo: undoManager).items }
                             .storyID(StoryID.Explorer.segment(store.relative(path)), press: { pick(path) })
                     }
                 }
@@ -532,13 +557,17 @@ private struct TreeRow: View {
     private func pick(_ path: String) {
         guard !editing else { return }
         focus()
-        store.selection = path
+        store.pickOnly(path)
     }
 
     private func click(double: Bool) {
         guard !editing else { return }
         focus()
-        store.selection = row.id
+        // ⌘ adds or drops this row, ⇧ takes the rows from the anchor (VS Code's tree).
+        let flags = NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+        if flags.contains(.command) { return store.pickToggle(row.id) }
+        if flags.contains(.shift) { return store.pickRange(to: row.id) }
+        store.pickOnly(row.id)
         if row.isFolder {
             if !double { store.toggle(row.id) }
         } else if double {
@@ -558,6 +587,7 @@ private struct InlineNameField: View {
     @StateObject private var name = Local("")
     @StateObject private var done = Held(false)
     @FocusState private var focused: Bool
+    @Environment(\.undoManager) private var undoManager
 
     private var folder: String {
         switch store.edit {
@@ -640,6 +670,7 @@ private struct InlineNameField: View {
         store.edit = nil
         switch result {
         case .success(let path):
+            recordUndo(edit, made: path)
             store.selection = path
             if newFile {
                 workspace.openFile(URL(fileURLWithPath: path))
@@ -647,6 +678,51 @@ private struct InlineNameField: View {
             }
         case .failure(let failure):
             TreeActions.show(failure)
+        }
+    }
+
+    /// ⌘Z for a rename (back to the old name) or a new item (to the Trash).
+    private func recordUndo(_ edit: FilesStore.Edit, made path: String) {
+        let (store, workspace, undo) = (store, workspace, undoManager)
+        switch edit {
+        case .rename(let old) where old != path:
+            Self.recordRename(from: old, to: path, store: store, workspace: workspace, undo: undo)
+        case .newFile, .newFolder:
+            Self.recordNew(path, store: store, undo: undo)
+        default:
+            break
+        }
+    }
+
+    private static func recordRename(from old: String, to new: String, store: FilesStore, workspace: Workspace, undo: UndoManager?) {
+        let oldName = (old as NSString).lastPathComponent
+        let newName = (new as NSString).lastPathComponent
+        TreeActions.record("Rename", undo: undo, store: store, back: {
+            switch store.rename(new, to: oldName) {
+            case .success(let back): workspace.renamed(new, to: back); return nil
+            case .failure(let failure): return failure
+            }
+        }) {
+            switch store.rename(old, to: newName) {
+            case .success(let again):
+                workspace.renamed(old, to: again)
+                recordRename(from: old, to: again, store: store, workspace: workspace, undo: undo)
+                return nil
+            case .failure(let failure): return failure
+            }
+        }
+    }
+
+    private static func recordNew(_ path: String, store: FilesStore, undo: UndoManager?) {
+        var trashed: [FilesStore.Trashed] = []
+        TreeActions.record("New", undo: undo, store: store, back: {
+            let result = store.trash([path])
+            trashed = result.done
+            return result.failure
+        }) {
+            let failure = store.restore(trashed)
+            recordNew(path, store: store, undo: undo)
+            return failure
         }
     }
 }
@@ -658,11 +734,27 @@ private struct InlineNameField: View {
     let isFolder: Bool
     let store: FilesStore
     let workspace: Workspace
+    let undo: UndoManager?
 
     var items: [OptionItem] {
+        let chosen = store.chosenTops
+        // Several chosen: only what applies to all of them.
+        if chosen.count > 1 {
+            return [
+                OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting(chosen.map { URL(fileURLWithPath: $0) }) },
+                OptionItem("Compress \(chosen.count) Items") { Task { if let failure = await store.compress(chosen) { TreeActions.show(failure) } } }, .rule,
+                OptionItem("Cut") { TreeActions.copy(chosen, cut: true, store: store) },
+                OptionItem("Copy") { TreeActions.copy(chosen, cut: false, store: store) },
+                OptionItem("Duplicate") { TreeActions.duplicate(chosen, store: store, workspace: workspace, undo: undo) }, .rule,
+                OptionItem("Copy Paths") { TreeActions.copy(chosen.joined(separator: "\n")) },
+                OptionItem("Copy Relative Paths") { TreeActions.copy(chosen.map(store.relative).joined(separator: "\n")) }, .rule,
+                OptionItem("Move \(chosen.count) Items to Trash", destructive: true) { TreeActions.trash(chosen, store: store, undo: undo) },
+            ]
+        }
+        let folder = isFolder ? path : store.parent(of: path)
         var items: [OptionItem] = [
-            OptionItem("New File…") { store.selection = path; store.startNew(folder: false) },
-            OptionItem("New Folder…") { store.selection = path; store.startNew(folder: true) }, .rule,
+            OptionItem("New File…") { store.pickOnly(path); store.startNew(folder: false) },
+            OptionItem("New Folder…") { store.pickOnly(path); store.startNew(folder: true) }, .rule,
         ]
         if !isFolder {
             items += [OptionItem("Open") { workspace.openFile(URL(fileURLWithPath: path)) },
@@ -670,31 +762,150 @@ private struct InlineNameField: View {
         }
         items += [
             OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) },
+            OptionItem("Open in Terminal") { workspace.terminals.newShell(folder: URL(fileURLWithPath: folder)) },
+        ]
+        if isFolder { items.append(OptionItem("Find in Folder…") { TreeActions.find(in: path, store: store, workspace: workspace) }) }
+        items += [
             OptionItem("Compress") { Task { if let failure = await store.compress([path]) { TreeActions.show(failure) } } }, .rule,
+            OptionItem("Cut") { TreeActions.copy([path], cut: true, store: store) },
+            OptionItem("Copy") { TreeActions.copy([path], cut: false, store: store) },
+        ]
+        if TreeActions.canPaste(store: store) {
+            items.append(OptionItem("Paste") { TreeActions.paste(into: folder, store: store, workspace: workspace, undo: undo) })
+        }
+        items += [
+            OptionItem("Duplicate") { TreeActions.duplicate([path], store: store, workspace: workspace, undo: undo) }, .rule,
             OptionItem("Copy Path") { TreeActions.copy(path) },
             OptionItem("Copy Relative Path") { TreeActions.copy(store.relative(path)) }, .rule,
             OptionItem("Rename…") { store.edit = .rename(path) },
-            OptionItem("Move to Trash", destructive: true) { TreeActions.trash(path, store: store) },
+            OptionItem("Move to Trash", destructive: true) { TreeActions.trash([path], store: store, undo: undo) },
         ]
         return items
     }
 }
 
+/// The rows a drag from the tree carries: SwiftUI's drag holds one file, so the rest of a
+/// chosen set waits here for the drop that takes it.
+@MainActor enum TreeDrag {
+    static var paths: [String] = []
+
+    /// The dropped files, widened to the whole chosen set when the drag started on one of them.
+    static func expand(_ urls: [URL]) -> [URL] {
+        guard urls.count == 1, paths.count > 1, paths.contains(urls[0].path) else { return urls }
+        defer { paths = [] }
+        return paths.map { URL(fileURLWithPath: $0) }
+    }
+}
+
 @MainActor
 enum TreeActions {
+    /// The pasteboard: a storyline host's own, so a run never touches the user's.
+    static var board: NSPasteboard { DraftClipboard.pasteboard }
+
     static func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        board.clearContents()
+        board.setString(text, forType: .string)
     }
 
-    static func trash(_ path: String, store: FilesStore) {
+    // MARK: Trash
+
+    /// One question for all of `paths`, then the Trash; one undo brings them all back.
+    static func trash(_ paths: [String], store: FilesStore, undo: UndoManager?) {
+        guard !paths.isEmpty else { return }
         let alert = NSAlert()
-        alert.messageText = "Are you sure you want to delete “\((path as NSString).lastPathComponent)”?"
-        alert.informativeText = "You can restore it from the Trash."
+        alert.messageText = paths.count == 1
+            ? "Are you sure you want to delete “\((paths[0] as NSString).lastPathComponent)”?"
+            : "Are you sure you want to delete the following \(paths.count) items?"
+        alert.informativeText = (paths.count == 1 ? "" : paths.prefix(10).map { ($0 as NSString).lastPathComponent }.joined(separator: "\n") + "\n\n")
+            + "You can restore \(paths.count == 1 ? "it" : "them") from the Trash."
         alert.addButton(withTitle: "Move to Trash")
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        if let failure = store.trash(path) { show(failure) }
+        guard StorylineSeams.confirm?("trash") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
+        let result = store.trash(paths)
+        if let failure = result.failure { show(failure) }
+        recordTrash(result.done, store: store, undo: undo)
+    }
+
+    private static func recordTrash(_ done: [FilesStore.Trashed], store: FilesStore, undo: UndoManager?) {
+        guard !done.isEmpty else { return }
+        record("Move to Trash", undo: undo, store: store, back: { store.restore(done) }) {
+            let again = store.trash(done.map(\.path))
+            recordTrash(again.done, store: store, undo: undo)
+            return again.failure
+        }
+    }
+
+    /// Registers an undo that runs `back`, whose redo runs `forward` (which registers the
+    /// next undo itself, as a redo makes new things).
+    static func record(
+        _ name: String, undo: UndoManager?, store: FilesStore,
+        back: @escaping @MainActor () -> FilesStore.Failure?, forward: @escaping @MainActor () -> FilesStore.Failure?
+    ) {
+        guard let undo else { return }
+        undo.registerUndo(withTarget: store) { store in
+            MainActor.assumeIsolated {
+                if let failure = back() { show(failure) }
+                undo.registerUndo(withTarget: store) { _ in
+                    MainActor.assumeIsolated { if let failure = forward() { show(failure) } }
+                }
+                undo.setActionName(name)
+            }
+        }
+        undo.setActionName(name)
+    }
+
+    // MARK: Cut, copy, paste, duplicate
+
+    /// ⌘C / ⌘X: the files on the pasteboard (Finder can paste them too) and kept for ⌘V.
+    static func copy(_ paths: [String], cut: Bool, store: FilesStore) {
+        guard !paths.isEmpty else { return }
+        board.clearContents()
+        board.writeObjects(paths.map { URL(fileURLWithPath: $0) as NSURL })
+        store.clipboard = (paths, cut)
+    }
+
+    static func canPaste(store: FilesStore) -> Bool {
+        board.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+    }
+
+    /// ⌘V into `folder`: the pasteboard's files, moved after a cut in the tree, copied
+    /// otherwise; a taken name gets " copy", as Finder does. One undo.
+    static func paste(into folder: String, store: FilesStore, workspace: Workspace, undo: UndoManager?) {
+        let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let paths = urls.map { realPath($0.path) }
+        guard !paths.isEmpty else { return }
+        let cut = store.clipboard.map { $0.cut && Set($0.paths) == Set(paths) } ?? false
+        let result = store.transfer(paths, into: folder, copy: !cut, collision: { _ in .keepBoth }, moved: workspace.renamed)
+        if let failure = result.failure { show(failure) }
+        // A cut pastes once; a copy can paste again.
+        if cut, !result.done.isEmpty { store.clipboard = nil; board.clearContents() }
+        registerUndo(result.done, store: store, workspace: workspace, undo: undo)
+    }
+
+    /// Duplicate: a copy beside each, named " copy". One undo.
+    static func duplicate(_ paths: [String], store: FilesStore, workspace: Workspace, undo: UndoManager?) {
+        var done: [FilesStore.Transfer] = []
+        for path in paths {
+            let result = store.transfer([path], into: store.parent(of: path), copy: true, collision: { _ in .keepBoth }, moved: workspace.renamed)
+            if let failure = result.failure { show(failure) }
+            done += result.done
+        }
+        registerUndo(done, store: store, workspace: workspace, undo: undo)
+    }
+
+    /// From outside the folder (Finder, another app): a drop copies, as in VS Code.
+    static func fromOutside(_ paths: [String], store: FilesStore) -> Bool {
+        paths.contains { !$0.hasPrefix(store.root + "/") }
+    }
+
+    // MARK: Find in Folder
+
+    /// Search, its files to include set to this folder.
+    static func find(in folder: String, store: FilesStore, workspace: Workspace) {
+        let search = workspace.searchStore()
+        search.include = folder == store.root ? "" : "./" + store.relative(folder) + "/**"
+        if !search.include.isEmpty { search.showsDetails = true }
+        workspace.showSearch()
     }
 
     // MARK: Dropping
@@ -714,7 +925,7 @@ enum TreeActions {
             alert.messageText = "\(copy ? "Copy" : "Move") \(sources.count) items into “\(folderName)”?"
             alert.addButton(withTitle: copy ? "Copy" : "Move")
             alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard StorylineSeams.confirm?(copy ? "copy" : "move") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
         }
         var always = answer
         let result = store.transfer(sources, into: folder, copy: copy, collision: { name in
@@ -804,12 +1015,12 @@ private struct TreeDrop: DropDelegate {
         let (folder, store, workspace, undo) = (folder, store, workspace, undo)
         Task { @MainActor in
             var paths: [String] = []
+            var urls: [URL] = []
             for provider in providers {
-                if let url = await Self.url(provider) { paths.append(realPath(url.path)) }
+                if let url = await Self.url(provider) { urls.append(url) }
             }
-            // From outside the folder (Finder, another app): a copy, as in VS Code.
-            let outside = paths.contains { !$0.hasPrefix(store.root + "/") }
-            TreeActions.drop(paths, into: folder, copy: option || outside, store: store, workspace: workspace, undo: undo)
+            paths = TreeDrag.expand(urls).map { realPath($0.path) }
+            TreeActions.drop(paths, into: folder, copy: option || TreeActions.fromOutside(paths, store: store), store: store, workspace: workspace, undo: undo)
         }
         return true
     }
@@ -821,4 +1032,48 @@ private struct TreeDrop: DropDelegate {
             }
         }
     }
+}
+
+// MARK: - Storylines
+
+extension Workspace {
+    /// The tree's chosen rows, relative to the folder, in the tree's order.
+    package var storyTreeChosen: [String] { files.map { store in store.chosen.map(store.relative) } ?? [] }
+
+    /// Where `title` sits in the tree's menu for the row at `relativePath` (rules counted), as
+    /// a right-click there would show it now.
+    package func storyTreeMenuIndex(_ relativePath: String, _ title: String) -> Int? {
+        guard let store = files else { return nil }
+        let path = realPath(folder.appendingPathComponent(relativePath).path)
+        let isFolder = store.row(showing: path)?.isFolder ?? false
+        return TreeMenu(path: path, isFolder: isFolder, store: store, workspace: self, undo: store.undo).items.firstIndex { $0.title == title }
+    }
+
+    /// Drops the chosen rows on the folder at `relativePath`, as a drag that starts on one of
+    /// them does (SwiftUI's drag isn't driven by synthetic events).
+    package func storyTreeDragChosen(into relativePath: String) {
+        guard let store = files, let first = store.chosenTops.first else { return }
+        TreeDrag.paths = store.chosenTops
+        let sources = TreeDrag.expand([URL(fileURLWithPath: first)]).map(\.path)
+        let target = relativePath.isEmpty ? store.root : realPath(folder.appendingPathComponent(relativePath).path)
+        TreeActions.drop(sources, into: target, copy: false, store: store, workspace: self, undo: store.undo)
+    }
+
+    /// Drops files from outside the folder (as from Finder) on the folder at `relativePath`.
+    package func storyTreeDropFromOutside(_ paths: [String], into relativePath: String) {
+        guard let store = files else { return }
+        let target = relativePath.isEmpty ? store.root : realPath(folder.appendingPathComponent(relativePath).path)
+        let sources = paths.map(realPath)
+        TreeActions.drop(sources, into: target, copy: TreeActions.fromOutside(sources, store: store), store: store, workspace: self, undo: store.undo)
+    }
+
+    /// ⌘Z and ⇧⌘Z on the window's undo manager.
+    package func storyUndo() { files?.undo?.undo() }
+    package func storyRedo() { files?.undo?.redo() }
+
+    /// Search's files to include.
+    package var storySearchInclude: String? { search?.include }
+
+    /// The active terminal's starting folder.
+    package var storyTerminalFolder: String? { terminals.active?.shell?.folder.path }
 }

@@ -15,7 +15,7 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var failure: String?
     @ObservationIgnored let view: LocalProcessTerminalView
     @ObservationIgnored private(set) var child: ProcessChild?
-    @ObservationIgnored private let folder: URL
+    @ObservationIgnored let folder: URL
     @ObservationIgnored private let executable: String
     @ObservationIgnored private let arguments: [String]
     @ObservationIgnored private var environment: [String: String]

@@ -57,7 +57,22 @@ final class FilesStore {
     private(set) var git = GitStatus.empty
     private(set) var rootLoaded = false
     private(set) var rootError = false
-    var selection: String?
+    /// The row the keys are on (VS Code's focus). With one item chosen, also the choice.
+    var selection: String? {
+        didSet {
+            // Moved off the chosen rows (a plain click, an arrow, a rename): back to one.
+            if !picked.isEmpty, selection.map(picked.contains) != true { picked = [] }
+        }
+    }
+    /// The rows chosen with ⌘ or ⇧ (VS Code's multi-select), the selection among them; empty
+    /// while one row is chosen.
+    private(set) var picked: Set<String> = []
+    /// Where a ⇧ range starts: the last row clicked without ⇧.
+    @ObservationIgnored private(set) var anchor: String?
+    /// ⌘C / ⌘X in the tree: the paths and whether ⌘V moves them.
+    @ObservationIgnored var clipboard: (paths: [String], cut: Bool)?
+    /// The window's undo manager, from the explorer that shows this tree (for storylines' ⌘Z).
+    @ObservationIgnored weak var undo: UndoManager?
     /// The folder a drag is over: it and its open rows fill (look §3).
     var dropTarget: String?
     var edit: Edit? {
@@ -381,11 +396,126 @@ final class FilesStore {
     }
 
     func trash(_ path: String) -> Failure? {
-        do { try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil) } catch {
-            return .system(error.localizedDescription)
+        trash([path]).failure
+    }
+
+    /// Sends `paths` to the Trash; what went, and where it is now, so undo can bring it back.
+    func trash(_ paths: [String]) -> (done: [Trashed], failure: Failure?) {
+        var done: [Trashed] = []
+        var failure: Failure?
+        for path in paths {
+            var trashed: NSURL?
+            do { try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: &trashed) } catch {
+                failure = .system(error.localizedDescription)
+                continue
+            }
+            if let trashed = trashed as URL? { done.append(Trashed(path: path, trashed: trashed)) }
         }
-        Task { await reload((path as NSString).deletingLastPathComponent) }
-        return nil
+        if !paths.isEmpty, picked.contains(where: paths.contains) || selection.map(paths.contains) == true { pickOnly(nil) }
+        reloadFolders(of: paths)
+        return (done, failure)
+    }
+
+    /// One item in the Trash and where it came from.
+    struct Trashed: Sendable {
+        let path: String
+        let trashed: URL
+    }
+
+    /// Brings trashed items back where they were (undo of a trash, last first).
+    func restore(_ items: [Trashed]) -> Failure? {
+        var failure: Failure?
+        for item in items.reversed() {
+            do { try FileManager.default.moveItem(at: item.trashed, to: URL(fileURLWithPath: item.path)) } catch {
+                failure = .system(error.localizedDescription)
+            }
+        }
+        reloadFolders(of: items.map(\.path))
+        if let last = items.last { selection = last.path }
+        return failure
+    }
+
+    private func reloadFolders(of paths: [String]) {
+        let folders = Set(paths.map { ($0 as NSString).deletingLastPathComponent })
+        Task {
+            for folder in folders where folder == root || children[folder] != nil || expanded.contains(folder) {
+                await load(folder, rebuilding: false)
+            }
+            rebuild()
+        }
+    }
+
+    // MARK: - Choosing several (VS Code's ⌘ and ⇧ clicks)
+
+    /// The chosen paths in the tree's order: the picked rows, or the one selection.
+    var chosen: [String] {
+        guard !picked.isEmpty else { return selection.map { [$0] } ?? [] }
+        let order = rows.map(\.id)
+        return order.filter(picked.contains) + picked.subtracting(order).sorted()
+    }
+
+    /// The chosen paths without any that sit inside another chosen folder (what a trash, move
+    /// or copy acts on).
+    var chosenTops: [String] { Self.tops(chosen) }
+
+    nonisolated static func tops(_ paths: [String]) -> [String] {
+        paths.filter { path in !paths.contains { $0 != path && path.hasPrefix($0 + "/") } }
+    }
+
+    /// Whether `row` is among the chosen.
+    func isChosen(_ row: Row) -> Bool {
+        if picked.isEmpty { return selection.map(row.shows) ?? false }
+        return picked.contains(row.id)
+    }
+
+    /// A plain click or arrow: just this row.
+    func pickOnly(_ path: String?) {
+        picked = []
+        anchor = path
+        selection = path
+    }
+
+    /// ⌘-click: this row in or out of the choice; the keys go to it.
+    func pickToggle(_ path: String) {
+        var next = picked.isEmpty ? Set(selection.map { [$0] } ?? []) : picked
+        if next.contains(path) { next.remove(path) } else { next.insert(path) }
+        anchor = path
+        if next.count <= 1 {
+            picked = []
+            selection = next.first
+        } else {
+            picked = next
+            selection = next.contains(path) ? path : chosen.first(where: next.contains)
+        }
+    }
+
+    /// ⇧-click or ⇧-arrow: every row from the anchor to `path`.
+    func pickRange(to path: String) {
+        let from = anchor ?? selection ?? path
+        let span = Self.span(rows.map(\.id), from: from, to: path)
+        anchor = from
+        if span.count <= 1 {
+            picked = []
+            selection = path
+        } else {
+            picked = Set(span)
+            selection = path
+        }
+    }
+
+    /// ⌘A: every row shown.
+    func pickAll() {
+        let all = rows.filter { $0.kind == .node }.map(\.id)
+        guard all.count > 1 else { return }
+        anchor = all.first
+        picked = Set(all)
+        if selection.map(picked.contains) != true { selection = all.first }
+    }
+
+    /// The rows between two (both included), in the tree's order; just `to` when `from` isn't shown.
+    nonisolated static func span(_ ids: [String], from: String, to: String) -> [String] {
+        guard let a = ids.firstIndex(of: from), let b = ids.firstIndex(of: to) else { return [to] }
+        return Array(ids[min(a, b)...max(a, b)])
     }
 
     // MARK: - Compressing (Finder's Compress)

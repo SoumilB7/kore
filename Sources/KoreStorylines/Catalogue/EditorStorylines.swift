@@ -282,8 +282,7 @@ final class ExplorerChainDeep: FilesStoryline {
             Expect("and not in “d10”") { $0.app.workspace?.storyHasFile(Self.folder(10) + "/new.txt") == false },
 
             // Compress on a chain's name zips that folder beside it, as Finder does.
-            RightClick(.id(StoryID.Explorer.segment(Self.folder(3)))), WaitForElement(.id(StoryID.Options.panel)),
-            Press(.id(StoryID.Options.item(4))),
+            TreeMenuItem(Self.folder(3), "Compress", on: .id(StoryID.Explorer.segment(Self.folder(3)))),
             Expect("d3.zip made beside “d3”, not empty", found: { "\($0.app.workspace?.storyFileSize(Self.folder(2) + "/d3.zip") ?? 0) bytes" }) {
                 ($0.app.workspace?.storyFileSize(Self.folder(2) + "/d3.zip") ?? 0) > 0
             },

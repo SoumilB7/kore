@@ -124,8 +124,9 @@ final class TerminalPanel {
         UILog.event("terminal-hide", ["count": "\(entries.count)"])
     }
 
-    @discardableResult func newShell(draft: String? = nil, history: String? = nil) -> TerminalEntry {
-        let entry = TerminalEntry(shell: TerminalShell(folder: folder, draft: draft, history: history, environment: environment))
+    /// A new shell, in the window's folder or in `in` (the explorer's Open in Terminal).
+    @discardableResult func newShell(draft: String? = nil, history: String? = nil, folder start: URL? = nil) -> TerminalEntry {
+        let entry = TerminalEntry(shell: TerminalShell(folder: start ?? folder, draft: draft, history: history, environment: environment))
         entry.view.suspendsRenderingWhenNotVisible = suspendsRenderingWhenNotVisible
         entries.append(entry)
         select(entry)

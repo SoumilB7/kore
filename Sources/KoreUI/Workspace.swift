@@ -121,7 +121,11 @@ package final class Workspace {
     private(set) var files: FilesStore?
     package var explorerOpen = false {
         didSet {
-            if explorerOpen { _ = filesStore() }
+            if explorerOpen, !oldValue {
+                // Opened: the tree shows the active tab's file, as VS Code's auto-reveal does.
+                let files = filesStore()
+                if let path = activeTab.file?.path { Task { await files.reveal(path) } }
+            }
             saveExplorer()
         }
     }
