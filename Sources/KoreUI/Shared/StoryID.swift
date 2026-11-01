@@ -258,6 +258,17 @@ extension StoryID {
         package static let close = StoryID(.agentmap, "close")
     }
 
+    package enum AgentTab {
+        /// The agent's prompt, the first row of its tab's timeline.
+        package static let prompt = StoryID(.agentmap, "tabprompt")
+        /// "Show full prompt" / "Show less" under a long prompt.
+        package static let promptToggle = StoryID(.agentmap, "tabprompttoggle")
+        /// The tab's crumb row above the timeline.
+        package static let crumb = StoryID(.agentmap, "tabcrumb")
+        /// The end of the tab's timeline, under its last row.
+        package static let end = StoryID(.agentmap, "tabend")
+    }
+
     package enum Welcome {
         /// A recent folder, by its path.
         package static func recent(_ path: String) -> StoryID { StoryID(.welcome, "recent", key: path) }

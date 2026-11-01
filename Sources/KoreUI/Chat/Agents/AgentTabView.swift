@@ -15,6 +15,7 @@ struct AgentTabView: View {
         return VStack(spacing: 0) {
             if let info {
                 crumb(info)
+                    .storyID(StoryID.AgentTab.crumb)
                 AgentTabTimeline(chat: chat, id: id, prompt: info.prompt)
                     .onAppear { chat.loadAgentIfNeeded(id) }
                     // Its tools' files open in Kore, as the chat's do.
@@ -154,24 +155,18 @@ private struct AgentTabTimeline: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        Color.clear.frame(height: Layout.Timeline.itemPadding)
-                        AgentTimelineRows(chat: chat, id: id)
-                    } header: {
-                        if let prompt, !prompt.isEmpty {
-                            Text(prompt)
-                                .font(TextStyle.body)
-                                .foregroundStyle(Theme.text)
-                                .textSelection(.enabled)
-                                .padding(Inset.userBox)
-                                .panel(.userBox)
-                                .padding(.vertical, Layout.Timeline.itemPadding)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Theme.background)
-                        }
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    // The prompt is the timeline's first row, as a user's message is the chat's:
+                    // it scrolls away with the rest, and a long one folds like a long message.
+                    if let prompt, !prompt.isEmpty {
+                        AgentTabPrompt(text: prompt)
+                            .padding(.vertical, Layout.Timeline.itemPadding)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    Color.clear.frame(height: Layout.Timeline.itemPadding)
+                    AgentTimelineRows(chat: chat, id: id)
                     Color.clear.frame(height: Stroke.hairline).id(Self.end)
+                        .storyID(StoryID.AgentTab.end)
                 }
                 .padding(.horizontal, column.padding)
                 .padding(.top, Layout.Transcript.top)
@@ -216,6 +211,47 @@ private struct AgentTabTimeline: View {
         // placed: stay at the end while following.
         if following.value, height != geometry.value.height { proxy.scrollTo(Self.end, anchor: .bottom) }
         geometry.value = (height, offset)
+    }
+}
+
+/// The agent's prompt in the user's box. A long one (from `collapseFrom` lines) shows
+/// `collapsedLines` with "Show full prompt" under it, as a long message does in the chat. It starts
+/// clipped, so a long brief never lays out whole until it's opened.
+private struct AgentTabPrompt: View {
+    let text: String
+    /// The laid-out lines of the clipped text: enough to tell a long prompt from a short one.
+    @StateObject private var lines = Local(0)
+    @StateObject private var expanded = Local(false)
+
+    private var long: Bool { lines.value >= Layout.Timeline.collapseFrom }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !expanded.value && (lines.value == 0 || long) {
+                MessageText(
+                    text: text, lines: Layout.Timeline.collapsedLines, fade: Size.collapseFade * Zoom.shared.scale,
+                    ground: PanelStyle.userBox.fill ?? Theme.surface, selectable: false,
+                    click: long ? { expanded.value = true } : nil
+                ) { lines.value = $0 }
+            } else {
+                Text(text)
+                    .font(TextStyle.body)
+                    .foregroundStyle(Theme.text)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if long {
+                HStack {
+                    Spacer(minLength: 0)
+                    MessageToggle(expanded: expanded.value, title: "Show full prompt") { expanded.value.toggle() }
+                        .storyID(StoryID.AgentTab.promptToggle)
+                }
+                .padding(.top, Space.messageToggle)
+            }
+        }
+        .padding(Inset.userBox)
+        .panel(.userBox)
+        .storyID(StoryID.AgentTab.prompt)
     }
 }
 
