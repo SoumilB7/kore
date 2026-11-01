@@ -188,7 +188,7 @@ private struct InstallButton: View {
                 key: method == .official ? "Recommended" : CLIInstaller.command(method, for: provider)
             ) { installs.install(method) }
         }
-        let height = CGFloat(items.count) * Layout.Options.row + Space.xs * 2
+        let height = CGFloat(items.count) * Layout.Options.menuRow + Space.xs * 2
         let top = view.convert(CGPoint(x: view.bounds.minX, y: view.isFlipped ? view.bounds.minY : view.bounds.maxY), to: nil)
         OptionsMenu.shared.show(items, at: CGPoint(x: top.x - Layout.Options.width / 2, y: top.y + height + Space.xs), in: window, source: "install")
     }

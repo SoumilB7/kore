@@ -11,6 +11,8 @@ extension Workspace {
     /// The folder's chat ids as history lists them (both CLIs, earlier folder paths included).
     package var storyHistoryIDs: [String] { chats.map(\.id) }
     /// The paths that follow the folder: file tabs', chats' and the terminals' folder.
+    /// The active file's tab shows its text, not a renderer's view of it.
+    package var storyActiveFileRaw: Bool { activeFile?.showsRaw ?? false }
     package var storyFilePaths: [String] { tabs.compactMap { $0.file?.path } }
     package var storyChatFolders: [URL] { tabs.compactMap { $0.chat?.folder } }
     package var storyTerminalsFolder: URL { terminals.folder }

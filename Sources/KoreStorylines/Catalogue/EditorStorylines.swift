@@ -290,3 +290,44 @@ final class ExplorerChainDeep: FilesStoryline {
         ]
     }
 }
+
+
+/// A folder's right-click menu shows whole, Copy Path and Copy Relative Path included, without
+/// scrolling; a new Markdown file made from it opens as its text, ready to write in.
+final class ExplorerNewMarkdownRaw: FilesStoryline {
+    override class var tags: Set<Tag> { [.files, .gate] }
+    override class var files: [(path: String, text: String)] { [("docs/readme.md", "# Hi\n")] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            WaitForElement(.treeRow("docs")),
+            RightClick(.treeRow("docs")), WaitForElement(.id(StoryID.Options.panel)),
+            MenuShowsWhole(row: "docs", last: "Move to Trash"),
+            Snapshot("folder-menu"),
+            Press(.id(StoryID.Options.item(0))),
+            WaitForFocus(.id(StoryID.Explorer.namefield)),
+            TypeText("notes.md"),
+            Key(.returnKey),
+            Expect("notes.md made and open") { $0.app.workspace?.storyActiveFile == "docs/notes.md" },
+            Expect("as its text, not the preview") { $0.app.workspace?.storyActiveFileRaw == true },
+        ]
+    }
+}
+
+/// The right-click menu's last item sits inside its panel: nothing left to scroll to.
+private struct MenuShowsWhole: Step {
+    let row: String
+    let last: String
+    var label: String { "Expect the whole menu on screen, “\(last)” included" }
+
+    func run(_ story: StoryContext) async throws {
+        guard let index = story.app.workspace?.storyTreeMenuIndex(row, last) else { throw StoryFailure.other("no “\(last)”") }
+        let item = try await story.element(.id(StoryID.Options.item(index)))
+        let panel = try await story.element(.id(StoryID.Options.panel))
+        guard let frame = item.frame, let box = panel.frame else { throw StoryFailure.other("no frames") }
+        guard box.minY <= frame.minY + 0.5, frame.maxY <= box.maxY + 0.5 else {
+            throw StoryFailure.expectation("“\(last)” inside the menu (item \(frame), panel \(box))")
+        }
+    }
+}

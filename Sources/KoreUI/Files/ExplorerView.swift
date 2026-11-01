@@ -681,6 +681,8 @@ private struct InlineNameField: View {
             store.selection = path
             if newFile {
                 workspace.openFile(URL(fileURLWithPath: path))
+                // An empty new file is for writing: its text, not a renderer's view (a .md's preview).
+                workspace.activeFile?.showsRaw = true
                 workspace.activeFile?.editor.focus()
             }
         case .failure(let failure):

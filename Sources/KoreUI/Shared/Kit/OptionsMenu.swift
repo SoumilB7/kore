@@ -184,8 +184,10 @@ final class OptionsMenu {
 
     private func place() {
         guard let content = owner?.contentView, let host else { return }
-        let height = min(Size.menuMax, CGFloat(items.filter { !$0.separator }.count + (parents.isEmpty ? 0 : 1)) * Layout.Options.row
-                         + CGFloat(items.filter(\.separator).count) * (Stroke.hairline + Space.xs * 2) + Space.xs * 2)
+        // As tall as its items, so a long menu (a folder's) shows whole; only a window too short
+        // for it leaves the rest to scroll (`fitting`).
+        let height = CGFloat(items.filter { !$0.separator }.count + (parents.isEmpty ? 0 : 1)) * Layout.Options.menuRow
+            + CGFloat(items.filter(\.separator).count) * (Stroke.hairline + Space.xxs * 2) + Space.xs * 2
         let point = content.convert(anchor, from: nil)
         host.frame = Self.fitting(point: point, size: CGSize(width: Layout.Options.width, height: height),
                                   bounds: content.bounds, flipped: content.isFlipped)
@@ -286,7 +288,7 @@ private struct OptionsList: View {
                     }
                     ForEach(Array(menu.items.enumerated()), id: \.offset) { index, item in
                         if item.separator {
-                            Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.xs)
+                            Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.xxs)
                         } else {
                             Button { menu.choose(index) } label: {
                                 label(item.title, symbol: item.checked ? "checkmark" : nil,
@@ -318,14 +320,14 @@ private struct OptionsList: View {
         HStack(spacing: Space.sm) {
             if gutter { Image(systemName: symbol ?? "checkmark").opacity(symbol == nil ? 0 : 1).font(Chrome.glyphCrumb) }
             if let glyph { Image(systemName: glyph).font(Chrome.caption).foregroundStyle(Theme.secondary) }
-            Text(text).font(Chrome.label).lineLimit(1).truncationMode(.middle)
+            Text(text).font(Chrome.caption).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 0)
             if let key { Text(key).font(Chrome.caption).foregroundStyle(Theme.tertiary).padding(.leading, Space.lg) }
             if branch { Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.secondary) }
         }
         .foregroundStyle(tint)
         .padding(.horizontal, Space.sm)
-        .frame(maxWidth: .infinity, minHeight: Layout.Options.row, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: Layout.Options.menuRow, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
@@ -395,7 +397,12 @@ struct OptionMenuButton<Label: View>: View {
 }
 
 extension Layout {
-    enum Options { static let width: CGFloat = 280; static let row: CGFloat = 28 }
+    enum Options {
+        static let width: CGFloat = 280
+        static let row: CGFloat = 28
+        /// A right-click menu's row: compact, so a folder's whole menu fits without scrolling.
+        static let menuRow: CGFloat = 22
+    }
 }
 extension StoryID {
     package enum Options {
