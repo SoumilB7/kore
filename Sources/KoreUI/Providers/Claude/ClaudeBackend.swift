@@ -817,7 +817,10 @@ final class ClaudeBackend: ChatBackend {
     /// no `--fork-session`), so the same session goes on from there.
     func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
         guard let sessionId else { throw ForkError.notFound }
-        let found = await page(sessionId, before: id)
+        var found = await page(sessionId, before: id)
+        // An id the file doesn't hold (a row from before an earlier rollback) reads nothing: look
+        // for the message by its text along the current history instead.
+        if id != nil, found.messages.isEmpty { found = await page(sessionId) }
         let messages = found.messages
         guard let target = Self.message(id, text, in: messages),
             let before = messages[..<target].lastIndex(where: { !ClaudeHistory.isBoundary($0) }),

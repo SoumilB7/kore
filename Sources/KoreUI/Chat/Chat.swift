@@ -1328,17 +1328,25 @@ package final class Chat: Identifiable {
         }
     }
 
+    /// A rollback under way (`rollBack(to:draft:)`).
+    @ObservationIgnored private var rollingBack = false
+
     /// Takes this chat back to before a user message: it and everything after it go, and its text
     /// returns to the composer. Files stay as they are.
-    func rollBack(_ entry: TranscriptStore.Entry) { rollBack(to: entry, draft: entry.text) }
+    package func rollBack(_ entry: TranscriptStore.Entry) { rollBack(to: entry, draft: entry.text) }
 
     /// Takes this chat back to this answer: what came after its turn goes.
-    func rollBack(after answer: TranscriptStore.Entry) {
+    package func rollBack(after answer: TranscriptStore.Entry) {
         if let next = nextMessage(after: answer) { rollBack(to: next, draft: "") }
     }
 
     private func rollBack(to entry: TranscriptStore.Entry, draft: String) {
+        // One at a time: a second one started meanwhile would cut the CLI at its own message while
+        // the first one's rows replaced the transcript, so the two would disagree.
+        guard !rollingBack else { return }
+        rollingBack = true
         Task {
+            defer { rollingBack = false }
             // A running turn ends first, as Stop ends it (at most 5 s: `stopFallback`).
             stop()
             for _ in 0..<60 where isBusy { try? await Task.sleep(for: .milliseconds(100)) }

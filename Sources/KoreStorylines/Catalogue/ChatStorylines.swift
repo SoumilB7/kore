@@ -387,6 +387,37 @@ private struct ReloadChat: Step {
     }
 }
 
+/// Two rollbacks asked for at once (a double click on an answer, then the message above it): the
+/// first runs, the second is dropped, and the rows are the first one's.
+final class RollbackOneAtATime: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript {
+        CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer"), CLIScript.reply("Third answer")])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1), Send("two"), TurnFinished(2), Send("three"), TurnFinished(3), WaitIdle(),
+            Do("roll back twice at once") { story in
+                let chat = try story.activeChat()
+                let entries = chat.transcript.entries
+                guard let answer = entries.first(where: { $0.kind == .answer && $0.text == "Second answer" }),
+                    let two = entries.first(where: { $0.kind == .user && $0.text == "two" })
+                else { throw StoryFailure.other("rows missing") }
+                chat.rollBack(after: answer)
+                chat.rollBack(two)
+            },
+            Expect.rows("the first rollback's rows") { rows in
+                rows.filter { $0.kind == "user" }.map(\.text) == ["one", "two"] && rows.contains { $0.text == "Second answer" }
+            },
+            Expect("one rollback asked of the CLI") { story in
+                try story.scriptedBackend().log.filter { if case .rollback = $0 { true } else { false } }.count == 1
+            },
+            Expect("an empty composer") { try $0.activeChat().draft.isEmpty },
+        ]
+    }
+}
+
 /// A fork is in History as soon as it's made, before anything is sent in it (Claude makes its
 /// session only with the first message; Codex as the fork opens). A message later, there's
 /// still one entry for it, under its title, and Kore's own record of it has given way to the
