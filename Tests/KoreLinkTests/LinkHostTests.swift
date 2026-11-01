@@ -128,7 +128,7 @@ struct LinkHostTests {
         defer { client.close() }
         #expect(welcome.proto == LinkProto.version)
         #expect(welcome.epoch == LinkRun.epoch)
-        #expect(welcome.policy.sendMaxLevel == .manual)
+        #expect(welcome.policy.sendMaxLevel == .danger)
         #expect(welcome.providers.map(\.id) == ["claude", "codex"])
         let rest: [String] = await off {
             var types: [String] = []

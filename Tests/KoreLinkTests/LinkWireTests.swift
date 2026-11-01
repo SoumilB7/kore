@@ -164,13 +164,22 @@ struct LinkPolicyTests {
     static let manual = LinkPolicy.ChatFacts(
         level: .manual, modes: ["default": .manual, "plan": .plan, "acceptEdits": .edits, "auto": .auto], cards: ["c": card])
 
-    @Test func sendsOnlyWhereToolsAsk() {
-        #expect(LinkPolicy.check(.send(chatId: "x", text: "hi"), Self.manual) == .allow)
-        var edits = Self.manual
-        edits.level = .edits
-        #expect(LinkPolicy.check(.send(chatId: "x", text: "hi"), edits) == .deny(.sendCap, "This chat acts without asking; send to it from Kore."))
-        edits.planOn = true
-        #expect(LinkPolicy.check(.send(chatId: "x", text: "hi"), edits) == .allow)
+    @Test func sendsInEveryMode() {
+        for level in ModeLevel.allCases {
+            var chat = Self.manual
+            chat.level = level
+            #expect(LinkPolicy.check(.send(chatId: "x", text: "hi"), chat) == .allow)
+        }
+    }
+
+    @Test func raisingStaysRefusedWhereSendingIsAllowed() {
+        var auto = Self.manual
+        auto.level = .auto
+        auto.modes["danger"] = .danger
+        #expect(LinkPolicy.check(.send(chatId: "x", text: "hi"), auto) == .allow)
+        if case .deny(let code, _) = LinkPolicy.check(.setMode(chatId: "x", modeId: "danger"), auto) { #expect(code == .raiseMode) } else { Issue.record() }
+        auto.planOn = true
+        if case .deny(let code, _) = LinkPolicy.check(.setPlan(chatId: "x", on: false), auto) { #expect(code == .raiseMode) } else { Issue.record() }
     }
 
     @Test func refusesCommandsShellAndEmpty() {

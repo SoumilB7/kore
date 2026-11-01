@@ -89,7 +89,7 @@ package final class Chat: Identifiable {
     /// That chat, while it's open (its "Forked from" line switches to it).
     @ObservationIgnored weak var original: Chat?
     /// The chat has been shown, so its CLI was started once (`startOnce`).
-    @ObservationIgnored private var shown = false
+    @ObservationIgnored private(set) var shown = false
     @ObservationIgnored private let compactMemory: AutoCompactMemory
     /// The auto-compact point is the chat's own (picked in it, kept for its session, or its
     /// original's when it's a fork), not the provider's: kept under its session id once known.

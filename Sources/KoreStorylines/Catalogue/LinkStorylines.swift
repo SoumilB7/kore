@@ -112,6 +112,54 @@ final class LinkRingDenied: ChatStoryline {
 }
 
 /// The storylines' companion: rings in-process, then talks to the socket from a thread of its own.
+/// The link opens a chat no tab has shown (one it made, as a restored tab would be): Kore starts
+/// it in the background and serves its page, and the tab the owner is on stays selected. It sends
+/// to a chat in a mode where tools don't ask, which the link may do in every mode.
+final class LinkOpensUnstartedChat: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Done.")]) }
+
+    override func steps() -> [any Step] {
+        let client = LinkStoryClient()
+        var active: UUID?
+        var made: String?
+        return super.steps() + [
+            Do("ring, then Allow") { _ in try client.ring() },
+            WaitForElement(.id(StoryID.Link.card)),
+            Expect("a moment before Allow takes a press") { _ in Date() > client.rungAt.addingTimeInterval(0.9) },
+            Press(.id(StoryID.Link.allow)),
+            Do("connect") { _ in client.connect() },
+            Expect("welcomed, with a window") { _ in client.welcomed && !client.snapshotWindows.isEmpty },
+            Do("make a chat over the link") { story in
+                active = story.app.workspace?.activeTab.id
+                guard let window = client.snapshotWindows.first?.id else { throw StoryFailure.other("no window") }
+                client.send(.cmd(id: "new", .new(windowId: window, provider: try story.activeChat().provider.id)))
+            },
+            Expect("made, in a tab no one has shown", found: { _ in client.result("new").map { "\($0)" } }) { story in
+                guard let id = client.result("new")?.chatId else { return false }
+                made = id
+                let chat = story.app.workspace?.tabs.lazy.compactMap(\.chat).first { $0.id.uuidString == id }
+                return chat.map { !$0.hasStarted } ?? false
+            },
+            Do("open its transcript") { _ in client.send(.txOpen(chatId: made ?? "", last: 60)) },
+            Expect("started in the background, its page served, the same tab selected") { story in
+                let chat = story.app.workspace?.tabs.lazy.compactMap(\.chat).first { $0.id.uuidString == made }
+                return chat?.hasStarted == true && client.pagedChats.contains(made ?? "") && story.app.workspace?.activeTab.id == active
+            },
+            Do("put the chat in the most permissive mode, in Kore") { story in
+                let chat = try story.activeChat()
+                guard let top = chat.controls.availableModes.max(by: { $0.level < $1.level }) else { throw StoryFailure.other("no modes") }
+                chat.setMode(top.id, remember: false)
+            },
+            Do("send to it over the link") { story in
+                client.send(.cmd(id: "send", .send(chatId: try story.activeChat().id.uuidString, text: "From the link")))
+            },
+            Expect("taken in that mode", found: { _ in client.result("send").map { "\($0)" } }) { _ in client.result("send")?.ok == true },
+            Do("disconnect") { _ in LinkRun.current?.revoke() },
+        ]
+    }
+}
+
 final class LinkStoryClient: @unchecked Sendable {
     private let lock = NSLock()
     private var messages: [LinkMessage] = []
@@ -230,6 +278,16 @@ final class LinkStoryClient: @unchecked Sendable {
         lock.withLock {
             messages.compactMap { if case .snapshot(_, _, let chats) = $0 { chats.map(\.id) } else { nil } }.flatMap { $0 }
         }
+    }
+
+    /// The windows of the first snapshot.
+    var snapshotWindows: [LinkWindow] {
+        lock.withLock { messages.lazy.compactMap { if case .snapshot(_, let windows, _) = $0 { windows } else { nil } }.first ?? [] }
+    }
+
+    /// The chats a `tx.page` came for.
+    var pagedChats: Set<String> {
+        lock.withLock { Set(messages.compactMap { if case .txPage(let chatId, _, _, _, _) = $0 { chatId } else { nil } }) }
     }
 
     func result(_ id: String) -> LinkMessage.Result? {

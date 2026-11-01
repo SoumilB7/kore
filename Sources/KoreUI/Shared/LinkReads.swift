@@ -16,6 +16,14 @@ package enum ChatAttention: Sendable {
 }
 
 extension Chat {
+    /// Its CLI was started: a tab showed it, or the link opened it.
+    package var hasStarted: Bool { shown }
+
+    /// Starts it as showing its tab would (its CLI, and its history for a resumed chat), without
+    /// showing it: the active tab and focus stay as they are. For the link opening a chat no tab
+    /// has shown yet, as a board's tiles start theirs.
+    package func startInBackground() async { await startOnce() }
+
     package var attention: ChatAttention {
         switch BoardTileState.of(self, unseen: false) {
         case .waiting: .waiting

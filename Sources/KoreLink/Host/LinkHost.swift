@@ -251,6 +251,13 @@ package final class LinkHost {
             // The client is going; it may ring again this run.
             end(.quit)
         case .txOpen(let chatId, let last):
+            guard let chat = LinkSnapshot.chatsByID()[chatId] else {
+                send(.result(.init(id: "tx.open:" + chatId, ok: false, code: .goneChat, message: "That chat isn't open in Kore any more.")))
+                return
+            }
+            // A chat no tab has shown yet (restored, or opened from the link): it starts in the
+            // background, as its tab would, and its page follows as its history arrives.
+            if !chat.hasStarted { wake(chat, chatId) }
             let count = min(max(last ?? Self.window, 1), Self.windowMax)
             session.subs[chatId] = Session.Sub(last: count)
             session.followOrder.removeAll { $0 == chatId }
@@ -295,6 +302,17 @@ package final class LinkHost {
             .attnEvent, .unknown:
             // Kore's own messages, or a type from a newer client: skipped.
             break
+        }
+    }
+
+    /// Starts a chat the link opened before any tab showed it. A start that fails answers
+    /// `gone.chat`, keyed `tx.open:<chatId>`.
+    private func wake(_ chat: Chat, _ chatId: String) {
+        UILog.event("link-wake-chat", ["chat": chatId])
+        Task { [weak self] in
+            await chat.startInBackground()
+            guard let self, chat.attention == .failed else { return }
+            self.send(.result(.init(id: "tx.open:" + chatId, ok: false, code: .goneChat, message: "Kore couldn't open that chat.")))
         }
     }
 

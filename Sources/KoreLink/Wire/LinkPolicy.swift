@@ -3,11 +3,14 @@ import Foundation
 /// What the local link may do in Kore, decided again for every command against the chat as it is
 /// when the command is applied. The lists are frozen (`z-docs/link-protocol.md` §6): a change takes
 /// a doc change and the owner's approval first. The link reaches Kore's chats, not the Mac: it can
-/// follow and answer them, but never raise how much an agent may do without asking, and it sends
-/// only to chats where tools still ask (Manual and Plan).
+/// follow, answer and send to them in any mode (owner, 2026-11-01), but never raise how much an
+/// agent may do without asking.
 package enum LinkPolicy {
-    /// The most permissive mode a chat may be in for the link to send to it.
-    package static let sendMaxLevel = ModeLevel.manual
+    /// The most permissive mode a chat may be in for the link to send to it: every mode.
+    package static let sendMaxLevel = ModeLevel.danger
+    /// The most permissive mode the link may leave plan into: leaving plan into a mode where tools
+    /// don't ask raises how much the agent may do.
+    package static let leavePlanMaxLevel = ModeLevel.manual
     /// The longest message the link may send.
     package static let maxText = 64 * 1024
     /// Slash commands the link may send: compacting only. Others can run shell or switch accounts.
@@ -59,9 +62,6 @@ package enum LinkPolicy {
         case .send(_, let text):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, text.utf8.count <= maxText else { return .deny(.invalid, "Nothing to send, or too long.") }
-            guard chat.effectiveLevel <= sendMaxLevel else {
-                return .deny(.sendCap, "This chat acts without asking; send to it from Kore.")
-            }
             if trimmed.hasPrefix("/") {
                 let name = trimmed.dropFirst().prefix { !$0.isWhitespace }
                 guard commands.contains(String(name)) else { return .deny(.command, "Only /compact can be sent over the link.") }
@@ -88,10 +88,10 @@ package enum LinkPolicy {
         case .setPlan(_, let on):
             // Plan is the lowest level: on lowers. Off goes back to the chat's own mode, which the
             // link may do only where tools still ask.
-            return on || !chat.planOn || chat.level <= sendMaxLevel ? .allow : .deny(.raiseMode, "Leaving plan raises the mode; do it in Kore.")
+            return on || !chat.planOn || chat.level <= leavePlanMaxLevel ? .allow : .deny(.raiseMode, "Leaving plan raises the mode; do it in Kore.")
         case .planReady(_, let choice):
             guard chat.cards.values.contains(where: { $0.kind == .planReady }) else { return .deny(.goneCard, "No plan is waiting.") }
-            return choice == .stay || chat.level <= sendMaxLevel
+            return choice == .stay || chat.level <= leavePlanMaxLevel
                 ? .allow : .deny(.raiseMode, "Implementing leaves plan, which raises the mode; do it in Kore.")
         case .new, .unknown:
             return .allow
