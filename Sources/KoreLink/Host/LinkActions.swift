@@ -17,12 +17,13 @@ enum LinkActions {
         static func failed(_ code: ResultCode, _ message: String) -> Outcome { Outcome(ok: false, code: code, message: message) }
     }
 
-    static func apply(_ command: LinkCommand, chat: Chat?) -> Outcome {
+    /// `files`: a send's blobs, already saved where Kore keeps attachments.
+    static func apply(_ command: LinkCommand, chat: Chat?, files: [URL] = []) -> Outcome {
         if case .deny(let code, let message) = LinkPolicy.check(command, chat.map(LinkSnapshot.facts)) { return .failed(code, message) }
         switch command {
-        case .send(_, let text):
+        case .send(_, let text, _):
             guard let chat else { return .failed(.goneChat, "") }
-            return chat.sendFromLink(text) ? .done : .failed(.busy, "The chat can't take a message right now.")
+            return chat.sendFromLink(text, files: files) ? .done : .failed(.busy, "The chat can't take a message right now.")
         case .stop:
             chat?.stop()
             return .done

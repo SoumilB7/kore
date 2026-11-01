@@ -7,7 +7,7 @@ import Foundation
 
 package enum LinkProto {
     package static let major = 1
-    package static let minor = 0
+    package static let minor = 1
     package static var version: LinkVersion { LinkVersion(major: major, minor: minor) }
 }
 
@@ -459,10 +459,13 @@ package struct ChatMeta: Codable, Sendable, Equatable {
     package var running: Bool
     package var cards: [LinkCard]
     package var can: Can
+    /// The "/" commands the chat offers that the link may send (1.1). Kore's own entries are left
+    /// out: they open Kore's popups and send the CLI nothing.
+    package var commands: [LinkSlash]?
 
     package init(
         id: String, provider: String, title: String, state: State, mode: Mode, modeIds: [String], allowedModeIds: [String],
-        model: String?, queued: Int, running: Bool, cards: [LinkCard], can: Can
+        model: String?, queued: Int, running: Bool, cards: [LinkCard], can: Can, commands: [LinkSlash]? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -476,6 +479,34 @@ package struct ChatMeta: Codable, Sendable, Equatable {
         self.running = running
         self.cards = cards
         self.can = can
+        self.commands = commands
+    }
+}
+
+/// One "/" command a chat offers: a CLI command (sent as `/name`) or a skill (Codex, `$name`).
+package struct LinkSlash: Codable, Sendable, Equatable {
+    package enum Kind: String, LenientEnum { case command, skill, unknown }
+    package var name: String
+    package var description: String
+    package var kind: Kind
+    package init(name: String, description: String, kind: Kind) {
+        self.name = name
+        self.description = description
+        self.kind = kind
+    }
+}
+
+/// A file attached to a user message (1.1). `ref` is opaque and only means something with its chat:
+/// `blob.get` serves it, and only refs in that chat's transcript.
+package struct LinkAttachment: Codable, Sendable, Equatable {
+    package enum Kind: String, LenientEnum { case image, text, pdf, other, unknown }
+    package var ref: String
+    package var name: String
+    package var kind: Kind
+    package init(ref: String, name: String, kind: Kind) {
+        self.ref = ref
+        self.name = name
+        self.kind = kind
     }
 }
 
@@ -548,11 +579,13 @@ package struct LinkEntry: Codable, Sendable, Equatable {
     package var tool: Tool?
     package var changes: [Change]?
     package var agent: Agent?
+    /// A user message's files (1.1).
+    package var attachments: [LinkAttachment]?
 
     package init(
         id: String, kind: Kind, turn: String? = nil, text: String? = nil, doc: [Block]? = nil, textLen: Int, done: Bool,
         isError: Bool = false, stopped: Bool = false, inTurn: Bool = false, tool: Tool? = nil, changes: [Change]? = nil,
-        agent: Agent? = nil
+        agent: Agent? = nil, attachments: [LinkAttachment]? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -567,6 +600,7 @@ package struct LinkEntry: Codable, Sendable, Equatable {
         self.tool = tool
         self.changes = changes
         self.agent = agent
+        self.attachments = attachments
     }
 }
 
@@ -650,7 +684,8 @@ package struct AttnTurn: Codable, Sendable, Equatable {
 package enum LinkCommand: Codable, Sendable, Equatable {
     package enum PlanChoice: String, LenientEnum { case implement, stay, unknown }
 
-    case send(chatId: String, text: String)
+    /// `blobs`: finished uploads to attach (1.1).
+    case send(chatId: String, text: String, blobs: [String] = [])
     case stop(chatId: String)
     case answer(chatId: String, cardId: String, action: CardAction.ID, digest: String, answers: [String: [String]]?)
     case setMode(chatId: String, modeId: String)
@@ -663,7 +698,7 @@ package enum LinkCommand: Codable, Sendable, Equatable {
     /// The chat it acts on; nil for a new chat.
     package var chatId: String? {
         switch self {
-        case .send(let id, _), .stop(let id), .answer(let id, _, _, _, _), .setMode(let id, _), .setPlan(let id, _), .planReady(let id, _): id
+        case .send(let id, _, _), .stop(let id), .answer(let id, _, _, _, _), .setMode(let id, _), .setPlan(let id, _), .planReady(let id, _): id
         case .new, .unknown: nil
         }
     }
@@ -682,14 +717,17 @@ package enum LinkCommand: Codable, Sendable, Equatable {
         }
     }
 
-    private enum Key: String, CodingKey { case type, chatId, text, cardId, action, digest, answers, modeId, on, choice, windowId, provider }
+    private enum Key: String, CodingKey { case type, chatId, text, blobs, cardId, action, digest, answers, modeId, on, choice, windowId, provider }
 
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
         let type = try c.decode(String.self, forKey: .type)
         func chat() throws -> String { try c.decode(String.self, forKey: .chatId) }
         switch type {
-        case "chat.send": self = .send(chatId: try chat(), text: try c.decode(String.self, forKey: .text))
+        case "chat.send":
+            self = .send(
+                chatId: try chat(), text: try c.decodeIfPresent(String.self, forKey: .text) ?? "",
+                blobs: try c.decodeIfPresent([String].self, forKey: .blobs) ?? [])
         case "chat.stop": self = .stop(chatId: try chat())
         case "chat.answer":
             self = .answer(
@@ -708,9 +746,10 @@ package enum LinkCommand: Codable, Sendable, Equatable {
         var c = encoder.container(keyedBy: Key.self)
         try c.encode(type, forKey: .type)
         switch self {
-        case .send(let chatId, let text):
+        case .send(let chatId, let text, let blobs):
             try c.encode(chatId, forKey: .chatId)
             try c.encode(text, forKey: .text)
+            if !blobs.isEmpty { try c.encode(blobs, forKey: .blobs) }
         case .stop(let chatId):
             try c.encode(chatId, forKey: .chatId)
         case .answer(let chatId, let cardId, let action, let digest, let answers):
@@ -750,6 +789,12 @@ package enum ResultCode: String, LenientEnum {
     case goneChat = "gone.chat"
     case goneCard = "gone.card"
     case goneWindow = "gone.window"
+    /// Uploads and downloads (1.1).
+    case tooLarge = "blob.tooLarge"
+    case badHash = "blob.badHash"
+    case badType = "blob.badType"
+    case goneBlob = "gone.blob"
+    case deniedRef = "denied.ref"
     case busy
     case invalid
     case rateLimited

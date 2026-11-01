@@ -6,6 +6,7 @@ package enum LinkMessage: Sendable, Equatable {
     package enum ByeReason: String, LenientEnum { case quit, disconnected, slow, auth, version, invalid, rateLimited, unknown }
     package enum Field: String, LenientEnum { case text, input, result, unknown }
     package enum AttnOp: String, LenientEnum { case open, clear, turn, unknown }
+    package enum Variant: String, LenientEnum { case thumb, full, unknown }
 
     package struct Client: Codable, Sendable, Equatable {
         package var name: String
@@ -87,13 +88,19 @@ package enum LinkMessage: Sendable, Equatable {
         /// Set on a `chat.new`'s result.
         package var chatId: String?
         package var windowId: String?
-        package init(id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, chatId: String? = nil, windowId: String? = nil) {
+        /// Set on a finished upload's result (1.1).
+        package var blobId: String?
+        package init(
+            id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, chatId: String? = nil, windowId: String? = nil,
+            blobId: String? = nil
+        ) {
             self.id = id
             self.ok = ok
             self.code = code
             self.message = message
             self.chatId = chatId
             self.windowId = windowId
+            self.blobId = blobId
         }
     }
 
@@ -118,6 +125,13 @@ package enum LinkMessage: Sendable, Equatable {
     case entryChunk(id: String, text: String, offset: Int, total: Int)
     case cardMore(id: String, chatId: String, cardId: String, offset: Int)
     case cardChunk(id: String, text: String, offset: Int, total: Int)
+    // Files (1.1): an upload is begun, sent in chunks and ended; its result carries the blob's id,
+    // which `chat.send` attaches. `blob.get` reads a transcript attachment in pieces.
+    case blobPutBegin(uploadId: String, name: String, mime: String, size: Int, sha256: String)
+    case blobPutChunk(uploadId: String, index: Int, data: String)
+    case blobPutEnd(uploadId: String)
+    case blobGet(id: String, chatId: String, ref: String, variant: Variant, offset: Int)
+    case blobChunk(id: String, mime: String, offset: Int, total: Int, data: String)
     // Commands
     case cmd(id: String, LinkCommand)
     case result(Result)
@@ -147,6 +161,11 @@ package enum LinkMessage: Sendable, Equatable {
         case .entryChunk: "entry.chunk"
         case .cardMore: "card.more"
         case .cardChunk: "card.chunk"
+        case .blobPutBegin: "blob.put.begin"
+        case .blobPutChunk: "blob.put.chunk"
+        case .blobPutEnd: "blob.put.end"
+        case .blobGet: "blob.get"
+        case .blobChunk: "blob.chunk"
         case .cmd: "cmd"
         case .result: "result"
         case .attnState: "attn.state"
@@ -159,6 +178,7 @@ package enum LinkMessage: Sendable, Equatable {
     package static let types: Set<String> = [
         "challenge", "hello", "welcome", "bye", "command", "snapshot", "delta", "tx.open", "tx.more", "tx.close", "tx.page", "tx.delta", "tx.reset",
         "entry.more", "entry.chunk", "card.more", "card.chunk", "cmd", "result", "attn.state", "attn.event",
+        "blob.put.begin", "blob.put.chunk", "blob.put.end", "blob.get", "blob.chunk",
     ]
 }
 
@@ -166,7 +186,7 @@ extension LinkMessage: Codable {
     private enum Key: String, CodingKey {
         case t, nonce, proto, client, proof, commands, epoch, host, providers, policy, caps, reason, rev, windows, chats, removed, chatId, last,
             count, txRev, entries, turns, hasEarlier, upserts, order, id, entryId, field, offset, text, total, cardId, cmd, ok, code,
-            message, windowId, aid, open, recent, op, item, key, turn
+            message, windowId, aid, open, recent, op, item, key, turn, uploadId, name, mime, size, sha256, index, data, ref, variant, blobId
     }
 
     package init(from decoder: any Decoder) throws {
@@ -202,10 +222,19 @@ extension LinkMessage: Codable {
         case "entry.chunk": self = .entryChunk(id: try d(.id), text: try d(.text), offset: try d(.offset), total: try d(.total))
         case "card.more": self = .cardMore(id: try d(.id), chatId: try d(.chatId), cardId: try d(.cardId), offset: try d(.offset))
         case "card.chunk": self = .cardChunk(id: try d(.id), text: try d(.text), offset: try d(.offset), total: try d(.total))
+        case "blob.put.begin":
+            self = .blobPutBegin(uploadId: try d(.uploadId), name: try d(.name), mime: try d(.mime), size: try d(.size), sha256: try d(.sha256))
+        case "blob.put.chunk": self = .blobPutChunk(uploadId: try d(.uploadId), index: try d(.index), data: try d(.data))
+        case "blob.put.end": self = .blobPutEnd(uploadId: try d(.uploadId))
+        case "blob.get":
+            self = .blobGet(id: try d(.id), chatId: try d(.chatId), ref: try d(.ref), variant: try d(.variant), offset: try o(.offset) ?? 0)
+        case "blob.chunk": self = .blobChunk(id: try d(.id), mime: try d(.mime), offset: try d(.offset), total: try d(.total), data: try d(.data))
         case "cmd": self = .cmd(id: try d(.id), try d(.cmd))
         case "result":
             self = .result(
-                .init(id: try d(.id), ok: try d(.ok), code: try o(.code), message: try o(.message), chatId: try o(.chatId), windowId: try o(.windowId)))
+                .init(
+                    id: try d(.id), ok: try d(.ok), code: try o(.code), message: try o(.message), chatId: try o(.chatId), windowId: try o(.windowId),
+                    blobId: try o(.blobId)))
         case "attn.state": self = .attnState(aid: try d(.aid), open: try d(.open), recent: try d(.recent))
         case "attn.event": self = .attnEvent(aid: try d(.aid), op: try d(.op), item: try o(.item), key: try o(.key), turn: try o(.turn))
         default: self = .unknown(t)
@@ -278,6 +307,30 @@ extension LinkMessage: Codable {
             try c.encode(chatId, forKey: .chatId)
             try c.encode(cardId, forKey: .cardId)
             try c.encode(offset, forKey: .offset)
+        case .blobPutBegin(let uploadId, let name, let mime, let size, let sha256):
+            try c.encode(uploadId, forKey: .uploadId)
+            try c.encode(name, forKey: .name)
+            try c.encode(mime, forKey: .mime)
+            try c.encode(size, forKey: .size)
+            try c.encode(sha256, forKey: .sha256)
+        case .blobPutChunk(let uploadId, let index, let data):
+            try c.encode(uploadId, forKey: .uploadId)
+            try c.encode(index, forKey: .index)
+            try c.encode(data, forKey: .data)
+        case .blobPutEnd(let uploadId):
+            try c.encode(uploadId, forKey: .uploadId)
+        case .blobGet(let id, let chatId, let ref, let variant, let offset):
+            try c.encode(id, forKey: .id)
+            try c.encode(chatId, forKey: .chatId)
+            try c.encode(ref, forKey: .ref)
+            try c.encode(variant, forKey: .variant)
+            try c.encode(offset, forKey: .offset)
+        case .blobChunk(let id, let mime, let offset, let total, let data):
+            try c.encode(id, forKey: .id)
+            try c.encode(mime, forKey: .mime)
+            try c.encode(offset, forKey: .offset)
+            try c.encode(total, forKey: .total)
+            try c.encode(data, forKey: .data)
         case .cmd(let id, let command):
             try c.encode(id, forKey: .id)
             try c.encode(command, forKey: .cmd)
@@ -288,6 +341,7 @@ extension LinkMessage: Codable {
             try c.encodeIfPresent(r.message, forKey: .message)
             try c.encodeIfPresent(r.chatId, forKey: .chatId)
             try c.encodeIfPresent(r.windowId, forKey: .windowId)
+            try c.encodeIfPresent(r.blobId, forKey: .blobId)
         case .attnState(let aid, let open, let recent):
             try c.encode(aid, forKey: .aid)
             try c.encode(open, forKey: .open)

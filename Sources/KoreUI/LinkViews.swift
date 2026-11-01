@@ -171,6 +171,10 @@ package enum LinkPanel {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.level = .floating
+        // A panel hides while its app isn't frontmost by default: the card stays up until it's
+        // answered, so a click elsewhere can't leave a ring waiting unseen (and a storyline host
+        // that isn't frontmost still finds it). The popup closes on losing keys anyway.
+        panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.contentView = host
         return panel

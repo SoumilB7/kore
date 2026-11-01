@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 
@@ -114,7 +115,7 @@ struct LinkFixtureTests {
     }
 
     @Test func unknownTypesAndCommandsAreKeptAsUnknown() throws {
-        #expect(try LinkMessage.decode(Data(#"{"t":"blob.put.begin","size":3}"#.utf8)) == .unknown("blob.put.begin"))
+        #expect(try LinkMessage.decode(Data(#"{"t":"diff.get","path":"a"}"#.utf8)) == .unknown("diff.get"))
         let cmd = try LinkMessage.decode(Data(#"{"t":"cmd","id":"x","cmd":{"type":"files.read","path":"/etc"}}"#.utf8))
         #expect(cmd == .cmd(id: "x", .unknown("files.read")))
         #expect(LinkPolicy.check(.unknown("files.read"), nil) == .deny(.invalid, "Kore doesn't know that command."))
@@ -244,5 +245,82 @@ struct LinkPolicyTests {
         #expect(verdicts.prefix(40).allSatisfy { $0 == .ok })
         #expect(verdicts[40] == .over)
         #expect(verdicts.last == .far)
+    }
+}
+
+/// Link 1.1's "/" commands: any the chat offers, never Kore's own, never "!".
+@Suite("link commands")
+struct LinkCommandPolicyTests {
+    static let chat = LinkPolicy.ChatFacts(
+        level: .manual, modes: ["default": .manual], commands: ["review", "init"], koreEntries: ["usage", "account", "remote-control"])
+
+    @Test func sendsTheChatsCommands() {
+        #expect(LinkPolicy.check(.send(chatId: "x", text: "/review 12"), Self.chat) == .allow)
+        #expect(LinkPolicy.check(.send(chatId: "x", text: "/compact"), Self.chat) == .allow)
+    }
+
+    @Test func refusesKoreEntriesUnknownCommandsAndShell() {
+        for text in ["/usage", "/account", "/remote-control", "/login", "/logout", "/nope", "!ls"] {
+            if case .deny(let code, _) = LinkPolicy.check(.send(chatId: "x", text: text), Self.chat) { #expect(code == .command) } else {
+                Issue.record("\(text) was allowed")
+            }
+        }
+    }
+
+    @Test func filesAloneMaySend() {
+        #expect(LinkPolicy.check(.send(chatId: "x", text: "", blobs: ["b"]), Self.chat) == .allow)
+        let many = (0...LinkPolicy.maxBlobs).map { "b\($0)" }
+        if case .deny(let code, _) = LinkPolicy.check(.send(chatId: "x", text: "hi", blobs: many), Self.chat) { #expect(code == .invalid) } else { Issue.record() }
+    }
+}
+
+/// Link 1.1's uploads: checked whole, bounded, and dropped when unfinished.
+@Suite("link uploads")
+struct LinkUploadTests {
+    static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+    static func sha(_ data: Data) -> String { LinkUploads.hex(SHA256.hash(data: data)) }
+
+    @Test func anImageRoundTrips() throws {
+        var uploads = LinkUploads()
+        #expect(uploads.begin("u", name: "a.png", mime: "image/png", size: Self.png.count, sha256: Self.sha(Self.png)) == nil)
+        #expect(uploads.chunk("u", index: 0, base64: Self.png.base64EncodedString()) == nil)
+        let file = try uploads.end("u").get()
+        #expect(file.sniffed == .image && file.data == Self.png)
+        #expect(uploads.count == 0)
+    }
+
+    @Test func refusesBadHashTypeSizeAndOrder() {
+        var uploads = LinkUploads()
+        _ = uploads.begin("h", name: "a.png", mime: "image/png", size: Self.png.count, sha256: String(repeating: "0", count: 64))
+        _ = uploads.chunk("h", index: 0, base64: Self.png.base64EncodedString())
+        #expect(uploads.end("h") == .failure(.init(.badHash, "The file's SHA-256 doesn't match.")))
+        let text = Data("not a picture".utf8)
+        _ = uploads.begin("t", name: "a.png", mime: "image/png", size: text.count, sha256: Self.sha(text))
+        _ = uploads.chunk("t", index: 0, base64: text.base64EncodedString())
+        if case .failure(let f) = uploads.end("t") { #expect(f.code == .badType) } else { Issue.record() }
+        #expect(uploads.begin("big", name: "b", mime: "application/octet-stream", size: LinkUploads.maxSize + 1, sha256: Self.sha(text))?.code == .tooLarge)
+        _ = uploads.begin("o", name: "a.txt", mime: "text/plain", size: 2, sha256: Self.sha(Data("ab".utf8)))
+        #expect(uploads.chunk("o", index: 1, base64: Data("b".utf8).base64EncodedString())?.code == .invalid)
+        #expect(uploads.count == 0)
+    }
+
+    @Test func dropsUnfinishedUploadsAfterTwoMinutes() {
+        var uploads = LinkUploads()
+        let start = Date()
+        _ = uploads.begin("u", name: "a.png", mime: "image/png", size: Self.png.count, sha256: Self.sha(Self.png), at: start)
+        #expect(uploads.chunk("u", index: 0, base64: Self.png.base64EncodedString(), at: start.addingTimeInterval(121))?.code == .goneBlob)
+    }
+
+    @Test func boundsUploadsAtOnce() {
+        var uploads = LinkUploads()
+        for i in 0..<LinkUploads.maxUploads { #expect(uploads.begin("u\(i)", name: "f", mime: "text/plain", size: 1, sha256: String(repeating: "a", count: 64)) == nil) }
+        #expect(uploads.begin("more", name: "f", mime: "text/plain", size: 1, sha256: String(repeating: "a", count: 64))?.code == .busy)
+    }
+
+    @Test func savesUnderASafeName() {
+        #expect(LinkUploads.safeName("../../etc/passwd") == "passwd")
+        #expect(LinkUploads.safeName("..hidden") == "hidden")
+        #expect(LinkUploads.safeName("a\u{0}b:c.txt") == "abc.txt")
+        #expect(LinkUploads.safeName("") == "file")
     }
 }

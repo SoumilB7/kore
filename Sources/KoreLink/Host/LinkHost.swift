@@ -57,6 +57,9 @@ package final class LinkHost {
         var bucket = MessageBucket()
         var commands = RateLimiter(limit: 30, per: 60)
         var sends = RateLimiter(limit: 10, per: 60)
+        /// Files on their way in, and finished ones waiting for a send (by blob id, kept 10 min).
+        var uploads = LinkUploads()
+        var blobs: [String: (url: URL, made: Date)] = [:]
 
         struct Sub {
             var last: Int
@@ -200,6 +203,12 @@ package final class LinkHost {
                 hello(message, session)
                 continue
             }
+            // An upload's chunks are bounded by the upload itself (its declared size), not counted
+            // as messages: a 12 MB photo is 256 of them.
+            if case .blobPutChunk = message {
+                handle(message, session)
+                continue
+            }
             switch session.bucket.take() {
             case .ok: break
             case .over:
@@ -226,7 +235,7 @@ package final class LinkHost {
             .welcome(
                 .init(
                     proto: LinkProto.version, epoch: LinkRun.epoch, host: .init(name: Host.current().localizedName ?? "Mac", koreVersion: Self.version),
-                    providers: LinkSnapshot.providers(), policy: .init(sendMaxLevel: LinkPolicy.sendMaxLevel), caps: ["tx", "attn"])))
+                    providers: LinkSnapshot.providers(), policy: .init(sendMaxLevel: LinkPolicy.sendMaxLevel), caps: ["tx", "attn", "blob", "commands"])))
         session.snapshotDue = true
         tick()
         send(attention.ledger.state(after: 0))
@@ -295,11 +304,38 @@ package final class LinkHost {
             let approval = LinkSnapshot.chatsByID()[chatId]?.approvals.pending.first { $0.id == cardId }
             let piece = LinkSnapshot.piece(approval.flatMap(LinkSnapshot.fullContent) ?? "", from: offset)
             send(.cardChunk(id: id, text: piece.text, offset: piece.offset, total: piece.total))
+        case .blobPutBegin(let uploadId, let name, let mime, let size, let sha256):
+            if let failure = session.uploads.begin(uploadId, name: name, mime: mime, size: size, sha256: sha256) { failed(uploadId, failure) }
+        case .blobPutChunk(let uploadId, let index, let data):
+            if let failure = session.uploads.chunk(uploadId, index: index, base64: data) { failed(uploadId, failure) }
+        case .blobPutEnd(let uploadId):
+            switch session.uploads.end(uploadId) {
+            case .failure(let failure): failed(uploadId, failure)
+            case .success(let file):
+                guard session.blobs.count < LinkPolicy.maxBlobs * 2, let url = LinkFiles.save(file) else {
+                    return failed(uploadId, .init(.busy, "Kore couldn't keep the file."))
+                }
+                let blobId = UUID().uuidString
+                session.blobs[blobId] = (url, Date())
+                UILog.event("link-blob", ["kind": "\(file.sniffed)", "bytes": "\(file.data.count)"])
+                send(.result(.init(id: "blob.put:" + uploadId, ok: true, blobId: blobId)))
+            }
+        case .blobGet(let id, let chatId, let ref, let variant, let offset):
+            guard let chat = LinkSnapshot.chatsByID()[chatId] else {
+                return send(.result(.init(id: id, ok: false, code: .goneChat, message: "That chat isn't open in Kore any more.")))
+            }
+            switch LinkFiles.read(chat, ref: ref, variant: variant) {
+            case .failure(let failure): send(.result(.init(id: id, ok: false, code: failure.code, message: failure.message)))
+            case .success(let file):
+                let start = min(max(offset, 0), file.data.count)
+                let piece = file.data[file.data.startIndex + start..<file.data.startIndex + min(start + LinkFiles.piece, file.data.count)]
+                send(.blobChunk(id: id, mime: file.mime, offset: start, total: file.data.count, data: Data(piece).base64EncodedString()))
+            }
         case .cmd(let id, let command):
             send(.result(perform(id, command, session)))
             tick()
         case .challenge, .hello, .welcome, .command, .snapshot, .delta, .txPage, .txDelta, .txReset, .entryChunk, .cardChunk, .result, .attnState,
-            .attnEvent, .unknown:
+            .attnEvent, .blobChunk, .unknown:
             // Kore's own messages, or a type from a newer client: skipped.
             break
         }
@@ -316,11 +352,22 @@ package final class LinkHost {
         }
     }
 
+    /// An upload that failed: its result, keyed `blob.put:<uploadId>`.
+    private func failed(_ uploadId: String, _ failure: LinkUploads.Failure) {
+        send(.result(.init(id: "blob.put:" + uploadId, ok: false, code: failure.code, message: failure.message)))
+    }
+
     private func perform(_ id: String, _ command: LinkCommand, _ session: Session) -> LinkMessage.Result {
         guard session.commands.take() else { return .init(id: id, ok: false, code: .rateLimited) }
         if case .send = command, !session.sends.take() { return .init(id: id, ok: false, code: .rateLimited) }
         let chat = command.chatId.flatMap { LinkSnapshot.chatsByID()[$0] }
-        let outcome = LinkActions.apply(command, chat: chat)
+        var files: [URL] = []
+        if case .send(_, _, let blobs) = command {
+            files = blobs.compactMap { session.blobs[$0]?.url }
+            guard files.count == blobs.count else { return .init(id: id, ok: false, code: .goneBlob, message: "A file wasn't uploaded, or expired.") }
+        }
+        let outcome = LinkActions.apply(command, chat: chat, files: files)
+        if outcome.ok, case .send(_, _, let blobs) = command { for blob in blobs { session.blobs[blob] = nil } }
         UILog.event("link-cmd", ["type": command.type, "chat": command.chatId, "code": outcome.code?.rawValue ?? "ok"])
         if outcome.ok { mark.record(Self.describe(command, chat: chat ?? outcome.newChat)) }
         return .init(
@@ -373,7 +420,14 @@ package final class LinkHost {
         }
         ticks += 1
         let everySecond = ticks % Int(1 / Self.rate) == 0
-        if everySecond { Workspace.showLinkMark(mark) }
+        if everySecond {
+            Workspace.showLinkMark(mark)
+            if !session.blobs.isEmpty || session.uploads.count > 0 {
+                let now = Date()
+                session.uploads.sweep(at: now)
+                session.blobs = session.blobs.filter { now.timeIntervalSince($0.value.made) < 600 }
+            }
+        }
         let chats = LinkSnapshot.chatsByID()
         for message in attention.look(chats, everything: false) { send(message) }
         let wantsAll = everySecond || session.snapshotDue

@@ -103,10 +103,10 @@ package enum Beat: Sendable {
     }
 
     /// The chat's controls for a provider: a cheap model and the efforts both CLIs offer.
-    package static func controls(model: String = "haiku") -> Beat {
+    package static func controls(model: String = "haiku", commands: [SlashCommand] = []) -> Beat {
         .event(.controlsLoaded(ChatControls(
             models: [ModelOption(id: model, name: model.capitalized, resolved: model, efforts: ["low", "medium", "high"])],
-            model: model, effort: "medium", commands: [])))
+            model: model, effort: "medium", commands: commands)))
     }
 }
 

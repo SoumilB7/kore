@@ -138,11 +138,51 @@
     {
       "file": "attn.event.turn.json",
       "type": "attn.event"
+    },
+    {
+      "file": "blob.put.begin.json",
+      "type": "blob.put.begin"
+    },
+    {
+      "file": "blob.put.chunk.json",
+      "type": "blob.put.chunk"
+    },
+    {
+      "file": "blob.put.end.json",
+      "type": "blob.put.end"
+    },
+    {
+      "file": "result.blob.json",
+      "type": "result"
+    },
+    {
+      "file": "cmd.send.blobs.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.send.slash.json",
+      "type": "cmd"
+    },
+    {
+      "file": "blob.get.json",
+      "type": "blob.get"
+    },
+    {
+      "file": "blob.chunk.json",
+      "type": "blob.chunk"
+    },
+    {
+      "file": "delta.commands.json",
+      "type": "delta"
+    },
+    {
+      "file": "tx.page.attachments.json",
+      "type": "tx.page"
     }
   ],
   "proto": {
     "major": 1,
-    "minor": 0
+    "minor": 1
   },
   "ringProof": {
     "file": "ring-proof.json"

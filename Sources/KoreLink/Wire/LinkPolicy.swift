@@ -13,8 +13,12 @@ package enum LinkPolicy {
     package static let leavePlanMaxLevel = ModeLevel.manual
     /// The longest message the link may send.
     package static let maxText = 64 * 1024
-    /// Slash commands the link may send: compacting only. Others can run shell or switch accounts.
-    package static let commands: Set<String> = ["compact"]
+    /// Files a message from the link may carry.
+    package static let maxBlobs = 10
+    /// "/" commands the link always refuses: Kore's own entries (they open Kore's popups) and the
+    /// CLI's sign-in, usage and remote commands they stand in for, which only work in a terminal.
+    /// Any other command the chat offers may be sent, as on the Mac (owner, 2026-11-01).
+    package static let koreOnly: Set<String> = ["usage", "account", "login", "logout", "remote-control"]
 
     /// One chat as the policy sees it.
     package struct ChatFacts: Sendable, Equatable {
@@ -34,12 +38,21 @@ package enum LinkPolicy {
         package var modes: [String: ModeLevel]
         /// Cards waiting, by id.
         package var cards: [String: Card]
+        /// The "/" commands the chat offers (CLI commands and skills, by name), and Kore's own
+        /// entries in its "/" menu.
+        package var commands: Set<String>
+        package var koreEntries: Set<String>
 
-        package init(level: ModeLevel, planOn: Bool = false, modes: [String: ModeLevel], cards: [String: Card] = [:]) {
+        package init(
+            level: ModeLevel, planOn: Bool = false, modes: [String: ModeLevel], cards: [String: Card] = [:], commands: Set<String> = [],
+            koreEntries: Set<String> = []
+        ) {
             self.level = level
             self.planOn = planOn
             self.modes = modes
             self.cards = cards
+            self.commands = commands
+            self.koreEntries = koreEntries
         }
 
         /// What the agent may do now: a plan switch that's on means planning, whatever the mode.
@@ -59,15 +72,18 @@ package enum LinkPolicy {
         }
         guard let chat else { return .deny(.goneChat, "That chat isn't open in Kore any more.") }
         switch command {
-        case .send(_, let text):
+        case .send(_, let text, let blobs):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, text.utf8.count <= maxText else { return .deny(.invalid, "Nothing to send, or too long.") }
-            if trimmed.hasPrefix("/") {
-                let name = trimmed.dropFirst().prefix { !$0.isWhitespace }
-                guard commands.contains(String(name)) else { return .deny(.command, "Only /compact can be sent over the link.") }
+            guard !trimmed.isEmpty || !blobs.isEmpty, text.utf8.count <= maxText, blobs.count <= maxBlobs else {
+                return .deny(.invalid, "Nothing to send, or too long.")
             }
             // The claude CLI runs a message starting with "!" as a shell command.
             if trimmed.hasPrefix("!") { return .deny(.command, "Shell commands can't be sent over the link.") }
+            if trimmed.hasPrefix("/") {
+                let name = String(trimmed.dropFirst().prefix { !$0.isWhitespace })
+                if koreOnly.contains(name) || chat.koreEntries.contains(name) { return .deny(.command, "/\(name) is Kore's own; use it in Kore.") }
+                guard name == "compact" || chat.commands.contains(name) else { return .deny(.command, "This chat doesn't offer /\(name).") }
+            }
             return .allow
         case .stop:
             return .allow

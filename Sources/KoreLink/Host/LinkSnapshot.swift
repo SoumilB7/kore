@@ -95,7 +95,23 @@ enum LinkSnapshot {
         let current = chat.provider.modes.first { $0.id == chat.controls.mode }.map(Self.level) ?? .danger
         var waiting: [String: LinkPolicy.ChatFacts.Card] = [:]
         for card in cards(chat) { waiting[card.id] = .init(kind: card.kind, digest: card.digest) }
-        return LinkPolicy.ChatFacts(level: current, planOn: chat.provider.planToggle != nil && chat.controls.planMode, modes: modes, cards: waiting)
+        let all = chat.controls.linkCommands
+        return LinkPolicy.ChatFacts(
+            level: current, planOn: chat.provider.planToggle != nil && chat.controls.planMode, modes: modes, cards: waiting,
+            commands: Set(all.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(all.filter { $0.kind == .kore }.map(\.name)))
+    }
+
+    /// The most commands, and the longest description, a chat's meta carries.
+    static let commandsMax = 200
+    static let descriptionCap = 100
+
+    /// The "/" commands the link may send: the chat's own, without Kore's entries and the ones the
+    /// policy refuses.
+    static func commands(_ chat: Chat) -> [LinkSlash] {
+        chat.controls.linkCommands
+            .filter { $0.kind != .kore && !LinkPolicy.koreOnly.contains($0.name) }
+            .prefix(commandsMax)
+            .map { LinkSlash(name: $0.name, description: String($0.description.prefix(descriptionCap)), kind: $0.kind == .skill ? .skill : .command) }
     }
 
     static func meta(_ chat: Chat) -> ChatMeta {
@@ -114,7 +130,7 @@ enum LinkSnapshot {
             mode: .init(id: chat.controls.mode, level: facts.level, planOn: chat.provider.planToggle != nil ? chat.controls.planMode : nil),
             modeIds: chat.controls.availableModes.map(\.id), allowedModeIds: LinkPolicy.allowedModes(facts).sorted(),
             model: chat.controls.currentModel?.name, queued: chat.queuedCount, running: chat.isBusy, cards: cards(chat),
-            can: .init(send: sendable && !chat.accountRestartPending, stop: chat.isWorking))
+            can: .init(send: sendable && !chat.accountRestartPending, stop: chat.isWorking), commands: commands(chat))
     }
 
     // MARK: Cards
@@ -223,7 +239,22 @@ enum LinkSnapshot {
             doc: formatted && !e.text.isEmpty ? doc(text.text) : nil, textLen: text.length, done: e.done, isError: e.isError,
             stopped: e.stopped, inTurn: e.inTurn, tool: tool,
             changes: e.changes.isEmpty ? nil : e.changes.map { .init(path: relative($0.path, to: folder), added: $0.added, removed: $0.removed) },
-            agent: e.agent.map { .init(id: $0.id, name: $0.name, status: $0.statusName) })
+            agent: e.agent.map { .init(id: $0.id, name: $0.name, status: $0.statusName) },
+            attachments: e.linkAttachments.isEmpty ? nil : e.linkAttachments.enumerated().map { i, a in
+                LinkAttachment(ref: attachmentRef(entryId: e.id.uuidString, index: i), name: a.name, kind: attachmentKind(a.linkKind))
+            })
+    }
+
+    /// An attachment's ref: its message's id and its place there. It names nothing on disk.
+    static func attachmentRef(entryId: String, index: Int) -> String { "\(entryId)/\(index)" }
+
+    static func attachmentKind(_ kind: Attachment.Kind) -> LinkAttachment.Kind {
+        switch kind {
+        case .image: .image
+        case .text: .text
+        case .pdf: .pdf
+        case .other: .other
+        }
     }
 
     static func turn(_ t: TranscriptStore.Turn) -> LinkTurn {

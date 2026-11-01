@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import KoreLink
@@ -19,6 +20,7 @@ final class LinkRingAndAct: ChatStoryline {
     override func steps() -> [any Step] {
         let client = LinkStoryClient()
         return super.steps() + [
+            Do("start with no link") { _ in LinkStoryClient.reset() },
             Do("ring the doorbell") { _ in try client.ring() },
             WaitForElement(.id(StoryID.Link.card)),
             Expect("a moment before Allow takes a press") { _ in Date() > client.rungAt.addingTimeInterval(0.9) },
@@ -99,6 +101,7 @@ final class LinkRingDenied: ChatStoryline {
     override func steps() -> [any Step] {
         let client = LinkStoryClient()
         return super.steps() + [
+            Do("start with no link") { _ in LinkStoryClient.reset() },
             Do("ring the doorbell") { _ in try client.ring(key: "denied-sender") },
             WaitForElement(.id(StoryID.Link.card)),
             Press(.id(StoryID.Link.deny)),
@@ -124,6 +127,7 @@ final class LinkOpensUnstartedChat: ChatStoryline {
         var active: UUID?
         var made: String?
         return super.steps() + [
+            Do("start with no link") { _ in LinkStoryClient.reset() },
             Do("ring, then Allow") { _ in try client.ring() },
             WaitForElement(.id(StoryID.Link.card)),
             Expect("a moment before Allow takes a press") { _ in Date() > client.rungAt.addingTimeInterval(0.9) },
@@ -132,7 +136,9 @@ final class LinkOpensUnstartedChat: ChatStoryline {
             Expect("welcomed, with a window") { _ in client.welcomed && !client.snapshotWindows.isEmpty },
             Do("make a chat over the link") { story in
                 active = story.app.workspace?.activeTab.id
-                guard let window = client.snapshotWindows.first?.id else { throw StoryFailure.other("no window") }
+                // This storyline's window: others' may still be open in the same run.
+                let folder = story.app.workspace?.folder.lastPathComponent
+                guard let window = client.snapshotWindows.first(where: { $0.name == folder })?.id else { throw StoryFailure.other("no window") }
                 client.send(.cmd(id: "new", .new(windowId: window, provider: try story.activeChat().provider.id)))
             },
             Expect("made, in a tab no one has shown", found: { _ in client.result("new").map { "\($0)" } }) { story in
@@ -160,6 +166,83 @@ final class LinkOpensUnstartedChat: ChatStoryline {
     }
 }
 
+/// Link 1.1: the chat's "/" commands in its meta and sendable, Kore's own entries and "!" refused;
+/// an image and a text file uploaded, checked and attached to a message; a bad hash and an
+/// oversize upload refused; the message's image read back as a thumbnail, and a ref the
+/// transcript doesn't hold refused.
+final class LinkFilesAndCommands: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    static let review = SlashCommand(name: "review", description: "Review a pull request", hint: "", kind: .command)
+    override class var script: CLIScript {
+        CLIScript(start: [.controls(commands: [review])], turns: [CLIScript.reply("Looked at both.")])
+    }
+    /// A 1×1 PNG.
+    static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+    static let text = Data("total = round(sub * (1 + tax))\n".utf8)
+
+    override func steps() -> [any Step] {
+        let client = LinkStoryClient()
+        var chatId = ""
+        var blobs: [String] = []
+        return super.steps() + [
+            Do("start with no link") { _ in LinkStoryClient.reset() },
+            Do("ring, then Allow") { _ in try client.ring() },
+            WaitForElement(.id(StoryID.Link.card)),
+            Expect("a moment before Allow takes a press") { _ in Date() > client.rungAt.addingTimeInterval(0.9) },
+            Press(.id(StoryID.Link.allow)),
+            Do("connect") { story in
+                chatId = try story.activeChat().id.uuidString
+                client.connect()
+            },
+            Expect("welcomed with files and commands") { _ in client.caps.contains("blob") && client.caps.contains("commands") },
+            Expect("the chat's commands listed, Kore's own left out", found: { _ in client.meta(chatId)?.commands.map { "\($0.map(\.name))" } }) { _ in
+                let names = client.meta(chatId)?.commands?.map(\.name) ?? []
+                return names.contains("review") && !names.contains("usage") && !names.contains("account")
+            },
+            Do("send /review, /usage and a shell line") { _ in
+                client.send(.cmd(id: "slash", .send(chatId: chatId, text: "/review")))
+                client.send(.cmd(id: "kore", .send(chatId: chatId, text: "/usage")))
+                client.send(.cmd(id: "shell", .send(chatId: chatId, text: "!ls")))
+            },
+            Expect("/review taken; /usage and ! refused", found: { _ in ["slash", "kore", "shell"].map { "\(client.result($0).map { "\($0)" } ?? "-")" }.joined(separator: " | ") }) { _ in
+                client.result("slash")?.ok == true && client.result("kore")?.code == .command && client.result("shell")?.code == .command
+            },
+            TurnFinished(1),
+            Do("upload an image and a text file, a bad hash and an oversize file") { _ in
+                client.upload("img", name: "screen.png", mime: "image/png", data: Self.png)
+                client.upload("txt", name: "total.ts", mime: "text/plain", data: Self.text)
+                client.upload("bad", name: "x.png", mime: "image/png", data: Self.png, sha: String(repeating: "0", count: 64))
+                client.send(.blobPutBegin(uploadId: "big", name: "big.bin", mime: "application/octet-stream", size: LinkUploads.maxSize + 1, sha256: String(repeating: "a", count: 64)))
+            },
+            Expect("both kept, the bad hash and the oversize refused", found: { _ in ["img", "txt", "bad", "big"].map { "\(client.result("blob.put:" + $0).map { "\($0)" } ?? "-")" }.joined(separator: " | ") }) { _ in
+                guard let a = client.result("blob.put:img")?.blobId, let b = client.result("blob.put:txt")?.blobId else { return false }
+                blobs = [a, b]
+                return client.result("blob.put:bad")?.code == .badHash && client.result("blob.put:big")?.code == .tooLarge
+            },
+            Do("send a message with both") { _ in client.send(.cmd(id: "files", .send(chatId: chatId, text: "Both files", blobs: blobs))) },
+            Expect("taken", found: { _ in client.result("files").map { "\($0)" } }) { _ in client.result("files")?.ok == true },
+            TurnFinished(2),
+            Expect("the message holds the image and the file") { story in
+                let entry = try story.activeChat().transcript.entries.last { $0.kind == .user && $0.text == "Both files" }
+                let kinds = entry?.linkAttachments.map(\.linkKind) ?? []
+                return kinds == [.image, .text]
+            },
+            Do("read the image back as a thumbnail, and a ref the chat doesn't hold") { story in
+                let entry = try story.activeChat().transcript.entries.last { $0.kind == .user && $0.text == "Both files" }
+                let ref = "\(entry?.id.uuidString ?? "")/0"
+                client.send(.blobGet(id: "thumb", chatId: chatId, ref: ref, variant: .thumb, offset: 0))
+                client.send(.blobGet(id: "stray", chatId: chatId, ref: "\(UUID().uuidString)/0", variant: .full, offset: 0))
+                client.send(.blobGet(id: "path", chatId: chatId, ref: "../../etc/passwd", variant: .full, offset: 0))
+            },
+            Expect("a JPEG thumbnail; the others refused", found: { _ in "\(client.chunk("thumb").map { ($0.mime, $0.total) } as Any) \(client.result("stray").map { "\($0)" } ?? "-")" }) { _ in
+                client.chunk("thumb")?.mime == "image/jpeg" && (client.chunk("thumb")?.total ?? 0) > 0
+                    && client.result("stray")?.code == .deniedRef && client.result("path")?.code == .deniedRef
+            },
+            Do("disconnect") { _ in LinkRun.current?.revoke() },
+        ]
+    }
+}
+
 final class LinkStoryClient: @unchecked Sendable {
     private let lock = NSLock()
     private var messages: [LinkMessage] = []
@@ -170,6 +253,16 @@ final class LinkStoryClient: @unchecked Sendable {
     private(set) var socket: String?
     private(set) var runSecret: Data?
     private(set) var reringRefused = false
+
+    /// No link left from an earlier storyline in the same run (one that failed before its own
+    /// Disconnect): no run, connection, card or popup, and no refusals.
+    @MainActor
+    static func reset() {
+        LinkRun.current?.revoke()
+        LinkPanel.closeCard()
+        LinkPanel.closePopup()
+        LinkDoorbell.forgetRefusals()
+    }
 
     /// Rings with this process's own requirement, as a sender keyed `key`.
     @MainActor
@@ -292,6 +385,43 @@ final class LinkStoryClient: @unchecked Sendable {
 
     func result(_ id: String) -> LinkMessage.Result? {
         lock.withLock { messages.lazy.compactMap { if case .result(let r) = $0, r.id == id { r } else { nil } }.first }
+    }
+
+    /// The welcome's capabilities.
+    var caps: [String] { lock.withLock { messages.lazy.compactMap { if case .welcome(let w) = $0 { w.caps } else { nil } }.first ?? [] } }
+
+    /// A chat's latest meta, from snapshots and deltas.
+    func meta(_ chatId: String) -> ChatMeta? {
+        lock.withLock {
+            messages.reversed().lazy.compactMap { message -> ChatMeta? in
+                switch message {
+                case .snapshot(_, _, let chats), .delta(_, _, .some(let chats), _): chats.first { $0.id == chatId }
+                default: nil
+                }
+            }.first
+        }
+    }
+
+    /// A `blob.get`'s first piece.
+    func chunk(_ id: String) -> (mime: String, total: Int, data: String)? {
+        lock.withLock {
+            messages.lazy.compactMap { if case .blobChunk(let i, let mime, _, let total, let data) = $0, i == id { (mime, total, data) } else { nil } }.first
+        }
+    }
+
+    /// Uploads `data` whole: begin, 48 KB chunks, end. `sha` overrides its SHA-256.
+    func upload(_ uploadId: String, name: String, mime: String, data: Data, sha: String? = nil) {
+        let digest = sha ?? LinkUploads.hex(SHA256.hash(data: data))
+        send(.blobPutBegin(uploadId: uploadId, name: name, mime: mime, size: data.count, sha256: digest))
+        var index = 0
+        var offset = 0
+        while offset < data.count {
+            let piece = data[offset..<min(offset + LinkUploads.chunkMax, data.count)]
+            send(.blobPutChunk(uploadId: uploadId, index: index, data: Data(piece).base64EncodedString()))
+            index += 1
+            offset += piece.count
+        }
+        send(.blobPutEnd(uploadId: uploadId))
     }
 
     var bye: LinkMessage.ByeReason? {
