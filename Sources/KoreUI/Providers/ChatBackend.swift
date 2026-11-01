@@ -22,7 +22,10 @@ package protocol ChatBackend: AnyObject {
     /// toggle, /goal).
     /// `queued`: Kore's id for a message sent while a turn runs; `.queuedMessage(id:)` says where
     /// the CLI took it. nil for a normal send.
-    func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool
+    /// `id`: the id the message's row carries (the same as `queued` for a queued one), by which
+    /// `fork` and `rollback` find it: the CLI keeps it as the message's own (Claude's uuid), or
+    /// the backend keeps what it stands for (Codex's turn).
+    func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool
     func interrupt() async
     func respond(to approvalID: String, _ decision: Decision) async
     /// Before `start()`, sets what the CLI launches with.
@@ -54,15 +57,16 @@ package protocol ChatBackend: AnyObject {
     /// background agent's are tailed from its transcript while it runs.
     func agentHistory(_ id: String) async -> [ChatEvent]
     /// Where a fork from a user message starts: the history before that message, in a new
-    /// session. `id` is the message's id from replay (nil for one sent in this run: it's found by
-    /// its text from the end).
+    /// session. `id` is the message's id (`.userMessage`'s); without one, or one the history
+    /// doesn't hold, it's found by its text, where only one message has it.
     func fork(message id: String?, text: String) async throws -> ForkStart
     /// A fork of the whole conversation so far, in a new session (forking from the last answer;
     /// an earlier answer forks before the next user message instead).
     func forkAtEnd() async throws -> ForkStart
-    /// Takes this session back to before a user message, in place: the message and everything
-    /// after it leave the CLI's history (`id` and `text` as for `fork`). Gives back the history
-    /// left, and whether more comes before it. Files aren't touched.
+    /// Takes this session back to before a user (or peer) message, in place: the message and
+    /// everything after it leave the CLI's history (`id` and `text` as for `fork`). Gives back the
+    /// history left, and whether more comes before it. Files aren't touched. A CLI still starting
+    /// starts first, so it comes up cut too.
     func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool)
     /// The page of conversation before what's shown (before a compaction), oldest first, and
     /// whether more comes before it; nil when there's none.
@@ -161,7 +165,18 @@ package struct ForkPoint: Sendable {
 
 enum ForkError: LocalizedError {
     case notFound
-    var errorDescription: String? { "that message isn't in the session's history" }
+    /// Found only by its text, which more than one message has.
+    case ambiguous
+    /// The chat has nothing saved yet.
+    case notSaved
+
+    var errorDescription: String? {
+        switch self {
+        case .notFound: "that message is no longer in the chat's saved history"
+        case .ambiguous: "more than one message in the chat's saved history says the same, so it can't tell which one"
+        case .notSaved: "the chat has nothing saved yet"
+        }
+    }
 }
 
 /// The files a turn changed. In a git work tree that's the diff between snapshots taken at
@@ -177,7 +192,11 @@ extension ChatBackend {
     }
 
     package func send(_ text: String, files: [Attachments.File]) async throws -> Bool {
-        try await send(text, files: files, queued: nil)
+        try await send(text, files: files, queued: nil, id: nil)
+    }
+
+    package func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool {
+        try await send(text, files: files, queued: queued, id: queued)
     }
 
     /// For a backend without fast mode: it never reports one, so nothing offers it.

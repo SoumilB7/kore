@@ -87,7 +87,7 @@ public actor ClaudeSession {
 
         public var description: String {
             switch self {
-            case .notRunning: "claude process is not running"
+            case .notRunning: "the claude CLI isn't running"
             case .controlError(let message): "claude control request failed: \(message)"
             }
         }
@@ -99,6 +99,10 @@ public actor ClaudeSession {
     private var io: StdioProcess?
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
     private var running = false
+    /// What it wrote before it was up (stderr, and stdout that isn't a message): why it ended,
+    /// when it ends at once. Bounded; dropped once it's up.
+    private var startOutput: String? = ""
+    private var exitStatus: Int32?
 
     /// Latest session id; changes when the CLI forks a resumed session.
     public private(set) var sessionId: String?
@@ -327,17 +331,30 @@ public actor ClaudeSession {
             for await output in io.output {
                 switch output {
                 case .line(let line): handle(line: line)
-                case .stderr(let text): sink.yield(.stderr(text))
+                case .stderr(let text):
+                    noteStart(text)
+                    sink.yield(.stderr(text))
                 case .exited(let status): didExit(status: status)
                 }
             }
         }
 
-        capabilities = try await control("initialize")
+        do {
+            capabilities = try await control("initialize")
+        } catch Failure.notRunning where !running {
+            throw CLIExecutable.ExitedAtStart(name: "claude", status: exitStatus ?? -1, output: startOutput ?? "")
+        }
+        startOutput = nil
         fastMode = ClaudeFastMode(capabilities)
     }
 
+    private func noteStart(_ text: String) {
+        guard let output = startOutput, output.utf8.count < 4096 else { return }
+        startOutput = output + text
+    }
+
     private func didExit(status: Int32) {
+        exitStatus = status
         running = false
         let waiting = pending
         pending = [:]
@@ -369,9 +386,11 @@ public actor ClaudeSession {
             quietDeltaAt = now
         }
         guard let message = try? JSONValue.parse(line) else {
+            noteStart(String(decoding: line, as: UTF8.self) + "\n")
             sink.yield(.stderr("unparseable stdout line: \(String(decoding: line, as: UTF8.self))\n"))
             return
         }
+        if startOutput != nil, message["type"]?.string == "result" { noteStart(String(decoding: line, as: UTF8.self) + "\n") }
 
         switch message["type"]?.string {
         case "control_response":

@@ -19,6 +19,54 @@ struct ClaudeTranslatorTests {
         #expect(call?.detail.contains("echo hi") == true)
     }
 
+    /// A rollback (or a fork) finds a message by its id; by its text only where one message has
+    /// it, Kore's notes of attached files after it allowed, and a peer's by the words it said.
+    @Test func aRollbackFindsItsMessage() throws {
+        let lines = [
+            #"{"type":"user","uuid":"u1","message":{"role":"user","content":"yes"}}"#,
+            #"{"type":"assistant","uuid":"a1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"OK"}]}}"#,
+            #"{"type":"user","uuid":"u2","message":{"role":"user","content":[{"type":"text","text":"look\n\n[file: /tmp/a.bin]"}]}}"#,
+            #"{"type":"user","uuid":"p1","origin":{"kind":"peer","name":"kore-2f","body":"<b>hi</b>"},"message":{"role":"user","content":"<cross-session-message>hi</cross-session-message>"}}"#,
+            #"{"type":"user","uuid":"u3","message":{"role":"user","content":"yes"}}"#,
+        ]
+        let messages = try lines.map { try JSONValue.parse(Data($0.utf8)) }
+        #expect(try ClaudeBackend.message("u1", "yes", in: messages) == 0)
+        #expect(try ClaudeBackend.message("gone", "look", in: messages) == 2)
+        #expect(try ClaudeBackend.message(nil, "<b>hi</b>", in: messages) == 3)
+        #expect(throws: ForkError.ambiguous) { try ClaudeBackend.message(nil, "yes", in: messages) }
+        #expect(throws: ForkError.notFound) { try ClaudeBackend.message(nil, "", in: messages) }
+        #expect(throws: ForkError.notFound) { try ClaudeBackend.message(nil, "lo", in: messages) }
+    }
+
+    /// A message the CLI took into a running turn reads back in it, as it showed live: no turn
+    /// of its own starts there.
+    @Test func aMessageTakenMidTurnReadsBackInTheTurn() async throws {
+        let lines = [
+            #"{"type":"user","uuid":"u1","timestamp":"2026-10-21T10:00:00Z","message":{"role":"user","content":"Run it"}}"#,
+            #"{"type":"assistant","uuid":"a1","timestamp":"2026-10-21T10:00:01Z","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 1"}}]}}"#,
+            #"{"type":"attachment","uuid":"q1","timestamp":"2026-10-21T10:00:02Z","attachment":{"type":"queued_command","prompt":"and also this"}}"#,
+            #"{"type":"assistant","uuid":"a2","timestamp":"2026-10-21T10:00:03Z","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Done"}]}}"#,
+        ]
+        let messages = try lines.map { try JSONValue.parse(Data($0.utf8)) }
+        let replayed = await ClaudeTranslator.replayed(messages, folder: URL(fileURLWithPath: "/tmp"), sessionId: "s")
+        let store = TranscriptStore()
+        store.apply(.replayed(replayed.events))
+        let users = store.entries.filter { $0.kind == .user }
+        #expect(users.map(\.text) == ["Run it", "and also this"])
+        #expect(users.map(\.inTurn) == [false, true])
+    }
+
+    /// A CLI that ends as it starts says why in words: a JSON error's message, never the JSON.
+    @Test func anExitAtStartSaysWhyInWords() {
+        let json = CLIExecutable.ExitedAtStart(name: "claude", status: 1, output: #"{"type":"error","message":"Being updated"}"# + "\n")
+        #expect(json.errorDescription == "the claude CLI exited as it started: Being updated")
+        let plain = CLIExecutable.ExitedAtStart(name: "codex", status: 2, output: "\n\u{1B}[31mError: bad option\u{1B}[0m\nmore")
+        #expect(plain.said == "Error: bad option")
+        #expect(CLIExecutable.ExitedAtStart(name: "claude", status: 1, output: #"{"type":"system"}"#).said == nil)
+        #expect(SessionLog.cause(json) == "exited-1")
+        #expect(SessionLog.cause(CLIExecutable.Failure.notFound(name: "claude", searched: [])) == "missing")
+    }
+
     /// Stop during a Bash call: the call shows stopped, not failed, and the turn interrupted.
     /// The mode a session reads back in is the one the user's last prompt was sent in: a
     /// background task's notification or a peer's message records the mode the CLI was launched

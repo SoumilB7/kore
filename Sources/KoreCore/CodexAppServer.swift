@@ -39,6 +39,9 @@ public actor CodexAppServer {
     private let sink: AsyncStream<Incoming>.Continuation
     private var io: StdioProcess?
     private var running = false
+    /// What it wrote before it was up: why it ended, when it ends at once. Dropped once it's up.
+    private var startOutput: String? = ""
+    private var exitStatus: Int32?
     private var nextId = 1
     /// What to do with each awaited request's reply.
     private var pending: [Int: (Result<JSONValue, any Error>) -> Void] = [:]
@@ -167,21 +170,29 @@ public actor CodexAppServer {
             for await output in io.output {
                 switch output {
                 case .line(let line): handle(line: line)
-                case .stderr(let text): sink.yield(.stderr(text))
+                case .stderr(let text):
+                    if let output = startOutput, output.utf8.count < 4096 { startOutput = output + text }
+                    sink.yield(.stderr(text))
                 case .exited(let status): didExit(status: status)
                 }
             }
         }
 
-        info = try await request("initialize", [
-            "clientInfo": ["name": "kore", "title": "Kore", "version": "0.1.0"],
-            // Plan mode (collaborationMode) and plan deltas are experimental API.
-            "capabilities": ["experimentalApi": true],
-        ])
+        do {
+            info = try await request("initialize", [
+                "clientInfo": ["name": "kore", "title": "Kore", "version": "0.1.0"],
+                // Plan mode (collaborationMode) and plan deltas are experimental API.
+                "capabilities": ["experimentalApi": true],
+            ])
+        } catch Failure.notRunning where !running {
+            throw CLIExecutable.ExitedAtStart(name: "codex", status: exitStatus ?? -1, output: startOutput ?? "")
+        }
+        startOutput = nil
         try notify("initialized")
     }
 
     private func didExit(status: Int32) {
+        exitStatus = status
         running = false
         let waiting = pending
         pending = [:]

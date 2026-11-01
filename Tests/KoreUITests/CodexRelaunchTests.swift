@@ -148,7 +148,8 @@ struct CodexRelaunchTests {
         chat.draft = "hey"
         chat.send()
         try await until("the send's notice") { notices().count == 2 }
-        #expect(notices() == ["thread not found", "thread not found"])
+        #expect(notices().first == "thread not found")
+        #expect(notices().last?.contains("(thread not found)") == true)
         #expect(!chat.transcript.entries.contains { $0.text.contains("Couldn't compact") })
     }
 }

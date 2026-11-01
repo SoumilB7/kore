@@ -189,7 +189,7 @@ package final class Chat: Identifiable {
     package var sessionId: String? { status.sessionId }
     /// The id the folder's history lists it under: its session's, or a fork's own before its
     /// CLI names one (`KoreForks`).
-    var listedId: String? { sessionId ?? fork?.id }
+    package var listedId: String? { sessionId ?? fork?.id }
     var resumed: Bool { status.resumed }
     var hasConversation: Bool { status.hasConversation }
     package var title: String { status.title(fallback: provider.name) }
@@ -277,13 +277,13 @@ package final class Chat: Identifiable {
         if case .turnFinished = event, stoppingCompaction, context.compacting { dispatch(.compactionStopped) }
     }
 
-    /// Kore's record of a fork it lists follows its CLI: the id the CLI names it by, and that a
-    /// message went out (from then the CLI has the session).
+    /// Kore's record of a fork it lists follows its CLI: the id the CLI names it by. That a
+    /// message went out (from then the CLI has the session) is noted as the send returns: a
+    /// fork whose CLI never started stays a fork through a reload.
     private func noteFork(_ event: ChatEvent) {
         guard let key = fork?.id else { return }
         switch event {
         case .sessionIdentified(let id): KoreForks.shared.identified(cli: provider.id, key: key, as: id)
-        case .userMessage: KoreForks.shared.sent(cli: provider.id, key: key)
         default: break
         }
     }
@@ -399,12 +399,53 @@ package final class Chat: Identifiable {
     func start() async {
         guard !closed, !Task.isCancelled else { return }
         let epoch = workEpoch
-        do {
-            try await connect().start()
-        } catch {
-            guard currentWork(epoch), !Task.isCancelled else { return }
-            fail(Self.reason(error))
+        if let error = await launchCLI() {
+            guard currentWork(epoch), !Task.isCancelled, !(error is CancellationError) else { return }
+            fail("Couldn't start \(provider.name): \(Self.reason(error))")
         }
+    }
+
+    /// The CLI's start under way, its retries included, and the work it's for: whatever needs
+    /// the CLI meanwhile waits on this one (an account's change starts work of its own).
+    @ObservationIgnored private var launching: (epoch: UInt64, task: Task<Error?, Never>)?
+
+    /// Waits before each start again of a CLI that wouldn't start. A storyline sets them shorter.
+    package static let startRetries = HostSetting<[Duration]>([.seconds(2), .seconds(5), .seconds(10)])
+
+    /// Starts the CLI; one that won't (being updated, just removed, ending at once) is tried
+    /// again a few times (`startRetries`) before it's given up on, and the chat says why once,
+    /// at the first. Nil once it's up, else the last failure; the next call tries again.
+    private func launchCLI() async -> Error? {
+        let epoch = workEpoch
+        if let launching, launching.epoch == epoch { return await launching.task.value }
+        let backend = connect()
+        let task = Task { [weak self] () -> Error? in
+            let retries = Self.startRetries.value
+            var waits = retries[...]
+            while true {
+                do {
+                    try await backend.start()
+                    return nil
+                } catch {
+                    guard let self, self.currentWork(epoch), Self.retriable(error), let wait = waits.popFirst() else { return error }
+                    if waits.count == retries.count - 1 {
+                        self.dispatch(.notice("Couldn't start \(self.provider.name): \(Self.reason(error)). Trying again…"))
+                    }
+                    try? await Task.sleep(for: wait)
+                    if Task.isCancelled || !self.currentWork(epoch) { return CancellationError() }
+                }
+            }
+        }
+        launching = (epoch, task)
+        let error = await task.value
+        if launching?.epoch == epoch { launching = nil }
+        return error
+    }
+
+    /// A start that may work a moment later: not one the CLI refused (it would again), one
+    /// cancelled, or one held by an account's change.
+    private static func retriable(_ error: Error) -> Bool {
+        !["refused", "stopping", "cancelled"].contains(SessionLog.cause(error))
     }
 
     /// The backend, made on first use with the chat's current settings.
@@ -906,6 +947,13 @@ package final class Chat: Identifiable {
     /// Sends a message the composer has given up (or Kore's own "Continue").
     private func deliver(_ text: String, _ sent: [Attachment]) {
         guard !closed, !accountRestartPending else { return }
+        // A rollback under way: the CLI it would reach is ending, and the rows are about to be
+        // replaced. It goes once the rollback is done (`endRollback`).
+        if rollingBack {
+            heldForRollback.append((text, sent))
+            transcript.sending(true)
+            return
+        }
         interruptedByAccount = false
         relaunchIfDue()
         let epoch = workEpoch
@@ -916,12 +964,15 @@ package final class Chat: Identifiable {
             return
         }
         approvals.offerImplementPlan = false
-        // Sent while a turn runs, it waits (look.md §10) until the CLI says where it went.
-        let queued = status.isRunning ? UUID().uuidString : nil
+        // Sent while a turn runs, it waits (look.md §10) until the CLI says where it went. Its id
+        // is its row's too: the CLI keeps it (or its backend maps it), so a fork or a rollback
+        // finds this very message, not another with the same text.
+        let id = UUID().uuidString.lowercased()
+        let queued = status.isRunning ? id : nil
         let shown = sent.map(SentAttachment.init)
         let message: ChatEvent =
             queued.map { .messageQueued(id: $0, text: text, attachments: shown) }
-            ?? .userMessage(text: text, attachments: shown)
+            ?? .userMessage(text: text, attachments: shown, id: id)
         if let queued {
             waiting[queued] = (text, sent)
             waitingOrder.append(queued)
@@ -937,7 +988,19 @@ package final class Chat: Identifiable {
             await previous?.value
             guard currentWork(epoch), !Task.isCancelled else { return }
             do {
-                try await backend.start()
+                if let error = await launchCLI() {
+                    guard currentWork(epoch), !Task.isCancelled else { return }
+                    // Never sent: the message goes back to the composer, for a send that tries again.
+                    if let queued {
+                        dispatch(.queuedMessage(id: queued, .dropped))
+                    } else {
+                        transcript.sending(false)
+                        status.setRunning(false)
+                        giveBackToComposer(text, sent)
+                    }
+                    fail("Not sent: \(provider.name) didn't start (\(Self.reason(error))). The message is back in the composer.")
+                    return
+                }
                 guard currentWork(epoch), !Task.isCancelled else { return }
                 if queued == nil, !NetworkWatch.shared.isOnline {
                     dispatch(.notice("Offline: this sends when the network is back"))
@@ -952,7 +1015,9 @@ package final class Chat: Identifiable {
                     }
                 }
                 guard currentWork(epoch), !Task.isCancelled else { return }
-                let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued)
+                let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued, id: id)
+                // A fork's CLI has its session once a message went out, not when it was shown.
+                if let key = fork?.id { KoreForks.shared.sent(cli: provider.id, key: key) }
                 guard currentWork(epoch), !Task.isCancelled else { return }
                 if !turn, queued == nil {
                     transcript.sending(false)
@@ -1170,7 +1235,7 @@ package final class Chat: Identifiable {
     }
 
     /// The context wheel's click (look §9): compacts at once, between turns only.
-    var canCompact: Bool { status.sessionId != nil && !status.isRunning && !context.compacting }
+    var canCompact: Bool { status.sessionId != nil && !status.isRunning && !context.compacting && !rollingBack }
 
     /// `instructions`: what the summary should keep (`/compact <instructions>`); empty for none.
     /// The transcript's live row shows from here, before the CLI says it started. `point`: Kore
@@ -1328,38 +1393,68 @@ package final class Chat: Identifiable {
         }
     }
 
-    /// A rollback under way (`rollBack(to:draft:)`).
+    /// A rollback under way (`rollBack(to:)`).
     @ObservationIgnored private var rollingBack = false
+    /// Messages sent while it runs, in order: they go once it's done.
+    @ObservationIgnored private var heldForRollback: [(text: String, files: [Attachment])] = []
 
-    /// Takes this chat back to before a user message: it and everything after it go, and its text
-    /// returns to the composer. Files stay as they are.
-    package func rollBack(_ entry: TranscriptStore.Entry) { rollBack(to: entry, draft: entry.text) }
+    /// Takes this chat back to before a user message: it and everything after it go, and it
+    /// returns to the composer, with its files. A peer's message goes the same way, but its words
+    /// aren't the owner's to send again. Files on disk stay as they are.
+    package func rollBack(_ entry: TranscriptStore.Entry) { rollBack(to: entry, giveBack: entry.kind == .user) }
 
     /// Takes this chat back to this answer: what came after its turn goes.
     package func rollBack(after answer: TranscriptStore.Entry) {
-        if let next = nextMessage(after: answer) { rollBack(to: next, draft: "") }
+        if let next = nextMessage(after: answer) { rollBack(to: next, giveBack: false) }
     }
 
-    private func rollBack(to entry: TranscriptStore.Entry, draft: String) {
+    private func rollBack(to entry: TranscriptStore.Entry, giveBack: Bool) {
         // One at a time: a second one started meanwhile would cut the CLI at its own message while
         // the first one's rows replaced the transcript, so the two would disagree.
-        guard !rollingBack else { return }
+        guard !rollingBack, !closed else { return }
+        // A message taken into a running turn isn't a turn's start: cutting there would cut the
+        // turn in half (Claude), or take the whole turn (Codex).
+        guard entry.kind == .peer || (entry.kind == .user && !entry.inTurn) else { return }
         rollingBack = true
         Task {
-            defer { rollingBack = false }
             // A running turn ends first, as Stop ends it (at most 5 s: `stopFallback`).
             stop()
             for _ in 0..<60 where isBusy { try? await Task.sleep(for: .milliseconds(100)) }
+            guard !isBusy else {
+                endRollback()
+                dispatch(.notice("Couldn't roll back: the turn is still stopping. Try again once it has.", isError: true))
+                return
+            }
             do {
                 let left = try await connect().rollback(message: entry.source, text: entry.text)
                 sinceReplay = []
                 replaceHistory(left.events)
                 dispatch(.earlierHistory(left.more))
                 dispatch(.notice("Rolled back. Files not changed."))
-                if !draft.isEmpty { restoreDraft(draft, commands: controls.commands) }
+                if giveBack { giveBackToComposer(entry.text, Self.reattach(entry.attachments)) }
             } catch {
-                fail("Couldn't roll back: \(error.localizedDescription)")
+                fail("Couldn't roll back: \(Self.reason(error))")
             }
+            endRollback()
+        }
+    }
+
+    /// The rollback is over, done or not: what was sent meanwhile goes now, after its rows.
+    private func endRollback() {
+        rollingBack = false
+        let held = heldForRollback
+        heldForRollback = []
+        if !held.isEmpty, transcript.pendingSendSince != nil { transcript.sending(false) }
+        for message in held { deliver(message.text, message.files) }
+    }
+
+    /// A sent message's files, to attach again: those still on disk, and pictures known only as
+    /// they were sent (a past message's), saved again. Others can't be sent again.
+    private static func reattach(_ sent: [Attachment]) -> [Attachment] {
+        sent.compactMap { file in
+            if let url = file.url, FileManager.default.fileExists(atPath: url.path) { return Attachment(url: url) }
+            if file.kind == .image, let data = file.imageData, let url = Attachments.saveImage(data) { return Attachment(url: url) }
+            return nil
         }
     }
 
@@ -1408,12 +1503,19 @@ package final class Chat: Identifiable {
         guard case .queuedMessage(let id, let delivery) = event, let message = waiting.removeValue(forKey: id) else { return }
         waitingOrder.removeAll { $0 == id }
         guard delivery == .dropped else { return }
+        giveBackToComposer(message.text, message.files)
+    }
+
+    /// A message back in the composer (one Stop dropped, one rolled back): as it was sent when
+    /// the composer is empty, its command in the chip; otherwise ahead of what's there, which
+    /// stays.
+    private func giveBackToComposer(_ text: String, _ files: [Attachment]) {
         if command == nil, draft.isEmpty {
-            restoreDraft(message.text, commands: controls.commands)
-        } else {
-            draft = draft.isEmpty ? message.text : message.text + "\n" + draft
+            restoreDraft(text, commands: controls.commands)
+        } else if !text.isEmpty {
+            draft = draft.isEmpty ? text : text + "\n" + draft
         }
-        attachments = message.files + attachments
+        attachments = files + attachments
     }
 
     // MARK: Commands

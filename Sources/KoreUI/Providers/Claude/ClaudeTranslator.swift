@@ -189,12 +189,10 @@ package final class ClaudeTranslator {
 
     // MARK: Remote control
 
-    /// An id for a message Kore sends while remote control is on (nil while it's off): its echo
-    /// is then known as Kore's.
-    func ownSend() -> String? {
-        guard remoteActive else { return nil }
-        let id = UUID().uuidString.lowercased()
-        ownSends.insert(id)
+    /// The id a message Kore sends goes with (the CLI keeps it as the message's uuid). While
+    /// remote control is on, its echo is then known as Kore's.
+    func ownSend(_ id: String = UUID().uuidString.lowercased()) -> String {
+        if remoteActive { ownSends.insert(id) }
         return id
     }
 
@@ -1110,16 +1108,23 @@ package final class ClaudeTranslator {
                     taskNotification(text: text)
                     continue
                 }
-                // A message sent while the turn ran, taken at a tool boundary: it reads back in place.
+                // A message sent while the turn ran, taken at a tool boundary: it reads back in place,
+                // in the turn, as it showed live (no turn starts there to fork or roll back to).
                 if let text = message["attachment"]?["prompt"]?.string {
-                    out.append(.userMessage(text: text, attachments: [], id: message["uuid"]?.string))
+                    if turn != nil {
+                        let id = message["uuid"]?.string ?? ToolText.newID()
+                        out.append(.messageQueued(id: id, text: text, attachments: []))
+                        out.append(.queuedMessage(id: id, .inTurn(after: lastItem)))
+                    } else {
+                        out.append(.userMessage(text: text, attachments: [], id: message["uuid"]?.string))
+                    }
                 }
                 continue
             }
             if let peer = PeerMessage(entry: message) {
                 close()
                 openTurn(.peer, at: time)
-                out.append(.peerMessage(from: peer.from, text: peer.text, turn: turn))
+                out.append(.peerMessage(from: peer.from, text: peer.text, turn: turn, id: message["uuid"]?.string))
                 continue
             }
             if ClaudeHistory.isBoundary(message) {
@@ -1191,6 +1196,15 @@ package final class ClaudeTranslator {
         case "peer": .peer
         default: nil
         }
+    }
+
+    /// What a transcript entry said, as its row shows it: a peer's message, or the user's text,
+    /// whatever it starts with (Kore's notes of attached files included).
+    static func sentText(_ entry: JSONValue) -> String? {
+        if let peer = PeerMessage(entry: entry) { return peer.text }
+        guard entry["type"]?.string == "user" else { return nil }
+        let content = entry["message"]?["content"]
+        return content?.string ?? content?.array?.last { $0["type"]?.string == "text" }?["text"]?.string
     }
 
     static func promptText(_ content: JSONValue?) -> String? {

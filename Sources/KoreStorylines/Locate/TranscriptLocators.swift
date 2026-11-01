@@ -28,6 +28,15 @@ extension Locator {
         }
     }
 
+    /// The `n`-th message from a peer (another session) in the active chat.
+    package static func peerMessage(_ n: Int) -> Locator {
+        entry("peer message \(n)") { transcript in
+            let messages = transcript.entries.filter { $0.kind == .peer }
+            guard messages.indices.contains(n - 1) else { return .failure(LocatorMiss("peer message \(n): the chat has \(messages.count)")) }
+            return .success((messages[n - 1].id, StoryID.Transcript.peer(messages[n - 1].id)))
+        }
+    }
+
     /// The fold ("Worked for …") of the active chat's `turn`-th turn.
     package static func fold(turn: Int) -> Locator {
         entry("turn \(turn)'s fold") { transcript in

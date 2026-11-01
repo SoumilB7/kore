@@ -13,7 +13,7 @@ public enum CLIExecutable {
         public let environment: [String: String]
     }
 
-    public enum Failure: Error, CustomStringConvertible {
+    public enum Failure: LocalizedError, CustomStringConvertible {
         case notFound(name: String, searched: [String])
 
         public var description: String {
@@ -21,6 +21,53 @@ public enum CLIExecutable {
             case .notFound(let name, let dirs):
                 "\(name) CLI not found. Install it or set an explicit path. Searched: \(dirs.joined(separator: ":"))"
             }
+        }
+
+        /// What the chat says (the search path is for the log).
+        public var errorDescription: String? {
+            switch self {
+            case .notFound(let name, _): "the \(name) CLI wasn't found (not installed, or being updated)"
+            }
+        }
+    }
+
+    /// A CLI that ended before it was up (an update replacing it, a broken install, a refused
+    /// option): its first line of error output says why, when it wrote one.
+    public struct ExitedAtStart: LocalizedError, CustomStringConvertible {
+        public let name: String
+        public let status: Int32
+        /// Readable: a JSON error's message, never the JSON.
+        public let said: String?
+
+        public init(name: String, status: Int32, output: String) {
+            self.name = name
+            self.status = status
+            said = Self.firstError(output)
+        }
+
+        public var errorDescription: String? { "the \(name) CLI exited as it started" + (said.map { ": \($0)" } ?? "") }
+        public var description: String { errorDescription ?? "" }
+
+        /// The first line with words in it: a JSON line's error message (none: skipped), any other
+        /// line as it is, without terminal colours, at most 200 characters.
+        public static func firstError(_ output: String) -> String? {
+            for raw in output.split(whereSeparator: \.isNewline) {
+                let line = raw.replacingOccurrences(of: "\u{1B}\\[[0-9;]*[A-Za-z]", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespaces)
+                guard !line.isEmpty else { continue }
+                guard line.hasPrefix("{") || line.hasPrefix("[") else { return clip(line) }
+                guard let json = try? JSONValue.parse(Data(line.utf8)) else { continue }
+                let error = json["error"]
+                let words = error?["message"]?.string ?? error?.string ?? (json["is_error"]?.bool == true ? json["result"]?.string : nil)
+                    ?? (json["type"]?.string == "error" ? json["message"]?.string : nil)
+                if let words, !words.isEmpty { return clip(words) }
+            }
+            return nil
+        }
+
+        private static func clip(_ text: String) -> String {
+            let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+            return line.count > 200 ? String(line.prefix(199)) + "…" : line
         }
     }
 

@@ -55,8 +55,9 @@ package final class TranscriptStore {
         var warning = false
         /// A user message the CLI took into a running turn (look.md §10): it doesn't open a section.
         package var inTurn = false
-        /// A user message's id in its CLI's history (where a fork from it starts); nil for one
-        /// sent in this run. `forkSource` on a fork's "Forked from" line.
+        /// A user's or peer's message's id in its CLI's history (where a fork or a rollback finds
+        /// it); for one sent in this run, the id Kore sent it with. `forkSource` on a fork's
+        /// "Forked from" line.
         var source: String?
 
         package static func == (a: Self, b: Self) -> Bool {
@@ -1066,9 +1067,10 @@ package final class TranscriptStore {
     }
 
     /// A peer's message, placed where its turn began.
-    func peer(from: String, text: String, turn: String?) {
+    func peer(from: String, text: String, turn: String?, source: String? = nil) {
         var entry = Entry(kind: .peer, text: text, from: from)
         entry.turn = turn
+        entry.source = source
         if let turn, let first = entries.firstIndex(where: { $0.turn == turn }) {
             insert(entry, at: first)
         } else {
@@ -1218,7 +1220,8 @@ package final class TranscriptStore {
                 append(entry)
             }
         case .nextTurn:
-            user(entry.text, attachments: entry.attachments)
+            // Sent with Kore's id, which the CLI keeps (or its backend maps): a rollback finds it by it.
+            user(entry.text, attachments: entry.attachments, source: id)
         case .dropped:
             changed(at: entries.count - 1)
         }
@@ -1621,7 +1624,7 @@ package final class TranscriptStore {
             let items = run.indices.map { i in
                 let id = run[i].id
                 let rowActions: MessageActions? =
-                    if case .message(let e, _, _) = run[i] { MessageActions(always: false, canFork: e.id != running, canRollBack: e.id != first) }
+                    if case .message(let e, _, _) = run[i] { MessageActions(always: false, canFork: e.id != running, canRollBack: e.id != first && !e.inTurn) }
                     else { actions[id] }
                 return Item(
                     row: run[i], dot: dots[i],

@@ -22,8 +22,26 @@ struct SessionLog: Sendable {
         log.write("started", ["cli": cli, "chat": chat ?? "-", "pid": pid.map(String.init) ?? "-", "launch": launch])
     }
 
-    func startFailed(_ cli: String, chat: String?, launch: String) {
-        log.write("start-failed", ["cli": cli, "chat": chat ?? "-", "launch": launch])
+    /// `error`'s kind only (`cause`), never its words.
+    func startFailed(_ cli: String, chat: String?, launch: String, error: Error) {
+        log.write("start-failed", ["cli": cli, "chat": chat ?? "-", "launch": launch, "cause": Self.cause(error)])
+    }
+
+    /// Why a CLI didn't start: "missing" (not found), "exited" (it ended before it was up, and
+    /// `exited-<status>`), "spawn" (it couldn't be run), "refused" (it ran and said no),
+    /// "stopping" (the last account's process is still ending), "cancelled", or "other".
+    static func cause(_ error: Error) -> String {
+        switch error {
+        case CLIExecutable.Failure.notFound: "missing"
+        case let exited as CLIExecutable.ExitedAtStart: "exited-\(exited.status)"
+        case is PendingCLIShutdown: "stopping"
+        case is CancellationError: "cancelled"
+        case CodexAppServer.Failure.rpc: "refused"
+        case ClaudeSession.Failure.controlError: "refused"
+        case ClaudeSession.Failure.notRunning, CodexAppServer.Failure.notRunning: "not-running"
+        case is POSIXError, is CocoaError: "spawn"
+        default: (error as NSError).domain == NSPOSIXErrorDomain ? "spawn" : "other"
+        }
     }
 
     /// `asked`: Kore ended it (a relaunch, the chat closed), so the exit was expected.

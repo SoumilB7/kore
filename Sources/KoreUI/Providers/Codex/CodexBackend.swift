@@ -119,7 +119,7 @@ final class CodexBackend: ChatBackend {
                 pendingShutdown = pending
                 accountBlocked = true
             }
-            log.startFailed("codex", chat: sessionId, launch: kind)
+            log.startFailed("codex", chat: sessionId, launch: kind, error: error)
             throw error
         }
         let thread = await session.threadId
@@ -132,7 +132,7 @@ final class CodexBackend: ChatBackend {
         do {
             newest = try await open(session, page: replayPending ? Self.pageTurns : nil)
         } catch {
-            log.startFailed("codex", chat: resume, launch: kind)
+            log.startFailed("codex", chat: resume, launch: kind, error: error)
             await session.close()
             if resume != nil, forkAt == nil, case CodexAppServer.Failure.rpc = error { refused = error }
             throw error
@@ -572,7 +572,11 @@ final class CodexBackend: ChatBackend {
 
     // MARK: - Actions
 
-    func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool {
+    /// Kore's ids for the messages sent in this run → the turns they started: a row's id is
+    /// Kore's (`send`'s `id`), a turn's is Codex's.
+    private var sentTurns: [String: String] = [:]
+
+    func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
         // The Codex extension's /plan is a local toggle: nothing is sent.
         if text == "/plan" && files.isEmpty {
             await setPlanMode(!options.planMode)
@@ -625,6 +629,7 @@ final class CodexBackend: ChatBackend {
         do {
             let turn = try await session.send(input: input, clientId: queued)
             if let queued { translator.queuedAccepted(queued, turn: turn) }
+            if let id, let turn { sentTurns[id] = turn }
             flush()
         } catch {
             translator.ownTurnSent = false
@@ -821,10 +826,58 @@ final class CodexBackend: ChatBackend {
     func fork(message id: String?, text: String) async throws -> ForkStart {
         try await start()
         guard let session, let thread = sessionId else { return .fresh }
-        // A replayed message by its turn's id; one sent in this run by its text from the end.
-        if let id, let start = try await fork(session, thread, view: .notLoaded, at: { $0["id"]?.string == id }) { return start }
-        if let start = try await fork(session, thread, view: .summary, at: Self.sent(text)) { return start }
-        throw ForkError.notFound
+        let found = try await locate(session, thread, id: id, text: text)
+        // The thread's first turn: nothing comes before it.
+        return found.before.map { .pending(ForkPoint(from: thread, at: $0)) } ?? .fresh
+    }
+
+    /// A message's turn, the one before it, and the turns after it.
+    private struct Located {
+        let turn: String
+        let later: [String]
+        var before: String?
+    }
+
+    /// The turn holding a message: by its id (a turn's, or the one Kore sent it with), else by
+    /// its text where only one turn has it (of two "yes", the text can't say which was meant).
+    /// Read a page at a time from the end: a long thread's turns are never read whole for an id.
+    private func locate(_ session: CodexSession, _ thread: String, id: String?, text: String) async throws -> Located {
+        if let id = id.map({ sentTurns[$0] ?? $0 }),
+            let found = try await scan(session, thread, view: .notLoaded, unique: false, at: { $0["id"]?.string == id })
+        {
+            return found
+        }
+        guard !text.isEmpty, let found = try await scan(session, thread, view: .summary, unique: true, at: Self.sent(text)) else {
+            throw ForkError.notFound
+        }
+        return found
+    }
+
+    /// The newest turn `match` accepts. `unique`: every turn is read, and a second one accepted
+    /// throws `ForkError.ambiguous`.
+    private func scan(
+        _ session: CodexSession, _ thread: String, view: CodexSession.TurnsView, unique: Bool, at match: (JSONValue) -> Bool
+    ) async throws -> Located? {
+        var cursor: String?
+        var newer: [String] = []
+        var found: Located?
+        repeat {
+            let page = try await session.turns(of: thread, before: cursor, limit: 50, view: view)
+            for turn in page.turns.reversed() {
+                let id = turn["id"]?.string ?? ""
+                if found != nil, found?.before == nil {
+                    found?.before = id
+                    if !unique { return found }
+                }
+                if match(turn) {
+                    guard found == nil else { throw ForkError.ambiguous }
+                    found = Located(turn: id, later: newer)
+                }
+                newer.append(id)
+            }
+            cursor = page.earlier
+        } while cursor != nil
+        return found
     }
 
     /// Opens the thread. The app-server before this one can still hold it for a moment (a reload
@@ -851,53 +904,23 @@ final class CodexBackend: ChatBackend {
         }
     }
 
-    /// Cut back in place (`thread/revert`): the same thread goes on from the turn before.
+    /// Cut back in place (`thread/revert`): the same thread goes on from the turn before. What
+    /// the reverted turns started and still runs (terminals that outlived them, child threads)
+    /// stops first: it would go on into a history that no longer has it.
     func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
         try await start()
-        guard let session, let thread = sessionId else { throw ForkError.notFound }
-        var turn: String?
-        if let id { turn = try await newestTurn(session, thread, view: .notLoaded) { $0["id"]?.string == id } }
-        if turn == nil { turn = try await newestTurn(session, thread, view: .summary, at: Self.sent(text)) }
-        guard let turn else { throw ForkError.notFound }
-        try await session.revert(thread, before: turn)
+        guard let session, let thread = sessionId else { throw ForkError.notSaved }
+        let found = try await locate(session, thread, id: id, text: text)
+        let work = translator.work(of: Set(found.later + [found.turn]))
+        for terminal in work.terminals { _ = try? await session.terminate(process: terminal.process, in: terminal.owner.sub) }
+        for child in work.children { try? await session.interrupt(thread: child.thread, turn: child.turn) }
+        try await session.revert(thread, before: found.turn)
         let page = try await session.turns(of: thread, limit: Self.pageTurns)
         earlierFrom = page.earlier
         rollout = await session.rolloutPath.map(CodexRolloutReader.init)
         let replayed = await replay(page.turns, session)
         translator.adopt(replayed.carried)
         return (replayed.events, page.earlier != nil)
-    }
-
-    /// The newest turn `match` accepts, a page at a time from the end.
-    private func newestTurn(
-        _ session: CodexSession, _ thread: String, view: CodexSession.TurnsView, at match: (JSONValue) -> Bool
-    ) async throws -> String? {
-        var cursor: String?
-        repeat {
-            let page = try await session.turns(of: thread, before: cursor, limit: 50, view: view)
-            if let found = page.turns.last(where: match) { return found["id"]?.string }
-            cursor = page.earlier
-        } while cursor != nil
-        return nil
-    }
-
-    /// Finds the newest turn `at` matches, a page at a time from the end (a long thread's turns
-    /// are never read whole), and forks through the turn before it. Nil when none matches.
-    private func fork(
-        _ session: CodexSession, _ thread: String, view: CodexSession.TurnsView, at match: (JSONValue) -> Bool
-    ) async throws -> ForkStart? {
-        var cursor: String?
-        var found = false
-        repeat {
-            let page = try await session.turns(of: thread, before: cursor, limit: 50, view: view)
-            for turn in page.turns.reversed() {
-                if found, let before = turn["id"]?.string { return .pending(ForkPoint(from: thread, at: before)) }
-                found = match(turn)
-            }
-            cursor = page.earlier
-        } while cursor != nil
-        // The thread's first turn: nothing comes before it.
-        return found ? .fresh : nil
     }
 
     /// Through the thread's last turn (`thread/fork`'s `lastTurnId` keeps turns through it):

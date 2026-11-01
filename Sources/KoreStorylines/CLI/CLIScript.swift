@@ -25,6 +25,15 @@ package struct CLIScript: Sendable {
     /// What a remote side does once remote control is on (a turn begun from claude.ai/code or
     /// a codex remote client): played after `setRemoteControl(true)`.
     package var remote: [Beat] = []
+    /// A resumed chat's start shows its history, then waits for `Release` before it's up (a CLI
+    /// still launching).
+    package var holdLaunch = false
+    /// A rollback waits for `Release` before it cuts (a CLI slow to start again).
+    package var holdRollback = false
+    /// The first this many starts fail, as a CLI being updated fails: it exits as it starts,
+    /// saying `startError` (a resumed chat's history still shows first, as it's read from disk).
+    package var failedStarts = 0
+    package var startError = #"{"type":"error","message":"The CLI is being updated. Try again in a moment."}"#
 
     package init(
         start: [Beat] = [.controls()], turns: [[Beat]] = [], compact: [Beat] = CLIScript.compaction(), agents: [String: [ChatEvent]] = [:],
@@ -149,6 +158,10 @@ package enum Call: Sendable, Equatable {
     case relaunch
     /// Started again after a relaunch, before a send asked (its models reloaded).
     case restarted
+    /// A launch held by `holdLaunch` came up.
+    case launched
+    /// A start failed (`failedStarts`).
+    case startFailed
     /// Not Kore's: a test's go-ahead (`ScriptedBackend.release()`), to hold a script mid-way.
     case release
 

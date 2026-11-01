@@ -69,10 +69,7 @@ struct RemoteControlTests {
         let translator = ClaudeTranslator(folder: Drive.folder, sessionId: nil)
         translator.remoteActive = true
         translator.openTurn(.user)
-        guard let own = translator.ownSend() else {
-            Issue.record("no id for Kore's own send")
-            return
-        }
+        let own = translator.ownSend()
         translator.translate(Self.echo(own, "my own message"))
         translator.translate(Self.echo("peer", "a peer's note", synthetic: true))
         #expect(!translator.take().events.contains { if case .userMessage = $0 { true } else if case .messageQueued = $0 { true } else { false } })
@@ -92,7 +89,6 @@ struct RemoteControlTests {
 
     @Test func claudeIgnoresEchoesWhileItsOff() {
         let translator = ClaudeTranslator(folder: Drive.folder, sessionId: nil)
-        #expect(translator.ownSend() == nil)
         translator.translate(.commandStarted(id: "r1", sessionId: nil))
         translator.translate(Self.echo("r1", "Add the check"))
         #expect(!translator.take().events.contains { if case .userMessage = $0 { true } else { false } })

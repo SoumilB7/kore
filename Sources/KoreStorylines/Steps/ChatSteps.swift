@@ -33,6 +33,7 @@ package struct UseScript: Step {
     package func run(_ story: StoryContext) async throws {
         // Each storyline starts with the app's own watchdog wait, whatever one before set.
         Chat.stallAfter.value = 90
+        Chat.startRetries.value = [.seconds(2), .seconds(5), .seconds(10)]
         if let provider { ScriptedWorld.shared.scripts[provider] = script } else { ScriptedWorld.shared.script = script }
         if let provider {
             // The independent auth-status read and usage reply describe the same fixture.

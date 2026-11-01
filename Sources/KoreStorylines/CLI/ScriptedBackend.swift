@@ -66,6 +66,11 @@ package final class ScriptedBackend: ChatBackend {
     // MARK: - ChatBackend
 
     private var relaunched = false
+    /// A launch held by `holdLaunch`: a start meanwhile waits for it, as the real backends' do.
+    private var launching: Task<Void, Never>?
+    private var historyShown = false
+    /// Starts failed so far (`failedStarts`).
+    private var startFailures = 0
     /// Remote control is on: a start after a relaunch links it again, as the real CLIs' backends do.
     private var remoteOn = false
 
@@ -78,12 +83,29 @@ package final class ScriptedBackend: ChatBackend {
                 sink.yield(.remoteControl(RemoteControl(state: .connected, place: provider == "claude" ? "claude.ai/code" : "acme-mac")))
             }
         }
+        if let launching { return await launching.value }
         guard !started else { return }
+        // A resumed chat's history (a fork's: the original's, to its fork point) shows once,
+        // whether or not the CLI then comes up.
+        if !historyShown {
+            historyShown = true
+            if let fork = options.fork {
+                history = world.history(of: fork.from, through: fork.at)
+                sink.yield(.replayed(history))
+            } else if let resume = options.resume {
+                history = world.sessions[resume.id] ?? []
+                sink.yield(.replayed(history))
+                if world.earlier[resume.id] != nil { sink.yield(.earlierHistory(true)) }
+            }
+        }
+        if startFailures < script.failedStarts {
+            startFailures += 1
+            log.append(.startFailed)
+            throw CLIExecutable.ExitedAtStart(name: provider, status: 1, output: script.startError)
+        }
         started = true
         // A fork also names the session it came from as `resume` (`Workspace.fork`): the fork wins.
         if let fork = options.fork {
-            history = world.history(of: fork.from, through: fork.at)
-            sink.yield(.replayed(history))
             // Claude's fork takes the id Kore gives it (`--session-id`); Codex names its thread.
             sessionId = (provider == "claude" ? fork.id : nil) ?? world.newSession(provider)
             if let title = options.forkTitle { sink.yield(.titleChanged(title)) }
@@ -91,23 +113,29 @@ package final class ScriptedBackend: ChatBackend {
             if provider == "codex", let sessionId { world.list(sessionId, provider: provider, folder: options.folder, title: options.forkTitle ?? "") }
         } else if let resume = options.resume {
             sessionId = resume.id
-            history = world.sessions[resume.id] ?? []
-            sink.yield(.replayed(history))
-            if world.earlier[resume.id] != nil { sink.yield(.earlierHistory(true)) }
         } else {
             sessionId = world.newSession(provider)
         }
         if let sessionId { sink.yield(.sessionIdentified(sessionId)) }
         world.sessions[sessionId ?? ""] = history
+        if script.holdLaunch, options.resume != nil {
+            let launch = Task {
+                _ = await self.waitFor(.release)
+                self.log.append(.launched)
+            }
+            launching = launch
+            await launch.value
+            launching = nil
+        }
         let beats = script.start
         enqueue { await $0.play(beats) }
     }
 
-    package func send(_ text: String, files: [Attachments.File], queued id: String?) async throws -> Bool {
+    package func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
         try await start()
-        if let id, turn != nil {
+        if let queued, turn != nil {
             log.append(.queued(text))
-            queued.append((id, text))
+            self.queued.append((queued, text))
             offer(.queued(text))
             return true
         }
@@ -117,7 +145,8 @@ package final class ScriptedBackend: ChatBackend {
         }
         let index = sends
         sends += 1
-        record(.userMessage(text: text, attachments: [], id: "m\(index)"))
+        let sent = files.map { SentAttachment(name: $0.name, kind: $0.kind, url: $0.url, image: nil) }
+        record(.userMessage(text: text, attachments: sent, id: id ?? "m\(index)"))
         enqueue { await $0.playTurn($0.script(for: index), queued: nil) }
         return true
     }
@@ -196,25 +225,34 @@ package final class ScriptedBackend: ChatBackend {
     package func fork(message id: String?, text: String) async throws -> ForkStart {
         log.append(.fork(message: id))
         guard let sessionId else { return .fresh }
-        // The message's place in the history: by its id, or one sent in this run by its text.
-        let index = history.indices.last { i in
-            guard case .userMessage(let body, _, let messageId) = history[i] else { return false }
-            return id.map { $0 == messageId } ?? (body == text)
-        }
-        guard let index else { throw ScriptedError.noSuchMessage(id ?? text) }
+        let index = try message(id, text)
         let first = history.firstIndex { if case .userMessage = $0 { true } else { false } }
         if index == first { return .fresh }
         world.sessions[sessionId] = history
         return .pending(ForkPoint(from: sessionId, at: String(index)))
     }
 
-    package func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
-        log.append(.rollback(message: id))
-        let index = history.indices.last { i in
-            guard case .userMessage(let body, _, let messageId) = history[i] else { return false }
-            return id.map { $0 == messageId } ?? (body == text)
+    /// A message's place in the history (a user's or a peer's), as the real backends find it: by
+    /// its id, else by its text where only one message has it.
+    private func message(_ id: String?, _ text: String) throws -> Int {
+        func said(_ event: ChatEvent) -> (id: String?, text: String)? {
+            switch event {
+            case .userMessage(let body, _, let id), .peerMessage(_, let body, _, let id): (id, body)
+            default: nil
+            }
         }
-        guard let index else { throw ScriptedError.noSuchMessage(id ?? text) }
+        if let id, let index = history.indices.last(where: { said(history[$0])?.id == id }) { return index }
+        let matches = history.indices.filter { !text.isEmpty && said(history[$0])?.text == text }
+        guard let index = matches.first else { throw ScriptedError.noSuchMessage(id ?? text) }
+        guard matches.count == 1 else { throw ScriptedError.ambiguous(text) }
+        return index
+    }
+
+    package func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        try await start()
+        log.append(.rollback(message: id))
+        if script.holdRollback { _ = await waitFor(.release) }
+        let index = try message(id, text)
         history = Array(history[..<index])
         if let sessionId { world.sessions[sessionId] = history }
         return (history, false)
@@ -358,7 +396,7 @@ package final class ScriptedBackend: ChatBackend {
         let next = queued.removeFirst()
         let index = sends
         sends += 1
-        record(.userMessage(text: next.text, attachments: [], id: "m\(index)"))
+        record(.userMessage(text: next.text, attachments: [], id: next.id))
         await playTurn(script(for: index), queued: (next.id, ToolID.make()))
     }
 
@@ -410,7 +448,7 @@ package final class ScriptedBackend: ChatBackend {
                 if queued.isEmpty { _ = await waitFor(.queued("")) }
                 guard !queued.isEmpty else { continue }
                 let message = queued.removeFirst()
-                record(.userMessage(text: message.text, attachments: [], id: "m\(sends)"))
+                record(.userMessage(text: message.text, attachments: [], id: message.id))
                 sends += 1
                 await emit(.queuedMessage(id: message.id, .inTurn(after: lastItem)))
             case .fileEdit(let path, let content):
@@ -521,11 +559,13 @@ package final class ScriptedBackend: ChatBackend {
 
 package enum ScriptedError: LocalizedError {
     case noSuchMessage(String)
+    case ambiguous(String)
     case noUsage
 
     package var errorDescription: String? {
         switch self {
         case .noSuchMessage(let message): "the scripted session has no message \(message)"
+        case .ambiguous(let text): "the scripted session has more than one message \(text)"
         case .noUsage: "the script has no usage to answer with"
         }
     }

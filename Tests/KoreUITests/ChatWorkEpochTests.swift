@@ -40,7 +40,7 @@ struct ChatWorkEpochTests {
                 if failOld { throw OldFailure() }
             }
         }
-        func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool {
+        func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
             sent.append(text)
             if sent.count == 1, firstSendWaits {
                 await withCheckedContinuation { sendGate = $0 }

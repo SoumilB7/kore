@@ -25,8 +25,17 @@ struct CodexCommands {
     /// Lists in a row a live row was missing from.
     private var missing: [String: Int] = [:]
     private var stopAsked: Set<String> = []
+    /// The chat's turn each command's item belongs to (a child's: the turn that spawned it).
+    private var turnOf: [String: TurnID] = [:]
 
     func isRow(_ id: String) -> Bool { rows[id] != nil }
+
+    /// The processes the chat's turns `turns` started that still run, in turn or as rows.
+    func live(of turns: Set<TurnID>) -> [(process: String, owner: AgentID)] {
+        let inTurn = running.filter { turnOf[$0.key].map(turns.contains) == true }.map { ($0.key, $0.value.process, $0.value.owner) }
+        let outlived = rows.filter { $0.value.live && turnOf[$0.key].map(turns.contains) == true }.map { ($0.key, $0.value.process, $0.value.owner) }
+        return (inTurn + outlived).sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
+    }
 
     /// The live rows' owners, whose lists to read.
     var liveOwners: Set<AgentID> { Set(rows.values.filter(\.live).map(\.owner)) }
@@ -38,8 +47,9 @@ struct CodexCommands {
         rows[id].flatMap { $0.live ? ($0.process, $0.owner) : nil }
     }
 
-    mutating func started(_ item: CodexItem, agent: AgentID, at: Date) {
+    mutating func started(_ item: CodexItem, agent: AgentID, turn: TurnID? = nil, at: Date) {
         guard item.type == "commandExecution", item.status == "inProgress", let process = item.raw["processId"]?.string else { return }
+        turnOf[item.id] = turn
         running[item.id] = Item(
             command: CodexTranslator.command(item.raw) ?? item.command ?? "", cwd: item.raw["cwd"]?.string, process: process,
             owner: agent, at: at)

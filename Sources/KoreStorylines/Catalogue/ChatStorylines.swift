@@ -418,6 +418,307 @@ final class RollbackOneAtATime: ChatStoryline {
     }
 }
 
+/// The scripted CLI's calls of one kind, in order.
+@MainActor private func calls(_ story: StoryContext, _ kind: (Call) -> Bool) throws -> [Call] {
+    try story.scriptedBackend().log.filter(kind)
+}
+
+@MainActor private func isRollback(_ call: Call) -> Bool { if case .rollback = call { true } else { false } }
+
+/// The active chat's user messages, as their rows read.
+@MainActor private func users(_ rows: [StoryRow]) -> [String] { rows.filter { $0.kind == "user" }.map(\.text) }
+
+/// Starts that fail retried within moments, not seconds.
+private let quickRetries = Do("start again within moments") { _ in
+    Chat.startRetries.value = [.milliseconds(50), .milliseconds(50), .milliseconds(50)]
+}
+
+/// Rolled back while a reopened chat's CLI still starts (its history shows first): the rollback
+/// waits for the launch, so the CLI that comes up is cut too, and nothing the launch said brings
+/// the rest back.
+final class RollbackDuringLaunch: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript {
+        CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer"), CLIScript.reply("Third answer")])
+    }
+
+    override func steps() -> [any Step] {
+        var held = Self.script
+        held.holdLaunch = true
+        return super.steps() + [
+            Send("one"), TurnFinished(1), Send("two"), TurnFinished(2), WaitIdle(),
+            UseScript(held), ReloadChat(),
+            Press(Locator.userMessage(2).action(.rollback)), Press(Locator.userMessage(2).action(.rollback)),
+            Expect.rows("nothing cut while the CLI starts") { users($0) == ["one", "two"] },
+            Release(),
+            Expect.rows("only what came before message 2") { rows in
+                users(rows) == ["one"] && rows.contains { $0.text == "First answer" } && !rows.contains { $0.text == "Second answer" }
+            },
+            Expect("message 2 back in the composer") { try $0.activeChat().draft == "two" },
+            Expect("the cut made once the CLI was up") { story in
+                let log = try story.scriptedBackend().log
+                guard let up = log.firstIndex(of: .launched), let cut = log.firstIndex(where: isRollback) else { return false }
+                return up < cut
+            },
+            Send("three"), TurnFinished(1),
+            Expect.rows("the chat goes on from there") { rows in users(rows) == ["one", "three"] && rows.contains { $0.text == "First answer" } },
+        ]
+    }
+}
+
+/// A peer's message (another session's) rolls back as a user's does, by its own id; its words
+/// don't go to the composer, as they aren't the owner's to send.
+final class RollbackPeerMessage: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript {
+        CLIScript(turns: [
+            CLIScript.reply("First answer"),
+            CLIScript.reply("Second answer") + [
+                .event(.turnStarted("peer-1", origin: .peer, at: Date())),
+                .event(.peerMessage(from: "kore-2f", text: "<b>A note</b> from a peer", turn: "peer-1", id: "p1")),
+                .stream(.answer, "Answer to the peer"),
+                .event(.turnFinished("peer-1", .completed, duration: nil)),
+            ],
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1), Send("two"), TurnFinished(3), WaitIdle(),
+            Press(Locator.peerMessage(1).action(.rollback)), Press(Locator.peerMessage(1).action(.rollback)),
+            Expect.rows("the peer's message and what followed it gone") { rows in
+                users(rows) == ["one", "two"] && rows.contains { $0.text == "Second answer" }
+                    && !rows.contains { $0.kind == "peer" || $0.text == "Answer to the peer" }
+            },
+            Expect("found by its id") { story in try calls(story, isRollback) == [.rollback(message: "p1")] },
+            Expect("an empty composer") { try $0.activeChat().draft.isEmpty },
+        ]
+    }
+}
+
+/// Two messages say the same: the rollback cuts at the one pressed, not the newest that says it.
+final class RollbackDuplicateTexts: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript {
+        CLIScript(turns: [CLIScript.reply("A1"), CLIScript.reply("A2"), CLIScript.reply("A3"), CLIScript.reply("A4")])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1), Send("yes"), TurnFinished(2), Send("two"), TurnFinished(3), Send("yes"), TurnFinished(4),
+            WaitIdle(),
+            Press(Locator.userMessage(2).action(.rollback)), Press(Locator.userMessage(2).action(.rollback)),
+            Expect.rows("only what came before the first “yes”") { rows in
+                users(rows) == ["one"] && rows.contains { $0.text == "A1" } && !rows.contains { $0.text == "A2" }
+            },
+            Expect("“yes” back in the composer") { try $0.activeChat().draft == "yes" },
+            Expect("found by its id, not its text") { story in
+                try calls(story, isRollback).allSatisfy { if case .rollback(let id) = $0 { id != nil } else { false } }
+            },
+        ]
+    }
+}
+
+/// A message sent with a file rolls back with it: its text and its file are back in the composer.
+final class RollbackAttachedMessage: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer")]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1),
+            Do("attach a file") { story in
+                let file = story.folder.appendingPathComponent("notes.txt")
+                try "Notes".write(to: file, atomically: true, encoding: .utf8)
+                try story.activeChat().storyAttach([file])
+            },
+            Send("two"), TurnFinished(2), WaitIdle(),
+            Expect("the file sent with it") { try $0.activeChat().attachments.isEmpty },
+            Press(Locator.userMessage(2).action(.rollback)), Press(Locator.userMessage(2).action(.rollback)),
+            Expect.rows("only what came before message 2") { users($0) == ["one"] },
+            Expect("its text and its file back in the composer") { story in
+                let chat = try story.activeChat()
+                return chat.draft == "two" && chat.attachments.map(\.name) == ["notes.txt"]
+            },
+        ]
+    }
+}
+
+/// Sent while a rollback runs, a message waits for it, then goes to the CLI that's cut, after the
+/// rows it left: neither lost to the CLI that's ending nor wiped with the rows.
+final class RollbackHoldsSends: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript {
+        var script = CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer"), CLIScript.reply("Third answer")])
+        script.holdRollback = true
+        return script
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1), Send("two"), TurnFinished(2), WaitIdle(),
+            Press(Locator.userMessage(2).action(.rollback)), Press(Locator.userMessage(2).action(.rollback)),
+            Expect("the rollback asked of the CLI") { story in try !calls(story, isRollback).isEmpty },
+            Do("send while it rolls back") { try $0.activeChat().storySend("three") },
+            Expect("“three” not sent yet, nor shown") { story in
+                try !story.scriptedBackend().log.contains(.send("three")) && !users(story.activeChat().rows).contains("three")
+            },
+            Release(),
+            TurnFinished(3),
+            Expect.rows("“three” after the rows the rollback left") { rows in
+                users(rows) == ["one", "three"] && rows.contains { $0.text == "Third answer" } && !rows.contains { $0.text == "Second answer" }
+            },
+            Expect("sent once") { story in try story.scriptedBackend().log.filter { $0 == .send("three") }.count == 1 },
+            Expect("message 2 back in the composer") { try $0.activeChat().draft == "two" },
+        ]
+    }
+}
+
+/// A message the CLI took into a running turn starts no turn: there's nothing to roll back to
+/// there (Claude would cut the turn in half, Codex take all of it), so it offers no rollback.
+final class RollbackNotMidTurn: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript {
+        CLIScript(turns: [
+            CLIScript.reply("First answer"),
+            [.startTurn, .stream(.answer, "Working on it.\n\n"), .takeQueued, .stream(.answer, "Done."), .finishTurn(.completed)],
+        ])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1),
+            Send("two"),
+            WaitForEvent("the turn to start") { if case .turnStarted = $0 { true } else { false } },
+            Queue("and also this"),
+            TurnFinished(2), WaitIdle(),
+            Expect.rows("taken into the turn") { $0.contains { $0.kind == "user" && $0.text == "and also this" && $0.inTurn } },
+            Do("roll back to the message taken mid-turn") { story in
+                let chat = try story.activeChat()
+                guard let taken = chat.transcript.entries.first(where: { $0.kind == .user && $0.inTurn }) else {
+                    throw StoryFailure.other("no message taken mid-turn")
+                }
+                chat.rollBack(taken)
+            },
+            Expect("nothing asked of the CLI") { story in try calls(story, isRollback).isEmpty },
+            Expect.rows("nothing gone") { users($0) == ["one", "two", "and also this"] },
+            Expect("an empty composer") { try $0.activeChat().draft.isEmpty },
+        ]
+    }
+}
+
+/// What's typed in the composer stays when a rollback gives its message back: the message goes
+/// ahead of it.
+final class RollbackMergesDraft: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer")]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("one"), TurnFinished(1), Send("two"), TurnFinished(2), WaitIdle(),
+            Do("type something") { try $0.activeChat().draft = "typed meanwhile" },
+            Press(Locator.userMessage(2).action(.rollback)), Press(Locator.userMessage(2).action(.rollback)),
+            Expect.rows("only what came before message 2") { users($0) == ["one"] },
+            Expect("the message ahead of what was typed") { try $0.activeChat().draft == "two\ntyped meanwhile" },
+        ]
+    }
+}
+
+/// A CLI that can't start for a moment (being updated: it exits as it starts) is started again:
+/// the chat says why once, in words, and the message sent meanwhile goes once it's up, once. A
+/// reopened chat's history stays on screen through it.
+final class StartRetried: Storyline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var variants: [Variant] { [.claude, .codex] }
+
+    private static var failing: CLIScript {
+        var script = CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer")])
+        script.failedStarts = 2
+        return script
+    }
+
+    private static func notice(_ rows: [StoryRow]) -> [StoryRow] { rows.filter { $0.text.contains("Trying again") } }
+
+    override func steps() -> [any Step] {
+        [
+            UseScript(Self.failing), quickRetries, OpenFolder(), StartChat(),
+            Send("hello"), TurnFinished(1),
+            Expect.rows("one notice, naming the cause in words") { rows in
+                let said = Self.notice(rows)
+                return said.count == 1 && said[0].text.contains("being updated") && !said[0].text.contains("{")
+            },
+            Expect.rows("the message and its answer") { rows in users(rows) == ["hello"] && rows.contains { $0.text == "First answer" } },
+            Expect("sent once, after two starts failed") { story in
+                let log = try story.scriptedBackend().log
+                return log.filter { $0 == .send("hello") }.count == 1 && log.filter { $0 == .startFailed }.count == 2
+            },
+            UseScript(Self.failing), quickRetries, ReloadChat(),
+            Send("again"), TurnFinished(1),
+            Expect.rows("the history kept, the new message after it") { rows in
+                users(rows) == ["hello", "again"] && rows.contains { $0.text == "First answer" }
+            },
+            Expect("sent once") { story in try story.scriptedBackend().log.filter { $0 == .send("again") }.count == 1 },
+        ]
+    }
+}
+
+/// A CLI that still won't start after its retries: the message isn't sent, the chat says so and
+/// gives it back to the composer, and the next send tries again.
+final class StartGivesUp: Storyline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var variants: [Variant] { [.claude, .codex] }
+
+    override func steps() -> [any Step] {
+        var script = CLIScript(turns: [CLIScript.reply("First answer")])
+        script.failedStarts = 4
+        return [
+            UseScript(script), quickRetries, OpenFolder(), StartChat(),
+            Send("hello"),
+            Expect.rows("not sent, said so") { $0.contains { $0.text.hasPrefix("Not sent") && $0.text.contains("being updated") } },
+            Expect("the message back in the composer") { try $0.activeChat().draft == "hello" },
+            Do("send it again") { story in
+                let chat = try story.activeChat()
+                chat.storySend(chat.draft)
+            },
+            TurnFinished(1),
+            Expect("sent once") { story in try story.scriptedBackend().log.filter { $0 == .send("hello") }.count == 1 },
+        ]
+    }
+}
+
+/// A fork whose CLI never started stays a fork: reopened, it shows the original's history up to
+/// the fork point again (not an empty resume of an id no CLI has), and goes on as the fork.
+final class ForkStartFails: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .fork, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Second answer")]) }
+
+    override func steps() -> [any Step] {
+        var failing = Self.script
+        failing.failedStarts = 8
+        return super.steps() + [
+            Send("one"), TurnFinished(1), Send("two"), TurnFinished(2), WaitIdle(),
+            UseScript(failing), quickRetries,
+            Fork.fromMessage(2),
+            Do("send the fork's message") { story in
+                let chat = try story.activeChat()
+                chat.storySend(chat.draft)
+            },
+            Expect.rows("not sent") { $0.contains { $0.text.hasPrefix("Not sent") } },
+            Expect("still a fork its CLI hasn't made") { story in
+                let chat = try story.activeChat()
+                return chat.listedId.flatMap { KoreForks.shared.find(cli: chat.providerID, id: $0) }?.made == false
+            },
+            UseScript(Self.script), ReloadChat(),
+            Expect.rows("the original's history up to the fork point") { rows in
+                users(rows) == ["one"] && rows.contains { $0.text == "First answer" }
+            },
+            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.hasSuffix("(fork)") },
+            Send("two again"), TurnFinished(1),
+            Expect.rows("the fork goes on") { rows in users(rows) == ["one", "two again"] },
+        ]
+    }
+}
+
 /// A fork is in History as soon as it's made, before anything is sent in it (Claude makes its
 /// session only with the first message; Codex as the fork opens). A message later, there's
 /// still one entry for it, under its title, and Kore's own record of it has given way to the

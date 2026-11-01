@@ -16,7 +16,7 @@ extension HostOverrideTests {
 
             init() { (events, sink) = AsyncStream.makeStream() }
             func start() async throws {}
-            func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool { true }
+            func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool { true }
             func interrupt() async {}
             func respond(to approvalID: String, _ decision: Decision) async { answered.append((approvalID, decision)) }
             func setMode(_ id: String) async throws {}

@@ -78,6 +78,9 @@ package final class CodexTranslator {
     private var finished: Set<String> = []
     /// Each child's spawning thread, and the children that outlived its turn (`outlived`).
     private var parents: [String: AgentID] = [:]
+    /// The chat's turn each child thread was spawned in (its own children's too): a rollback of
+    /// that turn stops it.
+    private var spawnedIn: [String: TurnID] = [:]
     private var background: Set<String> = []
     /// The `subAgentActivity` item that ended each child's latest run.
     private var finishedBy: [String: String] = [:]
@@ -114,6 +117,13 @@ package final class CodexTranslator {
     func request(_ id: String) -> CodexApproval? { pending.removeValue(forKey: id) }
 
     func childTurn(_ thread: String) -> String? { childTurns[thread] }
+
+    /// What the chat's turns `turns` started that still runs: terminals that outlived them, and
+    /// child threads (theirs too) at work.
+    func work(of turns: Set<TurnID>) -> (terminals: [(process: String, owner: AgentID)], children: [(thread: String, turn: String)]) {
+        let children = childTurns.filter { spawnedIn[$0.key].map(turns.contains) == true }
+        return (commands.live(of: turns), children.sorted { $0.key < $1.key }.map { ($0.key, $0.value) })
+    }
 
     // MARK: - Turns
 
@@ -351,7 +361,7 @@ package final class CodexTranslator {
     }
 
     private func itemStarted(_ item: CodexItem, agent: AgentID) {
-        if !replaying { commands.started(item, agent: agent, at: .now) }
+        if !replaying { commands.started(item, agent: agent, turn: agent.sub.map { spawnedIn[$0] } ?? turn, at: .now) }
         if agent == .main, !replaying {
             if item.type == "userMessage" {
                 if remoteActive, remoteMessage(item) { return }
@@ -584,6 +594,7 @@ package final class CodexTranslator {
         guard thread != threadId, !isAncestor(thread, of: parent) else { return }
         guard spawned.insert(thread).inserted else { return }
         parents[thread] = parent
+        if !replaying { spawnedIn[thread] = parent.sub.flatMap { spawnedIn[$0] } ?? turn }
         // Its nickname ("Hume") or role names it; else its task, from an agent path like
         // /root/count_lines. Beside the name goes what's left: the role, else the task.
         let info = agentThreads[thread]
@@ -947,20 +958,28 @@ package final class CodexTranslator {
             if let settings = settings[id] { apply(settings, .user, at: start) }
             openTurn(id, at: start)
             var sawPrompt = false
+            var previous: String?
             for item in (turn["items"]?.array ?? []).map(CodexItem.init) {
                 if item.type == "userMessage" {
                     let (text, attachments) = Self.prompt(item.raw["content"] ?? [])
                     // The turn's id is where a fork from its first message starts; a message steered
-                    // into the turn later keeps its own item id.
+                    // into the turn later reads back in it, after the item it followed, as it showed
+                    // live (no turn starts there to fork or roll back to).
                     let first = !sawPrompt
                     sawPrompt = true
                     if !text.isEmpty || !attachments.isEmpty {
-                        out.append(.userMessage(text: text, attachments: attachments, id: first ? id : item.id))
+                        if first {
+                            out.append(.userMessage(text: text, attachments: attachments, id: id))
+                        } else {
+                            out.append(.messageQueued(id: item.id, text: text, attachments: attachments))
+                            out.append(.queuedMessage(id: item.id, .inTurn(after: previous)))
+                        }
                     }
                 } else if item.type == "contextCompaction" {
                     // Its turn holds nothing else; resume keeps the turns before it.
                     out.append(.compacted(at: Self.date(turn["startedAt"]) ?? .now))
                 } else {
+                    previous = item.id
                     itemStarted(item, agent: .main)
                     itemCompleted(item, agent: .main)
                     commands.replayed(item, turnStart: start, turnDuration: turn["durationMs"]?.int, owner: .main, folder: folder, into: &out)

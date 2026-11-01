@@ -46,9 +46,12 @@ package enum ChatEvent: Sendable {
     case messageQueued(id: String, text: String, attachments: [SentAttachment])
 
     /// The user's own message. `Chat` dispatches it at send time; backends emit it only in replay.
+    /// `id`: its id in the CLI's history (where a fork or a rollback finds it); for one sent in
+    /// this run, the id Kore sent it with.
     case userMessage(text: String, attachments: [SentAttachment], id: String? = nil)
-    /// A message from another session, placed where `turn` began (at the end when nil).
-    case peerMessage(from: String, text: String, turn: TurnID?)
+    /// A message from another session, placed where `turn` began (at the end when nil). `id`:
+    /// its id in the CLI's history, as a user message's.
+    case peerMessage(from: String, text: String, turn: TurnID?, id: String? = nil)
     /// Appends to the block, creating it if the id is new.
     case text(BlockID, TextKind, String, agent: AgentID = .main)
     /// The block is where the turn's final answer starts: what's before it is the turn's work.
@@ -205,7 +208,7 @@ package struct ContextUsage: Sendable, Equatable {
     }
 }
 
-/// Where a message sent while a turn ran went (`ChatBackend.send(_:files:queued:)`).
+/// Where a message sent while a turn ran went (`ChatBackend.send(_:files:queued:id:)`).
 package enum QueuedDelivery: Sendable, Equatable {
     /// The CLI took it into the running turn, after `after` (the last main tool call or text
     /// block; nil when the turn had none yet).

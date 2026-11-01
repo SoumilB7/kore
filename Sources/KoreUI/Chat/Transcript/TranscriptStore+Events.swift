@@ -28,8 +28,8 @@ extension TranscriptStore {
 
         case .userMessage(let text, let attachments, let id):
             user(text, attachments: attachments.map(Self.attachment), source: id)
-        case .peerMessage(let from, let text, let turn):
-            peer(from: from, text: text, turn: turn)
+        case .peerMessage(let from, let text, let turn, let id):
+            peer(from: from, text: text, turn: turn, source: id)
         case .text(let block, let kind, let text, let agent):
             let kind: TextKind = switch kind {
             case .answer: .answer

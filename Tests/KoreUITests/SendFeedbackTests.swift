@@ -115,7 +115,7 @@ struct SendFeedbackTests {
             if failStart { throw Failed.start }
         }
         func release() { gate?.resume(); gate = nil }
-        func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool { sent += 1; return accepted }
+        func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool { sent += 1; return accepted }
         func interrupt() async {}
         func respond(to approvalID: String, _ decision: Decision) async {}
         func setMode(_ id: String) async throws {}
@@ -188,6 +188,10 @@ struct SendFeedbackTests {
 
     @Test(arguments: ["claude", "codex"])
     func rejectedSendOrFailedStartupClearsFeedback(_ provider: String) async throws {
+        // Given up at once: starting again is `StartRetried`'s.
+        let retries = Chat.startRetries.value
+        Chat.startRetries.value = []
+        defer { Chat.startRetries.value = retries }
         for failure in [false, true] {
             let backend = Backend()
             backend.accepted = false
