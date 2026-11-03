@@ -771,10 +771,11 @@ struct MessageText: View {
 
     /// The body font's line height, worked out once per zoom.
     static var lineHeight: CGFloat {
-        let zoom = Zoom.shared.scale
-        if let height = lineHeights[zoom] { return height }
-        let height = NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: 13 * zoom))
-        lineHeights[zoom] = height
+        // TextStyle.body's size: zoom times the chat style's text scale.
+        let size = 13 * Zoom.shared.scale * ChatStyle.textScale
+        if let height = lineHeights[size] { return height }
+        let height = NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: size))
+        lineHeights[size] = height
         return height
     }
 
@@ -844,15 +845,22 @@ struct MessageActionsRow: View {
     let story: StoryID
     let fork: () -> Void
     @StateObject private var copied = Local(false)
+    /// Settings ▸ Text ▸ Message buttons.
+    @AppStorage(KoreSettings.copyButtonKey) private var showCopy = true
+    @AppStorage(KoreSettings.forkButtonKey) private var showFork = true
 
     var body: some View {
         HStack(spacing: Size.MessageActions.gap) {
             if shown {
-                IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy", action: copy)
-                    .storyID(story.part(.copy))
-                IconButton(symbol: "arrow.triangle.branch", kind: .mini, font: Chrome.label, help: "Fork", action: fork)
-                    .disabled(!canFork)
-                    .storyID(story.part(.fork))
+                if showCopy {
+                    IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy", action: copy)
+                        .storyID(story.part(.copy))
+                }
+                if showFork {
+                    IconButton(symbol: "arrow.triangle.branch", kind: .mini, font: Chrome.label, help: "Fork", action: fork)
+                        .disabled(!canFork)
+                        .storyID(story.part(.fork))
+                }
             }
         }
         .frame(height: Size.MessageActions.row, alignment: .leading)

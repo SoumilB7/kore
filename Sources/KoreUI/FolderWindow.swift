@@ -7,6 +7,7 @@ struct FolderWindow: View {
     @StateObject private var fullScreen = Local(false)
     @StateObject private var historyOpen = Local(false)
     @StateObject private var clockFrame = Local(CGRect.zero)
+    @AppStorage(KoreSettings.fullWidthComposerKey) private var fullComposer = false
 
     init(folder: URL) {
         self.folder = folder
@@ -20,7 +21,7 @@ struct FolderWindow: View {
             let floating = geometry.size.width < Layout.Explorer.overlayBelow
             let docked = workspace.explorerOpen && !floating
             let column = ChatColumn.fitting(
-                geometry.size.width - (docked ? workspace.explorerWidth + Stroke.hairline : 0))
+                geometry.size.width - (docked ? workspace.explorerWidth + Stroke.hairline : 0), fullComposer: fullComposer)
             VStack(spacing: 0) {
                 // Above the chat: its scroll view extends up under the title bar and would
                 // otherwise take the tab bar's clicks.

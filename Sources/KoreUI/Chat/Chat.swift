@@ -176,6 +176,19 @@ package final class Chat: Identifiable {
             ownAutoCompact = true
         }
         if fork == nil, let id = session?.id { controls.restorePlanAllow(chat: id) }
+        // A brand-new chat starts as Settings ▸ New Chats says (dev runs read none: `modeMemory`).
+        if fork == nil, session == nil {
+            let defaults = modeMemory.defaults
+            if let point = KoreSettings.autoCompact(defaults) {
+                context.autoCompactAt = point
+                ownAutoCompact = true
+            }
+            launchModel = KoreSettings.text(KoreSettings.modelKey(provider.id), defaults)
+            launchEffort = KoreSettings.text(KoreSettings.effortKey(provider.id), defaults)
+            if let mode = KoreSettings.text(KoreSettings.modeKey(provider.id), defaults), provider.modes.contains(where: { $0.id == mode }) {
+                controls.mode = mode
+            }
+        }
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
         transcript.providerName = provider.name
@@ -265,6 +278,7 @@ package final class Chat: Identifiable {
         }
         seedImportedContext(event)
         autoCompactIfDue(event)
+        ChatAlerts.note(event)
         afterAccountEvent(event)
         continueAfterLimit(event)
         showBeforeCompaction(event)

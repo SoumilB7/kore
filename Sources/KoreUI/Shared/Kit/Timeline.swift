@@ -24,6 +24,7 @@ struct TimelineItem<Content: View>: View {
     /// An agent's rail instead of the plain line (its hue, thicker).
     var rail: Color?
     @ViewBuilder let content: Content
+    @AppStorage(ChatStyle.key) private var style = ChatStyle.classic
 
     private typealias T = Layout.Timeline
 
@@ -34,7 +35,7 @@ struct TimelineItem<Content: View>: View {
             .padding(.top, top)
             .padding(.bottom, bottom)
             .background(alignment: .topLeading) {
-                if above || below {
+                if (above || below) && (style == .classic || rail != nil) {
                     TimelineLine(
                         top: above ? 0 : top + T.lineStart,
                         end: below ? nil : T.lineEndTail,
@@ -43,7 +44,7 @@ struct TimelineItem<Content: View>: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                if dot != .none {
+                if dot != .none, style == .classic || dot != .plain {
                     TimelineDotView(dot: dot)
                         .offset(x: T.dotX - dotInset, y: top + T.dotY - dotInset)
                 }

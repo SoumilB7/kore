@@ -208,9 +208,10 @@ struct ChatColumn: Equatable {
     /// further 12 in from each side and takes the rest (no cap: the sides are used at any
     /// size, full screen included); the composer is min(760, W − 2p), centred. Continuous, so
     /// a drag is one plain relayout per frame.
-    static func fitting(_ width: CGFloat) -> ChatColumn {
+    static func fitting(_ width: CGFloat, fullComposer: Bool = false) -> ChatColumn {
         let padding = min(max(24 + (width - 800) * 0.04, 24), 48).rounded()
-        let composer = min(760, max(width - 2 * padding, 0))
+        // Settings ▸ Text ▸ Full-width prompt box: the composer takes the column's width.
+        let composer = fullComposer ? max(width - 2 * padding, 0) : min(760, max(width - 2 * padding, 0))
         return ChatColumn(
             maxWidth: .infinity, padding: padding + 12, composerMaxWidth: composer + 2 * padding, composerPadding: padding)
     }

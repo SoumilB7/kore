@@ -60,6 +60,6 @@ extension Font {
     /// rounds to a whole point (13.2 draws at 13), and the transcript's selection, laid out with
     /// AppKit's Menlo at 13.2, then wraps a long code span where the drawn text doesn't.
     static func koreMono(_ size: CGFloat, zoom: CGFloat) -> Font {
-        .custom("Menlo", fixedSize: size * zoom)
+        .custom(KoreSettings.codeFont, fixedSize: size * zoom)
     }
 }

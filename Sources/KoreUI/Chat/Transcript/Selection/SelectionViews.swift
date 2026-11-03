@@ -310,6 +310,10 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
             guard let done = press, event.window === window else { return event }
             press = nil
             stopAutoscroll()
+            // Settings ▸ Text ▸ Copy on selection: a finished selection goes to the clipboard, as in a terminal.
+            if UserDefaults.standard.bool(forKey: KoreSettings.selectionCopyKey), done.dragging || done.clicks > 1, selection.hasSelection {
+                _ = selection.copy()
+            }
             if done.onText {
                 // Taken, like its press: the same release sent again (a window that isn't key)
                 // would open the link a second time.

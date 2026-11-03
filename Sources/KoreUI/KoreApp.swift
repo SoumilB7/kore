@@ -33,13 +33,16 @@ package struct KoreApp: App {
                 .environment(app)
                 .modifier(WindowActions(app: app))
                 .containerBackground(Theme.background, for: .window)
-                .preferredColorScheme(.dark)
+                .modifier(ThemeScheme())
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         .commands {
-            CommandGroup(after: .appInfo) { StayAwakeCommands() }
+            CommandGroup(after: .appInfo) {
+                SettingsCommand()
+                StayAwakeCommands()
+            }
             // Kore keeps its settings in the / menu, with no Settings window: ⌘, opens Account there.
             CommandGroup(replacing: .appSettings) { AccountCommands() }
             CommandGroup(replacing: .newItem) { FileCommands(app: app) }
@@ -60,13 +63,19 @@ package struct KoreApp: App {
             }
         }
 
+        Window("Settings", id: SettingsView.id) {
+            SettingsView().containerBackground(Theme.background, for: .window)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+
         // One window per folder. Opening a folder that already has a window focuses it.
         WindowGroup(for: URL.self) { $folder in
             if let folder {
                 FolderWindow(folder: folder)
                     .modifier(WindowActions(app: app))
                     .containerBackground(Theme.background, for: .window)
-                    .preferredColorScheme(.dark)
+                    .modifier(ThemeScheme())
             }
         }
         .windowStyle(.hiddenTitleBar)

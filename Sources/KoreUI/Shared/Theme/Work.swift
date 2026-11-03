@@ -6,8 +6,8 @@ import SwiftUI
 extension Theme {
     /// Status colours. With `danger` they appear only in timeline dots, inside DiffView and in
     /// "+N −N" counts.
-    static let success = Color(hex: 0x74C991)
-    static let warning = Color(hex: 0xE1C08D)
+    static let success = Appearance.role(\.success)
+    static let warning = Appearance.role(\.warning)
 
     static let diffAdd = success
     static let diffRemove = danger
@@ -140,7 +140,7 @@ extension Motion {
 
 extension PanelStyle {
     /// The user's message.
-    static let userBox = PanelStyle(fill: Theme.surface, radius: Radius.chip, line: Theme.border)
+    static let userBox = PanelStyle(fill: Theme.userFill, radius: Radius.chip, line: Theme.userLine)
     /// A tool's IN / OUT box, and the DiffView in the timeline.
     static let toolBody = PanelStyle(fill: Theme.surface, radius: Radius.chip, line: Theme.border, width: Stroke.fine)
 }

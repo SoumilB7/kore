@@ -410,6 +410,7 @@ struct TabBar: View {
                 }
                 .storyID(StoryID.Titlebar.newtab)
             Spacer(minLength: Space.xl)
+            SettingsButton(size: tabHeight)
             Text(workspace.folder.lastPathComponent)
                 .font(Chrome.label)
                 .foregroundStyle(Theme.secondary)
