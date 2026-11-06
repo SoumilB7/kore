@@ -16,7 +16,7 @@ import KoreCore
 ///   KORE_KEYS=<code>[;cmd+shift+<code>...] key presses (cmd, shift, opt, ctrl) (virtual key codes) after the clicks and drag, 0.5s apart,
 ///                            delivered inside Kore; KORE_REAL_KEYS=1 posts them through the window server
 ///                            instead (they then go to whatever app is frontmost)
-///   KORE_CLICK=<x>,<y>[;...] click those points (from the window's top-left), 1s apart, before the snapshot
+///   KORE_CLICK=<x>,<y>[,r][;...] click (or right-click) those points (from the window's top-left), 1s apart, before the snapshot
 ///   KORE_CLICK_AFTER=<s>     start those clicks that many seconds after launch (default 2.5; a replay needs ~8)
 ///   KORE_REAL_CLICK=1        post that click through the window server (moves the real cursor),
 ///                            to catch title-bar regions that swallow clicks
@@ -111,12 +111,14 @@ enum DevSnapshot {
     /// Runs that start or resume a chat keep one tab instead of loading the folder's chats.
     static var singleTab: Bool { startProvider != nil || resume != nil }
     private static let output = ProcessInfo.processInfo.environment["KORE_SNAPSHOT"]
-    /// "x,y" clicks once; "x,y,2" double-clicks (inside Kore, like the single clicks).
+    /// "x,y" clicks once; "x,y,2" double-clicks; "x,y,r" right-clicks (inside Kore, like the single clicks).
     private static let clickList: [(NSPoint, Int)] = (ProcessInfo.processInfo.environment["KORE_CLICK"] ?? "")
         .split(separator: ";").compactMap { pair in
-            let xy = pair.split(separator: ",").compactMap { Double($0) }
-            guard xy.count >= 2 else { return nil }
-            return (NSPoint(x: xy[0], y: xy[1]), xy.count > 2 ? Int(xy[2]) : 1)
+            let parts = pair.split(separator: ",")
+            let xy = parts.prefix(2).compactMap { Double($0) }
+            guard xy.count == 2 else { return nil }
+            let third = parts.count > 2 ? String(parts[2]) : "1"
+            return (NSPoint(x: xy[0], y: xy[1]), third == "r" ? -1 : Int(third) ?? 1)
         }
     private static var clicks: [NSPoint] { clickList.map(\.0) }
 
@@ -486,7 +488,10 @@ enum DevSnapshot {
     @MainActor private static func send(click point: NSPoint, count: Int = 1) {
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }) else { return }
         let location = NSPoint(x: point.x, y: window.frame.height - point.y)
-        for (type, clickCount) in (1...max(count, 1)).flatMap({ n in [(NSEvent.EventType.leftMouseDown, n), (.leftMouseUp, n)] }) {
+        let presses: [(NSEvent.EventType, Int)] = count < 0
+            ? [(.rightMouseDown, 1), (.rightMouseUp, 1)]
+            : (1...max(count, 1)).flatMap { n in [(NSEvent.EventType.leftMouseDown, n), (.leftMouseUp, n)] }
+        for (type, clickCount) in presses {
             if let event = NSEvent.mouseEvent(
                 with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clickCount, pressure: 1)
