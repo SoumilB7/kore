@@ -72,11 +72,11 @@ extension Theme {
     /// punctuation. Functions and properties stay plain.
     enum Syntax {
         static let plain = text
-        static let keyword = Blue.b300
-        static let type = Blue.b200
-        static let string = warning
-        static let number = string
-        static let comment = Color(hex: 0x6F7A83)
+        static let keyword = Appearance.role(\.keyword)
+        static let type = Appearance.role(\.type)
+        static let string = Appearance.role(\.string)
+        static let number = Appearance.role(\.number)
+        static let comment = Appearance.role(\.comment)
         static let punctuation = secondary
         static let heading = keyword
         static let link = accent
@@ -110,7 +110,7 @@ extension Theme {
         static let keyword = Syntax.keyword
         static let flag = Blue.b200
         static let string = Syntax.string
-        static let variable = Color(hex: 0x8CC4B4)
+        static let variable = Appearance.role(\.variable)
         static let op = secondary
         static let comment = Syntax.comment
     }

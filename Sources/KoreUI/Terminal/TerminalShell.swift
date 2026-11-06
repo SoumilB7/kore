@@ -128,11 +128,24 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate {
         startup = nil
     }
 
+    /// Every terminal styled, so a theme switch reaches the ones already open.
+    private static let styled = NSHashTable<TerminalView>.weakObjects()
+
+    static func restyleAll() { styled.allObjects.forEach(style) }
+
     static func style(_ view: TerminalView) {
-        view.nativeBackgroundColor = NSColor(Theme.background)
-        view.nativeForegroundColor = NSColor(Theme.text)
-        view.caretColor = NSColor(Theme.accent)
+        styled.add(view)
+        let palette = Appearance.live
+        view.nativeBackgroundColor = palette.background
+        view.nativeForegroundColor = palette.text
+        view.caretColor = palette.accent
+        view.installColors(palette.ansi.count == 16 ? palette.ansi.map(Self.term) : SwiftTerm.Color.terminalAppColors)
         view.selectedTextBackgroundColor = NSColor(Theme.Selection.active)
         view.suspendsRenderingWhenNotVisible = true
+    }
+
+    private static func term(_ color: NSColor) -> SwiftTerm.Color {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        return SwiftTerm.Color(red: UInt16(c.redComponent * 65535), green: UInt16(c.greenComponent * 65535), blue: UInt16(c.blueComponent * 65535))  // lint:allow SwiftTerm palette conversion, not a view colour
     }
 }
