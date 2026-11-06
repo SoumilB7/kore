@@ -294,8 +294,10 @@ package enum MarkdownParser {
         var string = (try? AttributedString(markdown: String(text), options: options)) ?? AttributedString(text)
         var spans: [Range<AttributedString.Index>] = []
         var links: [Range<AttributedString.Index>] = []
+        var strong: [Range<AttributedString.Index>] = []
         for run in string.runs {
             if run.inlinePresentationIntent?.contains(.code) == true { spans.append(run.range) }
+            if run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true { strong.append(run.range) }
             if run.link != nil { links.append(run.range) }
         }
         // A bare URL the parser linked by itself is dropped here and linked again by `autolink`,
@@ -307,9 +309,12 @@ package enum MarkdownParser {
             string[range].link = nil
             return true
         }
+        // Colours only (no metrics): plain in Classic, the theme's in Document (Theme.styled).
+        for range in strong { string[range].foregroundColor = Theme.strongText }
         for range in spans {
             string[range].font = code
             string[range].backgroundColor = Theme.inlineCode
+            string[range].foregroundColor = Theme.inlineCodeText
         }
         for range in links {
             string[range].foregroundColor = Theme.link

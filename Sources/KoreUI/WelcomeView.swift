@@ -12,6 +12,14 @@ struct WelcomeView: View {
     @StateObject private var monitor = Held<Any?>(nil)
 
     var body: some View {
+        content
+            // Dev hook: KORE_SETTINGS=<section> opens Settings at launch (screenshots, checks).
+            .onAppear {
+                if ProcessInfo.processInfo.environment["KORE_SETTINGS"] != nil { openWindow(id: SettingsView.id) }
+            }
+    }
+
+    private var content: some View {
         VStack(spacing: Layout.Welcome.sectionGap) {
             VStack(spacing: Space.sm) {
                 BrandMark(height: Layout.Welcome.markHeight)

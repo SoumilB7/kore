@@ -42,13 +42,15 @@ enum SelectionStyle: Equatable {
     @MainActor func lineHeight(zoom: CGFloat) -> CGFloat { NSLayoutManager().defaultLineHeight(for: font(zoom)) }
 
     private func font(_ zoom: CGFloat) -> NSFont {
-        switch self {
-        case .body, .running: .systemFont(ofSize: 13 * zoom)
-        case .heading(let level): .systemFont(ofSize: Self.headings[min(max(level, 1), 6) - 1] * zoom, weight: .bold)
+        // As TextStyle: body, cells and headings scale with the chat style; code doesn't.
+        let s = ChatStyle.textScale
+        return switch self {
+        case .body, .running: .systemFont(ofSize: 13 * zoom * s)
+        case .heading(let level): .systemFont(ofSize: Self.headings[min(max(level, 1), 6) - 1] * zoom * s, weight: .bold)
         case .code: Self.mono(12 * zoom)
         case .codeSmall: Self.mono(11 * zoom)
         case .toolHeader: .systemFont(ofSize: 13 * zoom, weight: .bold)
-        case .cell(let header): .systemFont(ofSize: 13 * zoom, weight: header ? .bold : .regular)
+        case .cell(let header): .systemFont(ofSize: 13 * zoom * s, weight: header ? .bold : .regular)
         }
     }
 

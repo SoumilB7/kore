@@ -6,7 +6,8 @@ import SwiftUI
 /// Sizes match the Claude Code VS Code extension: the system font at 13, Menlo 12 for code.
 @MainActor
 enum TextStyle {
-    static var body: Font { .kore(13) }
+    /// Running text: 13 pt, 14 in Document chat style (ChatStyle.textScale).
+    static var body: Font { .kore(13 * ChatStyle.textScale) }
     /// `body` for AppKit text (the composer's text view).
     static var bodyFont: NSFont { .systemFont(ofSize: 13 * Zoom.shared.scale) }
     static var bodyMedium: Font { .kore(13, .medium) }
@@ -20,7 +21,7 @@ enum TextStyle {
     /// `code` at a given zoom, for text styled off the main thread.
     nonisolated static func code(zoom: CGFloat) -> Font { .koreMono(12, zoom: zoom) }
     /// Extra line spacing for running text.
-    static let leading: CGFloat = 3
+    static var leading: CGFloat { ChatStyle.leading }
 }
 
 /// Glyphs inside content rows (SF Symbols and drawn marks); they zoom with their row.

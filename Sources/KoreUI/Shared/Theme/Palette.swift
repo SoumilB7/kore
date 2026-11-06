@@ -12,18 +12,19 @@ import SwiftUI
 enum Theme {
     /// The window ground stays the original neutral near-black (owner, 2026-10-21: the blue-tinted
     /// one read as dark blue); the raised layers above it carry the hue.
-    static let background = Color(hex: 0x111113)
-    static let surface = Color(hex: 0x171D21)
-    static let surfaceHover = Color(hex: 0x1D252A)
-    static let border = Color(hex: 0xBED7EB).opacity(0.09)
+    // Base colours follow the theme picked in Settings (Appearance.swift); Kore's own are there.
+    static let background = Appearance.color(\.background)
+    static let surface = Appearance.color(\.surface)
+    static let surfaceHover = Appearance.color(\.surfaceHover)
+    static let border = Appearance.color(\.line).opacity(0.09)
     /// 16.1, 6.2 and 4.8 : 1 on the background (tertiary 4.3 on `surface`, 4.0 on `surfaceHover`,
     /// 3.4 on `surfaceRaised`). Tertiary is for hints only: what a person needs to read is secondary.
-    static let text = Color(hex: 0xEDEDED)
-    static let secondary = Color(hex: 0x89959F)
-    static let tertiary = Color(hex: 0x77828B)
-    static let danger = Color(hex: 0xF0736B)
+    static let text = Appearance.color(\.text)
+    static let secondary = Appearance.color(\.secondary)
+    static let tertiary = Appearance.color(\.tertiary)
+    static let danger = Appearance.color(\.danger)
     /// Links, caret, selection, progress.
-    static let accent = Blue.b300
+    static let accent = Appearance.color(\.accent)
 
     // Derived: what views used to compute with `.opacity(…)`.
     /// Composer outline when focused, in a neutral mode.
@@ -50,7 +51,7 @@ enum Theme {
     /// The halo round a live command's point.
     static let commandHalo = accent.opacity(0.15)
     /// A small button under the pointer: a step above `surfaceHover`.
-    static let surfaceRaised = Color(hex: 0x263036)
+    static let surfaceRaised = Appearance.color(\.surfaceRaised)
     /// Send with nothing to send: the raised fill and a secondary arrow.
     static let sendOff = surfaceRaised
     static let sendOffGlyph = secondary
@@ -69,11 +70,11 @@ enum Theme {
 
     /// The hue's saturated steps (logo, accent, mode outlines).
     enum Blue {
-        static let b200 = Color(hex: 0xA3C3DC)
-        static let b300 = Color(hex: 0x6AB1E7)
-        static let b400 = Color(hex: 0x3C97DD)
-        static let b500 = Color(hex: 0x257DC1)
-        static let b600 = Color(hex: 0x1B6298)
+        static let b200 = Appearance.role(\.blue200)
+        static let b300 = Appearance.color(\.accent)
+        static let b400 = Appearance.role(\.blue400)
+        static let b500 = Appearance.role(\.blue500)
+        static let b600 = Appearance.role(\.blue600)
     }
 }
 

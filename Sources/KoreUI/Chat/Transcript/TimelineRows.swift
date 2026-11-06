@@ -783,10 +783,11 @@ struct MessageText: View {
 
     /// The body font's line height, worked out once per zoom.
     static var lineHeight: CGFloat {
-        let zoom = Zoom.shared.scale
-        if let height = lineHeights[zoom] { return height }
-        let height = NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: 13 * zoom))
-        lineHeights[zoom] = height
+        // TextStyle.body's size: zoom times the chat style's text scale.
+        let size = 13 * Zoom.shared.scale * ChatStyle.textScale
+        if let height = lineHeights[size] { return height }
+        let height = NSLayoutManager().defaultLineHeight(for: NSFont.systemFont(ofSize: size))
+        lineHeights[size] = height
         return height
     }
 
