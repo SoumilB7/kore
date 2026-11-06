@@ -55,6 +55,7 @@ package final class ControlsStore {
         switch event {
         case .controlsLoaded(let controls):
             models = controls.models
+            if memory.defaults != nil { KoreSettings.remember(models: controls.models, provider: provider.id) }
             modelId = controls.model
             effort = controls.effort
             commands = controls.commands
