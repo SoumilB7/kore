@@ -211,7 +211,7 @@ package enum DevNavProbe {
     /// The active tab's scroll view: how far down it is, and its content's and its own height.
     package static func scrollPlace(_ workspace: Workspace) -> (offset: Double, height: Double, visible: Double)? {
         guard let window = workspace.window, let view = DevScroller.transcript(in: window) else { return nil }
-        return (DevScroller.offset(view), Double(view.documentView?.frame.height ?? 0), view.contentView.bounds.height)
+        return (Double(DevScroller.offset(view)), Double(view.documentView?.frame.height ?? 0), Double(view.contentView.bounds.height))
     }
 
     /// The registered row nearest a quarter of the way down the active tab's scroll view (it stays

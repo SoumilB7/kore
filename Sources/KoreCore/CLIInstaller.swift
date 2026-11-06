@@ -259,7 +259,7 @@ private final class InstallRun: @unchecked Sendable {
     func cancel() {
         let pid: pid_t = lock.withLock {
             cancelled = true
-            return pid
+            return self.pid
         }
         guard pid > 0 else { return }
         kill(-pid, SIGTERM)
