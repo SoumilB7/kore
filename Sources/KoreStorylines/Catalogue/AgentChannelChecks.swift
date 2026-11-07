@@ -550,7 +550,9 @@ final class AgentChannelAll: ChatStoryline {
             },
             Do("stop that turn") { story in try AgentCast.of(story).chat("a").storyStop() },
             TurnsDone("a", 3),
-            // A long stream: slow on Codex under load (38 s and over 60 s measured), on main too.
+            // 180 s, not 60: this turn's wait is slow in the test harness (`story.chatEvents` filters every
+            // event so far on each pass). It took 6.7 s run first, on Claude, and 38 s to over 60 s when
+            // Codex ran second in the same host; Codex alone took 6.4 s. Why second is slower isn't traced.
             SendTo("a", Self.fourth), TurnsDone("a", 4, timeout: .seconds(180)),
             Followed("text", "printed the streamed answer whole, once") { out, _, _ in
                 out.components(separatedBy: Self.long).count == 2 && out.hasSuffix("· idle\n")
@@ -1407,6 +1409,7 @@ final class AgentSafety: ChatStoryline {
                 status == 0 && !Self.controls(out) && out.contains("\\u001b[31mred") && out.contains("\\u009b31mcsi")
             },
             HandedOff(),
+            TurnedAway(),
             Impostor(socket: fake.path),
         ]
     }
@@ -1426,6 +1429,38 @@ final class AgentSafety: ChatStoryline {
                 replies[2]["type"] as? String == "welcome", replies[3]["type"] as? String == "ended"
             else {
                 throw StoryFailure.expectation("got: \(run.output.prefix(400))")
+            }
+        }
+    }
+
+    /// Four processes hold all 16 places without a hello; the real `kore` is told why, each time.
+    private struct TurnedAway: Step {
+        var label: String { "kore, with every place taken, says so and exits 5" }
+        var timeout: Duration? { .seconds(20) }
+
+        static let holder = """
+            zmodload zsh/net/socket || exit 9
+            for i in 1 2 3 4; do zsocket $KORE_AGENT_SOCKET || exit 8; done
+            print ready
+            sleep 3
+            """
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            let script = story.outputs.appendingPathComponent("agent-holder.zsh")
+            try Self.holder.write(to: script, atomically: true, encoding: .utf8)
+            let holders = (0..<4).map { _ in KoreRun() }
+            for holder in holders { try holder.start([script.path], executable: URL(fileURLWithPath: "/bin/zsh")) }
+            defer { holders.forEach { $0.stop() } }
+            try await story.until("all 16 places held", timeout: .seconds(3)) { holders.allSatisfy { $0.output.contains("ready") } }
+            try await Task.sleep(for: .milliseconds(100))
+            // Several, as what `kore` finds depends on how soon Kore has closed it.
+            for _ in 0..<5 {
+                let kore = KoreRun()
+                try kore.start(["whoami"], pass: "a-pass-to-keep")
+                try await story.until("kore to exit", timeout: .seconds(5)) { kore.status != nil }
+                guard kore.status == 5, kore.output.contains("Too many connections") else {
+                    throw StoryFailure.expectation("exit \(kore.status ?? -1): \(kore.output.prefix(200))")
+                }
             }
         }
     }
