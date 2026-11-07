@@ -613,11 +613,11 @@ final class AgentChannelAll: ChatStoryline {
                 return results.count == 31 && results.prefix(30).allSatisfy { $0["ok"] as? Bool == true }
                     && results.last?["code"] as? String == "rate_limited" && results.last?["id"] as? String == "r31"
             },
-            Expect("7. one audit line for each of the 31") { story in
+            Expect("7. an audit line for each of the 30, one saying the rest were held back") { story in
                 let lines = try AgentAudit.commands().dropFirst(auditMark)
                 let b = try AgentCast.of(story).id("b")
-                return lines.count == 31 && lines.prefix(30).allSatisfy { $0["result"] == "ok" && $0["chat"] == b && $0["cmd"] == "agent.whoami" }
-                    && lines.last?["result"] == "rate_limited"
+                let throttled = try AgentAudit.lines().compactMap(AgentAudit.parse).contains { $0.event == "agent-throttled" && $0.fields["chat"] == b }
+                return lines.count == 30 && lines.allSatisfy { $0["result"] == "ok" && $0["chat"] == b && $0["cmd"] == "agent.whoami" } && throttled
             },
             KoreAs(["whoami"], b, "6. kore says so, exit 5", status: 5, says: "Too many commands: 30 a minute."),
             KoreAs(["whoami"], a, "6. a's own budget untouched", expect: ["· watch"]),
@@ -689,14 +689,14 @@ final class AgentChannelAll: ChatStoryline {
                 guard lines.count == 4 else { return false }
                 return try lines[0] == ["caller": "chat", "chat": cast.id("a"), "cmd": "agent.whoami", "result": "ok"]
                     && lines[1] == ["caller": "chat", "chat": cast.id("a"), "cmd": "chat.show", "result": "no_chat"]
-                    && lines[2] == ["caller": "chat", "chat": cast.id("c"), "cmd": "chat.send", "result": "unknown_command"]
+                    && lines[2] == ["caller": "chat", "chat": cast.id("c"), "cmd": "unknown", "result": "unknown_command"]
                     && lines[3] == ["caller": "chat", "chat": cast.id("c"), "cmd": "tx.read", "target": cast.id("a"), "result": "ok"]
             },
             Expect("7. every agent line holds ids and codes only, never text") { _ in
                 let texts = [Self.first, Self.reply, Self.second, Self.listed, Self.third, "Which colour", "Sentence 1", "secret words", "nothing-like-this"]
                 let lines = try AgentAudit.lines()
                 let agent = lines.compactMap(AgentAudit.parse)
-                let keys: Set = ["caller", "chat", "cmd", "target", "result", "tier", "code"]
+                let keys: Set = ["caller", "chat", "cmd", "target", "result", "tier", "code", "what"]
                 let uuid = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/
                 return !agent.isEmpty && !lines.contains { line in texts.contains { line.contains($0) } }
                     && agent.allSatisfy { e in
@@ -864,7 +864,10 @@ enum ProcessCost {
         }
         var task = proc_taskinfo()
         if proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &task, Int32(MemoryLayout<proc_taskinfo>.size)) > 0 { s.threads = Int(task.pti_threadnum) }
-        s.fds = Int(proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)) / MemoryLayout<proc_fdinfo>.stride
+        // Asked with no buffer, this gives the highest slot used plus some: a count needs a buffer.
+        let room = max(Int(proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)), 0)
+        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: room / MemoryLayout<proc_fdinfo>.stride)
+        s.fds = Int(proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fds, Int32(fds.count * MemoryLayout<proc_fdinfo>.stride))) / MemoryLayout<proc_fdinfo>.stride
         return s
     }
 
@@ -1202,6 +1205,123 @@ final class AgentClosedWindow: ChatStoryline {
             Expect("the window is closed") { story in story.window?.isVisible == false },
             KoreAs(["ls"], .outside(), "nothing is listed") { status, out, _ in status == 0 && out.contains("No chats are open.") },
         ]
+    }
+}
+
+/// What a caller and `kore` won't take: text that would drive a terminal, a socket another process
+/// has taken over, something else at Kore's socket.
+final class AgentSafety: ChatStoryline {
+    override class var tags: Set<Tag> { [.agentChannel] }
+    override class var variants: [Variant] { [.claude] }
+    /// Colour, a bell, a C1 CSI, DEL and a carriage return.
+    static let hostile = "plain \u{1B}[31mred\u{07} \u{9B}31mcsi\u{7F} \rend"
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(hostile)]) }
+
+    static func controls(_ text: String) -> Bool {
+        text.unicodeScalars.contains { $0 != "\n" && $0 != "\t" && ($0.value < 0x20 || (0x7F...0x9F).contains($0.value)) }
+    }
+
+    /// Connects and says hello, then a child process sends a command, twice. The first child stays
+    /// alive while Kore looks (it does at once; the parent waits, as its own reading would name it
+    /// again); the second has gone by then.
+    static let handOff = """
+        zmodload zsh/net/socket || exit 9
+        for child in stays goes; do
+            zsocket $KORE_AGENT_SOCKET || exit 8
+            fd=$REPLY
+            print -r -u $fd -- '{"type":"hello","proto":1,"client":"raw"}'
+            IFS= read -r -t 5 -u $fd line; print -r -- "$line"
+            if [[ $child == stays ]]; then
+                ( print -r -u $fd -- '{"type":"cmd","id":"1","cmd":"agent.whoami"}'; sleep 1 ) &
+            else
+                ( print -r -u $fd -- '{"type":"cmd","id":"1","cmd":"agent.whoami"}' )
+            fi
+            sleep 0.4
+            if IFS= read -r -t 2 -u $fd line; then print -r -- "$line"; else print -r -- '{"type":"ended"}'; fi
+            exec {fd}>&-
+        done
+        wait
+        """
+
+    /// A server that isn't Kore: prints what it's told, once it's told anything.
+    static let impostor = """
+        zmodload zsh/net/socket || exit 9
+        zsocket -l $1 || exit 8
+        listener=$REPLY
+        print ready
+        zsocket -a $listener || { print nobody; exit 0 }
+        fd=$REPLY
+        IFS= read -r -t 2 -u $fd line && print -r -- "told: $line"
+        print done
+        """
+
+    override func steps() -> [any Step] {
+        let directory = URL(fileURLWithPath: "/tmp/kas-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let fake = URL(fileURLWithPath: "/tmp/kaf-\(UUID().uuidString.prefix(8)).sock")
+        return super.steps() + [
+            Do("agent control on, a terminal may watch") { story in
+                let cast = AgentCast.of(story)
+                cast.directory = directory
+                cast.chats["a"] = try story.activeChat()
+                AgentChannel.directory = directory
+                AgentGrants.stopAll()
+                AgentGrants.setEnabled(true)
+                AgentGrants.setExternal(.watch)
+            },
+            SendTo("a", "hello"), TurnsDone("a", 1),
+            KoreAs(["log", "{a}"], .outside(), "chat text can't drive the terminal") { status, out, _ in
+                status == 0 && !Self.controls(out) && out.contains("plain [31mred 31mcsi end")
+            },
+            KoreAs(["log", "{a}", "--json"], .outside(), "nor in JSON, with the text kept") { status, out, _ in
+                status == 0 && !Self.controls(out) && out.contains("\\u001b[31mred") && out.contains("\\u009b31mcsi")
+            },
+            HandedOff(),
+            Impostor(socket: fake.path),
+        ]
+    }
+
+    private struct HandedOff: Step {
+        var label: String { "a child process using its parent's connection is refused" }
+        var timeout: Duration? { .seconds(20) }
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            let script = story.outputs.appendingPathComponent("agent-handoff.zsh")
+            try AgentSafety.handOff.write(to: script, atomically: true, encoding: .utf8)
+            let run = KoreRun()
+            try run.start([script.path], executable: URL(fileURLWithPath: "/bin/zsh"))
+            try await story.until("it to finish", timeout: timeout) { run.status != nil }
+            let replies = AgentJSON.objects(run.output)
+            guard replies.count == 4, replies[0]["type"] as? String == "welcome", replies[1]["type"] as? String == "bye", replies[1]["code"] as? String == "mismatch",
+                replies[2]["type"] as? String == "welcome", replies[3]["type"] as? String == "ended"
+            else {
+                throw StoryFailure.expectation("got: \(run.output.prefix(400))")
+            }
+        }
+    }
+
+    private struct Impostor: Step {
+        let socket: String
+        var label: String { "kore tells nothing to a server that isn't Kore" }
+        var timeout: Duration? { .seconds(20) }
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            let script = story.outputs.appendingPathComponent("agent-impostor.zsh")
+            try AgentSafety.impostor.write(to: script, atomically: true, encoding: .utf8)
+            let server = KoreRun()
+            try server.start([script.path, socket], executable: URL(fileURLWithPath: "/bin/zsh"))
+            defer {
+                server.stop()
+                unlink(socket)
+            }
+            try await story.until("the server to listen", timeout: .seconds(5)) { server.output.contains("ready") }
+            let kore = KoreRun()
+            try kore.start(["whoami"], pass: "a-pass-to-keep", environment: ["KORE_AGENT_SOCKET": socket])
+            try await story.until("kore to exit", timeout: .seconds(10)) { kore.status != nil }
+            try await story.until("the server to finish", timeout: .seconds(10)) { server.status != nil }
+            guard kore.status == 5, kore.output.contains("isn't the Kore"), !server.output.contains("told:") else {
+                throw StoryFailure.expectation("kore: exit \(kore.status ?? -1) \(kore.output.prefix(200)); server: \(server.output.prefix(200))")
+            }
+        }
     }
 }
 

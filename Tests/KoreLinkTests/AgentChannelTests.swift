@@ -19,6 +19,8 @@ final class AgentTestClient: @unchecked Sendable {
 
     init?(path: String) {
         fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(path.utf8)
@@ -34,8 +36,6 @@ final class AgentTestClient: @unchecked Sendable {
         }
         var timeout = timeval(tv_sec: 3, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        var on: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
     }
 
     func send(_ object: [String: Any]) {
@@ -82,6 +82,14 @@ struct AgentCallerTests {
         let loop: [pid_t: pid_t] = [7: 8, 8: 7]
         #expect(AgentCaller.ancestors(of: 7, parent: { loop[$0] }) == [7, 8])
         #expect(AgentCaller.ancestors(of: 9, parent: { $0 + 1 }).count == AgentCaller.depthMax)
+    }
+
+    @Test func aProcessGoneOnTheWayIsntExternal() {
+        let parents: [pid_t: pid_t] = [500: 400, 400: 300, 300: 1]
+        #expect(AgentCaller.chain(of: 500, parent: { parents[$0] }) == [500, 400, 300])
+        let broken: [pid_t: pid_t] = [500: 400]
+        #expect(AgentCaller.chain(of: 500, parent: { broken[$0] }) == nil)
+        #expect(AgentCaller.chain(of: 500, parent: { _ in nil }) == nil)
     }
 
     @Test func passAndTreeMustAgree() {
@@ -269,8 +277,18 @@ struct AgentChannelTests {
         defer { AgentGrants.stopAll() }
         let path = Self.socket(directory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        // A file at the socket's path, as a killed Kore leaves one.
-        #expect(FileManager.default.createFile(atPath: path, contents: Data()))
+        // A socket file with nobody listening, as a killed Kore leaves one.
+        let left = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { raw in
+            raw.copyBytes(from: Array(path.utf8))
+            raw[path.utf8.count] = 0
+        }
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(left, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+        #expect(bound == 0)
+        Darwin.close(left)
         AgentGrants.setEnabled(true)
         AgentGrants.setExternal(.watch)
         #expect(AgentChannel.current != nil)
@@ -280,6 +298,103 @@ struct AgentChannelTests {
             return client.hello()
         }
         #expect(welcome?["type"] as? String == "welcome")
+    }
+
+    @Test func whatIsntItsOwnIsLeftAlone() throws {
+        let directory = Self.reset()
+        defer { AgentGrants.stopAll() }
+        let path = Self.socket(directory)
+        let manager = FileManager.default
+        // A file at the socket's path: not opened over, not removed.
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        #expect(manager.createFile(atPath: path, contents: Data("mine".utf8)))
+        AgentGrants.setEnabled(true)
+        AgentGrants.setExternal(.watch)
+        #expect(AgentChannel.current == nil)
+        #expect(manager.contents(atPath: path) == Data("mine".utf8))
+        AgentGrants.stopAll()
+        try manager.removeItem(atPath: path)
+        // Replaced after opening: closing leaves what's there now.
+        AgentGrants.setExternal(.watch)
+        #expect(AgentChannel.current != nil)
+        try manager.removeItem(atPath: path)
+        #expect(manager.createFile(atPath: path, contents: Data("mine".utf8)))
+        AgentGrants.stopAll()
+        #expect(manager.contents(atPath: path) == Data("mine".utf8))
+        try manager.removeItem(atPath: path)
+        // The folder a link to another: refused, and the other's mode is as it was.
+        let other = directory.deletingLastPathComponent().appendingPathComponent("kat-other-\(UUID().uuidString.prefix(8))")
+        try manager.createDirectory(at: other, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        defer { try? manager.removeItem(at: other) }
+        try manager.removeItem(at: directory)
+        try manager.createSymbolicLink(at: directory, withDestinationURL: other)
+        defer { try? manager.removeItem(at: directory) }
+        AgentGrants.setExternal(.watch)
+        #expect(AgentChannel.current == nil)
+        #expect((try manager.attributesOfItem(atPath: other.path))[.posixPermissions] as? Int == 0o755)
+        #expect(!manager.fileExists(atPath: other.appendingPathComponent(AgentChannel.socketName).path))
+    }
+
+    @Test func theSwitchOffEndsExternalAccessToo() {
+        _ = Self.reset()
+        defer { AgentGrants.stopAll() }
+        AgentGrants.setEnabled(true)
+        AgentGrants.setExternal(.watch)
+        #expect(AgentChannel.current != nil)
+        AgentGrants.setEnabled(false)
+        #expect(AgentGrants.external == .off && AgentChannel.current == nil)
+        AgentGrants.setEnabled(true)
+        #expect(AgentChannel.current == nil)
+    }
+
+    @Test func aFloodEndsItsConnection() async throws {
+        let directory = Self.reset()
+        defer { AgentGrants.stopAll() }
+        AgentGrants.setEnabled(true)
+        AgentGrants.setExternal(.watch)
+        let path = Self.socket(directory)
+        // Bad lines count like commands: after the budget and the strikes, the connection ends.
+        let limit = AgentChannel.perMinute + AgentChannel.strikes
+        let (answered, bye): (Int, AgentLine?) = await off {
+            guard let client = AgentTestClient(path: path) else { return (0, nil) }
+            defer { client.close() }
+            _ = client.hello()
+            var answers = 0
+            var last: AgentLine?
+            for _ in 0..<limit + 1 {
+                client.send(["type": 1])
+                last = client.next()
+                if last?["type"] as? String != "result" { break }
+                answers += 1
+            }
+            return (answers, last)
+        }
+        #expect(answered == limit)
+        #expect(bye?["type"] as? String == "bye" && bye?["code"] as? String == "rate_limited")
+    }
+
+    @Test func oneProcessCantHoldEveryPlace() async throws {
+        let directory = Self.reset()
+        defer { AgentGrants.stopAll() }
+        AgentGrants.setEnabled(true)
+        AgentGrants.setExternal(.watch)
+        let path = Self.socket(directory)
+        let held = AgentSlots.perProcess
+        let (kept, closed): (Int, Int) = await off {
+            let clients = (0..<held + 3).compactMap { _ in AgentTestClient(path: path) }
+            defer { clients.forEach { $0.close() } }
+            var closed = 0
+            var kept = 0
+            for client in clients {
+                var timeout = timeval(tv_sec: 0, tv_usec: 200_000)
+                setsockopt(client.fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+                var byte: UInt8 = 0
+                let n = read(client.fd, &byte, 1)
+                if n == 0 { closed += 1 } else { kept += 1 }
+            }
+            return (kept, closed)
+        }
+        #expect(kept == held && closed == 3)
     }
 
     @Test func thirtyCommandsAMinute() async throws {

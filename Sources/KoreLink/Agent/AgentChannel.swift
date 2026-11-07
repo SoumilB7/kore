@@ -21,17 +21,23 @@ package final class AgentChannel {
 
     /// Commands a caller may run a minute.
     static let perMinute = 30
-    /// Connections at once.
-    static let clientsMax = 16
+    /// Lines a caller may send past `perMinute`, each answered, before its connection ends.
+    static let strikes = 30
+    /// Log lines a caller may cause a minute; the rest are one `agent-throttled` line.
+    static let logLinesPerMinute = 120
     /// The commands served. Every one is Watch's for now, so tests add a higher one to reach `.tier`.
     static var commands = AgentCommand.all
 
     package let socketPath: String
     private let queue = DispatchQueue(label: "dev.kore.agent")
-    private let listener: LinkListener
+    private let listener: AgentListener
+    private let slots = AgentSlots()
     private var clients: [UUID: Client] = [:]
     /// Each caller's budget (a chat's, or every external caller's together), for this opening.
     private var limits: [String: RateLimiter] = [:]
+    private var strikesLeft: [String: RateLimiter] = [:]
+    private var logBudgets: [String: RateLimiter] = [:]
+    private var throttleLogged: [String: Date] = [:]
     private var dirty = Set<String>()
     private var flushDue = false
     private var quitObserver: NSObjectProtocol?
@@ -71,7 +77,7 @@ package final class AgentChannel {
             do {
                 current = try AgentChannel(directory: directory)
             } catch {
-                UILog.event("agent-open-failed", ["errno": "\((error as? LinkListener.Failure).map { "\($0)" } ?? "?")"])
+                UILog.event("agent-open-failed", ["errno": "\((error as? AgentListener.Failure).map { "\($0)" } ?? "?")"])
             }
         } else {
             current?.close(.stopped)
@@ -80,14 +86,28 @@ package final class AgentChannel {
 
     private init(directory: URL) throws {
         socketPath = directory.appendingPathComponent(Self.socketName).path
-        listener = try LinkListener(path: socketPath, queue: queue)
+        listener = try AgentListener(path: socketPath, queue: queue)
+        let slots = self.slots
         listener.start { [weak self] fd in
-            // On the channel's queue: who it is comes from the kernel before anything is read.
-            guard let peer = AgentCaller.peer(fd) else {
+            // On the channel's queue: who it is comes from the kernel before anything is read, and
+            // whether it gets a place before it costs the main thread anything.
+            guard let who = AgentCaller.identity(fd) else {
                 Darwin.close(fd)
                 return
             }
-            LinkHost.onMain { self?.accepted(fd, peer) }
+            guard slots.take(who.pid) else {
+                Darwin.close(fd)
+                if slots.noteTurnedAway() { LinkHost.onMain { UILog.event("agent-throttled", ["what": "connections"]) } }
+                return
+            }
+            guard let peer = AgentCaller.peer(fd, pid: who.pid, token: who.token) else {
+                slots.release(who.pid)
+                Darwin.close(fd)
+                return
+            }
+            LinkHost.onMain {
+                if let self { self.accepted(fd, peer) } else { Darwin.close(fd) }
+            }
         }
         // A chat closing ends its follows and its own callers, and its grant: once it's out of
         // its window (after this turn of the run loop).
@@ -145,22 +165,35 @@ package final class AgentChannel {
     // MARK: Connections
 
     private func accepted(_ fd: Int32, _ peer: AgentCaller.Peer) {
-        guard AgentChannel.current === self, clients.count < Self.clientsMax else {
+        let slots = self.slots
+        let queue = self.queue
+        func turnAway() {
             Darwin.close(fd)
-            return
+            queue.async { slots.release(peer.pid) }
         }
+        guard AgentChannel.current === self else { return turnAway() }
         // A grant whose chat has closed counts no more; with none left, the socket goes.
         AgentGrants.prune(open: Set(AgentReads.chatsByID().keys))
         guard AgentGrants.wanted else {
-            Darwin.close(fd)
+            turnAway()
             close(.stopped)
             return
         }
         let token = UUID()
+        let pid = peer.pid
+        let holder = ConnectionHolder()
         let connection = AgentConnection(
-            fd: fd, queue: queue,
-            onLines: { [weak self] lines in LinkHost.onMain { self?.received(lines, token) } },
-            onClose: { [weak self] in LinkHost.onMain { self?.dropped(token) } })
+            fd: fd, queue: queue, token: peer.token, peerToken: { LinkIdentity.peerToken($0) },
+            onLines: { [weak self] lines in
+                LinkHost.onMain {
+                    self?.received(lines, token)
+                    holder.connection?.batchDone()
+                }
+            },
+            onMoved: { [weak self] in LinkHost.onMain { self?.moved(token) } },
+            onClose: { [weak self] in LinkHost.onMain { self?.dropped(token) } },
+            onGone: { slots.release(pid) })
+        holder.connection = connection
         clients[token] = Client(token: token, connection: connection, peer: peer)
         connection.start()
         DispatchQueue.main.asyncAfter(deadline: .now() + AgentProto.helloWithin) { [weak self] in
@@ -171,6 +204,17 @@ package final class AgentChannel {
         }
     }
 
+    /// Lets a connection's callbacks reach it, once it's made.
+    private final class ConnectionHolder: @unchecked Sendable {
+        var connection: AgentConnection?
+    }
+
+    /// Another process is using this connection: it isn't who Kore named.
+    private func moved(_ token: UUID) {
+        guard let client = clients[token] else { return }
+        refuse(client, .mismatch, "Another process took over this connection.")
+    }
+
     private func dropped(_ token: UUID) {
         guard let client = clients.removeValue(forKey: token) else { return }
         if !client.follows.isEmpty { followsChanged() }
@@ -179,22 +223,49 @@ package final class AgentChannel {
     private func refuse(_ client: Client, _ code: AgentCode, _ message: String) {
         clients[client.token] = nil
         client.connection.finish(after: Self.encode(AgentBye(code: code, message: message)))
-        UILog.event("agent-refused", ["caller": client.callerClass, "chat": client.chat, "code": code.rawValue])
+        log("agent-refused", client, ["caller": client.callerClass, "chat": client.chat, "code": code.rawValue])
         if !client.follows.isEmpty { followsChanged() }
+    }
+
+    /// Writes a log line a caller caused, while its budget lasts: after that one line a minute
+    /// says so, so a caller can't write the audit trail out of the log.
+    private func log(_ event: String, _ client: Client, _ fields: KeyValuePairs<String, String?>) {
+        if logBudgets[client.key, default: RateLimiter(limit: Self.logLinesPerMinute, per: 60)].take() {
+            UILog.event(event, fields)
+        } else {
+            throttled(client)
+        }
+    }
+
+    private func throttled(_ client: Client) {
+        let now = Date()
+        guard now.timeIntervalSince(throttleLogged[client.key] ?? .distantPast) >= 60 else { return }
+        throttleLogged[client.key] = now
+        UILog.event("agent-throttled", ["caller": client.callerClass, "chat": client.chat, "what": "commands"])
     }
 
     private func received(_ lines: [Data], _ token: UUID) {
         for line in lines {
             guard AgentChannel.current === self, let client = clients[token] else { return }
-            guard let message = try? JSONDecoder().decode(AgentIn.self, from: line) else {
-                if client.named {
-                    send(client, AgentResult<AgentEmpty>(id: "", ok: false, code: .invalid, message: "Not a JSON object."))
-                    continue
-                }
-                return refuse(client, .invalid, "Not a JSON object.")
-            }
             guard client.named else {
+                guard let message = try? JSONDecoder().decode(AgentIn.self, from: line) else {
+                    return refuse(client, .invalid, "Not a JSON object.")
+                }
                 hello(message, client)
+                continue
+            }
+            // Every line counts, whatever it holds, before anything looks inside it.
+            guard limits[client.key, default: RateLimiter(limit: Self.perMinute, per: 60)].take() else {
+                guard strikesLeft[client.key, default: RateLimiter(limit: Self.strikes, per: 60)].take() else {
+                    return refuse(client, .rateLimited, Self.message(.rateLimited))
+                }
+                throttled(client)
+                let id = (try? JSONDecoder().decode(AgentIn.self, from: line))?.id ?? ""
+                send(client, AgentResult<AgentEmpty>(id: id, ok: false, code: .rateLimited, message: Self.message(.rateLimited)))
+                continue
+            }
+            guard let message = try? JSONDecoder().decode(AgentIn.self, from: line) else {
+                send(client, AgentResult<AgentEmpty>(id: "", ok: false, code: .invalid, message: "Not a JSON object."))
                 continue
             }
             guard message.type == "cmd", let id = message.id, let name = message.cmd else {
@@ -228,7 +299,7 @@ package final class AgentChannel {
             client.named = true
         }
         let tier = tier(client)
-        UILog.event("agent-hello", ["caller": client.callerClass, "chat": client.chat, "tier": tier.rawValue])
+        log("agent-hello", client, ["caller": client.callerClass, "chat": client.chat, "tier": tier.rawValue])
         send(client, AgentWelcome(caller: callerInfo(client), tier: tier, commands: AgentCommand.allowed(tier).map(\.name)))
     }
 
@@ -250,7 +321,6 @@ package final class AgentChannel {
         let code: AgentCode? = {
             let tier = tier(client)
             guard tier != .off else { return .stopped }
-            guard limits[client.key, default: RateLimiter(limit: Self.perMinute, per: 60)].take() else { return .rateLimited }
             return AgentCommand.refusal(name, tier: tier, among: Self.commands)
         }()
         if let code {
@@ -259,9 +329,9 @@ package final class AgentChannel {
             target = run(id, name, args, client)
         }
         // One line per command: who, which, on what, and how it went. Never text.
-        UILog.event(
-            "agent-cmd",
-            ["caller": client.callerClass, "chat": client.chat, "cmd": name, "target": target, "result": lastResult])
+        // A command's name only if it's one of Kore's: what a caller typed isn't logged.
+        let known = Self.commands.contains { $0.name == name } ? name : "unknown"
+        log("agent-cmd", client, ["caller": client.callerClass, "chat": client.chat, "cmd": known, "target": target, "result": lastResult])
         if code == .stopped { refuse(client, .stopped, Self.message(.stopped)) }
     }
 

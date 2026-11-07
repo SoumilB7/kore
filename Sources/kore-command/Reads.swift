@@ -29,6 +29,8 @@ enum Reads {
             return 0
         } catch .unreachable {
             return fail("Kore isn't running, or agent control is off.", code: 5)
+        } catch .notKore {
+            return fail("What's at Kore's socket isn't the Kore this came with.", code: 5)
         } catch .refused(let code, let message) {
             return fail(message, code: ["denied", "mismatch", "tier", "stopped", "version", "rate_limited"].contains(code) ? 5 : 1)
         } catch {
@@ -37,7 +39,7 @@ enum Reads {
     }
 
     static func fail(_ message: String, code: Int32) -> Int32 {
-        FileHandle.standardError.write(Data("kore: \(message)\n".utf8))
+        FileHandle.standardError.write(Data(safe("kore: \(message)\n").utf8))
         return code
     }
 
@@ -83,31 +85,31 @@ enum Reads {
         let caller = data["caller"] as? Object ?? [:]
         let tier = data["tier"] as? String ?? "off"
         if caller["class"] as? String == "chat" {
-            print("chat \(str(caller["short"]))  \(str(caller["title"]))  · \(tier)")
+            say("chat \(str(caller["short"]))  \(str(caller["title"]))  · \(tier)")
         } else {
-            print("external · \(tier)")
+            say("external · \(tier)")
         }
     }
 
     static func caps(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
         let data = try client.run("agent.caps")
         if o.json { return printJSON(data) }
-        print("Kore access: \(str(data["tier"]))")
-        for command in data["commands"] as? [String] ?? [] { print("  \(command)") }
+        say("Kore access: \(str(data["tier"]))")
+        for command in data["commands"] as? [String] ?? [] { say("  \(command)") }
     }
 
     static func ls(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
         let data = try client.run("chats.list")
         if o.json { return printJSON(data) }
         let chats = data["chats"] as? [Object] ?? []
-        guard !chats.isEmpty else { return print("No chats are open.") }
+        guard !chats.isEmpty else { return say("No chats are open.") }
         let state = width(chats, "state"), provider = width(chats, "provider")
         for chat in chats {
             var line = "\(str(chat["short"]))  \(pad(str(chat["state"]), state))  \(pad(str(chat["provider"]), provider))  \(str(chat["title"]))"
             line += "  · \(str(chat["window"]))"
             if let cards = chat["cards"] as? Int, cards > 0 { line += cards == 1 ? "  · 1 card" : "  · \(cards) cards" }
             if chat["own"] as? Bool == true { line += "  (this chat)" }
-            print(line)
+            say(line)
         }
     }
 
@@ -115,7 +117,7 @@ enum Reads {
         let data = try client.run("chat.show", ["chat": ref])
         if o.json { return printJSON(data) }
         let chat = data["chat"] as? Object ?? [:]
-        print(str(chat["title"]))
+        say(str(chat["title"]))
         var rows: [(String, String)] = [("id", str(chat["id"])), ("state", str(chat["state"]))]
         var cli = str(chat["provider"])
         if let model = chat["model"] as? String { cli += " · \(model)" }
@@ -133,8 +135,8 @@ enum Reads {
         }
         if let session = data["session"] as? String { rows.append(("session", session)) }
         if let queued = chat["queued"] as? Int, queued > 0 { rows.append(("queued", "\(queued)")) }
-        for (key, value) in rows { print("  \(pad(key, 8))  \(value)") }
-        for card in data["pending"] as? [Object] ?? [] { print("  waiting   \(str(card["kind"])): \(str(card["title"]))") }
+        for (key, value) in rows { say("  \(pad(key, 8))  \(value)") }
+        for card in data["pending"] as? [Object] ?? [] { say("  waiting   \(str(card["kind"])): \(str(card["title"]))") }
     }
 
     static func log(_ client: AgentClient, _ ref: String, _ o: inout Options) throws(AgentClient.Failure) {
@@ -156,15 +158,15 @@ enum Reads {
         while let raw = try client.nextRaw() {
             guard let line = (try? JSONSerialization.jsonObject(with: raw)) as? Object, line["type"] as? String == "event" else { continue }
             if o.json {
-                FileHandle.standardOutput.write(raw + Data([0x0A]))
+                FileHandle.standardOutput.write(safeJSON(raw) + Data([0x0A]))
             } else {
                 switch line["event"] as? String {
                 case "row": if let row = line["row"] as? Object { rows.take([row], settled: false) }
                 case "state":
                     let state = str(line["state"])
                     if state != "working" { rows.settle() }
-                    print("· \(state)")
-                case "gone": print("· closed")
+                    say("· \(state)")
+                case "gone": say("· closed")
                 default: break
                 }
             }
@@ -178,13 +180,13 @@ enum Reads {
         let data = try client.run("cards.list", args)
         if o.json { return printJSON(data) }
         let cards = data["cards"] as? [Object] ?? []
-        guard !cards.isEmpty else { return print("Nothing is waiting.") }
+        guard !cards.isEmpty else { return say("Nothing is waiting.") }
         for card in cards {
-            print("\(str(card["chatShort"]))  \(str(card["chatTitle"]))  · \(str(card["kind"])): \(str(card["title"]))")
-            if let detail = card["detail"] as? String, !detail.isEmpty { print("    \(oneLine(detail))") }
+            say("\(str(card["chatShort"]))  \(str(card["chatTitle"]))  · \(str(card["kind"])): \(str(card["title"]))")
+            if let detail = card["detail"] as? String, !detail.isEmpty { say("    \(oneLine(detail))") }
             for question in card["questions"] as? [Object] ?? [] {
                 let options = (question["options"] as? [String] ?? []).joined(separator: " / ")
-                print("    \(oneLine(str(question["text"])))" + (options.isEmpty ? "" : "  [\(options)]"))
+                say("    \(oneLine(str(question["text"])))" + (options.isEmpty ? "" : "  [\(options)]"))
             }
         }
     }
@@ -197,16 +199,16 @@ enum Reads {
         let data = try client.run("history.list", args)
         if o.json { return printJSON(data) }
         let sessions = data["sessions"] as? [Object] ?? []
-        guard !sessions.isEmpty else { return print("No past chats in \(str(data["folder"])).") }
+        guard !sessions.isEmpty else { return say("No past chats in \(str(data["folder"])).") }
         let parse = ISO8601DateFormatter()
         let show = DateFormatter()
         show.dateFormat = "MMM d HH:mm"
         let provider = width(sessions, "provider")
         for s in sessions {
             let when = (s["updated"] as? String).flatMap(parse.date(from:)).map(show.string(from:)) ?? ""
-            print("\(pad(when, 12))  \(pad(str(s["provider"]), provider))  \(str(s["title"]))" + (s["open"] as? Bool == true ? "  (open)" : ""))
+            say("\(pad(when, 12))  \(pad(str(s["provider"]), provider))  \(str(s["title"]))" + (s["open"] as? Bool == true ? "  (open)" : ""))
         }
-        if data["more"] as? Bool == true { print("…") }
+        if data["more"] as? Bool == true { say("…") }
     }
 
     // MARK: Text
@@ -232,7 +234,39 @@ enum Reads {
 
     static func printJSON(_ object: Any) {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else { return }
-        FileHandle.standardOutput.write(data + Data([0x0A]))
+        FileHandle.standardOutput.write(safeJSON(data) + Data([0x0A]))
+    }
+
+    /// A line for a terminal: what chats hold can't move its cursor or retitle it.
+    static func say(_ line: String) { print(safe(line)) }
+
+    /// Text without C0 or C1 controls (or DEL), but for newlines and tabs.
+    static func safe(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars where scalar == "\n" || scalar == "\t" || !(scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value)) {
+            out.append(scalar)
+        }
+        return String(out)
+    }
+
+    /// JSON whose DEL and C1 controls, which JSON leaves as they are, are escaped: the same text,
+    /// and safe in a terminal. (C0 controls are escaped already.)
+    static func safeJSON(_ data: Data) -> Data {
+        var out = Data(capacity: data.count)
+        var bytes = data.makeIterator()
+        var pending = bytes.next()
+        while let byte = pending {
+            pending = bytes.next()
+            if byte == 0x7F {
+                out.append(contentsOf: Array("\\u007f".utf8))
+            } else if byte == 0xC2, let next = pending, (0x80...0x9F).contains(next) {
+                out.append(contentsOf: Array(String(format: "\\u%04x", Int(next)).utf8))
+                pending = bytes.next()
+            } else {
+                out.append(byte)
+            }
+        }
+        return out
     }
 }
 
@@ -281,16 +315,16 @@ struct Rows {
         let cut = row["textLen"] != nil ? " …" : ""
         switch Reads.str(row["kind"]) {
         case "thinking": return
-        case "user": print("\n› " + indented(text, "  ") + cut)
-        case "answer", "plan", "summary": print(text + cut)
+        case "user": Reads.say("\n› " + indented(text, "  ") + cut)
+        case "answer", "plan", "summary": Reads.say(text + cut)
         case "tool":
             let tool = row["tool"] as? Object ?? [:]
             let what = [Reads.str(tool["summary"]), Reads.str(tool["path"])].first { !$0.isEmpty } ?? ""
-            print("· \(Reads.str(tool["name"]))" + (what.isEmpty ? "" : " \(Reads.oneLine(what))") + (row["error"] as? Bool == true ? "  ✗" : ""))
-        case "agent": print("◦ \(Reads.str(row["agent"])): \(Reads.oneLine(text))")
-        case "peer": print("« " + indented(text, "  "))
-        case "notice": print("! " + Reads.oneLine(text))
-        default: if !text.isEmpty { print("— \(Reads.oneLine(text)) —") }
+            Reads.say("· \(Reads.str(tool["name"]))" + (what.isEmpty ? "" : " \(Reads.oneLine(what))") + (row["error"] as? Bool == true ? "  ✗" : ""))
+        case "agent": Reads.say("◦ \(Reads.str(row["agent"])): \(Reads.oneLine(text))")
+        case "peer": Reads.say("« " + indented(text, "  "))
+        case "notice": Reads.say("! " + Reads.oneLine(text))
+        default: if !text.isEmpty { Reads.say("— \(Reads.oneLine(text)) —") }
         }
     }
 

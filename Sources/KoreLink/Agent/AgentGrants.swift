@@ -35,7 +35,10 @@ package enum AgentGrants {
     /// The master switch, from Kore only.
     package static func setEnabled(_ on: Bool) {
         defaults.set(on, forKey: switchKey)
-        if !on { tiers = [:] }
+        if !on {
+            tiers = [:]
+            external = .off
+        }
         AgentChannel.sync()
     }
 

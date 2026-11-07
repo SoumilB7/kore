@@ -7,6 +7,8 @@ final class AgentClient {
     enum Failure: Error {
         /// No socket: Kore isn't running, or agent control is off.
         case unreachable
+        /// Something else is at the socket. Nothing was said to it.
+        case notKore
         /// Kore said `bye`, or a command failed: its code and words.
         case refused(code: String, message: String)
         case closed
@@ -29,6 +31,9 @@ final class AgentClient {
     /// Connects and says hello with the chat's pass, if this runs under one of Kore's chats.
     init() throws(Failure) {
         fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        // Before connecting: once Kore has closed it, this can't be set.
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(Self.socketPath.utf8)
@@ -45,8 +50,11 @@ final class AgentClient {
             Darwin.close(fd)
             throw .unreachable
         }
-        var on: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        // Before a chat's pass goes anywhere.
+        guard Self.peerIsKore(fd) else {
+            Darwin.close(fd)
+            throw .notKore
+        }
         timeout(10)
         var hello: Object = ["type": "hello", "proto": 1, "client": "kore"]
         if let pass = ProcessInfo.processInfo.environment["KORE_AGENT_PASS"], !pass.isEmpty { hello["pass"] = pass }
@@ -57,6 +65,31 @@ final class AgentClient {
     }
 
     deinit { Darwin.close(fd) }
+
+    /// The process at the socket is the Kore this came with: Contents/MacOS/Kore beside
+    /// Contents/Helpers/kore, or in a development build's folder, a host beside this binary.
+    private static func peerIsKore(_ fd: Int32) -> Bool {
+        var token = audit_token_t()
+        var size = socklen_t(MemoryLayout<audit_token_t>.size)
+        // SOL_LOCAL is 0 and LOCAL_PEERTOKEN 6 (sys/un.h); val[5] is the pid.
+        guard getsockopt(fd, 0, 6, &token, &size) == 0 else { return false }
+        var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid_t(token.val.5), &path, UInt32(path.count)) > 0 else { return false }
+        let peer = URL(fileURLWithPath: String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)).resolvingSymlinksInPath().path
+        return expectedServers().contains(peer)
+    }
+
+    private static func expectedServers() -> [String] {
+        var size = UInt32(MAXPATHLEN)
+        var raw = [CChar](repeating: 0, count: Int(size))
+        guard _NSGetExecutablePath(&raw, &size) == 0 else { return [] }
+        let me = URL(fileURLWithPath: String(decoding: raw.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)).resolvingSymlinksInPath()
+        let folder = me.deletingLastPathComponent()
+        if folder.lastPathComponent == "Helpers" {
+            return [folder.deletingLastPathComponent().appendingPathComponent("MacOS/Kore").resolvingSymlinksInPath().path]
+        }
+        return ["Kore", "kore-storylines"].map { folder.appendingPathComponent($0).resolvingSymlinksInPath().path }
+    }
 
     /// How long a read waits (0: for ever).
     func timeout(_ seconds: Int) {
