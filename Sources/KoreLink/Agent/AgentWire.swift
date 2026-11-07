@@ -37,6 +37,12 @@ package struct AgentCommand: Sendable, Equatable {
 
     package static let all: [Self] = [whoami, caps, chats, show, read, follow, unfollow, cards, history]
 
+    /// Why `tier` may not run `name`; nil when it may.
+    package static func refusal(_ name: String, tier: AgentTier, among commands: [Self] = all) -> AgentCode? {
+        guard let command = commands.first(where: { $0.name == name }) else { return .unknownCommand }
+        return command.tier <= tier ? nil : .tier
+    }
+
     /// What `tier` may run, in the order above.
     package static func allowed(_ tier: AgentTier) -> [Self] { tier == .off ? [] : all.filter { $0.tier <= tier } }
 }

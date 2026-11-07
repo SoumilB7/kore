@@ -23,6 +23,8 @@ package final class AgentChannel {
     static let perMinute = 30
     /// Connections at once.
     static let clientsMax = 16
+    /// The commands served. Every one is Watch's for now, so tests add a higher one to reach `.tier`.
+    static var commands = AgentCommand.all
 
     package let socketPath: String
     private let queue = DispatchQueue(label: "dev.kore.agent")
@@ -125,7 +127,7 @@ package final class AgentChannel {
     /// Some chat closed: each follow of a chat no longer open gets `gone`, a closed chat's own
     /// callers are let go, its grant drops, and with no grant left the socket closes.
     private func chatsClosed() {
-        let open = LinkSnapshot.chatsByID()
+        let open = AgentReads.chatsByID()
         for client in clients.values {
             for (chatId, follow) in client.follows where open[chatId] == nil {
                 send(client, AgentEvent(id: follow.id, chat: chatId, event: "gone"))
@@ -148,7 +150,7 @@ package final class AgentChannel {
             return
         }
         // A grant whose chat has closed counts no more; with none left, the socket goes.
-        AgentGrants.prune(open: Set(LinkSnapshot.chatsByID().keys))
+        AgentGrants.prune(open: Set(AgentReads.chatsByID().keys))
         guard AgentGrants.wanted else {
             Darwin.close(fd)
             close(.stopped)
@@ -218,7 +220,7 @@ package final class AgentChannel {
             }
             client.named = true
         case .chat(let pass):
-            guard let chat = LinkSnapshot.chatsByID().values.first(where: { $0.agentPass == pass }) else {
+            guard let chat = AgentReads.chatsByID().values.first(where: { $0.agentPass == pass }) else {
                 return refuse(client, .denied, "That chat isn't open in Kore.")
             }
             client.chat = chat.id.uuidString
@@ -235,7 +237,7 @@ package final class AgentChannel {
     }
 
     private func callerInfo(_ client: Client) -> AgentCallerInfo {
-        let chat = client.chat.flatMap { LinkSnapshot.chatsByID()[$0] }
+        let chat = client.chat.flatMap { AgentReads.chatsByID()[$0] }
         return AgentCallerInfo(
             class: client.callerClass, chat: client.chat, short: client.chat.map(AgentReads.short), title: chat?.title)
     }
@@ -249,9 +251,7 @@ package final class AgentChannel {
             let tier = tier(client)
             guard tier != .off else { return .stopped }
             guard limits[client.key, default: RateLimiter(limit: Self.perMinute, per: 60)].take() else { return .rateLimited }
-            guard let command = AgentCommand.all.first(where: { $0.name == name }) else { return .unknownCommand }
-            guard command.tier <= tier else { return .tier }
-            return nil
+            return AgentCommand.refusal(name, tier: tier, among: Self.commands)
         }()
         if let code {
             fail(client, id, code, Self.message(code))
@@ -285,7 +285,7 @@ package final class AgentChannel {
                 guard let chat = resolve(args.chat, client, id) else { return nil }
                 chats = [chat]
             } else {
-                chats = LinkSnapshot.workspaces().flatMap(LinkSnapshot.chats)
+                chats = AgentReads.workspaces().flatMap(LinkSnapshot.chats)
             }
             send(client, AgentResult(id: id, ok: true, data: AgentCards(cards: chats.flatMap(AgentReads.cards))))
             return chats.count == 1 ? chats[0].id.uuidString : nil
@@ -337,7 +337,7 @@ package final class AgentChannel {
             fail(client, id, .noChat, "Name a chat: its title, its short id, or . for this one.")
             return nil
         }
-        let chats = LinkSnapshot.chatsByID()
+        let chats = AgentReads.chatsByID()
         let titled = chats.values.map { (id: $0.id.uuidString, title: $0.title) }
         switch AgentRefs.resolve(ref, chats: titled, own: client.chat) {
         case .chat(let found):
@@ -357,7 +357,7 @@ package final class AgentChannel {
     /// The window a history read is for: the folder named, the caller's chat's, the one holding
     /// the caller's directory, or the only one.
     private func window(_ args: AgentArgs, _ client: Client, _ id: String) -> Workspace? {
-        let windows = LinkSnapshot.workspaces()
+        let windows = AgentReads.workspaces()
         func path(_ text: String) -> String { URL(fileURLWithPath: (text as NSString).expandingTildeInPath).standardizedFileURL.path }
         if let folder = args.folder {
             let wanted = path(folder)
@@ -365,7 +365,7 @@ package final class AgentChannel {
             fail(client, id, .noWindow, "No Kore window has that folder open.")
             return nil
         }
-        if let own = client.chat.flatMap({ LinkSnapshot.chatsByID()[$0] }), let w = LinkSnapshot.workspace(of: own) { return w }
+        if let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let w = AgentReads.workspace(of: own) { return w }
         if let cwd = args.cwd.map(path) {
             let holding = windows.filter { cwd == $0.folder.standardizedFileURL.path || cwd.hasPrefix($0.folder.standardizedFileURL.path + "/") }
             if let w = holding.max(by: { $0.folder.path.count < $1.folder.path.count }) { return w }
@@ -415,7 +415,7 @@ package final class AgentChannel {
     /// Each followed chat that changed: its new and changed rows, and its status if it moved.
     private func flush() {
         guard AgentChannel.current === self, !dirty.isEmpty else { return }
-        let chats = LinkSnapshot.chatsByID()
+        let chats = AgentReads.chatsByID()
         let ids = dirty
         dirty = []
         for client in clients.values {
@@ -426,16 +426,19 @@ package final class AgentChannel {
                     client.follows[chatId] = nil
                     continue
                 }
+                let state = AgentReads.state(chat)
+                // The marks are what this caller was sent: a row still growing keeps its old one.
                 var marks: [UUID: Int] = [:]
                 for e in chat.transcript.entries.suffix(AgentReads.followWindow) {
                     let mark = AgentReads.mark(e)
-                    marks[e.id] = mark
-                    if follow.marks[e.id] != mark {
+                    if follow.marks[e.id] != mark, AgentReads.settled(e) || state != "working" {
                         send(client, AgentEvent(id: follow.id, chat: chatId, event: "row", row: AgentReads.row(e, folder: chat.folder)))
+                        marks[e.id] = mark
+                    } else {
+                        marks[e.id] = follow.marks[e.id]
                     }
                 }
                 follow.marks = marks
-                let state = AgentReads.state(chat)
                 if state != follow.state {
                     follow.state = state
                     send(client, AgentEvent(id: follow.id, chat: chatId, event: "state", state: state))

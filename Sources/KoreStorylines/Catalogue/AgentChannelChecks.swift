@@ -14,6 +14,7 @@ import KoreUI
 extension Tag {
     static let agentChannel: Tag = "agent"
     static let agentCost: Tag = "agentcost"
+    static let agentQuit: Tag = "agentquit"
 }
 
 /// The chats a storyline gave roles to (`a`, `b`, …), its followers, and what it put back at the
@@ -550,10 +551,10 @@ final class AgentChannelAll: ChatStoryline {
             Followed("text", "printed the streamed answer whole, once") { out, _, _ in
                 out.components(separatedBy: Self.long).count == 2 && out.hasSuffix("· idle\n")
             },
-            Followed("json", "had the answer's row many times as it grew") { out, _, _ in
+            Followed("json", "had the answer's row once, whole") { out, _, _ in
                 let rows = AgentJSON.objects(out).filter { $0["event"] as? String == "row" }.compactMap { $0["row"] as? [String: Any] }
                 let answer = rows.filter { ($0["text"] as? String).map { Self.long.hasPrefix($0) && $0.count > 40 } ?? false }
-                return answer.count >= 3 && answer.last?["text"] as? String == Self.long && Set(answer.compactMap { $0["id"] as? String }).count == 1
+                return answer.count == 1 && answer[0]["text"] as? String == Self.long
             },
             Do("stop both followers") { story in
                 for run in AgentCast.of(story).followers.values { run.stop() }
@@ -1158,15 +1159,95 @@ final class AgentChannelCost: ChatStoryline {
             StartFollower("p1", ["log", "{a}", "-f", "--json"], .chat("b")),
             Phase("stream-1", [StreamWithCommands(role: "a", turn: 3, roles: [])]),
             Do("stop p1") { story in AgentCast.of(story).followers["p1"]?.stop() },
+            // Answers alike vary by more than a follower costs, so each is measured beside one
+            // with nobody following.
+            Phase("stream-0b", [StreamWithCommands(role: "a", turn: 4, roles: [])]),
+            StartFollower("t1", ["log", "{a}", "-f"], .chat("b")),
+            Phase("stream-1b", [StreamWithCommands(role: "a", turn: 5, roles: [])]),
+            Do("stop t1") { story in AgentCast.of(story).followers["t1"]?.stop() },
+            Phase("stream-0c", [StreamWithCommands(role: "a", turn: 6, roles: [])]),
             StartFollower("p2", ["log", "{a}", "-f", "--json"], .chat("c")),
             StartFollower("p3", ["log", "{a}", "-f"], .chat("d")),
             StartFollower("p4", ["log", "{a}", "-f", "--json"], .chat("e")),
             StartFollower("p5", ["log", "{a}", "-f"], .chat("f")),
-            Phase("stream-4", [StreamWithCommands(role: "a", turn: 4, roles: ["g", "h", "i", "j", "k"])]),
+            Phase("stream-4", [StreamWithCommands(role: "a", turn: 7, roles: ["g", "h", "i", "j", "k"])]),
             Followed("p5", "printed the whole answer") { out, _, _ in out.contains(Self.long) },
             Do("stop the followers") { story in for run in AgentCast.of(story).followers.values { run.stop() } },
-            Phase("stream-0b", [StreamWithCommands(role: "a", turn: 5, roles: [])]),
+            Phase("stream-0d", [StreamWithCommands(role: "a", turn: 8, roles: [])]),
             Phase("mcp-idle", [IdleMCP(role: "a", hold: 30)]),
         ]
+    }
+}
+
+/// A closed window can stay in `Workspace.all` until it's freed: the channel doesn't list it.
+final class AgentClosedWindow: ChatStoryline {
+    override class var tags: Set<Tag> { [.agentChannel] }
+    override class var variants: [Variant] { [.claude] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Ready.")]) }
+
+    override func steps() -> [any Step] {
+        let directory = URL(fileURLWithPath: "/tmp/kaw-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        return super.steps() + [
+            Do("agent control on, a terminal may watch") { story in
+                let cast = AgentCast.of(story)
+                cast.directory = directory
+                cast.chats["a"] = try story.activeChat()
+                AgentChannel.directory = directory
+                AgentGrants.stopAll()
+                AgentGrants.setEnabled(true)
+                AgentGrants.setExternal(.watch)
+            },
+            KoreAs(["ls"], .outside(), "the chat is listed") { status, out, _ in status == 0 && !out.contains("No chats are open.") },
+            Do("close its window") { story in story.window?.close() },
+            Expect("the window is closed") { story in story.window?.isVisible == false },
+            KoreAs(["ls"], .outside(), "nothing is listed") { status, out, _ in status == 0 && out.contains("No chats are open.") },
+        ]
+    }
+}
+
+/// Kore quitting for real with agent control on: `scripts/tests/agent-quit.sh` watches from
+/// outside, since this host doesn't outlive it. Without that script's folder it only opens a chat.
+final class AgentQuitPath: ChatStoryline {
+    override class var tags: Set<Tag> { [.agentQuit] }
+    override class var variants: [Variant] { [.claude] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Ready.")]) }
+
+    override func steps() -> [any Step] {
+        let env = ProcessInfo.processInfo.environment
+        guard let folder = env["KORE_AGENT_QUIT_DIR"] else { return super.steps() }
+        let directory = URL(fileURLWithPath: folder, isDirectory: true)
+        let quits = env["KORE_AGENT_QUIT_HOW"] == "quit"
+        return super.steps() + [
+            Do("agent control on at the script's socket, a terminal may watch") { story in
+                AgentChannel.directory = directory
+                AgentGrants.stopAll()
+                AgentGrants.setEnabled(true)
+                AgentGrants.setExternal(.watch)
+            },
+            Expect("the socket") { _ in AgentChannel.current != nil },
+            Do("tell the script") { story in
+                let short = String(try story.activeChat().id.uuidString.prefix(8)).lowercased()
+                try "\(getpid()) \(short)\n".write(to: directory.appendingPathComponent("ready"), atomically: true, encoding: .utf8)
+            },
+            EndOnceFollowed(directory: directory, quits: quits),
+        ]
+    }
+}
+
+/// Waits for the script's follower; then Kore quits, or waits for the script's signal.
+private struct EndOnceFollowed: Step {
+    let directory: URL
+    let quits: Bool
+    var label: String { "the script's kore log -f follows, then Kore " + (quits ? "quits its own way" : "takes a signal") }
+    var timeout: Duration? { .seconds(120) }
+
+    @MainActor func run(_ story: StoryContext) async throws {
+        try await story.until("a follower", timeout: .seconds(60)) { AgentTaps.on }
+        if quits {
+            // What says the follower was on when Kore quit: this host writes no report.
+            try "".write(to: directory.appendingPathComponent("quitting"), atomically: true, encoding: .utf8)
+            NSApp.terminate(nil)
+        }
+        try await Task.sleep(for: .seconds(60))
     }
 }

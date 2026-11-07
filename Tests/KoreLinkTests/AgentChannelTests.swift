@@ -237,6 +237,51 @@ struct AgentChannelTests {
         #expect(right?["code"] as? String == "denied")
     }
 
+    @Test func aCommandAboveTheTierIsRefused() async throws {
+        let directory = Self.reset()
+        defer {
+            AgentChannel.commands = AgentCommand.all
+            AgentGrants.stopAll()
+        }
+        let drive = AgentCommand(name: "test.drive", tier: .drive)
+        AgentChannel.commands = AgentCommand.all + [drive]
+        #expect(AgentCommand.refusal("test.drive", tier: .watch, among: AgentChannel.commands) == .tier)
+        #expect(AgentCommand.refusal("test.drive", tier: .own, among: AgentChannel.commands) == .tier)
+        #expect(AgentCommand.refusal("test.drive", tier: .drive, among: AgentChannel.commands) == nil)
+        #expect(AgentCommand.refusal("test.drive", tier: .full, among: AgentChannel.commands) == nil)
+        AgentGrants.setEnabled(true)
+        AgentGrants.setExternal(.watch)
+        let path = Self.socket(directory)
+        let (above, still): (AgentLine?, AgentLine?) = await off {
+            guard let client = AgentTestClient(path: path) else { return (nil, nil) }
+            defer { client.close() }
+            _ = client.hello()
+            return (client.command("1", "test.drive"), client.command("2", "agent.whoami"))
+        }
+        #expect(above?["ok"] as? Bool == false && above?["code"] as? String == "tier")
+        #expect(above?["message"] as? String == AgentChannel.message(.tier))
+        // Refused, not cut off: the same connection goes on.
+        #expect(still?["ok"] as? Bool == true)
+    }
+
+    @Test func aSocketLeftByAKilledKoreIsReplaced() async throws {
+        let directory = Self.reset()
+        defer { AgentGrants.stopAll() }
+        let path = Self.socket(directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // A file at the socket's path, as a killed Kore leaves one.
+        #expect(FileManager.default.createFile(atPath: path, contents: Data()))
+        AgentGrants.setEnabled(true)
+        AgentGrants.setExternal(.watch)
+        #expect(AgentChannel.current != nil)
+        let welcome: AgentLine? = await off {
+            guard let client = AgentTestClient(path: path) else { return nil }
+            defer { client.close() }
+            return client.hello()
+        }
+        #expect(welcome?["type"] as? String == "welcome")
+    }
+
     @Test func thirtyCommandsAMinute() async throws {
         let directory = Self.reset()
         defer { AgentGrants.stopAll() }

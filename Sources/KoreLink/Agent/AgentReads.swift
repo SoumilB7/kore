@@ -16,6 +16,19 @@ enum AgentReads {
 
     static func short(_ id: String) -> String { String(id.prefix(8)).lowercased() }
 
+    /// The windows a caller sees: a closed one can stay in `Workspace.all` until it's freed.
+    static func workspaces() -> [Workspace] { LinkSnapshot.workspaces().filter { !$0.isClosed } }
+
+    static func workspace(of chat: Chat) -> Workspace? { workspaces().first { LinkSnapshot.chats($0).contains { $0 === chat } } }
+
+    static func chatsByID() -> [String: Chat] {
+        var out: [String: Chat] = [:]
+        for workspace in workspaces() {
+            for chat in LinkSnapshot.chats(workspace) { out[chat.id.uuidString] = chat }
+        }
+        return out
+    }
+
     static func state(_ chat: Chat) -> String {
         switch chat.attention {
         case .waiting: "needs-you"
@@ -39,11 +52,11 @@ enum AgentReads {
 
     /// Every open chat, window by window, tab order.
     static func chats(own: String?) -> [AgentChat] {
-        LinkSnapshot.workspaces().flatMap { w in LinkSnapshot.chats(w).map { chat($0, in: w, own: own) } }
+        workspaces().flatMap { w in LinkSnapshot.chats(w).map { chat($0, in: w, own: own) } }
     }
 
     static func detail(_ chat: Chat, own: String?) -> AgentChatDetail {
-        let workspace = LinkSnapshot.workspace(of: chat)
+        let workspace = workspace(of: chat)
         let context = chat.agentContext.map { c in
             AgentChatDetail.Context(used: c.used, window: c.window, pct: chat.linkControlState.contextPct)
         }
@@ -96,6 +109,15 @@ enum AgentReads {
         let count = min(max(last ?? page, 1), pageMax)
         let start = max(0, end - count)
         return AgentRows(chat: chat.id.uuidString, rows: entries[start..<end].map { row($0, folder: chat.folder) }, more: start > 0)
+    }
+
+    /// A row a follow sends: it's finished, or of a kind that doesn't stream. The rest wait for
+    /// the turn to end, so a growing answer isn't encoded again every tenth of a second.
+    static func settled(_ e: TranscriptStore.Entry) -> Bool {
+        switch e.kind {
+        case .user, .notice, .peer, .divider, .mode, .summary: true
+        default: e.done || e.stopped || e.isError
+        }
     }
 
     /// What a row looks like now, cheaply: a follow resends a row whose mark changed.
