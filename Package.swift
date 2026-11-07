@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "KoreCore", targets: ["KoreCore"]),
         .executable(name: "Kore", targets: ["Kore"]),
         .executable(name: "kore-cli", targets: ["kore-cli"]),
+        .executable(name: "kore-command", targets: ["kore-command"]),
         .executable(name: "kore-storylines", targets: ["kore-storylines"]),
         .executable(name: "kore-fake-cli", targets: ["kore-fake-cli"]),
         .executable(name: "kore-power-bench", targets: ["kore-power-bench"]),
@@ -32,6 +33,10 @@ let package = Package(
         .target(name: "KoreLink", dependencies: ["KoreUI", "KoreCore"], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
+        // The `kore` command in Kore.app (Contents/Helpers/kore): the reads over Kore's agent
+        // channel (`z-docs/agent-protocol.md`) and `kore mcp`; opening and `kore setup` stay the
+        // zsh script's. Foundation only, so it stays small and starts fast.
+        .executableTarget(name: "kore-command", swiftSettings: releaseForSize),
         // User storylines (phase 12): the engine, steps, scripted CLI and catalogue, and the app
         // with them inside. Neither is part of Kore.app.
         .target(name: "KoreStorylines", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),

@@ -120,6 +120,8 @@ package struct BackendOptions {
     /// another agent's instruction file it gets at each launch.
     package var hiddenRows: Set<String> = []
     package var instructions: URL?
+    /// The chat's pass for Kore's agent channel, in its CLI's environment (`AgentPasses`).
+    package var agentPass: String?
 
     package init(
         folder: URL, resume: SessionSummary? = nil, mode: String, planMode: Bool = false, model: String? = nil,

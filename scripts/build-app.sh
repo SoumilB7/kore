@@ -9,12 +9,17 @@ BUILD_SHA="${KORE_BUILD_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo un
 APP="build/Kore.app"
 
 swift build -c release --product Kore
+swift build -c release --product kore-command
 BIN="$(swift build -c release --show-bin-path)/Kore"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Kore"
-cp scripts/kore "$APP/Contents/Resources/kore"
+# The `kore` command: the binary reads Kore over its agent channel and hands opening and setup
+# to the script. Resources/kore stays where ~/.local/bin/kore has always pointed.
+cp "${BIN:h}/kore-command" "$APP/Contents/Helpers/kore"
+cp scripts/kore "$APP/Contents/Resources/kore.zsh"
+ln -s ../Helpers/kore "$APP/Contents/Resources/kore"
 cp -R Resources/ThirdParty "$APP/Contents/Resources/ThirdParty"
 # The package's resource bundles (mermaid.js).
 cp -R "${BIN:h}"/*.bundle "$APP/Contents/Resources/"
@@ -57,6 +62,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
 EOF
 
 # Ad-hoc signature: enough to run locally. Not sandboxed, since it must spawn `claude`.
+codesign --force --options runtime --sign - "$APP/Contents/Helpers/kore"
 codesign --force --options runtime --sign - "$APP"
 echo "built $APP ($BUILD_SHA)"
 

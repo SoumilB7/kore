@@ -37,7 +37,8 @@ while (( $# )); do
   esac
   shift
 done
-products=(kore-storylines)
+# kore-command: the `kore` binary the agent channel's storylines run.
+products=(kore-storylines kore-command)
 (( process )) && products+=(kore-fake-cli)
 for product in $products; do
   if ! swift build -c $build --product $product >/tmp/kore-storylines-build.$$ 2>&1; then

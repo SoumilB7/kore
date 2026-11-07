@@ -186,6 +186,9 @@ package final class Chat: Identifiable {
         ownPopups()
     }
 
+    /// What its CLI, and what runs under it, names this chat by on Kore's agent channel.
+    package let agentPass = AgentPasses.make()
+
     package var sessionId: String? { status.sessionId }
     /// The id the folder's history lists it under: its session's, or a fork's own before its
     /// CLI names one (`KoreForks`).
@@ -222,6 +225,7 @@ package final class Chat: Identifiable {
             replaceHistory(events)
             StorylineSeams.events?(self, event)
             if LinkTaps.on { LinkTaps.event?(self, event) }
+            if AgentTaps.on { AgentTaps.event?(self, event) }
             return
         }
         let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
@@ -273,6 +277,7 @@ package final class Chat: Identifiable {
         if case .replayed = event { showHeld() }
         StorylineSeams.events?(self, event)
         if LinkTaps.on { LinkTaps.event?(self, event) }
+        if AgentTaps.on { AgentTaps.event?(self, event) }
         // A stopped turn took the compaction in it along, whether or not the CLI said so.
         if case .turnFinished = event, stoppingCompaction, context.compacting { dispatch(.compactionStopped) }
     }
@@ -462,6 +467,7 @@ package final class Chat: Identifiable {
             folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
             model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
         options.fastMode = launchFastMode
+        options.agentPass = agentPass
         if let imported {
             options.hiddenRows = Set(imported.record.written)
             options.instructions = imported.record.instructions.map { URL(fileURLWithPath: $0) }

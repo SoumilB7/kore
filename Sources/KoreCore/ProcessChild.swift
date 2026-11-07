@@ -123,6 +123,12 @@ package struct ProcessChild: Sendable, Equatable {
         info.pbi_start_tvsec == seconds && info.pbi_start_tvusec == microseconds
     }
 
+    /// The parent of a running process, as the kernel has it now (nil once it's gone).
+    package static func parent(of pid: pid_t) -> pid_t? {
+        guard pid > 1, let info = info(pid), info.pbi_status != SZOMB else { return nil }
+        return pid_t(info.pbi_ppid)
+    }
+
     private static func info(_ pid: pid_t) -> proc_bsdinfo? {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)

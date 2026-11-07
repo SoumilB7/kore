@@ -110,7 +110,8 @@ final class CodexBackend: ChatBackend {
             let launch = CodexSession.Options(
                 cwd: options.folder, model: options.model, effort: options.effort,
                 permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
-                plan: options.planMode, resume: resume, forkAt: forkAt, developerInstructions: instructions)
+                plan: options.planMode, resume: resume, forkAt: forkAt, developerInstructions: instructions,
+                environment: options.agentPass.map { [AgentPasses.variable: $0] } ?? [:])
             let task = Task { try await CodexSession.launch(launch) }
             opening = task
             session = try await task.value

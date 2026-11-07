@@ -158,6 +158,7 @@ final class ClaudeBackend: ChatBackend {
             launch.extraArgs += ["--resume-session-at", rollbackAt]
         }
         if let instructions = options.instructions { launch.extraArgs += ["--append-system-prompt-file", instructions.path] }
+        if let pass = options.agentPass { launch.environment[AgentPasses.variable] = pass }
         let starting = Task { try await ClaudeSession.start(launch) }
         opening = starting
         launches += 1

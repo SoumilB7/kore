@@ -100,6 +100,7 @@ package final class StdioProcess: @unchecked Sendable {
             ending.set(ProcessEnd(code: process.terminationStatus, signal: process.terminationReason == .uncaughtSignal))
             Self.running.remove(key)
             ChildReaper.shared.forget(process.processIdentifier)
+            AgentPasses.shared.ended(process.processIdentifier)
             exitSink.yield(process.terminationStatus)
             exitSink.finish()
         }
@@ -112,6 +113,7 @@ package final class StdioProcess: @unchecked Sendable {
             throw error
         }
         ChildReaper.shared.watch(process.processIdentifier)
+        AgentPasses.shared.started(process.processIdentifier, environment: environment)
 
         Task {
             var lines = LineSplitter()
