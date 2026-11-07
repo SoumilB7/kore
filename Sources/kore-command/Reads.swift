@@ -192,7 +192,7 @@ enum Reads {
     }
 
     static func history(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
-        var args: Object = ["cwd": FileManager.default.currentDirectoryPath]
+        var args: Object = [:]
         if let folder = o.folder { args["folder"] = folder }
         if let search = o.search { args["query"] = search }
         if o.archived { args["archived"] = true }

@@ -135,11 +135,19 @@ package final class AgentChannel {
         UILog.event("agent-closed", ["code": code.rawValue])
     }
 
-    /// A chat's access went off (`chat` nil: external callers'): its connections end.
+    /// A chat's access went off (`chat` nil: external callers'): its connections end, and whoever
+    /// could read it only because of that access stops following it.
     func revoked(chat: String?) {
         for (key, client) in clients where client.named && client.chat == chat {
             client.connection.finish(after: Self.encode(AgentBye(code: .stopped, message: "Kore access is off for this caller.")))
             clients[key] = nil
+        }
+        for client in clients.values where !client.follows.isEmpty {
+            let readable = Set(AgentReads.readable(own: client.chat).map(\.id.uuidString))
+            for (chatId, follow) in client.follows where !readable.contains(chatId) {
+                send(client, AgentEvent(id: follow.id, chat: chatId, event: "gone"))
+                client.follows[chatId] = nil
+            }
         }
         followsChanged()
     }
@@ -355,7 +363,7 @@ package final class AgentChannel {
                 guard let chat = resolve(args.chat, client, id) else { return nil }
                 chats = [chat]
             } else {
-                chats = AgentReads.workspaces().flatMap(LinkSnapshot.chats)
+                chats = AgentReads.readable(own: own)
             }
             send(client, AgentResult(id: id, ok: true, data: AgentCards(cards: chats.flatMap(AgentReads.cards))))
             return chats.count == 1 ? chats[0].id.uuidString : nil
@@ -407,7 +415,8 @@ package final class AgentChannel {
             fail(client, id, .noChat, "Name a chat: its title, its short id, or . for this one.")
             return nil
         }
-        let chats = AgentReads.chatsByID()
+        // Only what this caller may read: the rest isn't there to it, not even by its id.
+        let chats = Dictionary(AgentReads.readable(own: client.chat).map { ($0.id.uuidString, $0) }, uniquingKeysWith: { a, _ in a })
         let titled = chats.values.map { (id: $0.id.uuidString, title: $0.title) }
         switch AgentRefs.resolve(ref, chats: titled, own: client.chat) {
         case .chat(let found):
@@ -424,25 +433,21 @@ package final class AgentChannel {
         return nil
     }
 
-    /// The window a history read is for: the folder named, the caller's chat's, the one holding
-    /// the caller's directory, or the only one.
+    /// The window a history read is for: the caller's own chat's, and no other. A caller outside
+    /// Kore's chats has no folder of its own.
     private func window(_ args: AgentArgs, _ client: Client, _ id: String) -> Workspace? {
-        let windows = AgentReads.workspaces()
-        func path(_ text: String) -> String { URL(fileURLWithPath: (text as NSString).expandingTildeInPath).standardizedFileURL.path }
-        if let folder = args.folder {
-            let wanted = path(folder)
-            if let w = windows.first(where: { $0.folder.standardizedFileURL.path == wanted }) { return w }
-            fail(client, id, .noWindow, "No Kore window has that folder open.")
+        guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let workspace = AgentReads.workspace(of: own) else {
+            fail(client, id, .noWindow, "Past chats can be read only from a chat in Kore, for its own folder.")
             return nil
         }
-        if let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let w = AgentReads.workspace(of: own) { return w }
-        if let cwd = args.cwd.map(path) {
-            let holding = windows.filter { cwd == $0.folder.standardizedFileURL.path || cwd.hasPrefix($0.folder.standardizedFileURL.path + "/") }
-            if let w = holding.max(by: { $0.folder.path.count < $1.folder.path.count }) { return w }
+        if let folder = args.folder {
+            let wanted = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path
+            guard wanted == workspace.folder.standardizedFileURL.path else {
+                fail(client, id, .noWindow, "Past chats can be read only for this chat's own folder.")
+                return nil
+            }
         }
-        if windows.count == 1 { return windows[0] }
-        fail(client, id, .noWindow, windows.isEmpty ? "No Kore window is open." : "Several windows are open: name one's folder.")
-        return nil
+        return workspace
     }
 
     // MARK: Following
@@ -485,13 +490,13 @@ package final class AgentChannel {
     /// Each followed chat that changed: its new and changed rows, and its status if it moved.
     private func flush() {
         guard AgentChannel.current === self, !dirty.isEmpty else { return }
-        let chats = AgentReads.chatsByID()
         let ids = dirty
         dirty = []
-        for client in clients.values {
+        for client in clients.values where !client.follows.isEmpty {
+            let readable = AgentReads.readable(own: client.chat)
             for chatId in ids {
                 guard var follow = client.follows[chatId] else { continue }
-                guard let chat = chats[chatId] else {
+                guard let chat = readable.first(where: { $0.id.uuidString == chatId }) else {
                     send(client, AgentEvent(id: follow.id, chat: chatId, event: "gone"))
                     client.follows[chatId] = nil
                     continue
@@ -521,14 +526,17 @@ package final class AgentChannel {
 
     // MARK: Lines
 
-    private func send(_ client: Client, _ value: some Encodable) {
-        client.connection.send(Self.encode(value))
+    /// Encoded and masked on the channel's queue: a page of long rows costs the main thread
+    /// nothing. Every line a caller gets comes through `encode`.
+    private func send(_ client: Client, _ value: some Encodable & Sendable) {
+        client.connection.send { Self.encode(value) }
     }
 
-    static func encode(_ value: some Encodable) -> Data {
+    nonisolated static func encode(_ value: some Encodable) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]
-        return (try? encoder.encode(value)) ?? Data("{}".utf8)
+        guard let data = try? encoder.encode(value) else { return Data("{}".utf8) }
+        return Data(AgentSecrets.mask(String(decoding: data, as: UTF8.self)).utf8)
     }
 
     // MARK: For tests and storylines

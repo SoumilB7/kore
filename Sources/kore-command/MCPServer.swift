@@ -90,7 +90,6 @@ enum MCPServer {
     static func call(_ name: String, _ arguments: Object) -> Object {
         guard let tool = tools.first(where: { $0.name == name }) else { return failure("No such tool: \(name).") }
         var args = arguments.filter { key, _ in tool.args.contains { $0.0 == key } }
-        if tool.command == "history.list" { args["cwd"] = FileManager.default.currentDirectoryPath }
         do {
             let client = try AgentClient()
             let data = try client.run(tool.command, args)

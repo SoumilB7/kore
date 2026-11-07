@@ -29,6 +29,17 @@ enum AgentReads {
         return out
     }
 
+    /// The open chats a caller may read, window by window, tab order: those in the folder of the
+    /// caller's own chat, and those whose own access is above Off. A caller outside Kore's chats
+    /// has no folder, so only the second.
+    static func readable(own: String?) -> [Chat] {
+        let home = own.flatMap { chatsByID()[$0] }.flatMap(workspace(of:))?.folder.standardizedFileURL.path
+        return workspaces().flatMap { w -> [Chat] in
+            let same = w.folder.standardizedFileURL.path == home
+            return LinkSnapshot.chats(w).filter { same || AgentGrants.tier(chat: $0.id.uuidString) != .off }
+        }
+    }
+
     static func state(_ chat: Chat) -> String {
         switch chat.attention {
         case .waiting: "needs-you"
@@ -50,9 +61,9 @@ enum AgentReads {
             queued: chat.queuedCount, cards: LinkSnapshot.cards(chat).count, own: id == own ? true : nil)
     }
 
-    /// Every open chat, window by window, tab order.
+    /// Every chat this caller may read, window by window, tab order.
     static func chats(own: String?) -> [AgentChat] {
-        workspaces().flatMap { w in LinkSnapshot.chats(w).map { chat($0, in: w, own: own) } }
+        readable(own: own).map { chat($0, in: workspace(of: $0), own: own) }
     }
 
     static func detail(_ chat: Chat, own: String?) -> AgentChatDetail {

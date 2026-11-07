@@ -170,7 +170,10 @@ private struct NoLongPass: Step {
 final class AgentFlood: ChatStoryline {
     override class var tags: Set<Tag> { [.agentFlood] }
     override class var variants: [Variant] { [.claude] }
-    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Ready.")]) }
+    /// Long answers, to read a long page of.
+    static let long = String(repeating: "Some ordinary words of a long answer, with a path /src/app.swift:12 and a sha 8d4f6bc. ", count: 190)
+    static let turns = 5
+    override class var script: CLIScript { CLIScript(turns: (0..<turns).map { _ in CLIScript.reply(long) }) }
 
     override func steps() -> [any Step] {
         let directory = URL(fileURLWithPath: "/tmp/kaf-\(UUID().uuidString.prefix(8))", isDirectory: true)
@@ -198,6 +201,25 @@ final class AgentFlood: ChatStoryline {
             NoLongPass(),
             fresh(),
             Phase("hold", [HoldSlots()]),
+            Do("masking a page at its worst: 200 rows of 16 KiB") { story in
+                let row = String(repeating: "Some ordinary words of a long answer, with a path /src/app.swift:12 and a sha 8d4f6bc. ", count: 190)
+                let began = ContinuousClock.now
+                for _ in 0..<200 { _ = AgentSecrets.mask(row) }
+                AgentCast.of(story).note(String(format: "mask, off the main thread: %d rows of %d bytes %.1f ms", 200, row.utf8.count, ProcessCost.seconds(ContinuousClock.now - began) * 1000), to: story.outputs)
+            },
+            // A long page: built on the main thread, encoded and masked off it.
+            fresh(),
+            Do("a has Watch") { story in
+                let cast = AgentCast.of(story)
+                cast.chats["a"] = try story.activeChat()
+                AgentGrants.set(.watch, chat: try cast.id("a"))
+            },
+        ] + (1...Self.turns).flatMap { turn -> [any Step] in
+            [SendTo("a", "again \(turn)"), TurnsDone("a", turn)]
+        } + [
+            WaitIdle(),
+            Phase("long-page", [KoreAs(["log", "{a}", "-n", "10", "--json"], .chat("a"), "a page of long rows") { status, out, _ in status == 0 && out.utf8.count > 80_000 }]),
+            NoLongPass(),
         ]
     }
 }

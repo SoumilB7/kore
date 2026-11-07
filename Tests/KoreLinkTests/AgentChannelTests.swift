@@ -139,6 +139,86 @@ struct AgentGrantTests {
     }
 }
 
+@Suite("agent secrets")
+struct AgentSecretsTests {
+    // Built here so that nothing in the repository looks like a key to a scanner.
+    static let tail = String(repeating: "a1B2c3D4", count: 5)
+
+    static let shapes: [String] = {
+        var out: [String] = []
+        out.append("sk-" + tail)
+        out.append("sk-ant-api03-" + tail)
+        out.append("sk_" + "live_" + tail)
+        out.append("gh" + "p_" + tail)
+        out.append("github" + "_pat_" + tail)
+        out.append("AKIA" + "IOSFODNN7EXAMPLE")
+        out.append("xox" + "b-1234-" + tail)
+        out.append("AIza" + tail)
+        out.append("glpat-" + tail)
+        out.append("npm_" + tail)
+        out.append("hf_" + tail)
+        out.append("eyJ" + tail + ".eyJ" + tail + "." + tail)
+        return out
+    }()
+
+    @Test(arguments: shapes)
+    func keysAreMasked(_ key: String) {
+        let out = AgentSecrets.mask("before \(key) after")
+        #expect(out == "before \(AgentSecrets.mask) after")
+    }
+
+    struct Line: Codable, Equatable {
+        var a: String
+        var b: String
+    }
+
+    /// A line as the channel encodes it: masked, and still valid JSON with its fields apart.
+    func encoded(_ a: String, _ b: String = "next") throws -> Line {
+        try JSONDecoder().decode(Line.self, from: AgentChannel.encode(Line(a: a, b: b)))
+    }
+
+    @Test(arguments: shapes)
+    func keysAreMaskedInALine(_ key: String) throws {
+        #expect(try encoded("before \(key) after") == Line(a: "before \(AgentSecrets.mask) after", b: "next"))
+    }
+
+    @Test func maskingKeepsALineValid() throws {
+        // Named values, quoted and on lines of their own.
+        #expect(try encoded("{\"api_key\": \"abcdefgh1234\"}").a == "{\"api_key\": \"\(AgentSecrets.mask)\"}")
+        #expect(try encoded("line\nAPI_KEY=abcdefgh1234\nline").a == "line\nAPI_KEY=\(AgentSecrets.mask)\nline")
+        // A private key cut off by a cap: masked to the string's end, the next field untouched.
+        let cut = "-----BEGIN RSA PRIVATE " + "KEY-----\nabc\ndef"
+        #expect(try encoded("a \(cut)", "kept") == Line(a: "a \(AgentSecrets.mask)", b: "kept"))
+        // What only looks like one across two fields stays as it is.
+        #expect(try encoded("https://me:", "pass@host") == Line(a: "https://me:", b: "pass@host"))
+        #expect(try encoded("password", "abcdefgh1234") == Line(a: "password", b: "abcdefgh1234"))
+    }
+
+    @Test func aPrivateKeyIsMaskedToItsEndOrTheEndOfTheText() {
+        let body = "-----BEGIN RSA PRIVATE " + "KEY-----\nabc\ndef\n"
+        #expect(AgentSecrets.mask("a \(body)-----END RSA PRIVATE KEY----- b") == "a \(AgentSecrets.mask) b")
+        #expect(AgentSecrets.mask("a \(body)") == "a \(AgentSecrets.mask)")
+    }
+
+    @Test func aNamedValueKeepsItsName() {
+        #expect(AgentSecrets.mask("API_KEY=abcdefgh1234") == "API_KEY=\(AgentSecrets.mask)")
+        #expect(AgentSecrets.mask("\"client_secret\": \"abcdefgh1234\"") == "\"client_secret\": \"\(AgentSecrets.mask)\"")
+        #expect(AgentSecrets.mask("password: abcdefgh") == "password: \(AgentSecrets.mask)")
+        #expect(AgentSecrets.mask("Authorization: Bearer " + Self.tail) == "Authorization: Bearer \(AgentSecrets.mask)")
+        #expect(AgentSecrets.mask("postgres://me:abcdefgh@db/x") == "postgres://me:\(AgentSecrets.mask)@db/x")
+    }
+
+    static let ordinary: [String] = [
+        "1A2B3C4D-0000-0000-0000-000000000001", "8d4f6bc2e1a94f0b8d4f6bc2e1a94f0b8d4f6bc2", "the task-management-and-risk-assessment-framework",
+        "input_tokens: 12345678", "password: short", "see the secret plan", "https://example.com:8080/path", "/Users/me/src/app.swift:12",
+    ]
+
+    @Test(arguments: ordinary)
+    func ordinaryTextIsLeftAlone(_ text: String) {
+        #expect(AgentSecrets.mask(text) == text)
+    }
+}
+
 @MainActor
 @Suite("agent channel", .serialized)
 struct AgentChannelTests {

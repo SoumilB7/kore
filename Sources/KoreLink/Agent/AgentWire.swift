@@ -87,22 +87,20 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     /// Rows to read (`tx.read`, `tx.follow`), and the row to read back from.
     package var last: Int?
     package var before: String?
-    /// A window's folder (`history.list`), else the one holding `cwd`.
+    /// `history.list`: the folder asked for, which has to be the caller's own chat's.
     package var folder: String?
-    package var cwd: String?
     package var query: String?
     package var archived: Bool?
     package var offset: Int?
 
     package init(
-        chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, cwd: String? = nil, query: String? = nil,
+        chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, query: String? = nil,
         archived: Bool? = nil, offset: Int? = nil
     ) {
         self.chat = chat
         self.last = last
         self.before = before
         self.folder = folder
-        self.cwd = cwd
         self.query = query
         self.archived = archived
         self.offset = offset

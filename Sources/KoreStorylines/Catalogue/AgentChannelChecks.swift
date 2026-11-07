@@ -21,6 +21,8 @@ extension Tag {
 /// end, pass or fail: no grant, the switch off, no socket folder.
 @MainActor
 final class AgentCast: StoryFinishing {
+    /// The second folder's path, for a run with a chat in another window.
+    var otherFolder: String?
     var chats: [String: Chat] = [:]
     var followers: [String: KoreRun] = [:]
     var notes: [String] = []
@@ -39,6 +41,7 @@ final class AgentCast: StoryFinishing {
     /// `{a}` → chat a's short id, `{a.id}` → its id, `{a.title}` → its title, `{sock}` → the socket.
     func fill(_ text: String) throws -> String {
         var out = text.replacingOccurrences(of: "{sock}", with: AgentWatchReads.socketPath)
+        if let otherFolder { out = out.replacingOccurrences(of: "{d.folder}", with: otherFolder) }
         for (role, chat) in chats {
             out = out.replacingOccurrences(of: "{\(role).id}", with: chat.id.uuidString)
             out = out.replacingOccurrences(of: "{\(role).title}", with: chat.title)
@@ -1199,12 +1202,138 @@ final class AgentClosedWindow: ChatStoryline {
                 AgentGrants.stopAll()
                 AgentGrants.setEnabled(true)
                 AgentGrants.setExternal(.watch)
+                AgentGrants.set(.watch, chat: try story.activeChat().id.uuidString)
             },
             KoreAs(["ls"], .outside(), "the chat is listed") { status, out, _ in status == 0 && !out.contains("No chats are open.") },
             Do("close its window") { story in story.window?.close() },
             Expect("the window is closed") { story in story.window?.isVisible == false },
             KoreAs(["ls"], .outside(), "nothing is listed") { status, out, _ in status == 0 && out.contains("No chats are open.") },
         ]
+    }
+}
+
+/// What a Watch grant reads: chats in the caller's own folder and chats whose own access is above
+/// Off, and a chat in another folder with access off isn't there, not even by its id. Text that
+/// looks like a key comes back masked.
+final class AgentWatchLimit: ChatStoryline {
+    override class var tags: Set<Tag> { [.agentChannel, .gate] }
+    // Made up here so that nothing in the repository looks like a key to a scanner.
+    static let apiKey = "sk-" + String(repeating: "a1B2c3D4", count: 4)
+    static let codeKey = "gh" + "p_" + String(repeating: "Z9y8X7w6", count: 4)
+    static let password = "hunter" + "2-is-long"
+    static let leaky = "Use \(apiKey) and \(codeKey), password: \(password), done."
+    static let card = Approval(id: "ls1", title: "Run ls -la", detail: "List the folder", body: "ls -la", canAlwaysAllow: false, questions: [])
+    override class var script: CLIScript {
+        CLIScript(turns: [
+            CLIScript.reply(leaky),
+            [.startTurn, .approval(card, allow: Beat.answer("Listed."), deny: []), .finishTurn(.completed)],
+        ])
+    }
+
+    static func shows(_ role: String, _ out: String, _ story: StoryContext) throws -> Bool {
+        out.contains(try AgentCast.of(story).fill("{\(role)}"))
+    }
+
+    static func masked(_ out: String) -> Bool {
+        out.contains(AgentSecrets.mask) && ![apiKey, codeKey, password].contains { out.contains($0) }
+    }
+
+    override func steps() -> [any Step] {
+        let directory = URL(fileURLWithPath: "/tmp/kaw-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let a = KoreCaller.chat("a")
+        let missing = "No open chat matches"
+        return super.steps() + [
+            Do("agent control on; a has Watch") { story in
+                let cast = AgentCast.of(story)
+                cast.directory = directory
+                cast.chats["a"] = try story.activeChat()
+                AgentChannel.directory = directory
+                AgentGrants.stopAll()
+                AgentGrants.setEnabled(true)
+                AgentGrants.set(.watch, chat: try cast.id("a"))
+            },
+            SendTo("a", "hello from here"), TurnsDone("a", 1),
+            CastChat("b"),
+            OtherFolderChat(role: "d"),
+            SendTo("d", "plans over there"), TurnsDone("d", 1),
+            SendTo("d", "list it"),
+            WaitingOnCard(role: "d"),
+
+            // Another folder, access off: not there.
+            KoreAs(["ls"], a, "lists its folder's chats, off or not, and not the other's") { status, out, story in
+                try status == 0 && Self.shows("a", out, story) && Self.shows("b", out, story) && !Self.shows("d", out, story)
+            },
+            KoreAs(["ls", "--json"], a, "nor in JSON") { status, out, story in try status == 0 && Self.shows("a", out, story) && !Self.shows("d", out, story) },
+            KoreAs(["show", "{d}"], a, "show refused, by short id", status: 1, says: missing),
+            KoreAs(["show", "{d.id}"], a, "show refused, by whole id", status: 1, says: missing),
+            KoreAs(["show", "{d.title}"], a, "show refused, by title", status: 1, says: missing),
+            KoreAs(["log", "{d}"], a, "log refused", status: 1, says: missing),
+            KoreAs(["log", "{d}", "-f"], a, "follow refused", status: 1, says: missing),
+            KoreAs(["pending", "{d}"], a, "its cards refused", status: 1, says: missing),
+            KoreAs(["pending"], a, "its cards not listed") { status, out, _ in status == 0 && out.contains("Nothing is waiting") },
+            KoreAs(["history", "--folder", "{d.folder}"], a, "its folder's past chats refused", status: 1, says: "own folder"),
+
+            // Its access on: there. Its access off again: gone, and a follow of it ends.
+            Do("d gets Watch") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("d")) },
+            KoreAs(["ls"], a, "now listed") { status, out, story in try status == 0 && Self.shows("d", out, story) },
+            KoreAs(["pending"], a, "and its card", expect: [Self.card.title]),
+            StartFollower("f", ["log", "{d}", "-f", "--json"], a),
+            Do("d's access off") { story in AgentGrants.set(.off, chat: try AgentCast.of(story).id("d")) },
+            Followed("f", "the follow is told and ends", timeout: .seconds(5)) { out, status, _ in status != nil && out.contains("\"event\":\"gone\"") },
+            KoreAs(["show", "{d}"], a, "refused again", status: 1, says: missing),
+
+            // A caller outside Kore's chats has no folder: only what's above Off, and no history.
+            Do("outsiders may watch (the seam)") { _ in AgentGrants.setExternal(.watch) },
+            KoreAs(["ls"], .outside(), "outside: only a, the chat with access") { status, out, story in
+                try status == 0 && Self.shows("a", out, story) && !Self.shows("b", out, story) && !Self.shows("d", out, story)
+            },
+            KoreAs(["log", "{b}"], .outside(), "outside: an Off chat refused", status: 1, says: missing),
+            KoreAs(["log", "{d}"], .outside(), "outside: another folder's Off chat refused", status: 1, says: missing),
+            KoreAs(["history"], .outside(), "outside: no past chats", status: 1, says: "only from a chat in Kore"),
+            Do("outsiders off") { _ in AgentGrants.setExternal(.off) },
+
+            // What looks like a key.
+            KoreAs(["log", "{a}"], a, "keys masked in text") { status, out, _ in status == 0 && Self.masked(out) },
+            KoreAs(["log", "{a}", "--json"], a, "and in JSON") { status, out, _ in status == 0 && Self.masked(out) },
+            Do("close the other window") { story in
+                let chat = try AgentCast.of(story).chat("d")
+                Workspace.all.allObjects.first { $0.tabs.contains { $0.chat === chat } }?.window?.close()
+            },
+        ]
+    }
+
+    /// A chat in a window of another folder, by role.
+    private struct OtherFolderChat: Step {
+        let role: String
+        var label: String { "chat “\(role)” in another folder's window" }
+        var timeout: Duration? { .seconds(20) }
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            guard let model = AppModel.shared else { throw StoryFailure.other("the app model isn't up") }
+            // Its own for each variant: a closed window of the same folder can stay in `Workspace.all`.
+            let folder = story.outputs.appendingPathComponent("other-\(story.folder.lastPathComponent)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            model.openFolder(folder)
+            let path = folder.standardizedFileURL.path
+            let workspace = try await story.wait("its window") {
+                Workspace.all.allObjects.first { $0.window != nil && !$0.isClosed && $0.folder.standardizedFileURL.path == path }
+            }
+            guard workspace.start(provider: story.variant?.provider ?? "claude", model: nil) else { throw StoryFailure.modelMissing("the provider") }
+            let cast = AgentCast.of(story)
+            cast.chats[role] = try await story.wait("its chat") { workspace.activeTab.chat }
+            cast.otherFolder = path
+        }
+    }
+
+    private struct WaitingOnCard: Step {
+        let role: String
+        var label: String { "“\(role)” is waiting on a card" }
+        var timeout: Duration? { .seconds(10) }
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            let chat = try AgentCast.of(story).chat(role)
+            try await story.until("the card", timeout: timeout) { if case .waiting = chat.attention { true } else { false } }
+        }
     }
 }
 
@@ -1267,6 +1396,7 @@ final class AgentSafety: ChatStoryline {
                 AgentGrants.stopAll()
                 AgentGrants.setEnabled(true)
                 AgentGrants.setExternal(.watch)
+                AgentGrants.set(.watch, chat: try story.activeChat().id.uuidString)
             },
             SendTo("a", "hello"), TurnsDone("a", 1),
             KoreAs(["log", "{a}"], .outside(), "chat text can't drive the terminal") { status, out, _ in
@@ -1338,11 +1468,12 @@ final class AgentQuitPath: ChatStoryline {
         let directory = URL(fileURLWithPath: folder, isDirectory: true)
         let quits = env["KORE_AGENT_QUIT_HOW"] == "quit"
         return super.steps() + [
-            Do("agent control on at the script's socket, a terminal may watch") { story in
+            Do("agent control on at the script's socket, a terminal may watch the chat") { story in
                 AgentChannel.directory = directory
                 AgentGrants.stopAll()
                 AgentGrants.setEnabled(true)
                 AgentGrants.setExternal(.watch)
+                AgentGrants.set(.watch, chat: try story.activeChat().id.uuidString)
             },
             Expect("the socket") { _ in AgentChannel.current != nil },
             Do("tell the script") { story in

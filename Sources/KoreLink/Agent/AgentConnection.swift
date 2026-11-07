@@ -109,11 +109,11 @@ final class AgentConnection: @unchecked Sendable {
         }
     }
 
-    /// Queues one line (any thread).
-    func send(_ line: Data) {
+    /// Queues one line, made on this connection's queue (from any thread), in the order asked.
+    func send(_ line: @escaping @Sendable () -> Data) {
         queue.async { [weak self] in
             guard let self, !self.closed else { return }
-            self.outbox.append(line)
+            self.outbox.append(line())
             self.outbox.append(0x0A)
             guard self.outbox.count <= Self.backlogMax else { return self.shut() }
             self.flush()
