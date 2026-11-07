@@ -80,8 +80,8 @@ enum AgentReads {
         let id = chat.id.uuidString
         return LinkSnapshot.cards(chat).map { card in
             AgentCard(
-                chat: id, chatShort: short(id), chatTitle: chat.title, id: card.id, kind: card.kind.rawValue, title: card.title,
-                detail: card.detail, body: card.body,
+                chat: id, chatShort: short(id), chatTitle: chat.title, id: card.id, kind: card.kind.rawValue, title: LinkSnapshot.capped(card.title, LinkSnapshot.inputCap).text,
+                detail: card.detail.map { LinkSnapshot.capped($0, LinkSnapshot.bodyCap).text }, body: card.body.map { LinkSnapshot.capped($0, LinkSnapshot.bodyCap).text },
                 questions: card.questions?.map { .init(text: $0.text, options: $0.options.map(\.label)) })
         }
     }
@@ -105,7 +105,7 @@ enum AgentReads {
         var tool: AgentRow.Tool?
         if e.kind == .tool, let name = e.toolName {
             tool = AgentRow.Tool(
-                name: name, summary: e.summary, path: e.path.map { LinkSnapshot.relative($0, to: folder) },
+                name: name, summary: e.summary.map { LinkSnapshot.capped($0, LinkSnapshot.inputCap).text }, path: e.path.map { LinkSnapshot.relative($0, to: folder) },
                 input: e.input.map { LinkSnapshot.capped($0, LinkSnapshot.inputCap).text }, result: e.result.map(LinkSnapshot.headAndTail))
         }
         return AgentRow(

@@ -44,8 +44,17 @@ package enum AgentCaller {
     /// That process and its chain of parents, read now. Nil if the walk can't be trusted: some
     /// process on the way went while reading it, or the token changed by the end of it.
     package static func peer(_ fd: Int32, pid: pid_t, token: Data) -> Peer? {
-        guard let tree = chain(of: pid, parent: ProcessChild.parent(of:)), LinkIdentity.peerToken(fd) == token else { return nil }
+        guard let tree = chain(of: pid, parent: parent(of:)), LinkIdentity.peerToken(fd) == token else { return nil }
         return Peer(pid: pid, token: token, ancestors: tree)
+    }
+
+    /// A process's parent, also when it's root's (Terminal's `login`, sshd): the short record is
+    /// open to any user, the full one isn't. Nil if it has gone.
+    package static func parent(of pid: pid_t) -> pid_t? {
+        var info = proc_bsdshortinfo()
+        let size = Int32(MemoryLayout<proc_bsdshortinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, &info, size) == size, info.pbsi_status != SZOMB else { return nil }
+        return pid_t(info.pbsi_ppid)
     }
 
     /// `ancestors`, or nil if a process on the way doesn't answer: gone isn't the same as external.

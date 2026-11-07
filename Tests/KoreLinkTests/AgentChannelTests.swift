@@ -182,6 +182,25 @@ struct AgentSecretsTests {
         #expect(try encoded("before \(key) after") == Line(a: "before \(AgentSecrets.mask) after", b: "next"))
     }
 
+    /// In a line, a key right after an escape has no word boundary before it.
+    @Test(arguments: ["\n", "\t", "\r", "\u{07}"])
+    func aKeyAfterAnEscapeIsMasked(_ escape: String) throws {
+        for key in Self.shapes {
+            #expect(try encoded("before\(escape)\(key)\(escape)after").a == "before\(escape)\(AgentSecrets.mask)\(escape)after")
+        }
+        #expect(try encoded("x\(escape)Bearer " + Self.tail).a == "x\(escape)Bearer \(AgentSecrets.mask)")
+        #expect(try encoded("x\(escape)postgres://me:abcdefgh@db").a == "x\(escape)postgres://me:\(AgentSecrets.mask)@db")
+        #expect(try encoded("password:\(escape == "\u{07}" ? " " : escape)abcdefgh1234").a.hasSuffix(AgentSecrets.mask))
+    }
+
+    @Test func maskingStaysQuickOnALongRun() {
+        let run = "echo " + String(repeating: "a", count: 200 * 1024)
+        let began = ContinuousClock.now
+        #expect(AgentSecrets.mask(run) == run)
+        // Quadratic, this took minutes; a debug build on a busy machine has plenty of room.
+        #expect(ContinuousClock.now - began < .seconds(5))
+    }
+
     @Test func maskingKeepsALineValid() throws {
         // Named values, quoted and on lines of their own.
         #expect(try encoded("{\"api_key\": \"abcdefgh1234\"}").a == "{\"api_key\": \"\(AgentSecrets.mask)\"}")
@@ -216,6 +235,75 @@ struct AgentSecretsTests {
     @Test(arguments: ordinary)
     func ordinaryTextIsLeftAlone(_ text: String) {
         #expect(AgentSecrets.mask(text) == text)
+    }
+}
+
+@Suite("agent connection")
+struct AgentConnectionTests {
+    final class Seen: @unchecked Sendable {
+        let lock = NSLock()
+        var moved = 0
+        var lines = 0
+        func moved(_ note: Void) { lock.withLock { moved += 1 } }
+    }
+
+    /// A connection on one end of a socket pair whose peer token is `now`, not what it was made with.
+    func connection(_ seen: Seen, token now: Data) -> (AgentConnection, Int32) {
+        var pair: [Int32] = [0, 0]
+        _ = socketpair(AF_UNIX, SOCK_STREAM, 0, &pair)
+        var on: Int32 = 1
+        setsockopt(pair[0], SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        let connection = AgentConnection(
+            fd: pair[0], queue: DispatchQueue(label: "agent-connection-test"), token: Data([1]), peerToken: { _ in now },
+            onLines: { _ in seen.lock.withLock { seen.lines += 1 } }, onMoved: { seen.moved(()) }, onClose: {}, onGone: {})
+        connection.start()
+        return (connection, pair[1])
+    }
+
+    func settled(_ seen: Seen, _ wanted: @Sendable (Seen) -> Bool) async throws -> Bool {
+        for _ in 0..<100 {
+            if seen.lock.withLock({ wanted(seen) }) { return true }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    @Test func anotherProcessSendingIsNoticed() async throws {
+        let seen = Seen()
+        let (connection, other) = connection(seen, token: Data([2]))
+        defer {
+            connection.finish()
+            Darwin.close(other)
+        }
+        _ = write(other, "x\n", 2)
+        #expect(try await settled(seen) { $0.moved == 1 && $0.lines == 0 })
+    }
+
+    @Test func anotherProcessOnlyReadingIsNoticedWhenKoreSends() async throws {
+        let seen = Seen()
+        let (connection, other) = connection(seen, token: Data([2]))
+        defer {
+            connection.finish()
+            Darwin.close(other)
+        }
+        // A follower's events: told once, and nothing goes out to it.
+        connection.send { Data("{}".utf8) }
+        connection.send { Data("{}".utf8) }
+        #expect(try await settled(seen) { $0.moved == 1 })
+        var byte: UInt8 = 0
+        _ = fcntl(other, F_SETFL, fcntl(other, F_GETFL) | O_NONBLOCK)
+        #expect(read(other, &byte, 1) < 0)
+    }
+
+    @Test func theSameProcessGoesOn() async throws {
+        let seen = Seen()
+        let (connection, other) = connection(seen, token: Data([1]))
+        defer {
+            connection.finish()
+            Darwin.close(other)
+        }
+        _ = write(other, "x\n", 2)
+        #expect(try await settled(seen) { $0.lines == 1 && $0.moved == 0 })
     }
 }
 
@@ -460,21 +548,47 @@ struct AgentChannelTests {
         AgentGrants.setExternal(.watch)
         let path = Self.socket(directory)
         let held = AgentSlots.perProcess
-        let (kept, closed): (Int, Int) = await off {
+        let (kept, told): (Int, [String]) = await off {
             let clients = (0..<held + 3).compactMap { _ in AgentTestClient(path: path) }
             defer { clients.forEach { $0.close() } }
-            var closed = 0
+            var told: [String] = []
             var kept = 0
             for client in clients {
                 var timeout = timeval(tv_sec: 0, tv_usec: 200_000)
                 setsockopt(client.fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-                var byte: UInt8 = 0
-                let n = read(client.fd, &byte, 1)
-                if n == 0 { closed += 1 } else { kept += 1 }
+                if let bye = client.next() { told.append(bye["code"] as? String ?? "?") } else { kept += 1 }
             }
-            return (kept, closed)
+            return (kept, told)
         }
-        #expect(kept == held && closed == 3)
+        // The rest are told why, not just closed.
+        #expect(kept == held && told == ["rate_limited", "rate_limited", "rate_limited"])
+    }
+
+    @Test func aClosedConnectionIsFreed() async throws {
+        let directory = Self.reset()
+        defer { AgentGrants.stopAll() }
+        AgentGrants.setEnabled(true)
+        AgentGrants.setExternal(.watch)
+        let path = Self.socket(directory)
+        let client = try #require(await off { AgentTestClient(path: path) })
+        #expect(await off { client.hello() }?["type"] as? String == "welcome")
+        weak let connection = AgentChannel.current?.newestConnection
+        #expect(connection != nil)
+        // A line that never ends, then gone.
+        await off {
+            client.send(["type": String(repeating: "a", count: 1024)])
+            let part = Data(repeating: 0x61, count: 32 * 1024)
+            _ = part.withUnsafeBytes { write(client.fd, $0.baseAddress, $0.count) }
+            client.close()
+        }
+        for _ in 0..<100 where connection != nil { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(connection == nil && AgentChannel.current?.connections == 0)
+    }
+
+    @Test func rootsProcessesAreReadable() {
+        // launchd is root's: the full record would refuse this, and a Terminal's `login` with it.
+        #expect(AgentCaller.parent(of: 1) != nil)
+        #expect(AgentCaller.parent(of: getpid()) == getppid())
     }
 
     @Test func thirtyCommandsAMinute() async throws {

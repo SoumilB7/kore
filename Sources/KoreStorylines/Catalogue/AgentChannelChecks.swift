@@ -550,7 +550,8 @@ final class AgentChannelAll: ChatStoryline {
             },
             Do("stop that turn") { story in try AgentCast.of(story).chat("a").storyStop() },
             TurnsDone("a", 3),
-            SendTo("a", Self.fourth), TurnsDone("a", 4),
+            // A long stream: slow on Codex under load (38 s and over 60 s measured), on main too.
+            SendTo("a", Self.fourth), TurnsDone("a", 4, timeout: .seconds(180)),
             Followed("text", "printed the streamed answer whole, once") { out, _, _ in
                 out.components(separatedBy: Self.long).count == 2 && out.hasSuffix("· idle\n")
             },

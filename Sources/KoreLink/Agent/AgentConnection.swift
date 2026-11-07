@@ -20,6 +20,8 @@ final class AgentConnection: @unchecked Sendable {
     private var closed = false
     /// A batch is with the main thread: the reader is suspended.
     private var waiting = false
+    /// `onMoved` has run.
+    private var toldMoved = false
     /// The peer's token as now, to compare: nil once it has gone.
     private let peerToken: @Sendable (Int32) -> Data?
     private let token: Data
@@ -28,9 +30,8 @@ final class AgentConnection: @unchecked Sendable {
     private let onClose: @Sendable () -> Void
     private let onGone: @Sendable () -> Void
 
-    /// `token`: whose this connection is. `onLines` and `onMoved` end with `batchDone()`.
-    /// `onMoved`: another process is using it. `onClose`: it ended by itself. `onGone`: it ended,
-    /// either way, once.
+    /// `token`: whose this connection is. `onLines` ends with `batchDone()`. `onMoved`: another
+    /// process is using it, once. `onClose`: it ended by itself. `onGone`: it ended, either way, once.
     init(
         fd: Int32, queue: DispatchQueue, token: Data, peerToken: @escaping @Sendable (Int32) -> Data?,
         onLines: @escaping @Sendable ([Data]) -> Void, onMoved: @escaping @Sendable () -> Void,
@@ -95,7 +96,9 @@ final class AgentConnection: @unchecked Sendable {
         switch peerToken(fd) {
         case token: onLines(lines)
         case nil: shut()
-        default: onMoved()
+        default:
+            toldMoved = true
+            onMoved()
         }
     }
 
@@ -109,10 +112,21 @@ final class AgentConnection: @unchecked Sendable {
         }
     }
 
-    /// Queues one line, made on this connection's queue (from any thread), in the order asked.
+    /// Queues one line, made on this connection's queue (from any thread), in the order asked. A
+    /// caller that only reads, a follower, is checked here: reading names it to the kernel too.
     func send(_ line: @escaping @Sendable () -> Data) {
         queue.async { [weak self] in
             guard let self, !self.closed else { return }
+            switch self.peerToken(self.fd) {
+            case self.token: break
+            case nil: return self.shut()
+            default:
+                if !self.toldMoved {
+                    self.toldMoved = true
+                    self.onMoved()
+                }
+                return
+            }
             self.outbox.append(line())
             self.outbox.append(0x0A)
             guard self.outbox.count <= Self.backlogMax else { return self.shut() }
@@ -179,6 +193,7 @@ final class AgentConnection: @unchecked Sendable {
         if let reader { reader.cancel() } else { Darwin.close(fd) }
         reader = nil
         outbox = Data()
+        inbox = Data()
         onGone()
         if notify { onClose() }
     }

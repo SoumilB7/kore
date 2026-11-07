@@ -96,13 +96,13 @@ package final class AgentChannel {
                 return
             }
             guard slots.take(who.pid) else {
-                Darwin.close(fd)
+                Self.turnAway(fd, Self.tooMany)
                 if slots.noteTurnedAway() { LinkHost.onMain { UILog.event("agent-throttled", ["what": "connections"]) } }
                 return
             }
             guard let peer = AgentCaller.peer(fd, pid: who.pid, token: who.token) else {
                 slots.release(who.pid)
-                Darwin.close(fd)
+                Self.turnAway(fd, Self.unknownProcess)
                 return
             }
             LinkHost.onMain {
@@ -118,6 +118,18 @@ package final class AgentChannel {
             MainActor.assumeIsolated { AgentChannel.current?.close(.stopped) }
         }
         UILog.event("agent-open")
+    }
+
+    /// What a connection turned away on the queue is told. Made once: this path is what a process
+    /// reconnecting in a loop keeps hitting.
+    private nonisolated static let tooMany = encode(AgentBye(code: .rateLimited, message: "Too many connections to Kore from this process, or at once.")) + Data([0x0A])
+    private nonisolated static let unknownProcess = encode(AgentBye(code: .mismatch, message: "Kore couldn't tell which process this is.")) + Data([0x0A])
+
+    /// Says why, as far as the socket's buffer takes it without waiting, and closes.
+    private nonisolated static func turnAway(_ fd: Int32, _ line: Data) {
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        _ = line.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        Darwin.close(fd)
     }
 
     /// Closes every connection (with `bye`) and the socket, and lets go of every hook.
@@ -202,6 +214,7 @@ package final class AgentChannel {
             onClose: { [weak self] in LinkHost.onMain { self?.dropped(token) } },
             onGone: { slots.release(pid) })
         holder.connection = connection
+        newestConnection = connection
         clients[token] = Client(token: token, connection: connection, peer: peer)
         connection.start()
         DispatchQueue.main.asyncAfter(deadline: .now() + AgentProto.helloWithin) { [weak self] in
@@ -214,7 +227,7 @@ package final class AgentChannel {
 
     /// Lets a connection's callbacks reach it, once it's made.
     private final class ConnectionHolder: @unchecked Sendable {
-        var connection: AgentConnection?
+        weak var connection: AgentConnection?
     }
 
     /// Another process is using this connection: it isn't who Kore named.
@@ -543,6 +556,8 @@ package final class AgentChannel {
 
     /// Connections open now.
     package var connections: Int { clients.count }
+    /// The last connection made, while anything holds it: tests see it go.
+    weak var newestConnection: AgentConnection?
     /// Callers named by their hello, as `chat:<id>` or `external`.
     package var callers: [String] { clients.values.filter(\.named).map(\.key).sorted() }
 }

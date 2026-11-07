@@ -9,9 +9,15 @@ import Foundation
 package enum AgentSecrets {
     package static let mask = "[masked]"
 
-    /// Whole matches are keys. `\b` first, so "task-" isn't "sk-".
+    /// Where a key can begin: a word's start, or just after an escape in encoded JSON, where the
+    /// escape's last letter or digit would hide the boundary (`\n`, `\t`, `\r`, `\u0007`).
+    private static let start = #"(?:(?<=\\[nrt])|(?<=\\u[0-9a-fA-F]{4})|\b)"#
+    /// Space, or an escaped one in encoded JSON.
+    private static let gap = #"(?:\s|\\[nrt])"#
+
+    /// Whole matches are keys. `start` first, so "task-" isn't "sk-".
     private static let keys = regex(
-        #"\b(?:sk-[A-Za-z0-9_-]{16,}"#
+        start + #"(?:sk-[A-Za-z0-9_-]{16,}"#
             + #"|(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}"#
             + #"|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"#
             + #"|(?:AKIA|ASIA)[0-9A-Z]{16}"#
@@ -26,10 +32,11 @@ package enum AgentSecrets {
     /// What names itself: the name stays, the value goes. An all-digit value is a count. Quotes
     /// around it may be escaped, in a JSON string.
     private static let named = regex(
-        #"(?i)((?:api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key|auth[_-]?key)[A-Za-z0-9_-]{0,32}(?:\\?["'])?\s{0,3}[:=]\s{0,3}(?:\\?["'])?)(?!\d+\b)[^\s"',;\\]{8,}"#)
-    private static let bearer = regex(#"(?i)(\bbearer\s+)[A-Za-z0-9._~+/-]{16,}=*"#)
-    /// `scheme://user:password@host`.
-    private static let inURL = regex(#"([a-z][a-z0-9+.-]*://[^/\s:@"\\]+:)[^/\s@"\\]+(@)"#)
+        #"(?i)((?:api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key|auth[_-]?key)[A-Za-z0-9_-]{0,32}(?:\\?["'])?"# + gap + "{0,3}[:=]" + gap + #"{0,3}(?:\\?["'])?)(?!\d+\b)[^\s"',;\\]{8,}"#)
+    private static let bearer = regex("(?i)(" + start + "bearer" + gap + #"{1,4})[A-Za-z0-9._~+/-]{16,}=*"#)
+    /// `scheme://user:password@host`, found from its `://`: from the scheme's start, a long run
+    /// of letters takes quadratic time (27 s for 50 KB).
+    private static let inURL = regex(#"(://[^/\s:@"\\]+:)[^/\s@"\\]+(@)"#)
 
     private static func regex(_ pattern: String) -> NSRegularExpression {
         // Fixed patterns, checked by the tests: one that didn't compile matches nothing.
