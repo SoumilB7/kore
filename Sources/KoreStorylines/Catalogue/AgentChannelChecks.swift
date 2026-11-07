@@ -1531,9 +1531,15 @@ private struct EndOnceFollowed: Step {
     @MainActor func run(_ story: StoryContext) async throws {
         try await story.until("a follower", timeout: .seconds(60)) { AgentTaps.on }
         if quits {
+            // ⌘Q once only warns: agent control and its follower carry on.
+            QuitGuard.shared.press(byKey: true, hasWindow: true)
+            guard QuitGuard.shared.armed, AgentChannel.current != nil, AgentTaps.on else {
+                throw StoryFailure.expectation("agent control still on, and its follower, after one ⌘Q")
+            }
             // What says the follower was on when Kore quit: this host writes no report.
             try "".write(to: directory.appendingPathComponent("quitting"), atomically: true, encoding: .utf8)
-            NSApp.terminate(nil)
+            // The second is the quit.
+            QuitGuard.shared.press(byKey: true, hasWindow: true)
         }
         try await Task.sleep(for: .seconds(60))
     }

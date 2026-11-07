@@ -49,6 +49,10 @@ package struct KoreApp: App {
             CommandGroup(replacing: .saveItem) {}
             // ⌘P is quick open.
             CommandGroup(replacing: .printItem) {}
+            // ⌘Q takes two (`QuitGuard`).
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit Kore") { QuitGuard.shared.menuItem() }.keyboardShortcut("q")
+            }
             CommandGroup(before: .toolbar) {
                 ExplorerCommands()
             }
@@ -180,7 +184,7 @@ private struct WindowActions: ViewModifier {
     @Environment(\.dismissWindow) private var dismissWindow
 
     func body(content: Content) -> some View {
-        content.onAppear { app.setWindowActions(openWindow: openWindow, dismissWindow: dismissWindow) }
+        content.overlay(alignment: .top) { QuitNotice() }.onAppear { app.setWindowActions(openWindow: openWindow, dismissWindow: dismissWindow) }
     }
 }
 

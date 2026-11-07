@@ -60,6 +60,7 @@ extension StoryID {
     package enum Titlebar {
         package static let explorer = StoryID(.titlebar, "explorer")
         package static let history = StoryID(.titlebar, "history")
+        package static let quitNotice = StoryID(.titlebar, "quitnotice")
         package static let agents = StoryID(.titlebar, "agents")
         /// ">_ 2": the chat's live background commands; opens the map at them.
         package static let commands = StoryID(.titlebar, "commands")
