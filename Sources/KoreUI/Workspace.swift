@@ -157,7 +157,7 @@ package final class Workspace {
     private(set) var recentFiles: [String] = []
     @ObservationIgnored private var saveQueued = false
     @ObservationIgnored private var saveGeneration = 0
-    @ObservationIgnored private var isClosed = false
+    @ObservationIgnored package private(set) var isClosed = false
     @ObservationIgnored private var drafts: [String: ChatDraft] = [:]
     @ObservationIgnored private var retainedAttachments: [UUID: [Attachment]] = [:]
     private(set) var closedTabs: [Saved.Closed] = []

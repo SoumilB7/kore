@@ -822,6 +822,7 @@ package final class Chat: Identifiable {
         let backend = backend
         self.backend = nil
         Task { await backend?.close() }
+        AgentTaps.closed?(self)
     }
 
     // MARK: Composer

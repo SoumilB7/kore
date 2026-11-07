@@ -2,6 +2,7 @@
 # Tests scripts/kore with fake installers and a stubbed `open` in a temp HOME:
 # no app opens and no real installer runs.
 set -u
+zmodload zsh/datetime
 
 kore="${0:A:h:h}/kore"
 tmp=$(mktemp -d -t kore-cmd-test)
@@ -82,5 +83,40 @@ for a in help -h; do
     reset; run $a
     check "kore $a" '(( code == 0 )) && [[ $out == usage:* && $out == *"kore setup"* && ! -f $tmp/opened ]]'
 done
+
+# The `kore` binary (KORE_BIN, the built kore-command) hands opening and setup to this script
+# as before, and refuses its reads at once while no Kore listens.
+if [[ -n ${KORE_BIN:-} ]]; then
+    runbin() {
+        out=$(cd "$tmp/work" && HOME="$tmp/home" PATH="$tmp/bin:/usr/bin:/bin" KORE_SCRIPT="$kore" \
+            KORE_SETUP_PATH="$tmp/home/.local/bin" KORE_OPEN="$tmp/bin/open-stub" KORE_TEST_OPENED="$tmp/opened" \
+            KORE_SETUP_INSTALL_CLAUDE="$(fake_install claude)" KORE_SETUP_INSTALL_CODEX="$(fake_install codex)" \
+            KORE_AGENT_SOCKET="$tmp/no-kore.sock" KORE_AGENT_PASS= \
+            "$KORE_BIN" "$@" 2>&1)
+        code=$?
+    }
+    reset; runbin
+    check "binary: bare kore opens the app only" '(( code == 0 )) && [[ $(opened_n) == 2 && $(opened_first) == -a ]]'
+    reset; runbin .
+    check "binary: kore ." '(( code == 0 )) && [[ $(opened_n) == 3 && $(opened_last) == "${tmp:A}/work" ]]'
+    reset; runbin ./setup
+    check "binary: kore ./setup opens the folder" '(( code == 0 )) && [[ $(opened_last) == "${tmp:A}/work/setup" ]]'
+    reset; mkdir -p "$tmp/work/ls"; runbin ./ls
+    check "binary: kore ./ls opens the folder named like a command" '(( code == 0 )) && [[ $(opened_last) == "${tmp:A}/work/ls" ]]'
+    reset; runbin nope
+    check "binary: kore <missing>" '(( code == 1 )) && [[ $out == *"not a folder: nope"* && ! -f $tmp/opened ]]'
+    reset; runbin setup --help
+    check "binary: kore setup --help" '(( code == 0 )) && [[ $out == *"kore setup"* && ! -e $tmp/home/.local/bin/claude && ! -f $tmp/opened ]]'
+    reset; runbin setup codex
+    check "binary: kore setup codex" '(( code == 0 )) && [[ $out == *"✓ Codex installed"* && $out != *Claude* ]]'
+    reset; runbin help
+    check "binary: kore help" '(( code == 0 )) && [[ $out == usage:* && $out == *"kore setup"* && $out == *"kore ls"* ]]'
+    reset; s=$EPOCHREALTIME; runbin ls; ms=$(( (EPOCHREALTIME - s) * 1000 ))
+    check "binary: kore ls with no Kore: exit 5 at once ($(printf %.0f $ms) ms)" '(( code == 5 && ms < 500 )) && [[ $out == "kore: Kore isn'"'"'t running, or agent control is off." ]]'
+    reset; runbin log
+    check "binary: kore log with no chat: usage, exit 2" '(( code == 2 )) && [[ $out == *"kore log <chat>"* ]]'
+    reset; runbin ls --bogus
+    check "binary: an unknown option: exit 2" '(( code == 2 )) && [[ $out == *"unknown option --bogus"* ]]'
+fi
 
 (( fails == 0 )) && print "all passed" || { print "$fails failed"; exit 1 }

@@ -36,7 +36,7 @@ enum LinkSnapshot {
 
     /// The folder windows open now.
     static func workspaces() -> [Workspace] {
-        Workspace.all.allObjects.filter { $0.window != nil }
+        Workspace.all.allObjects.filter { $0.window != nil && !$0.isClosed }
     }
 
     static func windowID(_ workspace: Workspace) -> String { StableID.of(workspace.folder.path, prefix: "w_") }

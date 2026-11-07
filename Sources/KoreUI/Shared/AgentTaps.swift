@@ -6,6 +6,8 @@ package enum AgentTaps {
     /// Some caller follows a chat: every event a chat applies is handed over.
     package static var on = false
     package static var event: ((Chat, ChatEvent) -> Void)?
+    /// A chat closed, while the channel is open (nil otherwise).
+    package static var closed: ((Chat) -> Void)?
 }
 
 extension Chat {

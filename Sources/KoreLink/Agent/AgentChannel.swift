@@ -87,6 +87,11 @@ package final class AgentChannel {
             }
             LinkHost.onMain { self?.accepted(fd, peer) }
         }
+        // A chat closing ends its follows and its own callers, and its grant: once it's out of
+        // its window (after this turn of the run loop).
+        AgentTaps.closed = { _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { AgentChannel.current?.chatsClosed() } }
+        }
         quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { AgentChannel.current?.close(.stopped) }
         }
@@ -103,6 +108,7 @@ package final class AgentChannel {
         listener.close()
         if let quitObserver { NotificationCenter.default.removeObserver(quitObserver) }
         quitObserver = nil
+        AgentTaps.closed = nil
         followsChanged()
         UILog.event("agent-closed", ["code": code.rawValue])
     }
@@ -114,6 +120,24 @@ package final class AgentChannel {
             clients[key] = nil
         }
         followsChanged()
+    }
+
+    /// Some chat closed: each follow of a chat no longer open gets `gone`, a closed chat's own
+    /// callers are let go, its grant drops, and with no grant left the socket closes.
+    private func chatsClosed() {
+        let open = LinkSnapshot.chatsByID()
+        for client in clients.values {
+            for (chatId, follow) in client.follows where open[chatId] == nil {
+                send(client, AgentEvent(id: follow.id, chat: chatId, event: "gone"))
+                client.follows[chatId] = nil
+            }
+        }
+        AgentGrants.prune(open: Set(open.keys))
+        for client in clients.values where client.named {
+            if let chat = client.chat, open[chat] == nil { refuse(client, .stopped, "This chat closed.") }
+        }
+        followsChanged()
+        if !AgentGrants.wanted { close(.stopped) }
     }
 
     // MARK: Connections

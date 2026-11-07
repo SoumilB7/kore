@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import KoreLink
 import KoreUI
 
@@ -67,32 +68,61 @@ final class AgentWatchReads: ChatStoryline {
 }
 
 /// The built `kore` (beside this app's binary), run as a terminal would: outside Kore's chats,
-/// with no pass, at this run's socket. Its output is read off the main thread.
+/// with no pass, at this run's socket; or, with `under`, inside a chat's process tree: a stand-in
+/// for the chat's CLI that Kore records as started with that chat's pass (the seam a real launch
+/// goes through), with `kore` its child, as a tool's shell would run it. Its output is read off
+/// the main thread.
 final class KoreRun: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     private var ended: Int32?
     private var eof = false
+    private var began: ContinuousClock.Instant?
+    private var took: Duration?
     private var process: Process?
+    private var input: FileHandle?
 
     static var binary: URL { Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("kore-command") }
 
     var output: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
     /// Its exit status, once it has exited and everything it wrote is read.
     var status: Int32? { lock.withLock { eof ? ended : nil } }
+    /// From its start (under a stand-in: from the go) to its exit.
+    var elapsed: Duration? { lock.withLock { took } }
+    var pid: pid_t? { process?.processIdentifier }
 
+    /// `pass`: the KORE_AGENT_PASS it carries. `under`: the pass of the chat whose CLI it runs
+    /// under (nil: outside every chat). `input`: written to its stdin, which closes after unless
+    /// `keepInput`. `environment`: more variables.
     @MainActor
-    func start(_ arguments: [String]) throws {
+    func start(
+        _ arguments: [String], pass: String? = nil, under cli: String? = nil, input: Data? = nil, keepInput: Bool = false,
+        executable: URL? = nil, environment extra: [String: String] = [:]
+    ) throws {
         let process = Process()
-        process.executableURL = Self.binary
-        process.arguments = arguments
+        let binary = executable ?? Self.binary
         var environment = ProcessInfo.processInfo.environment
-        environment["KORE_AGENT_PASS"] = nil
+        environment["KORE_AGENT_PASS"] = pass
         environment["KORE_AGENT_SOCKET"] = AgentWatchReads.socketPath
+        environment.merge(extra) { $1 }
+        if cli != nil {
+            // Waits for its go (once Kore has recorded it), then runs `kore` as its child.
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = [
+                "-fc", "zmodload zsh/datetime; read -r _; s=$EPOCHREALTIME; \"$@\"; c=$?; "
+                    + "[[ -n ${KORE_RUN_MS-} ]] && print -r -- $(( (EPOCHREALTIME - s) * 1000 )) >> $KORE_RUN_MS; exit $c",
+                "cli", binary.path,
+            ] + arguments
+        } else {
+            process.executableURL = binary
+            process.arguments = arguments
+        }
         process.environment = environment
         let pipe = Pipe()
+        let stdin = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
+        process.standardInput = stdin
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
             if chunk.isEmpty {
@@ -102,14 +132,36 @@ final class KoreRun: @unchecked Sendable {
             }
             self?.lock.withLock { self?.data.append(chunk) }
         }
-        process.terminationHandler = { [weak self] p in self?.lock.withLock { self?.ended = p.terminationStatus } }
+        process.terminationHandler = { [weak self] p in
+            if cli != nil { AgentPasses.shared.ended(p.processIdentifier) }
+            self?.lock.withLock {
+                self?.ended = p.terminationStatus
+                self?.took = self?.began.map { ContinuousClock.now - $0 }
+            }
+        }
         lock.withLock {
             data = Data()
             ended = nil
             eof = false
+            took = nil
         }
         self.process = process
         try process.run()
+        if let cli { AgentPasses.shared.register(cli, pid: process.processIdentifier) }
+        lock.withLock { began = ContinuousClock.now }
+        var first = cli != nil ? Data("go\n".utf8) : Data()
+        if let input { first.append(input) }
+        if !first.isEmpty { try? stdin.fileHandleForWriting.write(contentsOf: first) }
+        if keepInput { self.input = stdin.fileHandleForWriting } else { try? stdin.fileHandleForWriting.close() }
+    }
+
+    /// More on its stdin (`keepInput`).
+    func write(_ more: Data) { try? input?.write(contentsOf: more) }
+
+    /// Closes its stdin.
+    func closeInput() {
+        try? input?.close()
+        input = nil
     }
 
     func stop() { process?.terminate() }

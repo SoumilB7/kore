@@ -148,6 +148,8 @@ enum Reads {
         }
         let data = try client.run("tx.follow", args)
         client.timeout(0)
+        // Each line as it's printed, into a pipe too (an agent's shell reads one).
+        setvbuf(stdout, nil, _IOLBF, 0)
         var rows = Rows()
         if o.json { printJSON(data) } else { rows.take(data["rows"] as? [Object] ?? [], settled: false) }
         // Until Kore closes the connection, or the chat goes. ^C ends it.
