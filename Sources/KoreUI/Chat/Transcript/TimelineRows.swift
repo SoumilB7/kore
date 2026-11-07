@@ -517,7 +517,8 @@ struct MessageHeader: View {
 
     /// The lines shown: three when pinned, `collapsedLines` when clipped, else all.
     private var shown: Int? {
-        if place == .sticky { return Layout.Timeline.stickyLines }
+        // Pinned: up to three lines, no taller than the message (a one-liner is one line).
+        if place == .sticky { return min(Layout.Timeline.stickyLines, max(lines.value, 1)) }
         return collapsible ? Layout.Timeline.collapsedLines : nil
     }
 
