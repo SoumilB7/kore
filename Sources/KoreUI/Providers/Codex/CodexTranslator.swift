@@ -1013,7 +1013,7 @@ package final class CodexTranslator {
     }
 
     /// A user message's text (without Kore's file notes) and its files.
-    private static func prompt(_ content: JSONValue) -> (text: String, attachments: [SentAttachment]) {
+    static func prompt(_ content: JSONValue) -> (text: String, attachments: [SentAttachment]) {
         let text = content.array?.compactMap { $0["text"]?.string }.filter { !Attachments.isFileNote($0) }
             .joined(separator: "\n") ?? ""
         return (text, attachments(content))

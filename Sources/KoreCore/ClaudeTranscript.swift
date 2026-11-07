@@ -43,6 +43,28 @@ public final class ClaudeTranscript: @unchecked Sendable {
         }
     }
 
+    /// What the user said on the current branch, oldest first, from `before` back through every
+    /// compaction, sent while a turn ran or starting one (`startsTurn`, what `page`'s `userTurns`
+    /// counts): only those entries' lines are read.
+    public func prompts(before: String) -> [(text: String, startsTurn: Bool)] {
+        lock.withLock {
+            refresh()
+            let ids = ClaudeHistory.walk(links, before: before, userTurns: .max).ids.filter { id in
+                links.id(of: id).flatMap { links[$0] }.map { $0.isPrompt || $0.isQueuedCommand } == true
+            }
+            let read = lines(ids, in: links)
+            return ids.compactMap { id in
+                let starts = links.id(of: id).flatMap { links[$0]?.isPrompt } == true
+                guard let line = read[id], let entry = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+                    return starts ? ("", true) : nil
+                }
+                let text = ChatTextIndex.claudeMessage(entry)
+                // Another session's message or a notice, taken mid-turn: not the user's.
+                return text != nil || starts ? (text ?? "", starts) : nil
+            }
+        }
+    }
+
     // MARK: - The newest page first
 
     /// `page()` read from the file's end: the newest page, before the whole file is indexed.

@@ -356,6 +356,13 @@ package final class TranscriptStore {
     private(set) var folded: (turn: String, answer: String, seq: Int)?
     /// User turns before the shown window: the "Load earlier turns" row shows while any are.
     private(set) var hiddenTurns = 0
+    /// Every user message of the chat, loaded or not.
+    private(set) var messageMarks: [MessageMark] = []
+    /// The ones not loaded, oldest first.
+    private(set) var earlierMarks: [EarlierMessage] = []
+    var pendingMessage: (query: String, until: Date)?
+    /// What a storyline presses on the scroller, once it's on screen.
+    @ObservationIgnored package var storyRail: (jump: (Int) -> Void, hover: (Int?) -> Void, current: () -> Int?)?
     /// Conversation before what the CLI's history shows (before a compaction): once the shown
     /// turns are all in view, the top row loads it.
     private(set) var earlierAvailable = false
@@ -579,8 +586,89 @@ package final class TranscriptStore {
         countHidden()
         earlierAvailable = more
         loadingEarlier = false
+        // What just came in isn't "not loaded" any more; the list is read again after this.
+        let came = entries.count { $0.kind == .user } - later.count { $0.kind == .user }
+        earlierMarks.removeLast(min(max(came, 0), earlierMarks.count))
         invalidateAll()
         rebuild()
+        updateMarks()
+    }
+
+    /// The user's messages, oldest first, for the message scroller: where each one is.
+    struct MessageMark: Equatable {
+        enum Place: Equatable {
+            /// In a built section: scrolled to.
+            case built(section: String)
+            /// In the store, above the built window: built, then scrolled to.
+            case held(UUID)
+            /// On disk: the index in `earlierMarks`.
+            case earlier(Int)
+        }
+        let place: Place
+    }
+
+    private func updateMarks() {
+        let earlier = (0..<earlierMarks.count).map { MessageMark(place: .earlier($0)) }
+        // Not what another session or a notice sent as a message: `<…>` isn't the user's.
+        let held = entries[..<windowStartIndex].filter { $0.kind == .user && !$0.text.hasPrefix("<") }.map { MessageMark(place: .held($0.id)) }
+        let built = sections.compactMap { section in
+            section.header.map { $0.kind == .user && !$0.text.hasPrefix("<") } == true ? MessageMark(place: .built(section: section.id)) : nil
+        }
+        let marks = earlier + held + built
+        if marks != messageMarks { messageMarks = marks }
+    }
+
+    /// The list of what's not loaded arrived.
+    func earlierMessages(_ messages: [EarlierMessage]) {
+        guard messages != earlierMarks else { return }
+        earlierMarks = messages
+        updateMarks()
+    }
+
+    /// The search found this in the chat: gone to once the chat's loaded far enough to hold it
+    /// (for a while: a chat that never does stays at its end).
+    func goToMessage(saying query: String, until: Date = Date().addingTimeInterval(8)) {
+        pendingMessage = (query, until)
+    }
+
+    /// The message whose turn last says `query`, in what the store holds.
+    func message(saying query: String) -> UUID? {
+        guard let hit = entries.lastIndex(where: {
+            ($0.kind == .user || $0.kind == .answer) && $0.text.range(of: query, options: .caseInsensitive) != nil
+        }) else { return nil }
+        return entries[...hit].last { $0.kind == .user || $0.kind == .peer }?.id
+    }
+
+    /// Builds the window from `entry` on, keeping all the turns after it.
+    func show(from entry: UUID) {
+        guard let at = position[entry], at < windowStartIndex else { return }
+        windowStart = entry
+        countHidden()
+        invalidateAll()
+        rebuild()
+    }
+
+    /// Builds every turn the store holds.
+    func showAll() {
+        guard windowStart != nil else { return }
+        windowStart = nil
+        countHidden()
+        invalidateAll()
+        rebuild()
+    }
+
+    /// The oldest user message held.
+    var firstUserMessage: UUID? { entries.first { $0.kind == .user }?.id }
+
+    /// A message's words, and the answer its turn ended on, for the scroller's card.
+    func messagePreview(_ section: String) -> (message: String, answer: String?)? {
+        guard let id = UUID(uuidString: String(section.dropFirst(2))), let at = position[id] else { return nil }
+        var answer: String?
+        for entry in entries[(at + 1)...] {
+            if entry.kind == .user && !entry.inTurn { break }
+            if entry.kind == .answer, !entry.text.isEmpty { answer = entry.text }
+        }
+        return (entries[at].text, answer)
     }
 
     func earlierHistory(_ available: Bool) {
@@ -1515,6 +1603,7 @@ package final class TranscriptStore {
         if models.count != sections.count || zip(models, sections).contains(where: { $0 !== $1 }) {
             sections = models
             changed = true
+            updateMarks()
         }
         if changed { tail &+= 1 }
         if whole { prepareAnswers() }

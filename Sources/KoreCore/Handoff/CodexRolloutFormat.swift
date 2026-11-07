@@ -18,6 +18,11 @@ public struct CodexRolloutFormat: HandoffFormat {
 
     public init() {}
 
+    /// A user message the harness wrote: environment, instructions, notices.
+    static func isContext(_ text: String) -> Bool {
+        HandoffHarness.isHarness(text) || text.hasPrefix("# AGENTS.md instructions")
+    }
+
     /// The first line is the rollout's `session_meta` (with the thread's id), and the lines after
     /// it are `{timestamp, type, payload}` records.
     public func identify(_ head: HandoffHead) -> HandoffIdentity? {
@@ -246,9 +251,7 @@ public struct CodexRolloutFormat: HandoffFormat {
             }
         }
 
-        static func isContext(_ text: String) -> Bool {
-            HandoffHarness.isHarness(text) || text.hasPrefix("# AGENTS.md instructions")
-        }
+        static func isContext(_ text: String) -> Bool { CodexRolloutFormat.isContext(text) }
 
         mutating func function(_ item: JSONValue) {
             let name = item["name"]?.string ?? "tool"

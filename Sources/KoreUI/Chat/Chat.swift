@@ -1497,6 +1497,23 @@ package final class Chat: Identifiable {
         }
     }
 
+    /// The message scroller's jump: as far back as `turns` turns, in one page.
+    func loadEarlier(turns: Int) async {
+        guard transcript.earlierAvailable, !transcript.loadingEarlier else { return }
+        transcript.startLoadingEarlier()
+        let page = await connect().earlier(turns: turns)
+        transcript.prepend(page?.events ?? [], more: page?.more ?? false)
+    }
+
+    /// The user's messages not loaded yet, for the message scroller.
+    func readEarlierMessages() async {
+        guard transcript.earlierAvailable else {
+            transcript.earlierMessages([])
+            return
+        }
+        transcript.earlierMessages(await connect().earlierMessages())
+    }
+
     /// Dev hook (`KORE_QUEUE`): sends `text` the way a message sent mid-turn goes, with an id
     /// for `.queuedMessage`, until the composer queues (look.md §10).
     /// KORE_QUEUE: sends as the composer does (queued, since a turn runs).

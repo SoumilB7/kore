@@ -26,7 +26,7 @@ package final class ScriptedWorld {
     private var made = 0
     /// The forks the scripted CLI lists in a folder's history, by session id: as the real ones
     /// do, Codex's from when the fork opens, Claude's from its first message.
-    private(set) var listed: [String: (provider: String, folder: String, title: String)] = [:]
+    private(set) var listed: [String: (provider: String, folder: String, title: String, file: URL?)] = [:]
     /// Each import's history as Kore gave it to the scripted CLI, oldest first.
     package private(set) var imports: [(provider: String, plan: HandoffPlan, target: HandoffTarget)] = []
 
@@ -43,16 +43,16 @@ package final class ScriptedWorld {
         StorylineSeams.sessions = { [unowned self] provider, folder in
             let path = folder.standardizedFileURL.path
             let extra = listed.filter { $0.value.provider == provider && $0.value.folder == path }.map { id, chat in
-                SessionSummary(id: id, agent: provider == "codex" ? .codex : .claude, title: chat.title, updated: .now)
+                SessionSummary(id: id, agent: provider == "codex" ? .codex : .claude, title: chat.title, updated: .now, file: chat.file)
             }
             return (own: provider != "codex", extra: extra)
         }
     }
 
     /// A session the scripted CLI now lists (named `title` unless it has a name already).
-    func list(_ id: String, provider: String, folder: URL, title: String) {
+    func list(_ id: String, provider: String, folder: URL, title: String, file: URL? = nil) {
         guard listed[id] == nil else { return }
-        listed[id] = (provider, folder.standardizedFileURL.path, title)
+        listed[id] = (provider, folder.standardizedFileURL.path, title, file)
     }
 
     /// A rename, as the CLI saves it.

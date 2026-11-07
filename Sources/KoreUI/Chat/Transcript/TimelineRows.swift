@@ -27,6 +27,9 @@ struct TranscriptActions {
     var rollBackAfter: (TranscriptStore.Entry) -> Void = { _ in }
     /// Loads the conversation before a compaction.
     var loadEarlierConversation: () -> Void = {}
+    /// The message scroller's: goes back that many turns, and lists what's still not loaded.
+    var loadEarlierTurns: (Int) async -> Void = { _ in }
+    var readEarlierMessages: () async -> Void = {}
     /// A fork's "Forked from" line: switches to the original chat's tab; nil when there's none.
     var openOriginal: (() -> Void)?
     /// An auth failure's Sign in: Account opens in the chat and the sign-in starts.
@@ -712,6 +715,16 @@ final class StickyTracker: ObservableObject {
     var bandHeight: CGFloat = 0
     private var headers: [String: CGFloat] = [:]
     private var rows: [String: CGFloat] = [:]
+    /// A row with no frame is above the view, as it is once it has left by its top; a jump's
+    /// landing is the exception (`landed`), until the next row leaves.
+    private var rowlessAreAbove = true
+
+    /// A jump landed: the rows it passed over reported nothing, and what's above the message it
+    /// went to mustn't hang over it.
+    func landed() {
+        rowlessAreAbove = false
+        for id in stuck where rows[id] == nil { stuck.remove(id) }
+    }
 
     func header(_ id: String, _ y: CGFloat) {
         headers[id] = y
@@ -721,6 +734,7 @@ final class StickyTracker: ObservableObject {
     /// A row's bottom; nil once it's gone from the list. A jump (a long output arriving, a
     /// fling) can take it off screen with no frame reported past its header: gone, it's above.
     func row(_ id: String, _ y: CGFloat?) {
+        if y == nil, rows[id] != nil { rowlessAreAbove = true }
         rows[id] = y
         update(id)
     }
@@ -733,7 +747,7 @@ final class StickyTracker: ObservableObject {
         // it builds again) mustn't pin a copy there, over the text a press would select. Pinned,
         // a row that never laid out is above (the chat opened below it, or a jump took it off
         // with no frame reported past its header).
-        let past = header < 0.5 && (rows[id].map { $0 < header - 0.5 } ?? true)
+        let past = header < 0.5 && (rows[id].map { $0 < header - 0.5 } ?? rowlessAreAbove)
         if past != stuck.contains(id) {
             if past { stuck.insert(id) } else { stuck.remove(id) }
         }

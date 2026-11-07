@@ -935,11 +935,28 @@ final class CodexBackend: ChatBackend {
     }
 
     /// The ten turns before the ones shown.
-    func earlier() async -> (events: [ChatEvent], more: Bool)? {
+    func earlier() async -> (events: [ChatEvent], more: Bool)? { await earlier(turns: Self.pageTurns) }
+
+    /// Read a page at a time with only the messages in each turn (`summary`), no tool output.
+    func earlierMessages() async -> [EarlierMessage] {
+        guard var cursor = earlierFrom, let session, let thread = sessionId else { return [] }
+        var turns: [JSONValue] = []
+        while let older = try? await session.turns(of: thread, before: cursor, limit: 200, view: .summary) {
+            turns = older.turns + turns
+            guard let next = older.earlier else { break }
+            cursor = next
+        }
+        return turns.enumerated().compactMap { index, turn in
+            let first = (turn["items"]?.array ?? []).map(CodexItem.init).first { $0.type == "userMessage" }
+            return first.map { EarlierMessage(text: CodexTranslator.prompt($0.raw["content"] ?? []).0, turns: turns.count - index) }
+        }
+    }
+
+    func earlier(turns: Int) async -> (events: [ChatEvent], more: Bool)? {
         guard let from = earlierFrom else { return nil }
         try? await start()
         guard let session, let thread = sessionId,
-            let older = try? await session.turns(of: thread, before: from, limit: Self.pageTurns)
+            let older = try? await session.turns(of: thread, before: from, limit: turns)
         else { return nil }
         earlierFrom = older.earlier
         // An older page is history only: it starts from no mode and leaves the live one alone.

@@ -57,6 +57,8 @@ struct TranscriptTimeline: View, Equatable {
     /// The content's height just before turns went in above: the view moves down by what they
     /// added, at once (`ScrollShift`).
     @StateObject private var paged = Held(CGFloat?.none)
+    /// A jump is landing: its own moves aren't the reader nearing the top.
+    @StateObject private var landingUntil = Held(Date.distantPast)
     /// And the first answer on screen then, with its top. The turns that went in are only
     /// estimated, so that move can be off: once it's `placed`, the answer's next report (it's
     /// back on screen) moves the view by what's left. When none comes by the next scroll update
@@ -81,6 +83,8 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var insetSettling = Held(false)
     /// Which sections' messages have scrolled past their pinned header.
     @StateObject private var sticky = StickyTracker()
+    /// Held, not observed: only the scroller redraws when it changes, never this view.
+    @StateObject private var reading = Held(MessageReading())
     /// The rows' actions, built once (their closures hold only references), so a section drawn
     /// again with the same model is skipped.
     @StateObject private var built = Held((rows: TranscriptActions, reveal: TranscriptActions)?.none)
@@ -106,6 +110,7 @@ struct TranscriptTimeline: View, Equatable {
     private static let leftEnd: CGFloat = 150
     /// After a send, new content glides into view for this long.
     private static let glide: TimeInterval = 2
+    private static let landing: TimeInterval = 0.5
     /// A scroll view new or built again has laid out this long after its height last changed,
     /// and within `settleLimit` in all.
     private static let settle: TimeInterval = 0.5
@@ -160,6 +165,20 @@ struct TranscriptTimeline: View, Equatable {
             }
             // Built again when a shown transcript draws none of its rows (`checkBlank`).
             .id(mount.value)
+            .overlay(alignment: .trailing) {
+                if !hidden, !band {
+                    MessageRail(store: store, tracker: sticky, reading: reading.value, atEnd: following.value, actions: actions) { id in
+                        // The reader's new place: nothing held from before pulls it back.
+                        following.value = false
+                        anchor.value = nil
+                        paged.value = nil
+                        restore.value = nil
+                        restoreInRow.value = nil
+                        landingUntil.value = Date().addingTimeInterval(Self.landing)
+                        proxy.scrollTo(id, anchor: .top)
+                    }
+                }
+            }
             // Away from the end, a line under the bottom edge fades out rather than being cut.
             .overlay(alignment: .bottom) {
                 LinearGradient(colors: [Theme.background.opacity(0), Theme.background], startPoint: .top, endPoint: .bottom)
@@ -385,7 +404,7 @@ struct TranscriptTimeline: View, Equatable {
                 // row's press does, with what's on screen kept where it is. Only the reader's own
                 // scroll: never a place being restored (a tab coming back).
                 if !following.value, restore.value == nil, restoreInRow.value == nil, anchor.value == nil, paged.value == nil,
-                    !fetching.value, !widthHeld, offset < geometry.value.offset - 1, offset + insetTop.value < new[2]
+                    !fetching.value, !widthHeld, offset < geometry.value.offset - 1, offset + insetTop.value < new[2], Date() >= landingUntil.value
                 {
                     if store.hiddenTurns > 0 {
                         loadEarlier()
@@ -753,8 +772,9 @@ struct TranscriptTimeline: View, Equatable {
         actions.rowPlaced = { id, frame in
             put(hold.placed(id, frame, offset: shift.frames?.visible.minY, inset: inset.value, visible: visible.value, following: following.value))
         }
-        actions.messageMoved = { id, frame in
+        actions.messageMoved = { [reading] id, frame in
             sticky.row(id, frame?.maxY)
+            reading.value.moved(id, frame?.minY)
             moved(id, frame?.minY)
         }
         // A long message opening grows down from where it is, and closing gives back just that:

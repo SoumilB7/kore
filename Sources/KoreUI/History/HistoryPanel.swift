@@ -50,13 +50,22 @@ struct HistoryPanel: View {
     /// moves it, when the first row is lit and Return opens it.
     @StateObject private var lit = Local<Int?>(nil)
     @StateObject private var window = Held<NSWindow?>(nil)
+    @StateObject private var search = Held(ChatSearch())
     @FocusState private var searchFocused: Bool
 
+    /// Chats named by the query, then those whose words hold it, each newest first.
     private var matches: [SessionSummary] {
         let q = query.value.trimmingCharacters(in: .whitespaces).lowercased()
-        return workspace.chats.filter { chat in
-            chat.archived == showArchived.value && (q.isEmpty || chat.title.lowercased().contains(q))
-        }
+        let listed = workspace.chats.filter { $0.archived == showArchived.value }
+        guard !q.isEmpty else { return listed }
+        let hits = search.value.hits
+        let named = listed.filter { $0.title.lowercased().contains(q) }
+        return named + listed.filter { hits[$0.id] != nil && !$0.title.lowercased().contains(q) }
+    }
+
+    /// What the search reads: the panel's list, whatever the query.
+    private func searchChats() {
+        search.value.update(query: query.value, chats: workspace.chats.filter { $0.archived == showArchived.value })
     }
 
     private var archivedCount: Int { workspace.chats.count { $0.archived } }
@@ -71,6 +80,7 @@ struct HistoryPanel: View {
                         ForEach(Array(matches.enumerated()), id: \.element.id) { index, chat in
                             HistoryRow(
                                 session: chat,
+                                hit: search.value.hits[chat.id],
                                 lit: (lit.value ?? 0) == index,
                                 showsActions: lit.value == index,
                                 isRenaming: renaming.value == chat.id,
@@ -97,7 +107,7 @@ struct HistoryPanel: View {
             .frame(maxHeight: max(listHeight.value, 1))
 
             if matches.isEmpty {
-                Text(!workspace.loaded ? "Loading…" : showArchived.value ? "No archived chats" : "No chats yet")
+                Text(emptyLine)
                     .font(Chrome.label)
                     .foregroundStyle(Theme.tertiary)
                     .padding(.vertical, Space.xl)
@@ -111,8 +121,15 @@ struct HistoryPanel: View {
         .background(WindowReader { window.value = $0 })
         .opacity(isOpen ? 1 : 0)
         .allowsHitTesting(isOpen)
-        .onChange(of: query.value) { lit.value = nil }
-        .onChange(of: showArchived.value) { lit.value = nil }
+        .onChange(of: query.value) {
+            lit.value = nil
+            searchChats()
+        }
+        .onChange(of: showArchived.value) {
+            lit.value = nil
+            searchChats()
+        }
+        .onChange(of: workspace.chats) { if isOpen { searchChats() } }
         .onChange(of: isOpen, initial: true) { _, open in
             lit.value = nil
             if open {
@@ -121,17 +138,25 @@ struct HistoryPanel: View {
                 monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { event in
                     handle(event)
                 }
+                searchChats()
                 Task { await workspace.refresh() }
             } else {
                 if let m = monitor.value { NSEvent.removeMonitor(m) }
                 monitor.value = nil
                 renaming.value = nil
+                search.value.stop()
             }
         }
         .onDisappear {
             if let m = monitor.value { NSEvent.removeMonitor(m) }
             monitor.value = nil
         }
+    }
+
+    private var emptyLine: String {
+        if !workspace.loaded { return "Loading…" }
+        if !query.value.trimmingCharacters(in: .whitespaces).isEmpty { return search.value.reading ? "Searching chats…" : "No chats match" }
+        return showArchived.value ? "No archived chats" : "No chats yet"
     }
 
     private var searchBar: some View {
@@ -188,6 +213,11 @@ struct HistoryPanel: View {
             Task { await workspace.unarchive(chat) }
         } else {
             workspace.open(chat)
+            // Found by what it says: there, not at its end.
+            let words = query.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if search.value.hits[chat.id] != nil, !chat.title.lowercased().contains(words.lowercased()) {
+                workspace.activeTab.chat?.transcript.goToMessage(saying: words)
+            }
         }
     }
 
@@ -224,6 +254,8 @@ struct HistoryPanel: View {
 
 private struct HistoryRow: View {
     let session: SessionSummary
+    /// Where the search found the query in what the chat says.
+    let hit: ChatTextIndex.Hit?
     /// The panel's one highlight: the pointer's row, or the keys'.
     let lit: Bool
     /// Rename and Archive: on the row the pointer or the keys moved to.
@@ -265,21 +297,9 @@ private struct HistoryRow: View {
         Button(action: open) {
             HStack(spacing: Space.md) {
                 ProviderLogo(provider: Registry.provider(for: session.agent), size: Size.logoRow)
-                Text(session.title)
-                    .font(Chrome.body)
-                    .foregroundStyle(session.archived ? Theme.secondary : Theme.text)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                // A chat Kore made by an import names where it came from.
-                if let source = HandoffRecords.record(target: session.id)?.sourceProduct {
-                    Text("from \(source)").font(Chrome.label).foregroundStyle(Theme.tertiary).fixedSize()
-                }
-                Spacer(minLength: Space.md)
-                if !showsActions {
-                    Text(session.updated.historyAge)
-                        .font(Chrome.label)
-                        .foregroundStyle(Theme.secondary)
-                        .fixedSize()
+                VStack(alignment: .leading, spacing: Space.xxs) {
+                    titleLine
+                    if let hit { snippet(hit) }
                 }
             }
             .padding(.leading, Space.lg)
@@ -289,6 +309,42 @@ private struct HistoryRow: View {
         }
         .buttonStyle(.plain)
         .help(session.title)
+    }
+
+    private var titleLine: some View {
+        HStack(spacing: Space.md) {
+            Text(session.title)
+                .font(Chrome.body)
+                .foregroundStyle(session.archived ? Theme.secondary : Theme.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            // A chat Kore made by an import names where it came from.
+            if let source = HandoffRecords.record(target: session.id)?.sourceProduct {
+                Text("from \(source)").font(Chrome.label).foregroundStyle(Theme.tertiary).fixedSize()
+            }
+            Spacer(minLength: Space.md)
+            if !showsActions {
+                Text(session.updated.historyAge)
+                    .font(Chrome.label)
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize()
+            }
+        }
+    }
+
+    /// The words around the match, the match itself lit.
+    private func snippet(_ hit: ChatTextIndex.Hit) -> some View {
+        let text = hit.snippet as NSString
+        var line = AttributedString(text.substring(to: hit.match.lowerBound))
+        var found = AttributedString(text.substring(with: NSRange(hit.match)))
+        found.foregroundColor = Theme.text
+        line += found
+        line += AttributedString(text.substring(from: hit.match.upperBound))
+        return Text(line)
+            .font(Chrome.label)
+            .foregroundStyle(Theme.tertiary)
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 
     private var renameField: some View {

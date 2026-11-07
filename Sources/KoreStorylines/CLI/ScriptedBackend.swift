@@ -271,6 +271,15 @@ package final class ScriptedBackend: ChatBackend {
         return (page, false)
     }
 
+    package func earlierMessages() async -> [EarlierMessage] {
+        guard let sessionId, let page = world.earlier[sessionId] else { return [] }
+        let texts = page.compactMap { event -> String? in
+            if case .userMessage(let text, _, _) = event { return text }
+            return nil
+        }
+        return texts.map { EarlierMessage(text: $0, turns: texts.count) }
+    }
+
     package func usage() async throws -> PlanReading {
         log.append(.usage)
         switch script.usage {

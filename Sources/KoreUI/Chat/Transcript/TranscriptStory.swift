@@ -65,6 +65,23 @@ package struct StoryTranscript {
         return true
     }
 
+    /// The message scroller's marks, in the user's terms: "built", "held" or "earlier".
+    package var railMarks: [String] {
+        store.messageMarks.map {
+            switch $0.place {
+            case .built: "built"
+            case .held: "held"
+            case .earlier: "earlier"
+            }
+        }
+    }
+
+    /// A click on the scroller's mark, and the pointer over it.
+    package func railJump(_ index: Int) { store.storyRail?.jump(index) }
+    package func railHover(_ index: Int?) { store.storyRail?.hover(index) }
+    /// The bright mark.
+    package var railCurrent: Int? { store.storyRail?.current() }
+
     private func rowID(_ entry: UUID) -> String? {
         let id = entry.uuidString
         for section in store.sections {

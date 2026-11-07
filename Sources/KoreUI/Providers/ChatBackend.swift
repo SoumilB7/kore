@@ -71,6 +71,11 @@ package protocol ChatBackend: AnyObject {
     /// The page of conversation before what's shown (before a compaction), oldest first, and
     /// whether more comes before it; nil when there's none.
     func earlier() async -> (events: [ChatEvent], more: Bool)?
+    /// As `earlier`, as far back as `turns` user turns: the message scroller's jump.
+    func earlier(turns: Int) async -> (events: [ChatEvent], more: Bool)?
+    /// The user's messages before what's shown, oldest first, without loading the conversation
+    /// around them: the message scroller's dim marks.
+    func earlierMessages() async -> [EarlierMessage]
     /// Summarizes the conversation to free context (Claude `/compact`, Codex
     /// `thread/compact/start`): `.compactionStarted`, then `.compacted` or `.compactionFailed`.
     /// `instructions` say what the summary should keep, where the CLI takes them (Claude).
@@ -186,7 +191,21 @@ enum ForkError: LocalizedError {
 /// the CLI reported: its own turn diff when it has one (Codex), else the turn's tool edits
 /// merged per file. Two chats running in one folder at once see each other's edits in their
 /// git diffs.
+/// A user message that isn't loaded yet.
+package struct EarlierMessage: Equatable, Sendable {
+    package let text: String
+    /// How many turns `earlier(turns:)` has to go back to bring it in.
+    package let turns: Int
+
+    package init(text: String, turns: Int) {
+        self.text = text
+        self.turns = turns
+    }
+}
+
 extension ChatBackend {
+    package func earlier(turns: Int) async -> (events: [ChatEvent], more: Bool)? { await earlier() }
+    package func earlierMessages() async -> [EarlierMessage] { [] }
     package var observedAgents: Set<String> { [] }
     package func relaunchAfterAccountChange() async -> Bool {
         await relaunch(reason: "account changed")

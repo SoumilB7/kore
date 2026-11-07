@@ -884,9 +884,25 @@ final class ClaudeBackend: ChatBackend {
         return .pending(ForkPoint(from: source, at: at, history: found))
     }
 
-    func earlier() async -> (events: [ChatEvent], more: Bool)? {
+    func earlier() async -> (events: [ChatEvent], more: Bool)? { await earlier(turns: 10) }
+
+    func earlierMessages() async -> [EarlierMessage] {
+        guard let from = earlierFrom, let source else { return [] }
+        let reader = reader(source)
+        let said = await Task.detached(priority: .userInitiated) { reader.prompts(before: from) }.value
+        // Back to the turn each is in: one sent during a turn comes in with that turn's start.
+        var turns = 0
+        var messages: [EarlierMessage] = []
+        for message in said.reversed() {
+            if message.startsTurn { turns += 1 }
+            messages.append(EarlierMessage(text: message.text, turns: max(turns + (message.startsTurn ? 0 : 1), 1)))
+        }
+        return messages.reversed()
+    }
+
+    func earlier(turns: Int) async -> (events: [ChatEvent], more: Bool)? {
         guard let from = earlierFrom, let source else { return nil }
-        let older = await page(source, before: from, userTurns: 10)
+        let older = await page(source, before: from, userTurns: turns)
         earlierFrom = older.earlier
         // An older page is history only: it starts from no mode and leaves the live one alone.
         let replayed = await ClaudeTranslator.replayed(older.messages, folder: options.folder, sessionId: source)
