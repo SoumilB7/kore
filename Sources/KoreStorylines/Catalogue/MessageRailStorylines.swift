@@ -27,8 +27,9 @@ final class MessageRailMarks: ChatStoryline {
                 workspace.open(SessionSummary(id: session, agent: SessionSummary.Agent(rawValue: provider) ?? .claude, title: "Long", updated: .now))
             },
             WaitForElement(.id(StoryID.Transcript.rail)),
-            Expect("a mark per message: 3 on disk, the rest held or built", found: { marks($0).description }) { story in
-                count("earlier", story) == 3 && marks(story).count == 33 && count("held", story) > 0 && count("built", story) > 0
+            // On disk: the 3 before the compaction and all but the newest 15 kept in memory.
+            Expect("a mark per message: 18 on disk, the rest held or built", found: { marks($0).description }) { story in
+                count("earlier", story) == 18 && marks(story).count == 33 && count("held", story) > 0 && count("built", story) > 0
                     && marks(story).first == "earlier" && marks(story).last == "built"
             },
             Do("The pointer on a dim mark") { $0.app.chat?.storyTranscript.railHover(1) },
@@ -44,7 +45,7 @@ final class MessageRailMarks: ChatStoryline {
                 guard let held = marks(story).firstIndex(of: "held") else { throw StoryFailure.modelMissing("a held mark") }
                 story.app.chat?.storyTranscript.railJump(held + 1)
             },
-        ] + Self.atTop(4) + [
+        ] + Self.atTop(19) + [
             // On disk (unless nearing the top already read it in, as scrolling there does): read
             // in, there, and plain from then on.
             Do("Click the first mark") { $0.app.chat?.storyTranscript.railJump(0) },

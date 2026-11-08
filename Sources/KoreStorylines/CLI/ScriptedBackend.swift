@@ -95,7 +95,7 @@ package final class ScriptedBackend: ChatBackend {
             } else if let resume = options.resume {
                 history = world.sessions[resume.id] ?? []
                 sink.yield(.replayed(history))
-                if world.earlier[resume.id] != nil { sink.yield(.earlierHistory(true)) }
+                sink.yield(.earlierHistory(world.earlier[resume.id] != nil))
             }
         }
         if startFailures < script.failedStarts {
@@ -255,6 +255,7 @@ package final class ScriptedBackend: ChatBackend {
         let index = try message(id, text)
         history = Array(history[..<index])
         if let sessionId { world.sessions[sessionId] = history }
+        (notHeld, heldFrom) = (nil, 0)
         return (history, false)
     }
 
@@ -265,19 +266,45 @@ package final class ScriptedBackend: ChatBackend {
         return .pending(ForkPoint(from: sessionId, at: String(history.count)))
     }
 
-    package func earlier() async -> (events: [ChatEvent], more: Bool)? {
-        guard let sessionId, let page = world.earlier[sessionId] else { return nil }
+    /// What's before the rows the chat holds, once some left memory; until then, the session's
+    /// earlier page. And where in `history` the rows it holds begin.
+    private var notHeld: [ChatEvent]?
+    private var heldFrom = 0
+
+    private var older: [ChatEvent] { notHeld ?? sessionId.flatMap { world.earlier[$0] } ?? [] }
+
+    package func earlier() async -> (events: [ChatEvent], more: Bool)? { await earlier(turns: 10) }
+
+    package func earlier(turns: Int) async -> (events: [ChatEvent], more: Bool)? {
+        let all = older
+        guard !all.isEmpty else { return nil }
         log.append(.earlier)
-        return (page, false)
+        let starts = all.indices.filter { if case .userMessage = all[$0] { true } else { false } }
+        let start = starts.count > turns ? starts[starts.count - turns] : 0
+        notHeld = Array(all[..<start])
+        heldFrom = max(heldFrom - (all.count - start), 0)
+        return (Array(all[start...]), start > 0)
     }
 
-    package func earlierMessages() async -> [EarlierMessage] {
-        guard let sessionId, let page = world.earlier[sessionId] else { return [] }
-        let texts = page.compactMap { event -> String? in
+    package func earlierMessages() async -> [EarlierMessage] { Self.messages(in: older) }
+
+    private static func messages(in events: [ChatEvent]) -> [EarlierMessage] {
+        let texts = events.compactMap { event -> String? in
             if case .userMessage(let text, _, _) = event { return text }
             return nil
         }
-        return texts.map { EarlierMessage(text: $0, turns: texts.count) }
+        return texts.indices.map { EarlierMessage(text: texts[$0], turns: texts.count - $0) }
+    }
+
+    package func unloadPoint(message id: String?, text: String) async -> UnloadPoint? {
+        guard !script.unreadable, let index = try? message(id, text), index >= heldFrom else { return nil }
+        return UnloadPoint(earlier: String(index), messages: Self.messages(in: older + history[heldFrom..<index]))
+    }
+
+    package func unloaded(to earlier: String) {
+        guard let index = Int(earlier) else { return }
+        notHeld = older + history[heldFrom..<index]
+        heldFrom = index
     }
 
     package func usage() async throws -> PlanReading {

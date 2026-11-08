@@ -34,6 +34,8 @@ package struct CLIScript: Sendable {
     /// saying `startError` (a resumed chat's history still shows first, as it's read from disk).
     package var failedStarts = 0
     package var startError = #"{"type":"error","message":"The CLI is being updated. Try again in a moment."}"#
+    /// A history that can't give turns back (`ChatBackend.unloadPoint`): the chat keeps them.
+    package var unreadable = false
 
     package init(
         start: [Beat] = [.controls()], turns: [[Beat]] = [], compact: [Beat] = CLIScript.compaction(), agents: [String: [ChatEvent]] = [:],

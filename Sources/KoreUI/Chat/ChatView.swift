@@ -62,8 +62,19 @@ struct ChatView: View {
                     let seen = shown && !occluded.value
                     TranscriptTimeline(store: kept.transcript, actions: actions(kept)).equatable()
                         // Off screen, its stream draws a couple of times a second, not 30.
-                        .onChange(of: seen, initial: true) { _, seen in kept.transcript.hidden = !seen }
-                        .onDisappear { kept.transcript.hidden = false }
+                        .onChange(of: seen, initial: true) { _, seen in
+                            kept.transcript.hidden = !seen
+                            kept.transcript.covered = shown && !seen
+                            if seen {
+                                kept.transcript.seenAgain()
+                            } else if shown {
+                                kept.unloadOld()
+                            }
+                        }
+                        .onDisappear {
+                            kept.transcript.hidden = false
+                            kept.transcript.covered = false
+                        }
                         // The spinner's glyph takes the mode's colour, as the composer outline does.
                         .environment(\.spinnerTint, kept.controls.tint)
                         .environment(\.hiddenTab, !shown)
@@ -391,6 +402,7 @@ extension TranscriptActions {
         actions.rollBackAfter = { chat.rollBack(after: $0) }
         actions.loadEarlierConversation = { chat.loadEarlierConversation() }
         actions.loadEarlierTurns = { await chat.loadEarlier(turns: $0) }
+        actions.unloadOld = { chat.unloadOld() }
         actions.readEarlierMessages = { await chat.readEarlierMessages() }
         actions.openOriginal = workspace.openOriginal(of: chat)
         // Held by the chat's selection: neither the chat nor the window is kept by it.

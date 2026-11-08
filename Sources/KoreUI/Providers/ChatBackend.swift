@@ -76,6 +76,12 @@ package protocol ChatBackend: AnyObject {
     /// The user's messages before what's shown, oldest first, without loading the conversation
     /// around them: the message scroller's dim marks.
     func earlierMessages() async -> [EarlierMessage]
+    /// Where earlier history would go on from if this message were the first one held, and the
+    /// messages before there; nil when the history can't give back what's before it (not written
+    /// yet, no CLI to ask), and the chat keeps it. Nothing changes until `unloaded(to:)`.
+    func unloadPoint(message id: String?, text: String) async -> UnloadPoint?
+    /// What's before that message is read as earlier conversation from now on.
+    func unloaded(to earlier: String)
     /// Summarizes the conversation to free context (Claude `/compact`, Codex
     /// `thread/compact/start`): `.compactionStarted`, then `.compacted` or `.compactionFailed`.
     /// `instructions` say what the summary should keep, where the CLI takes them (Claude).
@@ -192,6 +198,18 @@ enum ForkError: LocalizedError {
 /// merged per file. Two chats running in one folder at once see each other's edits in their
 /// git diffs.
 /// A user message that isn't loaded yet.
+/// Where earlier history would go on from with a chat's oldest turns gone from memory
+/// (`ChatBackend.unloadPoint`), and the messages before there.
+package struct UnloadPoint: Sendable {
+    package let earlier: String
+    package let messages: [EarlierMessage]
+
+    package init(earlier: String, messages: [EarlierMessage]) {
+        self.earlier = earlier
+        self.messages = messages
+    }
+}
+
 package struct EarlierMessage: Equatable, Sendable {
     package let text: String
     /// How many turns `earlier(turns:)` has to go back to bring it in.
@@ -206,6 +224,8 @@ package struct EarlierMessage: Equatable, Sendable {
 extension ChatBackend {
     package func earlier(turns: Int) async -> (events: [ChatEvent], more: Bool)? { await earlier() }
     package func earlierMessages() async -> [EarlierMessage] { [] }
+    package func unloadPoint(message id: String?, text: String) async -> UnloadPoint? { nil }
+    package func unloaded(to earlier: String) {}
     package var observedAgents: Set<String> { [] }
     package func relaunchAfterAccountChange() async -> Bool {
         await relaunch(reason: "account changed")

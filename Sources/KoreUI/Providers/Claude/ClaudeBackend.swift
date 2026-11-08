@@ -888,6 +888,21 @@ final class ClaudeBackend: ChatBackend {
 
     func earlierMessages() async -> [EarlierMessage] {
         guard let from = earlierFrom, let source else { return [] }
+        return await earlierMessages(before: from, in: source)
+    }
+
+    /// Only a session of its own: its file holds the message's id once the CLI has written it.
+    /// `earlier` is the entry before the message, as for any page that ends at a message.
+    func unloadPoint(message id: String?, text: String) async -> UnloadPoint? {
+        guard let id, let sessionId, options.hiddenRows.isEmpty else { return nil }
+        let found = await page(sessionId, before: id, userTurns: 1)
+        guard found.messages.first?["uuid"]?.string == id, let earlier = found.earlier else { return nil }
+        return UnloadPoint(earlier: earlier, messages: await earlierMessages(before: earlier, in: sessionId))
+    }
+
+    func unloaded(to earlier: String) { earlierFrom = earlier }
+
+    private func earlierMessages(before from: String, in source: String) async -> [EarlierMessage] {
         let reader = reader(source)
         let said = await Task.detached(priority: .userInitiated) { reader.prompts(before: from) }.value
         // Back to the turn each is in: one sent during a turn comes in with that turn's start.
@@ -895,6 +910,7 @@ final class ClaudeBackend: ChatBackend {
         var messages: [EarlierMessage] = []
         for message in said.reversed() {
             if message.startsTurn { turns += 1 }
+            if message.summary { continue }
             messages.append(EarlierMessage(text: message.text, turns: max(turns + (message.startsTurn ? 0 : 1), 1)))
         }
         return messages.reversed()

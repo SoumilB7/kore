@@ -90,6 +90,11 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var built = Held((rows: TranscriptActions, reveal: TranscriptActions)?.none)
     /// The scroll view's last geometry: content height, offset, visible height, top inset, width.
     @StateObject private var seen = Held([CGFloat]())
+    /// That, as it last was on screen: under another tab a new height of the composer's (a new
+    /// chat's import line) moves it, and that says nothing of where the reader left it.
+    @StateObject private var seenShown = Held([CGFloat]())
+    /// Built anew out of sight (`renewOutOfSight`), and laying out until then.
+    @StateObject private var renewing = Held(Date?.none)
     /// A shown transcript with rows and none of them on screen (`checkBlank`): the check under
     /// way and when it looks (each call moves that on), how often the scroll view was built again
     /// for it, and when it was lately (a few a minute at most).
@@ -101,6 +106,8 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var settling = Held((offset: CGFloat?, until: Date, limit: Date)?.none)
     @StateObject private var mount = Local(0)
     @StateObject private var shown = Held(false)
+    /// The store this view counts as on screen in (`countOnScreen`).
+    @StateObject private var counted = Held(TranscriptStore?.none)
 
     private static let end = "transcript-end"
     private static let loadRow = "transcript-load-row"
@@ -117,7 +124,8 @@ struct TranscriptTimeline: View, Equatable {
     private static let settleLimit: TimeInterval = 1.5
 
     var body: some View {
-        let sections = frozen(hidden) { store.sections }
+        // What left memory leaves here too, behind another tab: all this view holds is let go.
+        let sections = frozen(hidden, epoch: store.unloads) { store.sections }
         return ScrollViewReader { proxy in
             let (rowActions, reveal) = builtActions(proxy)
             ScrollView {
@@ -170,6 +178,7 @@ struct TranscriptTimeline: View, Equatable {
                     MessageRail(store: store, tracker: sticky, reading: reading.value, atEnd: following.value, actions: actions) { id in
                         // The reader's new place: nothing held from before pulls it back.
                         following.value = false
+                        letGo()
                         anchor.value = nil
                         paged.value = nil
                         restore.value = nil
@@ -232,12 +241,28 @@ struct TranscriptTimeline: View, Equatable {
                 // would slide under the card.
                 let visibleMoved = new[2] != visibleHeight.value
                 visibleHeight.value = new[2]
+                // Built anew out of sight: at the end through its layout, shown by now or not. Those
+                // moves aren't the reader's, who takes over by scrolling (nothing followed then).
+                var renewed = false
+                if let until = renewing.value {
+                    if Date() >= until {
+                        renewing.value = nil
+                    } else if following.value {
+                        renewed = true
+                        if abs(offset + new[2] - height) > 1 {
+                            var instant = Transaction()
+                            instant.disablesAnimations = true
+                            withTransaction(instant) { proxy.scrollTo(Self.end, anchor: .bottom) }
+                        }
+                    }
+                }
                 // Under another tab, nobody reads or scrolls it: its moves are layout's and a glide's
                 // still under way, and say nothing of where the reader is. It shows as it was left.
                 if hidden {
                     geometry.value = (height, offset)
                     return
                 }
+                seenShown.value = new
                 // A move with no scroll phase (the scroll bar, End) never reaches `.idle` above.
                 // A new width can leave the content's height past its rows: looked at soon.
                 if old.count == new.count, old[4] > 0, new[4] != old[4] { checkBlank(soon: true) }
@@ -377,7 +402,7 @@ struct TranscriptTimeline: View, Equatable {
                 if insetSettling.value, !following.value || gesturing.value || offset + new[2] >= height - Self.atBottom {
                     insetSettling.value = false
                 }
-                if !shift.zoomAdjusting, following.value, !widthHeld, !insetSettling.value, height == geometry.value.height, height > new[2] + Self.atBottom,
+                if !shift.zoomAdjusting, following.value, !widthHeld, !renewed, !insetSettling.value, height == geometry.value.height, height > new[2] + Self.atBottom,
                     offset < geometry.value.offset - 1, offset + new[2] < height - Self.leftEnd
                 {
                     following.value = false
@@ -414,6 +439,33 @@ struct TranscriptTimeline: View, Equatable {
                 }
                 geometry.value = (height, offset)
             }
+            // A history read again brings a store of its own, under this same view.
+            .onChange(of: ObjectIdentifier(store), initial: true) {
+                // Following it, or there by a move that didn't say so.
+                store.readerAtEnd = { [following, gesturing, restore, restoreInRow, shift, seenShown] in
+                    let seen = seenShown.value
+                    let atEnd = following.value || (seen.count == 5 && seen[1] + seen[2] >= seen[0] - Self.atBottom)
+                    return atEnd && !gesturing.value && restore.value == nil && restoreInRow.value == nil && !shift.zoomAdjusting
+                }
+                // Rows gone while it was out of sight are laid out by now: the end is at once where
+                // the end row is, whatever the rows above it were estimated at.
+                store.backAtEnd = { [following, glidingUntil, glideCut, weak store = store] in
+                    following.value = true
+                    glidingUntil.value = nil
+                    glideCut.value = store?.sentAt
+                    var instant = Transaction()
+                    instant.disablesAnimations = true
+                    withTransaction(instant) { proxy.scrollTo(Self.end, anchor: .bottom) }
+                }
+                store.readerView = ObjectIdentifier(following)
+                countOnScreen()
+            }
+            // Out of sight behind another tab: the chat's oldest turns can leave memory.
+            .onChange(of: hidden) { _, hidden in
+                countOnScreen()
+                if hidden { actions.unloadOld() }
+            }
+            .onChange(of: store.unloads) { renewOutOfSight() }
             .onChange(of: store.folded?.seq) {
                 pendingFold.value = true
                 letGo()
@@ -552,6 +604,14 @@ struct TranscriptTimeline: View, Equatable {
                 shift.onZoomInput = nil
                 shift.onLetGo = nil
                 store.savedScroll = place(atEnd: following.value)
+                // A board's tile may have taken the chat over by now.
+                if store.readerView == ObjectIdentifier(following) {
+                    store.readerAtEnd = nil
+                    store.backAtEnd = nil
+                }
+                counted.value?.viewsOnScreen -= 1
+                counted.value = nil
+                actions.unloadOld()
             }
         }
     }
@@ -647,6 +707,34 @@ struct TranscriptTimeline: View, Equatable {
         widthHold.reset()
         shift.release()
         mount.value &+= 1
+    }
+
+    /// Turns left memory with nobody looking: a lazy stack would go on from heights it estimated
+    /// with those rows, and could come back past its rows with nothing drawn (a pin to the end
+    /// doesn't reach it). Out of sight, its scroll view is built anew at the end, so it's laid out
+    /// by the time the tab shows, and holds nothing of what left.
+    private func renewOutOfSight() {
+        guard !store.isOnScreen else { return }
+        following.value = true
+        glidingUntil.value = nil
+        glideCut.value = store.sentAt
+        position.value = ScrollPosition(edge: .bottom)
+        rowTops.value = [:]
+        answerTops.value = [:]
+        widthHold.reset()
+        shift.release()
+        settle(at: nil)
+        renewing.value = Date() + Self.settleLimit
+        mount.value &+= 1
+    }
+
+    /// This view counts its store's chat as on screen while it shows it.
+    private func countOnScreen() {
+        let now = hidden ? nil : store
+        guard counted.value !== now else { return }
+        counted.value?.viewsOnScreen -= 1
+        now?.viewsOnScreen += 1
+        counted.value = now
     }
 
     /// The reader's place isn't kept through a new width any longer (`WidthHold`).

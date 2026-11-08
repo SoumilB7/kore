@@ -939,7 +939,25 @@ final class CodexBackend: ChatBackend {
 
     /// Read a page at a time with only the messages in each turn (`summary`), no tool output.
     func earlierMessages() async -> [EarlierMessage] {
-        guard var cursor = earlierFrom, let session, let thread = sessionId else { return [] }
+        guard let cursor = earlierFrom else { return [] }
+        return await earlierMessages(before: cursor)
+    }
+
+    /// Only with its app-server up (no CLI is started for this): the page of turns from the
+    /// thread's end through the message's says where the turns before it go on.
+    func unloadPoint(message id: String?, text: String) async -> UnloadPoint? {
+        guard let session, let thread = sessionId, let found = try? await locate(session, thread, id: id, text: text),
+            let newest = try? await session.turns(of: thread, before: nil, limit: found.later.count + 1, view: .notLoaded),
+            newest.turns.first?["id"]?.string == found.turn, let earlier = newest.earlier
+        else { return nil }
+        return UnloadPoint(earlier: earlier, messages: await earlierMessages(before: earlier))
+    }
+
+    func unloaded(to earlier: String) { earlierFrom = earlier }
+
+    private func earlierMessages(before from: String) async -> [EarlierMessage] {
+        guard let session, let thread = sessionId else { return [] }
+        var cursor = from
         var turns: [JSONValue] = []
         while let older = try? await session.turns(of: thread, before: cursor, limit: 200, view: .summary) {
             turns = older.turns + turns

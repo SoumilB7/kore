@@ -29,6 +29,8 @@ struct TranscriptActions {
     var loadEarlierConversation: () -> Void = {}
     /// The message scroller's: goes back that many turns, and lists what's still not loaded.
     var loadEarlierTurns: (Int) async -> Void = { _ in }
+    /// The chat's oldest turns may leave memory now (`Chat.unloadOld`).
+    var unloadOld: () -> Void = {}
     var readEarlierMessages: () async -> Void = {}
     /// A fork's "Forked from" line: switches to the original chat's tab; nil when there's none.
     var openOriginal: (() -> Void)?

@@ -280,6 +280,11 @@ package final class Chat: Identifiable {
         if AgentTaps.on { AgentTaps.event?(self, event) }
         // A stopped turn took the compaction in it along, whether or not the CLI said so.
         if case .turnFinished = event, stoppingCompaction, context.compacting { dispatch(.compactionStopped) }
+        switch event {
+        case .earlierHistory: unloadOld(opening: true)
+        case .turnFinished: unloadOld()
+        default: break
+        }
     }
 
     /// Kore's record of a fork it lists follows its CLI: the id the CLI names it by. That a
@@ -1371,6 +1376,7 @@ package final class Chat: Identifiable {
     /// Loads a sub-agent's own transcript the first time it's opened, when the chat doesn't have
     /// it (a replayed chat's agents, Codex children).
     func loadAgentIfNeeded(_ id: String) {
+        transcript.keepLane(of: id)
         guard transcript.needsHistory(id) else { return }
         let backend = connect()
         Task {
@@ -1486,6 +1492,29 @@ package final class Chat: Identifiable {
         loadEarlierConversation()
     }
 
+    @ObservationIgnored private var unloading = false
+
+    /// The turns before the newest `TranscriptStore.keptTurns` leave memory, once its history has
+    /// said it can give them back: when the chat goes out of sight or a turn ends out of sight, and
+    /// as it opens (`opening`), the rows it hasn't built. An imported chat's carried rows are in
+    /// no history.
+    func unloadOld(opening: Bool = false) {
+        guard !unloading, !closed, !rollingBack, !isBusy, !awaitingHistory, sinceReplay == nil, imported == nil, waitingOrder.isEmpty,
+            let backend, let first = transcript.unloadPoint(opening: opening)
+        else { return }
+        unloading = true
+        let store = transcript
+        Task {
+            defer { unloading = false }
+            // Things may have moved on while the history was read.
+            guard let point = await backend.unloadPoint(message: first.source, text: first.text), backend === self.backend, store === transcript,
+                !closed, !rollingBack, !isBusy, store.unloadPoint(opening: opening)?.id == first.id
+            else { return }
+            backend.unloaded(to: point.earlier)
+            store.unload(before: first.id, earlier: point.messages)
+        }
+    }
+
     /// The conversation before a compaction, ten turns at a time.
     func loadEarlierConversation() {
         guard transcript.earlierAvailable, !transcript.loadingEarlier else { return }
@@ -1493,7 +1522,8 @@ package final class Chat: Identifiable {
         let backend = connect()
         Task {
             let page = await backend.earlier()
-            transcript.prepend(page?.events ?? [], more: page?.more ?? false)
+            // Not read (its CLI didn't start): what left memory is still there to ask for.
+            transcript.prepend(page?.events ?? [], more: page?.more ?? transcript.mayHaveLeft)
         }
     }
 
@@ -1502,7 +1532,7 @@ package final class Chat: Identifiable {
         guard transcript.earlierAvailable, !transcript.loadingEarlier else { return }
         transcript.startLoadingEarlier()
         let page = await connect().earlier(turns: turns)
-        transcript.prepend(page?.events ?? [], more: page?.more ?? false)
+        transcript.prepend(page?.events ?? [], more: page?.more ?? transcript.mayHaveLeft)
     }
 
     /// The user's messages not loaded yet, for the message scroller.

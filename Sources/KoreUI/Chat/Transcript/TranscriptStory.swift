@@ -187,3 +187,73 @@ extension StoryTranscript {
     package static var openedLinks: [URL] { TranscriptSelection.opened }
     package static var linksOpenedInKore: [URL] { TranscriptSelection.openedInKore }
 }
+
+// What's in memory of a transcript as a storyline checks it (`UnloadStorylines`).
+extension StoryTranscript {
+    /// The built rows in words, with nothing that differs between a row and the same row read
+    /// back (its ids): equal lines are equal rows.
+    package var rowLines: [String] {
+        store.sections.flatMap(\.items).map { item in
+            switch item.row {
+            case .entry(let e): "\(e.kind)|\(e.text)"
+            case .message(let e, let open, let expanded): "message|\(e.text)|\(open)|\(expanded)"
+            case .tool(let e, let open): "tool|\(e.toolName ?? "")|\(e.text)|\(e.result ?? "")|\(e.done)|\(e.isError)|\(open)"
+            case .thinking(let e, let open): "thinking|\(e.text)|\(open)"
+            case .file(let e, let open, _): "file|\(e.changes.map(\.path))|\(e.done)|\(open)"
+            case .agent(let e, _, let open): "agent|\(e.agent?.id ?? "")|\(e.agent?.name ?? "")|\(e.agent?.index ?? -1)|\(e.agent.map { "\($0.status)" } ?? "")|\(e.agent?.result ?? "")|\(open)"
+            case .fold(let f): "fold|\(f.label)|\(f.denied)|\(f.open)|\(f.count ?? "")|\(f.failed)"
+            case .rule: "rule"
+            case .outcome(_, let text, _, _, _): "outcome|\(text)"
+            case .signIn(_, let said): "signIn|\(said)"
+            case .slept(_, let said): "slept|\(said)"
+            case .changes(_, let files, let added, let removed): "changes|\(files)|\(added)|\(removed)"
+            case .explored(let calls, let open): "explored|\(calls.count)|\(open)"
+            case .summary(let e, let expanded): "summary|\(e.text)|\(expanded)"
+            case .queued(let e): "queued|\(e.text)"
+            case .spinner(_, _, _, let word, _): "spinner|\(word ?? "")"
+            }
+        }
+    }
+
+    package var earlierAvailable: Bool { store.earlierAvailable }
+    package var readerAtEnd: Bool { store.readerAtEnd?() ?? false }
+    /// Its tab is the one shown, its window aside.
+    package var showing: Bool { !store.hidden }
+    /// The layers drawing in the visible part of the transcript: none is a blank view.
+    package var drawnLayers: Int? { scrollView.flatMap(ScrollShift.drawn) }
+    /// Builds every turn the store holds.
+    package func showAll() { store.showAll() }
+    /// The agents the map lists, by id.
+    package var mapAgents: [String] {
+        let tree = store.agentTree()
+        return (tree.running + tree.done + tree.stopped).map(\.info.id).sorted()
+    }
+    /// An agent's own work, in rows.
+    package func agentRows(_ id: String) -> Int { store.agentItems(id).count }
+    /// Each changes row's files in the changes view.
+    package var changesShown: [Int] {
+        store.sections.flatMap(\.items).compactMap { item in
+            if case .changes(let turn, _, _, _) = item.row { store.changes(ofTurn: turn).count } else { nil }
+        }
+    }
+    /// Whether a message's row offers a rollback.
+    package func offersRollBack(_ text: String) -> Bool {
+        store.sections.flatMap(\.items).contains { item in
+            if case .message(let e, _, _) = item.row, e.text == text { item.actions?.canRollBack == true } else { false }
+        }
+    }
+    /// A message's row is built.
+    package func toggleTurn(of text: String) {
+        guard let at = store.entries.firstIndex(where: { $0.kind == .user && $0.text == text }),
+            let turn = store.entries[at...].lazy.compactMap(\.turn).first
+        else { return }
+        store.toggle(turn: turn)
+    }
+}
+
+extension Chat {
+    /// What `unloadOld`'s moments call.
+    package func storyUnload() { unloadOld() }
+    /// As a card, the map or an agent tab opening does.
+    package func storyOpenAgent(_ id: String) { loadAgentIfNeeded(id) }
+}

@@ -59,6 +59,8 @@ package final class TranscriptStore {
         /// it); for one sent in this run, the id Kore sent it with. `forkSource` on a fork's
         /// "Forked from" line.
         var source: String?
+        /// Kore's own row, in no CLI's history: it can't be read back (`unloadPoint`).
+        var local = false
 
         package static func == (a: Self, b: Self) -> Bool {
             a.id == b.id && a.kind == b.kind && a.text == b.text && a.result == b.result && a.done == b.done
@@ -225,7 +227,7 @@ package final class TranscriptStore {
     }
 
     /// The chat's first message: nothing comes before it to roll back to.
-    private var firstMessage: UUID? { entries.first { $0.kind == .user || $0.kind == .peer }?.id }
+    private var firstMessage: UUID? { hasUnloaded ? nil : entries.first { $0.kind == .user || $0.kind == .peer }?.id }
 
     struct MessageActions: Equatable {
         /// Always shown (the chat's newest finished answer); otherwise only under the pointer.
@@ -402,6 +404,62 @@ package final class TranscriptStore {
     @ObservationIgnored private var windowStart: UUID?
     @ObservationIgnored private var windowPlaced = false
     static let openTurns = 10
+    /// The user turns a chat keeps in memory; older ones are read back from its CLI's history
+    /// when the reader goes up to them (`unloadPoint`, `unload`).
+    static let keptTurns = 15
+    /// Turns of this chat left memory and haven't all come back.
+    @ObservationIgnored private var hasUnloaded = false
+    var mayHaveLeft: Bool { hasUnloaded }
+    /// Whether the reader is at the end, nothing moving the view: set by the timeline while it's
+    /// up. Gone, `savedScroll` says.
+    @ObservationIgnored var readerAtEnd: (() -> Bool)?
+    /// Which view those are.
+    @ObservationIgnored var readerView: ObjectIdentifier?
+    /// The timeline's views showing this chat (a tab's, a board tile's), its covered window aside.
+    /// On screen, turns never leave but the unbuilt ones as it opens: rows going from above change
+    /// what the lazy stack estimates of all the rest, and can leave the view past its rows with
+    /// nothing drawn.
+    @ObservationIgnored var viewsOnScreen = 0
+    /// Its tab is the one shown, in a window nothing shows.
+    @ObservationIgnored var covered = false
+    var isOnScreen: Bool { viewsOnScreen > 0 && !covered }
+    /// Takes the view to the end, as it shows again after turns left.
+    @ObservationIgnored var backAtEnd: (() -> Void)?
+    @ObservationIgnored private var leftUnseen = false
+    /// Changes when turns leave.
+    private(set) var unloads = 0
+
+    /// Seen again: at the end, if turns left meanwhile.
+    func seenAgain() {
+        guard leftUnseen else { return }
+        leftUnseen = false
+        DispatchQueue.main.async { [weak self] in self?.backAtEnd?() }
+    }
+    /// Until then nothing leaves: a page just read in, or a message searched for, is what its
+    /// reader is on the way to.
+    @ObservationIgnored private var staysUntil = Date.distantPast
+    private static let readInStays: TimeInterval = 2
+    /// What a turn that left memory knew beyond its CLI's history, by its id and its message's
+    /// (one CLI's turn ids last, the other's message ids do), for when it's read back.
+    @ObservationIgnored private var leftTurns: [String: LeftTurn] = [:]
+    /// The time the turns that left took, still in `workedBefore`: reading them back doesn't add it twice.
+    @ObservationIgnored private var leftWork: TimeInterval = 0
+    /// Cards of agents whose turns left memory: the map still lists them.
+    @ObservationIgnored private var parkedAgents: [String: AgentInfo] = [:]
+    /// Agents whose own work was looked at: it stays when their turn leaves (an agent tab may show it).
+    @ObservationIgnored private var keptLanes: Set<String> = []
+    /// The changes last read, for a modal open on a turn that left memory.
+    @ObservationIgnored private var changesRead: (turn: String, changes: [FileChange])?
+
+    private struct LeftTurn {
+        let duration: TimeInterval?
+        let outcome: Outcome
+        let denied: Int
+        let open: Bool
+        let touched: Bool
+        let startMode: String?
+        let endMode: String?
+    }
     /// The lowest entry index changed since the last rebuild: sections from the one holding it
     /// are built again, the ones above are kept. nil: nothing changed.
     @ObservationIgnored private var dirtyFrom: Int?
@@ -564,20 +622,30 @@ package final class TranscriptStore {
     /// more before it. A turn that's running stays the running one.
     func prepend(_ events: [ChatEvent], more: Bool) {
         let later = entries
-        let (running, latest) = (current, latestTurn)
+        staysUntil = Date().addingTimeInterval(Self.readInStays)
+        let (running, latest, answered, dismissed) = (current, latestTurn, lastAnswerTurn, retryDismissed)
+        let (mode, plan) = (permissionsMode, planOn)
+        let worked = workedBefore
         let known = agentOrder.count
         entries = []
         position = [:]
         batching = true
         events.forEach(apply)
+        restoreParked()
         // The page's agents that never finished in it are as stopped as a replay's.
         endUnfinishedAgents(from: known)
+        restoreLeftTurns()
         for entry in later {
             position[entry.id] = entries.count
             entries.append(entry)
         }
         batching = false
-        (current, latestTurn) = (running, latest)
+        (current, latestTurn, lastAnswerTurn, retryDismissed) = (running, latest, answered, dismissed)
+        (permissionsMode, planOn) = (mode, plan)
+        let back = min(workedBefore - worked, leftWork)
+        workedBefore -= back
+        leftWork -= back
+        hasUnloaded = hasUnloaded && more
         for i in entries.indices where entries[i].startedAt == nil && (entries[i].kind == .thinking || entries[i].kind == .answer) {
             entries[i].done = true
         }
@@ -592,6 +660,163 @@ package final class TranscriptStore {
         invalidateAll()
         rebuild()
         updateMarks()
+    }
+
+    // MARK: Unloading
+
+    /// A message a turn starts at, as its CLI's history knows it.
+    private static func startsTurn(_ entry: Entry) -> Bool {
+        entry.kind == .user && !entry.inTurn && !entry.text.hasPrefix("<")
+    }
+
+    /// The message the newest `keptTurns` begin at, when what's before it can leave memory now;
+    /// nil when nothing can: something's under way, the reader isn't at the end or has text
+    /// selected, or no row before it would come back as it was. On screen, none of it can but what
+    /// isn't built, `opening` the chat.
+    func unloadPoint(opening: Bool = false) -> Entry? {
+        guard !isOnScreen || opening else { return nil }
+        guard !turnIsOpen, queued.isEmpty, pendingSendSince == nil, compactingSince == nil, !loadingEarlier, pendingMessage == nil,
+            Date() >= staysUntil,
+            pendingApprovals.isEmpty, continuation == nil, !selection.hasSelection, readerAtEnd?() ?? savedScroll?.atEnd ?? true
+        else { return nil }
+        var start = entries.count
+        var kept = 0
+        while start > 0, kept < Self.keptTurns {
+            start -= 1
+            if Self.startsTurn(entries[start]) { kept += 1 }
+        }
+        guard kept == Self.keptTurns, start > 0 else { return nil }
+        // Up to the first row that can't be read back, and at a turn's own start.
+        let limit = min(start, firstUnreadable(before: start), isOnScreen ? windowStartIndex : start)
+        var cut = limit
+        while cut > 0 {
+            if Self.startsTurn(entries[cut]), entries[cut].source != nil,
+                entries[cut - 1].turn == nil || cut + 1 == entries.count || entries[cut - 1].turn != entries[cut + 1].turn
+            {
+                break
+            }
+            cut -= 1
+        }
+        guard cut > 0, entries[..<cut].contains(where: Self.startsTurn) else { return nil }
+        return entries[cut]
+    }
+
+    /// The first row before `end` that its CLI's history can't give back as it is: Kore's own, a
+    /// message no id finds, what still runs, a turn whose failure only Kore saw.
+    private func firstUnreadable(before end: Int) -> Int {
+        var first = end
+        for id in agentOrder where agent(id)?.status == .running || (agent(id)?.waiting ?? 0) > 0 {
+            if let card = cardIndex(id) { first = min(first, card) }
+        }
+        for id in refusedTurns where turnFirst[id] == nil {
+            first = min(first, turns[id]?.after.flatMap { position[$0] } ?? 0)
+        }
+        for i in 0..<first {
+            let entry = entries[i]
+            if entry.local || (entry.kind == .user && entry.source == nil) || (entry.kind == .tool && !entry.done) { return i }
+            guard let turn = entry.turn.flatMap({ turns[$0] }) else { continue }
+            switch turn.outcome {
+            case .completed, .interrupted: break
+            case .failed, .authFailed, .slept: return i
+            }
+        }
+        return first
+    }
+
+    /// What's before this message leaves memory, with all that's built from it. `marks`: the
+    /// messages that are in the history before it now. It can be read back by the way earlier
+    /// conversation always is.
+    func unload(before id: UUID, earlier marks: [EarlierMessage]) {
+        guard let cut = position[id], cut > 0 else { return }
+        let gone = entries[..<cut]
+        let goneIDs = Set(gone.map(\.id))
+        var message: String?
+        var left: Set<String> = []
+        var goneAgents: Set<String> = []
+        for entry in gone {
+            if entry.kind == .peer || Self.startsTurn(entry) { message = entry.source }
+            if let agent = entry.agent { park(agent, gone: &goneAgents) }
+            guard let id = entry.turn, left.insert(id).inserted, let turn = turns[id] else { continue }
+            let facts = LeftTurn(
+                duration: turn.duration, outcome: turn.outcome, denied: turn.denied, open: turn.open, touched: turn.touched,
+                startMode: turn.startMode, endMode: turn.endMode)
+            leftTurns[id] = facts
+            if let message { leftTurns[message] = facts }
+            leftWork += turn.duration ?? 0
+        }
+        for id in left {
+            turns[id] = nil
+            turnFirst[id] = nil
+        }
+        entries.removeFirst(cut)
+        position = Dictionary(uniqueKeysWithValues: entries.indices.map { (entries[$0].id, $0) })
+        tools = tools.filter { !goneIDs.contains($0.value) }
+        blocks = blocks.filter { block in
+            !goneIDs.contains(block.value) && !goneAgents.contains { block.key.hasPrefix($0 + "/") }
+        }
+        laneTools = laneTools.filter { !goneAgents.contains($0.value.agent) }
+        openKeys = openKeys.filter { key in
+            let id = key.hasPrefix("explored-") ? key.dropFirst("explored-".count) : Substring(key)
+            return UUID(uuidString: String(id.prefix(36))).map { !goneIDs.contains($0) } ?? true
+        }
+        if let start = windowStart, position[start] == nil { windowStart = nil }
+        hasUnloaded = true
+        earlierAvailable = true
+        earlierMarks = marks
+        countHidden()
+        invalidateAll()
+        rebuild()
+        updateMarks()
+        // It was left at the end: it comes back there.
+        savedScroll?.atEnd = true
+        if !isOnScreen { leftUnseen = true }
+        unloads &+= 1
+    }
+
+    /// An agent's card goes with its turn: what it is stays for the map. Its own work, and that
+    /// of the agents it spawned, is read back when it's opened, unless it's been looked at.
+    private func park(_ info: AgentInfo, gone: inout Set<String>) {
+        parkedAgents[info.id] = info
+        agentCards[info.id] = nil
+        guard !keptLanes.contains(info.id) else { return }
+        for child in lanes[info.id] ?? [] {
+            if let agent = child.agent {
+                park(agent, gone: &gone)
+                laneAgents[agent.id] = nil
+            }
+        }
+        lanes[info.id] = nil
+        loadedAgents.remove(info.id)
+        gone.insert(info.id)
+    }
+
+    /// Agents read back take up what they were.
+    private func restoreParked() {
+        guard !parkedAgents.isEmpty else { return }
+        for i in entries.indices {
+            if let id = entries[i].agent?.id, let info = parkedAgents.removeValue(forKey: id) { entries[i].agent = info }
+        }
+    }
+
+    /// Turns read back take up what only this run knew of them. Before the page's rows are joined
+    /// by the ones after it.
+    private func restoreLeftTurns() {
+        guard !leftTurns.isEmpty else { return }
+        var message: String?
+        var seen: Set<String> = []
+        for entry in entries {
+            if entry.kind == .peer || Self.startsTurn(entry) { message = entry.source }
+            guard let id = entry.turn, seen.insert(id).inserted, turns[id] != nil else { continue }
+            guard let facts = leftTurns.removeValue(forKey: id) ?? message.flatMap({ leftTurns[$0] }) else { continue }
+            if let message { leftTurns[message] = nil }
+            if let duration = facts.duration { turns[id]?.duration = duration }
+            turns[id]?.outcome = facts.outcome
+            turns[id]?.denied = facts.denied
+            turns[id]?.open = facts.open
+            turns[id]?.touched = facts.touched
+            turns[id]?.startMode = facts.startMode
+            turns[id]?.endMode = facts.endMode
+        }
     }
 
     /// The user's messages, oldest first, for the message scroller: where each one is.
@@ -629,6 +854,7 @@ package final class TranscriptStore {
     /// (for a while: a chat that never does stays at its end).
     func goToMessage(saying query: String, until: Date = Date().addingTimeInterval(8)) {
         pendingMessage = (query, until)
+        staysUntil = until
     }
 
     /// The message whose turn last says `query`, in what the store holds.
@@ -732,7 +958,9 @@ package final class TranscriptStore {
 
     /// After a fork's history: "Forked from "Refactor theme tokens"".
     func forkedFrom(_ title: String) {
-        append(Entry(kind: .divider, text: "Forked from \u{201C}\(title)\u{201D}", source: Self.forkSource))
+        var entry = Entry(kind: .divider, text: "Forked from \u{201C}\(title)\u{201D}", source: Self.forkSource)
+        entry.local = true
+        append(entry)
     }
 
     /// After an imported chat's carried part: "Continued in Codex · gpt-6-luna · 24 Oct". The
@@ -806,12 +1034,17 @@ package final class TranscriptStore {
     }
 
     func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date(), preserving observed: Set<String> = []) {
-        connection = .ok
-        if !batching { sending(false) }
+        if !batching {
+            connection = .ok
+            sending(false)
+        }
         guard let id = id ?? current, var turn = turns[id] else { return }
         endThinking()
-        settleAll()
-        pendingApprovals.removeAll()
+        // A page of earlier history read in says nothing of what's waiting now.
+        if !batching {
+            settleAll()
+            pendingApprovals.removeAll()
+        }
         // Its text has stopped streaming; after a stop, calls and agents the CLI never closed
         // (Codex sends nothing more for them) end as stopped. Replayed turns too.
         let interrupted = outcome == .interrupted
@@ -883,7 +1116,11 @@ package final class TranscriptStore {
         changed(turn: id)
     }
 
-    func changes(ofTurn id: String) -> [FileChange] { turns[id]?.changes ?? [] }
+    func changes(ofTurn id: String) -> [FileChange] {
+        guard let turn = turns[id] else { return changesRead?.turn == id ? changesRead?.changes ?? [] : [] }
+        changesRead = (id, turn.changes)
+        return turn.changes
+    }
 
     /// The latest turn ended because the Mac slept (the link's Continue).
     var latestTurnSlept: Bool {
@@ -1103,6 +1340,9 @@ package final class TranscriptStore {
         return laneAgents.first { $0.value.entry == id }?.key
     }
 
+    /// Its own work was opened: it's kept when its turn leaves memory.
+    func keepLane(of id: String) { keptLanes.insert(id) }
+
     /// An agent whose own work isn't here yet: from a replayed chat, or a Codex child.
     func needsHistory(_ id: String) -> Bool {
         guard let info = agent(id), info.status != .running, !loadedAgents.contains(id) else { return false }
@@ -1118,6 +1358,12 @@ package final class TranscriptStore {
         loadingHistory = true
         batch { events.forEach(apply) }
         loadingHistory = false
+        // Agents it spawned, read back with it, take up what they were.
+        guard !parkedAgents.isEmpty, var lane = lanes[id] else { return }
+        for i in lane.indices {
+            if let child = lane[i].agent?.id, let info = parkedAgents.removeValue(forKey: child) { lane[i].agent = info }
+        }
+        lanes[id] = lane
     }
 
     /// Opens or closes a sub-agent's card.
@@ -1138,8 +1384,8 @@ package final class TranscriptStore {
     /// A sub-agent's card details, for an approval it asks for.
     package func agent(_ id: String) -> AgentInfo? {
         if let card = agentCards[id], let i = position[card] { return entries[i].agent }
-        if let (parent, card) = laneAgents[id] { return lanes[parent]?.first { $0.id == card }?.agent }
-        return nil
+        if let (parent, card) = laneAgents[id], let found = lanes[parent]?.first(where: { $0.id == card })?.agent { return found }
+        return parkedAgents[id]
     }
 
     // MARK: Content
@@ -1284,7 +1530,8 @@ package final class TranscriptStore {
     /// The owner's messages with text, oldest first, the waiting ones last: what ↑ in an empty
     /// composer brings back (`ComposerView.recall`).
     var sentMessages: [String] {
-        (entries.lazy.filter { $0.kind == .user }.map(\.text) + queued.map(\.entry.text)).filter { !$0.allSatisfy(\.isWhitespace) }
+        ((hasUnloaded ? earlierMarks.map(\.text) : []) + entries.lazy.filter { $0.kind == .user }.map(\.text) + queued.map(\.entry.text))
+            .filter { !$0.allSatisfy(\.isWhitespace) }
     }
 
     func messageQueued(id: String, text: String, attachments: [Attachment]) {
@@ -1421,6 +1668,7 @@ package final class TranscriptStore {
         guard let asked = option(asked), let kept = option(kept) else { return }
         var entry = Entry(kind: .notice, text: "Couldn't switch to \(asked.label) · staying on \(kept.label)")
         entry.warning = true
+        entry.local = !batching
         entry.turn = current
         append(entry)
     }
@@ -1428,6 +1676,7 @@ package final class TranscriptStore {
     func notice(_ text: String, isError: Bool) {
         var entry = Entry(kind: .notice, text: text, isError: isError)
         entry.turn = current
+        entry.local = !batching
         append(entry)
     }
 
@@ -1437,7 +1686,7 @@ package final class TranscriptStore {
     /// agent of this chat has, so two live agents never share a shape (with more than eight live,
     /// shapes repeat). Finished agents' shapes are free again; an agent keeps its index for life.
     func freeAgentIndex() -> Int {
-        let base = agentCards.count + laneAgents.count
+        let base = agentCards.count + laneAgents.count + parkedAgents.count
         let count = AgentShape.allCases.count
         let live = Set(agentOrder.compactMap { agent($0) }.filter { $0.status == .running }.map { $0.index % count })
         let step = (0..<count).first { !live.contains((base + $0) % count) } ?? 0
@@ -1452,7 +1701,8 @@ package final class TranscriptStore {
         entry.agent = AgentInfo(
             id: id, index: freeAgentIndex(), name: name, type: type, model: model, prompt: prompt,
             parent: parent, background: background, startedAt: date)
-        agentOrder.append(id)
+        // One read back from history stays in its place.
+        if !agentOrder.contains(id) { agentOrder.append(id) }
         lanes[id] = lanes[id] ?? []
         if let parent {
             // A sub-agent's own agent: a card in its parent's lane, on the call that spawned it.
@@ -2134,6 +2384,8 @@ package final class TranscriptStore {
             lanes[parent]![i].agent != nil
         {
             change(&lanes[parent]![i].agent!)
+        } else if parkedAgents[id] != nil {
+            change(&parkedAgents[id]!)
         } else {
             return
         }

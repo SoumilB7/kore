@@ -20,13 +20,16 @@ extension EnvironmentValues {
 /// `@StateObject private var frozen = Frozen<Value>()`, then `frozen(hidden) { live }`.
 final class Frozen<Value>: ObservableObject {
     private var kept: Value?
+    private var keptEpoch = 0
 
-    func callAsFunction(_ hidden: Bool, _ live: () -> Value) -> Value {
+    /// `epoch`: a new one takes the live value, hidden or not.
+    func callAsFunction(_ hidden: Bool, epoch: Int = 0, _ live: () -> Value) -> Value {
         guard hidden else {
             kept = nil
             return live()
         }
-        if let kept { return kept }
+        if let kept, keptEpoch == epoch { return kept }
+        keptEpoch = epoch
         let value = live()
         kept = value
         return value
