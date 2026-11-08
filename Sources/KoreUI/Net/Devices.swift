@@ -113,8 +113,31 @@ package final class Devices {
 
     package func changed() { revision += 1 }
 
-    func openedPopup() { popupOpen = true }
-    func closedPopup() { popupOpen = false }
+    func openedPopup() {
+        popupOpen = true
+        holdBoxes()
+    }
+
+    func closedPopup() {
+        popupOpen = false
+        for connection in popupLinks { connection.release() }
+        popupLinks = []
+    }
+
+    /// The links the popup holds while it shows: every enrolled box's (not taken offline), so
+    /// what waits there and how it is are live.
+    @ObservationIgnored private var popupLinks: [HostConnection] = []
+
+    private func holdBoxes() {
+        guard popupLinks.isEmpty, net?.facts.on == true else { return }
+        for entry in NodeDirectory.shared.all.values where entry.enrolled {
+            let key = entry.rekeyed ? entry.id.raw : entry.ssh ?? entry.id.raw
+            guard !NetPauses.shared.contains(key) else { continue }
+            let connection = BoxList.shared.link(key)
+            connection.retain()
+            popupLinks.append(connection)
+        }
+    }
 
     // MARK: The picture
 

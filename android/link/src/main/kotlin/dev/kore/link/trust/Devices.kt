@@ -39,6 +39,8 @@ data class Device(
     val tags: List<String> = emptyList(),
     val raiseKey: ByteArray? = null,
     val paused: Boolean = false,
+    /** This phone's own note, never on the wire: the Macs whose directories list this box. */
+    val via: Set<UUID> = emptySet(),
 ) {
     /** `box-1.tail1234.ts.net.` → `box-1`. */
     val shortName: String get() = fqdn.substringBefore('.').ifEmpty { name }
@@ -46,7 +48,8 @@ data class Device(
     fun withNodeKey(key: String): Device =
         if (key in nodeKeys) this else copy(nodeKeys = (nodeKeys + key).takeLast(MAX_NODE_KEYS))
 
-    fun toJson(): JsonObject = buildJsonObject {
+    /** The record's JSON; [local] adds this phone's own [via] (the book on disk). */
+    fun toJson(local: Boolean = false): JsonObject = buildJsonObject {
         put("id", id.toString().uppercase())
         put("name", name)
         put("kind", kind.wire)
@@ -59,6 +62,7 @@ data class Device(
         put("fqdn", fqdn)
         raiseKey?.let { put("raiseKey", b64(it)) }
         if (paused) put("paused", true)
+        if (local && via.isNotEmpty()) put("via", JsonArray(via.map { JsonPrimitive(it.toString()) }))
     }
 
     override fun equals(other: Any?): Boolean = other is Device && toJson() == other.toJson()
@@ -82,6 +86,7 @@ data class Device(
                 tags = (o["tags"] as? JsonArray)?.map { (it as JsonPrimitive).content }.orEmpty(),
                 raiseKey = o.s("raiseKey")?.let { Base64.getDecoder().decode(it) },
                 paused = (o["paused"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                via = (o["via"] as? JsonArray)?.mapNotNull { runCatching { UUID.fromString((it as JsonPrimitive).content) }.getOrNull() }.orEmpty().toSet(),
             ).takeIf { it.identityKey.isNotEmpty() && it.nodeKeys.size <= MAX_NODE_KEYS }
         }.getOrNull()
 
@@ -102,7 +107,7 @@ class DeviceBook(initial: List<Device> = emptyList(), private val save: (List<De
     @Synchronized fun get(id: UUID): Device? = devices[id]
 
     @Synchronized fun put(device: Device) {
-        devices[device.id] = device
+        devices[device.id] = devices[device.id]?.let { device.copy(via = device.via + it.via) } ?: device
         save(devices.values.toList())
     }
 
@@ -116,18 +121,27 @@ class DeviceBook(initial: List<Device> = emptyList(), private val save: (List<De
     }
 
     /**
-     * An owner Mac's directory: every box and Mac it lists, except this phone itself. Records the
-     * phone already pinned keep their node keys (and a Mac's identity key never changes here).
+     * An owner Mac's directory, whole: every box and Mac it lists, except this phone itself. Records
+     * the phone already pinned keep their node keys (and a Mac's identity key never changes here).
+     * A box it no longer lists (removed, taken offline) goes, unless another Mac's directory still
+     * lists it; a box kept from before this note ([Device.via] empty) counts as this Mac's.
      */
     @Synchronized fun applyDirectory(from: UUID, self: UUID, records: List<Device>) {
         val mac = devices[from] ?: return
         if (mac.kind != NodeKind.MAC) return
+        val listed = HashSet<UUID>()
         for (r in records) {
             if (r.id == self || r.kind == NodeKind.PHONE) continue
+            listed += r.id
             val known = devices[r.id]
             devices[r.id] = if (known != null && known.kind == NodeKind.MAC) known.copy(name = r.name)
-            else if (known != null) r.copy(nodeKeys = (known.nodeKeys + r.nodeKeys).distinct().takeLast(Device.MAX_NODE_KEYS))
-            else r
+            else if (known != null) r.copy(nodeKeys = (known.nodeKeys + r.nodeKeys).distinct().takeLast(Device.MAX_NODE_KEYS), via = known.via + from)
+            else r.copy(via = setOf(from))
+        }
+        for (d in devices.values.toList()) {
+            if (d.kind != NodeKind.BOX || d.id in listed || (d.via.isNotEmpty() && from !in d.via)) continue
+            val others = d.via - from
+            if (others.isEmpty()) devices.remove(d.id) else devices[d.id] = d.copy(via = others)
         }
         save(devices.values.toList())
     }

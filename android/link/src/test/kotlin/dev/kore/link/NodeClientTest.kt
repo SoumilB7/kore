@@ -68,6 +68,16 @@ class NodeClientTest {
         assertEquals(listOf(0L, 100L), rig.dials)
     }
 
+    @Test fun aNamedBoxTheTailnetSaysIsAsleepIsLeftAlone() = runTest {
+        val rig = Rig(this, listOf({ PeerOffline() }), device = box())
+        rig.client.start()
+        runCurrent()
+        assertEquals(NodeMachine.AwayWhy.ASLEEP, (rig.client.state.value as State.Away).why)
+        rig.client.named()
+        runCurrent()
+        assertEquals(1, rig.dials.size)
+    }
+
     @Test fun aNamedNodeThatIsUpIsLeftAlone() = runTest {
         val link = link()
         val rig = Rig(this, listOf({ link }))

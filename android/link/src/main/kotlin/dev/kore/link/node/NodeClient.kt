@@ -164,11 +164,14 @@ class NodeClient(
 
     /**
      * The Mac's directory named this node: one that turned this phone away (a box waiting for the
-     * Mac's push) or is out of reach dials again now.
+     * Mac's push) or couldn't be reached dials again now. One the tailnet says is asleep, or that
+     * was taken offline, waits for its own trigger.
      */
     fun named() {
         val s = stateFlow.value
-        if (s is NodeMachine.State.Away || s is NodeMachine.State.Denied) post(NodeMachine.Event.Trigger)
+        val retry = s is NodeMachine.State.Denied ||
+            (s is NodeMachine.State.Away && (s.why == NodeMachine.AwayWhy.WAITING || s.why == NodeMachine.AwayWhy.UNREACHABLE))
+        if (retry) post(NodeMachine.Event.Trigger)
     }
 
     /** Stops dialing and ends the link (the app went off screen with background mode off). */

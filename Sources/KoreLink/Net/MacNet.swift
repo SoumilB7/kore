@@ -38,6 +38,8 @@ package protocol BoxDevicesLink: AnyObject {
     var boxPeer: NetPeer? { get }
     /// Up, and the box says it takes a merging `devices.set`.
     var takesMerge: Bool { get }
+    /// Which dial the link is on: an answer is awaited only on the dial its push went out on.
+    var dialNumber: Int { get }
     func post(_ payload: Data) -> Bool
 }
 
@@ -149,6 +151,8 @@ package final class MacNet {
 
     private struct Sent {
         var box: UUID
+        /// The link's dial it went out on: a link that dropped since never answers it.
+        var dial: Int
         var pushed: NodeDirectory.Pushed
         /// The box book's rev before it (its welcome's, or the last push's answer).
         var before: Int?
@@ -240,6 +244,8 @@ package final class MacNet {
         let mine = generation
         host.hold(Self.busKey, !allowedPhones().isEmpty || addOpen)
         guard let tailnet = host.tailnet, Self.listens(on: true, running: true, phones: allowedPhones().count, addOpen: addOpen) else {
+            // No port, but pushes still need who this Mac is (a revoke owed to a box).
+            learnIdentity()
             return close()
         }
         let name = host.macName
@@ -503,6 +509,27 @@ package final class MacNet {
 
     /// The identity's signer: read (the Keychain) off the main actor at a `refresh`.
     private var signer: (any IdentitySigner)?
+    private var learning = false
+
+    /// Reads this Mac's identity off the main actor once, when no listening `refresh` did: the
+    /// boxes are then caught up (what this Mac issued, even nothing at all).
+    private func learnIdentity() {
+        guard device == nil, !learning, let reader = host.identityReader() else { return }
+        learning = true
+        let foreground = foreground
+        background { [weak self] in
+            let identity = try? reader()
+            _ = self
+            foreground { [weak self] in
+                guard let self else { return }
+                self.learning = false
+                guard let identity, self.device == nil else { return }
+                self.signer = identity.signer
+                self.shared.withLock { $0.identity = (identity.device, identity.signer.publicKey) }
+                self.catchUpBoxes()
+            }
+        }
+    }
 
     /// A stranger's hello: inside the Add device window, a phone of this Mac's own user (or a
     /// tagged node with Kore's app capability, read+ask at most) waits for the owner's card.
@@ -722,13 +749,15 @@ package final class MacNet {
         guard link.takesMerge, let peer = link.boxPeer, let (records, rev, me) = issued() else { return }
         let box = peer.record.id
         let last = host.directory.all[box.uuidString.lowercased()]?.pushed
-        // A push to this box already on its way carries this rev: nothing more.
+        // Pushes to this box on a dial that's gone will never be answered.
+        sent = sent.filter { $0.value.box != box || $0.value.dial == link.dialNumber }
+        // A push on this very link that carries this rev is on its way: nothing more.
         if sent.values.contains(where: { $0.box == box && $0.pushed.by == me && $0.pushed.bookRev == rev }) { return }
         guard Self.owes(last, by: me, bookRev: rev, boxRev: peer.devicesRev) else { return }
         let set = DevicesWire.Set(id: UUID().uuidString, rev: 0, records: records, merge: true)
         guard link.post(DevicesWire.encode(set)) else { return }
         if sent.count >= 64 { sent = [:] }
-        sent[set.id] = Sent(box: box, pushed: .init(by: me, bookRev: rev, boxRev: peer.devicesRev ?? 0), before: peer.devicesRev)
+        sent[set.id] = Sent(box: box, dial: link.dialNumber, pushed: .init(by: me, bookRev: rev, boxRev: peer.devicesRev ?? 0), before: peer.devicesRev)
         NetAudit.line("push", ["box": box.uuidString.lowercased(), "records": "\(records.count)", "rev": "\(rev)"])
     }
 

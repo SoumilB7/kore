@@ -242,7 +242,7 @@ class Mesh(private val app: KoreApp) {
     private fun save(devices: List<Device>) {
         runCatching {
             val tmp = File(bookFile.path + ".tmp")
-            tmp.writeText(JsonArray(devices.map { it.toJson() }).toString())
+            tmp.writeText(JsonArray(devices.map { it.toJson(local = true) }).toString())
             tmp.renameTo(bookFile)
         }
     }

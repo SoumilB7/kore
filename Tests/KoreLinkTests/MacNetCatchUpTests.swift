@@ -11,6 +11,7 @@ import Testing
 final class FakeBoxLink: BoxDevicesLink {
     var boxPeer: NetPeer?
     var takesMerge = true
+    var dialNumber = 1
     var posted: [DevicesWire.Set] = []
 
     init(box: DeviceRecord?, rev: Int?) {
@@ -140,6 +141,34 @@ struct MacNetCatchUpTests {
         rig.net.catchUp(link)
         rig.net.catchUp(link)
         #expect(link.posted.count == 1)
+    }
+
+    @Test func aLinkThatDropsBeforeTheAnswerIsPushedAgainOnItsNextDial() throws {
+        let (rig, box) = try rig()
+        defer { rig.finish() }
+        try rig.allow(Phone())
+        let link = FakeBoxLink(box: box, rev: 2)
+        rig.net.catchUp(link)
+        // Dropped with the answer on its way; back on a new dial.
+        link.dialNumber = 2
+        rig.net.catchUp(link)
+        #expect(link.posted.count == 2)
+    }
+
+    @Test func withNoPhoneAndNoPortTheIdentityIsStillReadAndABoxIsToldNone() throws {
+        let (rig, box) = try rig()
+        defer { rig.finish() }
+        // A phone allowed once and pushed, then removed; Kore restarts with none.
+        let net = MacNet(host: rig.host, feed: rig.feed, asks: rig.asks, clock: rig.clock.function)
+        net.background = { $0() }
+        net.foreground = { work in MainActor.assumeIsolated { work() } }
+        let link = FakeBoxLink(box: box, rev: 3)
+        net.boxLinks = { [link] }
+        defer { net.stop() }
+        net.refresh()
+        #expect(!net.listening && net.device == rig.host.device)
+        let set = try #require(link.posted.first)
+        #expect(set.merge == true && set.records.isEmpty)
     }
 
     @Test func aPlainSSHGrantLinkIsNeverPushed() throws {

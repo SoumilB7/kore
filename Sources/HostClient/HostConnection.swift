@@ -345,6 +345,8 @@ package final class HostConnection {
     /// The box as this link's KoreNet session proved it (tailnet, or SSH `attach --proto 2`): its
     /// record and its book's rev; nil on a plain SSH grant link or while down.
     package var netPeer: NetPeer? { (transport as? NetTransport)?.peer }
+    /// Which dial the link is on now: a link that dropped and came back is another.
+    package var dialNumber: Int { transportDial }
 
     /// A link that takes a merging `devices.set` is ready (every route, every time): an owner Mac
     /// catches the box up on what it issued (KoreLink's `MacNet`).

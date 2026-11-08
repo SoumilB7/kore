@@ -282,9 +282,11 @@ extension DevicesPicture {
         var seen = Set<String>()
         var waiting: [PendingRow] = []
         // Every box's: an offline one's as it last said (kept on its entry), so a device waiting
-        // there can be allowed with no window open.
+        // there can be allowed with no window open. A device allowed here since is a row of its own.
+        let allowed = Set(phones.map(\.id))
         for box in boxes {
-            for device in box.pending where now.timeIntervalSince(device.lastSeen) < coolDown && seen.insert(device.nodeKey).inserted {
+            for device in box.pending
+            where now.timeIntervalSince(device.lastSeen) < coolDown && !(device.device.map(allowed.contains) ?? false) && seen.insert(device.nodeKey).inserted {
                 waiting.append(PendingRow(device: device, box: box.key, at: box.name))
             }
         }

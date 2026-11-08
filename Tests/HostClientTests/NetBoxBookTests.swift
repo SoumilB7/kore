@@ -59,6 +59,19 @@ struct NetBoxBookTests {
         #expect(picture.pending.map(\.device.nodeKey) == ["nodekey:p9"])
     }
 
+    @Test func aKeptEntryForAPhoneAllowedSinceDoesntWait() {
+        var down = BoxFacts(key: "mybox", name: "mybox")
+        down.listed = .ready
+        down.entry = entry()
+        let allowed = waiting("nodekey:allowed")
+        down.pending = [allowed, waiting()]
+        let phone = PhoneFacts(id: allowed.device!, name: "Pixel 9", connected: true)
+        let picture = DevicesPicture.make(
+            net: NetFacts(on: true, state: .installed, status: nil), macName: "MacBook", boxes: [down], phones: [phone], addUntil: nil, refusals: [],
+            signingIn: false, nudge: false, now: Self.now)
+        #expect(picture.pending.map(\.device.nodeKey) == ["nodekey:p9"])
+    }
+
     @Test func aBoxsRecordFollowsRenameTakeOfflineAndRemove() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("net-box-book-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
