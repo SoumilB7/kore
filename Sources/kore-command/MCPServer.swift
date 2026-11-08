@@ -172,7 +172,7 @@ enum MCPServer {
             if !allowed.contains(tool.command) {
                 let tier = client.welcome["tier"] as? String ?? "off"
                 return failure("This needs Arsenal's \(tierNeeded(tool.command).capitalized) tier; this chat has \(tier.capitalized). "
-                    + "The user picks a tier from its name beside the K on the chat's tab.")
+                    + "The user picks a tier from the Arsenal icon at the top right of Kore's window.")
             }
             let data = try client.run(tool.command, args)
             let text = (try? JSONSerialization.data(withJSONObject: data, options: [.sortedKeys, .withoutEscapingSlashes])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"

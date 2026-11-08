@@ -65,6 +65,8 @@ extension StoryID {
         /// ">_ 2": the chat's live background commands; opens the map at them.
         package static let commands = StoryID(.titlebar, "commands")
         package static let newtab = StoryID(.titlebar, "newtab")
+        /// Arsenal's icon, while the chat in front has it on; its click opens the tiers.
+        package static let arsenal = StoryID(.titlebar, "arsenal")
         /// The Stay awake cup; its click turns it on or off.
         package static let awake = StoryID(.titlebar, "awake")
         /// A mode in the cup's menu, by `StayAwake.Mode`'s id; "off" is Turn Off.
@@ -84,9 +86,6 @@ extension StoryID {
         /// A chat or agent tab; `.part(.close)` is its close button.
         package static func tab(_ id: UUID) -> StoryID { StoryID(.tabs, "tab", key: id.uuidString) }
         package static func file(_ relativePath: String) -> StoryID { StoryID(.tabs, "file", key: relativePath) }
-        /// A chat tab's Arsenal K, and the chevron that opens its tiers.
-        package static func arsenal(_ id: UUID) -> StoryID { StoryID(.tabs, "arsenal", key: id.uuidString) }
-        package static func arsenalTiers(_ id: UUID) -> StoryID { StoryID(.tabs, "arsenal.tiers", key: id.uuidString) }
         /// The strip the tabs scroll in.
         package static let strip = StoryID(.tabs, "strip")
     }

@@ -14,120 +14,39 @@ extension Theme {
             case .full: Theme.warning
             }
         }
-        /// The K's stem behind its arms.
-        static let stem = 0.5
     }
 }
 
-extension Size {
-    enum Arsenal {
-        static let width: CGFloat = 9
-        static let height: CGFloat = 12
-        static let button: CGFloat = 20
-    }
-}
-
-/// The K alone, in one colour with its stem fainter. Paths and no image, so a colour change can fade.
-struct ArsenalMark: View {
-    let color: Color
-
-    var body: some View {
-        ZStack {
-            SizedPath(Self.stem).fill(color.opacity(Theme.Arsenal.stem))
-            SizedPath(Self.arms).fill(color)
-        }
-        .frame(width: Size.Arsenal.width, height: Size.Arsenal.height)
-        .accessibilityHidden(true)
-    }
-
-    // The K's own 148 × 204 box.
-    nonisolated private static func point(_ x: CGFloat, _ y: CGFloat, _ size: CGSize) -> CGPoint {
-        CGPoint(x: (x - 78) / 148 * size.width, y: (y - 26) / 204 * size.height)
-    }
-
-    private static let stem: @Sendable (CGSize) -> Path = { size in
-        let origin = point(112, 30, size)
-        let end = point(144, 226, size)
-        let rect = CGRect(x: origin.x, y: origin.y, width: end.x - origin.x, height: end.y - origin.y)
-        return Path(roundedRect: rect, cornerRadius: rect.width / 4)
-    }
-
-    private static let arms: @Sendable (CGSize) -> Path = { size in
-        var path = Path()
-        path.addLines([point(84, 147.96, size), point(220, 33.72, size), point(220, 67.72, size), point(84, 181.96, size)])
-        path.closeSubpath()
-        path.addLines([point(84, 74.04, size), point(220, 188.28, size), point(220, 222.28, size), point(84, 108.04, size)])
-        path.closeSubpath()
-        return path
-    }
-}
-
-/// The K on a chat's tab, while it has Arsenal: in the tier's colour, with the tier's name and its
-/// chevron under the pointer, and a click turns it off. The way in is the tab's right-click or
-/// ⌥⌘K. It reads the chat's tier here, so a change redraws this and no more of the bar.
-struct ArsenalTabControl: View {
+/// Arsenal in the window's top row, beside the cup and the clock, for the chat in front: there only
+/// while it has Arsenal on, in its tier's colour. A click opens the tiers, Off and Stop agent
+/// control; the tab's right-click or ⌥⌘K turns it on. It reads the chat's tier here, so a change
+/// redraws this and no more of the row.
+struct ArsenalTitlebarButton: View {
     let chat: Chat
-    let tab: UUID
-    let hoveredTab: Bool
-    /// The tab has room for the tier's name; otherwise its chevron alone.
-    let showsName: Bool
+    let size: CGFloat
     @StateObject private var hovered = Local(false)
 
-    private var tabHovered: Bool { hoveredTab || Arsenal.shared.storyHover }
+    /// A charge in a ring: power handed to this chat. Line art, as the cup and the clock are.
+    static let symbol = "bolt.horizontal.circle"
 
     var body: some View {
         if let tier = chat.arsenal {
-            HStack(spacing: 0) {
-                // The name grows to the left, so the K stays under the pointer.
-                if tabHovered { word(tier) }
-                button
+            OptionMenuButton(source: "arsenal", items: { Arsenal.shared.tierItems(chat) }, chevron: false) {
+                Image(systemName: Self.symbol)
+                    .font(Chrome.bodyMedium)
+                    .foregroundStyle(Theme.Arsenal.color(tier))
+                    .frame(width: size, height: size)
+                    .background(hovered.value ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
+                    .contentShape(RoundedRectangle(cornerRadius: Radius.control))
             }
+            .onHover { hovered.value = $0 }
+            .help("Arsenal · \(tier.title)")
+            .accessibilityLabel("Arsenal")
+            .accessibilityValue(tier.title)
+            .storyID(StoryID.Titlebar.arsenal)
             // Fades on; off is instant.
             .transition(.asymmetric(insertion: .opacity.animation(Motion.fade), removal: .identity))
         }
-    }
-
-    private var color: Color { Theme.Arsenal.color(chat.arsenal ?? .watch) }
-
-    private var button: some View {
-        Button {
-            Arsenal.shared.turnOff(chat)
-        } label: {
-            Group {
-                if hovered.value {
-                    Image(systemName: "xmark.circle.fill").font(TextStyle.label).foregroundStyle(color)
-                } else {
-                    ArsenalMark(color: color)
-                }
-            }
-            .frame(width: Size.Arsenal.button, height: Size.Arsenal.button)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered.value = $0 }
-        .help("Turn off Arsenal · \(Arsenal.key)")
-        .accessibilityLabel("Arsenal")
-        .storyID(StoryID.Tabs.arsenal(tab))
-    }
-
-    private func word(_ tier: ArsenalTier) -> some View {
-        OptionMenuButton(source: "arsenal", items: { Arsenal.shared.tierItems(chat) }) {
-            if showsName {
-                Text(tier.title).font(Chrome.label).foregroundStyle(Theme.Arsenal.color(tier)).lineLimit(1).fixedSize()
-            }
-        }
-        .help("\(tier.title) · \(tier.reach)")
-        .accessibilityLabel("Arsenal tiers")
-        .storyID(StoryID.Tabs.arsenalTiers(tab))
-    }
-}
-
-/// A tab too narrow for the control: the K, while on.
-struct ArsenalOnBadge: View {
-    let chat: Chat
-
-    var body: some View {
-        if let tier = chat.arsenal { ArsenalMark(color: Theme.Arsenal.color(tier)).allowsHitTesting(false) }
     }
 }
 

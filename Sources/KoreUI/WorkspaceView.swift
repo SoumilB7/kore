@@ -420,6 +420,7 @@ struct TabBar: View {
             if let chat = workspace.activeTab.chat {
                 AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents, press: chat.agentMap.toggle)
                 CommandsButton(chat: chat, height: tabHeight)
+                if workspace.activeTab.agent == nil { ArsenalTitlebarButton(chat: chat, size: tabHeight) }
             }
             if let awake = StayAwake.current {
                 StayAwakeButton(awake: awake, size: tabHeight).storyID(StoryID.Titlebar.awake)
@@ -1290,24 +1291,11 @@ private struct TabItem: View {
         // to compete with the title bar's own window dragging.
         HStack(spacing: 0) {
             select
-            arsenal
             if label != .letters { close }
         }
         // Over the letters' end, so nothing moves as it shows.
         .overlay(alignment: .trailing) {
             if label == .letters { close }
-        }
-        // No room for a button: the K alone says it's on, and the right-click or ⌥⌘K turns it off.
-        .overlay(alignment: .bottomLeading) {
-            if label == .mark, let chat = tab.chat, tab.agent == nil { ArsenalOnBadge(chat: chat) }
-        }
-    }
-
-    /// The K, on a chat's own tab with room for it.
-    @ViewBuilder private var arsenal: some View {
-        if label != .mark, let chat = tab.chat, tab.agent == nil {
-            ArsenalTabControl(chat: chat, tab: tab.id, hoveredTab: hovered.value, showsName: label == .name)
-                .padding(.trailing, label == .letters && closeShown ? Size.closeGlyph : 0)
         }
     }
 

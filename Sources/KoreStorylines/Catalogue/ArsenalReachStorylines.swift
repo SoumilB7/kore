@@ -106,6 +106,9 @@ final class ArsenalReach: ChatStoryline {
                 Arsenal.shared.choose(.drive, a)
             },
             role("a", "Drive") { $0.arsenal == .drive },
+            // a in front, at Drive: the icon in the titlebar.
+            ExpectElement(.id(StoryID.Titlebar.arsenal)),
+            Snapshot("titlebar-arsenal-drive"),
             SendTo("a", "next"), TurnsDone("a", 2),
             role("a", "that turn carried Kore's note, once") { a in
                 let notes = ScriptedWorld.shared.backend(session: a.sessionId)?.log.compactMap { call -> String? in
@@ -125,6 +128,8 @@ final class ArsenalReach: ChatStoryline {
                 let launched = ScriptedWorld.shared.backend(session: shown.sessionId)?.options.model
                 return shown !== a && shown.arsenal == nil && launched == "gpt-6-sol"
             },
+            // The new chat in front has Arsenal off: no icon.
+            ExpectElement(.id(StoryID.Titlebar.arsenal), .absent),
         ] + (codex ? [] : [
             // Codex from Manual: none, as Read only reads any file without asking.
             mcp([Self.initialize, Self.call(2, "kore_new_chat", #"{"provider":"codex"}"#)], "no Codex chat from Manual") { replies in

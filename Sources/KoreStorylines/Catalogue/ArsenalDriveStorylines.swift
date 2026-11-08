@@ -36,10 +36,7 @@ final class ArsenalDrive: ChatStoryline {
 
         @MainActor func run(_ story: StoryContext) async throws {
             try await story.idle()
-            let chat = try AgentCast.of(story).chat(role)
-            guard let tab = story.app.workspace?.tabs.first(where: { $0.chat === chat })?.id else { throw StoryFailure.modelMissing("\(role)'s tab") }
-            try await Click(.id(StoryID.Tabs.arsenalTiers(tab))).run(story)
-            try await WaitForElement(.id(StoryID.Options.panel)).run(story)
+            try await OpenArsenalTiers(role: role).run(story)
             let rows = StoryID.Options.rows
             guard let index = rows.firstIndex(where: { $0.title.hasPrefix(prefix) }), rows[index].enabled else {
                 throw StoryFailure.expectation("an enabled “\(prefix)…” row in \(rows.map(\.title))")
@@ -83,7 +80,6 @@ final class ArsenalDrive: ChatStoryline {
                 AgentChannel.directory = directory
                 AgentGrants.stopAll()
                 Arsenal.shared.setAllowed(true)
-                Arsenal.shared.storyHover = true
             },
             SendTo("a", "hello"), TurnsDone("a", 1),
             Do("a in \(codex ? "Full access" : "Manual")") { story in try AgentCast.of(story).chat("a").storySetMode(codex ? "fullAccess" : "default") },

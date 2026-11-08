@@ -18,7 +18,7 @@ final class ArsenalOwn: ChatStoryline {
             turns: [CLIScript.reply("Ready.")])
     }
 
-    /// Opens `role`'s tiers from the name beside its K and picks the row whose title starts with `prefix`.
+    /// Opens `role`'s tiers from the titlebar's icon and picks the row whose title starts with `prefix`.
     private struct PickTier: Step {
         let role: String
         let prefix: String
@@ -27,10 +27,7 @@ final class ArsenalOwn: ChatStoryline {
 
         @MainActor func run(_ story: StoryContext) async throws {
             try await story.idle()
-            let chat = try AgentCast.of(story).chat(role)
-            guard let tab = story.app.workspace?.tabs.first(where: { $0.chat === chat })?.id else { throw StoryFailure.modelMissing("\(role)'s tab") }
-            try await Click(.id(StoryID.Tabs.arsenalTiers(tab))).run(story)
-            try await WaitForElement(.id(StoryID.Options.panel)).run(story)
+            try await OpenArsenalTiers(role: role).run(story)
             let rows = StoryID.Options.rows
             guard let index = rows.firstIndex(where: { $0.title.hasPrefix(prefix) }), rows[index].enabled else {
                 throw StoryFailure.expectation("an enabled “\(prefix)…” row in \(rows.map(\.title))")
@@ -65,7 +62,6 @@ final class ArsenalOwn: ChatStoryline {
                 AgentChannel.directory = directory
                 AgentGrants.stopAll()
                 Arsenal.shared.setAllowed(true)
-                Arsenal.shared.storyHover = true
             },
             SendTo("a", "hello"), TurnsDone("a", 1),
         ] + (codex ? [

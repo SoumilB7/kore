@@ -21,7 +21,7 @@ package enum ArsenalTier: String, CaseIterable, Sendable {
 }
 
 /// Arsenal: one chat's agent may use Kore itself through `kore` (`z-docs/design/arsenal-button.html`).
-/// This is what the tab's right-click, ⌥⌘K, the K and the Account popup act on; `AgentGrants`
+/// This is what the tab's right-click, ⌥⌘K, the titlebar's icon and the Account popup act on; `AgentGrants`
 /// (KoreLink, through `AgentTaps`) opens the socket to match. Grants live for this run only.
 @MainActor @Observable
 package final class Arsenal {
@@ -31,8 +31,6 @@ package final class Arsenal {
     package private(set) var allowed = false
     /// Some chat has it on.
     package private(set) var anyOn = false
-    /// A storyline has no pointer to hover with: every tab counts as hovered, in place of it.
-    package var storyHover = false
     @ObservationIgnored private let chats = NSHashTable<Chat>.weakObjects()
 
     /// The switch as saved, at launch: no chat has it yet, so nothing opens.
@@ -149,6 +147,8 @@ package final class Arsenal {
             .rule,
             OptionItem("Drive reaches chats at \(chat.controls.activeMode.label) or lower", enabled: false),
             OptionItem("Approvals stay yours", enabled: false),
+            .rule,
+            OptionItem("Stop agent control", destructive: true) { [self] in stopAll() },
         ]
         return items
     }
