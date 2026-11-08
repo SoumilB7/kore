@@ -47,6 +47,19 @@ else
         if [[ -n "${KORE_BUNDLE_BOX_HOST:-}" ]]; then cp "$packed" "$APP/Contents/Resources/"; fi
     done
 fi
+# kore-host for Mac boxes (a LaunchAgent there), for both CPUs: this Mac's own toolchain builds
+# them, packed and recorded the same way (`kore-host-macos-<arch>.xz`).
+if [[ -z "${KORE_NO_BOX_HOST:-}" ]] && command -v xz >/dev/null; then
+    mkdir -p build
+    for arch in arm64 x86_64; do
+        mac=(-c release --product kore-host --triple "$arch-apple-macosx15.0" --scratch-path .build-macos-host)
+        swift build "${mac[@]}" -Xlinker -dead_strip
+        packed="build/kore-host-macos-$arch.xz"
+        xz -9 -T0 -c "$(swift build "${mac[@]}" --show-bin-path)/kore-host" > "$packed"
+        HOST_SHAS+="    <key>KoreHostSHA256-macos-$arch</key><string>$(shasum -a 256 "$packed" | cut -d' ' -f1)</string>"$'\n'
+        if [[ -n "${KORE_BUNDLE_BOX_HOST:-}" ]]; then cp "$packed" "$APP/Contents/Resources/"; fi
+    done
+fi
 
 # App icon, rendered from the SVGs in Resources/.
 ICONSET="build/AppIcon.iconset"

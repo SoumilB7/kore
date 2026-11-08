@@ -1,7 +1,7 @@
-# kore-host: Kore's chats on a Linux box
+# kore-host: Kore's chats on a box
 
-kore-host runs Kore's chats on another machine, a "box": a Linux server, a workstation or a
-cloud VM that you reach with `ssh`. A Kore window on your Mac shows a box folder's chats, while
+kore-host runs Kore's chats on another machine, a "box": a Linux server, a workstation, a cloud
+VM, a container or another Mac, anything you reach with `ssh`. A Kore window on your Mac shows a box folder's chats, while
 the claude and codex CLIs run on the box, in its files. The Mac talks to it over your own SSH:
 `ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Nothing on the box listens on the
 network, and nothing runs there while it's idle except one small daemon waiting on a Unix socket.
@@ -10,51 +10,115 @@ The protocol is in [link-1.4-box.md](link-1.4-box.md).
 
 ## What a box needs
 
-- Linux on x86_64 or arm64 (aarch64). kore-host is a static binary, so any distribution works.
-- systemd with user services. Without systemd, run `kore-host run` from your own init system.
-- An SSH login from the Mac with a key (Kore's ssh never asks for a password), and the host key
-  accepted once (`ssh <box>` in Terminal).
-- The CLIs you want there: claude (its native installer puts it in `~/.local/bin`) and codex
-  (`npm i -g @openai/codex`, which needs `nodejs` and `npm`), and `git`.
-- `rsync`, for two-way sync (the Mac runs its own `/usr/bin/rsync`, which needs one on the box).
-  Minimal images often leave it out: `sudo apt install rsync` on Debian and Ubuntu.
+Only an SSH login from the Mac with a key (Kore's ssh never asks for a password). Kore finds the
+rest itself and says what's missing.
+
+| Machine | kore-host | Kept running by |
+|---|---|---|
+| Linux on x86_64 or arm64 (aarch64), any distribution | a static binary | a systemd user service, with linger |
+| Linux without a systemd user session (containers, WSL, some VPSes) | the same | nothing: started on demand (below) |
+| macOS 15 or later on arm64 or x86_64 | a macOS build | a LaunchAgent |
+
+- **Started on demand.** Where there's no service manager, `kore-host attach` starts `kore-host
+  run` itself (under `nohup`, in its own session) when no daemon answers, and it keeps running
+  after. Its socket, pid and lock are in `~/.local/state/kore-host/run/`, its lines in
+  `~/.local/state/kore-host/kore-host.log`. It behaves the same as the service, except that
+  after the machine restarts it starts at the next connect.
+- **Tools.** `rsync` for two-way sync and `git` for the CLIs. When one is missing, the box's line
+  says so in one line ("rsync isn't on mybox · sync needs it") with the command that adds it:
+  Kore runs it itself only where it needs no password (Homebrew on a Mac), and otherwise copies it
+  for you to run (`sudo apt-get install -y rsync`, `sudo dnf …`, `sudo apk add …`).
+- **The CLIs.** Set up agents installs them (below).
 
 ## Setting it up from Kore
 
-1. In a new window (⌘N), click the box button and choose **Add a box…**. Pick the host from your
-   SSH config. A window is either a folder on this Mac or a folder on a box, chosen when it
-   opens: a Mac folder's window has no box button, and a box folder's window opens on its Boxes
-   panel.
-2. Open its row. If the row says "kore-host isn't on <box> · Set up", click **Set up**. Kore then:
-   - asks the box for its CPU (`uname -sm`);
-   - copies its kore-host to `~/.local/bin/kore-host` (beside it as `kore-host.new`, then moved
-     over, so a running copy isn't disturbed);
-   - runs `kore-host install-service`;
-   - runs `kore-host allow <this Mac's name> --control full`;
-   - connects.
-3. Choose **Add folder…** and give a folder on the box, such as `~/Code/project`.
+1. In a new window (⌘N), click the box button and choose **Add a box…**. A window is either a
+   folder on this Mac or a folder on a box, chosen when it opens. Type a host from your SSH config
+   (it's suggested as you type), or any destination as `user@host` or `user@host:port`. A typed
+   destination is kept in Kore's own list, never written into `~/.ssh/config`. Only letters,
+   digits, `.`, `_` and `-` make a name, and none starts with `-`; ssh gets the host as one word
+   after `--`, and the user and port as options.
+2. Kore checks the machine over one ssh session that only reads (`uname`, `/etc/os-release`,
+   `command -v` for the tools it uses, the CLIs' `--version`, `$SHELL`, `$HOME`, free room, the git
+   identity). It keeps what it found for that box and shows it as the row's hover card
+   ("Linux · arm64 · Ubuntu 24.04.1 LTS"). It checks again only on Set up, Update, Set up agents or
+   Check again.
+3. The row says "Not set up on <box> · Set up". **Set up** runs, a line at a time:
+   - **Checking** the machine, and stopping with one line if Kore can't run there (another CPU,
+     macOS before 15, under 150 MB free);
+   - **Getting** the right kore-host (Linux x86_64 or aarch64, or macOS) from the app, the
+     `koreHostBinary` setting, or this version's GitHub release, checked against the SHA-256 the
+     build recorded;
+   - **Copying** it to `~/.local/bin/kore-host.new`, running its `--version` there, and only then
+     moving it over the old one (a running copy isn't disturbed, and one that can't run there
+     never replaces one that can);
+   - **Starting** it: `kore-host install-service` picks systemd, launchd or on demand;
+   - **Letting this Mac in**: `kore-host allow <this Mac's name> --control full`;
+   - **Connecting**.
+4. Choose **Add folder…** and give a folder on the box, such as `~/Code/project`.
 
-When the line says something else, its action fixes that case:
+Each failure is one line with the one action that fixes it:
 
 | Line | Action |
 |---|---|
-| Can't reach <box> | none: ssh itself failed, so try `ssh <box>` in Terminal |
-| kore-host isn't on <box> | Set up |
-| kore-host is stopped on <box> | Start (`systemctl --user start kore-host`) |
+| Can't reach <box> | Try again |
+| Can't find <box> · check the name | Try again |
+| <box> needs a key · ssh-copy-id <box> | Copy (run it in Terminal) |
+| <box>'s host key is new · ssh <box> once in Terminal | Copy |
+| <box>'s host key changed · check it, then ssh-keygen -R <host> | Copy |
+| Not set up on <box> | Set up |
+| Stopped on <box> | Start (`kore-host start`) |
 | <box> doesn't know this Mac | Set up (grants this Mac again) |
-| <box> runs an older kore-host | Update (copies this Kore's kore-host and restarts the service) |
+| <box> needs an update | Update (copies this Kore's kore-host and restarts it) |
+| rsync isn't on <box> · sync needs it | Copy, or Install where no password is needed |
+| No agents on <box> yet | Set up agents |
+| N differences from this Mac | Fix |
 
-An update restarts the service, which ends any turn that is running on the box.
+An update restarts the daemon, which ends any turn that is running on the box; Kore asks first
+when a chat there is working. Nothing runs until the Boxes panel is shown and a row is opened or
+used, and nothing polls.
 
 To remove a box, right-click its row and choose **Remove**. Kore forgets the box on this Mac and
 changes nothing on the box.
 
+## Set up agents
+
+**Set up agents** (the row's line, or its right-click menu) opens one popup with a line per
+agent:
+- **claude**: installed with its own installer (`curl -fsSL https://claude.ai/install.sh`, into
+  `~/.local/bin`);
+- **codex**: its npm package under `~/.npm-global` when `npm` is there, else its standalone
+  binary from its GitHub release into `~/.local/bin`;
+- **gh**: its release binary into `~/.local/bin`.
+
+All of them go under your home without sudo, where the box's service looks (its PATH has
+`~/.local/bin` and `~/.npm-global/bin`). An installer that needs a tool the box lacks says which,
+with the command that adds it. Once installed, each line signs in on the box through its
+no-browser flow: the page opens in this Mac's browser, the code has Copy, and claude takes the
+code back in a field. The login stays on the box. Kore never copies this Mac's logins, keys or
+settings to a box.
+
+Under the agents, the popup lists what else differs from this Mac, so box chats behave the same:
+- each CLI's presence and version (claude, codex, gh, git, node, rsync), when the major or minor
+  version differs, with **Update** for the agents;
+- each CLI's login: not signed in, or signed in as someone else;
+- the git identity, with **Use mine** (`git config --global user.name` and `user.email` there);
+- claude's user MCP servers, skills, plugins and agents, and codex's MCP servers, by name, and
+  each CLI's default model. These are listed only, never copied: a server's entry can carry a
+  secret. `kore-host facts` reads them on the box, names only.
+
+The compare is kept with the box and runs again only on Set up, Update, Set up agents or **Check
+again**.
+
 ## Setting it up by hand
 
 A Kore built with `KORE_BUNDLE_BOX_HOST=1` carries the binaries as
-`Contents/Resources/kore-host-linux-x86_64.xz` and `kore-host-linux-aarch64.xz`; any other build
-downloads its version's from the GitHub release (`kore-host-linux-<arch>.xz`) and uses it only if
-its SHA-256 matches the one the build recorded.
+`Contents/Resources/kore-host-linux-x86_64.xz`, `kore-host-linux-aarch64.xz`,
+`kore-host-macos-arm64.xz` and `kore-host-macos-x86_64.xz`; any other build downloads its
+version's from the GitHub release (`kore-host-<platform>.xz`) and uses it only if its SHA-256
+matches the one the build recorded. A development build of Kore uses the `kore-host` built beside
+it for a Mac box like the Mac it runs on, and `defaults write dev.kore.Kore koreHostBinary <path>`
+names a file, or a folder holding `kore-host-<platform>[.xz]`.
 
 ```sh
 # On the Mac
@@ -73,7 +137,15 @@ ssh box 'chmod 755 .local/bin/kore-host.new && mv -f .local/bin/kore-host.new .l
 On the Mac, `scutil --get LocalHostName` prints the name Kore uses for its grant. If you want a
 different name, set it with `defaults write dev.kore.Kore boxGrant.<box> <name>`.
 
-`install-service` does four things:
+`install-service` picks how kore-host keeps running: launchd on a Mac, systemd where a user
+manager answers (`systemctl --user`), and otherwise on demand. `KORE_HOST_SERVICE=systemd`,
+`launchd` or `on-demand` picks one by hand. On a Mac it writes
+`~/Library/LaunchAgents/dev.kore.kore-host.plist` (`KeepAlive` on failure, the CLIs' folders and
+Homebrew's on PATH) and loads it into the desktop session, or the user's own when you're only
+logged in over ssh; if launchd refuses, it falls back to on demand. On demand, it remembers that
+in `~/.local/state/kore-host/service` and starts the daemon now.
+
+With systemd, `install-service` does four things:
 - writes `~/.config/systemd/user/kore-host.service` with the binary's real path, and with a
   PATH that includes `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `/usr/local/bin` and
   `/usr/bin`;
@@ -131,8 +203,10 @@ What both sides last agreed on (each file's size and mtime) is kept in
 | `kore-host revoke <name>` | Removes a grant. Its connection ends at its next command. |
 | `kore-host grants` | Lists the grants and their control. |
 | `kore-host run` | Runs the daemon (what the service runs). A second one exits and leaves the first alone. |
-| `kore-host install-service` | Installs, enables and (re)starts the user service. |
-| `kore-host uninstall [--purge]` | Stops, disables and removes the service. `--purge` also removes the state, grants and config. |
+| `kore-host install-service` | Installs and (re)starts it: the systemd user service, the LaunchAgent, or on demand. |
+| `kore-host start` | Starts the daemon as it was installed. |
+| `kore-host facts` | Prints the CLIs' MCP servers, skills, plugins, agents and default models, by name only, as JSON. |
+| `kore-host uninstall [--purge]` | Stops and removes the service, the LaunchAgent or the on-demand daemon. `--purge` also removes the state, grants and config. |
 | `kore-host --version` | Prints the version and the link version. |
 
 The control levels:
@@ -151,7 +225,14 @@ The control levels:
 | `~/.local/state/kore-host/chats/<id>/` | each chat's record and log |
 | `~/.local/state/kore-host/models.json` | each CLI's models, as it last listed them |
 | `$XDG_RUNTIME_DIR/kore-host/` | `link.sock`, `run.lock` and `kore-host.pid` (`/run/user/<uid>` without `XDG_RUNTIME_DIR`) |
-| `~/.config/systemd/user/kore-host.service` | the service |
+| `~/.config/systemd/user/kore-host.service` | the systemd service |
+| `~/Library/LaunchAgents/dev.kore.kore-host.plist` | the LaunchAgent, on a Mac |
+| `~/.local/state/kore-host/service` | `launchd` or `on-demand`, when kore-host isn't a systemd service |
+| `~/.local/state/kore-host/kore-host.log` | the on-demand daemon's and the LaunchAgent's lines |
+
+On a Mac box, the state and the socket live in `~/Library/Application Support/kore-host/` unless
+the XDG variables are set. On demand, the socket, pid and lock are in
+`~/.local/state/kore-host/run/`.
 
 How the box handles its files:
 - `XDG_CONFIG_HOME` and `XDG_STATE_HOME` move these, as usual.

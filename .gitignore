@@ -7,3 +7,4 @@ build/
 z-docs/
 .agents/
 .build-linux/
+.build-macos-host/

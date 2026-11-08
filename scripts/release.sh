@@ -27,5 +27,7 @@ notes=$(awk -v v="$VERSION" '
 GIT_COMMITTER_NAME=SoumilB7 GIT_COMMITTER_EMAIL=107888098+SoumilB7@users.noreply.github.com \
   GIT_COMMITTER_DATE="$(git log -1 --format=%cI)" git tag -a "$TAG" -m "Kore $VERSION"
 git -c credential.helper= -c credential.helper='!gh auth git-credential' push origin "$TAG"
-gh release create "$TAG" "$DMG" "$DMG.sha256" --verify-tag --title "Kore $VERSION" \
+# The boxes' kore-host builds (Linux and macOS), which a Kore without them downloads and checks.
+boxes=(build/kore-host-*.xz(N))
+gh release create "$TAG" "$DMG" "$DMG.sha256" $boxes --verify-tag --title "Kore $VERSION" \
   --notes "$notes" ${1:+"$1"}
