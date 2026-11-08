@@ -28,6 +28,8 @@ object MacProbe {
 
     /** Knock every 2 s while the Join screen shows, for at most 2 min; never in the background. */
     const val EVERY_MS = 2_000L
+    /** After a Mac answered "Add window closed": within its 3-a-minute pre-auth allowance. */
+    const val CLOSED_EVERY_MS = 20_000L
     const val FOR_MS = 120_000L
 }
 
@@ -216,7 +218,11 @@ class JoinFlow(
                     return true
                 }
             }
-            delay(MacProbe.EVERY_MS)
+            // A Mac that said its Add window is closed is asked again only every 20 s: its pre-auth
+            // allowance is 3 a minute per device, and a faster knock would lock this phone out for a
+            // minute just as the owner opens the window.
+            val closed = (stepFlow.value as? Step.Finding)?.addClosed == true
+            delay(if (closed) MacProbe.CLOSED_EVERY_MS else MacProbe.EVERY_MS)
         }
         if (!visible) return true
         val self = withContext(io) { tailnet.self() }

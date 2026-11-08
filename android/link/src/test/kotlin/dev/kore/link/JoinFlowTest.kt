@@ -128,12 +128,27 @@ class JoinFlowTest {
         val (rig, tries) = answering("unknown", "unknown", "refused")
         runCurrent()
         assertEquals(Step.Finding(listOf("mbp"), addClosed = true), rig.flow.step.value)
-        advanceTimeBy(2_001)
+        // A closed window is asked again only every 20 s (the Mac allows 3 a minute per device).
+        advanceTimeBy(19_000)
+        assertEquals(1, tries())
+        advanceTimeBy(1_001)
+        assertEquals(2, tries())
         assertEquals(Step.Finding(listOf("mbp"), addClosed = true), rig.flow.step.value)
-        advanceTimeBy(2_000)
+        advanceTimeBy(20_000)
         assertEquals(Step.Denied("mbp"), rig.flow.step.value)
         advanceTimeBy(60_000)
         assertEquals(3, tries())
+    }
+
+    @Test fun knocksOnAClosedWindowStayWithinTheMacsAllowance() = runTest {
+        val (rig, tries) = answering(*Array(20) { "unknown" })
+        runCurrent()
+        advanceTimeBy(60_000)
+        // At most 3 tries in any minute: the Mac's pre-auth limit never locks this phone out.
+        assertTrue("tries in the first minute: ${tries()}", tries() <= 4)
+        val first = tries()
+        advanceTimeBy(60_000)
+        assertTrue("tries in the second minute: ${tries() - first}", tries() - first <= 3)
     }
 
     @Test fun refusedIsNotAllowedAndAskAgainKnocksOnceMore() = runTest {
