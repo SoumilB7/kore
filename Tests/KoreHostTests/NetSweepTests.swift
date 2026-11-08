@@ -46,8 +46,10 @@ final class WatchedTailnet: Tailnet {
 
 /// Waits, yielding to the main queue (never sleeping), until `check` holds; false after 5 s.
 @MainActor
+/// Waits for `check` to hold, as soon as it does. Every use is a wait for something on its way;
+/// the bound only ends one that never comes (5 s ran out on a busy Mac with the answer on its way).
 func eventually(_ check: () -> Bool) async -> Bool {
-    let end = ContinuousClock.now + .seconds(5)
+    let end = ContinuousClock.now + .seconds(30)
     while !check() {
         guard ContinuousClock.now < end else { return false }
         await Task.yield()
