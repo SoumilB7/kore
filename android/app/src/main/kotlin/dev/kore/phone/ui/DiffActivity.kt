@@ -85,7 +85,7 @@ class DiffActivity : NodeActivity() {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = object : RecyclerView.ViewHolder(LinearLayout(this@DiffActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            addView(label("", 11f, K.faint, mono = true).apply { gravity = Gravity.END; setPadding(0, dp(1), dp(8), dp(1)) }, LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(label("", 11f, K.faint, mono = true).apply { gravity = Gravity.END; setPadding(0, dp(1), dp(8), dp(1)) }, LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(label("", 12f, K.text, mono = true).apply { setPadding(dp(4), dp(1), dp(12), dp(1)) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }) {}
 

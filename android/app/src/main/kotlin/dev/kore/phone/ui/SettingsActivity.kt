@@ -33,7 +33,7 @@ class SettingsActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = dp(56)
             setPadding(dp(4), dp(4), dp(16), dp(4))
-            addView(label("‹", 30f).apply { gravity = Gravity.CENTER; contentDescription = "Back"; setOnClickListener { finish() } }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(label("‹", 30f).apply { gravity = Gravity.CENTER; contentDescription = "Back"; setOnClickListener { finish() }; pressable(24) }, LinearLayout.LayoutParams(dp(48), dp(48)))
             addView(label("Settings", 17f, bold = true))
         })
         content = column(16)
@@ -65,7 +65,6 @@ class SettingsActivity : Activity() {
         for (n in mesh.nodes.value) content.addView(deviceRow(n))
         if (mesh.nodes.value.isEmpty()) content.addView(label("No devices yet.", 14f, K.dim).apply { setPadding(dp(4), 0, 0, dp(6)) })
         content.addView(toggle("KoreNet on this phone", mesh.networkOn) { mesh.networkOn = it })
-        content.addView(button("Leave KoreNet", K.err) { leave() })
         content.addView(label("Kore connects only while it's open, so it can't notify you while it's closed.", 13f, K.faint).apply { setPadding(dp(4), dp(6), dp(4), 0) })
         heading("Notifications")
         content.addView(button("Notification settings", K.text) {
@@ -77,7 +76,13 @@ class SettingsActivity : Activity() {
         content.addView(updateRow())
         heading("About")
         val code = mesh.deviceId.toString().take(8).let { it.take(4) + " " + it.drop(4) }
-        content.addView(label("Kore for Android ${packageManager.getPackageInfo(packageName, 0).versionName} · this phone $code", 13f, K.faint).apply { setPadding(dp(4), 0, 0, dp(24)) })
+        content.addView(label("Kore for Android ${packageManager.getPackageInfo(packageName, 0).versionName} · this phone $code", 13f, K.faint).apply { setPadding(dp(4), 0, 0, 0) })
+        // The one destructive step, last and outlined (phone-app §9).
+        content.addView(button("Leave KoreNet", K.err) { leave() }.apply {
+            background = rounded(android.graphics.Color.TRANSPARENT, 10, K.err)
+            pressable()
+            (layoutParams as LinearLayout.LayoutParams).apply { topMargin = dp(24); bottomMargin = dp(24) }
+        })
     }
 
     /** One device: its glyph, name and state; ⋯ forgets it on this phone. */
@@ -98,6 +103,7 @@ class SettingsActivity : Activity() {
             minHeight = dp(44)
             setPadding(dp(10), 0, dp(10), 0)
             contentDescription = "More for ${n.name}"
+            pressable(22)
             setOnClickListener { v -> PopMenu(this@SettingsActivity).show(v, listOf(PopMenu.Item("Forget on this phone", danger = true) { kore.mesh.forget(n.id); render() })) }
         })
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
@@ -134,6 +140,7 @@ class SettingsActivity : Activity() {
         setPadding(dp(14), 0, dp(14), 0)
         background = rounded(K.surface)
         setOnClickListener { onClick() }
+        pressable()
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
     }
 
@@ -144,7 +151,11 @@ class SettingsActivity : Activity() {
         setPadding(dp(14), 0, dp(10), 0)
         background = rounded(K.surface)
         addView(label(text, 15f), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(android.widget.Switch(this@SettingsActivity).apply { isChecked = on; setOnCheckedChangeListener { _, v -> change(v) } })
+        // Kore's one switch, as in the sheets; the whole row takes the tap.
+        addView(switchTrack(on), LinearLayout.LayoutParams(dp(38), dp(22)).apply { marginEnd = dp(4) })
+        switchSemantics(text, on)
+        setOnClickListener { change(!on); if (!isFinishing) render() }
+        pressable()
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
     }
 }

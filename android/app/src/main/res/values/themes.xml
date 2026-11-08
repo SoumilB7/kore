@@ -9,8 +9,8 @@
     </style>
     <color name="bg">#111113</color>
     <color name="surface">#171D21</color>
-    <color name="icon_bg">#000000</color>
-    <color name="claude">#D97757</color>
+    <color name="icon_bg">#111113</color>
+    <color name="claude">#F59A55</color>
     <color name="line">#212326</color>
     <color name="text">#EDEDED</color>
     <color name="dim">#89959F</color>

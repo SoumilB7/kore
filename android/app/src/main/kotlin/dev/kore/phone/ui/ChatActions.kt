@@ -55,6 +55,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         maxWidth = activity.dp(120)
         ellipsize = android.text.TextUtils.TruncateAt.END
         setOnClickListener { chooseMode() }
+        pressable(16)
         visibility = View.GONE
     }
     /** The chat's model and effort, quiet text beside the mode ("Atlas 5.5 · high"); a tap opens the options. */
@@ -65,6 +66,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         ellipsize = android.text.TextUtils.TruncateAt.END
         contentDescription = "Model"
         setOnClickListener { chooseMode() }
+        pressable(8)
         visibility = View.GONE
     }
     /** Arsenal, only while it's on: one glyph in the tier's colour. */
@@ -72,6 +74,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         gravity = Gravity.CENTER
         setPadding(activity.dp(4), activity.dp(7), activity.dp(4), activity.dp(7))
         setOnClickListener { chooseMode() }
+        pressable(8)
         visibility = View.GONE
     }
     /** At a plan limit: the draft goes when the limit resets (C7), as the Mac's ring beside Send. */
@@ -224,6 +227,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             android.text.SpannableStringBuilder().append("●", android.text.style.ForegroundColorSpan(modeColor(chat.obj("mode")?.get("level").int())), 0).append("  $m")
         } ?: ""
         modePill.visibility = if (mode != null) View.VISIBLE else View.GONE
+        modePill.contentDescription = mode?.let { "Mode: $it" } ?: "Mode"
         val controls = chat?.obj("controls")
         val chip = controls?.let {
             ControlModel.modelChip(ControlModel.models(snapshot, chat.str("provider")), want["model"] ?: it.str("modelId"), chat.str("model"), want["effort"] ?: it.str("effort"))
@@ -276,26 +280,35 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         showStatus()
     }
 
+    /** What Send/Stop shows now (0 at rest, 1 ready, 2 Stop): its ground is drawn again only on a change. */
+    private var actionLook = -1
+
     private fun refreshAction() {
         val atLimit = ControlModel.limitReset(chat?.obj("rescue")) != null && chat?.obj("can")?.bool("sendAtReset") == true
         ring.visibility = if (atLimit) View.VISIBLE else View.GONE
         ring.alpha = if (field.text.isNotBlank()) 1f else 0.45f
+        // As the full-control mockup: Stop a raised square with a light ■; Send at rest raised with
+        // a dim arrow, lit once there is something to send.
+        val ready = canSend && field.text.isNotBlank()
+        val look = if (running) 2 else if (ready) 1 else 0
+        if (look == actionLook) return
+        actionLook = look
         if (running) {
             action.text = "■"
-            action.textSize = 14f
+            action.textSize = 11f
+            action.setTextColor(STOP_INK)
             action.contentDescription = "Stop"
-            action.background = activity.rounded(K.err, 18)
-            action.alpha = 1f
+            action.background = activity.rounded(STOP_GROUND, 12)
             action.isEnabled = true
         } else {
             action.text = "↑"
             action.textSize = 18f
             action.contentDescription = "Send"
-            val ready = canSend && field.text.isNotBlank()
-            action.background = activity.rounded(if (ready) K.accent else K.line, 18)
-            action.alpha = if (ready) 1f else 0.6f
+            action.setTextColor(if (ready) K.onAccent else K.dim)
+            action.background = activity.rounded(if (ready) K.accent else K.raised, 12)
             action.isEnabled = ready
         }
+        action.pressable(12)
     }
 
     /** One line at most: what just happened, else why sending is off. */
@@ -867,6 +880,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         }
 
     companion object {
+        private val STOP_GROUND = android.graphics.Color.parseColor("#2A2D31")
+        private val STOP_INK = android.graphics.Color.parseColor("#E9E9EA")
         /** The highest mode level a raise from the phone asks for (Auto); Bypass and Full access never. */
         const val RAISE_CAP = 3
         const val PICK = 41

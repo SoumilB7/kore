@@ -95,8 +95,10 @@ private class SheetGround(private val density: Float, var corner: Int) : Drawabl
         c.drawLine(b.left + r, b.top + line.strokeWidth / 2, b.right - r, b.top + line.strokeWidth / 2, line)
         mark.color = corner
         val h = mark.strokeWidth / 2
-        c.drawArc(RectF(b.left + h, b.top + h, b.left + 2 * r, b.top + 2 * r), 180f, 90f, false, mark)
-        c.drawArc(RectF(b.right - 2 * r, b.top + h, b.right - h, b.top + 2 * r), 270f, 90f, false, mark)
+        // Each mark is 20 dp of the corner's arc, centred on it, as the Mac's corner marks.
+        val sweep = Math.toDegrees(20.0 / 22.0).toFloat()
+        c.drawArc(RectF(b.left + h, b.top + h, b.left + 2 * r, b.top + 2 * r), 225f - sweep / 2, sweep, false, mark)
+        c.drawArc(RectF(b.right - 2 * r, b.top + h, b.right - h, b.top + 2 * r), 315f - sweep / 2, sweep, false, mark)
     }
     override fun setAlpha(alpha: Int) = Unit
     override fun setColorFilter(cf: ColorFilter?) = Unit
@@ -223,7 +225,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
             isEnabled = enabled
             alpha = if (enabled) 1f else 0.4f
             if (enabled && onTap != null) {
-                setBackgroundResource(android.R.drawable.list_selector_background)
+                pressable()
                 setOnClickListener { onTap() }
             }
         }
@@ -266,7 +268,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
                     else -> label
                 }
                 isSelected = on
-                if (enabled && !on && !struck) setOnClickListener { onPick(key) }
+                if (enabled && !on && !struck) { setOnClickListener { onPick(key) }; pressable(0) }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
         add(bar, lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -285,7 +287,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
                 contentDescription = label
                 isSelected = on
                 alpha = if (enabled) 1f else 0.4f
-                if (enabled && !on) setOnClickListener { onPick(key) }
+                if (enabled && !on) { setOnClickListener { onPick(key) }; pressable(8) }
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = a.dp(6) })
         }
         lastWasItem = false
@@ -311,7 +313,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
             if (id == selected) row.addView(a.label("✓", 16f, K.accent))
             row.contentDescription = "model $name"
             row.isSelected = id == selected
-            if (enabled && id != selected) { row.setBackgroundResource(android.R.drawable.list_selector_background); row.setOnClickListener { onPick(id) } }
+            if (enabled && id != selected) { row.setOnClickListener { onPick(id) }; row.pressable(0) }
         } else {
             val flow = Flow(a, a.dp(6))
             for ((id, label) in versions) {
@@ -323,7 +325,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
                     contentDescription = "model $name $label"
                     isSelected = on
                     alpha = if (enabled) 1f else 0.4f
-                    if (enabled && !on) setOnClickListener { onPick(id) }
+                    if (enabled && !on) { setOnClickListener { onPick(id) }; pressable(14) }
                 })
             }
             row.addView(flow, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -333,11 +335,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
 
     /** A row with a switch on the right. */
     fun toggle(title: String, on: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
-        val track = FrameLayout(a).apply {
-            background = a.rounded(if (on) K.accent else Color.parseColor("#3A3F45"), 11)
-            addView(View(a).apply { background = a.rounded(Color.parseColor("#DDDDDD"), 8) },
-                FrameLayout.LayoutParams(a.dp(16), a.dp(16), Gravity.CENTER_VERTICAL or if (on) Gravity.END else Gravity.START).apply { setMargins(a.dp(2), 0, a.dp(2), 0) })
-        }
+        val track = a.switchTrack(on)
         val row = LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -345,10 +343,10 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
             setPadding(a.dp(4), a.dp(10), a.dp(4), a.dp(10))
             addView(a.label(title, 15f), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(track, LinearLayout.LayoutParams(a.dp(38), a.dp(22)))
-            contentDescription = title
+            switchSemantics(title, on)
             isSelected = on
             alpha = if (enabled) 1f else 0.4f
-            if (enabled) setOnClickListener { onChange(!on) }
+            if (enabled) { pressable(); setOnClickListener { onChange(!on) } }
         }
         add(row, item = true)
     }
@@ -386,6 +384,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
             setPadding(0, a.dp(12), 0, a.dp(12))
             contentDescription = text
             setOnClickListener { go() }
+            pressable(12)
         }
         row.addView(button(cancel, Color.TRANSPARENT, K.dim, K.line) { dismiss() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = a.dp(8) })
         row.addView(if (danger) button(primary, Color.TRANSPARENT, K.err, K.err) { onPrimary() } else button(primary, K.accent, Color.parseColor("#0B1220"), null) { onPrimary() },
@@ -457,7 +456,7 @@ class PopMenu(private val a: Activity) {
         if (right != null) addView(a.label(right, 13f, if (right == "✓") K.accent else K.faint).apply { setPadding(a.dp(8), 0, 0, 0) })
         contentDescription = title
         alpha = if (enabled) 1f else 0.4f
-        if (enabled) { setBackgroundResource(android.R.drawable.list_selector_background); setOnClickListener { go() } }
+        if (enabled) { pressable(0); setOnClickListener { go() } }
     }
 }
 
@@ -483,7 +482,7 @@ object Quiet {
 /** A refused command in one short line. */
 fun refusalWords(code: String?): String = when {
     code == null -> "That wasn't done."
-    code == "denied.control" || code == "denied.command" -> "That needs the device itself."
+    code == "denied.control" || code == "denied.command" -> "Only on the Mac or box itself, not from the phone."
     code == "denied.mac" -> "That needs the Mac."
     code == "denied.raiseMode" -> "That mode needs your fingerprint."
     code == "rateLimited" -> "Too fast. Try again in a moment."
@@ -541,8 +540,9 @@ fun Activity.barButton(bar: View, glyph: String, description: String, go: (View)
         contentDescription = description
         isClickable = true
         setOnClickListener { go(it) }
+        pressable(22)
     }
-    (bar.parent as LinearLayout).addView(b, LinearLayout.LayoutParams(dp(44), dp(48)))
+    (bar.parent as LinearLayout).addView(b, LinearLayout.LayoutParams(dp(48), dp(48)))
     return b
 }
 

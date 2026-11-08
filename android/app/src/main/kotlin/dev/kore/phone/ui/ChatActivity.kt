@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import dev.kore.phone.kore
@@ -60,6 +61,8 @@ class ChatActivity : NodeActivity() {
         }
         list = RecyclerView(this@ChatActivity).apply {
             layoutManager = LinearLayoutManager(this@ChatActivity).apply { stackFromEnd = true }
+            // Rows change in place as text streams in: no fade or slide on each update.
+            itemAnimator = null
             adapter = this@ChatActivity.adapter
             // On a board, a sideways fling moves to the next or previous chat on it.
             val board = intent.getStringArrayExtra("board")
@@ -171,7 +174,10 @@ class ChatActivity : NodeActivity() {
         adapter.canFork = chat?.obj("can")?.let { if (it.containsKey("fork")) it.bool("fork") else null }
         adapter.rescue = ControlModel.rescue(chat?.obj("rescue")) { at -> whenText(at) }
         menuButton?.visibility = if (chat != null && (chat.containsKey("controls") || link.hasControl(snapshot))) View.VISIBLE else View.GONE
+        val was = provider
         provider = chat?.str("provider") ?: provider
+        // A summary row names the CLI: drawn again if it only now became known.
+        if (provider != was) adapter.notifyDataSetChanged()
         val (dot, word) = stateLook(chat?.str("state"))
         barTitle.text = android.text.SpannableStringBuilder(providerMark(chat?.str("provider"))).append("  ").append(chat?.str("title") ?: "Chat")
         barDot.background = rounded(dot, 4)
@@ -235,7 +241,7 @@ class ChatActivity : NodeActivity() {
         object Earlier : Item()
         /** A rescue row under the turn: Retry, Continue, "Continues at …" ×. */
         data class Rescue(val line: ControlModel.RescueLine) : Item()
-        data class Work(val key: String, val steps: List<JsonObject>) : Item()
+        data class Work(val key: String, val steps: List<JsonObject>, val open: Boolean) : Item()
         /** The turn still runs: a spinner under the last row. */
         object Running : Item()
     }
@@ -268,9 +274,9 @@ class ChatActivity : NodeActivity() {
                 if (run.isEmpty()) return
                 val key = run.first().str("id") ?: ""
                 if (live || run.size < 2 || key in open) {
-                    if (run.size >= 2 && key in open) out.add(Item.Work(key, run.toList()))
+                    if (run.size >= 2 && key in open) out.add(Item.Work(key, run.toList(), true))
                     run.forEach { out.add(Item.One(it)) }
-                } else out.add(Item.Work(key, run.toList()))
+                } else out.add(Item.Work(key, run.toList(), false))
                 run = ArrayList()
             }
             for (e in entries) {
@@ -279,8 +285,37 @@ class ChatActivity : NodeActivity() {
             flush(true)
             if (running) out.add(Item.Running)
             rescue.forEach { out.add(Item.Rescue(it)) }
+            // Only what changed is drawn again: a streaming answer rebinds its own row, not the page.
+            val old = items
             items = out
-            notifyDataSetChanged()
+            DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+                override fun getOldListSize() = old.size
+                override fun getNewListSize() = out.size
+                override fun areItemsTheSame(o: Int, n: Int) = keyOf(old[o]) == keyOf(out[n])
+                override fun areContentsTheSame(o: Int, n: Int) = sameContent(old[o], out[n])
+            }, false).dispatchUpdatesTo(this)
+        }
+
+        private fun keyOf(item: Item): String = when (item) {
+            is Item.One -> "e:" + (item.e.str("id") ?: System.identityHashCode(item.e).toString())
+            is Item.Work -> "w:" + item.key
+            is Item.Rescue -> "r:" + item.line.key
+            Item.Earlier -> "earlier"
+            Item.Running -> "running"
+        }
+
+        /** The few cheap rows (Earlier, the spinner) are always drawn again; an entry only when it changed. */
+        private fun sameContent(a: Item, b: Item): Boolean = when {
+            a is Item.One && b is Item.One -> a.e === b.e || a.e == b.e
+            a is Item.Work && b is Item.Work -> a.steps.size == b.steps.size && a.open == b.open
+            a is Item.Rescue && b is Item.Rescue -> a == b
+            else -> false
+        }
+
+        /** One entry's row again (its tool opened, its thumbnail came). */
+        private fun changed(id: String?) {
+            val i = items.indexOfFirst { it is Item.One && it.e.str("id") == id }
+            if (i >= 0) notifyItemChanged(i)
         }
 
         override fun getItemCount() = items.size
@@ -352,7 +387,8 @@ class ChatActivity : NodeActivity() {
                     if (item.e.str("kind") in setOf("answer", "plan") && doc.isNotEmpty()) {
                         v.visibility = View.GONE
                         docBox.visibility = View.VISIBLE
-                        DocViews.build(this@ChatActivity, doc, docBox)
+                        // The answer's views are built once per content, not on every bind.
+                        if (docBox.tag != doc) { DocViews.build(this@ChatActivity, doc, docBox); docBox.tag = doc }
                     } else bind(v, item.e)
                     if (item.e.str("kind") == "divider") rule.visibility = View.VISIBLE
                     if (item.e.str("kind") in setOf("user", "answer", "plan")) {
@@ -426,9 +462,9 @@ class ChatActivity : NodeActivity() {
                         val d = android.graphics.drawable.BitmapDrawable(resources, thumb).apply { setBounds(0, 0, w, h) }
                         append("\uFFFC", android.text.style.ImageSpan(d), 0)
                     } else {
-                        append("📎 " + (f.str("name") ?: "attachment"))
+                        append(glyphSpan(dev.kore.phone.R.drawable.ic_attach)).append(" " + (f.str("name") ?: "attachment"))
                         val l = link
-                        if (l != null && f.str("kind") == "image") Thumbs.fetch(kore.scope, l, chatId, ref) { runOnUiThread { notifyDataSetChanged() } }
+                        if (l != null && f.str("kind") == "image") Thumbs.fetch(kore.scope, l, chatId, ref) { runOnUiThread { changed(e.str("id")) } }
                     }
                 }
             }
@@ -485,7 +521,7 @@ class ChatActivity : NodeActivity() {
                         v.setPadding(dp(10), dp(8), dp(10), dp(8))
                     }
                     if (e.objs("changes").isNotEmpty() && e.str("turn") != null) v.setOnClickListener { openChanges(e) }
-                    else v.setOnClickListener { if (!openTools.add(id)) openTools.remove(id); notifyDataSetChanged() }
+                    else v.setOnClickListener { if (!openTools.add(id)) openTools.remove(id); changed(id) }
                     (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
                 }
                 "summary" -> {

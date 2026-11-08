@@ -38,7 +38,7 @@ class SignInService : Service() {
         val front = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setClass(this, JoinActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val back = PendingIntent.getActivity(this, 0, front, PendingIntent.FLAG_IMMUTABLE)
         val note = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.kore_mark)
+            .setSmallIcon(R.drawable.ic_notify).setColor(ACCENT)
             .setContentTitle("Signing in to Tailscale…")
             .setContentIntent(back)
             .setOngoing(true)

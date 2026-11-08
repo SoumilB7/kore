@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A phone: one 1.35 line on the 16 grid (korenet-first-connect.html F, #phone). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp" android:height="20dp" android:viewportWidth="16" android:viewportHeight="16">
+    <path android:strokeColor="#89959F" android:strokeWidth="1.35" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M6.3,1.6h3.4a1.7,1.7 0,0 1,1.7 1.7v9.4a1.7,1.7 0,0 1,-1.7 1.7h-3.4a1.7,1.7 0,0 1,-1.7 -1.7v-9.4a1.7,1.7 0,0 1,1.7 -1.7zM7.3,12.1h1.4" />
+</vector>

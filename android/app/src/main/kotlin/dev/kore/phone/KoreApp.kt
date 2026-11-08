@@ -59,6 +59,7 @@ class KoreApp : Application() {
             override fun onActivityCreated(a: Activity, b: Bundle?) {
                 if (!screenshotsAllowed) a.window.setFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE, android.view.WindowManager.LayoutParams.FLAG_SECURE)
             }
+            override fun onActivityPostCreated(a: Activity, b: Bundle?) = dev.kore.phone.ui.fitBars(a)
             override fun onActivityStarted(a: Activity) {
                 if (started++ == 0) {
                     main.removeCallbacks(offScreen)

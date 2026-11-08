@@ -26,19 +26,29 @@ class WindowActivity : NodeActivity() {
         return super.body()
     }
 
+    /** Chat rows kept by what they show, and what was last drawn: a change elsewhere on the device draws nothing here. */
+    private val rows = RowCache()
+    private var shown: Any? = null
+
     override fun render(snapshot: JsonObject?) {
         this.snapshot = snapshot
-        content.removeAllViews()
         val w = snapshot?.objs("windows")?.firstOrNull { it.str("id") == windowId }
+        val control = link.hasControl(snapshot)
+        val chats = snapshot?.chatsById().orEmpty()
+        val look = listOf(snapshot == null, w, w?.let { usedChats(it).map { id -> chats[id] } }, control, unfolded.toMap(), macName)
+        if (look == shown) {
+            newSheet?.takeIf { it.isShowing }?.refresh()
+            return
+        }
+        shown = look
+        content.removeAllViews()
         if (w == null) {
             content.addView(label(if (snapshot == null) "Waiting for $macName…" else "This window was closed.", 14f, K.dim))
             return
         }
-        val control = link.hasControl(snapshot)
         plus?.visibility = if (control) View.VISIBLE else View.GONE
         barTitle.text = w.str("name") ?: ""
         content.addView(label(w.str("path") ?: "", 12f, K.faint).apply { setPadding(dp(4), 0, 0, dp(8)) })
-        val chats = snapshot.chatsById()
         val segments = ControlModel.segments(w)
         val grouped = segments.any { it is ControlModel.Segment.Group }
         var labelled = false
@@ -63,12 +73,18 @@ class WindowActivity : NodeActivity() {
         if (control) content.addView(quietRow("History") {
             startActivity(Intent(this, HistoryActivity::class.java).putExtra("window", windowId))
         }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10) })
+        rows.done()
         newSheet?.takeIf { it.isShowing }?.refresh()
+    }
+
+    /** The chats this window's tabs and boards show, in order. */
+    private fun usedChats(w: JsonObject): List<String?> = w.objs("tabs").flatMap { tab ->
+        if (tab.str("kind") == "board") tab.obj("board")?.objs("sections").orEmpty().flatMap { it.strs("chatIds") } else listOf(tab.str("chatId"))
     }
 
     private fun tab(w: JsonObject, tab: JsonObject, chats: Map<String, JsonObject>, control: Boolean) {
         when (tab.str("kind")) {
-            "chat", "agent" -> chatRow(chats[tab.str("chatId")], tab.str("title"))?.let { row ->
+            "chat", "agent" -> chatRow(chats[tab.str("chatId")], tab.str("title"), control = control)?.let { row ->
                 if (control) row.setOnLongClickListener { tabMenu(it, w, tab, chats[tab.str("chatId")]); true }
             }
             "board" -> {
@@ -84,22 +100,25 @@ class WindowActivity : NodeActivity() {
                         content.addView(head)
                     }
                     section.strs("chatIds").forEach { id ->
-                        chatRow(chats[id], null, order)?.let { row ->
+                        chatRow(chats[id], null, order, control)?.let { row ->
                             if (control) row.setOnLongClickListener { boardChatMenu(it, tab, chats[id]); true }
                         }
                     }
                 }
             }
-            "file" -> content.addView(row("📄 ${tab.str("title") ?: "File"}", "on $macName", null, onClick = null))
+            "file" -> content.addView(row(tab.str("title") ?: "File", "on $macName", null, glyphSpan(dev.kore.phone.R.drawable.ic_file, 15), onClick = null))
             else -> Unit
         }
     }
 
-    private fun chatRow(chat: JsonObject?, fallback: String?, board: Array<String>? = null): View? {
+    private fun chatRow(chat: JsonObject?, fallback: String?, board: Array<String>? = null, control: Boolean = false): View? {
         if (chat == null) return null
         val (dot, word) = rowLook(chat.str("state"))
-        val v = row(chat.str("title") ?: fallback ?: "Chat", word, dot, providerMark(chat.str("provider"))) {
-            startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", chat.str("id")).apply { if (board != null) putExtra("board", board) })
+        val key = listOf(chat.str("id"), chat.str("title") ?: fallback, chat.str("state"), chat.str("provider"), board?.toList(), control)
+        val v = rows.row(key) {
+            row(chat.str("title") ?: fallback ?: "Chat", word, dot, providerMark(chat.str("provider"))) {
+                startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", chat.str("id")).apply { if (board != null) putExtra("board", board) })
+            }
         }
         content.addView(v)
         return v
@@ -301,6 +320,7 @@ fun android.app.Activity.quietRow(title: String, detail: String? = null, go: () 
     addView(label(listOfNotNull(detail, "›").joinToString(" "), 12f, K.faint))
     contentDescription = title
     setOnClickListener { go() }
+    pressable(12)
     layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
 }
 

@@ -143,6 +143,7 @@ class DeviceActivity : NodeActivity() {
             isSelected = on
             contentDescription = if (empty) "$text, no chats" else text
             setOnClickListener { go() }
+            pressable(14)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
         chip("All ${windows.sumOf { it.chats }}", filter == null, false) { filter = null; draw() }
         for (w in windows.sortedByDescending { it.chats > 0 }) {
@@ -311,6 +312,7 @@ class DeviceActivity : NodeActivity() {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(14), dp(11), dp(14), dp(11))
         background = rounded(K.surface)
+        pressable()
         layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL

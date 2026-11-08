@@ -4,15 +4,21 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.TaskStackBuilder
 import android.content.Context
 import android.content.Intent
 import dev.kore.phone.R
 import dev.kore.phone.ui.ChatActivity
+import dev.kore.phone.ui.DeviceActivity
+import dev.kore.phone.ui.HomeActivity
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+
+/** Kore's accent, for the status-bar mark. */
+internal val ACCENT = 0xFF6AB1E7.toInt()
 
 /**
  * Alerts from one device's attention stream: one notification per chat, gone when the card is
@@ -76,16 +82,19 @@ class Notifier(private val context: Context, private val node: String = "", priv
     }
 
     private fun post(channel: String, chatId: String, title: String, what: String) {
-        val open = Intent(context, ChatActivity::class.java).putExtra("chat", chatId).putExtra("node", node)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val tap = PendingIntent.getActivity(context, id(chatId), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        // Back from the chat goes to its device, then Home, as if opened there.
+        val tap = TaskStackBuilder.create(context)
+            .addNextIntent(Intent(context, HomeActivity::class.java))
+            .apply { if (node.isNotEmpty()) addNextIntent(Intent(context, DeviceActivity::class.java).putExtra("node", node)) }
+            .addNextIntent(Intent(context, ChatActivity::class.java).putExtra("chat", chatId).putExtra("node", node))
+            .getPendingIntent(id(chatId), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val public = Notification.Builder(context, channel)
-            .setSmallIcon(R.drawable.kore_mark)
+            .setSmallIcon(R.drawable.ic_notify).setColor(ACCENT)
             .setContentTitle("Kore")
             .setContentText(if (channel == NEEDS) "A chat needs you" else "A chat $what".lowercase().replaceFirstChar { it.uppercase() })
             .build()
         val note = Notification.Builder(context, channel)
-            .setSmallIcon(R.drawable.kore_mark)
+            .setSmallIcon(R.drawable.ic_notify).setColor(ACCENT)
             .setContentTitle(title)
             .setContentText(what)
             .apply { nodeName()?.let { setSubText(it) } }

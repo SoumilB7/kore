@@ -67,11 +67,14 @@ class JoinActivity : Activity() {
 
     override fun onStop() {
         watch?.cancel()
+        pulse?.cancel()
         if (::root.isInitialized) flow.visible(false)
         super.onStop()
     }
 
     private fun render(s: Step, offline: Boolean) {
+        pulse?.cancel()
+        pulse = null
         root.removeAllViews()
         if (s !is Step.SigningIn) unopened = null
         flow.tab.toOpen(s)?.let { if (!signIn(it)) unopened = it }
@@ -129,12 +132,12 @@ class JoinActivity : Activity() {
                 secondary("Ask again") { flow.again() }
                 quiet("Leave KoreNet") { leave() }
             }
-            is Step.NoMac -> screen(halo(R.drawable.ic_mac), "No Mac with Kore here",
+            is Step.NoMac -> screen(halo(R.drawable.ic_net), "No Mac with Kore here",
                 (s.login?.let { "Signed in as $it.\n" } ?: "") + "Kore may be on a Mac signed in to another account.") {
                 secondary("Switch account") { leave() }
                 quiet("Get Kore for Mac") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(KORE_FOR_MAC))) }
             }
-            is Step.NeedsApproval -> screen(halo(R.drawable.ic_mac), "Waiting for a signature",
+            is Step.NeedsApproval -> screen(halo(R.drawable.ic_phone), "Waiting for a signature",
                 "Your tailnet has to approve or sign this phone first (Tailnet Lock or device approval).") {
                 s.nodeKey?.let { key ->
                     addView(facts(listOf("Node key" to key.take(16) + "…" + key.takeLast(4))))
@@ -182,6 +185,7 @@ class JoinActivity : Activity() {
     // MARK: the screen's parts (360 dp mockup: a centred middle, actions at the foot)
 
     private fun screen(top: View, big: String, small: String, foot: LinearLayout.() -> Unit) {
+        // The middle scrolls when it can't fit (landscape, large text); centred otherwise.
         val mid = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -190,7 +194,10 @@ class JoinActivity : Activity() {
             addView(label(big, 20f, bold = true).apply { gravity = Gravity.CENTER; setPadding(0, dp(14), 0, dp(6)) })
             addView(label(small, 13.5f, K.dim).apply { gravity = Gravity.CENTER; setLineSpacing(0f, 1.25f) })
         }
-        root.addView(mid, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(android.widget.ScrollView(this).apply {
+            isFillViewport = true
+            addView(mid, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT))
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), 0, dp(20), dp(26))
@@ -204,15 +211,26 @@ class JoinActivity : Activity() {
         background = rounded(K.surface, 16)
     }
 
+    /** The halo's glow while something is under way; one at a time, stopped off screen. */
+    private var pulse: android.animation.ValueAnimator? = null
+
     private fun halo(glyph: Int, pulse: Boolean = false): View = ImageView(this).apply {
         setImageResource(glyph)
         scaleType = ImageView.ScaleType.CENTER_INSIDE
         setPadding(dp(18), dp(18), dp(18), dp(18))
-        background = android.graphics.drawable.GradientDrawable().apply {
+        val ring = android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL
             setStroke(dp(2), K.raised)
         }
-        if (pulse) animate().alpha(0.5f).setDuration(900).withEndAction { animate().alpha(1f).setDuration(900) }.start()
+        background = ring
+        // Mockup .halo.pulse: the ring breathes to the accent and back, 1.6 s, for as long as it shows.
+        if (pulse) this@JoinActivity.pulse = android.animation.ValueAnimator.ofArgb(K.raised, K.accent).apply {
+            duration = 800
+            repeatMode = android.animation.ValueAnimator.REVERSE
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            addUpdateListener { ring.setStroke(dp(2), it.animatedValue as Int) }
+            start()
+        }
     }
 
     private fun facts(rows: List<Pair<String, String>>): View = LinearLayout(this).apply {
@@ -220,7 +238,7 @@ class JoinActivity : Activity() {
         setPadding(dp(14), dp(10), dp(14), dp(10))
         background = rounded(K.surface, 12)
         for ((k, v) in rows) addView(LinearLayout(this@JoinActivity).apply {
-            addView(label(k, 12f, K.faint), LinearLayout.LayoutParams(dp(96), LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(label(k, 12f, K.faint), LinearLayout.LayoutParams(dp(110), LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(label(v, 12f, K.text).apply { typeface = Typeface.MONOSPACE; maxLines = 1 })
         })
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
@@ -230,6 +248,7 @@ class JoinActivity : Activity() {
         gravity = Gravity.CENTER
         background = rounded(K.accent, 14)
         setOnClickListener { go() }
+        pressable(14)
         tag = text
     }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(10) })
 
@@ -237,14 +256,16 @@ class JoinActivity : Activity() {
         gravity = Gravity.CENTER
         background = rounded(K.surface, 14)
         setOnClickListener { go() }
+        pressable(14)
         tag = text
     }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(10) })
 
     private fun LinearLayout.quiet(text: String, go: () -> Unit) = addView(label(text, 15f, K.dim).apply {
         gravity = Gravity.CENTER
         setOnClickListener { go() }
+        pressable(14)
         tag = text
-    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(34)))
+    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
 
     companion object {
         const val KORE_FOR_MAC = "https://github.com/SoumilB7/kore"
