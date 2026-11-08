@@ -22,8 +22,9 @@ struct NodeNamesTests {
             // `place`: the Welcome's box key (2026-11-15, its title showed the id).
             ("key shown as text", NSRegularExpression(pattern: #"\b(?:Text|Button|OptionItem)\((?:[\w$]+\.)*(?:alias|place)\b"#)),
             ("key joined to words", NSRegularExpression(pattern: #"\b(?:[\w$]+\.)*alias \+ "[ ·]"#)),
-            // `"box:" + alias`: a workspace or cache key, not words.
-            ("words joined to key", NSRegularExpression(pattern: #""(?!box:")[^"]*[ ·:]" \+ (?:[\w$]+\.)*alias\b"#)),
+            // `"box:" + alias`: a workspace or cache key, and `"nodekey:" + alias` a stand-in box's
+            // node key (DevicesScript): keys, not words.
+            ("words joined to key", NSRegularExpression(pattern: #""(?!box:"|nodekey:")[^"]*[ ·:]" \+ (?:[\w$]+\.)*alias\b"#)),
         ]
         var found: [String] = []
         var scanned = 0
