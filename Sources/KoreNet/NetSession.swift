@@ -83,6 +83,9 @@ package final class NetSession {
         /// What the welcome tells this peer of the devices here (a Mac's to a phone: its own
         /// record, then its boxes); nil sends none.
         package var directory: ((DeviceRecord) -> [DeviceRecord]?)?
+        /// A paused device is welcomed (after its proof) for the service to park, instead of
+        /// `bye paused`: a Mac's phone then hears at once when it's brought online.
+        package var admitPaused = false
 
         package init(local: NetLocal, route: Binding.Route, peer: NetPeerFacts, book: DeviceBook, tickets: ResumeTickets) {
             self.local = local
@@ -109,6 +112,10 @@ package final class NetSession {
         /// This device's own Tailscale user (its Status): a server pinned over SSH takes its first
         /// node key only from a WhoIs of this user, after its proof.
         package var ownUser: Int64?
+        /// A box's claim, first contact: the server isn't in the book yet, so its challenge's
+        /// device and identity key are only learned (`learned`); the hello goes with `enroll`, and
+        /// the box answers `bye claim` (or `unknown`). Never a welcome: nothing is trusted here.
+        package var learn = false
 
         package init(local: NetLocal, route: Binding.Route, peer: NetPeerFacts, book: DeviceBook, server: UUID, service: String, resume: NetControl.Resume? = nil) {
             self.local = local
@@ -159,6 +166,8 @@ package final class NetSession {
     package private(set) var verified: VerifiedPeer?
     /// Server side: a node key the handshake kept for the peer (rotation), for the journal.
     package private(set) var nodeKeyAppend: DeviceBook.NodeKeyAppend?
+    /// A learning client (`Client.learn`): the device and identity key the challenge named.
+    package private(set) var learned: (device: UUID, identityKey: Data)?
     /// Server side: the device came in through its enroll (a record made now).
     package private(set) var enrolled = false
     /// Server side: a stranger's proven hello waiting for the owner (`Stranger.hold`).
@@ -212,7 +221,8 @@ package final class NetSession {
     package func start() {
         guard case .server(let server) = role, nonceS.isEmpty else { return }
         nonceS = random(Binding.nonceSize)
-        control(.challenge(.init(route: server.route.rawValue, device: server.local.device, nonce: nonceS)))
+        let key = server.route == .tailnet ? server.local.signer.publicKey : nil
+        control(.challenge(.init(route: server.route.rawValue, device: server.local.device, nonce: nonceS, identityKey: key)))
         flush()
     }
 
@@ -399,7 +409,7 @@ package final class NetSession {
             guard let proven = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: known) else {
                 return fail(NetControl.Reason.unknown)
             }
-            guard !known.isPaused else { return fail(NetControl.Reason.paused) }
+            guard !known.isPaused || server.admitPaused else { return fail(NetControl.Reason.paused) }
             record = known
             peer = proven
         } else {
@@ -482,11 +492,18 @@ package final class NetSession {
 
     private func clientChallenge(_ client: Client, _ challenge: NetControl.Challenge) {
         guard challenge.v == NetControl.version else { return fail(NetControl.Reason.version) }
-        guard challenge.route == client.route.rawValue, challenge.device == client.server else { return fail(NetControl.Reason.proof) }
-        guard let record = try? client.book.record(client.server) else { return fail(NetControl.Reason.unknown) }
+        guard challenge.route == client.route.rawValue, client.learn || challenge.device == client.server else { return fail(NetControl.Reason.proof) }
+        var record: DeviceRecord?
+        if client.learn {
+            guard client.route == .tailnet, client.enroll != nil, let key = challenge.identityKey, !key.isEmpty else { return fail(NetControl.Reason.proof) }
+            learned = (challenge.device, key)
+        } else {
+            guard let pinned = try? client.book.record(client.server) else { return fail(NetControl.Reason.unknown) }
+            record = pinned
+        }
         let nonceC = random(Binding.nonceSize)
         guard let binding = try? Binding(
-            route: client.route.rawValue, nonceS: challenge.nonce, nonceC: nonceC, deviceC: client.local.device, deviceS: client.server,
+            route: client.route.rawValue, nonceS: challenge.nonce, nonceC: nonceC, deviceC: client.local.device, deviceS: challenge.device,
             nodeKeyC: client.local.nodeKey, nodeKeyS: client.peer.nodeKey),
               let sig = try? IdentityProof.sign(binding, with: client.local.signer)
         else { return fail(NetControl.Reason.proof) }
@@ -497,8 +514,10 @@ package final class NetSession {
             enroll: client.enroll)))
         // The welcome and the service's first messages may come in one read: past the challenge
         // the client reads whole frames (the server it dialled is the one its book pins, and the
-        // welcome's proof decides within `clientWindow`).
-        decoder.preAuth = false
+        // welcome's proof decides within `clientWindow`). A learning client trusts nothing: it
+        // stays on pre-auth frames for the box's one `bye`.
+        decoder.preAuth = client.learn
+        if client.learn { decoder.expectAnotherPreAuthFrame() }
     }
 
     private func clientWelcome(_ client: Client, _ welcome: NetControl.Welcome) {

@@ -108,7 +108,9 @@ class HomeActivity : Activity() {
         }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(12) })
         val chats = snap?.objs("chats").orEmpty()
         val running = chats.count { it.str("state") == "working" }
+        val trouble = troubleWords(s, n.device.value.kind == NodeKind.MAC, n.name, kore.mesh.macName)
         val fact = when {
+            trouble != null -> trouble.fact
             up || (s == NodeMachine.State.Connecting && snap != null) -> "${chats.size} chats" + if (running > 0) " · $running running" else ""
             s is NodeMachine.State.Away && s.why == NodeMachine.AwayWhy.WAITING -> "waiting for ${kore.mesh.ownerName()}"
             s is NodeMachine.State.Away -> lastSeenWords(n.lastSeen) ?: stateWords(s).first.removePrefix("● ").lowercase()
@@ -116,13 +118,17 @@ class HomeActivity : Activity() {
         }
         addView(column().apply {
             addView(label(n.name, 15f, if (up) K.text else K.dim).apply { maxLines = 1 })
-            addView(label(fact, 12f, K.faint).apply { maxLines = 1 })
+            addView(label(fact, 12f, if (trouble?.action != null) K.accent else K.faint).apply { maxLines = 1 })
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         val (_, color) = nodeLook(s)
         addView(View(this@HomeActivity).apply { background = rounded(color, 4) }, LinearLayout.LayoutParams(dp(8), dp(8)))
         contentDescription = "${n.name}: $fact"
         tag = "device ${n.name}"
-        setOnClickListener { startActivity(Intent(this@HomeActivity, DeviceActivity::class.java).putExtra("node", n.id.toString())) }
+        // A device that won't take this phone: the row does its one action.
+        val action = trouble?.action
+        setOnClickListener {
+            if (action != null) rowAction(n, action) else startActivity(Intent(this@HomeActivity, DeviceActivity::class.java).putExtra("node", n.id.toString()))
+        }
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
     }
 

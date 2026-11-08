@@ -79,6 +79,12 @@ class DeviceActivity : NodeActivity() {
     private fun stateLine(): View? {
         val s = linkState ?: return null
         val node = link ?: return null
+        // Removed, or not allowed: one line and its one action, as Home's row says it.
+        troubleWords(s, node.device.value.kind == dev.kore.link.trust.NodeKind.MAC, macName, kore.mesh.macName)?.let { t ->
+            val said = t.fact.substringBeforeLast(" · ")
+            val act = t.action?.let { a -> t.fact.substringAfterLast(" · ") to { rowAction(node, a) } }
+            return stateRow(if (t.action == null) t.fact else said, act)
+        }
         val (text, action) = when (s) {
             is dev.kore.link.node.NodeMachine.State.Away -> when (s.why) {
                 dev.kore.link.node.NodeMachine.AwayWhy.ASLEEP -> listOfNotNull("$macName is asleep", lastSeenWords(node.lastSeen)).joinToString(" · ") to null
@@ -86,12 +92,14 @@ class DeviceActivity : NodeActivity() {
                 dev.kore.link.node.NodeMachine.AwayWhy.UNREACHABLE -> "$macName is offline · retrying" to ("Retry" to { node.reconnectNow() })
                 dev.kore.link.node.NodeMachine.AwayWhy.WAITING -> "Waiting for ${kore.mesh.ownerName()}" to ("Retry" to { node.reconnectNow() })
             }
-            is dev.kore.link.node.NodeMachine.State.Denied -> "$macName hasn't allowed this phone" to ("Try again" to { node.reconnectNow() })
-            dev.kore.link.node.NodeMachine.State.Removed -> "$macName removed this phone" to ("Forget" to { kore.mesh.forget(node.id); finish() })
             dev.kore.link.node.NodeMachine.State.SignedOut -> "Signed out of Tailscale" to ("Sign in" to { startActivity(Intent(this, JoinActivity::class.java).putExtra("signIn", true)) })
             dev.kore.link.node.NodeMachine.State.Idle -> if (!kore.mesh.networkOn) "KoreNet is off on this phone" to ("Turn on" to { kore.mesh.networkOn = true }) else return null
             else -> return null
         }
+        return stateRow(text, action)
+    }
+
+    private fun stateRow(text: String, action: Pair<String, () -> Unit>?): View {
         return LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(4), 0, dp(4), dp(10))

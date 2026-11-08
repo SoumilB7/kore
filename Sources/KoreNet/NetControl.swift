@@ -22,18 +22,22 @@ package enum NetControl: Equatable, Sendable {
 
     package static let version = 2
 
-    /// Server → client, first: the route as the server sees it, its device and nonce.
+    /// Server → client, first: the route as the server sees it, its device and nonce; over the
+    /// tailnet also its identity key (public), so a Mac claiming a box it has no record of can
+    /// pin it once its owner compared the device code (the welcome then proves the key).
     package struct Challenge: Codable, Equatable, Sendable {
         package var v: Int
         package var route: String
         package var device: UUID
         package var nonce: Data
+        package var identityKey: Data?
 
-        package init(route: String, device: UUID, nonce: Data) {
+        package init(route: String, device: UUID, nonce: Data, identityKey: Data? = nil) {
             v = NetControl.version
             self.route = route
             self.device = device
             self.nonce = nonce
+            self.identityKey = identityKey
         }
     }
 
@@ -154,6 +158,9 @@ package enum NetControl: Equatable, Sendable {
         package static let service = "service"
         package static let version = "version"
         package static let timeout = "timeout"
+        /// An unclaimed box took this Mac as its claimant (`kore-host join`'s window is open):
+        /// its owner's Allow, sent as `enroll.claim`, makes this Mac the box's owner.
+        package static let claim = "claim"
         package static let limit = "limit"
         package static let protocolError = "protocol"
     }

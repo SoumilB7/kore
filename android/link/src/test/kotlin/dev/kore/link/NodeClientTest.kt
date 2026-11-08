@@ -326,6 +326,56 @@ class NodeClientTest {
         assertEquals("timeout", answer.await().s("code"))
     }
 
+    @Test fun takenOfflineTheLinkIsParkedAndNothingRedials() = runTest {
+        val link = link()
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        link.push(buildJsonObject { put("t", "paused") })
+        runCurrent()
+        assertEquals(NodeMachine.AwayWhy.OFF, (rig.client.state.value as State.Away).why)
+        // The app opening, the peer coming online: the parked link is the way back, no dial.
+        rig.client.post(NodeMachine.Event.Trigger)
+        rig.client.post(NodeMachine.Event.PeerOnline)
+        advanceTimeBy(600_000)
+        assertEquals(1, rig.dials.size)
+    }
+
+    @Test fun broughtOnlineItDialsStraightBackAndIsUp() = runTest {
+        val first = link()
+        val second = link()
+        val rig = Rig(this, listOf({ first }, { second }))
+        rig.client.start()
+        runCurrent()
+        first.push(buildJsonObject { put("t", "paused") })
+        runCurrent()
+        first.drop("online")
+        runCurrent()
+        assertEquals(2, rig.dials.size)
+        assertEquals(State.Up, rig.client.state.value)
+    }
+
+    @Test fun leaveTellsTheMacAndTakesItsAnswer() = runTest {
+        val link = link()
+        link.respond = { m -> if (m.s("t") == "leave") buildJsonObject { put("t", "result"); put("id", "leave:" + m.s("id")); put("ok", true) } else null }
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        assertTrue(rig.client.leave())
+    }
+
+    @Test fun leaveGivesUpAfterTwoSecondsWithoutAnAnswer() = runTest {
+        val link = link()
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        val left = async { rig.client.leave() }
+        advanceTimeBy(NodeClient.LEAVE_MS - 1)
+        assertTrue(!left.isCompleted)
+        advanceTimeBy(2)
+        assertEquals(false, left.await())
+    }
+
     @Test fun raiseSignsTheDigestOverThisLinksBindingAndTheNodesNonce() = runTest {
         val key = dev.kore.link.trust.SoftwareIdentity.fresh()
         val nonce = ByteArray(32) { it.toByte() }

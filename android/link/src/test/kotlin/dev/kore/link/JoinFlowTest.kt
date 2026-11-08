@@ -93,15 +93,18 @@ class JoinFlowTest {
         assertEquals(listOf("mbp"), rig.knocks.map { it.first })
     }
 
-    @Test fun knocksEveryTwoSecondsWhileVisibleAndStopsAfterTwoMinutes() = runTest {
+    @Test fun knocksEveryTwoSecondsWhileVisibleAndStopsWithTheMacsTenMinuteWindow() = runTest {
         val tailnet = FakeTailnet(Tailnet.RUNNING).apply { me = this@JoinFlowTest.me; others = listOf(node("mbp")) }
         val rig = Rig(this, tailnet) { _, _ -> throw java.io.IOException("refused") }
         rig.flow.visible(true)
         rig.flow.begin()
         advanceTimeBy(10_001)
         assertEquals(listOf(0L, 2_000, 4_000, 6_000, 8_000, 10_000), rig.knocks.map { it.second })
-        advanceTimeBy(200_000)
-        assertEquals(60, rig.knocks.size)
+        // Still knocking at 9 min: an Add window opened late is found.
+        advanceTimeBy(530_000)
+        assertTrue(rig.flow.step.value.let { it is Step.Finding && !it.stopped })
+        advanceTimeBy(70_000)
+        assertEquals(300, rig.knocks.size)
         assertEquals(Step.Finding(listOf("mbp"), stopped = true), rig.flow.step.value)
     }
 
@@ -125,7 +128,7 @@ class JoinFlowTest {
         val rig = Rig(this, tailnet) { _, _ -> error("no knock expected") }
         rig.flow.visible(true)
         rig.flow.begin()
-        advanceTimeBy(121_000)
+        advanceTimeBy(601_000)
         assertEquals(Step.NoMac("me@example.com"), rig.flow.step.value)
         assertEquals(0, rig.knocks.size)
     }

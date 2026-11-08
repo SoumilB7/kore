@@ -200,7 +200,7 @@ final class MacRig {
         var setup = NetSession.Client(
             local: local, route: .tailnet, peer: NetPeerFacts(nodeKey: "nodekey:mac", userId: 7), book: book, server: host.device, service: "link",
             resume: resume)
-        if enroll { setup.enroll = .init(name: phone.name, kind: .phone, identityKey: phone.key.publicKey, raiseKey: phone.raise.publicKey) }
+        if enroll { setup.enroll = .init(name: phone.name, model: phone.name, kind: .phone, identityKey: phone.key.publicKey, raiseKey: phone.raise.publicKey) }
         let end = LiveEnd(NetSession(fd: a, role: .client(setup), clock: clock.function))
         net.greet(b, remote: phone.address, whois: whois ?? StubTailnet.who(key: phone.nodeKey))
         return end

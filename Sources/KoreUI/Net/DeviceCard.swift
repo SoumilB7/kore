@@ -20,6 +20,8 @@ package struct DeviceCardInfo: Equatable, Sendable {
     package var name: String
     /// A box's device id: its first 8 hex digits are the code `kore-host join` printed.
     package var device: UUID?
+    /// The record this phone replaces (reinstalled, or left): "Replaces Pixel 9 · last seen 2 h ago".
+    package var replaces: String?
 
     package init(
         title: String, note: String, node: String, address: String, login: String, firstSeen: Date, kind: DeviceRow.Kind = .phone, name: String? = nil,
@@ -110,6 +112,10 @@ struct DeviceCardView: View {
                 }
             } else {
                 facts(info).padding(.bottom, Space.lg)
+                if let replaces = info.replaces {
+                    Text(replaces).font(Theme.Net.line).foregroundStyle(Theme.secondary).lineLimit(1)
+                        .padding(.bottom, Space.md)
+                }
                 Text(info.note).font(Theme.Net.line).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, Space.xl)

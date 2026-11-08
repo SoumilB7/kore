@@ -2,6 +2,7 @@ import AppKit
 import HostClient
 import Observation
 import SwiftUI
+import Tailnet
 
 /// The phones' side of Devices (KoreLink's `MacNet`, set at launch; storylines: a script): the
 /// phones this Mac allowed, the Add device window, and what ⋯ does to a phone.
@@ -87,6 +88,10 @@ package final class Devices {
     @ObservationIgnored package var joinRunner: @MainActor (String) -> (any BoxNetJoinRunner)? = { BoxUpgrades.shared.runner(for: $0) }
     /// The boxes' upgrades, so Join KoreNet shows the one under way (storylines: none).
     @ObservationIgnored package var upgrades: BoxUpgrades? = .shared
+    /// Tailnet Lock's reader and signer (Kore: the switch's tailnet; storylines: theirs).
+    @ObservationIgnored package var lock: @MainActor () -> (read: @Sendable () -> TailnetLock?, sign: @Sendable (String) throws -> Void)? = {
+        KoreNetSwitch.shared?.lock
+    }
     @ObservationIgnored private let defaults: UserDefaults
 
     /// Bumped when the phones' side changes (a phone linked or went, the window closed): what
@@ -101,6 +106,11 @@ package final class Devices {
     @ObservationIgnored private var joinRun: (any BoxNetJoinRunner)?
     /// The Devices popup is up (the icon draws lit).
     package private(set) var popupOpen = false
+    /// Nodes Tailnet Lock keeps out, as last read (the popup opening reads it).
+    package private(set) var signatures: [SignatureRow] = []
+    /// Signs under way, and those that didn't take, by node key.
+    package private(set) var signing: Set<String> = []
+    package private(set) var signFailed: Set<String> = []
 
     package static let nudgedKey = "koreNetNudged"
     /// Where "Get the phone app" goes.
@@ -246,6 +256,43 @@ package final class Devices {
 
     package func getPhoneApp() { openURL(Self.phoneAppURL) }
 
+    // MARK: Kore's own tailnet couldn't start (G12)
+
+    /// The one action "Kore's tailnet couldn't start" offers.
+    package enum Unavailable: Equatable, Sendable {
+        /// It failed to come up: start KoreNet again.
+        case tryAgain
+        /// This Kore has no `kore-tailnet` of its own: installed Tailscale is the way on.
+        case installTailscale
+
+        package var title: String {
+            switch self {
+            case .tryAgain: "Try again"
+            case .installTailscale: "Install Tailscale"
+            }
+        }
+    }
+
+    /// Where Install Tailscale goes.
+    package static let tailscaleURL = URL(string: "https://tailscale.com/download/mac")!
+
+    /// A missing helper never comes back by trying again; anything else might.
+    package static func unavailable(_ why: String) -> Unavailable {
+        why.contains("no helper") ? .installTailscale : .tryAgain
+    }
+
+    /// Does the unavailable line's action: KoreNet off and on again, or Tailscale's download page.
+    package func unavailableAction(_ why: String) {
+        switch Self.unavailable(why) {
+        case .tryAgain:
+            net?.set(false)
+            net?.set(true)
+            changed()
+        case .installTailscale:
+            openURL(Self.tailscaleURL)
+        }
+    }
+
     package func rename(_ row: DeviceRow, to name: String) {
         switch row.kind {
         case .phone: if let id = UUID(uuidString: row.id) { phones?.rename(id, to: name) }
@@ -283,6 +330,33 @@ package final class Devices {
     }
 
     package func ask(_ pending: PendingRow) { phones?.ask(pending) }
+
+    // MARK: Tailnet Lock (G16)
+
+    /// Reads Tailnet Lock's kept-out nodes once, off the main actor (the popup opening).
+    package func readLock() async {
+        guard let lock = lock() else {
+            signatures = []
+            return
+        }
+        let read = lock.read
+        let found = await Task.detached { SignatureRow.rows(read()) }.value
+        signatures = found
+        signFailed.formIntersection(found.map(\.nodeKey))
+    }
+
+    /// "Sign": `tailscale lock sign` for the node, then Tailnet Lock again (a signed node leaves).
+    package func sign(_ row: SignatureRow) async {
+        guard row.canSign, !signing.contains(row.nodeKey), let lock = lock() else { return }
+        signing.insert(row.nodeKey)
+        signFailed.remove(row.nodeKey)
+        let (sign, key) = (lock.sign, row.nodeKey)
+        let ok = await Task.detached { (try? sign(key)) != nil }.value
+        signing.remove(row.nodeKey)
+        if !ok { signFailed.insert(row.nodeKey) }
+        HostLog.note("korenet", "lock sign", "\(row.name) \(ok ? "signed" : "failed")")
+        await readLock()
+    }
 
     // MARK: Join KoreNet (an SSH box)
 
@@ -349,6 +423,8 @@ extension StoryID {
         package static func rename(_ id: String) -> StoryID { row(id).part(.field) }
         /// A device waiting at a box, by node key.
         package static func pending(_ key: String) -> StoryID { StoryID(.titlebar, "net.pending", key: key) }
+        /// A kept-out node's Sign (Tailnet Lock), by node key.
+        package static func sign(_ key: String) -> StoryID { pending(key).part(.use) }
         /// The one line under the rows, and its action.
         package static let line = StoryID(.titlebar, "net.line")
         package static let lineAction = line.part(.use)

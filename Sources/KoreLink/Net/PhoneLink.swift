@@ -21,6 +21,11 @@ package final class PhoneLink {
     private let resumed: Bool
     private var started = false
     package private(set) var ended = false
+    /// Taken offline on this Mac: the link stays but serves nothing (no feed, no commands), so
+    /// Bring online reaches the phone at once (`bye online`, and it dials straight back).
+    package private(set) var parked = false
+    /// What a parked phone hears when it's brought online: dial again now.
+    package static let onlineReason = "online"
 
     init(net: MacNet, record: DeviceRecord, connection: PhoneConnection, binding: Data, resumed: Bool) {
         self.net = net
@@ -57,6 +62,7 @@ package final class PhoneLink {
     func begin(cursors: [String: KoreTrust.JSONValue]?) {
         guard !started, !ended else { return }
         started = true
+        if record.isPaused { return park() }
         let rev = resumed ? LinkResume.rev(cursors) : nil
         if let rev, let kept = net.retained(id, rev: rev) {
             client.sink.adopt(kept)
@@ -82,15 +88,24 @@ package final class PhoneLink {
             NetAudit.line("revoke", ["device": id.uuidString.lowercased()])
             return end(LinkMessage.ByeReason.revoked.rawValue)
         }
-        guard !now.isPaused else { return end(LinkMessage.ByeReason.paused.rawValue) }
         record = now
+        if now.isPaused, started { park() } else if !now.isPaused, parked { return unpark() }
         if !started, cursorsSettled || !resumed { begin(cursors: cursors) }
         for item in incoming where !ended {
+            // Parked: only its own leaving or going is heard.
+            if parked {
+                switch item {
+                case .leave, .link(.bye, _): break
+                default: continue
+                }
+            }
             switch item {
             case .invalid:
                 return end(LinkMessage.ByeReason.invalid.rawValue)
             case .raise(let raise):
                 self.raise(raise)
+            case .leave(let id):
+                return leave(id)
             case .link(.bye, _):
                 return end(LinkMessage.ByeReason.quit.rawValue)
             case .link(let message, let proof):
@@ -178,6 +193,40 @@ package final class PhoneLink {
         client.sink.send(.result(result))
     }
 
+    // MARK: Taken offline
+
+    /// Taken offline: nothing more is sent or served; the phone hears `paused` and shows it.
+    func park() {
+        guard !parked, !ended else { return }
+        parked = true
+        net.feed.detach(client)
+        client.sink.sendRaw(Data(#"{"t":"paused"}"#.utf8))
+        NetAudit.line("park", ["device": id.uuidString.lowercased()])
+    }
+
+    /// Brought online: the parked link ends with `bye online`, and the phone dials straight back.
+    func unpark() {
+        guard parked else { return }
+        end(Self.onlineReason)
+    }
+
+    // MARK: Leaving
+
+    /// The phone leaves KoreNet (ID3 a): its record goes now, the boxes hear, and it hears that
+    /// before it signs out (`leave:<id>`).
+    private func leave(_ resultId: String) {
+        let who = id
+        do {
+            try net.host.book.update { $0.removeAll { $0.id == who } }
+        } catch {
+            return answer(.init(id: "leave:\(resultId)", ok: false))
+        }
+        NetAudit.line("leave", ["device": who.uuidString.lowercased()])
+        answer(.init(id: "leave:\(resultId)", ok: true))
+        end(LinkMessage.ByeReason.quit.rawValue)
+        net.phonesChanged()
+    }
+
     // MARK: Ending
 
     /// Ends the link (`bye <reason>`); the projector is kept a while for its resume.
@@ -191,7 +240,7 @@ package final class PhoneLink {
     /// The connection went (its side, or ours).
     func gone() {
         ended = true
-        net.feed.detach(client)
+        if !parked { net.feed.detach(client) }
         let id = id
         let net = net
         client.sink.projected { projector in

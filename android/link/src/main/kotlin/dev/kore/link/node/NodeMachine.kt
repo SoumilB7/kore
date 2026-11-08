@@ -112,6 +112,8 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
         "unknown" -> if (box) waiting(now) else State.Denied(reason)
         "refused", "proof" -> State.Denied(reason)
         "paused" -> State.Away(AwayWhy.OFF, null, lastSeen)
+        // A Mac brought this phone online again (its parked link ends so): dial straight back.
+        "online" -> connecting(reset = true)
         "quit", "sleep" -> State.Away(AwayWhy.ASLEEP, now + jitter(CAP_MS), lastSeen)
         // This side gave up on a dead socket (a probe got nothing): dial again at once.
         "abandoned" -> connecting(reset = true)

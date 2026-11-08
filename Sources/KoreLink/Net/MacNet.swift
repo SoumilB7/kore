@@ -482,6 +482,8 @@ package final class MacNet {
         let local = NetLocal(device: identity.device, kind: .mac, nodeKey: me.publicKey, signer: signer)
         var setup = NetSession.Server(local: local, route: .tailnet, peer: Self.facts(whois), book: host.book, tickets: tickets)
         setup.ownUser = me.owner
+        // A phone taken offline is parked, not refused: Bring online reaches it (`PhoneLink.park`).
+        setup.admitPaused = true
         let shared = shared
         let clock = clock
         setup.stranger = { hello in MacNet.stranger(hello, whois: whois, state: shared.withLock { $0 }, now: clock()) }
@@ -553,8 +555,10 @@ package final class MacNet {
             id: hello.device, name: clean(enroll.name), kind: .phone, abilities: abilities, owner: false, identityKey: enroll.identityKey,
             nodeKeys: [whois.node.key], userId: tagged ? nil : whois.userId, tags: whois.node.tags, fqdn: whois.node.name, raiseKey: enroll.raiseKey,
             issuedBy: issuer, added: now, lastSeen: now)
-        guard (try? record.validate()) != nil else { return .refuse(NetControl.Reason.unknown) }
-        return .hold(record, seconds: state.holdFor)
+        var held = record
+        held.model = enroll.model.map(clean)
+        guard (try? held.validate()) != nil else { return .refuse(NetControl.Reason.unknown) }
+        return .hold(held, seconds: state.holdFor)
     }
 
     /// What a phone's welcome tells it: this Mac's record first (pinned on first contact), then
@@ -584,8 +588,26 @@ package final class MacNet {
             let info = DeviceCardInfo.phone(
                 name: record.name, node: Self.shortName(connection.whois.node.name), address: connection.remote, login: connection.whois.user.loginName,
                 firstSeen: connection.firstSeen)
-            let ask = asks.ask(info) { [weak self] answer in self?.answered(answer, record: record, connection: connection) }
-            held[key] = (connection, ask)
+            // What's online now (one status read, off the main actor): an offline phone of the same
+            // user and model is this one reinstalled or left, and the card says it's replaced.
+            let tailnet = host.tailnet
+            let foreground = foreground
+            background { [weak self] in
+                let peers = (try? tailnet?.status())?.peers
+                _ = self
+                foreground { [weak self] in
+                    // Gone meanwhile: no card.
+                    guard let self, self.shaking[key] != nil else { return }
+                    let devices = (try? self.host.book.read().devices) ?? []
+                    let retire = peers.map { MacNet.replaced(by: record, model: record.model, in: devices, peers: $0) } ?? []
+                    var card = info
+                    card.replaces = retire.first.map { MacNet.replacesLine($0, peers: peers ?? [], now: self.clock()) }
+                    let ask = self.asks.ask(card) { [weak self] answer in
+                        self?.answered(answer, record: record, connection: connection, retire: retire.map(\.id))
+                    }
+                    self.held[key] = (connection, ask)
+                }
+            }
         case .established(let peer, let binding):
             shaking[key] = nil
             shared.withLock { $0.handshakes = max(0, $0.handshakes - 1) }
@@ -604,21 +626,22 @@ package final class MacNet {
         }
     }
 
-    /// The owner's answer to a phone's card.
-    private func answered(_ answer: DeviceAsks.Answer, record: DeviceRecord, connection: PhoneConnection) {
+    /// The owner's answer to a phone's card; Allow retires the records it replaces (`retire`).
+    private func answered(_ answer: DeviceAsks.Answer, record: DeviceRecord, connection: PhoneConnection, retire: [UUID] = []) {
         held[ObjectIdentifier(connection)] = nil
         let id = record.id.uuidString.lowercased()
         switch answer {
         case .allow:
             do {
                 try host.book.update { devices in
-                    devices.removeAll { $0.id == record.id }
+                    devices.removeAll { $0.id == record.id || ($0.kind == .phone && retire.contains($0.id)) }
                     devices.append(record)
                 }
             } catch {
                 NetAudit.line("deny", ["device": id, "reason": "book"])
                 return connection.admit(nil)
             }
+            for old in retire { NetAudit.line("retire", ["device": old.uuidString.lowercased(), "by": id]) }
             NetAudit.line("allow", ["device": id, "kind": record.kind.rawValue])
             connection.admit(record)
             phonesChanged()
@@ -786,6 +809,30 @@ package final class MacNet {
         let set = DevicesWire.Set(id: UUID().uuidString, rev: (try? host.book.read().rev) ?? 0, records: records)
         let data = DevicesWire.encode(set)
         for phone in live { phone.tell(data) }
+    }
+
+    // MARK: A phone reinstalled or left (ID3 b)
+
+    /// The phone records a newly allowed phone replaces: another id, the same Tailscale user, the
+    /// same model (an older record without one: its name, which was the model unless renamed),
+    /// and none of its node keys online now. Most recently seen first.
+    nonisolated static func replaced(by record: DeviceRecord, model: String?, in devices: [DeviceRecord], peers: [TailnetStatus.Peer]) -> [DeviceRecord] {
+        guard record.kind == .phone, let user = record.userId, let model, !model.isEmpty else { return [] }
+        let online = Set(peers.filter(\.online).map(\.publicKey))
+        return devices.filter { old in
+            old.kind == .phone && old.id != record.id && old.userId == user && (old.model ?? old.name) == model && old.nodeKeys.allSatisfy { !online.contains($0) }
+        }
+        .sorted { lastSeen($0, peers) ?? .distantPast > lastSeen($1, peers) ?? .distantPast }
+    }
+
+    /// When a record's phone was last on: the tailnet's word for its node, else the record's.
+    nonisolated static func lastSeen(_ record: DeviceRecord, _ peers: [TailnetStatus.Peer]) -> Date? {
+        peers.filter { record.nodeKeys.contains($0.publicKey) }.compactMap(\.lastSeen).max() ?? record.lastSeen
+    }
+
+    /// The card's line: "Replaces Pixel 9 · last seen 2 h ago".
+    nonisolated static func replacesLine(_ old: DeviceRecord, peers: [TailnetStatus.Peer], now: Date) -> String {
+        "Replaces \(old.name)" + (lastSeen(old, peers).map { " · last seen " + DevicesWords.ago($0, now: now) } ?? "")
     }
 
     /// A self-given name as a card shows it: printable, one line, at most 64 characters.

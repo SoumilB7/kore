@@ -30,18 +30,33 @@ class JoinActivity : Activity() {
     private var unopened: String? = null
     private val flow get() = kore.mesh.join
 
+    /** Opened from a removed or refused device's row (Join again, Ask again): knocks though joined. */
+    private val again get() = intent?.getBooleanExtra(AGAIN, false) == true
+    /** The knock [again] asked for has started (once per screen). */
+    private var knocked = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (kore.mesh.joined && intent?.getBooleanExtra("signIn", false) != true) return home()
+        if (kore.mesh.joined && !again && intent?.getBooleanExtra("signIn", false) != true) return home()
+        knocked = savedInstanceState?.getBoolean(AGAIN) == true
         root = column()
         setContentView(root)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(AGAIN, knocked)
     }
 
     override fun onStart() {
         super.onStart()
         if (isFinishing) return
-        if (kore.mesh.joined && intent?.getBooleanExtra("signIn", false) != true) return home()
+        if (kore.mesh.joined && !again && intent?.getBooleanExtra("signIn", false) != true) return home()
         flow.visible(true)
+        if (again && !knocked) {
+            knocked = true
+            flow.again()
+        }
         watch = kore.scope.launch { flow.step.combine(flow.offline) { s, off -> s to off }.collect { (s, off) -> runOnUiThread { render(s, off) } } }
     }
 
@@ -58,9 +73,12 @@ class JoinActivity : Activity() {
         // Mid sign-in with no network: one quiet line; it goes on by itself once back.
         val noNet = if (offline) "\nNo internet on this phone; Kore goes on once it's back." else ""
         when (s) {
-            is Step.Join -> screen(logo(), "Kore", if (s.failed) "Tailscale didn't start on this phone. Try again." else "Your Mac's chats, from here.") {
-                primary(if (s.failed) "Try again" else "Join KoreNet") { kore.mesh.beginJoin() }
-                addView(label("Signs in with Tailscale", 12f, K.faint).apply { gravity = Gravity.CENTER })
+            // Cancel on a Join again: back to the devices.
+            is Step.Join -> if (again && kore.mesh.joined) home() else {
+                screen(logo(), "Kore", if (s.failed) "Tailscale didn't start on this phone. Try again." else "Your Mac's chats, from here.") {
+                    primary(if (s.failed) "Try again" else "Join KoreNet") { kore.mesh.beginJoin() }
+                    addView(label("Signs in with Tailscale", 12f, K.faint).apply { gravity = Gravity.CENTER })
+                }
             }
             Step.Starting -> screen(halo(R.drawable.ic_mac, pulse = true), "Starting…", "Kore's own Tailscale is coming up.$noNet") { quiet("Cancel") { flow.cancel() } }
             is Step.SigningIn -> {
@@ -73,7 +91,7 @@ class JoinActivity : Activity() {
             }
             is Step.Finding -> {
                 // Signed in again after a lapse: the devices are known, Home picks up from here.
-                if (kore.mesh.joined) {
+                if (kore.mesh.joined && !again) {
                     kore.mesh.nodes.value.forEach { it.post(dev.kore.link.node.NodeMachine.Event.SignedIn) }
                     return home()
                 }
@@ -217,5 +235,7 @@ class JoinActivity : Activity() {
 
     companion object {
         const val KORE_FOR_MAC = "https://github.com/SoumilB7/kore"
+        /** Extra: Join again / Ask again from a device's row. */
+        const val AGAIN = "again"
     }
 }

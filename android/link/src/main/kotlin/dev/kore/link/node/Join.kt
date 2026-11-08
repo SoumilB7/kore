@@ -26,18 +26,19 @@ object MacProbe {
             it.userId != null && it.userId == self.userId && it.nodeKey != self.nodeKey
     }
 
-    /** Knock every 2 s while the Join screen shows, for at most 2 min; never in the background. */
+    /** Knock every 2 s while the Join screen shows, never in the background. */
     const val EVERY_MS = 2_000L
     /** After a Mac answered "Add window closed": within its 3-a-minute pre-auth allowance. */
     const val CLOSED_EVERY_MS = 20_000L
-    const val FOR_MS = 120_000L
+    /** As long as the Mac's Add device window lasts (10 min), so a window opened late is still found. */
+    const val FOR_MS = 600_000L
 }
 
 /**
  * The first run (phase 18 §5, korenet-first-connect.html E): Join KoreNet → sign in to Tailscale
  * in a Custom Tab → Finding your Mac… (knocking on the Macs [MacProbe] picks, only while the screen
- * is visible, stopping after 2 min) → Allow on the Mac → Home. A pure flow over a [Tailnet]: the
- * tests run it on a fake one in virtual time.
+ * is visible, for as long as the Mac's Add device window lasts) → Allow on the Mac → Home. A pure
+ * flow over a [Tailnet]: the tests run it on a fake one in virtual time.
  *
  * Mid sign-in ([signingIn]) the browser is in front and this screen isn't: the tailnet's state is
  * still read (the app keeps the tailnet up and a short foreground service holds the process), so a
@@ -62,7 +63,7 @@ class JoinFlow(
         data object Starting : Step()
         /** [url] opens in a Custom Tab; never logged. */
         data class SigningIn(val url: String) : Step()
-        /** Signed in; [macs] are the Macs seen (none answers yet). [stopped]: the 2 minutes are up. */
+        /** Signed in; [macs] are the Macs seen (none answers yet). [stopped]: the 10 minutes are up. */
         /** [addClosed]: a Mac answered, but its Add device window isn't open (`bye unknown`). */
         data class Finding(val macs: List<String>, val stopped: Boolean = false, val addClosed: Boolean = false) : Step()
         /** The hello went to [mac]; its owner reads the card. [self] is what that card shows of this phone. */
@@ -111,7 +112,7 @@ class JoinFlow(
         }
     }
 
-    /** "Try again" (Denied, or Finding stopped): knock for another 2 minutes. */
+    /** "Try again" (Denied, or Finding stopped): knock for another 10 minutes. */
     @Synchronized fun again() {
         halt()
         stepFlow.value = Step.Finding(emptyList())

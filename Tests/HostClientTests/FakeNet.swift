@@ -146,6 +146,10 @@ final class FakeNetBox: @unchecked Sendable {
     var minor = 12
     /// An SSH-route stranger with an enroll is taken (the grant upgrade).
     var takesEnroll = true
+    /// Unclaimed, as `kore-host join` leaves it: a Mac's enroll over the tailnet is answered
+    /// `bye claim` while the window is open (true), `bye unknown` once closed (false); its
+    /// `enroll.claim` is taken while open. Nil: no claims here.
+    var claimWindow: Bool?
 
     final class Session {
         let session: NetSession
@@ -187,7 +191,16 @@ final class FakeNetBox: @unchecked Sendable {
         setup.ownUser = 7
         let book = book
         let takes = takesEnroll
+        let window = claimWindow
         setup.stranger = { hello in
+            if route == .tailnet, let window, let enroll = hello.enroll, enroll.kind == .mac {
+                guard window else { return .refuse(NetControl.Reason.unknown) }
+                guard enroll.claim == true else { return .refuse(NetControl.Reason.claim) }
+                let record = DeviceRecord(
+                    id: hello.device, name: enroll.name, kind: .mac, abilities: [.read, .ask, .run], owner: true, identityKey: enroll.identityKey,
+                    nodeKeys: ["nodekey:mac"], userId: 7, fqdn: "macbook.tail.ts.net.", added: Date())
+                return .enroll(record) { _ in (try? book.update { $0.append(record) }) != nil }
+            }
             guard route == .ssh, takes, let enroll = hello.enroll else { return .refuse(NetControl.Reason.unknown) }
             let record = DeviceRecord(
                 id: hello.device, name: enroll.name, kind: .mac, abilities: [.read, .ask, .run], owner: true, identityKey: enroll.identityKey,

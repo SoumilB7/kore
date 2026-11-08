@@ -63,6 +63,15 @@ package final class TailnetLocal: Tailnet {
         return out
     }
 
+    package func lockStatus() throws -> TailnetLock? {
+        try decode(TailnetLock.self, try api.get("/localapi/v0/tka/status"))
+    }
+
+    package func lockSign(_ nodeKey: String) throws {
+        let body = try JSONSerialization.data(withJSONObject: ["NodeKey": nodeKey, "RotationPublic": NSNull()])
+        _ = try api.post("/localapi/v0/tka/sign", body: body)
+    }
+
     package func dial(_ address: String, port: UInt16) throws -> Int32 {
         guard let ip = IPAddress(address), ip.isTailnet else { throw TailnetError.notTailnet(address) }
         return try Sockets.connectTCP(ip, port: port)

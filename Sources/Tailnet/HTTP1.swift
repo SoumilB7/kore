@@ -7,11 +7,12 @@ struct HTTP1 {
     static let maxHead = 64 << 10
     static let maxBody = 16 << 20
 
-    static func request(_ path: String, authorization: String?) -> Data {
-        var text = "GET \(path) HTTP/1.1\r\nHost: local-tailscaled.sock\r\n"
+    static func request(_ path: String, authorization: String?, body: Data? = nil) -> Data {
+        var text = "\(body == nil ? "GET" : "POST") \(path) HTTP/1.1\r\nHost: local-tailscaled.sock\r\n"
         if let authorization { text += "Authorization: \(authorization)\r\n" }
+        if let body { text += "Content-Type: application/json\r\nContent-Length: \(body.count)\r\n" }
         text += "Connection: close\r\n\r\n"
-        return Data(text.utf8)
+        return Data(text.utf8) + (body ?? Data())
     }
 
     /// Basic auth with an empty user and the `sameuserproof` token.

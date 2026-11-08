@@ -157,6 +157,47 @@ struct DevicesUITests {
         devices.endJoin()
     }
 
+    @Test func kore_sTailnetThatCouldNotStartOffersTryAgain() {
+        let sides = Sides(ScriptedNet(on: true, state: .unavailable("kore-tailnet: exited 1")))
+        let devices = devices(sides)
+        #expect(Devices.unavailable("kore-tailnet: exited 1") == .tryAgain)
+        devices.unavailableAction("kore-tailnet: exited 1")
+        // Off and on again: the switch chose afresh.
+        #expect(sides.net.facts.on && sides.net.facts.state == .installed && sides.opened.isEmpty)
+    }
+
+    @Test func aKoreWithoutItsOwnTailnetOffersInstallTailscale() {
+        let why = "kore-tailnet: no helper in Kore.app/Contents/Helpers (built without Go or a signed release copy)"
+        let sides = Sides(ScriptedNet(on: true, state: .unavailable(why)))
+        let devices = devices(sides)
+        #expect(Devices.unavailable(why) == .installTailscale && Devices.Unavailable.installTailscale.title == "Install Tailscale")
+        devices.unavailableAction(why)
+        #expect(sides.opened == [Devices.tailscaleURL] && sides.net.facts.state == .unavailable(why))
+    }
+
+    @Test func signRunsTailnetLockAndReadsItAgain() async {
+        let sides = Sides(ScriptedNet(on: true, state: .installed))
+        let devices = devices(sides)
+        let signed = SignLog()
+        devices.lock = { ({ Self.lock(signed: !signed.keys.isEmpty) }, { key in signed.keys.append(key) }) }
+        await devices.readLock()
+        #expect(devices.signatures == [SignatureRow(nodeKey: "nodekey:p9", name: "kore-pixel-9", canSign: true)])
+        await devices.sign(devices.signatures[0])
+        #expect(signed.keys == ["nodekey:p9"] && devices.signatures.isEmpty && devices.signFailed.isEmpty)
+    }
+
+    nonisolated static func lock(signed: Bool) -> TailnetLock {
+        TailnetLock(enabled: true, publicKey: "tlpub:me", trustedKeys: ["tlpub:me"], filtered: signed ? [] : [.init(name: "kore-pixel-9.ts.net.", nodeKey: "nodekey:p9")])
+    }
+
+    @Test func aSignThatFailsSaysSo() async {
+        let devices = devices(Sides(ScriptedNet(on: true, state: .installed)))
+        devices.lock = { ({ TailnetLock(enabled: true, publicKey: "tlpub:me", trustedKeys: ["tlpub:me"], filtered: [.init(name: "box-9", nodeKey: "nodekey:b9")]) }, { _ in throw TailnetError.http(403) }) }
+        await devices.readLock()
+        await devices.sign(devices.signatures[0])
+        #expect(devices.signFailed == ["nodekey:b9"] && devices.signatures.count == 1)
+    }
+
     @Test func theCardsWords() {
         let box = DeviceCardInfo.box(
             name: "box-2", node: "box-2", address: "100.88.14.3", login: "me", firstSeen: Date(), device: UUID(uuidString: "7f3a91c2-1111-4000-8000-000000000000"))
@@ -173,4 +214,9 @@ struct DevicesUITests {
     @Test func theIconsDotFills() {
         #expect(NetIconLook.Dot.accent.fill == .needsYou && NetIconLook.Dot.ring.fill == .hollow && NetIconLook.Dot.dim.fill == .offline)
     }
+}
+
+/// The node keys a scripted Tailnet Lock signed.
+final class SignLog: @unchecked Sendable {
+    var keys: [String] = []
 }

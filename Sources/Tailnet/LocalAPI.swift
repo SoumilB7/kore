@@ -103,9 +103,17 @@ package final class LocalAPIClient: Sendable {
         return try body.body()
     }
 
+    /// One POST with a JSON body (Tailnet Lock's sign): its answer's body once it said 200.
+    package func post(_ path: String, body: Data) throws -> Data {
+        let (fd, reader) = try open(path, readTimeout: 10, body: body)
+        defer { Sockets.closeFD(fd) }
+        var answer = reader
+        return try answer.body()
+    }
+
     /// A connection whose response head was 200, its reader at the body. One retry after a fresh
     /// discovery when the connect fails or the token is refused.
-    func open(_ path: String, readTimeout: Int?) throws -> (Int32, HTTP1.Reader) {
+    func open(_ path: String, readTimeout: Int?, body: Data? = nil) throws -> (Int32, HTTP1.Reader) {
         var target = current
         // Missing when last looked (kore-host up before tailscaled at boot, Tailscale installed or
         // started since): looked for again, never kept missing for good.
@@ -123,7 +131,7 @@ package final class LocalAPIClient: Sendable {
             }
             if let readTimeout { Sockets.setReadTimeout(fd, seconds: readTimeout) }
             do {
-                try Sockets.writeAll(fd, HTTP1.request(path, authorization: authorization(target)))
+                try Sockets.writeAll(fd, HTTP1.request(path, authorization: authorization(target), body: body))
                 var reader = HTTP1.Reader(fd: fd)
                 let head = try reader.head()
                 switch head.status {

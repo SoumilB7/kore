@@ -31,6 +31,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -129,6 +130,8 @@ class NodeClient(
         class LinkDown(val link: LinkSession, val reason: String?) : Internal()
         class DialFailed(val error: Throwable) : Internal()
         data object Enrolling : Internal()
+        /** The Mac took this phone offline and parked its link: it says when it's back. */
+        data object Parked : Internal()
         class Allowed(val record: Device) : Internal()
     }
 
@@ -143,6 +146,8 @@ class NodeClient(
     @Volatile private var visibleChat: String? = null
     @Volatile private var lastAid = 0
     private var ticket: ByteArray? = null
+    /** The link is parked (taken offline on the Mac): nothing dials until the Mac ends it. */
+    private var parked = false
 
     /** The node's name: its welcome's, else its record's. */
     val name: String
@@ -214,6 +219,7 @@ class NodeClient(
             }
             is Internal.LinkDown -> if (event.link === session) {
                 session = null
+                parked = false
                 machine.on(NodeMachine.Event.Ended(event.reason), clock())
             }
             is Internal.DialFailed -> {
@@ -229,6 +235,12 @@ class NodeClient(
                 )
             }
             Internal.Enrolling -> machine.on(NodeMachine.Event.Enrolling, clock())
+            Internal.Parked -> if (session != null) {
+                parked = true
+                machine.on(NodeMachine.Event.Ended("paused"), clock())
+            }
+            // Parked: the Mac's `bye online` is the way back; a retry would only be refused.
+            NodeMachine.Event.Trigger, NodeMachine.Event.PeerOnline, NodeMachine.Event.Tick -> if (!parked) machine.on(event as NodeMachine.Event, clock())
             is Internal.Allowed -> {
                 ticket = null
                 if (event.record != deviceFlow.value) deviceFlow.value = event.record
@@ -239,6 +251,7 @@ class NodeClient(
                 dialing = null
                 session?.close()
                 session = null
+                parked = false
                 machine.on(event as NodeMachine.Event, clock())
             }
             is NodeMachine.Event -> machine.on(event, clock())
@@ -389,6 +402,19 @@ class NodeClient(
         val answer = scope.async(start = CoroutineStart.UNDISPATCHED) { resultFlow.first { it.str("id") == "raise.key:$id" } }
         link.send(Control.raiseKey(id, Base64.getEncoder().encodeToString(pub)).bytes())
         return withTimeoutOrNull(RAISE_KEY_MS) { answer.await() } ?: run { answer.cancel(); failure("raise.key:$id", "timeout") }
+    }
+
+    /**
+     * Leave KoreNet, said to this Mac before the phone signs out: true once it forgot this phone,
+     * false without a link or after [LEAVE_MS] (the Mac retires the record itself on the next Allow).
+     */
+    suspend fun leave(): Boolean {
+        val link = session ?: return false
+        val id = UUID.randomUUID().toString()
+        val answer = scope.async(start = CoroutineStart.UNDISPATCHED) { resultFlow.first { it.str("id") == "leave:$id" } }
+        link.send(Control.leave(id).bytes())
+        val said = withTimeoutOrNull(LEAVE_MS) { answer.await() } ?: run { answer.cancel(); return false }
+        return said["ok"]?.jsonPrimitive?.booleanOrNull == true
     }
 
     /** Sends a [Control] command; returns the id its `result` carries. */
@@ -554,6 +580,8 @@ class NodeClient(
                 attentionFlow.tryEmit(message)
             }
             "result" -> resultFlow.tryEmit(message)
+            // Taken offline on the Mac: the link stays, parked, until it's brought online.
+            "paused" -> if (deviceFlow.value.kind == dev.kore.link.trust.NodeKind.MAC) events.trySend(Internal.Parked)
             // An owner Mac's directory: the boxes it knows (only a Mac's is taken). A box it names that
             // turned this phone away, or is out of reach, is tried again at once ([onDirectory]'s).
             "devices.set" -> if (deviceFlow.value.kind == dev.kore.link.trust.NodeKind.MAC) {
@@ -569,6 +597,8 @@ class NodeClient(
         const val APPROVE = "approve."
         /** The Mac waits up to 100 s for its owner on a new fingerprint key. */
         const val RAISE_KEY_MS = 110_000L
+        /** Leave waits this long for each Mac's answer before signing out. */
+        const val LEAVE_MS = 2_000L
         /** Bytes per upload chunk, before base64. */
         const val UPLOAD_CHUNK = 48 * 1024
 

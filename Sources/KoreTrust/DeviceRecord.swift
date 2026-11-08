@@ -30,6 +30,9 @@ package struct DeviceRecord: Codable, Hashable, Sendable, Identifiable {
     /// Paused by an owner Mac (`devices.set`): its sessions are refused (`bye paused`), its record
     /// kept. Absent when not paused.
     package var paused: Bool?
+    /// A phone's model as its enroll said it ("Pixel 9"): a reinstalled phone of the same user and
+    /// model retires this record on its Allow. Absent for older records and other kinds.
+    package var model: String?
 
     package static let maxNodeKeys = 3
 
@@ -102,6 +105,7 @@ package struct DeviceRecord: Codable, Hashable, Sendable, Identifiable {
         added = try c.decode(Date.self, forKey: .added)
         lastSeen = try c.decodeIfPresent(Date.self, forKey: .lastSeen)
         paused = try c.decodeIfPresent(Bool.self, forKey: .paused)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
         try validate()
     }
 }

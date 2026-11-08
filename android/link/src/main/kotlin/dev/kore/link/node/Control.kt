@@ -184,6 +184,9 @@ object Control {
     /** A new `kore_raise` public key (SPKI DER, base64) for a Mac to take once its owner Allows it. */
     fun raiseKey(id: String, pub: String): JsonObject = buildJsonObject { put("t", "raise.key"); put("id", id); put("pub", pub) }
 
+    /** Leave KoreNet: the Mac forgets this phone now (its record goes, its boxes hear); its `result` is `leave:<id>`. */
+    fun leave(id: String): JsonObject = buildJsonObject { put("t", "leave"); put("id", id) }
+
     // Link messages that aren't commands.
 
     fun txOpen(chatId: String, last: Int = 60): JsonObject = buildJsonObject { put("t", "tx.open"); put("chatId", chatId); put("last", last) }

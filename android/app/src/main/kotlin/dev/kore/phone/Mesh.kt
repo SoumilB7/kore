@@ -23,6 +23,7 @@ import dev.kore.tailnet.EmbeddedTailnet
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,13 +60,16 @@ class Mesh(private val app: KoreApp) {
     private val switch by lazy { TailnetSwitch(tailnet) }
     val join by lazy {
         JoinFlow(tailnet, dialer::enroll, app.scope, ::joined, start = {
+            // Join pressed straight after Leave: the old node signs out first.
+            leaving?.join()
             // Join pressed with KoreNet off (turned off, then Leave): Join turns it on.
             if (!networkOn) prefs.edit().putBoolean("network", true).apply()
             keeper.up()
         })
     }
     private val keeper: TailnetKeeper by lazy {
-        TailnetKeeper(tailnet, switch, join, app.scope, { TailnetKeeper.Settings(networkOn, joined, background) },
+        // Mid Leave the tailnet stays up until the Macs heard.
+        TailnetKeeper(tailnet, switch, join, app.scope, { TailnetKeeper.Settings(networkOn, inBook, background) },
             onUp = { signedIn ->
                 troubled = false
                 nodesFlow.value.forEach { it.start(); it.post(if (signedIn) NodeMachine.Event.SignedIn else NodeMachine.Event.SignedOut) }
@@ -85,8 +89,13 @@ class Mesh(private val app: KoreApp) {
     val nodes: StateFlow<List<NodeClient>> = nodesFlow.asStateFlow()
     private val notifiers = HashMap<UUID, Pair<Notifier, Job>>()
 
-    /** Joined: a Mac allowed this phone and is pinned. */
-    val joined: Boolean get() = book.all().any { it.kind == NodeKind.MAC }
+    /** Joined: a Mac allowed this phone and is pinned (not while leaving). */
+    val joined: Boolean get() = leaving?.isActive != true && inBook
+
+    private val inBook: Boolean get() = book.all().any { it.kind == NodeKind.MAC }
+
+    /** Leave under way: the Macs are told, then the tailnet signs out. */
+    @Volatile private var leaving: Job? = null
 
     /** KoreNet on this phone (Settings → Devices); off = the tailnet stopped, no dials. */
     var networkOn: Boolean
@@ -118,6 +127,8 @@ class Mesh(private val app: KoreApp) {
     /** The Mac that tells boxes about this phone, by name (the first Mac known). */
     fun ownerName(): String = nodesFlow.value.firstOrNull { it.device.value.kind == NodeKind.MAC }?.name ?: "your Mac"
 
+    /** The Mac this phone joined through, as rows name it ("waiting for MacBook"). */
+    val macName: String get() = ownerName()
     /** Two or more devices: notifications name theirs. */
     val many: Boolean get() = nodesFlow.value.size > 1
 
@@ -179,6 +190,9 @@ class Mesh(private val app: KoreApp) {
                     // A box the Mac names now holds this phone, or can be reached: tried again at once.
                     val named = records.filter { it.kind == NodeKind.BOX }.map { it.id }.toSet()
                     nodesFlow.value.filter { it.id in named }.forEach(NodeClient::named)
+                    // The Mac took this phone back (brought online): boxes that said `paused` hear it too.
+                    nodesFlow.value.filter { it.device.value.kind == NodeKind.BOX && (it.state.value as? NodeMachine.State.Away)?.why == NodeMachine.AwayWhy.OFF }
+                        .forEach { it.post(NodeMachine.Event.Trigger) }
                 },
             ).also { client ->
                 if (keeper.running) client.start()
@@ -217,8 +231,22 @@ class Mesh(private val app: KoreApp) {
         if (!joined) apply()
     }
 
-    /** Leave KoreNet: the tailnet signs out, every device and key here goes; back to Join. */
+    /**
+     * Leave KoreNet: each linked Mac hears it first (it forgets this phone at once, its boxes with
+     * it; at most [NodeClient.LEAVE_MS]), then the tailnet signs out and every device and key here
+     * goes; back to Join. A Mac out of reach retires the old record itself on the next Allow.
+     */
     fun leave() {
+        if (leaving?.isActive == true) return
+        val macs = nodesFlow.value.filter { it.device.value.kind == NodeKind.MAC }
+        join.cancel()
+        leaving = app.scope.launch {
+            coroutineScope { macs.forEach { launch { it.leave() } } }
+            forgetAll()
+        }
+    }
+
+    private fun forgetAll() {
         nodesFlow.value.forEach(NodeClient::close)
         notifiers.values.forEach { (n, job) -> job.cancel(); n.clearAll() }
         notifiers.clear()
@@ -229,7 +257,6 @@ class Mesh(private val app: KoreApp) {
         IdentityKey.forget()
         raiseKey.forget()
         prefs.edit().remove("device").apply()
-        join.cancel()
     }
 
     private fun hostname(): String =

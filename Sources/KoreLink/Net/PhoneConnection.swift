@@ -22,9 +22,24 @@ package final class PhoneConnection: @unchecked Sendable {
 
     package enum Incoming: Sendable {
         case raise(LinkRaiseWire.Incoming)
+        /// Leave KoreNet (`{"t":"leave","id":…}`): the phone signs out next; its record goes now.
+        case leave(String)
         /// A link message, with a risky card's signature when its `chat.answer` carried one.
         case link(LinkMessage, proof: LinkRaiseWire.Signed?)
         case invalid
+    }
+
+    private struct Leave: Decodable {
+        var t: String
+        var id: String
+    }
+
+    /// A `leave` message's id; nil for anything else (looked at only when small and naming it).
+    static func leave(_ payload: Data) -> String? {
+        guard payload.count <= 256, payload.range(of: Data(#""t":"leave""#.utf8)) != nil,
+              let message = try? JSONDecoder().decode(Leave.self, from: payload), message.t == "leave", !message.id.isEmpty, message.id.count <= 64
+        else { return nil }
+        return message.id
     }
 
     /// Bytes waiting for a phone before it's dropped as too slow (as the local link's).
@@ -130,7 +145,9 @@ package final class PhoneConnection: @unchecked Sendable {
             }
             var incoming: [Incoming] = []
             for message in messages {
-                if let raise = LinkRaiseWire.incoming(message.payload) {
+                if let id = Self.leave(message.payload) {
+                    incoming.append(.leave(id))
+                } else if let raise = LinkRaiseWire.incoming(message.payload) {
                     incoming.append(.raise(raise))
                 } else if let decoded = try? LinkMessage.decode(message.payload) {
                     incoming.append(.link(decoded, proof: LinkRaiseWire.answerProof(message.payload)))

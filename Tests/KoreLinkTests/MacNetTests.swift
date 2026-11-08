@@ -162,13 +162,15 @@ struct MacNetTests {
 
     // MARK: An allowed phone
 
-    @Test func pausedAndUnknownPhonesAreRefusedAfterTheProof() async throws {
+    @Test func pausedPhonesAreParkedAndUnknownOnesRefusedAfterTheProof() async throws {
         let rig = try MacRig()
         defer { rig.finish() }
         let paused = Phone()
         try rig.allow(paused, paused: true)
+        // Proven and paused: welcomed, then parked (no snapshot), so Bring online can reach it.
         let p = try rig.dial(paused)
-        #expect(await p.closed() == "bye paused")
+        await p.next("paused")
+        #expect(!p.types.contains("snapshot") && rig.net.phones[paused.id]?.parked == true)
         // Known by id, but signed with another key: unknown, never paused.
         var impostor = paused
         impostor.key = SoftwareIdentity()

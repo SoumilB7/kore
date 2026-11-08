@@ -534,11 +534,14 @@ package final class HostNet {
                     }
                     return claim(claimant, hello: hello)
                 }
+                // Its Mac asks again before its owner's Allow: still the claimant.
+                if window { return .refuse(NetControl.Reason.claim) }
             } else if store.claimant == nil, window {
                 var entry = fresh
                 entry.claim = true
                 notePending(entry, at: now)
-                return .refuse(NetControl.Reason.unknown)
+                // The Mac shows its claim card on this answer; `unknown` tells it to run join again.
+                return .refuse(NetControl.Reason.claim)
             }
         }
         notePending(fresh, at: now)

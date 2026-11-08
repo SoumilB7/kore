@@ -33,13 +33,18 @@ extension MacNetTests {
         // Rename: the book, and the boxes hear.
         devices.rename(pixel.id, to: "  Pixel 9 Pro ")
         #expect(try rig.host.book.record(pixel.id)?.name == "Pixel 9 Pro" && rig.pushed.last?.first?.name == "Pixel 9 Pro")
-        // Take offline: kept but paused, its link ended, the boxes hear.
+        // Take offline: kept but paused, its link parked, the boxes hear.
         devices.setPaused(pixel.id, true)
-        #expect(await phone.closed() == "bye paused")
+        await phone.next("paused")
         #expect(try rig.host.book.record(pixel.id)?.isPaused == true && rig.pushed.last?.first?.isPaused == true)
         #expect(devices.phones.first.map { $0.paused && !$0.connected } == true)
+        // Bring online: the parked link ends with `bye online`, and the phone dials straight back.
         devices.setPaused(pixel.id, false)
+        #expect(await phone.closed() == "bye online")
         #expect(try rig.host.book.record(pixel.id)?.isPaused == false)
+        let back = try rig.dial(pixel)
+        await back.next("snapshot")
+        #expect(devices.phones.first?.connected == true)
         // Remove: gone from the book and from what the boxes are told.
         devices.remove(pixel.id)
         #expect(try rig.host.book.record(pixel.id) == nil && rig.pushed.last?.isEmpty == true && devices.phones.isEmpty)

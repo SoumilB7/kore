@@ -81,6 +81,7 @@ struct DevicesPopup: View {
         .onAppear {
             devices.net?.hold("devices", true)
             devices.net?.readStatus()
+            Task { await devices.readLock() }
         }
         .onDisappear {
             devices.net?.hold("devices", false)
@@ -246,12 +247,14 @@ struct DevicesPopup: View {
     // MARK: Lines
 
     @ViewBuilder private func lines(_ picture: DevicesPicture, now: Date) -> some View {
-        if !picture.pending.isEmpty {
+        let signatures = picture.net == .running ? devices.signatures : []
+        if !picture.pending.isEmpty || !signatures.isEmpty {
             NetRule()
             Text("Waiting").font(Theme.Net.line).foregroundStyle(Theme.secondary)
                 .padding(.horizontal, Space.xl)
                 .frame(minHeight: Size.Net.subHeader)
             ForEach(picture.pending) { row in pendingRow(row, now: now) }
+            ForEach(signatures) { row in signatureRow(row) }
         }
         switch picture.net {
         case .off:
@@ -283,8 +286,22 @@ struct DevicesPopup: View {
             }
             .storyID(StoryID.Net.line)
         case .unavailable(let why):
+            let action = Devices.unavailable(why)
             NetRule()
-            NetLine { Text("Kore's tailnet couldn't start") }.help(why).storyID(StoryID.Net.line)
+            NetLine {
+                Text("Kore's tailnet couldn't start")
+                Text("·")
+                Button { devices.unavailableAction(why) } label: {
+                    HStack(spacing: Space.xs) {
+                        Text(action.title)
+                        if action == .installTailscale { NetGlyph(kind: .external, size: Size.Net.smallGlyph) }
+                    }
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                .storyID(StoryID.Net.lineAction, press: { devices.unavailableAction(why) })
+            }
+            .help(why)
+            .storyID(StoryID.Net.line)
         case .running:
             runningLines(picture, now: now)
         }
@@ -344,6 +361,26 @@ struct DevicesPopup: View {
             if inside { hoveredRow.value = "pending:" + row.id } else if hoveredRow.value == "pending:" + row.id { hoveredRow.value = nil }
         }
         .storyID(StoryID.Net.pending(row.id), press: { devices.ask(row) })
+    }
+
+    /// A node Tailnet Lock keeps out: "needs a signature", and Sign when this Mac may sign it.
+    private func signatureRow(_ row: SignatureRow) -> some View {
+        let signing = devices.signing.contains(row.nodeKey)
+        let failed = devices.signFailed.contains(row.nodeKey)
+        return NetRowFrame(lit: false) {
+            NetGlyph(kind: row.phone ? .phone : .box).foregroundStyle(Theme.Net.glyph)
+            Text(row.name).font(Theme.Net.name).foregroundStyle(Theme.text).lineLimit(1)
+            Text(failed ? "couldn't sign · try again" : SignatureRow.detail).font(Theme.Net.detail).foregroundStyle(Theme.tertiary).lineLimit(1)
+            Spacer(minLength: 0)
+            if signing {
+                NetSpinner()
+            } else if row.canSign {
+                Button(SignatureRow.sign) { Task { await devices.sign(row) } }.buttonStyle(.plain).font(Theme.Net.line).foregroundStyle(Theme.accent)
+                    .storyID(StoryID.Net.sign(row.nodeKey), press: { Task { await devices.sign(row) } })
+            }
+        }
+        .help(row.canSign ? "" : SignatureRow.help)
+        .storyID(StoryID.Net.pending(row.nodeKey))
     }
 
     // MARK: Showing

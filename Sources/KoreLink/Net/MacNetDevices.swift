@@ -55,10 +55,12 @@ package final class MacNetDevices: PhoneDevices {
         mac.phonesChanged()
     }
 
-    /// Taken offline: kept, but refused here and at every box (`paused`) until brought online.
+    /// Taken offline: kept, but served nothing here (parked) and refused at every box (`paused`)
+    /// until brought online.
     package func setPaused(_ id: UUID, _ paused: Bool) {
         update(id) { $0.paused = paused ? true : nil }
-        if paused { net()?.phones[id]?.end(NetControl.Reason.paused) }
+        // Its link stays, parked: Bring online tells it to come back at once.
+        if paused { net()?.phones[id]?.park() } else { net()?.phones[id]?.unpark() }
         NetAudit.line(paused ? "pause" : "resume", ["device": id.uuidString.lowercased()])
     }
 
@@ -82,35 +84,48 @@ package final class MacNetDevices: PhoneDevices {
         let device = pending.device
         let address = KoreNetSwitch.shared?.status?.peers.first { $0.publicKey == device.nodeKey }?.tailscaleIPs.first ?? "—"
         let node = MacNet.shortName(device.fqdn.isEmpty ? device.name : device.fqdn)
-        let info: DeviceCardInfo = pending.kind == .box
+        var info: DeviceCardInfo = pending.kind == .box
             ? .box(name: device.name, node: node, address: address, login: device.login, firstSeen: device.firstSeen, device: device.device)
             : .phone(name: device.name, node: node, address: address, login: device.login, firstSeen: device.firstSeen)
+        // A phone of the same user and model that's offline now is this one reinstalled or left.
+        let peers = KoreNetSwitch.shared?.status?.peers
+        var retire: [UUID] = []
+        if let peers, pending.kind == .phone, let id = device.device, let key = device.identityKey {
+            let probe = DeviceRecord(
+                id: id, name: device.name, kind: .phone, abilities: [.read, .ask], identityKey: key, nodeKeys: [device.nodeKey], userId: device.userId,
+                fqdn: device.fqdn, added: Date())
+            let replaced = MacNet.replaced(by: probe, model: device.name, in: mac.allowedPhones(), peers: peers)
+            retire = replaced.map(\.id)
+            info.replaces = replaced.first.map { MacNet.replacesLine($0, peers: peers, now: Date()) }
+        }
         mac.asks.ask(info) { [weak self] answer in
             guard answer == .allow else {
                 if answer != .gone { NetAudit.line("deny", ["node": device.nodeKey, "at": pending.box]) }
                 return
             }
-            self?.allow(device)
+            self?.allow(device, retire: retire)
         }
     }
 
-    private func allow(_ device: PendingDevice) {
+    private func allow(_ device: PendingDevice, retire: [UUID] = []) {
         guard let mac = net(), let id = device.device, let key = device.identityKey, let issuer = mac.device else { return }
         let kind = device.kind ?? .phone
         guard kind != .mac else { return }
-        let record = DeviceRecord(
+        var record = DeviceRecord(
             id: id, name: MacNet.clean(device.name), kind: kind, abilities: kind == .phone ? [.read, .ask] : [.read, .ask, .run], identityKey: key,
             nodeKeys: [device.nodeKey], userId: device.userId, tags: device.tags, fqdn: device.fqdn, raiseKey: device.raiseKey, issuedBy: issuer,
             added: Date())
+        if kind == .phone { record.model = record.name }
         guard (try? record.validate()) != nil else { return }
         do {
             try mac.host.book.update { devices in
-                devices.removeAll { $0.id == id }
+                devices.removeAll { $0.id == id || ($0.kind == .phone && retire.contains($0.id)) }
                 devices.append(record)
             }
         } catch {
             return
         }
+        for old in retire { NetAudit.line("retire", ["device": old.uuidString.lowercased(), "by": id.uuidString.lowercased()]) }
         NetAudit.line("allow", ["device": id.uuidString.lowercased(), "kind": kind.rawValue, "how": "pending"])
         mac.phonesChanged()
     }

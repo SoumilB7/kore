@@ -14,6 +14,64 @@ package protocol Tailnet: Sendable {
     func listen(port: UInt16) throws -> [TailnetListenSocket]
     /// A connected stream socket to a tailnet peer.
     func dial(_ address: String, port: UInt16) throws -> Int32
+    /// Tailnet Lock as this node sees it; nil where it can't be read (Kore's own tailnet).
+    func lockStatus() throws -> TailnetLock?
+    /// Signs a node Tailnet Lock keeps out (`tailscale lock sign`): only when this node holds a
+    /// trusted lock key.
+    func lockSign(_ nodeKey: String) throws
+}
+
+extension Tailnet {
+    package func lockStatus() throws -> TailnetLock? { nil }
+    package func lockSign(_ nodeKey: String) throws { throw TailnetError.http(404) }
+}
+
+/// Tailnet Lock (`/localapi/v0/tka/status`): on or off, this node's lock key and the trusted
+/// ones, and the peers kept out for want of a signature.
+package struct TailnetLock: Decodable, Sendable, Equatable {
+    package var enabled: Bool
+    /// This node's own lock key (`tlpub:…`).
+    package var publicKey: String
+    package var trustedKeys: [String]
+    package var filtered: [Filtered]
+
+    package struct Filtered: Decodable, Sendable, Equatable {
+        /// Its tailnet name (`kore-pixel-9.tail1234.ts.net.`).
+        package var name: String
+        package var nodeKey: String
+
+        package init(name: String, nodeKey: String) {
+            self.name = name
+            self.nodeKey = nodeKey
+        }
+
+        enum CodingKeys: String, CodingKey { case name = "Name", nodeKey = "NodeKey" }
+    }
+
+    private struct Key: Decodable {
+        var key: String
+        enum CodingKeys: String, CodingKey { case key = "Key" }
+    }
+
+    enum CodingKeys: String, CodingKey { case enabled = "Enabled", publicKey = "PublicKey", trustedKeys = "TrustedKeys", filtered = "FilteredPeers" }
+
+    package init(enabled: Bool, publicKey: String, trustedKeys: [String], filtered: [Filtered]) {
+        self.enabled = enabled
+        self.publicKey = publicKey
+        self.trustedKeys = trustedKeys
+        self.filtered = filtered
+    }
+
+    package init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey) ?? ""
+        trustedKeys = (try c.decodeIfPresent([Key].self, forKey: .trustedKeys) ?? []).map(\.key)
+        filtered = try c.decodeIfPresent([Filtered].self, forKey: .filtered) ?? []
+    }
+
+    /// This node holds one of the trusted keys: it may sign.
+    package var canSign: Bool { enabled && !publicKey.isEmpty && trustedKeys.contains(publicKey) }
 }
 
 package enum TailnetError: Error, Equatable, CustomStringConvertible {

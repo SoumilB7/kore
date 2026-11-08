@@ -3,8 +3,11 @@ package dev.kore.phone
 import dev.kore.link.node.NodeMachine
 import dev.kore.link.node.NodeMachine.State
 import dev.kore.phone.ui.lastSeenWords
+import dev.kore.phone.ui.RowAction
+import dev.kore.phone.ui.Trouble
 import dev.kore.phone.ui.refusalWords
 import dev.kore.phone.ui.stateWords
+import dev.kore.phone.ui.troubleWords
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -26,6 +29,29 @@ class WordsTest {
         assertEquals("● Offline · retrying", stateWords(State.Away(NodeMachine.AwayWhy.UNREACHABLE, 1, null)).first)
         assertEquals("● Not allowed", stateWords(State.Denied("unknown")).first)
         assertEquals("● Signed out", stateWords(State.SignedOut).first)
+    }
+
+    @Test fun aRemovedDeviceOffersJoinAgain() {
+        assertEquals(Trouble("Removed on MacBook · Join again", "● Removed · Join again", RowAction.JOIN_AGAIN), troubleWords(State.Removed, true, "MacBook", "MacBook"))
+        assertEquals("Removed on MacBook · Join again", troubleWords(State.Removed, false, "mybox", "MacBook")?.fact)
+    }
+
+    @Test fun aMacThatDoesntHoldThisPhoneOffersAskAgain() {
+        assertEquals(Trouble("Not allowed · Ask again", "● Not allowed · Ask again", RowAction.ASK_AGAIN), troubleWords(State.Denied("unknown"), true, "MacBook", "MacBook"))
+    }
+
+    @Test fun aMacWhoseKoreNetWentOffOffersTryAgain() {
+        assertEquals(RowAction.TRY_AGAIN, troubleWords(State.Denied("refused"), true, "MacBook", "MacBook")?.action)
+        assertEquals("KoreNet is off on MacBook · Try again", troubleWords(State.Denied("refused"), true, "MacBook", "MacBook")?.fact)
+    }
+
+    @Test fun aBoxThatDoesntHoldThisPhoneYetWaitsForTheMac() {
+        assertEquals(Trouble("waiting for MacBook", "● Waiting for MacBook", null), troubleWords(State.Denied("unknown"), false, "mybox", "MacBook"))
+    }
+
+    @Test fun aReachableDeviceHasNoTrouble() {
+        assertEquals(null, troubleWords(State.Up, true, "MacBook", "MacBook"))
+        assertEquals(null, troubleWords(State.Away(NodeMachine.AwayWhy.ASLEEP, null, null), true, "MacBook", "MacBook"))
     }
 
     @Test fun refusalsAreOneDeviceNeutralLine() {

@@ -110,7 +110,7 @@ struct HostNetTests {
         let enroll = NetControl.Enroll(name: "MacBook", kind: .mac, identityKey: mac.key.publicKey)
         let first = try rig.dial(mac, enroll: enroll)
         try await first.until { first.closed != nil }
-        #expect(first.closed == "bye unknown" && rig.store.claimant?.device == mac.id)
+        #expect(first.closed == "bye claim" && rig.store.claimant?.device == mac.id)
         // A second Mac of the same user waits as an ordinary pending device.
         let second = Device("mac2")
         let other = try rig.dial(second, enroll: .init(name: "iMac", kind: .mac, identityKey: second.key.publicKey))

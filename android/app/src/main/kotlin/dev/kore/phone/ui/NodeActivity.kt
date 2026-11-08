@@ -121,9 +121,13 @@ abstract class NodeActivity : Activity() {
 
     private fun showBanner(link: NodeClient, s: State) {
         val name = link.name
-        val (text, color) = stateWords(s)
+        val trouble = troubleWords(s, link.device.value.kind == dev.kore.link.trust.NodeKind.MAC, name, kore.mesh.macName)
+        val (text, color) = trouble?.let { it.pill to stateWords(s).second } ?: stateWords(s)
         banner.text = text
         banner.setTextColor(color)
+        val action = trouble?.action
+        banner.setOnClickListener(action?.let { a -> android.view.View.OnClickListener { rowAction(link, a) } })
+        banner.isClickable = action != null
         banner.contentDescription = "$name: ${text.removePrefix("● ")}"
         banner.visibility = if (text.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
         macName = name
@@ -163,6 +167,39 @@ fun stateWords(s: State): Pair<String, Int> = when (s) {
     State.Removed -> "● Removed" to K.err
     State.SignedOut -> "● Signed out" to K.warn
     State.Idle -> "● Off" to K.dim
+}
+
+/** What a device row offers when the device won't take this phone: tapping the row does it. */
+enum class RowAction {
+    /** Join again through the Add device window (removed there). */
+    JOIN_AGAIN,
+    /** Ask the Mac again through the Add device window (it doesn't hold this phone). */
+    ASK_AGAIN,
+    /** Dial again now (the Mac's KoreNet was off). */
+    TRY_AGAIN,
+}
+
+/** A row's fact for a device that won't take this phone, with its one action. */
+data class Trouble(val fact: String, val pill: String, val action: RowAction?)
+
+/**
+ * Removed, not allowed, or a Mac whose KoreNet went off: one line and at most one action (G18).
+ * [name] is the device's, [mac] the Mac that allowed this phone (a box waits for it).
+ */
+fun troubleWords(s: State, isMac: Boolean, name: String, mac: String): Trouble? = when {
+    s == State.Removed -> Trouble("Removed on ${if (isMac) name else mac} · Join again", "● Removed · Join again", RowAction.JOIN_AGAIN)
+    s !is State.Denied -> null
+    !isMac -> Trouble("waiting for $mac", "● Waiting for $mac", null)
+    s.reason == "refused" -> Trouble("KoreNet is off on $name · Try again", "● KoreNet is off · Try again", RowAction.TRY_AGAIN)
+    else -> Trouble("Not allowed · Ask again", "● Not allowed · Ask again", RowAction.ASK_AGAIN)
+}
+
+/** Does a row's action: the Join screen for another Allow, or a dial now. */
+fun Activity.rowAction(node: NodeClient, action: RowAction) {
+    when (action) {
+        RowAction.JOIN_AGAIN, RowAction.ASK_AGAIN -> startActivity(Intent(this, JoinActivity::class.java).putExtra(JoinActivity.AGAIN, true))
+        RowAction.TRY_AGAIN -> node.post(NodeMachine.Event.Trigger)
+    }
 }
 
 /** A device's state as one glyph and colour: ● up, ◌ trying, ○ away. */
