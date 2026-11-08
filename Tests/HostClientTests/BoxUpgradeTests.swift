@@ -406,6 +406,9 @@ struct BoxUpgradeTests {
             guard let grant = GrantStore(paths.grants).load(grantName) else { return DaemonTransport(path: "/nonexistent", grant: Grant(name: grantName, socket: "", secret: "", control: .full, created: 0)) }
             return DaemonTransport(path: paths.socket.path, grant: grant)
         }
+        // A redial while the box isn't listening yet comes at once, not after the app's 1, 2, 5,
+        // 10 s: on a busy Mac those added up past the test's 30 s bound before "joined".
+        connection.backoff = [.milliseconds(10)]
         let rekeyer = NodeRekeyer(migration: NodeMigration(root: support, defaults: defaults))
         rekeyer.usage = { _, _ in }
         let switcher = KoreNetSwitch(
