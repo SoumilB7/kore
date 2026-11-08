@@ -11,7 +11,18 @@ package final class HostServices: ChatServices {
     /// Makes the backend; tests set a stand-in.
     package var backend: (ProviderDescriptor, BackendOptions) -> any ChatBackend = { $0.makeBackend($1) }
 
+    /// The box's paragraph for every chat (`HostDaemon` writes it): where it runs, and that Kore's
+    /// own tools aren't there.
+    package var instructions: URL?
+    /// No `kore`, no MCP server, no Arsenal notes on a box.
+    package var agentTools: Bool { false }
+
     package init() {}
+
+    package static func instructions(host: String) -> String {
+        "This chat runs on \(host), a Linux machine, through kore-host. The user sees it as a tab in Kore on their Mac. "
+            + "Kore's own tools (new tabs, other chats) aren't available here."
+    }
 
     package func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend { backend(provider, options) }
     package func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}

@@ -432,11 +432,12 @@ package final class Chat: Identifiable {
                 folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
                 model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
             options.fastMode = launchFastMode
-            options.agentPass = agentPass
+            options.agentPass = services.agentTools ? agentPass : nil
             if let imported {
                 options.hiddenRows = Set(imported.record.written)
                 options.instructions = imported.record.instructions.map { URL(fileURLWithPath: $0) }
             }
+            if options.instructions == nil { options.instructions = services.instructions }
             return options
         }) { [self] event in self.dispatch(event) }
     }
@@ -907,7 +908,7 @@ package final class Chat: Identifiable {
                 }
                 guard currentWork(epoch), !Task.isCancelled else { return }
                 // Arsenal changed since the agent was last told: this message carries a line saying so.
-                if arsenal != arsenalTold {
+                if services.agentTools, arsenal != arsenalTold {
                     arsenalTold = arsenal
                     backend.noteNextTurn(KoreReach.note(tier: arsenal?.title, chat: String(self.id.uuidString.prefix(8)).lowercased()))
                 }

@@ -205,6 +205,26 @@ struct LinkPolicyTests {
         #expect(LinkPolicy.allowedModes(Self.manual) == ["default", "plan"])
     }
 
+    /// Owner, 2026-11-10: a full-control client may raise a chat's mode, Auto included; standard
+    /// stays lower-only, and Always allow and `!` lines stay refused either way.
+    @Test func fullControlMayRaiseTheModeAndStandardMayNot() {
+        #expect(LinkPolicy.check(.setMode(chatId: "x", modeId: "auto"), Self.manual, control: .full) == .allow)
+        #expect(LinkPolicy.check(.setMode(chatId: "x", modeId: "auto"), Self.manual, control: .standard) == .deny(.raiseMode, "The link can only lower a chat's mode."))
+        if case .deny(let code, _) = LinkPolicy.check(.setMode(chatId: "x", modeId: "nope"), Self.manual, control: .full) { #expect(code == .invalid) } else { Issue.record() }
+        var autoPlan = Self.manual
+        autoPlan.level = .auto
+        autoPlan.planOn = true
+        #expect(LinkPolicy.check(.setPlan(chatId: "x", on: false), autoPlan, control: .full) == .allow)
+        #expect(LinkPolicy.allowedModes(Self.manual, control: .full) == Set(Self.manual.modes.keys))
+        var plan = Self.manual
+        plan.cards = ["p": .init(kind: .plan, digest: "P")]
+        #expect(LinkPolicy.check(.answer(chatId: "x", cardId: "p", action: .approvePlanAcceptEdits, digest: "P", answers: nil), plan, control: .full) == .allow)
+        if case .deny(let code, _) = LinkPolicy.check(.answer(chatId: "x", cardId: "c", action: .allowAlways, digest: "D", answers: nil), Self.manual, control: .full) {
+            #expect(code == .alwaysAllow)
+        } else { Issue.record() }
+        if case .deny(let code, _) = LinkPolicy.check(.send(chatId: "x", text: "!ls"), Self.manual, control: .full) { #expect(code == .command) } else { Issue.record() }
+    }
+
     @Test func answersOnlyWhatTheCardTakesWithItsDigest() {
         #expect(LinkPolicy.check(.answer(chatId: "x", cardId: "c", action: .allow, digest: "D", answers: nil), Self.manual) == .allow)
         #expect(

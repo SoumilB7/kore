@@ -29,6 +29,9 @@ package final class HostDaemon {
         self.paths = paths
         config = HostConfig.load(paths.config)
         services.onEvent = { [weak self] chat, event in self?.noted(chat, event) }
+        let note = paths.state.appendingPathComponent("instructions.md")
+        try? HostPaths.privateFile(Data(HostServices.instructions(host: ProcessInfo.processInfo.hostName).utf8), to: note)
+        services.instructions = note
         let dirs = (try? FileManager.default.contentsOfDirectory(at: paths.chats, includingPropertiesForKeys: nil)) ?? []
         chats = dirs.compactMap(HostChat.load).sorted { $0.record.created < $1.record.created }
         for chat in chats { watch(chat) }
@@ -353,15 +356,10 @@ package final class HostDaemon {
 
     // MARK: Accounts
 
-    /// The link's policy, but a full grant (the owner's own machine over SSH) may also raise a
-    /// chat's mode (owner, 2026-11-10): Auto, leaving plan, approving a plan with auto-accept.
+    /// The link's policy: a full grant is full control (it may raise a chat's mode); watch and act
+    /// are standard (lower only).
     static func check(_ command: LinkCommand, _ facts: LinkPolicy.ChatFacts, control: GrantControl) -> LinkPolicy.Verdict {
-        let verdict = LinkPolicy.check(command, facts)
-        if control == .full, case .deny(.raiseMode, _) = verdict {
-            if case .setMode(_, let modeId) = command, facts.modes[modeId] == nil { return verdict }
-            return .allow
-        }
-        return verdict
+        LinkPolicy.check(command, facts, control: control == .full ? .full : .standard)
     }
 
     /// The CLIs' own logins on the box. A sign-in's result carries its page (and code) in

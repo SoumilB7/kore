@@ -10,6 +10,11 @@ package protocol ChatServices: AnyObject {
     func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend
     /// The plan's windows a turn reported (`BackendOptions.planWindows`).
     func planWindows(_ cli: String, _ snapshot: PlanSnapshot?)
+    /// The chat's CLI gets Kore's own tools (`kore`, its MCP server, Arsenal's notes): the Mac's do;
+    /// a box has none.
+    var agentTools: Bool { get }
+    /// Instructions every chat's CLI starts with when it has none of its own (a box says where it runs).
+    var instructions: URL? { get }
     /// A transcript as the app shows it, over its own `TranscriptLog`.
     func makeTranscript() -> any ChatTranscript
     /// A chat's view state (its popups, the agent map), kept by the chat for the app.

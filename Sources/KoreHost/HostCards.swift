@@ -37,7 +37,7 @@ enum HostMeta {
     /// `raise`: the grant may raise the mode (a full grant), so every mode is allowed.
     static func meta(_ hc: HostChat, raise: Bool = false) -> ChatMeta {
         let facts = facts(hc)
-        let allowed = raise ? Set(facts.modes.keys) : LinkPolicy.allowedModes(facts)
+        let allowed = LinkPolicy.allowedModes(facts, control: raise ? .full : .standard)
         let chat = hc.chat
         let state: ChatMeta.State =
             if let chat, !chat.approvals.pending.isEmpty || chat.approvals.offerImplementPlan { .needsYou }

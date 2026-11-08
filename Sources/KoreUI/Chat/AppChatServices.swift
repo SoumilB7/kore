@@ -18,6 +18,10 @@ final class AppChatServices: ChatServices {
         UsageCues.shared.take(cli, snapshot: snapshot)
     }
 
+    var agentTools: Bool { true }
+
+    var instructions: URL? { nil }
+
     func makeTranscript() -> any ChatTranscript { TranscriptStore() }
 
     func makeViewState() -> AnyObject { ChatViewState() }

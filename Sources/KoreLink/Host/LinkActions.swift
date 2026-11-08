@@ -44,6 +44,8 @@ enum LinkActions {
             case .allow: decision = .allow
             case .deny: decision = .deny
             case .approvePlan: decision = .approvePlan(autoAcceptEdits: false)
+            // Only full control gets here with it (`LinkPolicy`).
+            case .approvePlanAcceptEdits: decision = .approvePlan(autoAcceptEdits: true)
             case .keepPlanning: decision = .keepPlanning
             case .submitAnswers: decision = .answers(answers ?? [:])
             default: return .failed(.action, "That card doesn't take that answer.")

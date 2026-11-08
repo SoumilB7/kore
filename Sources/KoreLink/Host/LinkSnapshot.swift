@@ -232,7 +232,7 @@ enum LinkSnapshot {
 
     /// `full`: with the run's full control, the chat's controls, rescue, wider `can` and Arsenal too.
     static func meta(_ chat: Chat, full: Bool) -> ChatMeta {
-        var made = baseMeta(chat)
+        var made = baseMeta(chat, full: full)
         guard full else { return made }
         let c = chat.linkControlState
         made.controls = ChatControls(
@@ -254,7 +254,7 @@ enum LinkSnapshot {
 
     static func ms(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }
 
-    private static func baseMeta(_ chat: Chat) -> ChatMeta {
+    private static func baseMeta(_ chat: Chat, full: Bool) -> ChatMeta {
         let facts = facts(chat)
         let state: ChatMeta.State =
             switch chat.attention {
@@ -268,7 +268,7 @@ enum LinkSnapshot {
         return ChatMeta(
             id: chat.id.uuidString, provider: chat.provider.id, title: chat.title, state: state,
             mode: .init(id: chat.controls.mode, level: facts.level, planOn: chat.provider.planToggle != nil ? chat.controls.planMode : nil),
-            modeIds: chat.controls.availableModes.map(\.id), allowedModeIds: LinkPolicy.allowedModes(facts).sorted(),
+            modeIds: chat.controls.availableModes.map(\.id), allowedModeIds: LinkPolicy.allowedModes(facts, control: full ? .full : .standard).sorted(),
             model: chat.controls.currentModel?.name, queued: chat.queuedCount, running: chat.isBusy, cards: cards(chat),
             can: .init(send: sendable && !chat.accountRestartPending, stop: chat.isWorking), commands: commands(chat))
     }

@@ -231,6 +231,26 @@ struct HostTests {
         #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "nope"), id: "4", control: .full) { _ in }?.code == .invalid)
     }
 
+    @Test func boxChatsGetTheBoxsInstructionsAndNoKoreTools() async throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        var launched: BackendOptions?
+        let backend = StandIn()
+        rig.host.services.backend = { _, options in
+            launched = options
+            return backend
+        }
+        let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: "codex", modelId: nil))
+        _ = rig.host.apply(.send(chatId: hc.id, text: "hi"), id: "1", control: .act) { _ in }
+        try await until { launched != nil }
+        #expect(launched?.agentPass == nil)
+        let file = try #require(launched?.instructions)
+        let text = try String(contentsOf: file, encoding: .utf8)
+        #expect(text.contains("through kore-host"))
+        #expect(text.contains(ProcessInfo.processInfo.hostName))
+        #expect(!text.contains("Arsenal"))
+    }
+
     @Test func watchGrantsCantAct() throws {
         let rig = try HostRig()
         defer { rig.finish() }
