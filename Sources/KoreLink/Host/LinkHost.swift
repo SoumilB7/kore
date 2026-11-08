@@ -231,7 +231,7 @@ package final class LinkHost {
     }
 
     private func hello(_ message: LinkMessage, _ session: Session) {
-        guard case .hello(let proto, let client, let proof, let commands) = message else { return refuse(.invalid) }
+        guard case .hello(let proto, let client, let proof, let commands, _) = message else { return refuse(.invalid) }
         guard proto.major == LinkProto.major else { return refuse(.version) }
         guard LinkProof.check(proof, secret: secret, nonce: session.nonce) else { return refuse(.auth) }
         session.proven = true
@@ -527,6 +527,7 @@ package final class LinkHost {
         case .accountPrivacy: "Changed email privacy"
         case .chatSetArsenal: "Changed Arsenal"
         case .arsenalStopAll: "Stopped agent control"
+        case .foldersList, .folderAdd: "Acted"
         }
     }
 

@@ -1,4 +1,8 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 
 /// One message on the link: its type in `t`, then its fields.
@@ -30,9 +34,22 @@ package enum LinkMessage: Sendable, Equatable {
     package struct Host: Codable, Sendable, Equatable {
         package var name: String
         package var koreVersion: String
-        package init(name: String, koreVersion: String) {
+        /// 1.4: "box" for a headless host (`kore-host`); absent for the Mac.
+        package var kind: String?
+        package init(name: String, koreVersion: String, kind: String? = nil) {
             self.name = name
             self.koreVersion = koreVersion
+            self.kind = kind
+        }
+    }
+
+    /// 1.4: a folder a box serves, as `folders.list` and `folder.add` answer: its window's id and path.
+    package struct Folder: Codable, Sendable, Equatable {
+        package var windowId: String
+        package var path: String
+        package init(windowId: String, path: String) {
+            self.windowId = windowId
+            self.path = path
         }
     }
 
@@ -109,9 +126,11 @@ package enum LinkMessage: Sendable, Equatable {
         package var blobId: String?
         /// Set on a `board.new`'s result (1.2).
         package var tabId: String?
+        /// Set on `folders.list`'s and `folder.add`'s results (1.4).
+        package var folders: [Folder]?
         package init(
             id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, chatId: String? = nil, windowId: String? = nil,
-            blobId: String? = nil, tabId: String? = nil
+            blobId: String? = nil, tabId: String? = nil, folders: [Folder]? = nil
         ) {
             self.id = id
             self.ok = ok
@@ -121,12 +140,14 @@ package enum LinkMessage: Sendable, Equatable {
             self.windowId = windowId
             self.blobId = blobId
             self.tabId = tabId
+            self.folders = folders
         }
     }
 
     // Session
     case challenge(nonce: String)
-    case hello(proto: LinkVersion, client: Client, proof: String, commands: [CompanionCommand]? = nil)
+    /// `grant` (1.4): the box grant the proof is keyed by; absent for the Mac.
+    case hello(proto: LinkVersion, client: Client, proof: String, commands: [CompanionCommand]? = nil, grant: String? = nil)
     case welcome(Welcome)
     case bye(ByeReason)
     /// Kore to the client: the user chose one of its commands in "/". No reply.
@@ -223,7 +244,7 @@ extension LinkMessage: Codable {
         case t, nonce, proto, client, proof, commands, epoch, host, providers, policy, caps, reason, rev, windows, chats, removed, chatId, last,
             count, txRev, entries, turns, hasEarlier, upserts, order, id, entryId, field, offset, text, total, cardId, cmd, ok, code,
             message, windowId, aid, open, recent, op, item, key, turn, uploadId, name, mime, size, sha256, index, data, ref, variant, blobId,
-            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId
+            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders
     }
 
     package init(from decoder: any Decoder) throws {
@@ -238,7 +259,7 @@ extension LinkMessage: Codable {
         }
         switch t {
         case "challenge": self = .challenge(nonce: try d(.nonce))
-        case "hello": self = .hello(proto: try d(.proto), client: try d(.client), proof: try d(.proof), commands: try o(.commands))
+        case "hello": self = .hello(proto: try d(.proto), client: try d(.client), proof: try d(.proof), commands: try o(.commands), grant: try o(.grant))
         case "welcome":
             self = .welcome(
                 .init(
@@ -285,7 +306,7 @@ extension LinkMessage: Codable {
             self = .result(
                 .init(
                     id: try d(.id), ok: try d(.ok), code: try o(.code), message: try o(.message), chatId: try o(.chatId), windowId: try o(.windowId),
-                    blobId: try o(.blobId), tabId: try o(.tabId)))
+                    blobId: try o(.blobId), tabId: try o(.tabId), folders: try o(.folders)))
         case "attn.state": self = .attnState(aid: try d(.aid), open: try d(.open), recent: try d(.recent))
         case "attn.event": self = .attnEvent(aid: try d(.aid), op: try d(.op), item: try o(.item), key: try o(.key), turn: try o(.turn))
         default: self = .unknown(t)
@@ -297,11 +318,12 @@ extension LinkMessage: Codable {
         try c.encode(type, forKey: .t)
         switch self {
         case .challenge(let nonce): try c.encode(nonce, forKey: .nonce)
-        case .hello(let proto, let client, let proof, let commands):
+        case .hello(let proto, let client, let proof, let commands, let grant):
             try c.encode(proto, forKey: .proto)
             try c.encode(client, forKey: .client)
             try c.encode(proof, forKey: .proof)
             try c.encodeIfPresent(commands, forKey: .commands)
+            try c.encodeIfPresent(grant, forKey: .grant)
         case .welcome(let w):
             try c.encode(w.proto, forKey: .proto)
             try c.encode(w.epoch, forKey: .epoch)
@@ -421,6 +443,7 @@ extension LinkMessage: Codable {
             try c.encodeIfPresent(r.windowId, forKey: .windowId)
             try c.encodeIfPresent(r.blobId, forKey: .blobId)
             try c.encodeIfPresent(r.tabId, forKey: .tabId)
+            try c.encodeIfPresent(r.folders, forKey: .folders)
         case .attnState(let aid, let open, let recent):
             try c.encode(aid, forKey: .aid)
             try c.encode(open, forKey: .open)
@@ -507,8 +530,8 @@ package enum LinkProof {
 
     /// Random bytes, base64.
     package static func random(_ count: Int) -> String {
-        var bytes = [UInt8](repeating: 0, count: count)
-        _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
+        var generator = SystemRandomNumberGenerator()
+        let bytes = (0..<count).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
         return Data(bytes).base64EncodedString()
     }
 }

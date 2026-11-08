@@ -18,9 +18,13 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", revision: "caa1bdd3f1396c5b0ed66121f299d1c8b42bc94c"),
+        // CryptoKit's API off macOS, for kore-host on Linux only.
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
     ],
     targets: [
-        .target(name: "KoreCore", swiftSettings: releaseForSize),
+        .target(
+            name: "KoreCore", dependencies: [.product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))],
+            swiftSettings: releaseForSize),
         // The chat engine without UI: the CLIs' backends and translators, chat events, account
         // calls and the chat state that has no view code. No SwiftUI, AppKit or Combine, so a
         // headless host can build on it; nothing here imports KoreUI.
@@ -36,7 +40,10 @@ let package = Package(
         // socket, timer or observer) until then.
         // The link's protocol: wire types, framing, the HMAC handshake, policy and the projector,
         // over `src`. No UI and no Mac-only parts, so a host without the app can serve it.
-        .target(name: "LinkProtocol", dependencies: ["src", "KoreCore"], swiftSettings: releaseForSize),
+        .target(
+            name: "LinkProtocol",
+            dependencies: ["src", "KoreCore", .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))],
+            swiftSettings: releaseForSize),
         .target(name: "KoreLink", dependencies: ["KoreUI", "LinkProtocol", "src", "KoreCore"], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),

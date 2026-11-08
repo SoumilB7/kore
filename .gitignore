@@ -6,3 +6,4 @@ build/
 .vscode/
 z-docs/
 .agents/
+.build-linux/

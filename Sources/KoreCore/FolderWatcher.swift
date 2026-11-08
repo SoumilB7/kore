@@ -1,3 +1,4 @@
+#if canImport(Darwin)
 import CoreServices
 import Foundation
 
@@ -54,3 +55,4 @@ public func realPath(_ path: String) -> String {
     defer { free(resolved) }
     return String(cString: resolved)
 }
+#endif

@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 
 /// A file as the editor opens it: its text with line endings made `\n`, and what's needed to
 /// write it back the way it was (line endings, encoding, byte-order mark). Files that aren't
@@ -126,9 +128,13 @@ public struct TextFile: Sendable {
     // MARK: - Reading
 
     private static func isImage(_ url: URL) -> Bool {
+        #if canImport(UniformTypeIdentifiers)
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         // SVG is text, and edited as such.
         return type.conforms(to: .image) && !type.conforms(to: .svg)
+        #else
+        return ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff"].contains(url.pathExtension.lowercased())
+        #endif
     }
 
     /// UTF-8 (with or without a BOM) or UTF-16 with a BOM; nil for anything holding NUL

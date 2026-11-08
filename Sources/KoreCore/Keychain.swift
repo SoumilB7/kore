@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 
 /// Where Kore puts a secret the user typed for a CLI to read later (a Claude API key): one
 /// generic-password item per service. The login Keychain in Kore; a storyline host or a test
@@ -29,6 +31,7 @@ package enum Keychain {
     }
 }
 
+#if canImport(Security)
 /// The user's login Keychain. Each item trusts Kore and `/usr/bin/security`, so the CLI's helper
 /// (`security find-generic-password -s <service> -w`) reads it without a prompt. The secret goes
 /// to the Security framework only: never on a command line.
@@ -96,6 +99,15 @@ package struct LoginKeychain: SecretStore {
         return Unmanaged<AnyObject>.fromOpaque(access).takeRetainedValue()
     }
 }
+#else
+/// No Keychain off macOS: the CLIs keep their own logins there.
+package struct LoginKeychain: SecretStore {
+    package init() {}
+    package func set(_ secret: String, service: String) throws { throw CocoaError(.featureUnsupported) }
+    package func remove(service: String) throws {}
+    package func contains(service: String) -> Bool { false }
+}
+#endif
 
 /// A Keychain in memory, for storylines and tests: what was set, by service.
 package final class MemoryKeychain: SecretStore, @unchecked Sendable {

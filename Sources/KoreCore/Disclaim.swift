@@ -1,4 +1,6 @@
+#if canImport(Darwin)
 import Darwin
+#endif
 import Foundation
 
 /// The CLIs and terminal shells Kore starts run as their own as far as macOS counts energy.
@@ -19,6 +21,7 @@ public enum Disclaim {
         return (trampoline, [flag, executable] + arguments)
     }
 
+    #if canImport(Darwin)
     /// First thing in a binary that can be a trampoline: started with `flag`, it becomes the
     /// program and never returns; otherwise it returns at once.
     public static func execIfAsked() {
@@ -58,4 +61,10 @@ public enum Disclaim {
         .map { unsafeBitCast($0, to: SetDisclaim.self) }
     private static let responsibleFor = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_get_pid_responsible_for_pid")
         .map { unsafeBitCast($0, to: ResponsibleFor.self) }
+    #else
+    /// Off macOS nothing charges energy to the starter: programs start directly.
+    public static func execIfAsked() {}
+
+    package static func responsible(for pid: pid_t) -> pid_t? { nil }
+    #endif
 }

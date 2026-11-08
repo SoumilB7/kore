@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 /// Each chat's pass for Kore's agent channel (`z-docs/agent-protocol.md`): a random value in its
 /// CLI's environment, so what runs under that CLI can name its chat. Kore believes it only when
@@ -17,8 +16,8 @@ package final class AgentPasses: @unchecked Sendable {
 
     /// A new pass: 24 random bytes, URL-safe base64.
     package static func make() -> String {
-        var bytes = [UInt8](repeating: 0, count: 24)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        var generator = SystemRandomNumberGenerator()
+        let bytes = (0..<24).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
         return Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
     }
 

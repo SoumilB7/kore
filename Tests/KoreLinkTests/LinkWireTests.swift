@@ -105,12 +105,12 @@ struct LinkFixtureTests {
     }
 
     @Test func helloCarriesTheCompanionsCommands() throws {
-        guard case .hello(_, _, _, let commands) = try LinkMessage.decode(Self.bytes("hello.commands")) else {
+        guard case .hello(_, _, _, let commands, _) = try LinkMessage.decode(Self.bytes("hello.commands")) else {
             Issue.record("not a hello")
             return
         }
         #expect(commands?.map(\.id) == ["qr", "activity"])
-        guard case .hello(_, _, _, let none) = try LinkMessage.decode(Self.bytes("hello")) else { return }
+        guard case .hello(_, _, _, let none, _) = try LinkMessage.decode(Self.bytes("hello")) else { return }
         #expect(none == nil)
         #expect(try LinkMessage.decode(Self.bytes("command")) == .command(id: "qr"))
     }

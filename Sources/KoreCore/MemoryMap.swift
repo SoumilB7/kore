@@ -1,3 +1,4 @@
+#if canImport(Darwin)
 import Darwin
 
 /// This process's dirty memory grouped by the tag the kernel keeps on each region, as
@@ -52,3 +53,4 @@ public enum MemoryMap {
         return parts
     }
 }
+#endif

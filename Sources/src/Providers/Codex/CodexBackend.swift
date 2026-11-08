@@ -1,6 +1,8 @@
 import Foundation
 import KoreCore
+#if canImport(os)
 import os
+#endif
 
 /// A Codex chat: one `codex app-server` process (JSON-RPC), one thread.
 @MainActor
@@ -53,7 +55,9 @@ package final class CodexBackend: ChatBackend {
     /// The user's name for the chat (`rename`): a fresh thread in place of an unwritten one takes it too.
     private var customName: String?
     private let log = SessionLog.shared
+    #if canImport(os)
     private static let log = Logger(subsystem: "Kore", category: "codex")
+    #endif
     /// Reads the threads' background terminals while any outlived its turn (`pollTerminals`).
     private var terminalPoll: Task<Void, Never>?
     /// Lists in a row that changed nothing: the next waits longer (`pollBackoff`).
@@ -767,7 +771,9 @@ package final class CodexBackend: ChatBackend {
             } catch {
                 try? await Task.sleep(for: .milliseconds(500))
                 do { try await session.rename(name) } catch {
+                    #if canImport(os)
                     Self.log.warning("Couldn't save the thread's name: \(error.localizedDescription, privacy: .public)")
+                    #endif
                 }
             }
             // Then a model's title in its place, as Claude's chats get, unless renamed meanwhile.

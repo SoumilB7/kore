@@ -1,4 +1,8 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 
 /// Each turn's changed files as Kore computed them live (a git snapshot diff catches edits made

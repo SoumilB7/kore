@@ -1,3 +1,4 @@
+#if canImport(Darwin)
 import Darwin
 import Foundation
 
@@ -135,3 +136,4 @@ package struct ProcessChild: Sendable, Equatable {
         return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size ? info : nil
     }
 }
+#endif

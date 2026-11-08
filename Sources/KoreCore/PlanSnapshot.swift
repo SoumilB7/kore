@@ -1,4 +1,8 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 
 /// The plan's windows at one moment, as a CLI reported them: Claude's per-turn `rate_limit_event`

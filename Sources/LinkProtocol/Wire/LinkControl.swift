@@ -57,6 +57,9 @@ package enum ControlKind: String, Sendable, CaseIterable {
     // 1.3: Arsenal, a chat's agent-control tier, and Stop agent control.
     case chatSetArsenal = "chat.setArsenal"
     case arsenalStopAll = "arsenal.stopAll"
+    // 1.4: a box's folders (its windows).
+    case foldersList = "folders.list"
+    case folderAdd = "folder.add"
 
     /// It acts on a CLI's account.
     package var onAccount: Bool { rawValue.hasPrefix("account.") }
@@ -130,6 +133,9 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var input: String?
     /// `chat.setArsenal` (1.3): a built tier's id, or "off".
     package var tier: String?
+    /// 1.4 (a box): `chat.new`'s folder in place of `windowId`; `folder.add`'s absolute path.
+    package var folder: String?
+    package var path: String?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -139,7 +145,8 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         groupId: String? = nil, name: String? = nil, color: String? = nil, folded: Bool? = nil, boardTabId: String? = nil,
         sectionId: String? = nil, toTab: Bool? = nil, swatch: String? = nil, mergeInto: String? = nil, remove: Bool? = nil,
         recentId: String? = nil, sessionId: String? = nil, mode: String? = nil, method: String? = nil, aim: String? = nil,
-        login: String? = nil, serial: Int? = nil, input: String? = nil, tier: String? = nil
+        login: String? = nil, serial: Int? = nil, input: String? = nil, tier: String? = nil,
+        folder: String? = nil, path: String? = nil
     ) {
         self.chatId = chatId
         self.windowId = windowId
@@ -180,6 +187,8 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         self.serial = serial
         self.input = input
         self.tier = tier
+        self.folder = folder
+        self.path = path
     }
 }
 

@@ -1,6 +1,8 @@
 import Foundation
 import KoreCore
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 
 /// What a file attached to a message is, for how it's sent and shown.
 package enum AttachmentKind: Sendable { case image, text, pdf, other }
@@ -38,6 +40,7 @@ package enum Attachments {
 
     package static func kind(of url: URL) -> AttachmentKind {
         if url.hasDirectoryPath { return .other }
+        #if canImport(UniformTypeIdentifiers)
         let type = UTType(filenameExtension: url.pathExtension)
         if type?.conforms(to: .image) == true { return .image }
         if type?.conforms(to: .pdf) == true { return .pdf }
@@ -49,6 +52,15 @@ package enum Attachments {
             return .text
         }
         return .other
+        #else
+        // Without the system's type table (a Linux box): by extension.
+        let ext = url.pathExtension.lowercased()
+        let name = url.lastPathComponent.lowercased()
+        if ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff", "svg"].contains(ext) { return .image }
+        if ext == "pdf" { return .pdf }
+        if textExtensions.contains(ext) || textExtensions.contains(name) || textFileNames.contains(name) { return .text }
+        return .other
+        #endif
     }
 
     // MARK: Encoding

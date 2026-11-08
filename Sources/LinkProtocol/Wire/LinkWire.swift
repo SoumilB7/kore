@@ -1,4 +1,8 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 import src
 
@@ -9,6 +13,8 @@ import src
 package enum LinkProto {
     package static let major = 1
     package static let minor = 3
+    /// A box (`kore-host`) speaks 1.4: the Mac's 1.3 and the box's additions.
+    package static let boxMinor = 4
     package static var version: LinkVersion { LinkVersion(major: major, minor: minor) }
 }
 
@@ -761,7 +767,7 @@ package enum LinkCommand: Codable, Sendable, Equatable {
     }
 
     private enum Key: String, CodingKey {
-        case type, chatId, text, blobs, cardId, action, digest, answers, modeId, on, choice, windowId, provider, modelId, place
+        case type, chatId, text, blobs, cardId, action, digest, answers, modeId, on, choice, windowId, provider, modelId, place, folder
     }
 
     package init(from decoder: any Decoder) throws {
@@ -782,7 +788,7 @@ package enum LinkCommand: Codable, Sendable, Equatable {
         case "chat.setMode": self = .setMode(chatId: try chat(), modeId: try c.decode(String.self, forKey: .modeId))
         case "chat.setPlan": self = .setPlan(chatId: try chat(), on: try c.decode(Bool.self, forKey: .on))
         case "chat.planReady": self = .planReady(chatId: try chat(), choice: try c.decode(PlanChoice.self, forKey: .choice))
-        case "chat.new" where !c.contains(.modelId) && !c.contains(.place):
+        case "chat.new" where !c.contains(.modelId) && !c.contains(.place) && !c.contains(.folder):
             self = .new(windowId: try c.decode(String.self, forKey: .windowId), provider: try c.decode(String.self, forKey: .provider))
         default:
             if let kind = ControlKind(rawValue: type) {

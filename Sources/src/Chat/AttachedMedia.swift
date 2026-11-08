@@ -1,7 +1,9 @@
+#if canImport(AVFoundation)
 import AVFoundation
 import ImageIO
-import KoreCore
 import UniformTypeIdentifiers
+#endif
+import KoreCore
 
 /// A video or audio file attached to a message, as the model is given it: no CLI reads one
 /// itself (Claude's, asked to read a screen recording by its path, hung mid-turn). A video goes
@@ -18,8 +20,13 @@ package struct AttachedMedia: Sendable {
 
     /// Whether `url` is a video or audio file (by its type), and which.
     package static func kind(of url: URL) -> (video: Bool, audio: Bool) {
+        #if canImport(AVFoundation)
         guard !url.hasDirectoryPath, let type = UTType(filenameExtension: url.pathExtension) else { return (false, false) }
         return (type.conforms(to: .movie), !type.conforms(to: .movie) && type.conforms(to: .audio))
+        #else
+        // A box reads no media: video and audio go as files, by their path.
+        return (false, false)
+        #endif
     }
 
     /// The media among `files`, read: nothing for the rest.
@@ -33,6 +40,7 @@ package struct AttachedMedia: Sendable {
         return media
     }
 
+    #if canImport(AVFoundation)
     package static func read(_ url: URL, video: Bool) async -> AttachedMedia {
         let asset = AVURLAsset(url: url)
         let seconds = (try? await asset.load(.duration).seconds).flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
@@ -73,6 +81,11 @@ package struct AttachedMedia: Sendable {
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
         return CGImageDestinationFinalize(destination) ? out as Data : nil
     }
+    #else
+    package static func read(_ url: URL, video: Bool) async -> AttachedMedia {
+        AttachedMedia(note: "[\(video ? "video" : "audio"): \(url.path)]", frames: [])
+    }
+    #endif
 
     /// "0:42", "1:05:09".
     package static func clock(_ seconds: Double) -> String {

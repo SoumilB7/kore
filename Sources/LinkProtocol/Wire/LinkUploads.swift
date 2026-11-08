@@ -1,4 +1,8 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 
 /// Files a client sends Kore (1.1): `blob.put.begin` declares one, `blob.put.chunk`s carry it in
