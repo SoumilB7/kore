@@ -24,7 +24,7 @@ struct BoxToolTests {
         host.send(.challenge(nonce: "bm9uY2U="))
         _ = await host.next("hello")
         host.send(json: [
-            "t": "welcome", "proto": ["major": 1, "minor": 6], "epoch": "e1",
+            "t": "welcome", "proto": ["major": 1, "minor": 7], "epoch": "e1",
             "host": ["name": "mybox", "koreVersion": "1", "kind": "box"], "providers": [],
             "policy": ["sendMaxLevel": 4, "control": control], "caps": ["tx", "control"] + (control == "full" ? ["stream"] : []),
         ])

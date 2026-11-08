@@ -233,6 +233,8 @@ final class LinkClient {
             guard current() != nil else { return }
             send(.result(sync(kind, folder: args.folder, id: id)))
             if kind == .syncWatch, let folder = args.folder.map(HostDaemon.standard) { syncs[folder]?.start() }
+        case .cmd(let id, .control(let kind, let args)) where kind.onFiles:
+            files(kind, args, id: id)
         case .cmd(let id, let command):
             guard let grant = current() else { return }
             let result = host.apply(command, id: id, control: grant.control) { [weak self] result in self?.send(.result(result)) }
@@ -267,6 +269,28 @@ final class LinkClient {
         let clis = full && !host.clis.isEmpty ? host.clis : nil
         send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
         send(.attnState(aid: 0, open: [], recent: []))
+    }
+
+    // MARK: Files (1.7)
+
+    /// `fs.list`, `fs.read`, `fs.mkdir`: full grants only, each checked by the box's rules, then
+    /// done off the main thread; the answer is a `FilesResult`.
+    private func files(_ kind: ControlKind, _ args: ControlArgs, id: String) {
+        guard let control = current()?.control else { return }
+        if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, nil, control: control == .full ? .full : .standard) {
+            return sendRaw(StreamWire.encode(FilesResult.refused(id, code, message)))
+        }
+        let files = HostFiles(home: HostPaths.home().path, served: host.config.folders)
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) { () -> FilesResult in
+                switch kind {
+                case .fsList: files.list(id: id, path: args.path, hidden: args.hidden == true)
+                case .fsRead: files.read(id: id, path: args.path ?? "", max: args.max)
+                default: files.mkdir(id: id, path: args.path ?? "")
+                }
+            }.value
+            self?.sendRaw(StreamWire.encode(result))
+        }
     }
 
     // MARK: Sync

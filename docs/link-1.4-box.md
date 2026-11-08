@@ -1,4 +1,4 @@
-# Link 1.4 to 1.6: the box (`kore-host`)
+# Link 1.4 to 1.7: the box (`kore-host`)
 
 A box is a headless machine running `kore-host`: the Mac reaches it with
 `ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Everything in link 1.0–1.3 holds unless this page says
@@ -35,7 +35,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 - `attach` exits 3 when no daemon listens, 4 when there's no such grant, 5 when there's no
   runtime folder, 2 on bad arguments; over ssh, 255 is ssh's own failure and 126/127 the shell's
   (kore-host can't run there, or isn't there).
-- `welcome`: `proto {1,6}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
+- `welcome`: `proto {1,7}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
   `policy {sendMaxLevel: 4, control: "full"|"standard"}` (`full` for a full grant),
   `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5). For a
   full grant each of `providers[]` carries `calls`: the `chat.call` types the box takes for that
@@ -282,3 +282,35 @@ and never sees the new messages.
   chat's, counted with everything else it does: 30 commands a minute, 10 messages a minute, 10 new
   chats an hour and 6 of them open, wherever they opened.
 
+
+## Link 1.7: a box's files
+
+The Mac's box window shows the box folder's files, and its Welcome browses the box for a folder
+to open. Three read-mostly commands, full grants only (`denied.control` otherwise), each checked
+by `LinkPolicy.checkBox` and answered off the daemon's main thread. A 1.6 box answers them
+`invalid`; the Mac says the box needs an update.
+
+| `type` | fields | |
+|---|---|---|
+| `fs.list` | `path?, hidden?` | A folder's entries: `{name, kind: "dir"\|"file"\|"link", size? (files), dir? (a link to a folder)}`, folders first, then by name; dotfiles only with `hidden: true`. At most 5,000 (`more: true` past that). No `path`: the box's home. Result: `path` (normalised), `entries`, `more?`. |
+| `fs.read` | `path, max?` | A file in a served folder, at most `max` bytes (2 MiB, and never more). Result: `kind` (`text`, `image` or `binary`), `size`, and `text` (UTF-8; a character cut at the end is dropped) or `data` (an image's bytes in base64; none for an image past `max`), `truncated: true` when it was cut. A binary file carries neither. |
+| `fs.mkdir` | `path` | One new folder whose parent may be listed (the browser's New Folder). Result: `path`. |
+
+Where a path may lead:
+
+- Every `path` is absolute, with no NUL or newline, at most 4096 bytes. `.` and `..` are resolved
+  before any check, so a path can't climb out of where it starts.
+- `fs.list` and `fs.mkdir`: inside the box user's home, or inside a folder the box serves (one
+  added on purpose with `folder.add`, wherever it is). Anything else, `/` included, is
+  `denied.path`: the browser starts at the home and goes outside it only through a served folder.
+  A path typed in the browser still opens (`folder.add`) without being listed.
+- `fs.read`: inside a served folder only.
+- Links are listed as `link` and never followed out: the path's real place (its links
+  resolved) has to stay inside the home or served folder it's under, else `denied.path`. A link
+  that stays inside is read as what it leads to.
+- A path that isn't there is `gone.file`; a file where a folder is wanted (or the reverse) is
+  `invalid`.
+
+The Mac asks only while a window or the browser shows the files: a box window lists the
+folders open in its explorer, and lists them again when a turn in that window ends. The box
+watches nothing for it and nothing polls.

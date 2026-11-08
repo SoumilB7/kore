@@ -43,12 +43,18 @@ final class HostRig {
 final class Client {
     let socket: HostSocket
     var got: [LinkMessage] = []
+    /// Every frame as it came, for the fields `LinkMessage` doesn't read.
+    var raws: [Data] = []
     var ended = false
 
     init(_ path: URL) throws {
         socket = try HostListener.connect(to: path.path)
         socket.start(
-            max: LinkFrame.outboundMax, frame: { [weak self] data in if let m = try? LinkMessage.decode(data) { self?.got.append(m) } },
+            max: LinkFrame.outboundMax,
+            frame: { [weak self] data in
+                self?.raws.append(data)
+                if let m = try? LinkMessage.decode(data) { self?.got.append(m) }
+            },
             ended: { [weak self] in self?.ended = true })
     }
 

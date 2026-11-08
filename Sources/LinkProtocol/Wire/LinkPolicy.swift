@@ -272,6 +272,14 @@ package enum LinkPolicy {
             // The box also checks it serves the folder.
             guard let folder = args.folder, folder.hasPrefix("/"), !folder.contains("\0") else { return .deny(.invalid, "Name the folder.") }
             return .allow
+        case .fsList, .fsRead, .fsMkdir:
+            // 1.7: the box's files, full grants only. The box also checks where the path leads
+            // (`HostFiles`): its home or a served folder, never through a link out of one.
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            if kind == .fsList, args.path == nil { return .allow }
+            guard LinkFiles.plainPath(args.path) else { return .deny(.invalid, "An absolute path.") }
+            if kind == .fsRead, let max = args.max, max < 0 { return .deny(.invalid, "A size of 0 or more.") }
+            return .allow
         case .tabReopen:
             // A closed chat back: named by `sourceId` (it isn't one of the box's chats until then).
             return args.sourceId != nil ? .allow : .deny(.invalid, "Name the chat.")

@@ -65,6 +65,13 @@ package enum ControlKind: String, Sendable, CaseIterable {
     /// 1.4: a served folder's changes, pushed to this client as `sync.changed` while it's linked.
     case syncWatch = "sync.watch"
     case syncUnwatch = "sync.unwatch"
+    /// 1.7: a box's files, read for the Mac's explorer and folder browser (`LinkFiles.swift`).
+    case fsList = "fs.list"
+    case fsRead = "fs.read"
+    case fsMkdir = "fs.mkdir"
+
+    /// A 1.7 file command: answered with a `FilesResult`, full grants only.
+    package var onFiles: Bool { self == .fsList || self == .fsRead || self == .fsMkdir }
 
     /// It acts on a CLI's account.
     package var onAccount: Bool { rawValue.hasPrefix("account.") }
@@ -141,6 +148,9 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     /// 1.4 (a box): `chat.new`'s folder in place of `windowId`; `folder.add`'s absolute path.
     package var folder: String?
     package var path: String?
+    /// 1.7: `fs.list` lists dotfiles too; `fs.read` reads at most this many bytes.
+    package var hidden: Bool?
+    package var max: Int?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -151,7 +161,7 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         sectionId: String? = nil, toTab: Bool? = nil, swatch: String? = nil, mergeInto: String? = nil, remove: Bool? = nil,
         recentId: String? = nil, sessionId: String? = nil, mode: String? = nil, method: String? = nil, aim: String? = nil,
         login: String? = nil, serial: Int? = nil, input: String? = nil, tier: String? = nil,
-        folder: String? = nil, path: String? = nil
+        folder: String? = nil, path: String? = nil, hidden: Bool? = nil, max: Int? = nil
     ) {
         self.chatId = chatId
         self.windowId = windowId
@@ -194,6 +204,8 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         self.tier = tier
         self.folder = folder
         self.path = path
+        self.hidden = hidden
+        self.max = max
     }
 }
 
