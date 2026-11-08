@@ -2,6 +2,32 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.3] - 2026-11-19
+
+### Added
+- Auto asks before a risky command (rm -r/-f on a variable, home or system path, sudo, Keychain
+  reads, curl into a shell): Run once, Deny, Always allow this command, or Always ask for these in
+  your settings. Only you can run it; a chat can only deny. Removals Auto never runs say why.
+- A message another chat sent that Claude held shows as a card: Let it in or Deny.
+- Move a Codex login between your Mac and a box, and move logins between two Macs once they pair
+  with an Allow card.
+- Phone: account usage per login (5 h and week) on each device and in a chat's sheet.
+- Phone: close windows and tabs, open a chat from History in this window, tap an image to see it,
+  pick several photos at once, and see a chat's current step while it works.
+- A chat running only a background command shows `>_` in its CLI's colour.
+- Box chats get the `kore` command, and can ask a Mac chat a question.
+
+### Fixed
+- A box listens for your phone after a reboot, without waiting on Tailscale.
+- Box chats' Kore tools answer as a Mac chat's do: same waits, same errors.
+- Copy, Fork and Revert work while zoomed in, and a code block's Copy stays in view.
+- A tab comes back where you left it; a window resize keeps your place.
+- The message ticks stay put as the box you type in grows.
+- Tab names keep at least four characters before the overflow menu takes over.
+- Rolling back keeps the context meter.
+- Chats you can't see do far less work while they stream.
+- A phone reconnecting to a box gets its welcome before anything else.
+
 ## [0.3.2] - 2026-11-17
 
 ### Added
