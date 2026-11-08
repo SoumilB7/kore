@@ -102,8 +102,16 @@ package struct TurnFinished: Step {
 
     package func run(_ story: StoryContext) async throws {
         let chat = try story.activeChat()
-        try await story.until("turn \(n) to finish") {
-            story.chatEvents(chat).filter { if case .turnFinished = $0 { true } else { false } }.count >= n
+        // A long reply streams a delta a run-loop pass, slower on a busy Mac: the wait fails when
+        // nothing more comes (one wait's time with no new event), not at a total for the turn.
+        while true {
+            let seen = story.chatEvents(chat).count
+            let finished = try await story.wait("turn \(n) to finish") { () -> Bool? in
+                let events = story.chatEvents(chat)
+                if events.filter({ if case .turnFinished = $0 { true } else { false } }).count >= n { return true }
+                return events.count > seen ? false : nil
+            }
+            if finished { return }
         }
     }
 }
