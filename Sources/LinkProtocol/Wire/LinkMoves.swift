@@ -66,6 +66,10 @@ package struct MoveInfo: Codable, Sendable, Equatable {
     /// The chat's own settings, all of them (`ChatSettings`): a peer from before them sends only
     /// the four above.
     package var settings: ChatSettings?
+    /// A Claude session cut back by a rollback its CLI hasn't written past yet: the message it
+    /// resumes at (`--resume-session-at`), which its file doesn't say (`chat.release`, `chat.copy`
+    /// prepare). Codex keeps its cut in the rollout itself.
+    package var rollbackAt: String?
 
     package init(
         moveId: String, chatId: String? = nil, provider: String, sessionId: String, folders: [String], root: String, files: [String], gen: Int,
@@ -242,6 +246,13 @@ package enum LinkMoves {
     package static func plainMoveID(_ id: String?) -> Bool {
         guard let id, (8...64).contains(id.count) else { return false }
         return id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+    }
+
+    /// A rollback's point as a link carries it: a message's uuid, as the claude CLI writes them,
+    /// nothing a CLI could take as a flag. Anything else is no point.
+    package static func rollbackPoint(_ id: String?) -> String? {
+        guard let id, id.count == 36, UUID(uuidString: id) != nil else { return nil }
+        return id
     }
 
     /// A session id: what the CLIs make (uuids), nothing that could name a path.

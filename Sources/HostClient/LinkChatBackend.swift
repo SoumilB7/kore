@@ -139,6 +139,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     }
 
     package var sessionId: String? { chatId }
+    /// The box's log is the chat: a history it replaces (its log started again after a
+    /// rollback, a correction it kept) is whole, as the box reads it (`StreamLog.rotate`).
+    package var historiesWhole: Bool { true }
 
     // MARK: Start
 

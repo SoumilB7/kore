@@ -68,6 +68,9 @@ package final class HostServices: ChatServices {
     package func arsenalFollowMode(_ chat: Chat) {}
     package func tap(_ chat: Chat, _ event: ChatEvent) { onEvent?(chat, event) }
     package func transcriptReplaced(_ chat: Chat) { onTranscript?(chat) }
+    /// A rollback cut a chat's history, asked by any client: the box starts its log again.
+    package var onRollback: ((Chat, [ChatEvent], Bool) -> Void)?
+    package func rolledBack(_ chat: Chat, to events: [ChatEvent], more: Bool) { onRollback?(chat, events, more) }
     package func log(_ name: String, _ fields: KeyValuePairs<String, String?>) {}
     package var timeReplay: Bool { false }
     package func logReplay(_ took: Duration) {}

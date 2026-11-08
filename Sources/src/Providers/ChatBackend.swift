@@ -11,6 +11,9 @@ package protocol ChatBackend: AnyObject {
     var sessionId: String? { get }
     /// Agents observed from another client's files, whose work this CLI does not own.
     var observedAgents: Set<String> { get }
+    /// Each history it replaces is whole (a box's log, started again): nothing the chat took
+    /// since its last replay is taken again after it, as it is after a CLI's corrected page.
+    var historiesWhole: Bool { get }
     /// Explicit login switch: stop only this CLI's work and confirm its process ended.
     func relaunchAfterAccountChange() async -> Bool
 
@@ -257,6 +260,7 @@ extension ChatBackend {
     package func unloadPoint(message id: String?, text: String) async -> UnloadPoint? { nil }
     package func unloaded(to earlier: String) {}
     package var observedAgents: Set<String> { [] }
+    package var historiesWhole: Bool { false }
     package func relaunchAfterAccountChange() async -> Bool {
         await relaunch(reason: "account changed")
         return true

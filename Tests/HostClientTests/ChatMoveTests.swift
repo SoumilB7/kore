@@ -108,6 +108,82 @@ struct ChatMoveTests {
         #expect(again.cost.rsyncReceived < size / 4)
     }
 
+    /// A rollback here, on a chat held from the box: the replica's events can't say it, so the
+    /// return says no count and the box's log starts again (its next start reads the session),
+    /// with no rolled-back turn. Without one, the replica's log is kept.
+    @Test(arguments: [false, true]) func aRollbackHereGoesBackWhole(_ rolledBack: Bool) async throws {
+        let s = try await sides()
+        defer { s.rig.finish() }
+        let hc = try #require(s.rig.host.newChat(folder: s.rig.folder.path, provider: "claude", modelId: "haiku", title: "Repos", session: Self.session))
+        try write(Self.rows(SessionFiles.real(s.rig.folder.path), count: 3), s.boxProjects.appendingPathComponent("\(Self.session).jsonl"))
+        let brought = try await s.moves.bring(chatId: hc.id, gen: 0, boxFolder: s.rig.folder.path, pair: s.pair).get()
+        let mirrors = ChatMirrors()
+        mirrors.store = s.moves.store
+        mirrors.connection = { _ in s.connection }
+        mirrors.every = 0.02
+        let mirror = mirrors.mirror(brought.moved)
+        s.connection.post(StreamWire.encode(ChatFollow(chatId: hc.id, after: nil, log: nil)))
+        for (text, id) in [("kept", "k1"), ("gone", "g1")] {
+            mirrors.event(session: Self.session, .userMessage(text: text, attachments: [], id: id))
+            mirrors.event(session: Self.session, .turnFinished("t-\(id)", .completed, duration: .seconds(1)))
+        }
+        mirror.write()
+        #expect(await until(30) { mirror.count == 4 && mirror.acked == 4 })
+        func said(_ text: String) async -> Bool {
+            await hc.stream.since(nil, log: nil).items.contains { if case .userMessage(text, _, _)? = $0.e { true } else { false } }
+        }
+        #expect(await said("gone"))
+
+        // Back to “gone” here: its history replaced (never mirrored), and the mirror told.
+        if rolledBack {
+            mirrors.event(session: Self.session, .historyReplaced([.userMessage(text: "kept", attachments: [], id: "k1")]))
+            mirrors.rolledBack(session: Self.session)
+        }
+        let moved = try #require(s.moves.store.session(Self.session))
+        let count = mirrors.count(moved)
+        #expect(count == (rolledBack ? nil : 4))
+        let back = try await s.moves.sendBack(moved, title: "Repos", settings: ChatSettings(modelId: "haiku"), mirrored: count).get()
+        #expect(back.chatId == hc.id && hc.ownedHere)
+        #expect(await said("gone") == !rolledBack)
+        #expect(await said("kept") == !rolledBack)
+    }
+
+    /// A Claude rollback with nothing written since lives outside the session file (the CLI
+    /// resumes at the point, `--resume-session-at`): the point goes with the session both ways,
+    /// and only a message's uuid is taken (anything else, the session resumes at its end).
+    @Test func aRollbackPointGoesWithTheSession() async throws {
+        let s = try await sides()
+        defer {
+            s.rig.finish()
+            RollbackPoints.forget(Self.session)
+        }
+        let hc = try #require(s.rig.host.newChat(folder: s.rig.folder.path, provider: "claude", modelId: "haiku", title: "Repos", session: Self.session))
+        try write(Self.rows(SessionFiles.real(s.rig.folder.path), count: 3), s.boxProjects.appendingPathComponent("\(Self.session).jsonl"))
+        let onBox = "0a1b2c3d-0000-4000-8000-000000000001", onMac = "0a1b2c3d-0000-4000-8000-000000000002"
+        var moves = s.moves
+        var kept: [(String?, String)] = []
+        moves.keepRollbackPoint = { kept.append(($0, $1)) }
+
+        // Cut back on the box (a phone's rollback): the Mac's CLI resumes there too.
+        RollbackPoints.set(onBox, for: Self.session)
+        _ = try await moves.bring(chatId: hc.id, gen: 0, boxFolder: s.rig.folder.path, pair: s.pair).get()
+        #expect(kept.count == 1 && kept.first?.0 == onBox && kept.first?.1 == Self.session)
+
+        // Cut back here: the box's CLI resumes at this Mac's point.
+        RollbackPoints.forget(Self.session)
+        moves.rollbackPoint = { $0 == Self.session ? onMac : nil }
+        _ = try await moves.sendBack(try #require(moves.store.session(Self.session)), title: "Repos", settings: ChatSettings(modelId: "haiku"), mirrored: nil).get()
+        #expect(RollbackPoints.at(Self.session) == onMac)
+
+        // A point that isn't a message's uuid never reaches a CLI's arguments: the box forgets its own.
+        _ = try await moves.bring(chatId: hc.id, gen: 2, boxFolder: s.rig.folder.path, pair: s.pair).get()
+        #expect(kept.last?.0 == onMac)
+        moves.rollbackPoint = { _ in "--dangerously-skip-permissions" }
+        _ = try await moves.sendBack(try #require(moves.store.session(Self.session)), title: "Repos", settings: ChatSettings(modelId: "haiku"), mirrored: nil).get()
+        #expect(RollbackPoints.at(Self.session) == nil)
+        #expect(LinkMoves.rollbackPoint("--resume-session-at") == nil && LinkMoves.rollbackPoint(onBox.uppercased()) == onBox.uppercased())
+    }
+
     /// Catching up is waited for as long as a busy machine needs (30 s at most): what this guards is
     /// that every row is acked in few small frames, not how fast.
     @Test func anHourOfAChattyChatMirrorsInFewSmallFrames() async throws {

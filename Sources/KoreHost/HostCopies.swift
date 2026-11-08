@@ -57,6 +57,7 @@ extension HostDaemon {
             answer.move?.bytes = SessionFiles.bytes(found)
             // A cut takes the draft with it; a copy leaves it with its original.
             answer.move?.settings = args.stop == true ? hc?.settings : hc?.settings.withoutDraft
+            answer.move?.rollbackAt = Self.rollbackPoint(provider, session: session)
             return answer
         case .commit:
             // A cut's copy is placed elsewhere: the source leaves. Its CLI ends first.
@@ -131,6 +132,8 @@ extension HostDaemon {
                 for path in placed { try? FileManager.default.removeItem(at: root.appendingPathComponent(path)) }
                 return refused(.invalid, "The box couldn't make the chat.")
             }
+            // The copy resumes where its source was cut back to (a Claude rollback its file doesn't say).
+            Self.keepRollbackPoint(args.rollbackAt, provider: provider, session: new)
             hc.adoptedCopy(transcript: main, line: args.copiedFrom)
             HostJournal.note("copy adopt", ["chat": hc.id, "move": moveId, "files": "\(placed.count)"])
             broadcast(chats: [hc])

@@ -79,6 +79,7 @@ extension HostDaemon {
                     effort: settings.controls?.effort ?? settings.effort, mode: settings.mode))
             answer.move?.bytes = SessionFiles.bytes(found)
             answer.move?.settings = hc.settings
+            answer.move?.rollbackAt = Self.rollbackPoint(settings.provider, session: session)
             return answer
         case .commit:
             guard let hold = hc.record.moving, hold.moveId == args.moveId, hold.grant == grant else { return refused(.staleGen, "That move isn't under way.") }
@@ -183,6 +184,8 @@ extension HostDaemon {
             moveClients[moveId] = nil
             let main = files.first { provider == ProviderDescriptor.codex.id || !$0.contains("/") }.map { root.appendingPathComponent($0).path }
             let owner = ChatOwner(host: ChatOwner.box, gen: (args.gen ?? 0) + 1, since: Int64(Date().timeIntervalSince1970 * 1000))
+            // The Mac's rollback point (a Claude cut its file doesn't say yet) goes with the session.
+            Self.keepRollbackPoint(args.rollbackAt, provider: provider, session: session)
             if let hc = fastForward {
                 // A fast-forward: the box's chat again, its history the one that came back.
                 let complete = hc.record.owner?.mirrored == args.seq && args.seq != nil
@@ -234,6 +237,20 @@ extension HostDaemon {
             try? FileManager.default.removeItem(at: dir)
             return MoveResult(id: id, ok: true)
         }
+    }
+
+    // MARK: Rollback points
+
+    /// A Claude session's rollback point here, for a Mac taking the session (nil: none, or Codex,
+    /// whose rollout keeps its own cut).
+    static func rollbackPoint(_ provider: String, session: String) -> String? {
+        provider == ProviderDescriptor.claude.id ? LinkMoves.rollbackPoint(RollbackPoints.at(session)) : nil
+    }
+
+    /// A session that came here: its CLI resumes at the point it came with, or at its file's end.
+    static func keepRollbackPoint(_ at: String?, provider: String, session: String) {
+        guard provider == ProviderDescriptor.claude.id else { return }
+        if let at = LinkMoves.rollbackPoint(at) { RollbackPoints.set(at, for: session) } else { RollbackPoints.forget(session) }
     }
 
     // MARK: chat.mirror
