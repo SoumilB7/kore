@@ -466,7 +466,7 @@ enum DevicesStory {
     static var claimsBefore: (any BoxClaims)?
 }
 
-private struct DevicesSetUp: Step {
+struct DevicesSetUp: Step {
     var on = false
     var phone: String?
     var box: String?

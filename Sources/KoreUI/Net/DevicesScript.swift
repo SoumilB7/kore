@@ -201,6 +201,42 @@ package final class ScriptedJoin: BoxNetJoinRunner {
     package func offersKoreTailnet(_ join: BoxNetJoin) -> Bool { offersSidecar }
 }
 
+/// A box's SSH → KoreNet upgrade as its `kore-host upgrade` report says: read by the same
+/// `BoxNetJoin.outcome` the real run uses; on, its link moves to the tailnet at once.
+@MainActor
+package final class ScriptedUpgrade: BoxNetJoinRunner {
+    package let report: String
+    package let macAccount: String?
+    /// The link moved (the box list shows it on the tailnet).
+    package var linked: (@MainActor () -> Void)?
+
+    package init(report: String, macAccount: String?, linked: (@MainActor () -> Void)? = nil) {
+        self.report = report
+        self.macAccount = macAccount
+        self.linked = linked
+    }
+
+    package func start(_ join: BoxNetJoin) {
+        join.checking()
+        guard let parsed = BoxUpgradeReport.parse(report) else { return join.failed("\(join.name) didn't answer like kore-host") }
+        join.started(version: parsed.version)
+        let outcome = BoxNetJoin.outcome(parsed, name: join.name, macAccount: macAccount)
+        join.take(outcome, report: parsed)
+        guard outcome == .link else { return }
+        join.node(on: true, nodeKey: parsed["node"] ?? "nodekey:" + join.key, sidecar: parsed.kore)
+        join.allowedBySSH()
+        join.linked(net: true)
+        linked?()
+    }
+
+    package func cancel(_ join: BoxNetJoin) {}
+    package func useKoreTailnet(_ join: BoxNetJoin) {}
+    package func signIn(_ join: BoxNetJoin) {}
+    package func authKey(_ join: BoxNetJoin, _ key: String) {}
+    package func stayOnSSH(_ join: BoxNetJoin) {}
+    package func offersKoreTailnet(_ join: BoxNetJoin) -> Bool { false }
+}
+
 /// The box list as a script has it (Devices' "Add a box", Use SSH…): SSH config hosts, boxes
 /// listed, each answering and setting up a step at a time as told. No ssh runs.
 @MainActor @Observable
@@ -210,6 +246,10 @@ package final class ScriptedBoxes: BoxAdding {
     @ObservationIgnored package private(set) var log: [String] = []
     /// Set up's steps, as the box list says them.
     @ObservationIgnored package var steps: [String]
+    /// The boxes' upgrades, for their rows' lines (storylines: their own).
+    @ObservationIgnored package var upgrades: BoxUpgrades?
+    /// Boxes whose link moved to the tailnet, with the tailnet they said.
+    package private(set) var onNet: [String: String] = [:]
 
     package init(hosts: [String] = ["mybox", "gpu-box", "pi"], steps: [String]? = nil) {
         self.hosts = hosts
@@ -258,6 +298,12 @@ package final class ScriptedBoxes: BoxAdding {
         }
     }
 
+    /// The box's link moved to the tailnet (`tailnet`: what the box said it's on).
+    package func joinNet(_ alias: String, tailnet: String) {
+        onNet[alias] = tailnet
+        Devices.shared.changed()
+    }
+
     /// Devices' rows for the boxes listed.
     package func facts() -> [BoxFacts] {
         boxes.map { box in
@@ -265,6 +311,13 @@ package final class ScriptedBoxes: BoxAdding {
             facts.listed = box.status
             facts.online = box.status == .ready
             facts.route = facts.online ? .ssh(alias: box.alias, grant: "mac") : nil
+            if let tailnet = onNet[box.alias] {
+                facts.route = .net
+                var entry = NodeDirectory.Entry(device: UUID(), name: box.alias, ssh: box.alias, nodeKey: "nodekey:" + box.alias, identityKey: Data([1]), enrolled: true)
+                entry.tailnet = tailnet
+                facts.entry = entry
+            }
+            facts.upgrade = upgrades?.facts(box.alias)
             return facts
         }
     }
