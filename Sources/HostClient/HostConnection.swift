@@ -79,6 +79,8 @@ package final class HostConnection {
     @ObservationIgnored package private(set) var caps: [String] = []
     @ObservationIgnored package private(set) var control: LinkControlLevel?
     @ObservationIgnored package let cache: HostCache
+    /// The CLIs whose login its chats' usage asked for (`LinkChatBackend`): once each.
+    @ObservationIgnored package var loginsAsked: Set<String> = []
 
     /// A link up this long counts as stable: the next drop dials again from the shortest wait.
     @ObservationIgnored package var stableAfter: Duration = .seconds(30)

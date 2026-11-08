@@ -166,7 +166,12 @@ final class BoxRig {
         let folder = folder.path
         services.backend = { provider, options in
             let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: id, model: options.model)
-            if let usage = self.usage { backend.usage = { request in Task { await usage.forwarded(request) } } }
+            backend.whoIs = { _, _ in "you@example.com" }
+            if let usage = self.usage {
+                backend.usage = { request in Task { await usage.forwarded(request) } }
+                backend.login = { box, cli, email in Task { await usage.boxLogin(box: box, cli: cli, email: email) } }
+                backend.shares = { reading, cli in await usage.shares(for: reading, cli: cli) }
+            }
             made = backend
             return backend
         }
@@ -433,6 +438,13 @@ struct BoxParityTests {
         // The plan's use in the window was all Kore's box chat, counted once.
         #expect(share?.kore == 20)
         #expect(share?.chats.map(\.id) == ["local/" + chatId])
+        #expect(share?.chats.first?.box == "local")
+        // The box window's popup reads the same, worked out here: nothing from the box's side.
+        let boxShares = await backend()?.koreShares(for: reading)
+        #expect(boxShares?.limits == (await rig.usage?.shares(for: reading, cli: "claude"))?.limits)
+        // A box signed in to another login: its chat isn't this one's.
+        let other = PlanReading(account: PlanAccount(email: "other@example.com", access: .plan), limits: reading.limits)
+        #expect(await rig.usage?.shares(for: other, cli: "claude")?.limits["Session"]?.chats.isEmpty == true)
         // Kept across a restart of the Mac's usage.
         let again = await usage().shares(for: reading, cli: "claude")?.limits["Session"]
         #expect(again?.kore == 20)

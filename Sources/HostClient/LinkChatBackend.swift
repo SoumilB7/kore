@@ -88,6 +88,21 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// Where the box chat's model requests go: this Mac's usage, so Kore's share of the plan's
     /// limits counts them (tests set their own).
     package var usage: @Sendable (ForwardedRequest) -> Void = { request in Task { await KoreUsage.shared.forwarded(request) } }
+    /// Who the box's CLI is signed in as (box, CLI, email): its requests count only for that
+    /// login's plan.
+    package var login: @Sendable (String, String, String?) -> Void = { box, cli, email in
+        Task { await KoreUsage.shared.boxLogin(box: box, cli: cli, email: email) }
+    }
+    /// Kore's share of a reading, worked out on this Mac (the box keeps no usage of its own).
+    package var shares: @Sendable (PlanReading, String) async -> KoreShares? = { reading, cli in
+        await Task.detached(priority: .utility) { await KoreUsage.shared.shares(for: reading, cli: cli) }.value
+    }
+    /// Who the box's CLI is signed in as, its email (`account.refresh` runs the CLI there for a
+    /// moment); tests answer for it.
+    package var whoIs: @MainActor (HostConnection, String) async -> String? = { connection, cli in
+        let result = await connection.command { HostWire.refresh(id: $0, provider: cli) }
+        return result.ok ? result.account?.email : nil
+    }
 
     package init(connection: HostConnection, provider: ProviderDescriptor, folder: String, chatId: String?, making: Making = Making()) {
         self.connection = connection
@@ -203,6 +218,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// catch-up again, a copy of a streamed message) are kept once.
     private func count(_ request: RequestUsage) {
         guard let chatId else { return }
+        askLogin()
         let model = request.model ?? ""
         let units =
             provider.id == "codex"
@@ -214,7 +230,16 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         usage(
             ForwardedRequest(
                 cli: provider.id, chat: connection.alias + "/" + chatId, request: request.id, time: request.at, model: model, agent: request.agent,
-                units: units))
+                units: units, title: [connection.chats[chatId]?.title, titleSaid, making.title].compactMap { $0 }.first { !$0.isEmpty }))
+    }
+
+    /// The box CLI's login, asked once a connection when its chats first make requests.
+    private func askLogin() {
+        let (connection, cli, login, whoIs) = (connection, provider.id, login, whoIs)
+        guard connection.loginsAsked.insert(cli).inserted else { return }
+        Task {
+            if let email = await whoIs(connection, cli) { login(connection.alias, cli, email) }
+        }
     }
 
     /// What the box doesn't take from here (its provider's capabilities don't list it) is said as
@@ -509,8 +534,11 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     package func usage() async throws -> PlanReading {
         guard let reading = try await call(.usage).reading else { throw UsageUnavailable() }
+        login(connection.alias, provider.id, reading.account.email)
         return reading
     }
+
+    package func koreShares(for reading: PlanReading) async -> KoreShares? { await shares(reading, provider.id) }
 
     package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome {
         guard let outcome = try await call(.useReset(credit: credit, attempt: attempt)).outcome else { throw UsageUnavailable() }

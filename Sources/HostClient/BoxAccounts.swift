@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import LinkProtocol
 import Observation
 
@@ -60,6 +61,10 @@ package final class BoxAccounts {
     /// Who the CLI on the box is signed in as.
     package func refresh(_ provider: String) async {
         let result = await connection.command { HostWire.refresh(id: $0, provider: provider) }
+        if result.ok, let email = result.account?.email {
+            let box = alias
+            Task { await KoreUsage.shared.boxLogin(box: box, cli: provider, email: email) }
+        }
         set(provider) {
             $0.said = result.message ?? (result.ok ? nil : "Couldn't read the login on \(alias)")
             $0.signedIn = result.signedIn

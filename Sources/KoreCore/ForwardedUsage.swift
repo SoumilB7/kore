@@ -14,8 +14,15 @@ public struct ForwardedRequest: Codable, Sendable, Equatable {
     public var model: String
     public var agent: String?
     public var units: Double
+    /// The chat's title on the box when it was made, so the ledger names it with the box offline.
+    public var title: String?
+    /// The box CLI's login (`PlanSnapshot.account`) when it was made; nil while unknown.
+    public var account: String?
 
-    public init(cli: String, chat: String, request: String, time: Date, model: String, agent: String?, units: Double) {
+    public init(
+        cli: String, chat: String, request: String, time: Date, model: String, agent: String?, units: Double, title: String? = nil,
+        account: String? = nil
+    ) {
         self.cli = cli
         self.chat = chat
         self.request = request
@@ -23,28 +30,73 @@ public struct ForwardedRequest: Codable, Sendable, Equatable {
         self.model = model
         self.agent = agent
         self.units = units
+        self.title = title
+        self.account = account
     }
 
     var key: String { chat + "|" + request }
+
+    /// The box's alias, from "<box>/<chat id>".
+    public var box: String { Self.box(chat) ?? chat }
+
+    static func box(_ chat: String) -> String? { chat.firstIndex(of: "/").map { String(chat[..<$0]) } }
 }
 
 extension KoreUsage {
-    /// Notes a box chat's request; a copy already noted keeps the larger weight.
+    /// Notes a box chat's request, with the box CLI's login when it's known; a copy already
+    /// noted keeps the larger weight.
     public func forwarded(_ request: ForwardedRequest) {
         loadForwarded()
-        if let kept = forwardedRequests[request.key], kept.units >= request.units { return }
+        var request = request
+        if request.account == nil { request.account = boxLogins[request.box + "/" + request.cli] }
+        if let kept = forwardedRequests[request.key] {
+            request.title = request.title ?? kept.title
+            request.account = request.account ?? kept.account
+            guard request.units > kept.units || (request.title, request.account) != (kept.title, kept.account) else { return }
+            request.units = max(request.units, kept.units)
+        }
         forwardedRequests[request.key] = request
         let cutoff = Date().addingTimeInterval(-8 * 86400)
         forwardedRequests = forwardedRequests.filter { $0.value.time > cutoff }
         saveForwarded()
     }
 
-    /// The box chats' requests for `cli` since `since`, as Kore's.
-    func forwardedRequests(cli: String, since: Date) -> [UsageRequest] {
+    /// Who a box's CLI is signed in as (an email, as the box said it): requests noted from now
+    /// on carry it, and those noted before without one are taken as its.
+    public func boxLogin(box: String, cli: String, email: String?) {
+        guard let account = PlanSnapshot.account(email: email), boxLogins[box + "/" + cli] != account else { return }
+        boxLogins[box + "/" + cli] = account
         loadForwarded()
-        return forwardedRequests.values.filter { $0.cli == cli && $0.time >= since }.sorted { $0.time < $1.time }.map {
-            UsageRequest(time: $0.time, chat: $0.chat, agent: $0.agent, folder: nil, model: $0.model, units: $0.units, kore: true)
+        let unstamped = forwardedRequests.filter { $0.value.account == nil && $0.value.cli == cli && $0.value.box == box }.keys
+        guard !unstamped.isEmpty else { return }
+        for key in unstamped { forwardedRequests[key]?.account = account }
+        saveForwarded()
+    }
+
+    /// The box chats' requests for `cli` since `since`, as Kore's: those whose box CLI was
+    /// signed in to `account` (the plan reading's login). With either login unknown, as this
+    /// Mac's CLI on its own counts: only for the main login (`main`).
+    func forwardedRequests(cli: String, since: Date, account: String? = nil, main: Bool = true) -> [UsageRequest] {
+        loadForwarded()
+        return forwardedRequests.values.filter { request in
+            guard request.cli == cli, request.time >= since else { return false }
+            guard let account, let login = request.account ?? boxLogins[request.box + "/" + cli] else { return main }
+            return login == account
         }
+        .sorted { $0.time < $1.time }
+        .map { UsageRequest(time: $0.time, chat: $0.chat, agent: $0.agent, folder: nil, model: $0.model, units: $0.units, kore: true) }
+    }
+
+    /// Each box chat's alias and latest title, by its id in the ledger.
+    func forwardedChats() -> [String: (box: String, title: String?)] {
+        loadForwarded()
+        var out: [String: (box: String, title: String?, at: Date)] = [:]
+        for request in forwardedRequests.values {
+            var chat = out[request.chat] ?? (request.box, nil, .distantPast)
+            if let title = request.title, request.time >= chat.at { (chat.title, chat.at) = (title, request.time) }
+            out[request.chat] = chat
+        }
+        return out.mapValues { ($0.box, $0.title) }
     }
 
     private var forwardedFile: URL? { forwardedSupport?.appendingPathComponent("forwarded.json") }

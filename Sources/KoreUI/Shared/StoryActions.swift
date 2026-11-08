@@ -203,7 +203,7 @@ extension Chat {
     /// ledger as it reads ("In Kore · ~12%", "This chat · ~3%", "Outside Kore · ~18%").
     package var isUsageExtendedOpen: Bool { usage.extended }
     package var storyUsagePicked: String? { usage.pickedLimit?.title }
-    package var storyUsageLedger: [String] { usage.ledger(current: sessionId) }
+    package var storyUsageLedger: [String] { usage.ledger(current: UsageChats.key(self)) }
     package var storyUsageExtras: String { UsageText.extras(usage.reading?.limits?.extras ?? []) }
     /// Whether the full resets are unfolded, and whether a row's "Yes" would go yet (a
     /// double-click's time after its "Use").

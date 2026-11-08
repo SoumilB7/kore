@@ -112,6 +112,142 @@ struct UsageAttributionTests {
         #expect(split.elsewhere == 1)
     }
 
+    // MARK: Usage from elsewhere
+
+    static let week = UsageWindow(minutes: 10080, resetsAt: at(10080), used: 0)
+
+    /// `count` rises of a point, each after one request of `units` (the limit's rate), the
+    /// reading 10 minutes apart.
+    static func ticks(_ count: Int, units: Double = 100, model: String = "test-opus-5-5", from start: Int = 0)
+        -> (requests: [UsageRequest], points: [UsagePoint])
+    {
+        let range = (start + 1)...(start + count)
+        let requests = range.map { UsageRequest(time: at(Double($0 * 10 - 5)), chat: "k", model: model, units: units, kore: true) }
+        return (requests, range.map { UsagePoint(time: at(Double($0 * 10)), used: Double($0)) })
+    }
+
+    /// What credit is left after `count` clean ticks: each earns `slack` points and spends one.
+    static func carried(_ count: Int) -> Double { min(Double(count) * (UsageAttribution.slack - 1), UsageAttribution.carry) }
+
+    @Test func aRiseLocalUnitsExplainOnlyHalfOfGoesPartlyElsewhere() {
+        var (requests, points) = Self.ticks(8)
+        // 8 → 18 by minute 90, with local units for 5 points: Kore's 300 and another app's 200.
+        requests += [
+            UsageRequest(time: Self.at(84), chat: "k2", model: "test-opus-5-5", units: 300, kore: true),
+            UsageRequest(time: Self.at(86), chat: "o", model: "test-opus-5-5", units: 200, kore: false),
+        ]
+        var week = Self.week
+        week.used = 18
+        let split = UsageAttribution.split(requests, points: points, window: week, now: Self.at(90))
+        #expect(split.rate == 100)
+        // The units' 5 points (with the slack the rate allows) and the credit carried: the rest,
+        // nearly half, is elsewhere's.
+        let local = 5 * UsageAttribution.slack + Self.carried(8)
+        #expect(abs(split.elsewhere - (10 - local)) < 1e-9)
+        #expect(split.elsewhere > 3.5)
+        #expect(split.spans.count == 1 && split.spans.first?.from == Self.at(80))
+        // The local part split as before, by units: 3 to 2.
+        #expect(abs(split.points[8] - local * 0.6) < 1e-9)
+        #expect(abs(split.points[9] - local * 0.4) < 1e-9)
+        let share = UsageAttribution.share(requests, points: points, window: week, now: Self.at(90))
+        #expect(abs(share.kore - (8 + local * 0.6)) < 1e-9)
+    }
+
+    @Test func withNoUsageElsewhereNothingChanges() {
+        // Requests of every size, the limit read after each as the plan floors it: 1 point a
+        // 100 units, Kore's and another app's mixed.
+        var requests: [UsageRequest] = []
+        var points: [UsagePoint] = []
+        var total = 0.0
+        var seed: UInt64 = 7
+        for step in 0..<120 {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            let units = Double(20 + (seed >> 33) % 160)
+            total += units
+            requests.append(UsageRequest(time: Self.at(Double(step * 10 + 3)), chat: step % 3 == 0 ? "o" : "k\(step % 4)", units: units, kore: step % 3 != 0))
+            points.append(UsagePoint(time: Self.at(Double(step * 10 + 5)), used: (total / 100).rounded(.down)))
+        }
+        var week = Self.week
+        week.used = (total / 100).rounded(.down)
+        let now = Self.at(1300)
+        let split = UsageAttribution.split(requests, points: points, window: week, now: now)
+        #expect(split.rate != nil)
+        #expect(split.elsewhere == 0)
+        // As before: each rise across its interval's requests by units.
+        var before = [Double](repeating: 0, count: requests.count)
+        var highest = 0.0
+        for (at, point) in (points + [UsagePoint(time: now, used: week.used)]).enumerated() where point.used > highest {
+            let taken = at < requests.count ? [at] : []
+            for index in taken { before[index] += point.used - highest }
+            highest = point.used
+        }
+        #expect(zip(split.points, before).allSatisfy { abs($0 - $1) < 1e-9 })
+    }
+
+    @Test func aThinHistoryKeepsEveryRiseLocal() {
+        var (requests, points) = Self.ticks(3)
+        requests.append(UsageRequest(time: Self.at(35), chat: "k", units: 10, kore: true))
+        var week = Self.week
+        week.used = 13
+        let split = UsageAttribution.split(requests, points: points, window: week, now: Self.at(40))
+        // 3 rises say nothing sure of the rate: 10 points on 10 units are local, as before.
+        #expect(split.rate == nil && split.scale == 100)
+        #expect(split.elsewhere == 0)
+        #expect(split.points.last == 10)
+    }
+
+    @Test func aModelWeeksUsageElsewhereLowersThePlainWeeksKore() {
+        // 10 clean points of the plain week, the last 2 Fable's (50 units a Fable point).
+        var (requests, points) = Self.ticks(8)
+        requests += [
+            UsageRequest(time: Self.at(85), chat: "k", model: "test-fable-5-1", units: 100, kore: true),
+            UsageRequest(time: Self.at(95), chat: "k", model: "test-fable-5-1", units: 100, kore: true),
+        ]
+        points += [UsagePoint(time: Self.at(90), used: 9), UsagePoint(time: Self.at(100), used: 10)]
+        // Then Fable 4 → 12 with no Fable request here: 400 Fable units elsewhere, 4 plain points.
+        // The plain week 10 → 18 meanwhile, with local units for 4.4 of it.
+        requests.append(UsageRequest(time: Self.at(105), chat: "k", model: "test-opus-5-5", units: 400, kore: true))
+        let fablePoints = [UsagePoint(time: Self.at(90), used: 2), UsagePoint(time: Self.at(100), used: 4)]
+        let fableWeek = UsageWindow(minutes: 10080, resetsAt: Self.at(10080), limit: nil, used: 12)
+        let fable = UsageAttribution.share(requests, points: fablePoints, window: fableWeek, now: Self.at(110), scope: "Fable")
+        #expect(fable.kore == 4)
+        #expect(fable.elsewhereUnits.map(\.points) == [400])
+        var week = Self.week
+        week.used = 18
+        let alone = UsageAttribution.share(requests, points: points, window: week, now: Self.at(110))
+        let carried = UsageAttribution.share(requests, points: points, window: week, now: Self.at(110), elsewhereUnits: fable.elsewhereUnits)
+        // Alone, the units' credit goes to Kore; with Fable's 4 points elsewhere, only the other 4.
+        #expect(abs(alone.kore - (10 + 4 * UsageAttribution.slack + Self.carried(10))) < 1e-9)
+        #expect(abs(carried.kore - 14) < 1e-9)
+    }
+
+    @Test func thePlansOtherSurfacesAreAFloorUnderOutsideKore() {
+        // Rounded shares that add to more than 100: the CLI's part alone would leave Kore 38.
+        let breakdown: JSONValue = [
+            "rows": [
+                ["key": "claude_code", "display_name": "Code", "percent": 95], ["key": "chat", "display_name": "Chats", "percent": 10],
+            ]
+        ]
+        let surfaces = UsageAttribution.surfaces(breakdown, used: 40)
+        let week = UsageWindow(minutes: 10080, resetsAt: Self.at(10080), used: 40)
+        let requests = [UsageRequest(time: Self.at(1), chat: "a", units: 1, kore: true)]
+        let share = UsageAttribution.share(requests, points: [], window: week, now: Self.at(60), surfaces: surfaces, cap: 38)
+        #expect(share.kore == 36 && share.clamped)
+        #expect(share.outside == 4)
+    }
+
+    @Test func boxChatsSumPerBox() {
+        let share = KoreShare(
+            used: 30, kore: 12,
+            chats: [
+                ChatShare(id: "mybox/a", points: 5, box: "mybox"), ChatShare(id: "local", points: 4),
+                ChatShare(id: "mybox/b", points: 2, box: "mybox"), ChatShare(id: "gpu/c", points: 1, box: "gpu"),
+            ])
+        #expect(share.boxes.map(\.box) == ["mybox", "gpu"])
+        #expect(share.boxes.map(\.points) == [7, 1])
+        #expect(KoreShare(used: 3, kore: 3, chats: [ChatShare(id: "local", points: 3)]).boxes.isEmpty)
+    }
+
     @Test func theClampCutsKoreToThePlanAndScalesTheChats() {
         let chats = [ChatShare(id: "a", points: 8, agents: 1, agentPoints: 4), ChatShare(id: "b", points: 3)]
         let cut = UsageAttribution.clamp(11, chats: chats, used: 9)
@@ -215,8 +351,10 @@ struct UsageAttributionFileTests {
         return formatter.string(from: now.addingTimeInterval(-minutesAgo * 60))
     }
 
-    func claudeLine(_ id: String, ago: Double, output: Int, entry: String = "sdk-cli", cwd: String = "/work/app", session: String) -> String {
-        #"{"type":"assistant","timestamp":"\#(stamp(ago))","entrypoint":"\#(entry)","cwd":"\#(cwd)","sessionId":"\#(session)","message":{"id":"\#(id)","model":"test-fable-5-1","usage":{"input_tokens":0,"output_tokens":\#(output),"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}}}}"#
+    func claudeLine(
+        _ id: String, ago: Double, output: Int, entry: String = "sdk-cli", cwd: String = "/work/app", session: String, model: String = "test-fable-5-1"
+    ) -> String {
+        #"{"type":"assistant","timestamp":"\#(stamp(ago))","entrypoint":"\#(entry)","cwd":"\#(cwd)","sessionId":"\#(session)","message":{"id":"\#(id)","model":"\#(model)","usage":{"input_tokens":0,"output_tokens":\#(output),"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}}}}"#
     }
 
     func write(_ lines: [String], to path: String, append: Bool = false) throws {
@@ -334,6 +472,115 @@ struct UsageAttributionFileTests {
         let share = try #require(shares.limits["Session (5hr)"])
         #expect(share.measured)
         #expect(abs(share.kore - 12) < 1e-6)
+    }
+
+    /// 2026-11-06 as the week saw it: a model week (Fable) rose 0 → 8 with no Fable request on
+    /// this Mac, made elsewhere, while Kore's chats ran all along on another model, so each rise
+    /// of the plain week had a request of Kore's in it. The plain week gives what the units
+    /// don't explain, and what Fable's rise weighs, to elsewhere.
+    @Test func aModelWeeksRiseFromElsewhereStaysOutOfKoresWeek() async throws {
+        let sessions = KoreSessions(url: root.appendingPathComponent("support/sessions.jsonl"))
+        sessions.record(cli: "claude", session: "kore", folder: nil, launch: "new", at: now.addingTimeInterval(-86400))
+        sessions.sync()
+        let log = PlanSnapshotLog(url: root.appendingPathComponent("support/snapshots.jsonl"))
+        let resets = now.addingTimeInterval(3 * 86400)
+        func read(_ ago: Double, week: Double, fable: Double? = nil) {
+            var windows = [PlanSnapshot.Window(minutes: 10080, used: week, resetsAt: resets)]
+            if let fable { windows.append(.init(minutes: 10080, used: fable, resetsAt: resets, limit: "Fable")) }
+            log.append(PlanSnapshot(at: now.addingTimeInterval(-ago * 60), cli: "claude", account: nil, source: "stream", windows: windows))
+        }
+        var lines: [String] = []
+        // The days before: a point of the week for each 100 units (5 Opus output tokens), and one
+        // Fable request of 50 units for a Fable point.
+        for tick in 1...10 {
+            lines.append(claudeLine("o\(tick)", ago: Double(1000 - tick * 10 + 5), output: 5, session: "kore", model: "test-opus-5-5"))
+            read(Double(1000 - tick * 10), week: Double(tick), fable: 0)
+        }
+        lines.append(claudeLine("f1", ago: 895, output: 1, session: "kore"))
+        read(890, week: 11, fable: 1)
+        // The day: Fable 1 → 9 with nothing of Fable's here; the week 11 → 19, Kore's Opus
+        // requests 60 units in each of its 8 rises: 4.8 points of the 8.
+        for tick in 1...8 {
+            lines.append(claudeLine("d\(tick)", ago: Double(500 - tick * 10 + 5), output: 3, session: "kore", model: "test-opus-5-5"))
+            read(Double(500 - tick * 10), week: Double(11 + tick), fable: Double(1 + tick))
+        }
+        log.sync()
+        try write(lines, to: "claude/projects/-work-app/kore.jsonl")
+        let usage = KoreUsage(paths: paths, snapshots: log, sessions: sessions)
+        let reading = PlanReading(
+            account: PlanAccount(access: .plan),
+            limits: PlanLimits(bars: [
+                PlanLimit(title: "Weekly (7 day)", used: 19, resetsAt: resets, window: 7 * 86400),
+                PlanLimit(title: "Weekly Fable", used: 9, resetsAt: resets, window: 7 * 86400, scope: "Fable"),
+            ]))
+        let shares = try #require(await usage.shares(for: reading, cli: "claude", now: now))
+        let fable = try #require(shares.limits["Weekly Fable"])
+        let week = try #require(shares.limits["Weekly (7 day)"])
+        // Fable: its own request's point; the 8 from elsewhere, 400 Fable units.
+        #expect(abs(fable.kore - 1) < 1e-9)
+        #expect(abs(fable.elsewhereUnits.reduce(0) { $0 + $1.points } - 400) < 1e-9)
+        // The week: the 11 points before, and of the day's 8 no more than its units explain
+        // (4.8, 5.3 with the slack) and less what Fable's 400 units weigh (4 points): 4.
+        #expect(abs(week.kore - 15) < 1e-6)
+        #expect(abs(week.outside - 4) < 1e-6)
+    }
+
+    // MARK: Box chats
+
+    func boxRequest(_ id: String, chat: String = "mybox/c1", ago: Double, units: Double, title: String? = "ComplianceOS basecamp", account: String?)
+        -> ForwardedRequest
+    {
+        ForwardedRequest(
+            cli: "claude", chat: chat, request: id, time: now.addingTimeInterval(-ago * 60), model: "test-opus-5-5", agent: nil, units: units,
+            title: title, account: account)
+    }
+
+    @Test func boxChatsAreTheirOwnRowsNamedWithTheirBox() async throws {
+        try write([claudeLine("l1", ago: 30, output: 10, session: "local")], to: "claude/projects/-work-app/local.jsonl")
+        let sessions = KoreSessions(url: root.appendingPathComponent("support/sessions.jsonl"))
+        sessions.record(cli: "claude", session: "local", folder: nil, launch: "new")
+        sessions.sync()
+        let me = PlanSnapshot.account(email: "you@example.com")
+        let usage = KoreUsage(paths: paths, sessions: sessions, added: { _ in [] })
+        // 500 units from the local chat; 300 and 200 from two of mybox's chats.
+        await usage.forwarded(boxRequest("r1", ago: 20, units: 300, title: nil, account: me))
+        await usage.forwarded(boxRequest("r1", ago: 20, units: 300, account: me))
+        await usage.forwarded(boxRequest("r2", chat: "mybox/c2", ago: 10, units: 200, title: "Deploy", account: me))
+        let shares = try #require(await usage.shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "you@example.com"), cli: "claude", now: now))
+        let share = try #require(shares.limits["Session (5hr)"])
+        #expect(share.chats.map(\.id) == ["local", "mybox/c1", "mybox/c2"])
+        #expect(share.chats.map(\.box) == [nil, "mybox", "mybox"])
+        #expect(share.chats.map(\.title) == [nil, "ComplianceOS basecamp", "Deploy"])
+        #expect(share.boxes.map(\.box) == ["mybox"])
+        #expect(abs((share.boxes.first?.points ?? 0) - 5) < 1e-9)
+        // Named the same with the box gone: kept with its requests.
+        let again = try #require(
+            await KoreUsage(paths: paths, sessions: sessions, added: { _ in [] })
+                .shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "you@example.com"), cli: "claude", now: now))
+        #expect(again.limits["Session (5hr)"]?.chats.map(\.title) == [nil, "ComplianceOS basecamp", "Deploy"])
+    }
+
+    @Test func aBoxCountsOnlyForTheLoginItsCLIRunsAs() async throws {
+        let (me, other) = (PlanSnapshot.account(email: "you@example.com"), PlanSnapshot.account(email: "other@example.com"))
+        // `me` is an added login here: a box signed in to it still counts for it.
+        let usage = KoreUsage(paths: paths, added: { _ in Set([me].compactMap { $0 }) })
+        await usage.forwarded(boxRequest("r1", ago: 20, units: 100, account: me))
+        await usage.forwarded(boxRequest("r2", chat: "gpu/c9", ago: 10, units: 100, title: "Train", account: other))
+        let mine = try #require(await usage.shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "you@example.com"), cli: "claude", now: now))
+        #expect(mine.limits["Session (5hr)"]?.chats.map(\.id) == ["mybox/c1"])
+        #expect(mine.limits["Session (5hr)"]?.kore == 10)
+        let theirs = try #require(
+            await usage.shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "other@example.com"), cli: "claude", now: now))
+        #expect(theirs.limits["Session (5hr)"]?.chats.map(\.id) == ["gpu/c9"])
+
+        // Noted before the box said who it runs as: taken as that login's once it does.
+        await usage.forwarded(boxRequest("r3", chat: "late/c1", ago: 5, units: 100, title: "Late", account: nil))
+        await usage.boxLogin(box: "late", cli: "claude", email: "other@example.com")
+        let later = try #require(
+            await usage.shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "other@example.com"), cli: "claude", now: now))
+        #expect(Set(later.limits["Session (5hr)"]?.chats.map(\.id) ?? []) == ["gpu/c9", "late/c1"])
+        let mineLater = try #require(await usage.shares(for: reading("Session (5hr)", used: 10, hours: 5, resetsIn: 4, email: "you@example.com"), cli: "claude", now: now))
+        #expect(mineLater.limits["Session (5hr)"]?.chats.map(\.id) == ["mybox/c1"])
     }
 
     func codexMeta(_ id: String, originator: String, parent: String? = nil) -> String {

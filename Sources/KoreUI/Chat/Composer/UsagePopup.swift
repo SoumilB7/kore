@@ -250,16 +250,18 @@ final class UsageState {
     }
 
     /// The extended view's ledger for the picked limit, one line per row ("In Kore · ~12%",
-    /// "Fix the race in LoginTests · ~6%", "Outside Kore · ~31%"), for a storyline's checks;
-    /// `current`: this chat's id, whose row reads "This chat".
+    /// "On mybox · ~4%", "Fix the race in LoginTests · ~6%", "Basecamp · mybox · ~4%",
+    /// "Outside Kore · ~31%"), for a storyline's checks; `current`: this chat's id in the ledger
+    /// (`UsageChats.key`), whose row reads "This chat".
     func ledger(current: String?) -> [String] {
         guard let limit = pickedLimit, let share = share(limit) else { return [] }
         guard share.kore > 0 else { return [UsageText.nothingFromKore] }
+        let boxes = share.boxes.map { "On \($0.box) · " + UsageText.kore($0.points) }
         let chats = share.chats.map { chat in
-            [chat.id == current ? "This chat" : chatNames[chat.id] ?? chat.title ?? UsageText.untitled, UsageText.kore(chat.points)]
-                .joined(separator: " · ")
+            [chat.id == current ? "This chat" : chatNames[chat.id] ?? chat.title ?? UsageText.untitled, chat.box, UsageText.kore(chat.points)]
+                .compactMap { $0 }.joined(separator: " · ")
         }
-        return ["In Kore · " + UsageText.kore(share.kore)] + chats + ["Outside Kore · " + UsageText.kore(share.outside)]
+        return ["In Kore · " + UsageText.kore(share.kore)] + boxes + chats + ["Outside Kore · " + UsageText.kore(share.outside)]
     }
 
     /// A limit's share of Kore, while a reading of it shows; nil while it's worked out.

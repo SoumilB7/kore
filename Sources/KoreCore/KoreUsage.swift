@@ -28,6 +28,8 @@ public actor KoreUsage {
     /// Box chats' requests (`ForwardedUsage.swift`), by chat and request id.
     var forwardedRequests: [String: ForwardedRequest] = [:]
     var forwardedLoaded = false
+    /// Each box CLI's login as last heard ("<box>/<cli>" to `PlanSnapshot.account`).
+    var boxLogins: [String: String] = [:]
     var forwardedSupport: URL? { paths.support }
     /// A CLI's added logins (`PlanSnapshot.account`): what Kore didn't note ran on none of them.
     private let added: @Sendable (String) -> Set<String>
@@ -70,12 +72,14 @@ public actor KoreUsage {
         default:
             return nil
         }
-        // Kore's chats on a box, as their events said: counted for the main login (the box's CLI
-        // runs as it, not as an added one).
-        if account == nil || !added(cli).contains(account ?? "") { requests += forwardedRequests(cli: cli, since: since) }
+        // Kore's chats on a box, as their events said: counted for the login the box's CLI runs
+        // as; while that isn't known, for the main login, as the CLI on its own here.
+        requests += forwardedRequests(cli: cli, since: since, account: account, main: account == nil || !added(cli).contains(account ?? ""))
         let logged = snapshots.entries(since: since).filter { $0.cli == cli }
         var limits: [String: KoreShare] = [:]
-        for bar in bars {
+        // Claude's model weeks first: what they put elsewhere, the plain limits put there too.
+        var carried: [UsageSpan] = []
+        for bar in bars.filter({ cli == "claude" && $0.scope != nil }) + bars.filter({ cli != "claude" || $0.scope == nil }) {
             guard let resetsAt = bar.resetsAt, let length = bar.window, length > 0 else { continue }
             let minutes = Int((length / 60).rounded())
             let window = UsageWindow(minutes: minutes, resetsAt: resetsAt, limit: cli == "codex" ? bar.scope : nil, used: bar.used)
@@ -87,15 +91,27 @@ public actor KoreUsage {
             if let codexIndex { points += codexIndex.points(minutes: minutes, limit: bar.scope, resetsAt: resetsAt) }
             points.sort { $0.time < $1.time }
             let cap = bar.surfaces.first(where: \.estimated)?.points
-            limits[bar.title] = UsageAttribution.share(
+            let scoped = cli == "claude" && bar.scope != nil
+            let share = UsageAttribution.share(
                 requests, points: points, window: window, now: now, scope: cli == "claude" ? bar.scope : nil, surfaces: bar.surfaces,
-                cap: cap)
+                cap: cap, elsewhereUnits: scoped || cli != "claude" ? [] : carried)
+            if scoped { carried += share.elsewhereUnits }
+            limits[bar.title] = share
+            if !bar.surfaces.isEmpty { noteBreakdown(bar, kore: share.kore) }
         }
-        if let titles = codexIndex?.titles(), !titles.isEmpty {
+        // Titles: a Codex thread's first prompt; a box chat's title and its box.
+        let titles = codexIndex?.titles() ?? [:]
+        let boxChats = forwardedChats()
+        if !titles.isEmpty || !boxChats.isEmpty {
             for (key, share) in limits {
                 limits[key]?.chats = share.chats.map { chat in
                     var chat = chat
-                    chat.title = titles[chat.id]
+                    if let box = boxChats[chat.id] {
+                        chat.box = box.box
+                        chat.title = box.title
+                    } else if let title = titles[chat.id] {
+                        chat.title = title
+                    }
                     return chat
                 }
             }
@@ -129,6 +145,21 @@ public actor KoreUsage {
         guard let logged, let read, !logged.hasPrefix("plan:") else { return true }
         return logged == read
     }
+
+    /// The plan's split of the week, one line in `usage.log` when it changes, beside Kore's
+    /// estimate, so the two can be checked against each other.
+    private var lastBreakdown: String?
+    private static let log = KoreLog.named("usage")
+
+    private func noteBreakdown(_ bar: PlanLimit, kore: Double) {
+        let rows = bar.surfaces.map { "\($0.name.lowercased().replacingOccurrences(of: " ", with: "_")):\(Self.figure($0.points))" }.joined(separator: ",")
+        let line = "used=\(Self.figure(bar.used)) \(rows)"
+        guard line != lastBreakdown else { return }
+        lastBreakdown = line
+        Self.log.write("breakdown", ["used": Self.figure(bar.used), "rows": rows, "kore": Self.figure(kore)])
+    }
+
+    private static func figure(_ value: Double) -> String { String(format: "%.1f", value) }
 
     /// When each CLI's index was last written, and whether it changed since.
     private var saved: [String: Date] = [:]

@@ -49,7 +49,7 @@ struct UsageModal: View {
         let bars = reading?.limits?.bars ?? []
         let limit = state.pickedLimit
         let share = limit.flatMap { state.share($0) }
-        let lines = (share?.surfaces.isEmpty == false ? 1 : 0) + (quality(limit, share) == nil ? 0 : 1)
+        let lines = (share?.surfaces.isEmpty == false ? 1 : 0) + (quality(limit, share) == nil ? 0 : 1) + (share?.boxes.count ?? 0)
         // What doesn't scroll: the insets, the header, the limits, the rules, In Kore, Outside
         // Kore and the lines under it. The chats get the rest, whole rows and a half.
         var fixed = Inset.card.top + Inset.card.bottom + Size.iconButtonSmall + CGFloat(bars.count) * Self.row
@@ -215,12 +215,17 @@ struct UsageModal: View {
         if let share {
             if share.kore > 0 {
                 let bar = width >= Size.usageModalWide ? Size.usageShareBarWide : Size.usageShareBar
-                let folders = Set(share.chats.map { $0.folder ?? "" })
+                let folders = Set(share.chats.map { $0.box.map { "box:" + $0 } ?? $0.folder ?? "" })
                 let showFolders = folders.count > 1 && width >= Size.usageModalFolders
+                let this = UsageChats.key(chat)
                 UsageShareRow(title: "In Kore", points: share.kore, used: limit.used, bar: bar, hatched: true)
+                // What came through each box, when any did.
+                ForEach(share.boxes, id: \.box) { box in
+                    note("On \(box.box) · \(UsageText.kore(box.points))")
+                }
                 let rows = LazyVStack(spacing: 0) {
                     ForEach(share.chats) { chatShare in
-                        let current = chatShare.id == chat.sessionId
+                        let current = chatShare.id == this
                         let name = state.chatNames[chatShare.id] ?? chatShare.title ?? UsageText.untitled
                         let go: @MainActor () -> Void = { [state, provider = chat.provider.id] in
                             state.closeExtended()
@@ -228,8 +233,9 @@ struct UsageModal: View {
                         }
                         UsageChatRow(
                             name: current ? "This chat" : name,
-                            folder: showFolders ? (UsageChats.folder(chatShare.id) ?? chatShare.folder).map { ($0 as NSString).lastPathComponent } : nil, share: chatShare,
-                            used: limit.used, bar: bar, current: current, go: go
+                            folder: showFolders
+                                ? chatShare.box ?? (UsageChats.folder(chatShare.id) ?? chatShare.folder).map { ($0 as NSString).lastPathComponent } : nil,
+                            box: chatShare.box != nil, share: chatShare, used: limit.used, bar: bar, current: current, go: go
                         )
                         .storyID(StoryID.UsageModal.chat(chatShare.id), press: current ? nil : go)
                         .tabStop(StoryID.UsageModal.chat(chatShare.id), skipped: current, action: go)
@@ -401,10 +407,12 @@ private struct UsageMiniBar: View {
 }
 
 /// One chat in the ledger: its name (accent on hover, a link), the folder when the chats span
-/// several, its mini bar, ~% and agents. A click goes to it; the chat the card is over can't.
+/// several (a box's chat: the box's mark and alias), its mini bar, ~% and agents. A click goes
+/// to it; the chat the card is over can't.
 private struct UsageChatRow: View {
     let name: String
     let folder: String?
+    let box: Bool
     let share: ChatShare
     let used: Double
     let bar: CGFloat
@@ -426,7 +434,12 @@ private struct UsageChatRow: View {
                         .truncationMode(.tail)
                         .layoutPriority(1)
                     if let folder {
-                        Text(folder).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
+                        HStack(spacing: Space.xxs) {
+                            if box { Image(systemName: "server.rack").imageScale(.small) }
+                            Text(folder).lineLimit(1).truncationMode(.tail)
+                        }
+                        .font(TextStyle.caption)
+                        .foregroundStyle(Theme.tertiary)
                     }
                     Spacer(minLength: Space.sm)
                     UsageMiniBar(points: share.points, used: used, hatched: true).frame(width: bar)
@@ -448,7 +461,7 @@ private struct UsageChatRow: View {
         .onHover { hovered.value = $0 }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            [name, "about \(UsageText.kore(share.points).dropFirst())", share.agents > 0 ? "\(share.agents) agents" : nil]
+            [name, share.box.map { "on \($0)" }, "about \(UsageText.kore(share.points).dropFirst())", share.agents > 0 ? "\(share.agents) agents" : nil]
                 .compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(current ? [] : .isButton)
     }
@@ -492,17 +505,24 @@ private struct AgentRings: View {
 /// Finding and opening the chats the extended view lists.
 @MainActor
 enum UsageChats {
+    /// A chat's id in the ledger: its session's; a box chat's "<box>/<id>", as its requests were
+    /// noted.
+    static func key(_ chat: Chat?) -> String? {
+        guard let chat, let id = chat.sessionId else { return nil }
+        return (chat.services as? BoxChatServices).map { $0.connection.alias + "/" + id } ?? id
+    }
+
     /// The folder of the open window a chat belongs to: its tab's, else its history's.
     static func folder(_ id: String) -> String? {
         Workspace.all.allObjects.first { workspace in
-            workspace.tabs.contains { $0.agent == nil && $0.chat?.sessionId == id } || workspace.chats.contains { $0.id == id }
+            workspace.tabs.contains { $0.agent == nil && key($0.chat) == id } || workspace.chats.contains { $0.id == id }
         }?.folder.path
     }
 
     /// A chat's name from an open window: its tab's, else its folder's history.
     static func name(_ id: String) -> String? {
         for workspace in Workspace.all.allObjects {
-            if let chat = workspace.tabs.first(where: { $0.agent == nil && $0.chat?.sessionId == id })?.chat { return chat.title }
+            if let chat = workspace.tabs.first(where: { $0.agent == nil && key($0.chat) == id })?.chat { return chat.title }
             if let summary = workspace.chats.first(where: { $0.id == id }) { return summary.title }
         }
         return nil
@@ -512,7 +532,7 @@ enum UsageChats {
     /// history.
     static func go(to share: ChatShare, provider: String, name: String) {
         for workspace in Workspace.all.allObjects {
-            if let tab = workspace.tabs.first(where: { $0.agent == nil && $0.chat?.sessionId == share.id }) {
+            if let tab = workspace.tabs.first(where: { $0.agent == nil && key($0.chat) == share.id }) {
                 workspace.select(tab)
                 workspace.window?.makeKeyAndOrderFront(nil)
                 return

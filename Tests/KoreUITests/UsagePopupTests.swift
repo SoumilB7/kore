@@ -112,6 +112,33 @@ struct UsagePopupTests {
         state.closeExtended()
     }
 
+    /// A box's chats are their own rows, the box named where a folder goes, and under In Kore a
+    /// line for what came through each box; this chat's row, on a box, reads "This chat".
+    @Test func theLedgerNamesBoxChatsAndSumsEachBox() async throws {
+        let state = UsageState()
+        let reading = PlanReading(
+            account: PlanAccount(access: .plan),
+            limits: PlanLimits(bars: [PlanLimit(title: "Weekly (7 day)", used: 40, resetsAt: Self.now.addingTimeInterval(3600), window: 7 * 86400)]))
+        var basecamp = ChatShare(id: "mybox/c1", points: 9, box: "mybox")
+        basecamp.title = "ComplianceOS basecamp"
+        let shares = KoreShares(
+            at: Self.now,
+            limits: [
+                "Weekly (7 day)": KoreShare(
+                    used: 40, kore: 20, chats: [basecamp, ChatShare(id: "a", points: 6), ChatShare(id: "mybox/c2", points: 5, box: "mybox")])
+            ])
+        state.open(provider: "test-\(UUID())", read: { reading }, useReset: { _, _ in .reset }, shares: { _ in shares })
+        for _ in 0..<100 where state.shares == nil { try await Task.sleep(for: .milliseconds(10)) }
+        state.openExtended()
+        state.named(["a": "Fix the race"])
+        #expect(
+            state.ledger(current: "mybox/c2") == [
+                "In Kore · ~20%", "On mybox · ~14%", "ComplianceOS basecamp · mybox · ~9%", "Fix the race · ~6%", "This chat · mybox · ~5%",
+                "Outside Kore · ~20%",
+            ])
+        state.closeExtended()
+    }
+
     @Test func resetsReadInTheLargestUnit() {
         let later = { (seconds: Double) in UsageText.resets(Self.now.addingTimeInterval(seconds), now: Self.now) }
         #expect(later(3 * 3600 - 300) == "Resets in 3h")
