@@ -87,3 +87,12 @@ extension Theme {
         static let hint = Font.system(size: 10.5)
     }
 }
+
+extension Layout {
+    /// Devices as a pane on the window's trailing side, as the explorer is on its leading one.
+    enum Devices {
+        static let width: CGFloat = 290
+        static let minWidth: CGFloat = 240
+        static let maxWidth: CGFloat = 420
+    }
+}

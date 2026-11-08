@@ -47,6 +47,16 @@ final class StayAwake {
         case waiting
         /// On battery and below the floor: the percent left.
         case paused(Int)
+
+        /// For logs: "off", "holding", "waiting", "paused".
+        var name: String {
+            switch self {
+            case .off: "off"
+            case .holding: "holding"
+            case .waiting: "waiting"
+            case .paused: "paused"
+            }
+        }
     }
 
     /// The running app's; nil in tests and anything else that never started it.
@@ -137,6 +147,7 @@ final class StayAwake {
         idleUntil = nil
         save()
         apply()
+        logChange("on")
     }
 
     func turnOff() {
@@ -150,7 +161,13 @@ final class StayAwake {
         idleTimer = nil
         save()
         apply()
+        logChange("off")
         for chat in Self.chats.compactMap(\.chat) { chat.cancelContinue() }
+    }
+
+    /// `awake action=on mode=agents state=waiting`: what a click or a menu did, and what it shows now.
+    private func logChange(_ action: String) {
+        UILog.event("awake", ["action": action, "mode": mode.rawValue, "state": state.name])
     }
 
     /// A chat other than `chat` waits for its limit's reset, which needs Stay awake on.
@@ -281,7 +298,19 @@ final class StayAwake {
         if want != held {
             held = want
             hold.hold(want)
+            // The reason's kind, never its words: "agents", "continue", "grace", "phones", the mode.
+            UILog.event("awake-hold", ["reason": holdKind, "state": state.name])
         }
+    }
+
+    /// Why it holds, in a word (`hold reason=` in ui.log); "none" when it doesn't.
+    var holdKind: String {
+        guard reason != nil else { return "none" }
+        guard mode == .whileAgentsWork else { return mode.rawValue }
+        if working > 0 { return "agents" }
+        if continuesAt != nil { return "continue" }
+        if idleUntil != nil { return "grace" }
+        return "phones"
     }
 
     // MARK: Chats

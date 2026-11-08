@@ -21,9 +21,13 @@ final class StayAwakeCup: ChatStoryline {
             ExpectElement(cup),
             Self.shows("off", "Stay awake", held: nil),
             // A click: on in While Agents Work, waiting with nothing running.
+            Self.draws("cup.and.saucer"),
             Click(cup),
             Self.shows("waiting", "Awake while agents work", held: nil),
             Expect("While Agents Work", found: { _ in StoryAwake.mode }) { _ in StoryAwake.mode == "agents" },
+            // Waiting looks on, not off: the filled cup.
+            Self.draws("cup.and.saucer.fill"),
+            Snapshot("stay-awake-waiting"),
             // A running turn holds.
             Send("Work for a while"),
             Self.shows("holding", "Keeping awake · 1 agent", held: "Kore: 1 agent working"),
@@ -46,8 +50,14 @@ final class StayAwakeCup: ChatStoryline {
             Expect("While Agents Work", found: { _ in StoryAwake.mode }) { _ in StoryAwake.mode == "agents" },
             Click(cup),
             Self.shows("off", "Stay awake", held: nil),
+            Self.draws("cup.and.saucer"),
             Expect("every hold let go", found: { _ in "\(StoryAwake.holds)" }) { _ in StoryAwake.holds.last == .some(nil) },
         ]
+    }
+
+    /// The cup's symbol.
+    static func draws(_ symbol: String) -> Expect {
+        Expect("the cup draws \(symbol)", found: { _ in StoryAwake.symbol ?? "nothing" }) { _ in StoryAwake.symbol == symbol }
     }
 
     /// Its state, hover line, and what the recorded hold holds.

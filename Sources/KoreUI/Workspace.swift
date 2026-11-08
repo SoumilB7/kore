@@ -26,6 +26,9 @@ package final class ChatTab: Identifiable {
 
     var isEmpty: Bool { chat == nil && file == nil && board == nil }
 
+    /// What the tab shows, for logs: "board", "file", "agent", "chat" or "picker".
+    var kind: String { board != nil ? "board" : file != nil ? "file" : agent != nil ? "agent" : chat != nil ? "chat" : "picker" }
+
     package var title: String {
         if let board { return board.name }
         if let file { return file.name }
@@ -132,6 +135,11 @@ package final class Workspace {
         return workspace
     }
 
+    /// The key window's active tab kind (`ChatTab.kind`), for a stall's line.
+    static var frontTab: String? {
+        open.values.first { $0.window?.isKeyWindow == true }?.activeTab.kind
+    }
+
     private func windowClosed() {
         // History open as the window went: the box's link isn't held for it any more.
         paired?.letGo()
@@ -188,6 +196,14 @@ package final class Workspace {
     var explorerWidth = Layout.Explorer.width {
         didSet { saveExplorer() }
     }
+    /// KoreNet's devices as the window's trailing pane (the network icon, Kore ▸ Devices…), kept
+    /// with the explorer's state.
+    package var devicesOpen = false {
+        didSet { if devicesOpen != oldValue { saveExplorer() } }
+    }
+    package var devicesWidth = Layout.Devices.width {
+        didSet { saveExplorer() }
+    }
     /// The title row's Sync button: a box's window only.
     var hasBoxButton: Bool { box != nil }
     /// The box a window's chats live on, by its alias; nil for a folder on this Mac (storylines).
@@ -239,6 +255,8 @@ package final class Workspace {
         if restore, let explorer = Self.savedExplorer(for: folder) {
             explorerWidth = explorer.width
             explorerOpen = explorer.open
+            devicesWidth = min(max(explorer.devicesWidth ?? Layout.Devices.width, Layout.Devices.minWidth), Layout.Devices.maxWidth)
+            devicesOpen = explorer.devices ?? false
         }
         // A box's window opens on its panel: the box folder's files.
         if box != nil { explorerOpen = true }
@@ -707,9 +725,9 @@ package final class Workspace {
     }
 
     /// Open over the window, and closed by Esc before anything in the chat: a tab's close
-    /// question, quick open, the explorer floating over a narrow window.
-    var hasOverlay: Bool {
-        tabs.contains(where: asking) || quickOpen != nil || (explorerOpen && explorerFloats)
+    /// question, quick open, the explorer or Devices floating over a narrow window.
+    package var hasOverlay: Bool {
+        tabs.contains(where: asking) || quickOpen != nil || ((explorerOpen || devicesOpen) && explorerFloats)
     }
 
     func closeOverlay() {
@@ -717,6 +735,9 @@ package final class Workspace {
             closing = nil
         } else if quickOpen != nil {
             quickOpen = nil
+        } else if explorerFloats, devicesOpen {
+            // Over the explorer when both float: it goes first.
+            devicesOpen = false
         } else if explorerFloats {
             explorerOpen = false
         }
@@ -1027,6 +1048,9 @@ package final class Workspace {
     private struct ExplorerState: Codable {
         var open: Bool
         var width: CGFloat
+        /// The Devices pane, on the other side: nil in what an earlier version kept.
+        var devices: Bool?
+        var devicesWidth: CGFloat?
     }
 
     private static let explorerKey = "explorer"
@@ -1034,7 +1058,7 @@ package final class Workspace {
     private func saveExplorer() {
         guard box == nil, Self.persists(folder) else { return }
         UserDefaults.standard.set(
-            try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth)),
+            try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth, devices: devicesOpen, devicesWidth: devicesWidth)),
             forKey: Self.key(Self.explorerKey, folder))
     }
 

@@ -39,6 +39,9 @@ let usage = """
                                  open a past chat (kore history lists them) in front
            kore answer <chat> <card> <answer>... | --deny | --allow
                                  answer a question card, one answer per question
+           kore logs [--since 10m] [--chat X] [--turn T] [--level warn] [-f] [--json] [log…]
+                                 Kore's own logs, read from their files (Kore needn't run);
+                                 the last hour unless --since says (--all: everything)
            kore whoami           who Kore sees calling, and its access
            kore caps             what that access allows
            kore mcp              the same reads as an MCP server, on stdio
@@ -59,6 +62,8 @@ let reads: Set = [
 switch arguments.first {
 case "help", "-h", "--help":
     print(usage)
+case "logs":
+    exit(Logs.run(Array(arguments.dropFirst())))
 case let first? where reads.contains(first):
     exit(Reads.run(first, Array(arguments.dropFirst())))
 default:

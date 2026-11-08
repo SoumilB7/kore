@@ -29,7 +29,9 @@ final class NavCost: Storyline {
 }
 
 struct MeasureNav: Step {
-    var label: String { "Measure row building, tab switching and scrolling" }
+    /// After the storyline's name on each line, when it measures more than once.
+    var tag: String?
+    var label: String { "Measure row building, tab switching and scrolling" + (tag.map { " (\($0))" } ?? "") }
     var timeout: Duration? { .seconds(240) }
 
     func run(_ story: StoryContext) async throws {
@@ -55,7 +57,8 @@ struct MeasureNav: Step {
             let s = await DevNavProbe.scroll(workspace)
             lines.append("scroll \(round): \(Int(s.px)) px, frames \(s.frames), over 33 ms \(s.over33), frame p95 \(f(s.p95)) ms, worst \(f(s.worst)) ms")
         }
-        let text = lines.map { "\(story.name) \($0)" }.joined(separator: "\n") + "\n"
+        let name = story.name + (tag.map { " " + $0 } ?? "")
+        let text = lines.map { "\(name) \($0)" }.joined(separator: "\n") + "\n"
         let url = story.outputs.appendingPathComponent("nav.notes")
         if let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()
@@ -120,5 +123,22 @@ struct MeasureTabs: Step {
         } else {
             try text.write(to: url, atomically: true, encoding: .utf8)
         }
+    }
+}
+
+/// NavCost's tab switching and scrolling with the Devices pane closed, then open beside the
+/// chats, then the same again: the two in one run, so the machine's load weighs on both alike.
+final class NavCostDevicesOpen: Storyline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        let devices = { (open: Bool) -> [any Step] in
+            [
+                Do(open ? "open Devices" : "close Devices") { story in story.app.workspace?.devicesOpen = open },
+                open ? WaitForElement(.id(StoryID.Net.panel)) as any Step : ExpectElement(.id(StoryID.Net.panel), .absent),
+                WaitIdle(), MeasureNav(tag: open ? "open" : "closed"),
+            ]
+        }
+        return [OpenFolder()] + NavCost.chat(1) + NavCost.chat(2) + NavCost.chat(3) + devices(false) + devices(true) + devices(false) + devices(true)
     }
 }

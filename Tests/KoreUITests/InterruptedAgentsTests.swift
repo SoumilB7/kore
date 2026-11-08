@@ -93,7 +93,7 @@ struct InterruptedAgentsTests {
         #expect(map.running.map(\.background) == [true])
         #expect(AgentMapRows.label(.stopped, map.stopped) == "Stopped 1 · 1 foreground")
 
-        let lines = try logLines().filter { $0.contains("agent=toolu_fg") && $0.contains("\tstatus ") }
+        let lines = try logLines().filter { $0.contains("agent=toolu_fg") && $0.contains(" info status ") }
         #expect(lines.count == 1)
         #expect(lines.first?.contains(#"to=stopped source="tool_result error""#) == true)
     }
@@ -107,7 +107,7 @@ struct InterruptedAgentsTests {
         #expect(!translator.isFinished("toolu_bg"))
         let lines = try logLines()
         #expect(lines.contains { $0.contains("agent=toolu_fg") && $0.contains(#"source="turn interrupt""#) })
-        #expect(lines.contains { $0.contains("\tspawned ") && $0.contains("agent=toolu_bg") && $0.contains("mode=background") })
+        #expect(lines.contains { $0.contains(" info spawned ") && $0.contains("agent=toolu_bg") && $0.contains("mode=background") })
     }
 
     /// Read back, the rejected call's agent is stopped too; the background one is left for its
@@ -184,25 +184,25 @@ struct InterruptedAgentsTests {
         translator.translate(.turnCompleted(CodexTurnResult(json(#"{"turn":{"id":"t1","status":"interrupted"}}"#))))
         #expect(ends(translator.take().events) == ["child stopped"])
         let lines = try logLines()
-        #expect(lines.contains { $0.contains("\tspawned cli=codex") && $0.contains("agent=child") })
+        #expect(lines.contains { $0.contains(" info spawned cli=codex") && $0.contains("agent=child") })
         #expect(lines.contains { $0.contains("agent=child") && $0.contains(#"to=stopped source="turn interrupt""#) })
     }
 
     // MARK: The log
 
-    /// One status change, one line: a timestamp, a tab, the event, its fields; past the limit the
-    /// file moves to `.1`.
+    /// One status change, one line: a timestamp, its level, the event, its fields; past the limit
+    /// the file moves to `.1`.
     @Test func aStatusChangeWritesOneLineWithItsSource() throws {
         AgentLog(log).status("claude", chat: "s1", agent: "toolu_x", to: "stopped", source: .fileStopMarker, via: "turn interrupt")
         let lines = try logLines()
         #expect(lines.count == 1)
-        let parts = lines[0].split(separator: "\t", maxSplits: 1).map(String.init)
+        let parts = lines[0].split(separator: " ", maxSplits: 1).map(String.init)
         #expect(parts.count == 2)
         let stamp = ISO8601DateFormatter()
         stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         #expect(stamp.date(from: parts[0]) != nil)
         #expect(
-            parts.last == #"status cli=claude chat=s1 agent=toolu_x from=running to=stopped source="file stop marker" via="turn interrupt""#)
+            parts.last == #"info status cli=claude chat=s1 agent=toolu_x from=running to=stopped source="file stop marker" via="turn interrupt""#)
 
         let small = KoreLog(url: logFile, limit: 200)
         for i in 0..<6 { small.write("resumed", ["agent": "a\(i)"]) }

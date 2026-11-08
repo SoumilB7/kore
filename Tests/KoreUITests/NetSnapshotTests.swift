@@ -32,6 +32,9 @@ struct NetSnapshotTests {
         window.contentView = nil
     }
 
+    /// Devices as the window's pane, as tall as a window's column.
+    static let pane = CGSize(width: 290, height: 600)
+
     static func status(_ state: BackendState = .running, peers: String = "", selfExtra: String = "", health: String = "[]") -> TailnetStatus {
         let json = #"{"BackendState":"\#(state.rawValue)","Self":{"PublicKey":"nodekey:mac","TailscaleIPs":["100.64.0.1"],"UserID":7,"HostName":"macbook"\#(selfExtra)},"Peer":{\#(peers)},"Health":\#(health)}"#
         return try! JSONDecoder().decode(TailnetStatus.self, from: Data(json.utf8))
@@ -102,52 +105,54 @@ struct NetSnapshotTests {
     }
 
     @Test func popupStates() async throws {
-        let size = CGSize(width: 300, height: 260)
+        let pane = DevicesSidebar(holdKey: "snapshots", floating: false)
+        let size = Self.pane
         let net = { ScriptedNet(on: true, state: .installed, status: Self.status()) }
-        try await with(ScriptedNet()) { try await shoot("a2-0-off", DevicesPopup(), size: size) }
-        try await with(net()) { try await shoot("a2-1-empty", DevicesPopup(), size: size) }
+        try await with(ScriptedNet()) { try await shoot("a2-0-off", pane, size: size) }
+        try await with(net()) { try await shoot("a2-1-empty", pane, size: size) }
         let phones = ScriptedPhones()
         phones.phones = [PhoneFacts(id: UUID(), name: "Pixel 9", connected: true, presence: "deploy fix")]
-        try await with(net(), phones: phones, boxes: [Self.box("mybox", nodeKey: "k")]) { try await shoot("a2-2-mac-box-phone", DevicesPopup(), size: size) }
+        try await with(net(), phones: phones, boxes: [Self.box("mybox", nodeKey: "k")]) { try await shoot("a2-2-mac-box-phone", pane, size: size) }
         let away = ScriptedPhones()
         away.phones = [PhoneFacts(id: UUID(), name: "Pixel 9", connected: false, lastSeen: Calendar.current.date(bySettingHour: 0, minute: 2, second: 0, of: Date()))]
         var down = Self.box("mybox", online: false, nodeKey: "k")
         down.lastHeard = Date().addingTimeInterval(-7300)
-        try await with(net(), phones: away, boxes: [down]) { try await shoot("a2-3-offline-rows", DevicesPopup(), size: size) }
+        try await with(net(), phones: away, boxes: [down]) { try await shoot("a2-3-offline-rows", pane, size: size) }
         let relayPeer = #""a":{"PublicKey":"k3","HostName":"box-3","TailscaleIPs":["100.64.0.9"],"Online":true,"UserID":7,"OS":"linux","Relay":"fra"}"#
         try await with(
             ScriptedNet(on: true, state: .installed, status: Self.status(peers: relayPeer)),
             boxes: [Self.box("mybox", nodeKey: "k"), Self.box("box-1", route: .ssh(alias: "box-1", grant: "m")), Self.box("box-3", nodeKey: "k3")]
-        ) { try await shoot("a2-4-routes", DevicesPopup(), size: size) }
+        ) { try await shoot("a2-4-routes", pane, size: size) }
         let adding = ScriptedPhones()
         adding.addUntil = Date().addingTimeInterval(600)
-        try await with(net(), phones: adding, boxes: [Self.box("mybox", nodeKey: "k")]) { try await shoot("a2-5-add-window", DevicesPopup(), size: size) }
+        try await with(net(), phones: adding, boxes: [Self.box("mybox", nodeKey: "k")]) { try await shoot("a2-5-add-window", pane, size: size) }
         adding.addUntil = Date().addingTimeInterval(431)
         adding.refusals = [DeviceRefusal(name: "ci-runner", tag: "tag:ci")]
-        try await with(net(), phones: adding) { try await shoot("a2-6-add-refused", DevicesPopup(), size: size) }
+        try await with(net(), phones: adding) { try await shoot("a2-6-add-refused", pane, size: size) }
         var waiting = Self.box("mybox", nodeKey: "k")
         waiting.pending = [Self.pending("Pixel 9", ago: 180), Self.pending("box-4", ago: 540, kind: .box)]
-        try await with(net(), boxes: [waiting]) { try await shoot("a2-7-pending", DevicesPopup(), size: size) }
+        try await with(net(), boxes: [waiting]) { try await shoot("a2-7-pending", pane, size: size) }
     }
 
     @Test func firstConnection() async throws {
-        let size = CGSize(width: 300, height: 200)
+        let pane = DevicesSidebar(holdKey: "snapshots", floating: false)
+        let size = Self.pane
         let ssh = Self.box("mybox", route: .ssh(alias: "mybox", grant: "m"))
         let phones = ScriptedPhones()
         phones.phones = [PhoneFacts(id: UUID(), name: "Pixel 9", connected: false)]
         try await with(ScriptedNet(on: true, state: .stopped, status: Self.status(.stopped)), phones: phones, boxes: [ssh]) {
-            try await shoot("c2-stopped", VStack(spacing: Space.md) { Bar(); DevicesPopup() }, size: CGSize(width: 300, height: 260))
+            try await shoot("c2-stopped", VStack(spacing: Space.md) { Bar(); pane }, size: Self.pane)
         }
-        try await with(ScriptedNet(on: true, state: .signedOut, status: Self.status(.needsLogin))) { try await shoot("c2-signed-out", DevicesPopup(), size: size) }
+        try await with(ScriptedNet(on: true, state: .signedOut, status: Self.status(.needsLogin))) { try await shoot("c2-signed-out", pane, size: size) }
         let notJoined = ScriptedNet(on: true, state: .sidecar, status: Self.status(.needsLogin), authURL: "https://login.tailscale.com/a/1f2e")
-        try await with(notJoined) { try await shoot("c3a-not-joined", VStack(spacing: Space.md) { Bar(); DevicesPopup() }, size: CGSize(width: 300, height: 200)) }
-        try await with(ScriptedNet(on: true, state: .installed, status: Self.status())) { try await shoot("c1-running", DevicesPopup(), size: size) }
+        try await with(notJoined) { try await shoot("c3a-not-joined", VStack(spacing: Space.md) { Bar(); pane }, size: Self.pane) }
+        try await with(ScriptedNet(on: true, state: .installed, status: Self.status())) { try await shoot("c1-running", pane, size: size) }
         let expiring = Self.status(
             peers: #""a":{"PublicKey":"k","HostName":"mybox","TailscaleIPs":["100.64.0.9"],"Online":true,"UserID":7,"OS":"linux","CurAddr":"1.2.3.4:1","KeyExpiry":"\#(ISO8601DateFormatter().string(from: Date().addingTimeInterval(2 * 86400 + 600)))"}"#,
             selfExtra: #","KeyExpiry":"\#(ISO8601DateFormatter().string(from: Date().addingTimeInterval(3 * 86400 + 600)))""#)
-        try await with(ScriptedNet(on: true, state: .installed, status: expiring), boxes: [Self.box("mybox", nodeKey: "k")]) { try await shoot("c4-key-expiring", DevicesPopup(), size: size) }
+        try await with(ScriptedNet(on: true, state: .installed, status: expiring), boxes: [Self.box("mybox", nodeKey: "k")]) { try await shoot("c4-key-expiring", pane, size: size) }
         try await with(ScriptedNet(on: true, state: .installed, status: Self.status(health: #"["this node is locked out; it will not have connectivity until it is signed"]"#))) {
-            try await shoot("c-lock", DevicesPopup(), size: size)
+            try await shoot("c-lock", pane, size: size)
         }
     }
 

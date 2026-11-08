@@ -5,16 +5,19 @@ import SwiftUI
 /// The title row's network icon (frame A1), in the slot left of the clock. Quiet (secondary, no
 /// dot) while every device is connected; at most one dot (pending → Tailscale off → offline);
 /// dimmed while KoreNet is off, Tailscale is off, or this Mac isn't on a tailnet yet. Hover is the
-/// one line behind the dot; a click opens Devices under it.
+/// one line behind the dot; a click opens or closes the window's Devices pane (`DevicesSidebar`),
+/// or Devices under it where there's no pane (the Welcome).
 struct NetworkButton: View {
     let size: CGFloat
+    /// The window's Devices pane: open (the icon stays lit) and its toggle. Nil: the popup.
+    var pane: (open: Bool, toggle: @MainActor () -> Void)?
     @StateObject private var hovered = Local(false)
     @StateObject private var anchor = Held<NSView?>(nil)
 
     var body: some View {
         let look = Devices.shared.look()
-        let open = DevicesPopup.openIn(anchor.value?.window)
-        Button { DevicesPopup.toggle(under: anchor.value) } label: {
+        let open = pane?.open ?? DevicesPopup.openIn(anchor.value?.window)
+        Button(action: press) {
             NetGlyph(kind: .net, size: Size.Net.titleGlyph)
                 .foregroundStyle(hovered.value || open ? Theme.text : look.dimmed ? Theme.Net.dim : Theme.Net.glyph)
                 .frame(width: size, height: size)
@@ -35,7 +38,11 @@ struct NetworkButton: View {
         .help(look.line)
         .accessibilityLabel(Text("Devices"))
         .accessibilityValue(Text(look.line))
-        .storyID(StoryID.Net.icon) { DevicesPopup.toggle(under: anchor.value) }
+        .storyID(StoryID.Net.icon, press: press)
+    }
+
+    private func press() {
+        if let pane { pane.toggle() } else { DevicesPopup.toggle(under: anchor.value) }
     }
 }
 
@@ -52,8 +59,13 @@ extension NetIconLook.Dot {
 /// Devices (frame A2, C): this Mac, then each box and phone with its glyph, name, one detail and
 /// dot; the devices waiting at a box; at most one line with at most one action. "+" opens the
 /// Add device window; ⋯ (in the dot's place on hover) renames, takes offline or brings online,
-/// joins an SSH box to KoreNet, and removes. Kore ▸ Devices… opens the same popup.
+/// joins an SSH box to KoreNet, and removes. A folder window shows the same list as its trailing
+/// pane (`DevicesSidebar`); the Welcome, and Kore ▸ Devices… with no folder window, the popup.
 struct DevicesPopup: View {
+    /// As a window's trailing pane (`DevicesSidebar`) rather than a popup.
+    var pane = false
+    /// The KoreNet bus hold's key while it shows.
+    var holdKey = "devices"
     @StateObject private var hoveredRow = Local<String?>(nil)
     @StateObject private var renaming = Local<String?>(nil)
     @StateObject private var draft = Local("")
@@ -76,37 +88,57 @@ struct DevicesPopup: View {
     var body: some View {
         let now = Date()
         let picture = devices.picture(now: now)
-        // As tall as its rows; taller than the room under the icon, they scroll.
-        ScrollView(.vertical) { content(picture, now: now) }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(maxHeight: NetPopupRoom.shared.height)
-        .frame(width: Size.Net.popupWidth, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-        .panel(.panel)
-        .cornerMarks(Theme.cornerOption)
-        .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
+        devicesFrame(picture, now: now)
         .onAppear {
-            devices.net?.hold("devices", true)
+            DevicesSidebar.hold(holdKey, by: 1)
+            if pane { devices.openedPane() }
             devices.net?.readStatus()
             Task { await devices.readLock() }
         }
         .onDisappear {
-            devices.net?.hold("devices", false)
+            DevicesSidebar.hold(holdKey, by: -1)
+            if pane { devices.closedPane() }
             devices.nudgeSeen()
         }
-        .storyID(StoryID.Net.popup)
+        .storyID(pane ? StoryID.Net.panel : StoryID.Net.popup)
     }
 
-    private func content(_ picture: DevicesPicture, now: Date) -> some View {
+    /// The popup: as tall as its rows; taller than the room under the icon, they scroll. The pane
+    /// fills its column on the window's ground, its rows scrolling under the header.
+    @ViewBuilder
+    private func devicesFrame(_ picture: DevicesPicture, now: Date) -> some View {
+        if pane {
+            VStack(alignment: .leading, spacing: 0) {
+                header(picture, now: now)
+                ScrollView(.vertical) { rows(picture, now: now).padding(.bottom, Space.xs + 1) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    header(picture, now: now)
+                    rows(picture, now: now)
+                }
+                .padding(.vertical, Space.xs + 1)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: NetPopupRoom.shared.height)
+            .frame(width: Size.Net.popupWidth, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .panel(.panel)
+            .cornerMarks(Theme.cornerOption)
+            .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
+        }
+    }
+
+    private func rows(_ picture: DevicesPicture, now: Date) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            header(picture, now: now)
             macRow(picture)
             ForEach(picture.devices) { row in deviceRow(row, now: now) }
             if picture.devices.contains(where: { $0.kind == .box }) { keepBoxesRow }
             lines(picture, now: now)
             addBox(picture)
         }
-        .padding(.vertical, Space.xs + 1)
     }
 
     // MARK: Header
@@ -139,7 +171,7 @@ struct DevicesPopup: View {
         .padding(.leading, Space.xl)
         .padding(.trailing, Space.sm)
         .padding(.vertical, Space.xs)
-        .frame(minHeight: Size.Net.header)
+        .frame(minHeight: pane ? Layout.Explorer.header : Size.Net.header)
     }
 
     // MARK: Rows
@@ -278,7 +310,7 @@ struct DevicesPopup: View {
     }
 
     private func join(_ row: DeviceRow) {
-        let window = NetPopupHost.shared.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+        let window = NetPopupHost.shared.window ?? anchors.value["row:" + row.id]?.window ?? NSApp.keyWindow ?? NSApp.mainWindow
         let anchor = window.flatMap { NetAnchors.icon(in: $0) }
         NetPopupHost.shared.close()
         NetJoinSheet.show(row.id, under: anchor, in: window)

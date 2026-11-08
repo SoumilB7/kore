@@ -2,13 +2,18 @@ import AppKit
 import SwiftUI
 
 /// The divider between a pane and the content beside it: a hairline that drags to resize the
-/// pane (on its leading side) within `range`, lit after a moment under the pointer, with the
-/// resize cursor; a double-click gives the pane back its own width (`reset`). `dragging` says
-/// when a drag starts and ends, however it ends: the content beside it holds still meanwhile
-/// (`heldBesideSash`) and wraps anew once, as it ends.
+/// pane within `range`, lit after a moment under the pointer, with the resize cursor; a
+/// double-click gives the pane back its own width (`reset`). The pane is on the window's leading
+/// side (the explorer: dragging right widens it) or its trailing side (Devices: dragging left
+/// widens it), as `edge` says. `dragging` says when a drag starts and ends, however it ends: the
+/// content beside it holds still meanwhile (`heldBesideSash`) and wraps anew once, as it ends.
 struct PaneSash: View {
+    /// Which side of the window the pane is on.
+    enum Edge { case leading, trailing }
+
     @Binding var width: CGFloat
     let range: ClosedRange<CGFloat>
+    var edge = Edge.leading
     let dragging: (Bool) -> Void
     let reset: () -> Void
     @GestureState private var pressed = false
@@ -49,8 +54,7 @@ struct PaneSash: View {
                     .updating($pressed) { _, pressed, _ in pressed = true }
                     .onChanged { drag in
                         if start.value == nil { begin(at: drag.translation.width) }
-                        let base = start.value ?? width
-                        width = min(max(base + drag.translation.width, range.lowerBound), range.upperBound)
+                        width = Self.width(base: start.value ?? width, moved: drag.translation.width, edge: edge, range: range)
                     }
                     .onEnded { _ in end() }
             )
@@ -69,9 +73,15 @@ struct PaneSash: View {
             .zIndex(2)
     }
 
+    /// The pane's width `moved` points into a drag that began at `base`: a leading pane follows
+    /// the pointer, a trailing one grows as it goes the other way. Within `range`.
+    static func width(base: CGFloat, moved: CGFloat, edge: Edge, range: ClosedRange<CGFloat>) -> CGFloat {
+        min(max(edge == .leading ? base + moved : base - moved, range.lowerBound), range.upperBound)
+    }
+
     private func begin(at moved: CGFloat) {
         // A drag cut off (the window lost focus) that carries on goes on from the pointer.
-        start.value = cut.value ? width - moved : width
+        start.value = cut.value ? (edge == .leading ? width - moved : width + moved) : width
         cut.value = false
         held.value = true
         dragging(true)
@@ -93,10 +103,11 @@ struct PaneSash: View {
 extension View {
     /// The content beside a sash, held at `width` through its drag: it keeps its size and stays
     /// put against its far edge while the pane beside it moves over it or away from it, so nothing
-    /// in it lays out. With nil it's the room left, as any content.
-    func heldBesideSash(_ width: CGFloat?) -> some View {
+    /// in it lays out. `pane`: the side the dragged pane is on (the content holds to the other).
+    /// With nil it's the room left, as any content.
+    func heldBesideSash(_ width: CGFloat?, pane: PaneSash.Edge = .leading) -> some View {
         frame(width: width, alignment: .leading)
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: width == nil ? .leading : .trailing)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: width == nil || pane == .trailing ? .leading : .trailing)
     }
 }
 

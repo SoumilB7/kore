@@ -107,6 +107,9 @@ package final class HostConnection {
 
     /// The route the link is on (or dialling) now; nil while down.
     @ObservationIgnored package private(set) var route: HostRoute?
+    /// The link up now: its id and since when, for its `link` line.
+    @ObservationIgnored private var linkId: String?
+    @ObservationIgnored private var linkUp: Date?
     /// The box's link minor, as its welcome said (1.12 has `usage.since`, `net.node`).
     @ObservationIgnored package private(set) var boxMinor = 0
     /// KoreNet's way to boxes while it's on (`KoreNetSwitch`); nil: SSH only, as before KoreNet.
@@ -675,6 +678,7 @@ package final class HostConnection {
         clearNetHold()
         let transport = transport
         if ready { transport?.send(HostWire.bye()) }
+        if linkUp != nil { endLink("stopped") }
         teardown()
         transport?.close()
         phase = .idle
@@ -713,6 +717,12 @@ package final class HostConnection {
         historyAsks = [:]
     }
 
+    /// The link's one line as it ends (before `teardown` forgets its route).
+    private func endLink(_ reason: String?) {
+        HostLog.linkEnded(alias, id: linkId, route: route, up: linkUp, reason: reason)
+        (linkId, linkUp) = (nil, nil)
+    }
+
     private func dropped(_ reason: String?) {
         guard transport != nil || pump != nil else { return }
         // The box forgot this Mac (removed it, or set up again): this Mac's proof over SSH is
@@ -741,6 +751,7 @@ package final class HostConnection {
             }
         }
         if netFailed { netFailures += 1 }
+        endLink(reason)
         teardown()
         // Sent, never answered: the box may or may not have it. A forwarded call goes again (the box
         // runs it once); anything else says so.
@@ -767,7 +778,6 @@ package final class HostConnection {
             lastReason = reason
             for watcher in Array(linkWatchers.values) { watcher(false) }
         }
-        HostLog.note(alias, "dropped", reason)
         guard users > 0 else { return }
         if now { return dial() }
         // Tried at the longest wait a few times: no timer any more; a wake, a network change or
@@ -954,6 +964,7 @@ package final class HostConnection {
     private func becameReady() {
         guard !ready else { return }
         ready = true
+        (linkId, linkUp) = (LogTurns.make(), Date())
         if route == .net { clearNetHold() }
         phase = .online
         lastHeard = nil
@@ -1019,6 +1030,7 @@ package final class HostConnection {
         phase = .refused(reason)
         let why = reason.line(name)
         let transport = transport
+        if linkUp != nil { endLink("refused") }
         teardown()
         transport?.close()
         for (id, _) in outbox { finish(id, ok: false, message: why) }
@@ -1357,7 +1369,7 @@ package enum HostLog {
     }
 
     package static func note(_ alias: String, _ what: String, _ detail: String?) {
-        log.write(what, ["host": alias, "detail": detail])
+        log.write(what, ["host": alias, "reason": detail.flatMap(word)])
     }
 
     /// Phase 18: an audit line (`audit <event>`): ids and kinds, never content.

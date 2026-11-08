@@ -260,7 +260,7 @@ package struct ChatMoves {
             title: info.title)
         moved.mirrored = 0
         store.keep(moved)
-        HostLog.note(connection.alias, "move here", "chat \(chatId) gen \(owner.gen) files \(files.count) rsync \(cost.rsyncReceived)B")
+        HostLog.event(connection.alias, "move here", ["chat": chatId, "files": String(files.count), "bytes": String(cost.rsyncReceived)])
         return .success(Brought(moved: moved, title: info.title, modelId: info.modelId, effort: info.effort, mode: info.mode, cost: cost))
     }
 
@@ -312,7 +312,7 @@ package struct ChatMoves {
         guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(NodeNames.name(connection.alias)) didn't take it", adopted.code)) }
         store.forget(session: moved.session)
         ChatMirrors.shared.ended(session: moved.session)
-        HostLog.note(connection.alias, "move back", "chat \(chatId) files \(found.files.count) rsync \(cost.rsyncSent)B")
+        HostLog.event(connection.alias, "move back", ["chat": chatId, "files": String(found.files.count), "bytes": String(cost.rsyncSent)])
         return .success((chatId, cost))
     }
 

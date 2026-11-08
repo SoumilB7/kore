@@ -199,7 +199,7 @@ package struct ChatCopies {
         made.cost.linkBytes += connection.lastMoveBytes
         guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(NodeNames.name(connection.alias)) didn't take it", adopted.code)) }
         made.chatId = chatId
-        HostLog.note(connection.alias, "copy there", "chat \(chatId) files \(found.files.count) rsync \(made.cost.rsyncSent)B")
+        HostLog.event(connection.alias, "copy there", ["chat": chatId, "files": String(found.files.count), "bytes": String(made.cost.rsyncSent)])
         return .success(made)
     }
 

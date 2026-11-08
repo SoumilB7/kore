@@ -292,6 +292,8 @@ package final class FileCarry {
     private var legBase: Int64 = 0
     private var halve = false
     private var saved = Date.distantPast
+    /// When this run started, for its `carry` line.
+    private var began = Date()
     /// From a checkpoint: what a run before left is looked for first.
     private let resuming: Bool
 
@@ -368,7 +370,8 @@ package final class FileCarry {
         journal.state = .running
         journal.failure = nil
         save()
-        log("carry-start", "\(move ? "move" : "copy") \(items.count) into \(folder.device):\(folder.path)\(resuming ? " resume done=\(journal.done) bytes=\(journal.bytes)" : "")")
+        began = Date()
+        log("carry-start", level: .debug, ["mode": move ? "move" : "copy", "items": String(items.count), "resumed": resuming ? String(journal.done) : nil])
         // Every place checked before anything moves.
         if let why = await checkFolder() { return await end(outcome, stop(why)) }
         var counts: [CarryCount] = []
@@ -432,14 +435,14 @@ package final class FileCarry {
             journal.state = .done
             journals?.remove(id)
             removeMacStaging()
-            log("carry-end", "done \(outcome.landed.count) bytes=\(bytes)")
+            logEnd("done")
             return outcome
         }
         if cancelled {
             outcome.cancelled = true
             outcome.failure = "Cancelled"
             await discard()
-            log("carry-end", "cancelled")
+            logEnd("cancelled")
             return outcome
         }
         let why: String
@@ -466,7 +469,7 @@ package final class FileCarry {
         } else {
             save()
         }
-        log("carry-end", "\(journal.state.rawValue) bytes=\(bytes)/\(totalBytes): \(why)")
+        logEnd(journal.state.rawValue)
         return outcome
     }
 
@@ -517,11 +520,22 @@ package final class FileCarry {
         if Date().timeIntervalSince(saved) >= saveEvery { save() }
     }
 
-    /// One line in hosts.log, under the box it reaches.
-    private func log(_ event: String, _ detail: String) {
-        let alias = folder.alias ?? items.lazy.compactMap(\.source.alias).first ?? "mac"
-        HostLog.note(alias, event, String(id.uuidString.prefix(8)).lowercased() + " " + detail)
+    /// One line in hosts.log, under the box it reaches, with the carry's id.
+    private func log(_ event: String, level: KoreLog.Level = .info, _ fields: KeyValuePairs<String, String?>) {
+        HostLog.event(alias, event, level: level, [(key: "id", value: shortId)] + fields.map { (key: $0.key, value: $0.value) })
     }
+
+    /// The carry's one line as it ends: how much, how long, and how it ended.
+    private func logEnd(_ result: String) {
+        let files = counts.compactMap { $0 }.reduce(0) { $0 + $1.files }
+        HostLog.event(alias, "carry", level: result == "done" || result == "cancelled" ? .info : .warn, [
+            "id": shortId, "mode": move ? "move" : "copy", "files": String(files), "bytes": String(bytes),
+            "dur_ms": String(Int(Date().timeIntervalSince(began) * 1000)), "result": result,
+        ])
+    }
+
+    private var alias: String { folder.alias ?? items.lazy.compactMap(\.source.alias).first ?? "mac" }
+    private var shortId: String { String(id.uuidString.prefix(8)).lowercased() }
 
     /// A box-to-box carry's bytes on this Mac between its legs: beside its checkpoint, or in a
     /// temporary folder when it has none.
@@ -636,7 +650,9 @@ package final class FileCarry {
             case .success(let copied) where copied == expected:
                 whole = true
             case .success(let copied):
-                log("carry-verify", "\(item.name) pass \(pass): files \(copied.files)/\(expected.files) bytes \(copied.bytes)/\(expected.bytes)")
+                log("carry-verify", level: .warn, [
+                    "item": String(index), "attempt": String(pass), "files": "\(copied.files)/\(expected.files)", "bytes": "\(copied.bytes)/\(expected.bytes)",
+                ])
                 await logDifference(item.source, staged)
                 let rsyncs = [.macToBox, .boxToMac, .boxToBox].contains(route)
                 if rsyncs, pass < passes {
@@ -648,7 +664,7 @@ package final class FileCarry {
             }
             break
         }
-        log("carry-verify", "\(item.name) ok: files \(count.files) bytes \(count.bytes)")
+        log("carry-verify", level: .debug, ["item": String(index), "ok": "yes", "files": String(count.files), "bytes": String(count.bytes)])
         if item.replace, await exists(target) {
             if case .failure(let why) = await trash(target) { return .failure(stop(why.text)) }
             steps.append("trash \(target.name)")
@@ -704,7 +720,7 @@ package final class FileCarry {
             if cancelled || paused || interrupted { run.cancel() }
             let result = await metering { await box.files.copy(source.path, to: staged.path, run: run, resume: true) }
             if case .failure(let why) = result {
-                log("carry-copy", "fs.copy \(source.name): \(why.message)")
+                log("carry-copy", level: .warn, ["item": String(index), "result": "failed"])
                 return why.message.contains("needs an update") ? .failed(why.message) : .interrupted(why.message)
             }
             return nil
@@ -748,16 +764,15 @@ package final class FileCarry {
         let parser = RsyncReader()
         let spawn = spawn
         let why = await metering(landing: landing) { await spawn.run([command], output: { meter.set(parser.feed($0)) }) }
-        log("carry-rsync", "exit \(spawn.lastStatus) \(landing.device)\(spawn.lastErrors.isEmpty ? "" : ": " + spawn.lastErrors)")
+        log("carry-rsync", level: spawn.lastStatus == 0 ? .debug : .warn, ["code": String(spawn.lastStatus), "to": landing.alias ?? "mac"])
         return why.map { .interrupted($0) }
     }
 
     /// On a copy that doesn't count the same: the first paths each side lacks, in hosts.log.
     private func logDifference(_ source: FilePlace, _ copy: FilePlace) async {
         guard let want = await listing(source), let have = await listing(copy) else { return }
-        let missing = want.subtracting(have).sorted().prefix(5)
-        let extra = have.subtracting(want).sorted().prefix(5)
-        log("carry-missing", "\(want.count - have.intersection(want).count) missing [\(missing.joined(separator: ", "))] extra [\(extra.joined(separator: ", "))]")
+        // Counts only: the paths are the owner's.
+        log("carry-missing", level: .warn, ["files": String(want.subtracting(have).count), "dropped": String(have.subtracting(want).count)])
     }
 
     /// The files and links under a folder, by path inside it: a walk here, the box's own

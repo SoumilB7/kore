@@ -139,6 +139,28 @@ package final class Devices {
 
     func closedPopup() {
         popupOpen = false
+        letGoOfBoxes()
+    }
+
+    /// A window's Devices pane (`DevicesSidebar`) came up or went: while any shows, the box links
+    /// are held as for the popup.
+    func openedPane() {
+        panes += 1
+        guard panes == 1 else { return }
+        holdBoxes()
+        upgrades?.retryFailed()
+    }
+
+    func closedPane() {
+        panes = max(0, panes - 1)
+        letGoOfBoxes()
+    }
+
+    @ObservationIgnored private var panes = 0
+
+    /// Nothing shows the devices any more: the links held for them go.
+    private func letGoOfBoxes() {
+        guard !popupOpen, panes == 0 else { return }
         for connection in popupLinks { connection.release() }
         popupLinks = []
     }

@@ -415,6 +415,8 @@ package enum StoryAwake {
     }
     /// The cup's hover line.
     package static var line: String? { StayAwake.current?.line }
+    /// The symbol the cup draws now (`StayAwakeLook`).
+    package static var symbol: String? { StayAwake.current.map { StayAwakeLook($0.state).symbol } }
     /// The reason it holds for now; nil when it holds nothing.
     package static var held: String? { (StayAwake.current?.hold as? RecordedHold)?.current }
     /// Every reason it was asked to hold, nil for each let-go, since the host started.

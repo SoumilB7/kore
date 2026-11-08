@@ -25,6 +25,42 @@ struct StayAwakeTests {
         #expect(awake.line == "Stay awake")
     }
 
+    /// The cup never looks the same in two states: a click in While Agents Work with nothing
+    /// running (off → waiting) shows, and so does the click back.
+    @Test func everyStateLooksItsOwn() {
+        let looks = [StayAwake.State.off, .waiting, .holding, .paused(12)].map(StayAwakeLook.init)
+        for (i, a) in looks.enumerated() {
+            for b in looks[(i + 1)...] { #expect(a != b) }
+        }
+        #expect(StayAwakeLook(.off) == StayAwakeLook(symbol: "cup.and.saucer", tone: .tertiary))
+        #expect(StayAwakeLook(.waiting) == StayAwakeLook(symbol: "cup.and.saucer.fill", tone: .secondary))
+        #expect(StayAwakeLook(.holding).symbol == "cup.and.heat.waves")
+        // The click a person sees change: on with nothing running, then off again.
+        let (awake, _, _, _) = awake()
+        let before = StayAwakeLook(awake.state)
+        awake.toggle()
+        #expect(StayAwakeLook(awake.state) != before)
+        awake.toggle()
+        #expect(StayAwakeLook(awake.state) == before)
+    }
+
+    /// Why it holds, in a word, for its log line.
+    @Test func theHoldsReasonInAWord() {
+        let (awake, _, clock, _) = awake()
+        #expect(awake.holdKind == "none")
+        awake.toggle()
+        #expect(awake.holdKind == "none")
+        awake.update(working: 2, continuesAt: nil)
+        #expect(awake.holdKind == "agents")
+        awake.update(working: 0, continuesAt: nil)
+        #expect(awake.holdKind == "grace")
+        clock.advance(by: 121)
+        awake.update(working: 0, continuesAt: clock.now.addingTimeInterval(600))
+        #expect(awake.holdKind == "continue")
+        awake.choose(.hour)
+        #expect(awake.holdKind == "1h")
+    }
+
     @Test func aClickTurnsItOnInWhileAgentsWorkAndAgainOff() {
         let (awake, hold, _, _) = awake()
         awake.toggle()

@@ -11,6 +11,8 @@ struct FolderWindow: View {
     @StateObject private var clockFrame = Local(CGRect.zero)
     /// The content's width while the sidebar's sash drags: it lays out once, as the drag ends.
     @StateObject private var heldContent = Local<CGFloat?>(nil)
+    /// The same while Devices' sash drags, on the other side.
+    @StateObject private var heldBesideDevices = Local<CGFloat?>(nil)
 
     init(folder: URL, moved: @escaping (URL) -> Void = { _ in }) {
         self.folder = folder
@@ -30,8 +32,11 @@ struct FolderWindow: View {
             let workspace = workspace.value
             let floating = geometry.size.width < Layout.Explorer.overlayBelow
             let docked = workspace.explorerOpen && !floating
+            let devicesDocked = workspace.devicesOpen && !floating
             let content = geometry.size.width - (docked ? workspace.explorerWidth + Stroke.hairline : 0)
-            let column = ChatColumn.fitting(heldContent.value ?? content)
+                - (devicesDocked ? workspace.devicesWidth + Stroke.hairline : 0)
+            let held = heldContent.value ?? heldBesideDevices.value
+            let column = ChatColumn.fitting(held ?? content)
             VStack(spacing: 0) {
                 // Above the chat: its scroll view extends up under the title bar and would
                 // otherwise take the tab bar's clicks.
@@ -75,7 +80,7 @@ struct FolderWindow: View {
                         .environment(\.chatColumn, column)
                         // Widths follow the drag frame by frame; nothing animates them.
                         .animation(nil, value: column)
-                        .heldBesideSash(heldContent.value)
+                        .heldBesideSash(held, pane: heldBesideDevices.value == nil ? .leading : .trailing)
                         // History hangs under the clock, inside the window whatever its size. It
                         // sits on the content, below the title bar (a text field in an overlay
                         // reaching into the title bar took no typing).
@@ -88,6 +93,15 @@ struct FolderWindow: View {
                             .padding(.trailing, Space.md)
                             .padding(.bottom, Space.xl)
                         }
+                    if devicesDocked {
+                        DevicesSash(width: Binding(get: { workspace.devicesWidth }, set: { workspace.devicesWidth = $0 })) { dragging in
+                            heldBesideDevices.value = dragging ? content : nil
+                        }
+                        DevicesSidebar(holdKey: DevicesSidebar.key(workspace), floating: false)
+                            .frame(width: workspace.devicesWidth)
+                            // Over the held content, which reaches under it as it widens.
+                            .zIndex(heldBesideDevices.value == nil ? 0 : 1)
+                    }
                 }
                 // Below 700 wide the sidebar floats over the content; a click outside closes it.
                 .overlay(alignment: .leading) {
@@ -120,6 +134,23 @@ struct FolderWindow: View {
                         }
                     }
                 }
+                // Devices, the same from the trailing edge; Esc or a click outside closes it.
+                .overlay(alignment: .trailing) {
+                    if workspace.devicesOpen, floating {
+                        ZStack(alignment: .trailing) {
+                            Color.clear.contentShape(Rectangle()).onTapGesture { workspace.devicesOpen = false }
+                            DevicesSidebar(holdKey: DevicesSidebar.key(workspace), floating: true)
+                                .frame(width: min(Layout.Devices.width, geometry.size.width - Layout.Explorer.overlayMargin))
+                                .clipShape(UnevenRoundedRectangle(topLeadingRadius: Radius.panel, bottomLeadingRadius: Radius.panel))
+                                .overlay(
+                                    UnevenRoundedRectangle(topLeadingRadius: Radius.panel, bottomLeadingRadius: Radius.panel)
+                                        .strokeBorder(Theme.border, lineWidth: Stroke.hairline)
+                                )
+                                .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
+                                .onExitCommand { workspace.devicesOpen = false }
+                        }
+                    }
+                }
                 .overlay(alignment: .top) {
                     if let mode = workspace.quickOpen {
                         ZStack(alignment: .top) {
@@ -132,7 +163,11 @@ struct FolderWindow: View {
                         }
                     }
                 }
-                .onChange(of: workspace.activeID) { if floating, workspace.explorerOpen { workspace.explorerOpen = false } }
+                .onChange(of: workspace.activeID) {
+                    guard floating else { return }
+                    if workspace.explorerOpen { workspace.explorerOpen = false }
+                    if workspace.devicesOpen { workspace.devicesOpen = false }
+                }
                 .onChange(of: floating, initial: true) { _, floats in workspace.explorerFloats = floats }
             }
             .ignoresSafeArea(.container, edges: .top)

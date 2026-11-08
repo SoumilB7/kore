@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import HostClient
+import KoreTrust
 import KoreUI
 
 // KoreNet's devices on the Mac (phase 18 step 7, korenet-first-connect.html): the network icon,
@@ -22,7 +23,7 @@ final class DevicesAddPhone: ChatStoryline {
             ExpectElement(icon),
             Self.icon("KoreNet is off", dimmed: true),
             Press(icon),
-            WaitForElement(.id(StoryID.Net.popup)),
+            WaitForElement(.id(StoryID.Net.panel)),
             ExpectElement(.id(StoryID.Net.add), .absent),
             Expect("the popup says KoreNet is off") { _ in Devices.shared.picture().net == .off },
             Press(.id(StoryID.Net.toggle)),
@@ -79,7 +80,7 @@ final class DevicesAddPhone: ChatStoryline {
             Press(.id(StoryID.Net.toggle)),
             Self.icon("KoreNet is off", dimmed: true),
             Press(icon),
-            ExpectElement(.id(StoryID.Net.popup), .absent),
+            ExpectElement(.id(StoryID.Net.panel), .absent),
         ]
     }
 
@@ -108,7 +109,7 @@ final class DevicesTakeOffline: ChatStoryline {
         return super.steps() + [
             DevicesSetUp(on: true, phone: "Pixel 9", box: "mybox"),
             Press(.id(StoryID.Net.icon)),
-            WaitForElement(.id(StoryID.Net.popup)),
+            WaitForElement(.id(StoryID.Net.panel)),
             WaitForElement(phone),
             // The phone, through ⋯'s menu.
             Press(Locator("Pixel 9's ⋯") { _ in
@@ -155,13 +156,14 @@ final class DevicesJoinKoreNet: ChatStoryline {
         return super.steps() + [
             DevicesSetUp(on: true, box: "mybox", ssh: true),
             Press(.id(StoryID.Net.icon)),
-            WaitForElement(.id(StoryID.Net.popup)),
+            WaitForElement(.id(StoryID.Net.panel)),
             Expect("mybox runs via SSH and can join") { _ in
                 Devices.shared.picture().devices.first { $0.id == "mybox" }.map { $0.canJoin && DevicesWords.detail($0, now: Date()) == "via SSH" } == true
             },
             Press(DevicesTakeOffline.part("mybox", .use)),
             WaitForElement(sheet),
-            ExpectElement(.id(StoryID.Net.popup), .absent),
+            // The sheet is a popup over the window: the pane stays beside it.
+            ExpectElement(.id(StoryID.Net.panel)),
             Self.rows(["✓ kore-host 0.31 · over SSH", "… Tailscale on mybox…"]),
             Do("mybox says its Tailscale runs") { _ in Self.advance() },
             Self.rows(["✓ kore-host 0.31 · over SSH", "✓ Tailscale on mybox · running", "… Reaching mybox on the tailnet…", "– Allowed by SSH"]),
@@ -267,7 +269,7 @@ final class DevicesAddBox: ChatStoryline {
         super.steps() + [
             DevicesSetUp(scriptedBoxes: true, release: true),
             Press(.id(StoryID.Net.icon)),
-            WaitForElement(.id(StoryID.Net.popup)),
+            WaitForElement(.id(StoryID.Net.panel)),
             Expect("KoreNet off, no rows yet") { _ in Devices.shared.picture().net == .off && Devices.shared.picture().devices.isEmpty },
             ExpectElement(.id(StoryID.Net.addBox)),
             ExpectElement(.id(StoryID.Net.useSSH), .absent),
@@ -282,7 +284,8 @@ final class DevicesAddBox: ChatStoryline {
             Press(.id(StoryID.Net.useSSH)),
             WaitForElement(.id(StoryID.Net.boxField)),
             ExpectElement(.id(StoryID.Net.boxHost("gpu-box"))),
-            Expect("the field has the keys") { story in story.window?.firstResponder is NSTextView },
+            // The field's editor, not the composer's text: the pane shares the chat's window.
+            Expect("the field has the keys") { story in (story.window?.firstResponder as? NSTextView)?.isFieldEditor == true },
             TypeText("myb"),
             ExpectElement(.id(StoryID.Net.boxHost("gpu-box")), .absent),
             ExpectElement(.id(StoryID.Net.boxHost("mybox"))),
@@ -331,7 +334,7 @@ final class DevicesAddBoxOnTailnet: ChatStoryline {
         super.steps() + [
             DevicesSetUp(on: true, scriptedBoxes: true, release: false, peers: ["box-2"]),
             Press(.id(StoryID.Net.icon)),
-            WaitForElement(.id(StoryID.Net.popup)),
+            WaitForElement(.id(StoryID.Net.panel)),
             Press(.id(StoryID.Net.addBox)),
             WaitForElement(.id(StoryID.Net.welcomePeer("box-2"))),
             ExpectElement(.id(StoryID.Net.useSSH)),
@@ -345,6 +348,94 @@ final class DevicesAddBoxOnTailnet: ChatStoryline {
                 DevicesStory.claims?.allowed == ["box-2"] && DevicesStory.boxes?.log == ["add box-2"]
             },
         ]
+    }
+}
+
+/// Devices as the window's trailing pane: the icon opens it beside the chat, lit while it's open,
+/// the explorer left as it was, and closes it; its sash widens it, and after a relaunch it's back
+/// at that width; a waiting device's row brings up its Allow card and the pane stays; in a narrow
+/// window it floats from the trailing edge and Esc closes it.
+final class DevicesPane: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        let icon = Locator.id(StoryID.Net.icon)
+        let pane = Locator.id(StoryID.Net.panel)
+        let explorer = Locator.id(StoryID.Explorer.sash)
+        return super.steps() + [
+            DevicesSetUp(on: true, box: "mybox", pending: "Pixel 9"),
+            Do("open the explorer") { story in try Self.workspace(story).explorerOpen = true },
+            WaitForElement(explorer),
+            Do("note where the explorer's edge is") { _ in Self.edge = StoryElement(StoryID.Explorer.sash)?.frame?.minX },
+            // 1 · The icon opens the pane; the explorer is as it was. Again, it closes.
+            Press(icon),
+            WaitForElement(pane),
+            WaitForElement(.id(StoryID.Net.sash)),
+            Expect("open beside the chat, the explorer as it was", found: { story in "\(Self.facts(story))" }) { story in
+                let workspace = try Self.workspace(story)
+                let edge = StoryElement(StoryID.Explorer.sash)?.frame?.minX
+                return Self.edge != nil && workspace.devicesOpen && workspace.explorerOpen && edge == Self.edge
+            },
+            Expect("the pane is on the window's trailing side, 290 wide") { story in
+                guard let frame = StoryElement(StoryID.Net.panel)?.frame, let window = story.window?.contentView?.bounds else { return false }
+                return abs(frame.width - 290) < 1 && abs(frame.maxX - window.maxX) < 1
+            },
+            Snapshot("devices-pane"),
+            Press(icon),
+            ExpectElement(pane, .absent),
+            Expect("closed; the explorer still open") { story in
+                let workspace = try Self.workspace(story)
+                return !workspace.devicesOpen && workspace.explorerOpen
+            },
+            // 2 · Its sash dragged 50 pt left widens it to 340; after a relaunch it's open at that width.
+            Press(icon),
+            WaitForElement(pane),
+            Drag(.id(StoryID.Net.sash), by: CGVector(dx: -50, dy: 0)),
+            Expect("widened to 340 by its sash", found: { story in "\(Self.facts(story))" }) { story in
+                guard let frame = StoryElement(StoryID.Net.panel)?.frame else { return false }
+                return try abs(Self.workspace(story).devicesWidth - 340) < 1 && abs(frame.width - 340) < 1
+            },
+            Relaunch(),
+            WaitForElement(pane),
+            Expect("open again at 340", found: { story in "\(Self.facts(story))" }) { story in
+                let workspace = try Self.workspace(story)
+                return workspace.devicesOpen && abs(workspace.devicesWidth - 340) < 1 && workspace.explorerOpen
+            },
+            // 3 · A waiting device: its card over the window, the pane still there.
+            WaitForElement(.id(StoryID.Net.pending(Self.pendingKey))),
+            Press(.id(StoryID.Net.pending(Self.pendingKey))),
+            WaitForElement(.id(StoryID.Net.card)),
+            ExpectElement(pane),
+            Expect("the card asks about Pixel 9") { _ in DeviceCardPanel.isOpen && DevicesStory.phones?.log.last == "ask Pixel 9" },
+            Press(.id(StoryID.Net.deny)),
+            Expect("the card gone, the pane still open") { story in try !DeviceCardPanel.isOpen && Self.workspace(story).devicesOpen },
+            // 4 · Narrow: it floats from the trailing edge, and Esc closes it.
+            SizeWindow(width: 600),
+            WaitForElement(pane),
+            Expect("floating at the trailing edge", found: { story in "\(Self.facts(story))" }) { story in
+                guard let frame = StoryElement(StoryID.Net.panel)?.frame, let window = story.window?.contentView?.bounds else { return false }
+                return try Self.workspace(story).hasOverlay && abs(frame.maxX - window.maxX) < 1
+            },
+            Snapshot("devices-pane-floating"),
+            Key(.escape),
+            ExpectElement(pane, .absent),
+            Expect("closed by Esc") { story in try !Self.workspace(story).devicesOpen },
+            RestoreWindow(),
+        ]
+    }
+
+    static let pendingKey = "nodekey:pixel-9"
+    @MainActor static var edge: CGFloat?
+
+    static func workspace(_ story: StoryContext) throws -> Workspace {
+        guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the workspace") }
+        return workspace
+    }
+
+    static func facts(_ story: StoryContext) -> String {
+        guard let workspace = story.app.workspace else { return "no workspace" }
+        let pane = StoryElement(StoryID.Net.panel)?.frame.map { "\($0)" } ?? "none"
+        return "devices \(workspace.devicesOpen) at \(workspace.devicesWidth) (\(pane)), explorer \(workspace.explorerOpen) at \(StoryElement(StoryID.Explorer.sash)?.frame?.minX ?? -1)"
     }
 }
 
@@ -378,6 +469,8 @@ private struct DevicesSetUp: Step {
     var release: Bool?
     /// kore-host boxes found on the tailnet.
     var peers: [String] = []
+    /// A phone waiting at the box (its node key `nodekey:<name>`).
+    var pending: String?
     var label: String { "KoreNet scripted: " + (on ? "on" : "off") + (phone.map { ", " + $0 } ?? "") + (box.map { ", " + $0 } ?? "") + (scriptedBoxes ? ", box list" : "") }
 
     func run(_ story: StoryContext) async throws {
@@ -404,12 +497,18 @@ private struct DevicesSetUp: Step {
         devices.joinRunner = { _ in DevicesStory.join }
         if let box {
             let ssh = self.ssh
+            let waiting = pending.map { name in
+                PendingDevice(
+                    nodeKey: "nodekey:" + name.lowercased().replacingOccurrences(of: " ", with: "-"), device: UUID(), name: name, kind: .phone,
+                    identityKey: Data([2]), userId: 7, tags: [], fqdn: name.lowercased() + ".ts.net.", login: "you@example.com", at: Date())
+            }
             devices.boxes = {
                 var facts = BoxFacts(key: box, name: box)
                 facts.listed = .ready
                 facts.online = true
                 facts.route = ssh ? .ssh(alias: box, grant: "mac") : .net
                 if !ssh { facts.entry = NodeDirectory.Entry(device: UUID(), name: box, ssh: box, nodeKey: "nodekey:" + box, identityKey: Data([1]), enrolled: true) }
+                facts.pending = waiting.map { [$0] } ?? []
                 facts.paused = NetPauses.shared.contains(box)
                 if facts.paused { facts.online = false }
                 return [facts]

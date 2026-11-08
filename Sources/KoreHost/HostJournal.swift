@@ -8,14 +8,20 @@ import LinkProtocol
 /// token or anything said in a chat.
 package enum HostJournal {
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var sink: (@Sendable (String) -> Void)? = KoreLog.isTestProcess ? nil : stderr
-
-    private static let stderr: @Sendable (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
+    /// stderr, until a test listens instead.
+    nonisolated(unsafe) private static var toStderr = !KoreLog.isTestProcess
+    nonisolated(unsafe) private static var sink: (@Sendable (String) -> Void)?
 
     nonisolated(unsafe) private static var watchers: [UUID: @Sendable (String) -> Void] = [:]
 
-    /// Where lines go: tests read them, or turn them off with nil.
-    package static func listen(_ to: (@Sendable (String) -> Void)?) { lock.withLock { sink = to } }
+    /// Where lines go: tests read them (each line's body, `event key=value…`), or turn them off
+    /// with nil.
+    package static func listen(_ to: (@Sendable (String) -> Void)?) {
+        lock.withLock {
+            sink = to
+            toStderr = false
+        }
+    }
 
     /// Lines also go to `to` until `unwatch` (tests running side by side each keep their own).
     package static func watch(_ to: @escaping @Sendable (String) -> Void) -> UUID {
@@ -26,16 +32,15 @@ package enum HostJournal {
 
     package static func unwatch(_ id: UUID) { _ = lock.withLock { watchers.removeValue(forKey: id) } }
 
-    /// One event and its fields (`connect grant=laptop control=full`); fields with no value are left out.
-    package static func note(_ event: String, _ fields: KeyValuePairs<String, String?> = [:]) {
-        var line = event
-        for (key, value) in fields {
-            guard let value else { continue }
-            line += " " + key + "=" + quoted(value)
-        }
-        let (sink, watching) = lock.withLock { (sink, Array(watchers.values)) }
-        sink?(line)
-        for watcher in watching { watcher(line) }
+    /// One event and its fields (`connect grant=laptop control=full`); fields with no value are
+    /// left out, and a value shaped like a token is redacted. On stderr it's a whole line, as in
+    /// the Mac's logs: `2026-11-08T10:00:00.000Z info connect grant=laptop control=full`.
+    package static func note(_ event: String, _ fields: KeyValuePairs<String, String?> = [:], level: KoreLog.Level = .info) {
+        let body = KoreLog.body(event, fields.compactMap { key, value in value.map { (key, KoreLog.redacted($0)) } })
+        let (sink, toStderr, watching) = lock.withLock { (sink, toStderr, Array(watchers.values)) }
+        if toStderr { FileHandle.standardError.write(Data((KoreLog.line(at: Date(), level, body) + "\n").utf8)) }
+        sink?(body)
+        for watcher in watching { watcher(body) }
     }
 
     /// Phase 18's audit lines, tagged `audit` (`audit connect device=… route=tailnet`): connect,
@@ -52,14 +57,7 @@ package enum HostJournal {
 
     /// A write that failed: a full disk by name, else the system's reason.
     package static func writeFailed(_ url: URL, _ code: Int32) {
-        note(code == ENOSPC ? "disk full" : "write failed", ["path": url.path, "reason": String(cString: strerror(code))])
-    }
-
-    private static func quoted(_ value: String) -> String {
-        let plain = !value.isEmpty && !value.contains { $0 == " " || $0 == "\"" || $0 == "=" || $0.isNewline }
-        if plain { return value }
-        return "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: " ") + "\""
+        note(code == ENOSPC ? "disk full" : "write failed", ["path": url.path, "reason": String(cString: strerror(code))], level: .error)
     }
 }
 

@@ -97,6 +97,8 @@ package final class Chat: Identifiable {
     /// A Stop's fallback (`stop`), and which turn it was for: one sent since isn't ended by it.
     @ObservationIgnored private var stopFallback: Task<Void, Never>?
     @ObservationIgnored private var turnSerial = 0
+    /// The running turn, for its one `turn` line in sessions.log.
+    @ObservationIgnored private var turnTally: TurnTally?
     /// Online, waiting on the model (no tool, agent, approval or compaction under way), and
     /// nothing heard for this long: the turn's connection likely died unnoticed. A storyline
     /// sets it shorter.
@@ -589,16 +591,22 @@ package final class Chat: Identifiable {
         case .turnStarted:
             turnSerial &+= 1
             lastHeard = Date()
-            SessionLog.shared.turn("turn-start", provider.id, chat: sessionId)
+            // Its id goes on the agents' and the CLI's lines until it ends.
+            let tally = TurnTally()
+            turnTally = tally
+            LogTurns.set(tally.id, chat: sessionId)
             startWatchdog()
         case .turnFinished(_, let outcome, let duration):
             endWatch()
-            SessionLog.shared.turn(
-                "turn-end", provider.id, chat: sessionId, outcome: Self.name(outcome), seconds: duration.map { Int($0.components.seconds) })
+            endTurnLine(Self.name(outcome), duration: duration)
         case .exited:
             endWatch()
+            endTurnLine("exited", duration: nil)
         default:
             guard !Self.isReplay(event) else { return }
+            turnTally?.count(event)
+            // A new chat's id comes with its first turn: the turn's lines carry it from here.
+            if case .sessionIdentified(let id) = event, let turnTally { LogTurns.set(turnTally.id, chat: id) }
             lastHeard = Date()
             if connection == .stalled {
                 // It spoke again: the connection was fine after all.
@@ -607,6 +615,18 @@ package final class Chat: Identifiable {
                 SessionLog.shared.connection(provider.id, chat: sessionId, state: "ok")
             }
         }
+    }
+
+    /// The running turn's one line, as it ends (or its CLI does). The CLI's own measure of its
+    /// length when it gives one.
+    private func endTurnLine(_ outcome: String, duration: Duration?) {
+        // A turn Kore never saw start still gets its line, as it ends.
+        guard let tally = turnTally ?? (duration == nil && outcome == "exited" ? nil : TurnTally()) else { return }
+        turnTally = nil
+        LogTurns.set(nil, chat: sessionId)
+        let ms = duration.map { Int($0.components.seconds * 1000 + $0.components.attoseconds / 1_000_000_000_000_000) }
+            ?? Int(Date().timeIntervalSince(tally.started) * 1000)
+        SessionLog.shared.turn(tally, provider.id, chat: sessionId, model: controls.modelId ?? launchModel, outcome: outcome, ms: ms)
     }
 
     private func endWatch() {

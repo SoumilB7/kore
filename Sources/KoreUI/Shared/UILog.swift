@@ -6,16 +6,43 @@ import KoreCore
 /// thread was held long enough to feel (`stall`). Events and ids only, never a message's or a
 /// file's text, in `ui.log` (kept a week, like every Kore log):
 ///
-///   2026-10-26T12:41:03.118Z	window-key folder=kore
-///   2026-10-26T12:41:09.502Z	stall ms=412 busy=430 active=yes shown=yes
+///   2026-10-26T12:41:03.118Z info window-fullscreen folder=kore
+///   2026-10-26T12:41:09.502Z warn stall ms=412 busy=430 tab=chat last_event=options-open active=yes shown=yes
+///
+/// The window and app focus changes are debug (`KORE_LOG_LEVEL=debug`); a window's occlusion and
+/// the screens changing, which can come many times a second, are one line per 10 s with their
+/// count (`n`).
 @MainActor
 package enum UILog {
     package static func event(_ name: String, _ fields: KeyValuePairs<String, String?> = [:]) {
-        log.write(name, fields)
+        event(.info, name, fields)
     }
+
+    package static func event(_ level: KoreLog.Level, _ name: String, _ fields: KeyValuePairs<String, String?> = [:]) {
+        lastEvent = name
+        log.write(level, name, fields)
+    }
+
+    /// The last event the interface had, written or not (a debug one too): what came just before a stall.
+    private(set) static var lastEvent: String?
 
     private static let log = KoreLog.named("ui")
     private static var started = false
+
+    /// Window and app focus: every switch between apps writes two or more.
+    static let debugEvents: Set<String> = ["window-key", "window-unkey", "app-active", "app-inactive"]
+    /// Can come many times a second: one line per 10 s.
+    static let throttledEvents: Set<String> = ["window-occlusion", "screens-changed"]
+
+    /// A window or app notification's line, at its level or throttled.
+    private static func note(_ name: String, _ fields: KeyValuePairs<String, String?> = [:]) {
+        if throttledEvents.contains(name) {
+            lastEvent = name
+            log.throttled(name, fields)
+        } else {
+            event(debugEvents.contains(name) ? .debug : .info, name, fields)
+        }
+    }
 
     /// From launch: the app's and windows' changes, sleep and wake, and main-thread stalls.
     static func start() {
@@ -34,7 +61,7 @@ package enum UILog {
         ]
         for (name, event) in app {
             center.addObserver(forName: name, object: nil, queue: .main) { _ in
-                MainActor.assumeIsolated { UILog.event(event) }
+                MainActor.assumeIsolated { UILog.note(event) }
             }
         }
         let windows: [(Notification.Name, String)] = [
@@ -57,7 +84,7 @@ package enum UILog {
                     if event == "window-occlusion" { visible = window.occlusionState.contains(.visible) ? "yes" : "no" }
                     var size: String?
                     if event == "window-resized" { size = "\(Int(window.frame.width))x\(Int(window.frame.height))" }
-                    UILog.event(event, ["folder": window.title.isEmpty ? nil : window.title, "visible": visible, "size": size])
+                    UILog.note(event, ["folder": window.title.isEmpty ? nil : window.title, "visible": visible, "size": size])
                 }
             }
         }
@@ -135,7 +162,11 @@ package enum UILog {
             let (ms, busy) = (Int(worst * 1000), Int((now - began) * 1000))
             MainActor.assumeIsolated {
                 let shown = NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
-                UILog.event("stall", ["ms": String(ms), "busy": String(busy), "active": NSApp.isActive ? "yes" : "no", "shown": shown ? "yes" : "no"])
+                // Written past `event`: the next stall's `last_event` is what came before it, not this.
+                log.write(.warn, "stall", [
+                    "ms": String(ms), "busy": String(busy), "tab": Workspace.frontTab, "last_event": lastEvent, "active": NSApp.isActive ? "yes" : "no",
+                    "shown": shown ? "yes" : "no",
+                ])
             }
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)

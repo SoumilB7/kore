@@ -320,8 +320,10 @@ private struct AccountCommands: View {
         Button("Account…") { workspace?.openAccount() }
         .keyboardShortcut(",")
         .disabled(workspace == nil)
-        // KoreNet's devices: the network icon's popup, in the front window.
-        Button("Devices…") { DevicesPopup.showFromMenu() }
+        // KoreNet's devices: the front window's pane; the popup where there's no folder window.
+        Button("Devices…") {
+            if let workspace { workspace.devicesOpen.toggle() } else { DevicesPopup.showFromMenu() }
+        }
         // Hard to hit by chance; the tab's right-click shows it.
         Button("Arsenal") { workspace?.toggleArsenal() }
         .keyboardShortcut("k", modifiers: [.command, .option])

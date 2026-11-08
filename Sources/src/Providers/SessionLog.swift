@@ -2,13 +2,14 @@ import Foundation
 import KoreCore
 
 /// Each chat's CLI process in `~/Library/Logs/Kore/sessions.log` (`KoreLog`): started, exited,
-/// relaunched, and its history read back. Ids, counts and times only; never a message.
+/// relaunched, its history read back, and one line per turn as it ends. Ids, counts and times
+/// only; never a message.
 ///
-///   …Z	started cli=claude chat=4fb9… pid=81546 launch=resume
-///   …Z	exited cli=claude chat=4fb9… pid=81546 signal=15 asked=yes
-///   …Z	relaunch cli=claude chat=4fb9… reason="account changed"
-///   …Z	replay-start cli=claude chat=4fb9… read=tail
-///   …Z	replay-end cli=claude chat=4fb9… read=tail lines=647 bytes=6976312 ms=142 shown_ms=71
+///   …Z info started cli=claude chat=4fb9… pid=81546 launch=resume
+///   …Z info turn id=a91f03 chat=4fb9… cli=claude model=haiku outcome=completed dur_ms=5120 tools=3 agents=1 in_tok=12 out_tok=480
+///   …Z info exited cli=claude chat=4fb9… pid=81546 signal=15 asked=yes
+///   …Z info relaunch cli=claude chat=4fb9… reason="account changed"
+///   …Z info replay-end cli=claude chat=4fb9… read=tail lines=647 bytes=6976312 ms=142 shown_ms=71
 package struct SessionLog: Sendable {
     package let log: KoreLog
 
@@ -24,7 +25,7 @@ package struct SessionLog: Sendable {
 
     /// `error`'s kind only (`cause`), never its words.
     package func startFailed(_ cli: String, chat: String?, launch: String, error: Error) {
-        log.write("start-failed", ["cli": cli, "chat": chat ?? "-", "launch": launch, "cause": Self.cause(error)])
+        log.write(.error, "start-failed", ["cli": cli, "chat": chat ?? "-", "launch": launch, "cause": Self.cause(error)])
     }
 
     /// Why a CLI didn't start: "missing" (not found), "exited" (it ended before it was up, and
@@ -76,20 +77,31 @@ package struct SessionLog: Sendable {
         log.write("shown", ["cli": cli, "chat": chat ?? "-", "rows": String(rows), "held": String(held), "late": late ? "yes" : nil])
     }
 
-    /// A turn began, or ended with its outcome and how long it ran.
-    package func turn(_ event: String, _ cli: String, chat: String?, outcome: String? = nil, seconds: Int? = nil) {
-        log.write(event, ["cli": cli, "chat": chat ?? "-", "outcome": outcome, "s": seconds.map(String.init)])
+    /// A turn, once it's over: one line with all of it (`TurnTally`). Not a failure's words, only
+    /// its outcome; tokens where the CLI said them.
+    package func turn(_ tally: TurnTally, _ cli: String, chat: String?, model: String?, outcome: String, ms: Int) {
+        let failed = !["completed", "interrupted"].contains(outcome)
+        log.write(
+            failed ? .warn : .info, "turn",
+            [
+                "id": tally.id, "chat": chat ?? "-", "cli": cli, "model": model, "outcome": outcome, "dur_ms": String(ms),
+                "tools": String(tally.tools), "agents": String(tally.agents),
+                "in_tok": tally.counted ? String(tally.input) : nil, "out_tok": tally.counted ? String(tally.output) : nil,
+                "cache_tok": tally.counted && tally.cached > 0 ? String(tally.cached) : nil,
+            ])
     }
 
     /// A running turn's connection changed: "offline", "ok", "retrying" (`attempt`), "stalled"
     /// (nothing heard for `quiet` seconds).
     package func connection(_ cli: String, chat: String?, state: String, attempt: String? = nil, quiet: Int? = nil) {
-        log.write("connection", ["cli": cli, "chat": chat ?? "-", "state": state, "attempt": attempt, "quiet": quiet.map(String.init)])
+        log.write(
+            state == "ok" ? .info : .warn, "connection",
+            ["cli": cli, "chat": chat ?? "-", "turn": LogTurns.turn(chat), "state": state, "attempt": attempt, "quiet": quiet.map(String.init)])
     }
 
     /// A stalled turn's Retry, or a Stop the CLI didn't answer: Kore ends its CLI itself.
     package func rescue(_ cli: String, chat: String?, action: String) {
-        log.write("rescue", ["cli": cli, "chat": chat ?? "-", "action": action])
+        log.write(.warn, "rescue", ["cli": cli, "chat": chat ?? "-", "turn": LogTurns.turn(chat), "action": action])
     }
 
     /// Queue transport and delivery receipts. Opaque ids and event names, never input text.
@@ -123,6 +135,59 @@ package struct SessionLog: Sendable {
                 "ms": String(Int(ms.rounded())), "shown_ms": shown.map { String(Int($0.rounded())) },
                 "corrected": corrected ? "yes" : nil,
             ])
+    }
+}
+
+/// One turn as it runs, for its `turn` line: a short id that the agents' and the CLI's lines in
+/// it carry too (`LogTurns`), and what it did.
+package struct TurnTally: Sendable {
+    package let id: String
+    package let started: Date
+    package var tools = 0
+    package var agents = 0
+    package var input = 0
+    package var output = 0
+    package var cached = 0
+    /// The CLI said a request's tokens.
+    package var counted = false
+
+    package init(id: String = LogTurns.make(), started: Date = Date()) {
+        self.id = id
+        self.started = started
+    }
+
+    /// What one of the turn's events adds to it.
+    package mutating func count(_ event: ChatEvent) {
+        switch event {
+        case .toolStarted: tools += 1
+        case .agentSpawned: agents += 1
+        case .requestUsage(let usage):
+            counted = true
+            input += usage.input
+            output += usage.output
+            cached += usage.cacheRead
+        default: break
+        }
+    }
+}
+
+/// The turn each chat runs now, by its session id: what its agents' and its CLI's lines carry as
+/// `turn`, to find all of one turn's lines (`kore logs --turn`).
+package enum LogTurns {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var running: [String: String] = [:]
+
+    /// Six hex digits, new each turn.
+    package static func make() -> String { String(format: "%06x", UInt32.random(in: 0...0xFF_FFFF)) }
+
+    package static func set(_ turn: String?, chat: String?) {
+        guard let chat else { return }
+        lock.withLock { running[chat] = turn }
+    }
+
+    package static func turn(_ chat: String?) -> String? {
+        guard let chat else { return nil }
+        return lock.withLock { running[chat] }
     }
 }
 

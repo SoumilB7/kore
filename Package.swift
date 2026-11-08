@@ -94,7 +94,7 @@ let package = Package(
         // kore-host over real Tailscale. Not part of Kore.app.
         .executableTarget(name: "korenet-e2e", dependencies: ["KoreNet", "KoreTrust", "Tailnet"]),
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
-        .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
+        .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "AgentTools", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "src", "KoreCore", "kore-fake-cli"]),
         .testTarget(
             name: "KoreLinkTests",

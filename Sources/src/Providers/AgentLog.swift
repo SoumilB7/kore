@@ -2,12 +2,13 @@ import Foundation
 import KoreCore
 
 /// Sub-agents' lifecycle in `~/Library/Logs/Kore/agents.log` (`KoreLog`): spawned, resumed,
-/// backgrounded, and each status change with what caused it. Ids, names, statuses and sources
-/// only; never a prompt, a result or a file's contents.
+/// backgrounded, and each status change with what caused it, under the chat's running turn
+/// (`LogTurns`). Ids, statuses and sources only; never a prompt, a title the model wrote, a
+/// result or a file's contents.
 ///
-///   …Z	spawned cli=claude chat=4fb9… agent=toolu_01Caw… name="Scout the code" mode=foreground parent=main
-///   …Z	status cli=claude chat=4fb9… agent=toolu_01Caw… from=running to=stopped source="tool_result error"
-///   …Z	status cli=claude chat=4fb9… agent=toolu_0126… from=running to=stopped source="file meta stoppedByUser" via="turn interrupt"
+///   …Z info spawned cli=claude chat=4fb9… turn=a91f03 agent=toolu_01Caw… mode=foreground parent=main
+///   …Z info status cli=claude chat=4fb9… turn=a91f03 agent=toolu_01Caw… from=running to=stopped source="tool_result error"
+///   …Z info status cli=claude chat=4fb9… agent=toolu_0126… from=running to=stopped source="file meta stoppedByUser" via="turn interrupt"
 package struct AgentLog: Sendable {
     /// What made an agent's status change.
     package enum Source: String, Sendable {
@@ -41,11 +42,12 @@ package struct AgentLog: Sendable {
 
     package static let shared = AgentLog()
 
+    /// `name`, the title the model gave it, isn't written: it's the model's words.
     package func spawned(_ cli: String, chat: String?, agent: String, name: String, background: Bool, parent: String?) {
         log.write(
             "spawned",
             [
-                "cli": cli, "chat": chat ?? "-", "agent": agent, "name": name, "mode": background ? "background" : "foreground",
+                "cli": cli, "chat": chat ?? "-", "turn": LogTurns.turn(chat), "agent": agent, "mode": background ? "background" : "foreground",
                 "parent": parent ?? "main",
             ])
     }
@@ -53,16 +55,19 @@ package struct AgentLog: Sendable {
     /// `via`: what made Kore look (a stop, a replay), when that isn't the source itself.
     package func status(_ cli: String, chat: String?, agent: String, from: String = "running", to: String, source: Source, via: String? = nil) {
         log.write(
-            "status",
-            ["cli": cli, "chat": chat ?? "-", "agent": agent, "from": from, "to": to, "source": source.rawValue, "via": via])
+            to == "failed" ? .warn : .info, "status",
+            [
+                "cli": cli, "chat": chat ?? "-", "turn": LogTurns.turn(chat), "agent": agent, "from": from, "to": to, "source": source.rawValue,
+                "via": via,
+            ])
     }
 
     package func resumed(_ cli: String, chat: String?, agent: String, via: String? = nil) {
-        log.write("resumed", ["cli": cli, "chat": chat ?? "-", "agent": agent, "via": via])
+        log.write("resumed", ["cli": cli, "chat": chat ?? "-", "turn": LogTurns.turn(chat), "agent": agent, "via": via])
     }
 
     package func backgrounded(_ cli: String, chat: String?, agent: String) {
-        log.write("backgrounded", ["cli": cli, "chat": chat ?? "-", "agent": agent])
+        log.write("backgrounded", ["cli": cli, "chat": chat ?? "-", "turn": LogTurns.turn(chat), "agent": agent])
     }
 
     package static func name(_ status: AgentStatus) -> String {
