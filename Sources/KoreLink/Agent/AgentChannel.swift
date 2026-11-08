@@ -850,17 +850,22 @@ package final class AgentChannel {
         }
         guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let window = window(args, client, id) else { return nil }
         guard roomForNew(client, id) else { return nil }
-        switch window.arsenalOpen(session: session, under: own) {
-        case .failure(let refusal):
-            fail(client, id, .refused, refusal.message)
-            return nil
-        case .success(let (chat, opened)):
-            if opened { spentNew(chat, client) }
-            let chatId = chat.id.uuidString
-            let message = opened ? "Opened “\(AgentReads.title(chat.title))”." : "It was open: in front."
-            send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
-            return chatId
+        // A box window's opens over the link: answered when the box has it.
+        Task { @MainActor [weak self, weak client] in
+            let result = await window.arsenalOpen(session: session, under: own)
+            guard let self, let client, AgentChannel.current === self else { return }
+            switch result {
+            case .failure(let refusal):
+                self.fail(client, id, .refused, refusal.message)
+            case .success(let (chat, opened)):
+                if opened { self.spentNew(chat, client) }
+                let chatId = chat.id.uuidString
+                let message = opened ? "Opened “\(AgentReads.title(chat.title))”." : "It was open: in front."
+                self.send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
+            }
         }
+        // Its log line names no chat: the one it opens isn't known yet.
+        return nil
     }
 
     // MARK: Following

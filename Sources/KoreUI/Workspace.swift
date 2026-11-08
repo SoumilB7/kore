@@ -413,17 +413,12 @@ package final class Workspace {
         }
         // On a box: an open chat's tab in front; a closed chat it keeps, back on the box and in a
         // tab here.
-        if let box {
+        if box != nil {
             if let tab = boxTab(session.id) {
                 select(tab)
                 return
             }
-            Task {
-                // A closed chat back on the box, or a past session its CLI keeps, as a box chat (1.9).
-                guard let chat = await box.openSession(session) else { return }
-                place(chat, at: tabs.count)
-                chats.removeAll { $0.id == session.id }
-            }
+            Task { _ = await openBoxSession(session) }
             return
         }
         if let tab = tab(for: session.id, provider: Registry.provider(for: session.agent).id) {
@@ -432,6 +427,26 @@ package final class Workspace {
         }
         if !activeTab.isEmpty { newTab() }
         activeTab.chat = chat(session)
+    }
+
+    /// A box window's past chat in a tab, as History opens it: its tab in front when it's shown
+    /// (`opened` false), else a closed chat back on the box, or a past session its CLI keeps, as a
+    /// box chat (1.9). Nil when the box didn't open it (or this isn't a box's window).
+    func openBoxSession(_ session: SessionSummary) async -> (chat: Chat, opened: Bool)? {
+        guard let box else { return nil }
+        if let shown = box.shownChat(session.id) {
+            if let tab = tab(showing: shown) { select(tab) }
+            return (shown, false)
+        }
+        guard let chat = await box.openSession(session) else { return nil }
+        // The box answered with a chat a tab shows already (the session it holds): that tab.
+        if let tab = tab(showing: chat) {
+            select(tab)
+            return (chat, false)
+        }
+        place(chat, at: tabs.count)
+        chats.removeAll { $0.id == session.id }
+        return (chat, true)
     }
 
     /// The tab showing a chat itself, or the board it's on.

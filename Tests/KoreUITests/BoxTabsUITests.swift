@@ -197,4 +197,54 @@ struct BoxTabsUITests {
         let back = try #require(shown().first)
         #expect(shown().count == 1 && workspace.activeTab.chat === back && back !== original)
     }
+
+    /// A History read's two asks (the folder's chats, and its archived ones), answered: `rows`, and none archived.
+    func answerHistory(_ script: Script, _ rows: [HistorySession]) async throws {
+        for _ in 0..<2 {
+            let ask = try #require(await script.next("history.list"))
+            let archived = ask["archived"] as? Bool == true
+            script.send(.historyPage(id: try #require(ask["id"] as? String), windowId: Self.window, sessions: archived ? [] : rows, more: false))
+        }
+    }
+
+    /// Arsenal's open (`kore open`) in a box window opens on the box as History does: History is
+    /// read over the link when the window hasn't listed it, the box opens the session, and the
+    /// chat gets a tab of its own in front, its Arsenal off. Asked again, the box names the same
+    /// chat and its tab comes forward, no second tab.
+    @Test func arsenalOpenInABoxWindowOpensOnTheBox() async throws {
+        let (script, box, workspace) = try await rig()
+        defer { box.windowClosed() }
+        script.send(json: [
+            "t": "welcome", "proto": ["major": 1, "minor": 10], "epoch": "e1", "host": ["name": "box", "koreVersion": "1", "kind": "box"],
+            "providers": [], "policy": ["sendMaxLevel": 4, "control": "full"], "caps": ["tx", "control", "stream", "history"],
+        ])
+        #expect(await until { box.connection.keepsHistory })
+        let caller = try #require(workspace.tabs.first?.chat)
+        let opening = Task { await workspace.arsenalOpen(session: "5e55f00d", under: caller) }
+
+        // Nothing listed yet: History read from the box first (its chats, then its archived ones).
+        let row = HistorySession(id: "5e55f00d-past", provider: "claude", title: "Old plans", updatedAt: 1_700_000_000_000, archived: false, open: false)
+        try await answerHistory(script, [row])
+        let ask = try #require(await script.command("history.open"))
+        #expect((ask["cmd"] as? [String: Any])?["sessionId"] as? String == "5e55f00d-past")
+        script.send(.result(.init(id: try #require(ask["id"] as? String), ok: true, chatId: "c2", windowId: Self.window)))
+        guard case .success(let (opened, new)) = await opening.value else { Issue.record("not opened"); return }
+        #expect(new && opened.arsenal == nil && opened.arsenalByAgent)
+        #expect((opened.services as? BoxChatServices)?.chatId == "c2" && workspace.activeTab.chat === opened)
+        let count = workspace.tabs.count
+
+        // Again: the box names c2, whose tab comes forward.
+        workspace.newTab()
+        let again = Task { await workspace.arsenalOpen(session: "5e55f00d-past", under: caller) }
+        // Its row left History as it opened: listed again (open now) when History is read again.
+        #expect(await until { script.got.contains { $0["t"] as? String == "history.list" || $0["t"] as? String == "cmd" } })
+        if script.got.contains(where: { $0["t"] as? String == "history.list" }) {
+            let open = HistorySession(id: "5e55f00d-past", provider: "claude", title: "Old plans", updatedAt: 1_700_000_000_000, archived: false, open: true)
+            try await answerHistory(script, [open])
+        }
+        let second = try #require(await script.command("history.open"))
+        script.send(.result(.init(id: try #require(second["id"] as? String), ok: true, chatId: "c2", windowId: Self.window)))
+        guard case .success(let (same, newAgain)) = await again.value else { Issue.record("not in front"); return }
+        #expect(same === opened && !newAgain && workspace.activeTab.chat === opened && workspace.tabs.count == count + 1)
+    }
 }

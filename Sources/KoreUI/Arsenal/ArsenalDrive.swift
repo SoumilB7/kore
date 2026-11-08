@@ -1,4 +1,5 @@
 import Foundation
+import HostClient
 import KoreCore
 import src
 
@@ -293,16 +294,24 @@ extension Workspace {
     /// A past chat of this window's, opened as a click in History opens it: its tab in front if it's
     /// open already, else a tab of its own. `session` is its id, or the start of it only one has.
     /// Opened, its mode is capped as a new chat's is (no freer than the caller's), and its Arsenal
-    /// stays off whatever it had: a tier is the user's to give it back. A box's chats are its own.
-    package func arsenalOpen(session: String, under caller: Chat) -> Result<(chat: Chat, opened: Bool), ArsenalRefusal> {
-        guard box == nil else { return .failure(.init("A box's past chats open from its window's History.")) }
+    /// stays off whatever it had: a tier is the user's to give it back. In a box's window it opens
+    /// on the box, as that window's History does.
+    package func arsenalOpen(session: String, under caller: Chat) async -> Result<(chat: Chat, opened: Bool), ArsenalRefusal> {
         let wanted = session.trimmingCharacters(in: .whitespaces).lowercased()
-        let found = chats.filter { $0.id.lowercased() == wanted || (wanted.count >= 6 && $0.id.lowercased().hasPrefix(wanted)) }
+        func lookup() -> [SessionSummary] {
+            chats.filter { $0.id.lowercased() == wanted || (wanted.count >= 6 && $0.id.lowercased().hasPrefix(wanted)) }
+        }
+        var found = lookup()
+        // A box's History is read over the link: read again once before saying it has no such chat.
+        if found.isEmpty, box != nil {
+            await refresh()
+            found = lookup()
+        }
         guard let summary = found.first(where: { $0.id.lowercased() == wanted }) ?? (found.count == 1 ? found.first : nil) else {
             return .failure(.init(found.isEmpty ? "No past chat in \(folder.lastPathComponent) has that id." : "Several past chats start with that id: give more of it."))
         }
         if paired != nil, boxRowPlace(summary.id) != nil { return .failure(.init("That chat is on the box: open it from History.")) }
-        if let tab = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil }), let chat = tab.chat {
+        if box == nil, let tab = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil }), let chat = tab.chat {
             select(tab)
             return .success((chat, false))
         }
@@ -314,9 +323,20 @@ extension Workspace {
         guard !capped.isEmpty else {
             return .failure(.init("Only you can open a \(provider.name) chat from this one: its lowest mode does more on its own than \(caller.controls.activeMode.label)."))
         }
-        open(summary)
-        guard let chat = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil })?.chat else {
-            return .failure(.init("Kore couldn't open that chat."))
+        let chat: Chat
+        if let box {
+            // On the box, as its History opens it (a closed chat back on the box, or a session its CLI keeps).
+            guard let shown = await openBoxSession(summary) else {
+                return .failure(.init("\(NodeNames.name(box.alias)) didn't open that chat."))
+            }
+            if !shown.opened { return .success((shown.chat, false)) }
+            chat = shown.chat
+        } else {
+            open(summary)
+            guard let opened = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil })?.chat else {
+                return .failure(.init("Kore couldn't open that chat."))
+            }
+            chat = opened
         }
         chat.arsenalByAgent = true
         let opened = chat.arsenalRank
