@@ -1,6 +1,7 @@
 import Foundation
 import HostClient
 import KoreTrust
+import LinkProtocol
 import Tailnet
 import Testing
 
@@ -102,5 +103,33 @@ struct NetBoxBookTests {
         #expect(try net.book.record(box.device)?.paused == nil && told == 3)
         net.boxChanged("mybox", removed: true)
         #expect(try net.book.record(box.device) == nil && told == 4)
+    }
+
+    /// Another device behind a known alias (the box was wiped): the dead box's pin leaves this
+    /// Mac's book and phones are told, so no phone lists it.
+    @Test func aReplacedBoxLeavesTheBookAndPhonesHear() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("net-box-book-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = suite()
+        let directory = NodeDirectory(defaults: defaults)
+        let (net, settled) = netSwitch(defaults, root: root, directory: directory) {
+            fakeEnv(.state(.running), local: FakeTailnet(), root: root, defaults: defaults, calls: EnvCalls())
+        }
+        net.set(true)
+        _ = await settled.next { $0 == "chose" }
+        defer { net.set(false) }
+        var told = 0
+        net.directoryChanged = { told += 1 }
+        let old = entry()
+        directory.upsert(old)
+        let record = DeviceRecord(
+            id: old.device, name: "mybox", kind: .box, abilities: [.read, .ask, .run], identityKey: Data([1]), nodeKeys: ["ssh", "nodekey:box"],
+            userId: 7, fqdn: "mybox.tail.ts.net.", added: Self.now)
+        try net.book.update { $0 = [record] }
+        let connection = HostConnection(alias: "mybox", grant: "laptop", cache: HostCache(alias: "mybox", root: root)) { FakeHost.pair().0 }
+        let wiped = UUID()
+        net.said(NetNodeWire.Node(device: wiped, identityKey: Data([2]), name: "mybox", on: true, nodeKey: "nodekey:new"), on: connection)
+        #expect(try net.book.record(old.device) == nil && told == 1)
+        #expect(directory.all.keys.sorted() == [wiped.uuidString.lowercased()])
     }
 }

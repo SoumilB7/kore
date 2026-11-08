@@ -268,6 +268,8 @@ extension DevicesPicture {
                 row.upgradeFix = upgrade.fix
                 row.joinedAt = upgrade.joinedAt
             }
+            // Its Tailscale off: one line, one action (the line that starts it, copied).
+            if row.tailscaleOff, row.upgradeFix == nil { row.upgradeFix = .copy(BoxNetJoin.sudoLine) }
             if box.online {
                 switch box.route {
                 case .net?: row.route = tailnetPeer?.relayed == true ? .relayed : .tailnet
@@ -416,7 +418,7 @@ package enum DevicesWords {
         case .notSetUp: return "not set up"
         case .offline: return row.lastSeen.map { "last seen " + ago($0, now: now) } ?? "offline"
         case .unknown where row.tailscaleOff, .connected where row.tailscaleOff:
-            return "Tailscale is off on \(row.name)" + (row.route == .ssh ? " · via SSH" : "")
+            return "Tailscale is off on \(row.name)"
         case .unknown: return row.route == .ssh ? "via SSH" : nil
         case .connected: break
         }

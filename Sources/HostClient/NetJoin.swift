@@ -122,11 +122,11 @@ package final class BoxNetJoin {
     }
 
     /// The command that starts the box's own Tailscale, for "Copy sudo line".
-    package static let sudoLine = "sudo tailscale up"
+    nonisolated package static let sudoLine = "sudo tailscale up"
     /// The command that installs Tailscale on a box, for "Copy line".
-    package static let installLine = "curl -fsSL https://tailscale.com/install.sh | sh"
+    nonisolated package static let installLine = "curl -fsSL https://tailscale.com/install.sh | sh"
     /// The command that keeps kore-host running after the last logout.
-    package static let lingerLine = "sudo loginctl enable-linger $USER"
+    nonisolated package static let lingerLine = "sudo loginctl enable-linger $USER"
 
     // What happened, in order.
 

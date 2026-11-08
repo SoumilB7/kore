@@ -68,6 +68,9 @@ package final class NodeDirectory: Sendable {
         package var id: NodeID { NodeID(device.uuidString.lowercased()) }
         /// On KoreNet and reachable there now: its node key is the one it listens on.
         package var listening: Bool { on && nodeKey != nil }
+        /// A tailnet peer with `key` is this box: its node key now, or the last one while its
+        /// Tailscale is off (the peer coming online is the box coming back).
+        package func isPeer(_ key: String) -> Bool { (nodeKey ?? lastNodeKey) == key }
     }
 
     /// What a box's `net.node` changes here (`KoreNetSwitch.said`).
@@ -89,8 +92,11 @@ package final class NodeDirectory: Sendable {
             return Heard(entry: fresh.hearing(node), replaced: before)
         }
         if before.identityKey != node.identityKey {
+            // Refused: never dialled on the tailnet as it was (its last key kept for the record),
+            // so it stays on SSH quietly until it's forgotten.
             var entry = before
             entry.identityChanged = true
+            entry.nodeKey = nil
             return Heard(entry: entry, refused: true)
         }
         return Heard(entry: before.hearing(node))

@@ -111,7 +111,9 @@ import Testing
         entry.nodeKey = nil
         let row = Self.picture(Self.facts(entry, online: true, route: .ssh(alias: "mybox", grant: "laptop"))).devices[0]
         #expect(!row.canJoin && row.tailscaleOff)
-        #expect(DevicesWords.detail(row, now: DevicesPictureTests.now) == "Tailscale is off on mybox · via SSH")
+        // One line and one action, the same as a stopped upgrade's: Copy sudo line.
+        #expect(DevicesWords.detail(row, now: DevicesPictureTests.now) == "Tailscale is off on mybox")
+        #expect(row.upgradeFix == .copy(BoxNetJoin.sudoLine))
     }
 
     @Test func aBoxWithKoreNetOffOffersJoin() {
@@ -148,6 +150,16 @@ import Testing
     @Test func anotherIdentityKeyIsRefusedAndFlagged() {
         let heard = NodeDirectory.heard(Self.node(key: Data([9])), before: Self.entry(rekeyed: true), ssh: "mybox")
         #expect(heard.refused && heard.entry.identityChanged && heard.entry.identityKey == Data([1]))
+        // Never dialled on the tailnet as it was: SSH only, quietly; its last key kept.
+        #expect(heard.entry.nodeKey == nil && heard.entry.lastNodeKey == "nodekey:box" && !heard.entry.listening)
+    }
+
+    /// The tailnet peer coming online is the box, by its key now or the one it last listened on.
+    @Test func aPeerIsTheBoxByItsLastKeyWhileTailscaleIsOff() {
+        var entry = Self.entry(rekeyed: true)
+        #expect(entry.isPeer("nodekey:box") && !entry.isPeer("nodekey:other"))
+        entry.nodeKey = nil
+        #expect(entry.isPeer("nodekey:box"))
     }
 
     @Test func anEntryKeptBeforeDecodesOnFromItsKey() throws {

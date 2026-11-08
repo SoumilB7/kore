@@ -338,7 +338,7 @@ package final class KoreNetSwitch: NetRouter {
         note(event)
         switch event {
         case .peer(_, let key?, let online?) where online:
-            for connection in connections() where directory.entry(forKey: connection.alias)?.nodeKey == key { connection.peerOnline() }
+            for connection in connections() where directory.entry(forKey: connection.alias)?.isPeer(key) == true { connection.peerOnline() }
         case .state(.running) where state == .sidecar && before != .running:
             // Kore's own tailnet signed in: its addresses and peers come with a fresh read.
             readStatus()
@@ -485,7 +485,7 @@ package final class KoreNetSwitch: NetRouter {
         let entry = heard.entry
         if heard.refused {
             // Its row says so (Forget and set up again); nothing else is taken from it.
-            if directory.all[entry.id.raw]?.identityChanged != true { directory.upsert(entry) }
+            if directory.all[entry.id.raw] != entry { directory.upsert(entry) }
             HostLog.note(connection.alias, "korenet refused", "the box's identity key changed")
             return
         }
@@ -497,6 +497,9 @@ package final class KoreNetSwitch: NetRouter {
         }
         if let old = heard.replaced {
             HostLog.audit("replaced", ["alias": connection.sshAlias, "old": old.id.raw, "device": entry.id.raw])
+            // The dead box's pin goes from this Mac's book, and phones hear the directory without it.
+            _ = try? book(env).update { $0.removeAll { $0.id == old.device } }
+            directoryChanged?()
             // Its stores were kept under the old device's id: they move to the new one's.
             if connection.alias == old.id.raw { Task { _ = await rekeyer.rekey(connection, to: entry.id, directory: directory) } }
         }
