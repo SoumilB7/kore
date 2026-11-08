@@ -220,6 +220,41 @@ final class DevicesJoinKoreNet: ChatStoryline {
     }
 }
 
+/// The Welcome's title row has the network icon where the box button was (the switcher's chips go
+/// between this Mac and a box): pressed, the Devices popup opens in the Welcome, under the icon;
+/// pressed again, it closes.
+final class DevicesFromWelcome: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            DevicesSetUp(on: true, phone: "Pixel 9"),
+            ShowWelcome(),
+            Expect("the Welcome has the network icon, no box button", found: { _ in
+                let icons = StoryRegistry.ids.filter { $0.hasPrefix("net.") || $0.hasPrefix("titlebar.") }
+                let windows = NSApp.windows.filter(\.isVisible).map { "\($0.title)" + ($0 === Self.welcome ? "*" : "") }
+                return "ids \(icons) windows \(windows) in-welcome \(Self.welcome.map { StoryRegistry.entries(StoryID.Net.icon.raw, in: $0).count } ?? -1)"
+            }) { _ in
+                Self.welcome.map { StoryRegistry.entry(StoryID.Net.icon.raw, in: $0) != nil } == true
+                    && !StoryRegistry.ids.contains("titlebar.boxes")
+            },
+            Do("Press the Welcome's network icon") { _ in Self.press() },
+            Expect("the Devices popup in the Welcome, under its icon") { _ in Self.welcome.map(DevicesPopupPlace.showsUnderIcon(in:)) == true },
+            Expect("Pixel 9 listed") { _ in Devices.shared.picture().devices.contains { $0.name == "Pixel 9" } },
+            Snapshot("devices-from-welcome"),
+            Do("Press it again") { _ in Self.press() },
+            Expect("closed") { _ in !Devices.shared.popupOpen },
+        ]
+    }
+
+    static var welcome: NSWindow? { NSApp.windows.first { $0.title == ListKeys.welcome && $0.isVisible } }
+
+    static func press() {
+        guard let welcome else { return }
+        StoryRegistry.entry(StoryID.Net.icon.raw, in: welcome)?.press?()
+    }
+}
+
 /// The scripted sides, put in for one storyline and taken out after it, pass or fail.
 @MainActor
 enum DevicesStory {

@@ -404,12 +404,21 @@ struct DevicesPopup: View {
 
     private static func show(in window: NSWindow, under anchor: NSView?) {
         Devices.shared.openedPopup()
-        NetPopupHost.shared.show("devices", DevicesPopup(), in: window, under: anchor, edge: .trailing) { Devices.shared.closedPopup() }
+        NetPopupHost.shared.show("devices", DevicesPopup(), in: window, under: anchor, edge: edge(of: anchor, in: window)) { Devices.shared.closedPopup() }
+    }
+
+    /// Which of the icon's edges the popup lines up with: its leading one where the icon sits in
+    /// the window's left half (the Welcome's, after the traffic lights), else its trailing one (a
+    /// folder window's, by the clock), so the popup opens into the window.
+    static func edge(of anchor: NSView?, in window: NSWindow) -> NetPopupHost.Edge {
+        guard let anchor, anchor.window === window, let content = window.contentView else { return .trailing }
+        return content.convert(anchor.bounds, from: anchor).midX < content.bounds.midX ? .leading : .trailing
     }
 
     static func openIn(_ window: NSWindow?) -> Bool {
         _ = Devices.shared.popupOpen
-        return window != nil && NetPopupHost.shared.isShowing("devices")
+        // Lit in the window it shows in only (the Welcome and a folder window each have an icon).
+        return window != nil && NetPopupHost.shared.isShowing("devices") && NetPopupHost.shared.window === window
     }
 }
 
@@ -527,5 +536,21 @@ struct Countdown: View {
                 .onChange(of: left == 0) { _, over in if over { Devices.shared.changed() } }
                 .storyID(StoryID.Net.countdown)
         }
+    }
+}
+
+/// Where the Devices popup hangs (storylines).
+@MainActor
+package enum DevicesPopupPlace {
+    /// Storylines: the popup shows in `window`, hanging under that window's icon (below it, one of
+    /// its edges lined up with the icon's).
+    package static func showsUnderIcon(in window: NSWindow) -> Bool {
+        guard NetPopupHost.shared.isShowing("devices"), NetPopupHost.shared.window === window, let popup = NetPopupHost.shared.frame,
+              let icon = NetAnchors.icon(in: window), let content = window.contentView
+        else { return false }
+        let under = content.convert(icon.bounds, from: icon)
+        let lined = abs(popup.minX - under.minX) < 1 || abs(popup.maxX - under.maxX) < 1
+        let below = content.isFlipped ? popup.minY >= under.maxY : popup.maxY <= under.minY
+        return lined && below
     }
 }

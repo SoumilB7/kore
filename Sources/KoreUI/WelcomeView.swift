@@ -119,10 +119,10 @@ struct WelcomeView: View {
                 .transition(.opacity)
             }
         }
-        // The box button, where a folder window's title row has it: after the traffic lights. A
-        // click switches the Welcome between this Mac and a box.
+        // KoreNet's devices, in the title row after the traffic lights (the switcher's chips
+        // above go between this Mac and a box); its popup hangs under it.
         .overlay(alignment: .topLeading) {
-            Group { if showsBoxes { WelcomeBoxButton(on: place != nil) { toggle() } } }
+            NetworkButton(size: Size.Box.welcomeButton)
                 .padding(.leading, Size.Box.welcomeInset)
                 .padding(.top, Space.xs)
                 .ignoresSafeArea(.container, edges: .top)
@@ -168,11 +168,6 @@ struct WelcomeView: View {
                 help: folder.path, story: StoryID.Welcome.recent(folder.path)
             ) { open(folder) }
         }
-    }
-
-    private func toggle() {
-        OptionsMenu.shared.close()
-        switcher.value.toggle(boxes: BoxList.shared.boxes.map(\.alias))
     }
 
     /// The box shown keeps its link while the Welcome shows it (its folders, chats, GitHub's
@@ -238,29 +233,6 @@ struct WelcomeView: View {
             return event
         }
         return nil
-    }
-}
-
-/// The title row's box button on the Welcome: lit while the Welcome stands on a box.
-private struct WelcomeBoxButton: View {
-    let on: Bool
-    let action: @MainActor @Sendable () -> Void
-    @StateObject private var hovered = Local(false)
-
-    var body: some View {
-        let lit = hovered.value || on
-        Button(action: action) {
-            Image(systemName: "server.rack")
-                .font(Chrome.bodyMedium)
-                .foregroundStyle(lit ? Theme.text : Theme.secondary)
-                .frame(width: Size.Box.welcomeButton, height: Size.Box.welcomeButton)
-                .background(lit ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
-                .contentShape(RoundedRectangle(cornerRadius: Radius.control))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered.value = $0 }
-        .popupAwareHelp(on ? "This Mac" : "Boxes")
-        .storyID(StoryID.Titlebar.boxes, press: action)
     }
 }
 

@@ -8,35 +8,17 @@ import SwiftUI
 struct WelcomeSwitch: Equatable {
     /// The box shown; nil: this Mac.
     var place: String?
-    /// The box the button goes back to.
-    var lastBox: String?
     /// Add a box…'s field is open, with what's typed.
     var adding: String?
 
-    /// The box button: back to this Mac, else to the last box (or the first one); with no box,
-    /// Add a box… opens.
-    mutating func toggle(boxes: [String]) {
-        if place != nil {
-            place = nil
-            return
-        }
-        guard let box = lastBox.flatMap({ boxes.contains($0) ? $0 : nil }) ?? boxes.first else {
-            adding = ""
-            return
-        }
-        show(box)
-    }
-
     mutating func show(_ box: String?) {
         place = box
-        if let box { lastBox = box }
         adding = nil
     }
 
     /// A box forgotten while it's shown: back to this Mac.
     mutating func removed(_ box: String) {
         if place == box { place = nil }
-        if lastBox == box { lastBox = nil }
     }
 }
 

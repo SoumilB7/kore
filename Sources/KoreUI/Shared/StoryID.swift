@@ -81,8 +81,6 @@ extension StoryID {
         package static func hiddenCount(_ n: Int) -> StoryID { StoryID(.titlebar, "overflow.count", key: String(n)) }
         /// The active tab's name before a strip of tabs too narrow for theirs.
         package static let tabName = StoryID(.titlebar, "tabname")
-        /// The box button, beside the panel button.
-        package static let boxes = StoryID(.titlebar, "boxes")
         /// A box window's Sync button.
         package static let boxSync = StoryID(.titlebar, "boxsync")
     }

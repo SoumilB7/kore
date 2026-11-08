@@ -9,28 +9,22 @@ import Testing
 /// box window's disconnect card.
 @MainActor
 struct BoxWelcomeTests {
-    @Test func theBoxButtonTogglesBetweenThisMacAndTheLastBox() {
+    @Test func theSwitcherShowsABoxAndThisMac() {
         var state = WelcomeSwitch()
-        state.toggle(boxes: ["mybox", "other"])
+        state.show("mybox")
         #expect(state.place == "mybox")
-        state.toggle(boxes: ["mybox", "other"])
+        state.show(nil)
         #expect(state.place == nil)
         state.show("other")
-        state.show(nil)
-        state.toggle(boxes: ["mybox", "other"])
+        // Forgotten while shown: back to this Mac; another box forgotten changes nothing.
+        state.removed("mybox")
         #expect(state.place == "other")
-        // Forgotten while shown: back to this Mac, and the button goes to the first box.
         state.removed("other")
         #expect(state.place == nil)
-        state.toggle(boxes: ["mybox"])
-        #expect(state.place == "mybox")
-        // No box yet: Add a box… opens.
-        var empty = WelcomeSwitch()
-        empty.toggle(boxes: [])
-        #expect(empty.place == nil)
-        #expect(empty.adding == "")
-        empty.show("new")
-        #expect(empty.adding == nil)
+        // Add a box…'s field closes once a box is shown.
+        state.adding = "new"
+        state.show("new")
+        #expect(state.adding == nil && state.place == "new")
     }
 
     private static func fake() -> BoxExplorerTests.FakeBox {

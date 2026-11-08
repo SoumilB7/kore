@@ -19,7 +19,7 @@ extension Size {
         static let agentsWidth: CGFloat = 340
         /// The popup rows' leading glyph or dot column.
         static let lead: CGFloat = 14
-        /// The new window's button: the title row's size, after the traffic lights.
+        /// The Welcome's title-row button (KoreNet's devices): its size, after the traffic lights.
         static let welcomeButton: CGFloat = 30
         static let welcomeInset: CGFloat = 82
     }

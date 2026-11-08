@@ -114,6 +114,8 @@ final class NetPopupHost {
 
     /// The window it shows in.
     var window: NSWindow? { owner }
+    /// Where it shows, in its window's content view.
+    var frame: CGRect? { host?.frame }
 }
 
 /// The anchors popups hang from, by window: each title row's network icon registers its own, so
