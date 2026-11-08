@@ -192,7 +192,11 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         setPadding(pad, pad, pad, pad)
         contentDescription = "Attach"
         pressFill(null, Tone.l2, 18)
-        setOnClickListener { if (uploadsOn()) chooseAttachment() else quiet("Uploads arrive with Kore's next update.") }
+        setOnClickListener {
+            val caps = Offers.caps(link()?.welcome?.value)
+            val box = link()?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
+            Offers.uploadsOff(caps, control = "history" in caps || !box, box = box, name = link()?.name ?: "there")?.let { quiet(it) } ?: chooseAttachment()
+        }
     }
     /** The attachments, inside the composer above the field: 52 thumbnails, 8 apart. */
     private val chips = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
@@ -424,7 +428,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             "cancelled" -> "Allow needs your fingerprint."
             "stale.card", "gone.card" -> "That card changed. Look again."
             "rateLimited" -> "Too fast. Try again in a moment."
-            else -> "Not sent (${r.str("code") ?: "refused"})."
+            else -> deviceWords(r.str("message"))?.let { "Not sent: $it" } ?: "Not sent (${r.str("code") ?: "refused"})."
         }
         showStatus()
     }
@@ -515,9 +519,6 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     }
     private val attachments = ArrayList<Attachment>()
     private var shot: Uri? = null
-
-    /** Uploads only once the Mac side offers them (link 1.1); until then 📎 says so instead. */
-    private fun uploadsOn(): Boolean = hasCap("blob") || hasCap("upload")
 
     /** What the Mac side offers this link (welcome `caps`): "blob" for uploads, "commands" for the "/" list. */
     private fun hasCap(name: String): Boolean {
@@ -903,7 +904,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             return
         }
         if (kind in setOf("model", "effort", "fast", "autoCompact")) want.remove(kind)
-        val words = if (code == "denied.raiseMode") r.str("message") ?: refusalWords(code) else refusalWords(code)
+        val words = refusalWords(code, r.str("message"))
         val sheet = live.lastOrNull { it.isShowing }
         if (sheet != null) { sheet.say(words); sheet.refresh() } else quiet(words)
     }

@@ -494,8 +494,20 @@ object Quiet {
     }
 }
 
-/** A refused command in one short line. */
-fun refusalWords(code: String?): String = when {
+/**
+ * A refused command in one short line: the device's own words when it gave them (a Mac's and a
+ * box's refusals are written for people), else a line for its code.
+ */
+fun refusalWords(code: String?, message: String? = null): String = deviceWords(message) ?: codeWords(code)
+
+/** A refusal's own words, trimmed; none for blanks or an older Mac's or box's terse ones. */
+fun deviceWords(message: String?): String? = message?.trim()?.takeIf { it.isNotEmpty() && it !in TERSE_WORDS }
+
+/** What a Mac or box before 0.3.5 said of a command it didn't know: its code reads better. */
+private val TERSE_WORDS = setOf("Not taken here.", "Unknown command.", "Unknown call.")
+
+/** A refusal's code as one line, for one that came without words. */
+fun codeWords(code: String?): String = when {
     code == null -> "That wasn't done."
     code == "denied.control" || code == "denied.command" -> "Only on the Mac or box itself, not from the phone."
     code == "denied.mac" -> "That needs the Mac."
@@ -528,7 +540,7 @@ fun Activity.act(
             when {
                 r.bool("ok") -> ok(r)
                 r.str("code") == "confirm.close" && forced != null -> confirmClose(ask ?: "It's working. Closing stops it.") { act(forced, say, null, null, ok) }
-                else -> say(refusalWords(r.str("code")))
+                else -> say(refusalWords(r.str("code"), r.str("message")))
             }
         }
     }

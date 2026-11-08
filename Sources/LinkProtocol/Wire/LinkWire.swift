@@ -328,12 +328,15 @@ package struct CardAction: Codable, Sendable, Equatable {
     package var label: String
     package var style: Style
     package var refused: Bool?
+    /// The answer's tooltip: Always allow's rule as it reads (`Always allow `npm test``).
+    package var help: String?
 
-    package init(id: ID, label: String, style: Style, refused: Bool? = nil) {
+    package init(id: ID, label: String, style: Style, refused: Bool? = nil, help: String? = nil) {
         self.id = id
         self.label = label
         self.style = style
         self.refused = refused
+        self.help = help
     }
 }
 

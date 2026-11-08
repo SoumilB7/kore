@@ -93,7 +93,7 @@ class HistoryActivity : NodeActivity() {
             runOnUiThread {
                 if (r == null || r.str("t") == "result") {
                     state.removeAllViews()
-                    state.addView(emptyState(dev.kore.phone.R.drawable.i_wifi_off, if (r == null) "$macName didn't answer" else "History isn't open", if (r == null) "Try again in a moment." else refusalWords(r.str("code"))))
+                    state.addView(emptyState(dev.kore.phone.R.drawable.i_wifi_off, if (r == null) "$macName didn't answer" else "History isn't open", if (r == null) "Try again in a moment." else refusalWords(r.str("code"), r.str("message"))))
                     return@runOnUiThread
                 }
                 if (reset) rows.clear()

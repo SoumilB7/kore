@@ -124,32 +124,9 @@ enum LinkSnapshot {
     }
 
     /// The most of a diff sent: 256 KiB of lines.
-    static let diffCap = 256 * 1024
+    static let diffCap = LinkProjection.diffCap
 
-    /// A file's change as hunks, with "+", "-" or " " before each line; cut at `diffCap`.
-    static func hunks(_ change: FileChange) -> ([LinkMessage.Hunk], Bool) {
-        var size = 0
-        var out: [LinkMessage.Hunk] = []
-        for hunk in change.hunks {
-            var lines: [String] = []
-            for line in hunk.lines {
-                let mark = switch line.kind {
-                case .add: "+"
-                case .remove: "-"
-                case .context: " "
-                }
-                let text = mark + line.text
-                size += text.utf8.count + 1
-                if size > diffCap {
-                    out.append(.init(oldStart: hunk.oldStart, newStart: hunk.newStart, lines: lines))
-                    return (out, true)
-                }
-                lines.append(text)
-            }
-            out.append(.init(oldStart: hunk.oldStart, newStart: hunk.newStart, lines: lines))
-        }
-        return (out, change.isTruncated)
-    }
+    static func hunks(_ change: FileChange) -> ([LinkMessage.Hunk], Bool) { LinkProjection.hunks(change) }
 
     /// Each CLI's models, read from its open chats (a CLI says them once it runs), its account,
     /// and its logins' usage as this Mac knows it (`AccountStore.linkUsage`).
@@ -351,11 +328,7 @@ enum LinkSnapshot {
             }
             actions = [.init(id: .submitAnswers, label: CardLabels.Question.submit, style: .primary), .init(id: .deny, label: CardLabels.Question.skip, style: .neutral)]
         case .permission, .planReady:
-            // A call Auto refused outright: OK only, its line says why.
-            actions = approval.autoStop && approval.allowNote != nil ? [.init(id: .deny, label: "OK", style: .neutral)] :
-                [.init(id: .allow, label: approval.autoStop ? "Run once" : "Allow", style: .primary, refused: approval.allowNote != nil ? true : nil)]
-                + (approval.canAlwaysAllow && !approval.autoStop ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true)] : [])
-                + [.init(id: .deny, label: "Deny", style: .destructive)]
+            actions = LinkProjection.permissionActions(approval)
         }
         let digest = LinkCardDigest(
             kind: kind, title: approval.title, detail: approval.detail, body: approval.body, plan: approval.plan, questions: questions,

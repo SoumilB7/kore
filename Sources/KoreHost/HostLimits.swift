@@ -1,4 +1,5 @@
 import Foundation
+import KoreTrust
 import LinkProtocol
 
 /// Link 1.12: how fast a watch or act grant's client may go, the Mac's own link's numbers
@@ -13,6 +14,18 @@ struct HostLimits {
     var sends = RateLimiter(limit: 10, per: 60)
     var accounts = RateLimiter(limit: 10, per: 60)
     var reads = RateLimiter(limit: 2, per: 1)
+
+    /// Upload bytes in the last hour, as each began (policy table `blob.put`: 256 MB an hour).
+    private var uploaded: [(at: Date, bytes: Int)] = []
+
+    /// Whether an upload of `size` fits this hour.
+    mutating func uploadFits(_ size: Int, at now: Date) -> Bool {
+        uploaded.removeAll { now.timeIntervalSince($0.at) >= 3600 }
+        return uploaded.reduce(size, { $0 + $1.bytes }) <= PolicyTable.blobBytesPerHour
+    }
+
+    /// An upload begun: its bytes count for the hour.
+    mutating func uploadBegan(_ size: Int, at now: Date) { uploaded.append((now, size)) }
 
     enum Verdict: Equatable {
         case ok

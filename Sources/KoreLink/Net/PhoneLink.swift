@@ -50,7 +50,7 @@ package final class PhoneLink {
         LinkMessage.Welcome(
             proto: LinkProto.version, epoch: LinkRun.epoch, host: .init(name: Host.current().localizedName ?? "Mac", koreVersion: LinkHost.version),
             providers: LinkSnapshot.providers(), policy: .init(sendMaxLevel: LinkPolicy.sendMaxLevel, control: .standard),
-            caps: ["tx", "attn", "blob", "commands", "control", "raise", "history", "diff"])
+            caps: ["tx", "attn", "blob", "commands", "control", "raise", "history", "diff", "group", "board"])
     }
 
     package var client: LinkFeed.Client { peer.client }

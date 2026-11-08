@@ -26,7 +26,8 @@ extension ProviderDescriptor {
         account: .codex,
         install: InstallWording(maker: "OpenAI", source: "chatgpt.com/codex · into ~/.local/bin · about a minute · no Node needed"),
         // `service_tier` on the models that list a fast one (`CodexBackend.setFastMode`).
-        fastMode: true)
+        fastMode: true,
+        commands: CodexBackend.builtinCommands)
 }
 
 /// Codex's permission presets as its VS Code extension shows them, and its separate Plan toggle.

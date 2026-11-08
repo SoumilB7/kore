@@ -402,6 +402,13 @@ package final class CodexBackend: ChatBackend {
         }
     }
 
+    /// Codex's own "/" commands, before its skills.
+    package nonisolated static let builtinCommands = [
+        SlashCommand(name: "plan", description: "Plan mode", hint: "", kind: .command),
+        SlashCommand(name: "compact", description: "Summarize the thread to free up context", hint: "", kind: .command),
+        SlashCommand(name: "goal", description: "Set a goal Codex keeps working toward until it is done", hint: "objective", kind: .command),
+    ]
+
     private func controls(_ session: CodexSession) async -> ChatControls {
         let list = (try? await session.models()) ?? []
         let models = options(list)
@@ -417,13 +424,7 @@ package final class CodexBackend: ChatBackend {
         }
         let skills = (try? await session.skills()) ?? []
         let commands =
-            [
-                SlashCommand(name: "plan", description: "Plan mode", hint: "", kind: .command),
-                SlashCommand(name: "compact", description: "Summarize the thread to free up context", hint: "", kind: .command),
-                SlashCommand(
-                    name: "goal", description: "Set a goal Codex keeps working toward until it is done",
-                    hint: "objective", kind: .command),
-            ]
+            Self.builtinCommands
             + skills.compactMap { json -> SlashCommand? in
                 guard let name = json["name"]?.string, json["enabled"]?.bool != false else { return nil }
                 return SlashCommand(

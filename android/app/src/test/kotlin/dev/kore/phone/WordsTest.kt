@@ -67,6 +67,22 @@ class WordsTest {
         assertEquals("Not done (weird).", refusalWords("weird"))
     }
 
+    /** A device's own words win: every `invalid` used to read "Kore there doesn't take that yet". */
+    @Test fun refusalsSayTheDevicesOwnWordsWhenItGivesThem() {
+        assertEquals("A box doesn't do that.", refusalWords("invalid", "A box doesn't do that."))
+        assertEquals("Leaving plan raises the mode; do it in Kore.", refusalWords("denied.raiseMode", "Leaving plan raises the mode; do it in Kore."))
+        assertEquals("That chat isn't on the box any more.", refusalWords("gone.chat", "  That chat isn't on the box any more. "))
+        // None, or only blanks: the code's line.
+        assertEquals("Kore there doesn't take that yet.", refusalWords("invalid", null))
+        assertEquals("Kore there doesn't take that yet.", refusalWords("invalid", "  "))
+        assertEquals("Too fast. Try again in a moment.", refusalWords("rateLimited", ""))
+        assertEquals("That wasn't done.", refusalWords(null, null))
+        // An older Mac's or box's terse words: the code's line reads better.
+        assertEquals("Kore there doesn't take that yet.", refusalWords("invalid", "Not taken here."))
+        assertEquals("Kore there doesn't take that yet.", refusalWords("invalid", "Unknown command."))
+        assertEquals("The box's kore-host needs an update for that.", refusalWords("invalid", "The box's kore-host needs an update for that."))
+    }
+
     /** The live bug's words: a box is never "asleep"; each surface tells one story. */
     @Test fun aBoxIsNeverAsleepAndEverySurfaceSaysTheSame() {
         val now = 10_000_000_000L

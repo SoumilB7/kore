@@ -201,7 +201,8 @@ package final class BoxPty {
 
     private static func why(_ result: LinkMessage.Result, _ answer: PtyResult?, alias: String) -> String {
         let message = answer?.message ?? result.message
-        if result.code == .invalid, message == nil || message == "That message isn't one this box reads." || message == "Unknown command." {
+        if result.code == .invalid, message == nil || message == "That message isn't one this box reads." || message == LinkPolicy.unknownBefore
+            || message == LinkPolicy.unknownCommand {
             return "\(NodeNames.name(alias)) needs an update for terminals"
         }
         if result.code == .deniedControl { return "Terminals need a grant with full control on \(NodeNames.name(alias))" }

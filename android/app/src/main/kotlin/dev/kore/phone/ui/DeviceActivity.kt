@@ -569,7 +569,7 @@ class DeviceActivity : NodeActivity() {
         kore.scope.launch {
             val r = node.call(dev.kore.link.node.Control.foldersList())
             runOnUiThread {
-                if (!r.bool("ok")) return@runOnUiThread s.say(refusalWords(r.str("code")))
+                if (!r.bool("ok")) return@runOnUiThread s.say(refusalWords(r.str("code"), r.str("message")))
                 boxFolders = r.objs("folders")
                 if (s.isShowing) s.refresh()
             }

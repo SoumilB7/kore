@@ -645,7 +645,7 @@ package final class HostDaemon {
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box", BoxTools.deviceCap] + (control != .watch ? ["history"] : [])
+            caps: ["tx", "attn", "commands", "control", "box", BoxTools.deviceCap] + (control != .watch ? ["history", "blob", "diff"] : [])
                 + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap] : []))
     }
 
@@ -731,17 +731,19 @@ package final class HostDaemon {
         _ command: LinkCommand, id: String, control: GrantControl, phone: Bool = false, reply: @escaping @MainActor (LinkMessage.Result) -> Void
     ) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
-        guard control != .watch else { return fail(.deniedControl, "This grant only watches.") }
+        guard control != .watch else { return fail(.deniedControl, LinkPolicy.watchOnly) }
         let hc = command.chatId.flatMap(chat)
         if command.chatId != nil, hc == nil { return fail(.goneChat, "No such chat on this box.") }
         if let hc, let refusal = Self.held(hc) { return fail(refusal.code, refusal.message) }
         switch command {
         case .send(_, let text, let blobs):
             guard let hc else { return fail(.goneChat, "") }
-            guard blobs.isEmpty else { return fail(.invalid, "Attach files from a full grant.") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
+            // Uploaded files (`blob.put`), kept on the box until a turn has read them.
+            let files = blobs.compactMap { self.blobs[$0] }
+            guard files.count == blobs.count else { return fail(.goneBlob, "A file wasn't uploaded, or expired. Attach it again.") }
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
-            guard chat.sendFromLink(text) else { return fail(.busy, "The chat can't take a message right now.") }
+            guard chat.sendFromLink(text, files: files) else { return fail(.busy, "The chat can't take a message right now.") }
             armIdle(hc)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
@@ -799,7 +801,7 @@ package final class HostDaemon {
             }
             return self.control(kind, args, id: id, control: control, phone: phone, reply: reply)
         case .unknown:
-            return fail(.invalid, "Unknown command.")
+            return fail(.invalid, LinkPolicy.unknownCommand)
         }
     }
 
@@ -920,7 +922,7 @@ package final class HostDaemon {
         case .accountUsage where args.login == nil:
             // 1.14: a client that acts (a phone) asks for its logins' usage: read again where due,
             // pushed in `clis[].usage`. Read-only, and nothing about a login is named.
-            guard control >= .act else { return fail(.deniedControl, "This grant only watches.") }
+            guard control >= .act else { return fail(.deniedControl, LinkPolicy.watchOnly) }
             planUsage.refresh(args.provider ?? "")
             return .init(id: id, ok: true)
         case .accountSignIn, .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh, .accountList, .accountUsage, .accountSwitch:
@@ -932,7 +934,7 @@ package final class HostDaemon {
         case .historyOpen, .historyRename, .historyArchive:
             return historyOp(kind, args, id: id, reply: reply)
         default:
-            return fail(.invalid, "Not taken here.")
+            return fail(.invalid, LinkPolicy.notTaken)
         }
     }
 
@@ -1086,7 +1088,7 @@ package final class HostDaemon {
             // first; this holds even if a rule there changes).
             return .init(id: id, ok: false, code: .invalid, message: LinkPolicy.boxSignOutRefused)
         default:
-            return .init(id: id, ok: false, code: .invalid, message: "Not taken here.")
+            return .init(id: id, ok: false, code: .invalid, message: LinkPolicy.notTaken)
         }
     }
 
@@ -1135,7 +1137,7 @@ package final class HostDaemon {
             if let hc { switchAccount(hc, to: login) }
             return .init(id: id, ok: true, login: hc.map { $0.record.account ?? LinkAccount.main }, folderLogin: accounts.folderDefault(folder) ?? LinkAccount.main)
         default:
-            return fail(.invalid, "Not taken here.")
+            return fail(.invalid, LinkPolicy.notTaken)
         }
     }
 

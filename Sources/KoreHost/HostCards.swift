@@ -31,7 +31,7 @@ enum HostMeta {
         let modes = Dictionary(provider.modes.map { ($0.id, level($0)) }, uniquingKeysWith: { a, _ in a })
         let current = modes[modeID(hc)] ?? .danger
         let cards = Dictionary(self.cards(hc, raise: raise).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest, risk: $0.risk)) }, uniquingKeysWith: { a, _ in a })
-        let commands = hc.chat?.controls.commands ?? []
+        let commands = hc.commands
         return LinkPolicy.ChatFacts(
             level: current, planOn: provider.planToggle != nil && (hc.chat?.controls.planMode ?? false), modes: modes, cards: cards,
             commands: Set(commands.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(commands.filter { $0.kind == .kore }.map(\.name)))
@@ -96,7 +96,7 @@ enum HostMeta {
             if let chat, !chat.approvals.pending.isEmpty || chat.approvals.offerImplementPlan { .needsYou }
             else if chat?.isWorking == true { .working }
             else { .idle }
-        let commands = (chat?.controls.commands ?? [])
+        let commands = hc.commands
             .filter { $0.kind != .kore && !LinkPolicy.koreOnly.contains($0.name) }
             .prefix(200)
             .map { LinkSlash(name: $0.name, description: String($0.description.prefix(100)), kind: $0.kind == .skill ? .skill : .command) }
@@ -183,10 +183,8 @@ enum HostMeta {
             }
             actions = [.init(id: .submitAnswers, label: CardLabels.Question.submit, style: .primary), .init(id: .deny, label: CardLabels.Question.skip, style: .neutral)]
         case .permission, .planReady:
-            actions =
-                [.init(id: .allow, label: "Allow", style: .primary)]
-                + (approval.canAlwaysAllow ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true)] : [])
-                + [.init(id: .deny, label: "Deny", style: .destructive)]
+            // As the Mac's (`LinkSnapshot`): Auto's asks run once, its refusals take OK only.
+            actions = LinkProjection.permissionActions(approval)
         }
         let digest = LinkCardDigest(
             kind: kind, title: approval.title, detail: approval.detail, body: approval.body, plan: approval.plan, questions: questions,

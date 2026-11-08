@@ -478,9 +478,20 @@ package enum LinkPolicy {
             }
             return .allow
         default:
-            return .deny(.invalid, "Not taken here.")
+            return .deny(.invalid, notTaken)
         }
     }
+
+    /// What a box says of a command it doesn't take (a Mac's window groups and boards): worded for
+    /// the person who asked. Boxes before 0.3.5 said `notTakenBefore`.
+    package static let notTaken = "A box doesn't do that."
+    package static let notTakenBefore = "Not taken here."
+    /// What a box says of a command newer than its kore-host. Boxes before 0.3.5 said
+    /// `unknownBefore`.
+    package static let unknownCommand = "The box's kore-host needs an update for that."
+    package static let unknownBefore = "Unknown command."
+    /// What a box says to a device whose grant only watches, of anything more.
+    package static let watchOnly = "This device can only watch here."
 
     /// The answers each kind of card takes over the link. `approvePlan` starts the work in Manual.
     package static func actions(_ kind: LinkCard.Kind) -> Set<CardAction.ID> {

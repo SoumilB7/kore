@@ -81,7 +81,7 @@ extension HostDaemon {
             }
             return nil
         default:
-            return fail(.invalid, "Not taken here.")
+            return fail(.invalid, LinkPolicy.notTaken)
         }
         return done
     }

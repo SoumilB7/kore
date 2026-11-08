@@ -34,6 +34,8 @@ package struct ProviderDescriptor: Identifiable, Sendable {
     package var install = InstallWording(maker: "", source: "")
     /// It has a fast mode (some of its models): what the link advertises (`ProviderFeatures`).
     package var fastMode = false
+    /// The "/" commands it takes before its CLI has listed its own (a chat not started yet).
+    package var commands: [SlashCommand] = []
 }
 
 /// The install card's words for one CLI's official installer.
