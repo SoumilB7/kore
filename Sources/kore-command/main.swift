@@ -27,7 +27,7 @@ let usage = """
            kore compact          compact it, once this turn ends
            kore new [--claude|--codex] [--model M] [--mode X] ["message"]
                                  a new chat in this window, in front (Act unlimited)
-           kore fork <chat> [--at <message>] [--model M] ["message"]
+           kore fork <chat> [--at -N|<message>] [--model M] ["message"]
                                  fork a chat (. for this one) into a tab in front (Act unlimited)
            kore wait <chat> [--timeout s]
                                  until its turn ends or a card asks: its answer

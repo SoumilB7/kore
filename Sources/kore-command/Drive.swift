@@ -6,7 +6,7 @@ enum Drive {
 
     static let usage = [
         "new": "[--claude|--codex] [--model M] [--mode X] [\"message\"]", "send": "<chat> \"message\"", "stop": "<chat>", "tab": "<chat>",
-        "fork": "<chat> [--at <message>] [--model M] [\"message\"]", "wait": "<chat> [--timeout s]",
+        "fork": "<chat> [--at -N|<message>] [--model M] [\"message\"]", "wait": "<chat> [--timeout s]",
         "answer": "<chat> <card> <answer>... | <chat> <card> --deny | <chat> <card> --allow", "open": "<session> [--folder F]",
     ]
 

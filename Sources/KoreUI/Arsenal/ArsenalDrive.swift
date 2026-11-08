@@ -93,8 +93,17 @@ extension Chat {
 extension Chat {
     /// Where an agent's fork of this chat starts, as the fork on a message's or an answer's menu
     /// makes it: at the user message `at` names (its row id, its text, or a part only it has), which
-    /// goes back to the fork's composer, or after the last answer.
+    /// goes back to the fork's composer, or after the last answer. `-N` is the Nth user message from
+    /// the end, as the message scroller counts them while the pointer is over it (`-1` the last).
     package func arsenalForkStart(at ref: String?) async -> Result<(start: ForkStart, draft: String), ArsenalRefusal> {
+        if let ref, let back = Self.fromEnd(ref) {
+            switch await scrollerMessage(back) {
+            case .success(let entry):
+                guard let start = await forkStart(entry) else { return .failure(.init("Couldn't fork it: the chat says why.")) }
+                return .success((start, entry.text))
+            case .failure(let refusal): return .failure(refusal)
+            }
+        }
         let entries = transcript.entries
         guard let ref, !ref.isEmpty else {
             guard let last = entries.last(where: { $0.kind == .answer }) else { return .failure(.init("Nothing to fork yet: it hasn't answered.")) }
@@ -108,6 +117,38 @@ extension Chat {
         guard let entry = found else { return .failure(.init("No one message matches “\(ref.prefix(80))”: give its row id (kore log), or more of its text.")) }
         guard let start = await forkStart(entry) else { return .failure(.init("Couldn't fork it: the chat says why.")) }
         return .success((start, entry.kind == .user ? entry.text : ""))
+    }
+
+    /// "-3" → 3; nil for anything else.
+    static func fromEnd(_ ref: String) -> Int? {
+        let ref = ref.trimmingCharacters(in: .whitespaces)
+        guard ref.hasPrefix("-"), let n = Int(ref.dropFirst()), n > 0 else { return nil }
+        return n
+    }
+
+    /// The scroller's message `back` from the end, read in from disk first if it isn't loaded, as a
+    /// click on its mark reads it in.
+    private func scrollerMessage(_ back: Int) async -> Result<TranscriptLog.Entry, ArsenalRefusal> {
+        let store = transcript
+        if store.earlierAvailable, store.earlierMarks.isEmpty { await readEarlierMessages() }
+        var marks = store.messageMarks
+        guard back <= marks.count else {
+            return .failure(.init(marks.isEmpty ? "It has no messages to fork at yet." : "It has \(marks.count) message(s): -1 to -\(marks.count)."))
+        }
+        if case .earlier(let at) = marks[marks.count - back].place, store.earlierMarks.indices.contains(at) {
+            await loadEarlier(turns: store.earlierMarks[at].turns)
+            marks = store.messageMarks
+        }
+        let id: UUID?
+        switch marks[max(marks.count - back, 0)].place {
+        case .built(let section): id = UUID(uuidString: String(section.dropFirst(2)))
+        case .held(let entry): id = entry
+        case .earlier: id = nil
+        }
+        guard let id, let entry = store.entries.first(where: { $0.id == id }) else {
+            return .failure(.init("Couldn't read that message in: fork at its text instead."))
+        }
+        return .success(entry)
     }
 }
 

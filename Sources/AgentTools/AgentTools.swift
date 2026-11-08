@@ -92,7 +92,7 @@ package enum AgentTools {
             description: "Fork a chat into a new Kore tab, in front, carrying its conversation (to a message with at, else all of it), in that chat's mode, its Arsenal off, and send it a message if given. Counts as a new chat (Act unlimited).",
             args: [
                 ("chat", "string", "The chat to fork: . for this one, or another it reaches (title, short id)."),
-                ("at", "string", "Fork before this user message: its row id (kore_read_chat) or its text. Default: after the last answer."),
+                ("at", "string", "Fork before this user message: -N for the Nth from the end (-1 the last, as the chat's message scroller counts), its row id (kore_read_chat) or its text. Default: after the last answer."),
                 ("model", "string", "A model the chat's CLI lists (default: the chat's)."), ("text", "string", "A message to send the fork."),
             ], required: ["chat"]),
         Tool(

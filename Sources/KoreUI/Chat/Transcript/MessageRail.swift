@@ -119,7 +119,7 @@ struct MessageRail: View {
         .onTapGesture { at in jump(layout.index(atY: at.y), marks) }
         .overlay(alignment: .topTrailing) {
             if let pointed, marks.indices.contains(pointed), let preview = preview(marks[pointed]) {
-                RailCard(message: preview.message, answer: preview.answer)
+                RailCard(message: preview.message, answer: preview.answer, back: marks.count - pointed)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight.value = $0 }
                     .offset(x: -(Size.railWidth + Size.railCardGap), y: cardTop(at: layout.y(layout.place(of: pointed) ?? 0), layout))
                     .allowsHitTesting(false)
@@ -307,17 +307,27 @@ final class MessageReading: ObservableObject {
     }
 }
 
-/// A message under the pointer: its first words, and how its turn ended when that's loaded.
+/// A message under the pointer: its first words, how its turn ended when that's loaded, and where
+/// it is from the end ("-3"), as `kore fork --at` takes it.
 private struct RailCard: View {
     let message: String
     let answer: String?
+    let back: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text(Self.line(message, or: "Image"))
-                .font(Chrome.bodyMedium)
-                .foregroundStyle(Theme.text)
-                .lineLimit(2)
+            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+                Text(Self.line(message, or: "Image"))
+                    .font(Chrome.bodyMedium)
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                Text("-\(back)")
+                    .font(Chrome.label)
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.secondary)
+                    .storyID(StoryID.Transcript.railCount(back))
+            }
             if let answer {
                 Text(Self.line(answer, or: ""))
                     .font(Chrome.label)

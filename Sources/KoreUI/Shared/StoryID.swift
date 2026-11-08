@@ -227,6 +227,8 @@ extension StoryID {
         package static let earlier = StoryID(.transcript, "earlier")
         /// The message scroller.
         package static let rail = StoryID(.transcript, "rail")
+        /// The card for the message under the pointer, which counts it from the end ("-3").
+        package static func railCount(_ back: Int) -> StoryID { StoryID(.transcript, "rail-count", key: "\(back)") }
         /// The active feedback row, including delivery before the CLI acknowledges a turn.
         package static let spinner = StoryID(.transcript, "spinner")
         /// A stalled turn's spinner row: Retry and Stop.
