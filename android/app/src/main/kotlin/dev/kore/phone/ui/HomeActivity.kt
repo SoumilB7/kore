@@ -97,7 +97,8 @@ class HomeActivity : Activity() {
     }
 
     /** A device: its glyph, name, one fact under it, and a status dot. */
-    private fun deviceRow(n: NodeClient, s: NodeMachine.State, snap: JsonObject?): View = LinearLayout(this).apply {
+    private fun deviceRow(n: NodeClient, state: NodeMachine.State, snap: JsonObject?): View = LinearLayout(this).apply {
+        val s = shownState(state, kore.mesh.networkOn)
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(14), dp(12), dp(14), dp(12))
         background = rounded(K.surface)
@@ -108,14 +109,13 @@ class HomeActivity : Activity() {
         }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(12) })
         val chats = snap?.objs("chats").orEmpty()
         val running = chats.count { it.str("state") == "working" }
-        val trouble = troubleWords(s, n.device.value.kind == NodeKind.MAC, n.name, kore.mesh.macName)
+        val mac = kore.mesh.macFor(n)
+        val trouble = troubleWords(s, n.device.value.kind == NodeKind.MAC, n.name, mac)
         val fact = when {
             trouble != null -> trouble.fact
             up || (s == NodeMachine.State.Connecting && snap != null) -> "${chats.size} chats" + if (running > 0) " · $running running" else ""
-            s is NodeMachine.State.Away && s.why == NodeMachine.AwayWhy.WAITING -> "waiting for ${kore.mesh.ownerName()}"
-            s is NodeMachine.State.Away && s.why == NodeMachine.AwayWhy.NET_OFF -> "KoreNet is off on ${n.name}"
-            s is NodeMachine.State.Away -> lastSeenWords(n.lastSeen) ?: stateWords(s).first.removePrefix("● ").lowercase()
-            else -> stateWords(s).first.removePrefix("● ").lowercase()
+            s is NodeMachine.State.Away -> awayFact(s.why, n.name, mac, n.lastSeen)
+            else -> stateWords(s, mac).first.removePrefix("● ").lowercase()
         }
         addView(column().apply {
             addView(label(n.name, 15f, if (up) K.text else K.dim).apply { maxLines = 1 })

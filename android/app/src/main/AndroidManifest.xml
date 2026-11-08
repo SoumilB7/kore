@@ -10,7 +10,6 @@
          Bluetooth, USB...): a normal permission, granted at install, never a prompt. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <application
         android:name=".KoreApp"
         android:allowBackup="false"
@@ -43,12 +42,9 @@
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/shots" />
         </provider>
         <receiver android:name=".ui.InstallResult" android:exported="false" />
-        <!-- Both hold the tailnet link to the owner's Mac: connectedDevice on Android 12-15 alike
-             (specialUse exists only from 14, dataSync is capped at 6 h a day from 15). -->
-        <service
-            android:name=".background.MeshService"
-            android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+        <!-- Holds the tailnet through a sign-in in the browser (the only time Kore runs while not
+             in front): connectedDevice on Android 12-15 alike (specialUse exists only from 14,
+             dataSync is capped at 6 h a day from 15). -->
         <service
             android:name=".background.SignInService"
             android:exported="false"

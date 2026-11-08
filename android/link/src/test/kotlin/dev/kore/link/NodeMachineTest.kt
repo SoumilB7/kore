@@ -6,6 +6,7 @@ import dev.kore.link.node.NodeMachine.Event
 import dev.kore.link.node.NodeMachine.State
 import kotlin.random.Random
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -48,7 +49,13 @@ class NodeMachineTest {
         assertEquals(21_000L, (m.on(Event.Ended("restart"), 20_000) as State.Away).at)
         m.on(Event.Tick, 21_000)
         m.on(Event.Connected, 21_000)
-        assertEquals(AwayWhy.ASLEEP, (m.on(Event.Ended("quit"), 21_000) as State.Away).why)
+        assertEquals(AwayWhy.UNREACHABLE, (m.on(Event.Ended("quit"), 21_000) as State.Away).why)
+        m.on(Event.Trigger, 22_000)
+        m.on(Event.Connected, 22_000)
+        // Only a Mac's `bye sleep` is asleep, and it's tried again on the cap.
+        val asleep = m.on(Event.Ended("sleep"), 22_000) as State.Away
+        assertEquals(AwayWhy.ASLEEP, asleep.why)
+        assertNotNull(asleep.at)
     }
 
     /** S35: the Mac's KoreNet switched off is not a refusal: the phone says so and comes back by itself. */
@@ -154,16 +161,23 @@ class NodeMachineTest {
         assertEquals(State.Connecting, m.on(Event.PeerOnline, 6))
     }
 
-    @Test fun offlinePeersWaitWithoutATimer() {
+    /** The live bug: a box the tailnet listed offline was "Asleep" with no timer, and never dialed again. */
+    @Test fun offlinePeersAreTriedAgainByBackoffNeverLeftAsleep() {
         val m = machine()
         m.on(Event.Start, 0)
         m.on(Event.Connected, 50)
         m.on(Event.Ended(null), 100)
-        val s = m.on(Event.PeerOffline, 100) as State.Away
-        assertEquals(AwayWhy.ASLEEP, s.why)
-        assertNull(s.at)
+        m.on(Event.Tick, m.wakeAt!!)
+        val s = m.on(Event.PeerOffline, 2_000) as State.Away
+        assertEquals(AwayWhy.OFFLINE, s.why)
         assertEquals(50L, s.lastSeen)
-        assertNull(m.wakeAt)
+        assertNotNull(m.wakeAt)
+        assertEquals(State.Connecting, m.on(Event.Tick, m.wakeAt!!))
+        // Each further offline backs off, capped, never without a timer.
+        var at = m.wakeAt ?: 0L
+        repeat(20) { m.on(Event.PeerOffline, at); at = m.wakeAt!!; m.on(Event.Tick, at) }
+        val last = m.on(Event.PeerOffline, at) as State.Away
+        assertTrue(last.at!! - at <= NodeMachine.CAP_MS * 12 / 10)
     }
 
     @Test fun byesMapToStates() {

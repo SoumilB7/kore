@@ -14,7 +14,6 @@ import dev.kore.link.node.TailnetSwitch
 import dev.kore.link.trust.Device
 import dev.kore.link.trust.DeviceBook
 import dev.kore.link.trust.NodeKind
-import dev.kore.phone.background.MeshService
 import dev.kore.phone.background.Notifier
 import dev.kore.phone.background.SignInService
 import dev.kore.phone.link.IdentityKey
@@ -36,9 +35,9 @@ import kotlinx.serialization.json.JsonObject
 /**
  * The phone on KoreNet (phase 18 §5): its embedded tailnet, its identity, the devices it knows
  * (a [DeviceBook] in no-backup storage) and one [NodeClient] per device. The tailnet and the node
- * clients run only while the app is on screen, mid sign-in (under [SignInService]), or, with the
- * background setting on (off by default), under [MeshService]'s foreground notification. KoreNet
- * off: nothing runs at all. When is [TailnetKeeper]'s; every start and stop goes through its switch.
+ * clients run only while the app is on screen, or mid sign-in (under [SignInService]): the phone
+ * obeys connections only while Kore is open, so nothing links, dials or works in the background.
+ * KoreNet off: nothing runs at all. When is [TailnetKeeper]'s; every start and stop goes through its switch.
  */
 class Mesh(private val app: KoreApp) {
     private val prefs = app.getSharedPreferences("kore", android.content.Context.MODE_PRIVATE)
@@ -72,7 +71,7 @@ class Mesh(private val app: KoreApp) {
     }
     private val keeper: TailnetKeeper by lazy {
         // Mid Leave the tailnet stays up until the Macs heard.
-        TailnetKeeper(tailnet, switch, join, app.scope, { TailnetKeeper.Settings(networkOn, inBook, background) },
+        TailnetKeeper(tailnet, switch, join, app.scope, { TailnetKeeper.Settings(networkOn, inBook) },
             onUp = { signedIn ->
                 troubled = false
                 nodesFlow.value.forEach { it.start(); it.post(if (signedIn) NodeMachine.Event.SignedIn else NodeMachine.Event.SignedOut) }
@@ -108,14 +107,6 @@ class Mesh(private val app: KoreApp) {
             apply()
         }
 
-    /** Background mode (off by default): a foreground service keeps the links while the app is closed. */
-    var background: Boolean
-        get() = prefs.getBoolean("background", false)
-        set(on) {
-            prefs.edit().putBoolean("background", on).apply()
-            apply()
-        }
-
     private var onScreen = false
 
     init {
@@ -132,6 +123,16 @@ class Mesh(private val app: KoreApp) {
 
     /** The Mac this phone joined through, as rows name it ("waiting for MacBook"). */
     val macName: String get() = ownerName()
+
+    /**
+     * The Mac a device's words name: a Mac itself, or for a box the Mac whose directory lists it
+     * (its [Device.via]), else the first Mac (T-A1/T-A3: never Mac A for Mac B's box).
+     */
+    fun macFor(n: NodeClient): String {
+        val d = n.device.value
+        if (d.kind == NodeKind.MAC) return n.name
+        return d.via.firstNotNullOfOrNull { id -> nodesFlow.value.firstOrNull { it.id == id }?.name } ?: ownerName()
+    }
     /** Two or more devices: notifications name theirs. */
     val many: Boolean get() = nodesFlow.value.size > 1
 
@@ -161,8 +162,6 @@ class Mesh(private val app: KoreApp) {
 
     /** Runs or stops the tailnet and the node clients as the screen and the settings say. */
     fun apply() {
-        // Background mode's service starts only from the front (Android 12+); stopping is always allowed.
-        if (background && networkOn && joined) { if (onScreen) MeshService.start(app) } else MeshService.stop(app)
         keeper.apply()
     }
 
@@ -255,7 +254,6 @@ class Mesh(private val app: KoreApp) {
         notifiers.clear()
         nodesFlow.value = emptyList()
         book.clear()
-        MeshService.stop(app)
         keeper.leave()
         IdentityKey.forget()
         raiseKey.forget()

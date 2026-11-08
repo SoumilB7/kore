@@ -101,7 +101,7 @@ abstract class NodeActivity : Activity() {
         val link = link ?: return backHome()
         watch = kore.scope.launch {
             var shown: State? = null
-            link.state.combine(link.snapshot) { s, snap -> s to snap }.collect { (s, snap) ->
+            link.state.combine(link.snapshot) { s, snap -> shownState(s, kore.mesh.networkOn) to snap }.collectLatest { (s, snap) ->
                 // Trying again is said only once it takes a while.
                 if (s == State.Connecting && shown != State.Connecting) delay(RECONNECTING_AFTER_MS)
                 shown = s
@@ -121,8 +121,9 @@ abstract class NodeActivity : Activity() {
 
     private fun showBanner(link: NodeClient, s: State) {
         val name = link.name
-        val trouble = troubleWords(s, link.device.value.kind == dev.kore.link.trust.NodeKind.MAC, name, kore.mesh.macName)
-        val (text, color) = trouble?.let { it.pill to stateWords(s).second } ?: stateWords(s)
+        val mac = kore.mesh.macFor(link)
+        val trouble = troubleWords(s, link.device.value.kind == dev.kore.link.trust.NodeKind.MAC, name, mac)
+        val (text, color) = trouble?.let { it.pill to stateWords(s, mac).second } ?: stateWords(s, mac)
         banner.text = text
         banner.setTextColor(color)
         val action = trouble?.action
@@ -152,22 +153,58 @@ abstract class NodeActivity : Activity() {
     }
 }
 
-/** A node's state as the bar's pill: empty while up. */
-fun stateWords(s: State): Pair<String, Int> = when (s) {
+/**
+ * The state a screen shows: [State.Idle] with KoreNet on is the seconds the tailnet takes to start
+ * on opening, so it reads as connecting, never "off" (that's only KoreNet off on this phone).
+ */
+fun shownState(s: State, networkOn: Boolean): State = if (s == State.Idle && networkOn) State.Connecting else s
+
+/** A node's state as the bar's pill: empty while up. [mac]: the Mac a box waits for or was paused by. */
+fun stateWords(s: State, mac: String = "your Mac"): Pair<String, Int> = when (s) {
     State.Up -> "" to K.ok
     State.Connecting -> "● Reconnecting" to K.warn
     State.AwaitingAllow -> "● Waiting for Allow" to K.dim
     is State.Away -> when (s.why) {
         NodeMachine.AwayWhy.ASLEEP -> "● Asleep" to K.dim
-        NodeMachine.AwayWhy.OFF -> "● Offline" to K.dim
-        NodeMachine.AwayWhy.UNREACHABLE -> "● Offline · retrying" to K.warn
-        NodeMachine.AwayWhy.WAITING -> "● Waiting for your Mac" to K.dim
+        NodeMachine.AwayWhy.OFFLINE -> "● Offline" to K.dim
+        NodeMachine.AwayWhy.OFF -> "● Taken offline" to K.dim
+        NodeMachine.AwayWhy.UNREACHABLE -> "● Not answering" to K.warn
+        NodeMachine.AwayWhy.WAITING -> "● Waiting for $mac" to K.dim
         NodeMachine.AwayWhy.NET_OFF -> "● KoreNet is off" to K.dim
     }
     is State.Denied -> "● Not allowed" to K.err
     State.Removed -> "● Removed" to K.err
     State.SignedOut -> "● Signed out" to K.warn
     State.Idle -> "● Off" to K.dim
+}
+
+/**
+ * Home's fact for a device that is away, the same story as the pill and the Device line:
+ * "asleep · last seen 14:02", "offline · last seen 2 h ago", "not answering", "taken offline on MacBook".
+ */
+fun awayFact(why: NodeMachine.AwayWhy, name: String, mac: String, lastSeen: Long?, now: Long = System.currentTimeMillis()): String {
+    val seen = lastSeenWords(lastSeen, now)
+    return when (why) {
+        NodeMachine.AwayWhy.ASLEEP -> listOfNotNull("asleep", seen).joinToString(" · ")
+        NodeMachine.AwayWhy.OFFLINE -> listOfNotNull("offline", seen).joinToString(" · ")
+        NodeMachine.AwayWhy.UNREACHABLE -> "not answering"
+        NodeMachine.AwayWhy.OFF -> "taken offline on $mac"
+        NodeMachine.AwayWhy.WAITING -> "waiting for $mac"
+        NodeMachine.AwayWhy.NET_OFF -> "KoreNet is off on $name"
+    }
+}
+
+/** The Device screen's line for a device that is away, and whether it offers Retry. */
+fun awayLine(why: NodeMachine.AwayWhy, name: String, mac: String, lastSeen: Long?, now: Long = System.currentTimeMillis()): Pair<String, Boolean> {
+    val seen = lastSeenWords(lastSeen, now)
+    return when (why) {
+        NodeMachine.AwayWhy.ASLEEP -> listOfNotNull("$name is asleep", seen).joinToString(" · ") to true
+        NodeMachine.AwayWhy.OFFLINE -> listOfNotNull("$name is offline", seen).joinToString(" · ") to true
+        NodeMachine.AwayWhy.UNREACHABLE -> "$name isn't answering" to true
+        NodeMachine.AwayWhy.OFF -> "$mac took this phone offline · Bring it online in Devices there" to false
+        NodeMachine.AwayWhy.WAITING -> "Waiting for $mac" to true
+        NodeMachine.AwayWhy.NET_OFF -> "KoreNet is off on $name" to true
+    }
 }
 
 /** What a device row offers when the device won't take this phone: tapping the row does it. */

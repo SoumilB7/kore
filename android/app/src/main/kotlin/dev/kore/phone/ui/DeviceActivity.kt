@@ -64,6 +64,8 @@ class DeviceActivity : NodeActivity() {
     override fun onStart() {
         super.onStart()
         scheduleMinute()
+        // Opening a device's screen tries it now: an away one dials at once, a quiet link gets a probe.
+        link?.reconnectNow()
     }
 
     override fun onStop() {
@@ -156,18 +158,14 @@ class DeviceActivity : NodeActivity() {
         val s = linkState ?: return null
         val node = link ?: return null
         // Removed, or not allowed: one line and its one action, as Home's row says it.
-        troubleWords(s, node.device.value.kind == dev.kore.link.trust.NodeKind.MAC, macName, kore.mesh.macName)?.let { t ->
+        troubleWords(s, node.device.value.kind == dev.kore.link.trust.NodeKind.MAC, macName, kore.mesh.macFor(node))?.let { t ->
             val said = t.fact.substringBeforeLast(" · ")
             val act = t.action?.let { a -> t.fact.substringAfterLast(" · ") to { rowAction(node, a) } }
             return stateRow(if (t.action == null) t.fact else said, act)
         }
         val (text, action) = when (s) {
-            is dev.kore.link.node.NodeMachine.State.Away -> when (s.why) {
-                dev.kore.link.node.NodeMachine.AwayWhy.ASLEEP -> listOfNotNull("$macName is asleep", lastSeenWords(node.lastSeen)).joinToString(" · ") to null
-                dev.kore.link.node.NodeMachine.AwayWhy.OFF -> "$macName took this phone offline" to null
-                dev.kore.link.node.NodeMachine.AwayWhy.UNREACHABLE -> "$macName is offline · retrying" to ("Retry" to { node.reconnectNow() })
-                dev.kore.link.node.NodeMachine.AwayWhy.WAITING -> "Waiting for ${kore.mesh.ownerName()}" to ("Retry" to { node.reconnectNow() })
-                dev.kore.link.node.NodeMachine.AwayWhy.NET_OFF -> "KoreNet is off on $macName" to ("Retry" to { node.reconnectNow() })
+            is dev.kore.link.node.NodeMachine.State.Away -> awayLine(s.why, macName, kore.mesh.macFor(node), node.lastSeen).let { (line, retry) ->
+                line to (if (retry) "Retry" to { node.reconnectNow() } else null)
             }
             dev.kore.link.node.NodeMachine.State.SignedOut -> "Signed out of Tailscale" to ("Sign in" to { startActivity(Intent(this, JoinActivity::class.java).putExtra("signIn", true)) })
             dev.kore.link.node.NodeMachine.State.Idle -> if (!kore.mesh.networkOn) "KoreNet is off on this phone" to ("Turn on" to { kore.mesh.networkOn = true }) else return null

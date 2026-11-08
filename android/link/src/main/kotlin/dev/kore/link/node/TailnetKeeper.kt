@@ -10,8 +10,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * When the phone's tailnet runs (phase 18 §5): KoreNet on, joined or joining, and on screen, in
- * background mode, or mid sign-in. A sign-in ([JoinFlow.signingIn]) keeps it up whatever the
+ * When the phone's tailnet runs (phase 18 §5): KoreNet on, joined or joining, and on screen or mid
+ * sign-in. Nothing keeps it up behind the owner's back: off screen (after the app's grace) the
+ * links say bye and the tailnet stops. A sign-in ([JoinFlow.signingIn]) keeps it up whatever the
  * screen: tsnet holds the pending node key in memory only, so a stop while the owner is in the
  * browser would finish a sign-in for a key that no longer exists, and the sign-in would loop.
  * Every start and stop goes through [switch]; the join's step changes re-run [apply].
@@ -21,7 +22,7 @@ class TailnetKeeper(
     val switch: TailnetSwitch,
     private val join: JoinFlow,
     private val scope: CoroutineScope,
-    /** KoreNet on, joined, background mode: read fresh on every [apply]. */
+    /** KoreNet on, joined: read fresh on every [apply]. */
     private val settings: () -> Settings,
     /** Up: true once Running (the node clients dial), false when it wants a sign-in. */
     private val onUp: (signedIn: Boolean) -> Unit,
@@ -31,7 +32,7 @@ class TailnetKeeper(
     private val onTrouble: (Exception) -> Unit = {},
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
-    data class Settings(val networkOn: Boolean, val joined: Boolean, val background: Boolean)
+    data class Settings(val networkOn: Boolean, val joined: Boolean)
 
     /** Wanted up (the node clients start with it). */
     @Volatile var running = false
@@ -55,8 +56,8 @@ class TailnetKeeper(
         if (want == running) return
         running = want
         settle?.cancel()
-        switch.want(want)
         if (want) {
+            switch.want(true)
             settle = scope.launch {
                 var wait = RETRY_MS
                 while (true) {
@@ -84,8 +85,15 @@ class TailnetKeeper(
                 if (running) onUp(true)
             }
         } else {
+            // The node clients close their links first; their byes get [BYE_MS] to leave before
+            // the tailnet under them stops (a peer then logs why, never a dead socket). Coming
+            // back on screen within it cancels the stop.
             onDown()
-            settle = scope.launch { runCatching { switch.settle() } }
+            settle = scope.launch {
+                delay(BYE_MS)
+                switch.want(false)
+                runCatching { switch.settle() }
+            }
         }
     }
 
@@ -113,11 +121,12 @@ class TailnetKeeper(
         const val UP_WAIT_MS = 30_000L
         const val RETRY_MS = 2_000L
         const val RETRY_CAP_MS = 60_000L
+        const val BYE_MS = 500L
 
         fun wants(s: Settings, step: JoinFlow.Step, onScreen: Boolean): Boolean {
             val signingIn = JoinFlow.signingIn(step)
             val joining = step !is JoinFlow.Step.Join
-            return s.networkOn && (s.joined || joining) && (onScreen || s.background || signingIn)
+            return s.networkOn && (s.joined || joining) && (onScreen || signingIn)
         }
     }
 }

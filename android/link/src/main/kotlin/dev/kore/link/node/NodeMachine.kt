@@ -8,8 +8,9 @@ import kotlin.random.Random
  *
  * - Backoff: 1 s, 2 s, 4 s … 300 s, ±20 % jitter; the app opening, a network change or the peer
  *   coming online tries at once.
- * - Away: the node said it sleeps or quits, or the tailnet says it's offline: wait for it to come
- *   back online (or the cap), never a tight loop.
+ * - Away: a Mac said it sleeps (ASLEEP), the tailnet says the node is offline (OFFLINE), or it
+ *   doesn't answer (UNREACHABLE): each tried again by the same backoff, never a tight loop and never
+ *   a wait with no end. The tailnet's offline is a hint (its list lags a start), not a reason to stop.
  * - The node's answer to who this phone is: AwaitingAllow (first contact, the owner reads the Mac's
  *   card), Denied (refused), Removed (revoked). A box that doesn't hold this phone yet (`unknown`)
  *   is waiting for its Mac's push: Away(WAITING), tried again on the Mac's directory naming the box,
@@ -21,13 +22,15 @@ import kotlin.random.Random
  */
 class NodeMachine(private val random: Random = Random.Default, private val box: Boolean = false) {
     /**
-     * OFF: an owner Mac took this phone offline (`paused`). WAITING: a box that doesn't hold this
-     * phone yet (its Mac's push is on its way). NET_OFF: the Mac's KoreNet is switched off.
+     * ASLEEP: a Mac said `bye sleep` (only a Mac sleeps). OFFLINE: the tailnet lists the node
+     * offline. UNREACHABLE: it didn't answer. OFF: an owner Mac took this phone offline (`paused`).
+     * WAITING: a box that doesn't hold this phone yet (its Mac's push is on its way). NET_OFF: the
+     * Mac's KoreNet is switched off.
      */
-    enum class AwayWhy { ASLEEP, OFF, UNREACHABLE, WAITING, NET_OFF }
+    enum class AwayWhy { ASLEEP, OFFLINE, OFF, UNREACHABLE, WAITING, NET_OFF }
 
     sealed class State {
-        /** Not running: the app is off screen (and background mode off), or KoreNet is off. */
+        /** Not running: the app is off screen, or KoreNet is off. */
         data object Idle : State()
         data object Connecting : State()
         data object AwaitingAllow : State()
@@ -94,7 +97,7 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
             }
             is Event.Ended -> if (s.passive) s else ended(event.reason, now)
             Event.PeerOffline -> when (s) {
-                is State.Connecting, is State.Away -> State.Away(AwayWhy.ASLEEP, null, lastSeen)
+                is State.Connecting, is State.Away -> backoff(now, AwayWhy.OFFLINE)
                 else -> s
             }
             Event.PeerOnline -> if (s is State.Away) connecting(reset = true) else s
@@ -137,7 +140,9 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
         "paused" -> State.Away(AwayWhy.OFF, null, lastSeen)
         // A Mac brought this phone online again (its parked link ends so): dial straight back.
         "online" -> connecting(reset = true)
-        "quit", "sleep" -> State.Away(AwayWhy.ASLEEP, now + jitter(CAP_MS), lastSeen)
+        // A Mac going to sleep says so; it's tried again on the cap (or at once when the app opens).
+        "sleep" -> State.Away(AwayWhy.ASLEEP, now + jitter(CAP_MS), lastSeen)
+        "quit" -> State.Away(AwayWhy.UNREACHABLE, now + jitter(CAP_MS), lastSeen)
         // kore-host restarting (an update, a service restart): back within seconds, tried at
         // 1 s, 2 s, 5 s, then the usual backoff. A peer that predates it says something else.
         "restart" -> {

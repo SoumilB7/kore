@@ -80,11 +80,11 @@ class NodeClientTest {
         assertEquals(2, rig.dials.size)
     }
 
-    @Test fun aNamedBoxTheTailnetSaysIsAsleepIsLeftAlone() = runTest {
+    @Test fun aNamedBoxTheTailnetSaysIsOfflineWaitsForItsOwnTimer() = runTest {
         val rig = Rig(this, listOf({ PeerOffline() }), device = box())
         rig.client.start()
         runCurrent()
-        assertEquals(NodeMachine.AwayWhy.ASLEEP, (rig.client.state.value as State.Away).why)
+        assertEquals(NodeMachine.AwayWhy.OFFLINE, (rig.client.state.value as State.Away).why)
         rig.client.named()
         runCurrent()
         assertEquals(1, rig.dials.size)
@@ -135,8 +135,10 @@ class NodeClientTest {
         runCurrent()
         assertEquals(listOf(a, b), results.map { it.s("id") })
         assertEquals(emptySet<String>(), rig.client.queued.value)
-        // Offline means no timer of its own: one dial only.
-        assertEquals(1, rig.dials.size)
+        // Offline is retried by backoff (1 s, 2 s, 4 s …), never left waiting with no timer.
+        assertTrue(rig.dials.size in 3..8)
+        val gaps = rig.dials.zipWithNext { x, y -> y - x }
+        assertTrue(gaps.toString(), gaps.zipWithNext().all { (x, y) -> y >= x * 8 / 10 })
     }
 
     @Test fun queuedCommandsGoOutOnceTheNodeIsBack() = runTest {

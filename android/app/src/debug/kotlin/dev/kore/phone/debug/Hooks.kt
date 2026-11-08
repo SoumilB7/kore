@@ -13,6 +13,6 @@ class Hooks : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val mesh = (context.applicationContext as KoreApp).mesh
         val nodes = mesh.nodes.value.joinToString(",") { "${it.device.value.kind.wire}:${it.state.value::class.simpleName}" }
-        resultData = "joined=${mesh.joined} network=${mesh.networkOn} background=${mesh.background} join=${mesh.join.step.value::class.simpleName} nodes=[$nodes]"
+        resultData = "joined=${mesh.joined} network=${mesh.networkOn} join=${mesh.join.step.value::class.simpleName} nodes=[$nodes]"
     }
 }

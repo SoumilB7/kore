@@ -184,7 +184,7 @@ class NodeClient(
         if (retry) post(NodeMachine.Event.Trigger)
     }
 
-    /** Stops dialing and ends the link (the app went off screen with background mode off). */
+    /** Stops dialing and ends the link with a bye (the app went off screen). */
     fun stop() = post(NodeMachine.Event.Stop)
 
     fun post(event: NodeMachine.Event) {

@@ -2,7 +2,10 @@ package dev.kore.phone
 
 import dev.kore.link.node.NodeMachine
 import dev.kore.link.node.NodeMachine.State
+import dev.kore.phone.ui.awayFact
+import dev.kore.phone.ui.awayLine
 import dev.kore.phone.ui.lastSeenWords
+import dev.kore.phone.ui.shownState
 import dev.kore.phone.ui.RowAction
 import dev.kore.phone.ui.Trouble
 import dev.kore.phone.ui.refusalWords
@@ -26,7 +29,10 @@ class WordsTest {
         assertEquals("", stateWords(State.Up).first)
         assertEquals("● Reconnecting", stateWords(State.Connecting).first)
         assertEquals("● Asleep", stateWords(State.Away(NodeMachine.AwayWhy.ASLEEP, null, null)).first)
-        assertEquals("● Offline · retrying", stateWords(State.Away(NodeMachine.AwayWhy.UNREACHABLE, 1, null)).first)
+        assertEquals("● Not answering", stateWords(State.Away(NodeMachine.AwayWhy.UNREACHABLE, 1, null)).first)
+        assertEquals("● Offline", stateWords(State.Away(NodeMachine.AwayWhy.OFFLINE, 1, null)).first)
+        assertEquals("● Taken offline", stateWords(State.Away(NodeMachine.AwayWhy.OFF, null, null)).first)
+        assertEquals("● Waiting for Mac mini", stateWords(State.Away(NodeMachine.AwayWhy.WAITING, 1, null), "Mac mini").first)
         assertEquals("● Not allowed", stateWords(State.Denied("unknown")).first)
         assertEquals("● Signed out", stateWords(State.SignedOut).first)
     }
@@ -59,5 +65,29 @@ class WordsTest {
         assertEquals("Not sent: connection lost.", refusalWords("expired"))
         assertEquals("That's no longer there.", refusalWords("gone.chat"))
         assertEquals("Not done (weird).", refusalWords("weird"))
+    }
+
+    /** The live bug's words: a box is never "asleep"; each surface tells one story. */
+    @Test fun aBoxIsNeverAsleepAndEverySurfaceSaysTheSame() {
+        val now = 10_000_000_000L
+        val seen = now - 2 * 60_000
+        assertEquals("offline · last seen 2 min ago", awayFact(NodeMachine.AwayWhy.OFFLINE, "mybox", "MacBook", seen, now))
+        assertEquals("mybox is offline · last seen 2 min ago" to true, awayLine(NodeMachine.AwayWhy.OFFLINE, "mybox", "MacBook", seen, now))
+        assertEquals("not answering", awayFact(NodeMachine.AwayWhy.UNREACHABLE, "mybox", "MacBook", seen, now))
+        assertEquals("mybox isn't answering" to true, awayLine(NodeMachine.AwayWhy.UNREACHABLE, "mybox", "MacBook", seen, now))
+        assertEquals("asleep · last seen 2 min ago", awayFact(NodeMachine.AwayWhy.ASLEEP, "MacBook", "MacBook", seen, now))
+    }
+
+    /** A5: taken offline names the Mac that did it, and offers nothing only the Mac can do. */
+    @Test fun takenOfflineNamesTheMac() {
+        assertEquals("taken offline on Mac mini", awayFact(NodeMachine.AwayWhy.OFF, "gpu", "Mac mini", null))
+        assertEquals("Mac mini took this phone offline · Bring it online in Devices there" to false, awayLine(NodeMachine.AwayWhy.OFF, "gpu", "Mac mini", null))
+    }
+
+    /** B1: the seconds the tailnet takes on opening read as connecting, never "off". */
+    @Test fun idleWithKoreNetOnReadsAsConnecting() {
+        assertEquals(State.Connecting, shownState(State.Idle, networkOn = true))
+        assertEquals(State.Idle, shownState(State.Idle, networkOn = false))
+        assertEquals(State.Up, shownState(State.Up, networkOn = true))
     }
 }

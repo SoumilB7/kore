@@ -27,7 +27,6 @@ class SignInTest {
 
     private class World(scope: TestScope, val tailnet: FakeTailnet = FakeTailnet(), var joined: Boolean = false) {
         var networkOn = true
-        var background = false
         val io = StandardTestDispatcher(scope.testScheduler)
         val switch = TailnetSwitch(tailnet, io)
         val ups = mutableListOf<Boolean>()
@@ -39,7 +38,7 @@ class SignInTest {
             { scope.testScheduler.currentTime }, io, start = { keeper.up() })
 
         init {
-            keeper = TailnetKeeper(tailnet, switch, flow, scope.backgroundScope, { TailnetKeeper.Settings(networkOn, joined, background) },
+            keeper = TailnetKeeper(tailnet, switch, flow, scope.backgroundScope, { TailnetKeeper.Settings(networkOn, joined) },
                 { ups += it }, { downs++ }, { troubles += it }, io)
         }
 
@@ -85,7 +84,7 @@ class SignInTest {
         w.tailnet.state = Tailnet.RUNNING
         w.tailnet.me = me
         w.tailnet.others = listOf(node("mbp"))
-        advanceTimeBy(1_001)
+        advanceTimeBy(1_001 + TailnetKeeper.BYE_MS)
         // Signed in while away: shown at once, no knock off screen.
         assertEquals(Step.Finding(emptyList()), w.flow.step.value)
         assertEquals(0, w.knocks)
@@ -188,11 +187,10 @@ class SignInTest {
     }
 
     @Test fun whenTheTailnetRuns() {
-        fun want(on: Boolean = true, joined: Boolean = false, bg: Boolean = false, step: Step = Step.Join(), screen: Boolean = false) =
-            TailnetKeeper.wants(TailnetKeeper.Settings(on, joined, bg), step, screen)
+        fun want(on: Boolean = true, joined: Boolean = false, step: Step = Step.Join(), screen: Boolean = false) =
+            TailnetKeeper.wants(TailnetKeeper.Settings(on, joined), step, screen)
         assertTrue(want(joined = true, screen = true))
-        assertFalse(want(joined = true))
-        assertTrue(want(joined = true, bg = true))
+        assertFalse(want(joined = true)) // off screen: nothing, ever (no background mode)
         assertFalse(want(on = false, joined = true, screen = true))
         assertFalse(want(screen = true)) // signed out, on the Join screen: nothing runs
         for (s in listOf(Step.Starting, Step.SigningIn(url), Step.NeedsApproval(null))) {
@@ -217,11 +215,23 @@ class SignInTest {
         w.keeper.onScreen(false)
         runCurrent()
         assertEquals(1, w.downs)
-        assertFalse(w.switch.up)
-        w.background = true
-        w.keeper.apply()
-        runCurrent()
+        // The links' byes get BYE_MS before the tailnet under them stops.
         assertTrue(w.switch.up)
+        advanceTimeBy(TailnetKeeper.BYE_MS + 1)
+        assertFalse(w.switch.up)
+    }
+
+    @Test fun backOnScreenWithinTheByeWindowKeepsTheTailnetUp() = runTest {
+        val w = World(this, FakeTailnet(Tailnet.RUNNING), joined = true)
+        w.keeper.onScreen(true)
+        advanceTimeBy(1_000)
+        assertTrue(w.switch.up)
+        w.keeper.onScreen(false)
+        advanceTimeBy(TailnetKeeper.BYE_MS / 2)
+        w.keeper.onScreen(true)
+        advanceTimeBy(TailnetKeeper.BYE_MS * 2)
+        assertTrue(w.switch.up)
+        assertEquals(0, w.tailnet.stops)
     }
 
     @Test fun networkOffKeepsItDownEvenOnScreen() = runTest {

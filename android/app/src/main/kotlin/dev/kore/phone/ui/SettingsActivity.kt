@@ -66,9 +66,7 @@ class SettingsActivity : Activity() {
         if (mesh.nodes.value.isEmpty()) content.addView(label("No devices yet.", 14f, K.dim).apply { setPadding(dp(4), 0, 0, dp(6)) })
         content.addView(toggle("KoreNet on this phone", mesh.networkOn) { mesh.networkOn = it })
         content.addView(button("Leave KoreNet", K.err) { leave() })
-        heading("Background")
-        content.addView(toggle("Stay connected when Kore is closed", mesh.background) { mesh.background = it; if (it) Onboarding.show(this) })
-        content.addView(label("Off, Kore connects only while it's open. On, it keeps a notification and uses more battery.", 13f, K.faint).apply { setPadding(dp(4), dp(6), dp(4), 0) })
+        content.addView(label("Kore connects only while it's open, so it can't notify you while it's closed.", 13f, K.faint).apply { setPadding(dp(4), dp(6), dp(4), 0) })
         heading("Notifications")
         content.addView(button("Notification settings", K.text) {
             startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))

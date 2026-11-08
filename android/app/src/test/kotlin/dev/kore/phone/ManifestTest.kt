@@ -27,7 +27,7 @@ class ManifestTest {
 
     @Test fun everyForegroundServiceHasItsTypePermissionAndAPrerequisite() {
         val services = elements("service").filter { it.hasAttributeNS(ns, "foregroundServiceType") }
-        assertEquals(setOf(".background.MeshService", ".background.SignInService"), services.map { it.getAttributeNS(ns, "name") }.toSet())
+        assertEquals(setOf(".background.SignInService"), services.map { it.getAttributeNS(ns, "name") }.toSet())
         assertTrue("android.permission.FOREGROUND_SERVICE" in permissions)
         for (s in services) {
             val name = s.getAttributeNS(ns, "name")
@@ -44,7 +44,7 @@ class ManifestTest {
     @Test fun theServicesStartForegroundWithTheTypeTheManifestDeclares() {
         // startForeground(…, type) must name a type the manifest declares for that service.
         val src = File(listOf("src/main/kotlin", "app/src/main/kotlin").first { File(it).exists() }, "dev/kore/phone/background")
-        for (f in listOf("MeshService.kt", "SignInService.kt")) {
+        for (f in listOf("SignInService.kt")) {
             val text = File(src, f).readText()
             assertTrue(f, "FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE" in text)
             assertTrue("$f catches a refused startForeground", Regex("try \\{\\s*startForeground").containsMatchIn(text))

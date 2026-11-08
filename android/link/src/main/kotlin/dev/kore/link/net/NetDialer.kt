@@ -40,9 +40,19 @@ class NetDialer(
         val peers = withContext(io) { tailnet.peers() }
         val peer = peers.firstOrNull { it.nodeKey in device.nodeKeys }
             ?: peers.firstOrNull { device.fqdn.isNotEmpty() && it.dnsName.trimEnd('.') == device.fqdn.trimEnd('.') }
-        if (peer != null && !peer.online) throw PeerOffline()
         val address = peer?.address ?: device.fqdn.trimEnd('.').ifEmpty { throw PeerOffline() }
-        return open(address, device, resume, null, enrolling)
+        // The tailnet's "offline" lags (a node just started lists its peers offline for a while):
+        // dialed anyway, and only a dial that fails to a peer listed offline is PeerOffline.
+        val listedOffline = peer != null && !peer.online
+        return try {
+            open(address, device, resume, null, enrolling)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: NetFailure) {
+            throw e
+        } catch (e: Exception) {
+            if (listedOffline) throw PeerOffline() else throw e
+        }
     }
 
     /** First contact with a Mac in its Add device window: the hello carries who this phone is. */
