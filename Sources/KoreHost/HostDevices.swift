@@ -105,4 +105,14 @@ extension HostDaemon {
         }
         client.sendRaw(StreamWire.encode(usage.since(ask.cursor, id: ask.id)))
     }
+
+    /// Who this box is on KoreNet (`net.node`), for a full link after its welcome: an owner Mac
+    /// pins the identity key and enrolls once. Nil before the box has an identity.
+    func netNode(enrolled: UUID?) -> NetNodeWire.Node? {
+        guard let identity = net?.identity else { return nil }
+        let name = String(ProcessInfo.processInfo.hostName.split(separator: ".").first ?? "box")
+        let nodeKey = net?.tailnet != nil ? net?.selfNode?.publicKey : nil
+        return NetNodeWire.Node(
+            device: identity.device, identityKey: identity.signer.publicKey, name: name, on: config.netOn, nodeKey: nodeKey, enrolled: enrolled)
+    }
 }

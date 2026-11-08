@@ -101,6 +101,9 @@ package final class NetSession {
         /// Who this device is, for a server without its record (a box being claimed, the Add
         /// device window, the SSH upgrade).
         package var enroll: NetControl.Enroll?
+        /// This device's own Tailscale user (its Status): a server pinned over SSH takes its first
+        /// node key only from a WhoIs of this user, after its proof.
+        package var ownUser: Int64?
 
         package init(local: NetLocal, route: Binding.Route, peer: NetPeerFacts, book: DeviceBook, server: UUID, service: String, resume: NetControl.Resume? = nil) {
             self.local = local
@@ -423,7 +426,7 @@ package final class NetSession {
         guard let binding, let record = serverRecord else { return fail(NetControl.Reason.protocolError) }
         guard welcome.v == NetControl.version else { return fail(NetControl.Reason.version) }
         guard let peer = IdentityProof.verify(welcome.sig, binding: binding, side: .server, record: record),
-              adopt(peer, record: record, route: client.route, facts: client.peer, book: client.book, ownUser: nil)
+              adopt(peer, record: record, route: client.route, facts: client.peer, book: client.book, ownUser: client.ownUser)
         else { return fail(NetControl.Reason.proof) }
         verified = peer
         guard (1...Self.maxCredit).contains(welcome.credit) else { return fail(NetControl.Reason.protocolError) }

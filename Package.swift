@@ -48,7 +48,7 @@ let package = Package(
         // A Mac window's chats on a box (`kore-host` over SSH): the transport, the link client, the
         // local copy per chat, and the chat backend that runs a `Chat` through the link. No UI;
         // KoreUI holds the one seam. Asleep until a window on a box opens.
-        .target(name: "HostClient", dependencies: ["src", "LinkProtocol", "KoreCore", "KoreTrust"], swiftSettings: releaseForSize),
+        .target(name: "HostClient", dependencies: ["src", "LinkProtocol", "KoreCore", "KoreTrust", "Tailnet", "KoreNet"], swiftSettings: releaseForSize),
         // KoreNet (phase 18): one device net for Mac, box and phone over the owner's tailnet. No UI,
         // all three build for static musl. KoreTrust: device records, the device book, the binding,
         // identity proofs, raises and the policy table.
@@ -92,8 +92,8 @@ let package = Package(
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "src", "KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "LinkProtocol", "HostClient", "KoreHost", "AgentTools", "KoreUI", "src", "KoreCore", "kore-host"]),
-        .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "LinkProtocol", "src", "KoreCore", "kore-host", "KoreTrust", "Tailnet", "KoreNet"]),
-        .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore"]),
+        .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "HostClient", "LinkProtocol", "src", "KoreCore", "kore-host", "KoreTrust", "Tailnet", "KoreNet"]),
+        .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore", "KoreTrust", "Tailnet", "KoreNet"]),
         .testTarget(name: "NetTrustTests", dependencies: ["KoreNet", "Tailnet", "KoreTrust", "KoreHostSys"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "src", "KoreCore"]),
     ]

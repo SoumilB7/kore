@@ -428,6 +428,7 @@ final class LinkClient {
         let clis = full && !host.clis.isEmpty ? host.clis : nil
         send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
         send(host.attention.ledger.state(after: 0))
+        if control == .full, let node = host.netNode(enrolled: deviceId) { sendRaw(StreamWire.encode(node)) }
     }
 
     // MARK: Presence (1.12)
