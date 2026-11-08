@@ -102,14 +102,21 @@ private struct ExpectSideKept: Step {
             defer { chat.storyStop() }
             let start = scroll.documentView?.frame.height ?? 0
             // Each delta that lands is looked at: the end pinned for it must not move the side.
-            for n in 0..<60 {
-                let seen = count(chat)
-                try await story.until("more of the reply") { count(chat) > seen }
-                try check("after delta \(n)")
-            }
-            try await story.until("the reply past a screen, still followed", timeout: .seconds(2)) {
+            // At least 60 of them, then on until the reply is past a screen and still followed:
+            // counted in deltas, not seconds (a busy Mac streams the same reply slower).
+            func pastAScreen() -> Bool {
                 (scroll.documentView?.frame.height ?? 0) > start + clip.bounds.height
                     && PinchZoomKeepsSide.distanceToEnd(scroll) < PinchZoomKeepsSide.atEnd
+            }
+            var n = 0
+            while n < 60 || !pastAScreen() {
+                guard n < 2000 else {
+                    throw StoryFailure.expectation("the reply past a screen, still followed, after \(n) deltas (grew \(Int((scroll.documentView?.frame.height ?? 0) - start)) of \(Int(clip.bounds.height)) pt, \(Int(PinchZoomKeepsSide.distanceToEnd(scroll))) pt from the end)")
+                }
+                let seen = count(chat)
+                try await story.until("more of the reply (delta \(n))") { count(chat) > seen }
+                try check("after delta \(n)")
+                n += 1
             }
             try check("at the end")
         } else {
@@ -633,13 +640,16 @@ private struct ZoomAboveEnd: Step {
         }
         // A reader's scroll to the end first: a scripted turn's glide can stop short of it.
         try await Scroll(.answer(turn: 1), to: .bottom).run(story)
+        let atBottom = PinchZoomNewLineHolds.distanceToEnd(scroll)
         try await Scroll(.answer(turn: 1), to: .by(-900)).run(story)
+        let scrolled = PinchZoomNewLineHolds.distanceToEnd(scroll)
         try await story.idle()
+        let idle = PinchZoomNewLineHolds.distanceToEnd(scroll)
         try await PinchZoomNewLineHolds.pinch(story, scroll, at: CGPoint(x: 0.75, y: 0.35), amount: 0.5)
         let noted = story.stash(PinchZoomNewLineHolds.Noted.self) { .init() }
         noted.note(scroll)
         guard abs(noted.scale - 1.5) < 0.01, noted.origin.x > 1, PinchZoomNewLineHolds.distanceToEnd(scroll) > 400 else {
-            throw StoryFailure.other("the pinch left scale \(noted.scale), origin \(noted.origin), \(PinchZoomNewLineHolds.distanceToEnd(scroll)) pt from the end")
+            throw StoryFailure.other("the pinch left scale \(noted.scale), origin \(noted.origin), \(PinchZoomNewLineHolds.distanceToEnd(scroll)) pt from the end (before it: \(Int(atBottom)) at the bottom, \(Int(scrolled)) after the 900 pt scroll, \(Int(idle)) once idle; page \(Int(scroll.documentView?.frame.height ?? 0)), view \(Int(scroll.contentView.bounds.height)))")
         }
     }
 }
