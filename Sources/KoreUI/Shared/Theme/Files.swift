@@ -9,7 +9,9 @@ extension Theme {
     enum Tree {
         static let guide = border
         static let guideActive = timelineLine
-        static let dropTarget = accent.opacity(0.10)
+        static let dropTarget = accent.opacity(0.18)
+        /// The rows inside a drop's folder: a soft wash of the same.
+        static let dropInside = accent.opacity(0.07)
     }
 
     enum Editor {

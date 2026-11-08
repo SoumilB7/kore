@@ -311,7 +311,7 @@ final class LinkClient {
         if kind == .fsWrite, args.blob != nil, upload == nil {
             return sendRaw(StreamWire.encode(FilesResult.refused(id, .goneBlob, "That upload isn't on the box any more.")))
         }
-        let trash = HostFiles.Trash.standard(home: home)
+        let trash = host.filesTrash ?? HostFiles.Trash.standard(home: home)
         // A new search stops the one before it; its pages go as they're found.
         let run = SearchRun { [weak self] hits in
             let page = StreamWire.encode(FilesHits(id: id, hits: hits))
@@ -335,6 +335,8 @@ final class LinkClient {
                 case .fsCreate: return files.create(id: id, path: args.path ?? "", dir: args.dir == true)
                 case .fsRename: return files.rename(id: id, from: args.from ?? "", to: args.to ?? "")
                 case .fsDelete: return files.delete(id: id, path: args.path ?? "", trash: trash)
+                case .fsCopy: return files.copy(id: id, from: args.from ?? "", to: args.to ?? "")
+                case .fsCount: return files.count(id: id, path: args.path ?? "")
                 case .fsSearch:
                     return files.search(id: id, root: args.root ?? "", query: args.query ?? "", text: args.mode == "text", max: args.max, run: run)
                 default: return .refused(id, .invalid, "Not taken here.")
@@ -346,6 +348,7 @@ final class LinkClient {
                 switch kind {
                 case .fsWrite, .fsCreate, .fsDelete: if let path = args.path { self.host.git.touched(path) }
                 case .fsRename: for path in [args.from, args.to].compactMap({ $0 }) { self.host.git.touched(path) }
+                case .fsCopy: if let path = args.to { self.host.git.touched(path) }
                 default: break
                 }
             }

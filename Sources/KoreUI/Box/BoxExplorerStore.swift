@@ -51,10 +51,10 @@ final class BoxExplorerStore {
     var edit: Edit? {
         didSet { if edit != oldValue { rebuild() } }
     }
-    /// ⌘X: what ⌘V moves.
-    var cut: [String] = []
     /// The folder a drag is over.
-    var dropTarget: String?
+    var dropTarget: String? { dropping.target }
+    /// A drag over the tree: its target, badge and the folders it sprang open.
+    @ObservationIgnored let dropping = TreeDropping()
     /// The box watches the open folders; false: a turn's end lists them again.
     private(set) var watching = false
     /// One plain line when the box refused something shown already (it's put back): it goes by
@@ -90,6 +90,9 @@ final class BoxExplorerStore {
     init(root: String, source: any BoxFileSource) {
         self.root = root.count > 1 && root.hasSuffix("/") ? String(root.dropLast()) : root
         self.source = source
+        dropping.isOpen = { [weak self] in self?.isExpanded($0) ?? true }
+        dropping.expand = { [weak self] in self?.expand($0) }
+        dropping.collapse = { [weak self] in self?.collapse($0) }
     }
 
     var alias: String { source.alias }
@@ -204,7 +207,7 @@ final class BoxExplorerStore {
         switch result {
         case .success(let listing):
             failed[folder] = nil
-            children[folder] = listing.entries.filter { !Self.hidden.contains($0.name) }
+            children[folder] = listing.entries.filter { !Self.hidden.contains($0.name) && !FileCarry.isStaging($0.name) }
             if listing.more { capped.insert(folder) } else { capped.remove(folder) }
             if folder == root { rootError = nil }
         case .failure(let why):
@@ -337,6 +340,12 @@ final class BoxExplorerStore {
             rebuild()
         }
         return result
+    }
+
+    /// The entry shows in a folder this tree has listed: one a move here can place at once.
+    func shows(_ path: String) -> Bool {
+        let name = (path as NSString).lastPathComponent
+        return children[parent(of: path)]?.contains { $0.name == name } == true
     }
 
     /// Moves entries into a folder (a drop, ⌘V after ⌘X): they show there at once; any the box
@@ -504,7 +513,7 @@ final class BoxExplorerStore {
             rows.append(Row(id: folder + "/\u{0}loading", name: "Loading…", depth: depth, isFolder: false, isOpen: false, kind: .note("Loading…")))
             return
         }
-        for entry in children[folder] ?? [] {
+        for entry in withPending(children[folder], in: folder) {
             let path = folder == "/" ? "/" + entry.name : folder + "/" + entry.name
             let open = entry.isFolder && expanded.contains(path)
             rows.append(Row(id: path, name: entry.name, depth: depth, isFolder: entry.isFolder, isOpen: open, isLink: entry.kind == .link))
@@ -515,6 +524,29 @@ final class BoxExplorerStore {
             rows.append(Row(id: folder + "/\u{0}more", name: line, depth: depth, isFolder: false, isOpen: false, kind: .note(line)))
         }
     }
+
+    /// A folder's entries and those on their way into it (`FileCarries`), in the tree's order.
+    private func withPending(_ listed: [FileEntry]?, in folder: String) -> [FileEntry] {
+        guard let listed else { return [] }
+        let coming = FileCarries.shared.pending(in: .box(alias: alias, path: folder))
+        guard !coming.isEmpty else { return listed }
+        let names = Set(listed.map(\.name))
+        var all = listed + coming.filter { !names.contains($0.name) }.map { FileEntry(name: $0.name, kind: $0.isFolder ? .dir : .file) }
+        all.sort { a, b in a.isFolder != b.isFolder ? a.isFolder : a.name.localizedStandardCompare(b.name) == .orderedAscending }
+        return all
+    }
+
+    /// Entries on their way came or went.
+    func carriesChanged() { rebuild() }
+
+    /// A carry landed: the open folders listed again, the last entry here chosen.
+    func landed(_ outcome: CarryOutcome) async {
+        await refresh()
+        if let last = outcome.landed.last(where: { $0.alias == alias && LinkFiles.inside($0.path, root) }) { await reveal(last.path) }
+    }
+
+    /// The box can be reached now (a drop onto an offline box is refused).
+    var reachable: Bool { (source as? HostConnection)?.isOnline ?? true }
 
     // MARK: Watching
 

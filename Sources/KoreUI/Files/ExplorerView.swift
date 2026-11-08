@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Button
 
@@ -59,7 +60,9 @@ struct ExplorerSidebar: View {
         VStack(spacing: 0) {
             header
             content
+            if workspace.sidebar != .search { CarryLine(root: .mac(store.root)) }
         }
+        .onChange(of: FileCarries.shared.revision) { store.carriesChanged() }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(floating ? Theme.surface : Theme.background)
         // Floating, the rows sit on the panel: their hover and selection a step above it.
@@ -333,6 +336,7 @@ private struct TreeList: View, Equatable {
         let target = store.dropTarget
         let dropSegment = target.flatMap { target in store.row(showing: target).flatMap { $0.id == target ? nil : target } }
         let drop = dropSegment == nil ? target : nil
+        let carrying = !FileCarries.shared.pending.isEmpty
         LazyVStack(spacing: 0) {
             ForEach(rows) { row in
                 let isSelected = store.isChosen(row)
@@ -347,7 +351,8 @@ private struct TreeList: View, Equatable {
                     folderTouched: row.isFolder && touchedFolders.contains(row.id),
                     typed: selection == row.id ? typed : "",
                     marked: marked.flatMap { row.shows($0) ? $0 : nil },
-                    inDropTarget: drop.map { row.id == $0 || row.id.hasPrefix($0 + "/") } ?? false,
+                    drop: drop.map { row.id == $0 ? .target : row.id.hasPrefix($0 + "/") ? .inside : .none } ?? .none,
+                    carrying: carrying ? FileCarries.shared.progress(of: .mac(row.id)) : nil,
                     dropSegment: dropSegment.flatMap { row.shows($0) ? $0 : nil },
                     // Focus with nothing selected marks where the keys start (look §3).
                     outlined: focused && selection == nil && row.id == rows.first?.id,
@@ -357,7 +362,26 @@ private struct TreeList: View, Equatable {
                 .id(row.id)
             }
         }
+        // The drop's badge at the pointer, over the row (or the space) it's on.
+        .overlay(alignment: .topLeading) {
+            if let badge = store.dropping.badge {
+                let index = badge.row.flatMap { path in rows.firstIndex { $0.shows(path) } } ?? rows.count
+                DropBadge(badge: badge).offset(y: CGFloat(index) * Size.Tree.row)
+            }
+        }
+        .animation(Motion.fade, value: store.dropping.badge?.text)
         .padding(.bottom, Space.md)
+        .onAppear {
+            // Under a drag, a row at an edge brings its neighbour into view: the tree scrolls.
+            store.dropping.nudge = { [store] path in
+                let rows = store.rows
+                guard let i = rows.firstIndex(where: { $0.shows(path) }) else { return }
+                withAnimation(.linear(duration: 0.12)) {
+                    if i + 1 < rows.count { proxy.scrollTo(rows[i + 1].id) }
+                    if i > 0 { proxy.scrollTo(rows[i - 1].id) }
+                }
+            }
+        }
         .onChange(of: selection) { _, selection in
             let pointed = store.pointed
             store.pointed = nil
@@ -381,7 +405,7 @@ private struct TreeList: View, Equatable {
         .focusable(false)
         .accessibilityHidden(true)
         // Dropped below the rows: into the folder itself.
-        .onDrop(of: [.fileURL], delegate: TreeDrop(folder: store.root, store: store, workspace: workspace, undo: undo))
+        .onDrop(of: TreeDrop.types, delegate: TreeDrop(folder: store.root, store: store, workspace: workspace, undo: undo))
     }
 
     /// The selected row's parent folder, whose guide is brighter.
@@ -431,8 +455,10 @@ private struct TreeRow: View, Equatable {
     let typed: String
     /// The folder whose name is underlined (`FilesStore.markedFolder`), when it's this row's.
     let marked: String?
-    /// Under a drag: the target folder, or a row inside it.
-    let inDropTarget: Bool
+    /// Under a drag: the target folder's row, or a row inside it.
+    let drop: DropFill
+    /// On its way here (a carry): how far.
+    let carrying: Double?
     /// The chain's upper folder a drag is over, when it's this row's: only its name fills.
     let dropSegment: String?
     /// The tree has focus and nothing is selected: this first row gets the focus line.
@@ -448,7 +474,7 @@ private struct TreeRow: View, Equatable {
         guard a.focused == b.focused, a.activeGuide == b.activeGuide, a.touch == b.touch, a.folderTouched == b.folderTouched else {
             return false
         }
-        return a.typed == b.typed && a.marked == b.marked && a.inDropTarget == b.inDropTarget && a.dropSegment == b.dropSegment
+        return a.typed == b.typed && a.marked == b.marked && a.drop == b.drop && a.carrying == b.carrying && a.dropSegment == b.dropSegment
             && a.outlined == b.outlined
     }
 
@@ -475,7 +501,10 @@ private struct TreeRow: View, Equatable {
         }
         .padding(.trailing, Size.Tree.trailing)
         .frame(height: Size.Tree.row)
+        .opacity(carrying == nil ? 1 : 0.5)
+        .overlay(alignment: .bottom) { if let carrying { CarryBar(fraction: carrying).padding(.horizontal, Space.sm) } }
         .background(fill, in: RoundedRectangle(cornerRadius: Radius.chip))
+        .animation(Motion.fade, value: drop)
         .overlay {
             if outlined {
                 RoundedRectangle(cornerRadius: Radius.chip).strokeBorder(Theme.accentLine, lineWidth: Stroke.hairline)
@@ -503,9 +532,9 @@ private struct TreeRow: View, Equatable {
         }
         // A press that moved a few points starts a drag; dropped back on this row, it's the click.
         .onDrop(
-            of: [.fileURL],
+            of: TreeDrop.types,
             delegate: TreeDrop(
-                folder: dropFolder, store: store, workspace: workspace, undo: undoManager, row: row.id,
+                folder: dropFolder, store: store, workspace: workspace, undo: undoManager, row: row.id, isFolder: row.isFolder,
                 click: { click(count: 1, flags: []) }))
         .koreContextMenu("explorer") {
             // A right-click outside the choice chooses just that row, as VS Code does.
@@ -515,7 +544,11 @@ private struct TreeRow: View, Equatable {
     }
 
     private var fill: Color {
-        if inDropTarget { return Theme.Tree.dropTarget }
+        switch drop {
+        case .target: return Theme.Tree.dropTarget
+        case .inside: return Theme.Tree.dropInside
+        case .none: break
+        }
         if isSelected { return focused ? Theme.Row.selectedFocused : Theme.Row.selected(ground) }
         return hovered.value ? Theme.Row.hoverQuiet(ground) : .clear
     }
@@ -558,7 +591,7 @@ private struct TreeRow: View, Equatable {
                     } else {
                         text
                             .onTapGesture { pick(path) }
-                            .onDrop(of: [.fileURL], delegate: TreeDrop(folder: path, store: store, workspace: workspace, undo: undoManager))
+                            .onDrop(of: TreeDrop.types, delegate: TreeDrop(folder: path, store: store, workspace: workspace, undo: undoManager, row: path))
                             .koreContextMenu("explorer") { TreeMenu(path: path, isFolder: true, store: store, workspace: workspace, undo: undoManager).items }
                             .storyID(StoryID.Explorer.segment(store.relative(path)), press: { pick(path) })
                     }
@@ -940,30 +973,36 @@ enum TreeActions {
 
     // MARK: Cut, copy, paste, duplicate
 
-    /// ⌘C / ⌘X: the files on the pasteboard (Finder can paste them too) and kept for ⌘V.
+    /// ⌘C / ⌘X: the files on the pasteboard (Finder can paste them too) and on Kore's file
+    /// clipboard, for ⌘V in any explorer, in any window.
     static func copy(_ paths: [String], cut: Bool, store: FilesStore) {
         guard !paths.isEmpty else { return }
-        board.clearContents()
-        board.writeObjects(paths.map { URL(fileURLWithPath: $0) as NSURL })
+        FileClipboard.shared.put(paths.map { .mac($0) }, cut: cut)
         store.clipboard = (paths, cut)
     }
 
-    static func canPaste(store: FilesStore) -> Bool {
-        board.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
-    }
+    static func canPaste(store: FilesStore) -> Bool { FileClipboard.shared.canPaste }
 
-    /// ⌘V into `folder`: the pasteboard's files, moved after a cut in the tree, copied
-    /// otherwise; a taken name gets " copy", as Finder does. One undo.
+    /// ⌘V into `folder`: files on this Mac moved after a cut (in any window), copied otherwise;
+    /// a taken name gets " copy". One undo. A box's files come by rsync (`FilePaste`).
     static func paste(into folder: String, store: FilesStore, workspace: Workspace, undo: UndoManager?) {
-        let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        let paths = urls.map { realPath($0.path) }
+        guard let clip = FileClipboard.shared.current() else { return }
+        let paths = clip.items.compactMap { if case .mac(let path) = $0 { path } else { nil } }
+        guard paths.count == clip.items.count else {
+            return FilePaste.carry(clip.items, into: .mac(folder), move: clip.cut) { outcome in
+                if clip.cut, outcome.failure == nil { FileClipboard.shared.pasted() }
+                await store.landed(outcome.landed.compactMap { if case .mac(let path) = $0 { path } else { nil } })
+            }
+        }
         guard !paths.isEmpty else { return }
-        let cut = store.clipboard.map { $0.cut && Set($0.paths) == Set(paths) } ?? false
         Task {
-            let result = await store.transfer(paths, into: folder, copy: !cut, collision: { _ in .keepBoth }, moved: workspace.renamed)
+            let result = await store.transfer(paths, into: folder, copy: !clip.cut, collision: { _ in .keepBoth }, moved: workspace.renamed)
             if let failure = result.failure { show(failure) }
             // A cut pastes once; a copy can paste again.
-            if cut, !result.done.isEmpty { store.clipboard = nil; board.clearContents() }
+            if clip.cut, !result.done.isEmpty {
+                store.clipboard = nil
+                FileClipboard.shared.pasted()
+            }
             registerUndo(result.done, store: store, workspace: workspace, undo: undo)
         }
     }
@@ -982,7 +1021,7 @@ enum TreeActions {
         }
     }
 
-    /// From outside the folder (Finder, another app): a drop copies, as in VS Code.
+    /// From outside the folder (Finder, another app): a drop copies (⌘ moves).
     static func fromOutside(_ paths: [String], store: FilesStore) -> Bool {
         paths.contains { !$0.hasPrefix(store.root + "/") }
     }
@@ -1085,43 +1124,79 @@ struct ExplorerSash: View {
     }
 }
 
-/// A row (or the space under the rows) as a drop target: it and its open rows fill while a drag
-/// is over it, and the drop moves or copies into its folder.
+/// How a row fills under a drag: the target folder's own row, or a row inside it.
+enum DropFill: Equatable { case none, target, inside }
+
+/// A row (or the space under the rows) as a drop target: its folder's row fills, its open rows
+/// softly, a badge at the pointer says what a drop does, and the drop moves or copies into it
+/// (`DropRules`): Kore's rows on this Mac move (⌥ copies), Finder's files and a box's rows copy
+/// (⌘ moves).
 private struct TreeDrop: DropDelegate {
+    /// Files (this Mac's, Finder's), and a box tree's rows (their paths as text).
+    static let types: [UTType] = [.fileURL, .plainText]
     let folder: String
     let store: FilesStore
     let workspace: Workspace
     let undo: UndoManager?
-    /// The row it's on, and its click: a drag from the row dropped back on it is a click whose
-    /// press moved a few points (AppKit started a drag, and the tap was lost).
+    /// The row it's on (a chain's folder for its name), and its click: a drag from the row
+    /// dropped back on it is a click whose press moved a few points (AppKit started a drag, and
+    /// the tap was lost). Nil: the space under the rows.
     var row: String?
+    var isFolder = true
     var click: (@MainActor () -> Void)?
 
     /// The drag started on this row alone: nothing fills, as it can't go anywhere.
     private var fromHere: Bool { row != nil && TreeDrag.paths == [row] }
 
-    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.fileURL]) }
-
-    func dropEntered(info: DropInfo) {
-        if !fromHere { store.dropTarget = folder }
+    private func act(_ sources: DragSources) -> DropAct {
+        DropRules.act(sources, into: .mac(folder), flags: NSEvent.modifierFlags, writable: FileManager.default.isWritableFile(atPath: folder))
     }
 
-    func dropExited(info: DropInfo) {
-        if store.dropTarget == folder { store.dropTarget = nil }
-    }
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.fileURL]) || BoxDrag.active }
+
+    func dropEntered(info: DropInfo) { _ = update(info) }
+
+    func dropExited(info: DropInfo) { store.dropping.out(row: row) }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        if !fromHere, store.dropTarget != folder { store.dropTarget = folder }
-        return DropProposal(operation: NSEvent.modifierFlags.contains(.option) ? .copy : .move)
+        // Back on the row it started from: no fill, and the drop is the click.
+        if fromHere { return DropProposal(operation: .move) }
+        switch update(info) {
+        case .refused: return DropProposal(operation: .forbidden)
+        case .move: return DropProposal(operation: .move)
+        case .copy: return DropProposal(operation: .copy)
+        }
+    }
+
+    private func update(_ info: DropInfo) -> DropAct {
+        guard !fromHere else { return .move }
+        let sources = DragSources.now()
+        let act = act(sources)
+        let shown = folder == store.root ? (folder as NSString).lastPathComponent : store.relative(folder)
+        store.dropping.over(
+            row: row, isFolder: isFolder, folder: folder, point: info.location, act: act,
+            text: DropRules.badge(act, sources: sources, into: .mac(folder), shown: shown))
+        return act
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        store.dropTarget = nil
-        let option = NSEvent.modifierFlags.contains(.option)
+        let act = fromHere ? DropAct.move : act(DragSources.now())
+        store.dropping.ended(droppedInto: act == .refused ? nil : folder)
+        guard act != .refused else { return false }
         let providers = info.itemProviders(for: [.fileURL])
         let (folder, store, workspace, undo, row, click) = (folder, store, workspace, undo, row, click)
+        if providers.isEmpty {
+            // Rows from a box's tree: copied here (⌘ moves), by rsync.
+            let texts = info.itemProviders(for: [.plainText])
+            Task { @MainActor in
+                guard let places = await BoxDrag.places(texts) else { return }
+                FilePaste.carry(places, into: .mac(folder), move: act == .move) { outcome in
+                    await store.landed(outcome.landed.compactMap { if case .mac(let path) = $0 { path } else { nil } })
+                }
+            }
+            return true
+        }
         Task { @MainActor in
-            var paths: [String] = []
             var urls: [URL] = []
             for provider in providers {
                 if let url = await Self.url(provider) { urls.append(url) }
@@ -1130,8 +1205,8 @@ private struct TreeDrop: DropDelegate {
                 TreeDrag.paths = []
                 return click()
             }
-            paths = TreeDrag.expand(urls).map { realPath($0.path) }
-            TreeActions.drop(paths, into: folder, copy: option || TreeActions.fromOutside(paths, store: store), store: store, workspace: workspace, undo: undo)
+            let paths = TreeDrag.expand(urls).map { realPath($0.path) }
+            TreeActions.drop(paths, into: folder, copy: act == .copy, store: store, workspace: workspace, undo: undo)
         }
         return true
     }

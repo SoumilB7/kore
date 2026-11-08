@@ -103,6 +103,11 @@ package struct FilesResult: Codable, Sendable, Equatable {
     package var watching: Bool?
     /// 1.8: `fs.read` with `base`: the file is still that, and nothing else is sent.
     package var unchanged: Bool?
+    /// 1.11: `fs.count`: the files under the entry (a link or a file counts one; folders none),
+    /// with `size` their bytes and `dir` whether the entry is a folder; `fs.copy` says the same
+    /// of the copy.
+    package var files: Int?
+    package var dir: Bool?
 
     package init(
         id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, path: String? = nil, entries: [FileEntry]? = nil,

@@ -145,8 +145,15 @@ package struct SyncBox: Sendable {
 
     /// Runs `script` under sh on the box, `args` as `$1`…, `input` on its stdin.
     package func shell(_ script: String, _ args: [String] = [], input: Data? = nil, low: Bool = false) async -> SyncProcess.Output {
+        let argv = shellArgv(script, args, low: low)
+        return await SyncProcess.run(argv[0], Array(argv.dropFirst()), input: input, low: low)
+    }
+
+    /// The whole command line that runs `script` on the box: ssh, its options, `--`, the host,
+    /// and the script and each argument quoted for the box's shell.
+    func shellArgv(_ script: String, _ args: [String] = [], low: Bool = false) -> [String] {
         let command = (low ? "nice -n 10 " : "") + "sh -c " + ShellQuote.single(script) + " sh" + args.map { " " + ShellQuote.single($0) }.joined()
-        return await SyncProcess.run(ssh[0], Array(ssh.dropFirst()) + ["--", host, command], input: input, low: low)
+        return ssh + ["--", host, command]
     }
 }
 

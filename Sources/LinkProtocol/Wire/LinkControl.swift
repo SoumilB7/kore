@@ -76,6 +76,10 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case fsDelete = "fs.delete"
     case fsSearch = "fs.search"
     case fsWatch = "fs.watch"
+    /// 1.11: an entry copied within the served folders, and an entry's files and bytes counted
+    /// (what a copy across devices checks before its source goes).
+    case fsCopy = "fs.copy"
+    case fsCount = "fs.count"
     /// 1.10: a chat moves between the box and a Mac (`LinkMoves.swift`), and the sync says when
     /// both ends have settled.
     case chatRelease = "chat.release"

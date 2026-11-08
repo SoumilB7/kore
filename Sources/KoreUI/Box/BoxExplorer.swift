@@ -9,7 +9,9 @@ import UniformTypeIdentifiers
 /// menus, over the link. New File, New Folder, Reload and Collapse all on the header while the
 /// pointer is over it, Search always. A folder's click opens or closes it; a file's opens it in a
 /// preview tab (a double click keeps it), editable. Return renames, ⌘⌫ moves to the box's trash,
-/// ⌘X ⌘V move, ⌘ and ⇧ choose several; a drag within the tree moves, a drop from Finder uploads.
+/// ⌘C ⌘X ⌘V copy and move to and from any explorer (this Mac's, another box's), ⌘ and ⇧ choose
+/// several; a drag within the box moves (⌥ copies), one from this Mac or another box copies (⌘
+/// moves).
 /// The folder's sync is the title row's Sync button.
 struct BoxExplorer: View {
     let workspace: Workspace
@@ -34,6 +36,7 @@ struct BoxExplorer: View {
         .onHover { hovered.value = $0 }
         // The link back after a drop lists the open folders again (`HostConnection`'s watches).
         .task { await store.start() }
+        .onChange(of: FileCarries.shared.revision) { store.carriesChanged() }
     }
 
     private var searching: Bool { workspace.sidebar == .search }
@@ -104,6 +107,7 @@ struct BoxExplorer: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .transition(.opacity)
         }
+        if !searching { CarryLine(root: .box(alias: store.alias, path: store.root)) }
     }
 
     private var tree: some View {
@@ -116,7 +120,7 @@ struct BoxExplorer: View {
                             state: row.kind == .node ? box.git.state(of: row.id) : nil,
                             focused: focused && store.isChosen(row.id), typed: store.selection == row.id ? typed.value : "",
                             editing: row.kind == .newFile || row.kind == .newFolder || store.edit == .rename(row.id),
-                            inDrop: store.dropTarget.map { row.id == $0 || row.id.hasPrefix($0 + "/") } ?? false
+                            drop: store.dropTarget.map { row.id == $0 ? .target : row.id.hasPrefix($0 + "/") ? .inside : .none } ?? .none
                         ) { count, flags in
                             focused = true
                             click(row, count: count, flags: flags)
@@ -124,6 +128,14 @@ struct BoxExplorer: View {
                         .id(row.id)
                     }
                 }
+                // The drop's badge at the pointer, over the row (or the space) it's on.
+                .overlay(alignment: .topLeading) {
+                    if let badge = store.dropping.badge {
+                        let index = badge.row.flatMap { path in store.rows.firstIndex { $0.id == path } } ?? store.rows.count
+                        DropBadge(badge: badge).offset(y: CGFloat(index) * Size.Tree.row)
+                    }
+                }
+                .animation(Motion.fade, value: store.dropping.badge?.text)
                 .padding(.bottom, Space.md)
                 // The empty part below the rows: the keys come to the tree; a drop there goes
                 // into the folder itself.
@@ -132,6 +144,17 @@ struct BoxExplorer: View {
                     .contentShape(Rectangle())
                     .onTapGesture { focused = true }
                     .onDrop(of: BoxDrop.types, delegate: BoxDrop(folder: store.root, store: store, workspace: workspace))
+            }
+            .onAppear {
+                // Under a drag, a row at an edge brings its neighbour into view: the tree scrolls.
+                store.dropping.nudge = { [store] path in
+                    let rows = store.rows
+                    guard let i = rows.firstIndex(where: { $0.id == path }) else { return }
+                    withAnimation(.linear(duration: 0.12)) {
+                        if i + 1 < rows.count { proxy.scrollTo(rows[i + 1].id) }
+                        if i > 0 { proxy.scrollTo(rows[i - 1].id) }
+                    }
+                }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { treeHeight.value = $0 }
             .focusable(interactions: .edit)
@@ -142,8 +165,8 @@ struct BoxExplorer: View {
                 guard store.edit == nil else { return }
                 for row in store.rows where row.kind == .node { store.pickToggle(row.id) }
             }
-            .onCommand(#selector(NSText.cut(_:))) { store.cut = store.chosenTops }
-            .onCommand(#selector(NSText.copy(_:))) { BoxTreeMenu.copy(store.chosenTops.joined(separator: "\n")) }
+            .onCommand(#selector(NSText.cut(_:))) { BoxTreeMenu.put(store.chosenTops, cut: true, store: store) }
+            .onCommand(#selector(NSText.copy(_:))) { BoxTreeMenu.put(store.chosenTops, cut: false, store: store) }
             .onCommand(#selector(NSText.paste(_:))) { BoxTreeMenu.paste(into: store.targetFolder(), store: store) }
             .onChange(of: store.selection) { _, selection in
                 guard let selection else { return }
@@ -253,7 +276,7 @@ private struct BoxTreeRow: View {
     let focused: Bool
     let typed: String
     let editing: Bool
-    let inDrop: Bool
+    let drop: DropFill
     let click: (Int, NSEvent.ModifierFlags) -> Void
     @StateObject private var hovered = Local(false)
     @Environment(\.listGround) private var ground
@@ -273,7 +296,7 @@ private struct BoxTreeRow: View {
                     BoxNameField(row: row, store: store, workspace: workspace)
                 } else {
                     Text(name).font(Chrome.body).lineLimit(1).truncationMode(.tail)
-                        .opacity(store.cut.contains(row.id) ? 0.5 : 1)
+                        .opacity(FileClipboard.shared.isCut(.box(alias: store.alias, path: row.id)) ? 0.5 : 1)
                     if row.isLink {
                         Image(systemName: "arrow.turn.up.right").font(Chrome.caption).foregroundStyle(Theme.tertiary).padding(.leading, Space.xs)
                     }
@@ -284,7 +307,11 @@ private struct BoxTreeRow: View {
         }
         .padding(.trailing, Size.Tree.trailing)
         .frame(height: Size.Tree.row)
+        // On its way here (a carry): dimmed, with its bar.
+        .opacity(carrying == nil ? 1 : 0.5)
+        .overlay(alignment: .bottom) { if let carrying { CarryBar(fraction: carrying).padding(.horizontal, Space.sm) } }
         .background(fill, in: RoundedRectangle(cornerRadius: Radius.chip))
+        .animation(Motion.fade, value: drop)
         .padding(.horizontal, Size.Tree.rowInset)
         .background(alignment: .leading) {
             if row.depth > 0 { TreeGuides(depth: row.depth).fill(Theme.Tree.guide).allowsHitTesting(false) }
@@ -301,7 +328,7 @@ private struct BoxTreeRow: View {
         .storyID(StoryID.Explorer.row(relative), press: { click(1, []) })
         .onDrag {
             // A chosen row carries the whole choice; the others only themselves.
-            BoxDrag.paths = store.isChosen(row.id) && !store.picked.isEmpty ? store.chosenTops : [row.id]
+            BoxDrag.start(store.isChosen(row.id) && !store.picked.isEmpty ? store.chosenTops : [row.id], alias: store.alias)
             // As text, the box paths (a terminal or another app takes them so); and as box files,
             // which a box chat's composer attaches as chips, sent by their paths.
             let provider = NSItemProvider(object: BoxDrag.paths.joined(separator: " ") as NSString)
@@ -312,7 +339,9 @@ private struct BoxTreeRow: View {
             }
             return provider
         }
-        .onDrop(of: BoxDrop.types, delegate: BoxDrop(folder: row.isFolder ? row.id : store.parent(of: row.id), store: store, workspace: workspace))
+        .onDrop(
+            of: BoxDrop.types,
+            delegate: BoxDrop(folder: row.isFolder ? row.id : store.parent(of: row.id), store: store, workspace: workspace, row: row.id, isFolder: row.isFolder))
         .koreContextMenu("explorer") {
             guard row.kind == .node else { return [] }
             if !store.isChosen(row.id) { store.pickOnly(row.id) }
@@ -348,8 +377,16 @@ private struct BoxTreeRow: View {
         }
     }
 
+    private var carrying: Double? {
+        FileCarries.shared.pending.isEmpty ? nil : FileCarries.shared.progress(of: .box(alias: store.alias, path: row.id))
+    }
+
     private var fill: Color {
-        if inDrop { return Theme.Tree.dropTarget }
+        switch drop {
+        case .target: return Theme.Tree.dropTarget
+        case .inside: return Theme.Tree.dropInside
+        case .none: break
+        }
         guard row.kind == .node else { return .clear }
         if selected { return focused ? Theme.Row.selectedFocused : Theme.Row.selected(ground) }
         return hovered.value ? Theme.Row.hoverQuiet(ground) : .clear
@@ -449,8 +486,7 @@ private struct BoxNameField: View {
 // MARK: - Menu and actions
 
 /// The tree's right-click menu, as the Files explorer's, less what a box's files can't do from
-/// this Mac (Open with Default App, Reveal in Finder, Open in Terminal, Compress, Copy and
-/// Duplicate as files).
+/// this Mac (Open with Default App, Reveal in Finder, Open in Terminal, Compress).
 @MainActor struct BoxTreeMenu {
     let path: String
     let isFolder: Bool
@@ -461,7 +497,9 @@ private struct BoxNameField: View {
         let chosen = store.chosenTops
         if chosen.count > 1 {
             return [
-                OptionItem("Cut") { store.cut = chosen }, .rule,
+                OptionItem("Cut") { Self.put(chosen, cut: true, store: store) },
+                OptionItem("Copy") { Self.put(chosen, cut: false, store: store) },
+                OptionItem("Duplicate") { Self.duplicate(chosen, store: store) }, .rule,
                 OptionItem("Copy Paths") { Self.copy(chosen.joined(separator: "\n")) },
                 OptionItem("Copy Relative Paths") { Self.copy(chosen.map(store.relative).joined(separator: "\n")) }, .rule,
                 OptionItem("Move \(chosen.count) Items to Trash", destructive: true) { Self.trash(chosen, store: store) },
@@ -474,10 +512,14 @@ private struct BoxNameField: View {
         ]
         if !isFolder { items.append(OptionItem("Open") { workspace.openBoxFile(path, preview: false) }) }
         if isFolder { items.append(OptionItem("Find in Folder…") { workspace.box?.search.scope(path); workspace.showSearch() }) }
-        items += [.rule, OptionItem("Cut") { store.cut = [path] }]
-        if !store.cut.isEmpty { items.append(OptionItem("Paste") { Self.paste(into: folder, store: store) }) }
         items += [
             .rule,
+            OptionItem("Cut") { Self.put([path], cut: true, store: store) },
+            OptionItem("Copy") { Self.put([path], cut: false, store: store) },
+        ]
+        if FileClipboard.shared.canPaste { items.append(OptionItem("Paste") { Self.paste(into: folder, store: store) }) }
+        items += [
+            OptionItem("Duplicate") { Self.duplicate([path], store: store) }, .rule,
             OptionItem("Copy Path") { Self.copy(path) },
             OptionItem("Copy Relative Path") { Self.copy(store.relative(path)) }, .rule,
             OptionItem("Rename…") { store.edit = .rename(path) },
@@ -488,12 +530,38 @@ private struct BoxNameField: View {
 
     static func copy(_ text: String) { TreeActions.copy(text) }
 
-    /// ⌘V after ⌘X: the cut entries move into `folder`.
+    /// ⌘C / ⌘X: on Kore's file clipboard (the paths as text on the pasteboard), for ⌘V in any
+    /// explorer, in any window.
+    static func put(_ paths: [String], cut: Bool, store: BoxExplorerStore) {
+        FileClipboard.shared.put(paths.map { .box(alias: store.alias, path: $0) }, cut: cut)
+    }
+
+    /// ⌘V into `folder`: a cut in this tree moves at once (`fs.rename`); anything else (a copy,
+    /// another window's, this Mac's, another box's) goes by `FilePaste`.
     static func paste(into folder: String, store: BoxExplorerStore) {
-        let paths = store.cut
-        guard !paths.isEmpty else { return }
-        store.cut = []
-        Task { _ = await store.move(paths, into: folder) }
+        guard let clip = FileClipboard.shared.current() else { return }
+        let here = clip.items.compactMap { place -> String? in
+            guard case .box(let alias, let path) = place, alias == store.alias, store.shows(path) else { return nil }
+            return path
+        }
+        if clip.cut, here.count == clip.items.count {
+            FileClipboard.shared.pasted()
+            Task { _ = await store.move(here, into: folder) }
+            return
+        }
+        FilePaste.carry(clip.items, into: .box(alias: store.alias, path: folder), move: clip.cut) { outcome in
+            if clip.cut, outcome.failure == nil { FileClipboard.shared.pasted() }
+            await store.landed(outcome)
+        }
+    }
+
+    /// Duplicate: a copy beside each, named " copy" (`fs.copy`).
+    static func duplicate(_ paths: [String], store: BoxExplorerStore) {
+        for (parent, group) in Dictionary(grouping: paths, by: store.parent(of:)) {
+            FilePaste.carry(group.map { .box(alias: store.alias, path: $0) }, into: .box(alias: store.alias, path: parent), move: false) { outcome in
+                await store.landed(outcome)
+            }
+        }
     }
 
     /// One question for all of them (as the Files explorer asks), then the box's trash.
@@ -520,86 +588,132 @@ private struct BoxNameField: View {
 
 // MARK: - Dragging and dropping
 
-/// The rows a drag in the box tree carries (the provider holds only a marker).
+/// The rows a drag in a box tree carries, and the box they're on (the provider holds their paths
+/// as text, which a drop checks against these).
 @MainActor enum BoxDrag {
     static var paths: [String] = []
+    static var alias: String?
+    private static var started = Date.distantPast
+
+    static func start(_ paths: [String], alias: String) {
+        self.paths = paths
+        self.alias = alias
+        started = Date()
+    }
+
+    /// A box drag may be over a drop now.
+    static var active: Bool { !paths.isEmpty && Date().timeIntervalSince(started) < 600 }
+
+    /// The rows a drop's text carries, when it's this drag's.
+    static func places(_ providers: [NSItemProvider]) async -> [FilePlace]? {
+        guard active, let alias, let provider = providers.first else { return nil }
+        let text: String? = await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: NSString.self) { object, _ in continuation.resume(returning: (object as? NSString) as String?) }
+        }
+        guard text == paths.joined(separator: " ") else { return nil }
+        defer { paths = [] }
+        return paths.map { .box(alias: alias, path: $0) }
+    }
 }
 
-/// A drop on a folder (a file row: its folder): rows from this tree move there; files from
-/// Finder upload there (12 MB each at most; a folder isn't taken).
+/// A drop on a folder (a file row: its folder; the space under the rows: the root), its row lit
+/// and a badge at the pointer saying what a drop does (`DropRules`): rows of this box move (⌥
+/// copies); this Mac's files and another box's rows copy (⌘ moves), by `FilePaste`.
 private struct BoxDrop: DropDelegate {
     static let types: [UTType] = [.fileURL, .plainText]
     let folder: String
     let store: BoxExplorerStore
     let workspace: Workspace
+    var row: String?
+    var isFolder = true
 
-    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: Self.types) }
-    func dropEntered(info: DropInfo) { store.dropTarget = folder }
-    func dropExited(info: DropInfo) { if store.dropTarget == folder { store.dropTarget = nil } }
+    private var into: FilePlace { .box(alias: store.alias, path: folder) }
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.fileURL]) || BoxDrag.active }
+    func dropEntered(info: DropInfo) { _ = update(info) }
+    func dropExited(info: DropInfo) { store.dropping.out(row: row) }
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: info.hasItemsConforming(to: [.fileURL]) ? .copy : .move)
+        switch update(info) {
+        case .refused: DropProposal(operation: .forbidden)
+        case .move: DropProposal(operation: .move)
+        case .copy: DropProposal(operation: .copy)
+        }
+    }
+
+    private func update(_ info: DropInfo) -> DropAct {
+        let sources = DragSources.now()
+        let act = DropRules.act(sources, into: into, flags: NSEvent.modifierFlags, reachable: store.reachable)
+        let shown = folder == store.root ? BoxFolder.lastPart(folder) : store.relative(folder)
+        store.dropping.over(row: row, isFolder: isFolder, folder: folder, point: info.location, act: act, text: DropRules.badge(act, sources: sources, into: into, shown: shown))
+        return act
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        store.dropTarget = nil
+        let act = DropRules.act(DragSources.now(), into: into, flags: NSEvent.modifierFlags, reachable: store.reachable)
+        store.dropping.ended(droppedInto: act == .refused ? nil : folder)
+        guard act != .refused else { return false }
         let urls = info.itemProviders(for: [.fileURL])
+        let (store, folder, into) = (store, folder, into)
+        func landed(_ outcome: CarryOutcome) async { await store.landed(outcome) }
         if urls.isEmpty {
-            let paths = BoxDrag.paths
-            BoxDrag.paths = []
-            guard !paths.isEmpty else { return false }
-            let movable = paths.filter { store.parent(of: $0) != folder && !LinkFiles.inside(folder, $0) }
-            guard !movable.isEmpty else { return false }
-            if movable.count > 1 {
-                let alert = NSAlert()
-                alert.messageText = "Move \(movable.count) items into “\((folder as NSString).lastPathComponent)”?"
-                alert.addButton(withTitle: "Move")
-                alert.addButton(withTitle: "Cancel")
-                guard StorylineSeams.confirm?("move") ?? (alert.runModal() == .alertFirstButtonReturn) else { return false }
+            let texts = info.itemProviders(for: [.plainText])
+            Task {
+                guard let places = await BoxDrag.places(texts) else { return }
+                let paths = places.map(\.path)
+                // Rows this tree shows move at once (`fs.rename`); the rest go by `FilePaste`.
+                guard act == .move, places.allSatisfy({ $0.alias == store.alias }), paths.allSatisfy(store.shows) else {
+                    return FilePaste.carry(places, into: into, move: act == .move, done: landed)
+                }
+                let movable = paths.filter { store.parent(of: $0) != folder && !LinkFiles.inside(folder, $0) }
+                guard !movable.isEmpty else { return }
+                if movable.count > 1 {
+                    let alert = NSAlert()
+                    alert.messageText = "Move \(movable.count) items into “\((folder as NSString).lastPathComponent)”?"
+                    alert.addButton(withTitle: "Move")
+                    alert.addButton(withTitle: "Cancel")
+                    guard StorylineSeams.confirm?("move") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
+                }
+                _ = await store.move(movable, into: folder)
             }
-            Task { _ = await store.move(movable, into: folder) }
             return true
         }
-        let (store, folder) = (store, folder)
         Task {
-            var files: [(name: String, data: Data)] = []
-            var skipped: [String] = []
+            var dropped: [URL] = []
             for provider in urls {
-                guard let url = await Self.url(provider) else { continue }
-                var isFolder: ObjCBool = false
-                FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder)
-                if isFolder.boolValue {
-                    skipped.append(url.lastPathComponent)
-                    continue
-                }
-                guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= LinkUploads.maxSize,
-                    let data = try? Data(contentsOf: url)
-                else {
-                    skipped.append(url.lastPathComponent)
-                    continue
-                }
-                files.append((url.lastPathComponent, data))
+                if let url = await Self.url(provider) { dropped.append(url) }
             }
-            let failure = await store.upload(files, into: folder) { name in
-                let alert = NSAlert()
-                alert.messageText = "“\(name)” already exists in “\((folder as NSString).lastPathComponent)”."
-                alert.addButton(withTitle: "Replace")
-                alert.addButton(withTitle: "Keep Both")
-                alert.addButton(withTitle: "Cancel")
-                switch StorylineSeams.confirm.map({ $0("replace") ? NSApplication.ModalResponse.alertFirstButtonReturn : .alertSecondButtonReturn })
-                    ?? alert.runModal()
-                {
-                case .alertFirstButtonReturn: return .replace
-                case .alertSecondButtonReturn: return .keepBoth
-                default: return .cancel
-                }
+            // A local tree's drag carries its whole choice.
+            let places = TreeDrag.expand(dropped).map { FilePlace.mac(realPath($0.path)) }
+            guard SyncBox.ssh(store.alias) == nil else {
+                return FilePaste.carry(places, into: into, move: act == .move, done: landed)
             }
-            if !skipped.isEmpty {
-                store.say("Not copied to \(store.alias): \(skipped.joined(separator: ", ")). Files up to 12 MB go; folders don't.")
-            } else if let failure {
-                store.say(failure)
-            }
+            await Self.upload(places.map { URL(fileURLWithPath: $0.path) }, into: folder, store: store)
         }
         return true
+    }
+
+    /// Without an SSH alias to rsync over: files (12 MB each at most; not folders) uploaded over
+    /// the link.
+    private static func upload(_ urls: [URL], into folder: String, store: BoxExplorerStore) async {
+        var files: [(name: String, data: Data)] = []
+        var skipped: [String] = []
+        for url in urls {
+            var isFolder: ObjCBool = false
+            FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder)
+            guard !isFolder.boolValue, let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= LinkUploads.maxSize,
+                let data = try? Data(contentsOf: url)
+            else {
+                skipped.append(url.lastPathComponent)
+                continue
+            }
+            files.append((url.lastPathComponent, data))
+        }
+        let failure = await store.upload(files, into: folder) { _ in .keepBoth }
+        if !skipped.isEmpty {
+            store.say("Not copied to \(store.alias): \(skipped.joined(separator: ", ")). Files up to 12 MB go; folders don't.")
+        } else if let failure {
+            store.say(failure)
+        }
     }
 
     private static func url(_ provider: NSItemProvider) async -> URL? {

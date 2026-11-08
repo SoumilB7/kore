@@ -287,7 +287,7 @@ package enum LinkPolicy {
             guard LinkFiles.plainPath(args.path) else { return .deny(.invalid, "An absolute path.") }
             if kind == .fsRead, let max = args.max, max < 0 { return .deny(.invalid, "A size of 0 or more.") }
             return .allow
-        case .fsWrite, .fsCreate, .fsDelete:
+        case .fsWrite, .fsCreate, .fsDelete, .fsCount:
             // 1.8: inside served folders only (the box checks where the path leads).
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             guard LinkFiles.plainPath(args.path) else { return .deny(.invalid, "An absolute path.") }
@@ -295,7 +295,7 @@ package enum LinkPolicy {
                 return .deny(.invalid, "One of text, data or blob.")
             }
             return .allow
-        case .fsRename:
+        case .fsRename, .fsCopy:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             guard LinkFiles.plainPath(args.from), LinkFiles.plainPath(args.to) else { return .deny(.invalid, "Two absolute paths.") }
             return .allow

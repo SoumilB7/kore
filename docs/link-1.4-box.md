@@ -638,3 +638,43 @@ first move compressed, and later ones only what changed since the copy each side
 reads and writes a file a piece at a time (256 KiB), so a large rollout never sits in memory.
 `chat.mirror` goes at most every 2 s, merged (a streamed answer is one event), and only while the
 replica is `followed`; missed events go from `mirrored` when the link is back.
+
+## Link 1.11: files copied and moved between places
+
+The Mac copies and moves files and folders between any two explorers in any window: a folder on
+the Mac, one on a box, one on another box. Two commands, additive, full grants only
+(`denied.control` otherwise), checked by `LinkPolicy.checkBox` and done off the daemon's main
+thread, with 1.8's rules for where a path may lead (inside a served folder; the entry's folder
+resolved and kept inside it; the entry itself never followed). A 1.10 box answers them `invalid`;
+the Mac says the box needs an update. The welcome's `caps` say `copy` to a full grant.
+
+| `type` | fields | |
+|---|---|---|
+| `fs.copy` | `from, to` | Copies `from` to `to`, a folder with everything in it: files with their mode and modification time, links as the same link (never followed), anything else (a socket, a pipe) left out. Into a hidden name beside `to` first, renamed when whole; a failure leaves nothing. Nothing is replaced (`invalid` when `to` is taken), a folder never goes inside itself, and a served folder's own place isn't a target. Result: `path`, and the copy's `files`, `size`, `dir` as `fs.count` says them. |
+| `fs.count` | `path` | What's under the entry, links not followed: `files` (a file or a link counts one, folders none), `size` (their bytes) and `dir` (the entry is a folder). |
+
+### How a carry goes
+
+Each Kore window's explorer has Copy, Cut, Paste and Duplicate (⌘C, ⌘X, ⌘V) and takes drops from
+any other. One file clipboard serves the whole app; the Mac's items are also on the pasteboard as
+files (Finder pastes them; Kore pastes Finder's, as copies), a box's as their paths in text.
+
+- Same device: a move is a rename (`fs.rename`, or the Mac's own), a copy the device's own
+  (`fs.copy`, or the Mac's). A drop moves; ⌥ copies.
+- Mac and box: `rsync -a` over the box's SSH alias, as the two-way sync runs it (`-e "ssh … --"`,
+  the remote path quoted for the box's shell). Box to box: `tar -C <folder> -cf - ./<name>` on
+  one, piped through the Mac into `tar -C <scratch> -xf -` on the other. Streamed; nothing is held
+  in memory. A drop copies; ⌘ moves.
+- Every box path is checked first: absolute and normalised on the Mac, then by the box
+  (`fs.count` of each source and of the folder it goes into, which must be a folder), so rsync
+  and tar touch only served folders.
+- The copy lands under a hidden name in the folder (`.<name>.kore-<id>`, or a `.kore-copy-<id>`
+  folder for tar), is counted with `fs.count` (or on the Mac) and has to match the source's files
+  and bytes, then takes its name. A taken name is kept as "name 2" ("name copy" in its own
+  folder); with one item the user picks Replace or Keep Both, and Replace sends what was there to
+  its trash only once the copy is whole. Nothing is overwritten otherwise.
+- A move across devices sends the source to its trash (`fs.delete`, or the macOS Trash) only
+  after its copy matched. A cancel or a failure stops the copy, removes the hidden partial copy
+  and keeps the source.
+- A carry that takes a while shows one line in the explorer it goes into ("Copying 3 items to
+  mybox · 42%", the copy's bytes counted every second) with Cancel.

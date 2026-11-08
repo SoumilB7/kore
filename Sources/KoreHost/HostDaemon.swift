@@ -55,6 +55,8 @@ package final class HostDaemon {
     /// Link 1.8: the grants' terminals, and git for the explorer, editor and diffs.
     let terminals = HostTerminals()
     let git = HostGit()
+    /// Where `fs.delete` puts what it deletes: nil, the user's trash (tests set their own).
+    package var filesTrash: HostFiles.Trash?
     /// 1.10: the environment the CLIs' session folders are read from (`CLAUDE_CONFIG_DIR`,
     /// `CODEX_HOME`, `HOME`; tests set their own), and each move under way by the link that
     /// started it (one that ends aborts it).
@@ -330,7 +332,7 @@ package final class HostDaemon {
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : []) + (control == .full ? ["stream", "pty", "git", "move"] : []))
+            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : []) + (control == .full ? ["stream", "pty", "git", "move", "copy"] : []))
     }
 
     var windows: [LinkWindow] {

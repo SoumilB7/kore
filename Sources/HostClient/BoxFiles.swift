@@ -64,6 +64,9 @@ package protocol BoxFileSource: AnyObject {
     /// Watches `folders` for `key` (a window), with the other keys' on this box; `changed` gets
     /// the folders that changed. False when the box can't watch them.
     func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?) async -> Bool
+    // 1.11: an entry copied within the served folders, and an entry's files and bytes counted.
+    func copy(_ from: String, to: String) async -> Result<String, HostRefusal>
+    func count(_ path: String) async -> Result<CarryCount, HostRefusal>
 }
 
 /// What the box said changed: folders, and in each the entries' names when it said them.
@@ -81,6 +84,15 @@ package struct BoxChange: Sendable, Equatable {
 
 extension BoxFileSource {
     package func read(_ path: String, max: Int?) async -> Result<BoxFileRead, HostRefusal> { await read(path, max: max, base: nil) }
+
+    /// A stand-in that doesn't copy: as a box from before 1.11 answers.
+    package func copy(_ from: String, to: String) async -> Result<String, HostRefusal> {
+        .failure(HostRefusal(message: "\(alias) needs an update to copy files"))
+    }
+
+    package func count(_ path: String) async -> Result<CarryCount, HostRefusal> {
+        .failure(HostRefusal(message: "\(alias) needs an update to copy files"))
+    }
 }
 
 /// Why a save didn't go: the file changed on the box since it was read (its stamp now, if it's
@@ -143,6 +155,17 @@ extension HostConnection: BoxFileSource {
     package func trash(_ path: String) async -> Result<Void, HostRefusal> {
         let result = await files(.fsDelete, ControlArgs(path: path))
         return result.ok ? .success(()) : .failure(refusal(result))
+    }
+
+    package func copy(_ from: String, to: String) async -> Result<String, HostRefusal> {
+        let result = await files(.fsCopy, ControlArgs(from: from, to: to))
+        return result.ok ? .success(result.path ?? to) : .failure(refusal(result, copying: true))
+    }
+
+    package func count(_ path: String) async -> Result<CarryCount, HostRefusal> {
+        let result = await files(.fsCount, ControlArgs(path: path))
+        guard result.ok, let files = result.files else { return .failure(refusal(result, copying: true)) }
+        return .success(CarryCount(files: files, bytes: result.size ?? 0, dir: result.dir == true))
     }
 
     package func search(_ root: String, _ query: String, text: Bool, max: Int, pages: (@MainActor ([FileHit]) -> Void)?)
@@ -209,10 +232,10 @@ extension HostConnection: BoxFileSource {
     }
 
     /// The box's words, or what's wrong in Kore's: a box from before 1.7 doesn't know the command.
-    private func refusal(_ result: FilesResult) -> HostRefusal {
-        if result.ok { return HostRefusal(message: "\(alias) sent nothing") }
+    private func refusal(_ result: FilesResult, copying: Bool = false) -> HostRefusal {
+        if result.ok { return HostRefusal(message: copying ? "\(alias) needs an update to copy files" : "\(alias) sent nothing") }
         if result.code == .invalid, ["Unknown command.", "Not taken here."].contains(result.message) {
-            return HostRefusal(message: "\(alias) needs an update to show files")
+            return HostRefusal(message: "\(alias) needs an update to \(copying ? "copy" : "show") files")
         }
         if result.code == .deniedControl { return HostRefusal(message: "Files need a grant with full control on \(alias)") }
         return HostRefusal(message: result.message ?? "\(alias) refused it")

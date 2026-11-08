@@ -142,6 +142,7 @@ final class BoxRig {
         ])
         try HostConfig(folders: [folder.path]).save(paths.config)
         host = HostDaemon(paths: paths)
+        host.filesTrash = .mac(root.appendingPathComponent(".Trash").path)
         try host.start()
         grant = try GrantStore(paths.grants).allow("laptop", control: control, socket: paths.socket)
         host.pastSessions = { [weak self] provider, _ in await MainActor.run { self?.sessions[provider.id] } ?? [] }

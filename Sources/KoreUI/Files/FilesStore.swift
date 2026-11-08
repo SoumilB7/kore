@@ -1,4 +1,5 @@
 import AppKit
+import HostClient
 import KoreCore
 import Observation
 
@@ -83,7 +84,9 @@ final class FilesStore {
     /// The window's undo manager, from the explorer that shows this tree (for storylines' ⌘Z).
     @ObservationIgnored weak var undo: UndoManager?
     /// The folder a drag is over: it and its open rows fill (look §3).
-    var dropTarget: String?
+    var dropTarget: String? { dropping.target }
+    /// A drag over the tree: its target, badge and the folders it sprang open.
+    @ObservationIgnored let dropping = TreeDropping()
     var edit: Edit? {
         didSet { if edit != oldValue { rebuild() } }
     }
@@ -123,6 +126,9 @@ final class FilesStore {
 
     init(folder: URL) {
         root = realPath(folder.path)
+        dropping.isOpen = { [weak self] in self?.isExpanded($0) ?? true }
+        dropping.expand = { [weak self] in self?.expand($0) }
+        dropping.collapse = { [weak self] in self?.collapse($0) }
         watcher = FolderWatcher(URL(fileURLWithPath: root)) { [weak self] paths in self?.changed(paths) }
         watcher?.rootChanged = { [weak self] in self?.onRootMoved?() }
         Task { await load(root) }
@@ -228,7 +234,7 @@ final class FilesStore {
         }
         return urls.compactMap { url -> Node? in
             let name = url.lastPathComponent
-            guard !hidden.contains(name) else { return nil }
+            guard !hidden.contains(name), !FileCarry.isStaging(name) else { return nil }
             let values = try? url.resourceValues(forKeys: Set(keys))
             // Packages (.app, .xcodeproj) are folders here, as in VS Code.
             return Node(path: folder + "/" + name, name: name, isFolder: values?.isDirectory == true)
@@ -302,7 +308,7 @@ final class FilesStore {
         default:
             break
         }
-        for node in children[folder] ?? [] {
+        for node in withPending(children[folder], in: folder) {
             guard node.isFolder else {
                 rows.append(Row(id: node.path, names: [node.name], depth: depth, isFolder: false, isOpen: false))
                 continue
@@ -320,6 +326,31 @@ final class FilesStore {
             rows.append(Row(id: path, names: names, depth: depth, isFolder: true, isOpen: open))
             if open { append(children: path, depth: depth + 1, into: &rows) }
         }
+    }
+
+    /// A folder's entries and those on their way into it (`FileCarries`), in the tree's order.
+    private func withPending(_ listed: [Node]?, in folder: String) -> [Node] {
+        guard let listed else { return [] }
+        let coming = FileCarries.shared.pending(in: .mac(folder))
+        guard !coming.isEmpty else { return listed }
+        let names = Set(listed.map(\.name))
+        let extra = coming.filter { !names.contains($0.name) }.map { Node(path: folder + "/" + $0.name, name: $0.name, isFolder: $0.isFolder) }
+        return (listed + extra).sorted(by: Self.ordered)
+    }
+
+    /// Entries on their way came or went.
+    func carriesChanged() { rebuild() }
+
+    /// A carry landed these here: their folders listed again, the last one chosen.
+    func landed(_ paths: [String]) async {
+        for folder in Set(paths.map(parent(of:))) where folder == root || children[folder] != nil {
+            await load(folder, rebuilding: false)
+        }
+        if let last = paths.last {
+            if parent(of: last) != root { expanded.insert(parent(of: last)) }
+            selection = last
+        }
+        rebuild()
     }
 
     /// The parent folder rows show their guide brighter for (the selection's folder).
