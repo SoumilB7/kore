@@ -69,6 +69,26 @@ struct PlanLeavingTests {
         #expect(LinkPolicy.checkBox(.accountSignIn, ControlArgs(provider: "claude", method: "claudeai"), nil, control: .full) == .allow)
         #expect(LinkPolicy.checkBox(.accountSignIn, ControlArgs(provider: "claude", method: "claudeai"), nil, control: .standard) != .allow)
         #expect(LinkPolicy.checkBox(.chatNew, ControlArgs(modelId: "--dangerous model", provider: "claude", folder: "/w"), nil, control: .full) != .allow)
-        #expect(LinkPolicy.checkBox(.chatRename, ControlArgs(chatId: "x", title: "y"), LinkPolicy.ChatFacts(level: .manual, modes: [:]), control: .full) != .allow)
+        // 1.9: a chat's own operations are taken (act for the ordinary ones); what stays refused:
+        // a raise or a plan's-limit action without full control, `!` lines, Full Arsenal, bad
+        // titles, and kinds that are a Mac's layout.
+        let facts = LinkPolicy.ChatFacts(level: .manual, modes: [:])
+        func box(_ kind: ControlKind, _ args: ControlArgs, _ control: LinkControlLevel) -> LinkPolicy.Verdict {
+            LinkPolicy.checkBox(kind, args, facts, control: control)
+        }
+        #expect(box(.chatRename, ControlArgs(chatId: "x", title: "y"), .standard) == .allow)
+        #expect(box(.chatRename, ControlArgs(chatId: "x", title: "a\nb"), .full) != .allow)
+        #expect(box(.chatSetArsenal, ControlArgs(chatId: "x", tier: "own"), .standard) != .allow)
+        #expect(box(.chatSetArsenal, ControlArgs(chatId: "x", tier: "full"), .full) != .allow)
+        #expect(box(.chatSetArsenal, ControlArgs(chatId: "x", tier: "off"), .standard) == .allow)
+        #expect(box(.chatContinue, ControlArgs(chatId: "x"), .standard) != .allow)
+        #expect(box(.chatSendAtReset, ControlArgs(chatId: "x", text: "go"), .standard) != .allow)
+        #expect(box(.chatSendAtReset, ControlArgs(chatId: "x", text: "!ls"), .full) != .allow)
+        #expect(box(.chatSetAutoCompact, ControlArgs(chatId: "x", at: 150), .full) != .allow)
+        #expect(box(.chatFork, ControlArgs(chatId: "x"), .full) != .allow)
+        #expect(box(.historyOpen, ControlArgs(), .full) != .allow)
+        for layout: ControlKind in [.tabMove, .groupSet, .boardNew, .windowOpen, .chatSelect, .accountSwitch] {
+            #expect(LinkPolicy.checkBox(layout, ControlArgs(chatId: "x"), facts, control: .full) != .allow, "\(layout)")
+        }
     }
 }

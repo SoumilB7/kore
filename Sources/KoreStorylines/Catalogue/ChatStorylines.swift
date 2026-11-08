@@ -750,7 +750,10 @@ final class ForkListedInHistory: ChatStoryline {
             Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.hasSuffix("(fork)") },
             Press(.id(StoryID.Titlebar.history)),
             Expect("one History row for the fork, nothing sent in it", found: { "\(Self.listed($0))" }) { story in
-                try Self.shown(story) && !(story.scriptedBackend().log.contains { if case .send = $0 { true } else { false } })
+                // The fork's backend is found by the session its chat has taken, which the chat's
+                // event pump may take a pass later (it gives way every few ms): until then, wait.
+                guard Self.shown(story), let backend = try? story.scriptedBackend() else { return false }
+                return !backend.log.contains { if case .send = $0 { true } else { false } }
             },
             Key(.escape),
             Send("two"), TurnFinished(1),
