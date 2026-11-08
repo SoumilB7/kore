@@ -1,5 +1,6 @@
 import Foundation
 import HostClient
+import Observation
 import Tailnet
 
 // Scripted stand-ins for KoreNet's sides (storylines and snapshots): a switch that's on or off
@@ -7,12 +8,12 @@ import Tailnet
 // script says. No tailnet, no socket, no LocalAPI: nothing here leaves the process.
 
 /// KoreNet's switch as a script sets it.
-@MainActor
+@MainActor @Observable
 package final class ScriptedNet: DevicesNet {
     package var facts: NetFacts
     package var authURL: String?
-    package private(set) var held: Set<String> = []
-    package private(set) var reads = 0
+    @ObservationIgnored package private(set) var held: Set<String> = []
+    @ObservationIgnored package private(set) var reads = 0
 
     package init(on: Bool = false, state: NetState = .off, status: TailnetStatus? = nil, authURL: String? = nil) {
         facts = NetFacts(on: on, state: state, status: status)
