@@ -257,18 +257,20 @@ private struct TerminalHost: NSViewRepresentable {
     func makeNSView(context: Context) -> Container { Container() }
     func updateNSView(_ host: Container, context: Context) {
         let serial = panel.focusSerial
-        host.install(entry, focus: serial, allowsFocus: panel.renaming == nil) { panel.appliedFocus(serial) }
+        // Read when the focus is about to be taken, not as of this update: a rename started since
+        // (its field holding the typing) keeps it.
+        host.install(entry, focus: serial, allowsFocus: { [weak panel] in panel?.renaming == nil }) { panel.appliedFocus(serial) }
     }
 
     final class Container: NSView {
         private var entry: TerminalEntry?
         private var focus = -1
         private var needsFocus = false
-        private var allowsFocus = true
+        private var allowsFocus: () -> Bool = { true }
         private var applied: (() -> Void)?
         override var isFlipped: Bool { true }
 
-        func install(_ entry: TerminalEntry, focus: Int, allowsFocus: Bool, applied: @escaping () -> Void) {
+        func install(_ entry: TerminalEntry, focus: Int, allowsFocus: @escaping () -> Bool, applied: @escaping () -> Void) {
             self.applied = applied
             self.allowsFocus = allowsFocus
             if self.entry !== entry {
@@ -292,7 +294,7 @@ private struct TerminalHost: NSViewRepresentable {
                 needsFocus = false
                 let serial = focus
                 afterThisFrame { [weak self] in
-                    guard let self, self.allowsFocus, self.focus == serial, self.entry === entry, let window = self.window else { return }
+                    guard let self, self.allowsFocus(), self.focus == serial, self.entry === entry, let window = self.window else { return }
                     window.makeFirstResponder(entry.view)
                     self.applied?()
                 }
