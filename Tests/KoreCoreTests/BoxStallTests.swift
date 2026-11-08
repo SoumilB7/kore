@@ -91,12 +91,14 @@ struct BoxStallTests {
             #expect(status == 0)
             io.close()
         }
-        // The pipes' read ends close at EOF, off their handlers' queue: give them up to 3 s.
+        // The pipes' read ends close at EOF, off their handlers' queue: give them up to 3 s. The
+        // count is the whole test process's, and other suites open files meanwhile, so the bound
+        // is half of what 12 leaked pipe pairs (24 descriptors) would add, not an exact match.
         var waited = 0
-        while openDescriptors() > before + 2, waited < 3000 {
+        while openDescriptors() >= before + 12, waited < 3000 {
             try await Task.sleep(for: .milliseconds(50))
             waited += 50
         }
-        #expect(openDescriptors() <= before + 2, "before \(before), after \(openDescriptors())")
+        #expect(openDescriptors() < before + 12, "before \(before), after \(openDescriptors())")
     }
 }
