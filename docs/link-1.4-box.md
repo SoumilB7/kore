@@ -1,4 +1,4 @@
-# Link 1.4 to 1.11: the box (`kore-host`)
+# Link 1.4 to 1.12: the box (`kore-host`)
 
 A box is a headless machine running `kore-host`: the Mac reaches it with
 `ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Everything in link 1.0–1.3 holds unless this page says
@@ -760,3 +760,48 @@ while its explorer is closed): `chat.copy` and `chat.release` prepare say the fi
 (`MoveInfo.bytes`), rsync's `--progress` lines say how far it has got. Any failure before the
 last step, or a cancel, leaves everything as it was; a source that can't be put aside after its
 copy is placed stays, and the bar says so.
+
+## Link 1.12: the box's own file verbs, limits, attention and presence
+
+### File verbs in place of a shell
+
+What the Mac ran as `sh -c` over SSH, the box now does itself. Four commands, additive, full grants
+only (`denied.control` otherwise), checked by `LinkPolicy.checkBox` and again by the box, done off
+the daemon's main thread. The welcome's `caps` say `fsOps2` to a full grant; while the link is up
+and says it, the Mac uses them, and otherwise (an older box, the link down) the shell as before.
+
+| `type` | fields | |
+|---|---|---|
+| `sync.apply` | `root, deletes?, mkdirs?` | A sync round's deletes and new folders, each path relative to `root` (a served folder): plain parts only (no empty, `.` or `..` part), no control characters, at most 2000 paths a call (`invalid` otherwise; the Mac sends more in turns, each under 160 KiB of paths). Each folder above a path is opened from `root` without following a link (`O_NOFOLLOW`), so a path with a link or a file among its folders is left alone. Only files and links are deleted, never a folder (nor a link to one); folders a delete left empty go too, up to `root` (`rmdir -p`). A folder is made with any folders above it; one that's a link or a file is left. Result: `deleted`, `made`, `skipped` (left alone); the box's journal notes the counts. |
+| `fs.stat` | `path` | A folder in the home or a served one: `files` and `size` (what a sync carries, as `SyncTree` walks it), `free` (bytes left on its disk for this user), `dir`. `gone.file` when it isn't a folder there. Pairing's look at the box side. |
+| `fs.find` | `path` | The files and links under a served folder, by path inside it, links never followed: `paths`; `more: true` past 20 000 paths or 768 KiB of them (the Mac then leaves out its note of the paths a carry missed). |
+| `fs.delete` | `path, landing: true` | A carry's landing (its hidden partial copy: `.kore-copy-…` or `.<name>.kore-<8 hex>`) to the box's trash, as `fs.delete` does; any other name is `invalid`. Never removed for good. |
+
+### Rate limits
+
+A watch or act grant's link is held to the Mac link's numbers (`HostLimits`): 20 messages a second
+with a burst of 40 (an upload's `blob.put.chunk` not counted), 30 commands a minute, 10 sends and
+10 `account.*` commands a minute, 2 `history.list` pages a second. A command past a limit is
+answered `rate.limited`; another message past the message rate is dropped; a client far past it
+(a second's worth at four times the rate) is told `bye rateLimited` and the link ends. A full grant
+isn't limited. Each limit is counted when a message comes, against the time it came: nothing runs
+between messages.
+
+### Attention
+
+The box keeps the Mac's attention ledger (`AttentionLedger`) from its start: each chat's waiting
+cards (approvals, questions, a plan ready) as `open` items, and turn ends (finished, failed; a stop
+by the user isn't news) in its ring. A client gets `attn.state` after its snapshot (what's open and
+the recent turn ends), then `attn.event`s as they happen. Claude and Codex chats alike. The ledger
+is looked at only when a chat changes (an event, a command on it, it closing or its CLI sleeping):
+no timer.
+
+### Presence
+
+| `type` | fields | |
+|---|---|---|
+| `presence` | `onScreen, chatId?` | Client to box: whether its user is looking at it, and at which chat. Kept per client. |
+
+A client off screen (`onScreen: false`) is sent attention only: no `delta`, `tx.delta` or
+`tx.reset`. When it's back on screen and missed any, the box sends a fresh `snapshot` and a page of
+each chat it follows. A client that never says (the Mac) is on screen.
