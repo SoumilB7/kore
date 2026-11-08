@@ -94,7 +94,7 @@ SWIFT
         || fail "$TAG's SHA256SUMS is for another release: nothing changed."
     not_older "$version"
     want="$(sed -n 's/^\([0-9a-f]\{64\}\)  kore-src\.tar\.gz$/\1/p' "$tmp/SHA256SUMS")"
-    step "Downloading Kore $version…"
+    step "Downloading Kore ${version}…"
     curl -fsSL -o "$tmp/kore-src.tar.gz" "$RELEASES/download/$TAG/kore-src.tar.gz" \
         || fail "Couldn't download Kore. Check your connection and try again."
     [[ -n "$want" && "$(shasum -a 256 "$tmp/kore-src.tar.gz" | cut -d' ' -f1)" == "$want" ]] \

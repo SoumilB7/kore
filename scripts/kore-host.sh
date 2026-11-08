@@ -35,7 +35,7 @@ else fail "needs sha256sum"; fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 asset="kore-host-linux-$arch.xz"
-say "▸ Downloading kore-host for linux-$arch…"
+say "▸ Downloading kore-host for linux-${arch}…"
 for name in SHA256SUMS SHA256SUMS.sig "$asset"; do
     curl -fsSL --retry 2 -o "$tmp/$name" "$BASE/$name" || fail "couldn't download $name from $BASE"
 done

@@ -194,6 +194,15 @@ rm -rf $kdir
 out=$(mac); code=$?
 check "a release without a signature builds from git, with one note" '(( code == 0 )) && [[ -d $kdir/.git && $out == *"v9.9.9 has no signature"* ]]'
 
+# macOS's /bin/bash 3.2 in a UTF-8 locale reads a character like "…" right after `$name` as part
+# of the name (set -u: "version…: unbound variable", 0.3.0's install line). Shipped scripts
+# brace a variable that a non-ASCII character follows.
+glued=$(cd $repo && perl -ne 'print "$ARGV:$.: $_" if /\$[A-Za-z_]\w*[^\x00-\x7F]/; close ARGV if eof' install.sh scripts/kore-host.sh)
+check "no \$name glued to a non-ASCII character in install.sh or kore-host.sh" '[[ -z $glued ]]'
+[[ -z $glued ]] || print -r -- "$glued"
+LC_ALL=en_US.UTF-8 /bin/bash -uc 'version=0.3.0; s="Kore ${version}…"; [[ $s == "Kore 0.3.0…" ]]' 2>/dev/null
+check "  and the braced form works in /bin/bash 3.2, UTF-8" '(( $? == 0 ))'
+
 print ""
 (( fails == 0 )) && print "all passed" || print "$fails failed"
 exit $(( fails > 0 ))
