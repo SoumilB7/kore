@@ -140,3 +140,18 @@ func TestQuietLogfDropsTheSignInURL(t *testing.T) {
 		t.Fatalf("logged %q", out)
 	}
 }
+
+func TestLogsGetAFolderInsideTheState(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TS_LOGS_DIR", "")
+	if err := logsHere(dir); err != nil {
+		t.Fatal(err)
+	}
+	got := os.Getenv("TS_LOGS_DIR")
+	if got != filepath.Join(dir, "logs") {
+		t.Fatalf("TS_LOGS_DIR = %q", got)
+	}
+	if fi, err := os.Stat(got); err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("logs folder: %v %v", fi, err)
+	}
+}

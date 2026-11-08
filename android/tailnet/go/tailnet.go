@@ -82,6 +82,9 @@ func Start(dir, hostname string, sealer Sealer) error {
 	}
 	quiet()
 	registerGetter()
+	if err := logsHere(dir); err != nil {
+		return err
+	}
 	store, err := openSealedStore(filepath.Join(dir, "state.sealed"), sealer)
 	if err != nil {
 		return err
@@ -474,3 +477,14 @@ func quietLogf(format string, a ...any) {
 }
 
 var verbose = os.Getenv("KORE_TAILNET_VERBOSE") != ""
+
+// logsHere gives Tailscale's log policy a folder of its own inside the app's state: on Android
+// there's no home or cache folder for it to find, and without one tsnet panics at start ("no
+// safe place found to store log state"). Upload stays off; this only holds its local state.
+func logsHere(dir string) error {
+	logs := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logs, 0o700); err != nil {
+		return err
+	}
+	return os.Setenv("TS_LOGS_DIR", logs)
+}
