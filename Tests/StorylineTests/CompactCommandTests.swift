@@ -73,9 +73,14 @@ final class CompactCommandTests {
         #expect(compacting.draft.isEmpty)
         #expect(userTexts(compacting) == ["Say something", "/compact keep the names"])
         try await until("the live row") { rowIDs(compacting).last == liveRow }
-        // Sending waits while it compacts.
+        // Something typed can go while it compacts (Send, not Stop): it waits, queued, for the
+        // compaction (SendDuringCompaction). A typed /compact during one has nothing to add.
         compacting.draft = "Next"
-        #expect(!compacting.canSend)
+        #expect(compacting.canSend)
+        compacting.draft = "/compact"
+        compacting.send()
+        #expect(compacting.draft == "/compact")
+        compacting.draft = "Next"
 
         world.backends.last?.release()
         try await until("the compaction") {

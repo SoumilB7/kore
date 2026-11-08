@@ -71,4 +71,25 @@ struct CarryProgressTests {
         // A failing stage says why.
         #expect(await Spawn().run([["/bin/sh", "-c", "echo nope >&2; exit 3"]]) == "nope")
     }
+
+    /// A short line comes while the process still runs, not when it ends: the process waits for
+    /// the reader to have seen it (rsync's progress lines are a few dozen bytes each).
+    @Test func outputComesBeforeTheProcessEnds() async {
+        let seen = FileManager.default.temporaryDirectory.appendingPathComponent("kore-seen-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: seen) }
+        final class Text: @unchecked Sendable {
+            let lock = NSLock()
+            var text = ""
+        }
+        let got = Text()
+        // Up to 5 s for the reader, then it says it waited in vain.
+        let script = "printf 'first\\n'; i=0; while [ ! -e \"$1\" ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i+1)); done; [ -e \"$1\" ] && printf 'second\\n' || printf 'late\\n'"
+        let said = await Spawn().run([["/bin/sh", "-c", script, "sh", seen.path]], output: { data in
+            got.lock.withLock {
+                got.text += String(decoding: data, as: UTF8.self)
+                if got.text.contains("first") { FileManager.default.createFile(atPath: seen.path, contents: nil) }
+            }
+        })
+        #expect(said == nil && got.text == "first\nsecond\n")
+    }
 }

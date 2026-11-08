@@ -970,6 +970,19 @@ final class RsyncReader: @unchecked Sendable {
 /// Processes run to their end, each one's output into the next's input, and stopped at once by
 /// `stop`. Their errors go to a scratch file, never a pipe held here.
 package final class Spawn: @unchecked Sendable {
+    /// What a pipe has now, up to `most` bytes, as soon as there's any; nil at its end. Never
+    /// `read(upToCount:)`: on a pipe it waits for all `most` bytes, so rsync's short progress
+    /// lines came only as it ended (the bar sat at 0, then jumped to done).
+    static func readSome(_ handle: FileHandle, _ most: Int) -> Data? {
+        var buffer = [UInt8](repeating: 0, count: most)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { read(handle.fileDescriptor, $0.baseAddress, most) }
+            if count > 0 { return Data(buffer[0..<count]) }
+            if count < 0, errno == EINTR { continue }
+            return nil
+        }
+    }
+
     private let lock = NSLock()
     private var live: [Process] = []
     private var stopped = false
@@ -1066,7 +1079,7 @@ package final class Spawn: @unchecked Sendable {
             // A write after the reader went fails, not SIGPIPE in Kore.
             _ = fcntl(sink.fileDescriptor, F_SETNOSIGPIPE, 1)
             readers.append(Self.background {
-                while let piece = try? source.read(upToCount: 256 * 1024), !piece.isEmpty {
+                while let piece = Self.readSome(source, 256 * 1024) {
                     guard (try? sink.write(contentsOf: piece)) != nil else { break }
                     passed(piece.count)
                 }
@@ -1078,7 +1091,7 @@ package final class Spawn: @unchecked Sendable {
             try? read.fileHandleForWriting.close()
             let source = read.fileHandleForReading
             readers.append(Self.background {
-                while let piece = try? source.read(upToCount: 64 * 1024), !piece.isEmpty { output(piece) }
+                while let piece = Self.readSome(source, 64 * 1024) { output(piece) }
                 try? source.close()
             })
         }
