@@ -10,26 +10,31 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
   `${XDG_STATE_HOME:-~/.local/state}/kore-host/grants/<name>.json` (folder 0700, file 0600):
   `{"v":1,"name","socket","secret":"<base64, 32 bytes>","control","created":<unix s>}`.
   On macOS the folder is `~/Library/Application Support/kore-host/grants/` unless `XDG_STATE_HOME` is set.
-- `revoke <name>` deletes it; the daemon (signalled) closes that grant's connection with `bye auth`.
-  The daemon also reads the grant file again before each command, so a revoked, re-made or lowered
-  grant takes effect at its next command without a signal.
+- `revoke <name>` deletes it. The daemon reads a connection's grant again on each command: once
+  the file is gone or holds a new secret (`allow` again), the connection ends with `bye auth`; a
+  lowered `--control` holds from the next command.
   `grants` lists names and control, never secrets.
 - Control: `watch` reads only (every `cmd` is `denied.control`); `act` sends, stops, answers,
   sets mode, plan, model, makes chats and adds folders; `full` adds the `account.*` commands.
 
 ## Socket and handshake
 
-- `$XDG_RUNTIME_DIR/kore-host/link.sock` (folder 0700, socket 0600), listening while the daemon
-  runs. The peer's uid must be the host's. Several grants may be connected at once. A newer proven
-  connection for a grant already connected takes over: the older one gets `bye replaced` (a link
-  that died while the Mac slept never locks it out). A client told `replaced` doesn't dial again.
+- `$XDG_RUNTIME_DIR/kore-host/link.sock` (folder 0700, socket 0600; `/run/user/<uid>` when
+  `XDG_RUNTIME_DIR` isn't set), listening while the daemon runs. One daemon per folder: it holds
+  `run.lock` there, and a second `run` exits without touching the socket. The peer's uid must be
+  the host's. Several grants may be connected at once. A newer proven connection for a grant
+  already connected takes over: the older one gets `bye replaced` (a link that died while the Mac
+  slept never locks it out). A client told `replaced` doesn't dial again.
 - Writes to a client never block the daemon: each connection queues what its peer hasn't read,
   and one more than 8 MiB behind is closed (it catches up by `seq` when it's back).
 - Framing, `challenge` and `hello` are as §2–3, with `hello.grant: "<name>"`. The proof is
   `HMAC-SHA256(grant secret, "kore-link/1|" + nonce)`. Unknown grant or bad proof: `bye auth`.
 - `attach --as <name>` reads the grant, passes frames between stdin/stdout and the socket, and
   fills in `grant` and `proof` on the client's first `hello` (send it with `"proof": ""`).
-- `welcome`: `proto {1,5}`, `host {name, koreVersion, kind: "box"}`,
+- `attach` exits 3 when no daemon listens, 4 when there's no such grant, 5 when there's no
+  runtime folder, 2 on bad arguments; over ssh, 255 is ssh's own failure and 126/127 the shell's
+  (kore-host can't run there, or isn't there).
+- `welcome`: `proto {1,5}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
   `policy {sendMaxLevel: 4, control: "full"|"standard"}` (`full` for a full grant),
   `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5). For a
   full grant each of `providers[]` carries `calls`: the `chat.call` types the box takes for that
@@ -88,8 +93,8 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 | `chat.setEffort` | `chatId, level` | Also for an `act` grant. A running CLI switches; a stopped one starts on it. `invalid` when the chat's models offer no such level. |
 | `chat.setFast` | `chatId, on` | Also for an `act` grant. Only while the chat's CLI runs and has said fast mode is there for its model; `invalid` otherwise. |
 | `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as §6 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link (§11). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
-| `folders.list` | | Result: `folders: [{windowId, path}]`. |
-| `folder.add` | `path` | An absolute path to an existing folder; it's added to `config.json`. Result: `folders`. `gone.folder` otherwise. |
+| `folders.list` | | Result: `folders: [{windowId, path, missing?}]`; `missing: true` for a served folder that isn't there any more. |
+| `folder.add` | `path` | An existing folder, by absolute path or under `~` (the box's home); it's added to `config.json`. Result: `folders`. `gone.folder` otherwise. |
 | `account.refresh` | `provider` | Result `message`: "Signed in as …" / "… isn't signed in.". |
 | `account.signIn` | `provider, method?` | Result `message`: the page to open (and `code …` for a device code), space-separated. When the sign-in ends: `result {id: "<id>:done", ok, message}`. |
 | `account.submit` | `provider, serial, input` | The code from the page. |

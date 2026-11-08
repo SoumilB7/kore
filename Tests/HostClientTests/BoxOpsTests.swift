@@ -201,6 +201,30 @@ struct BoxOpsTests {
         #expect(try String(contentsOf: local.url, encoding: .utf8) == "kore-host test\n")
     }
 
+    // MARK: A real box, on purpose only
+
+    /// `KORE_BOX_PROBE=<alias>` (and `KORE_BOX_COMMAND=<kore-host's path there>`): what each failure
+    /// reads as against a real box, through real ssh. Grants and installs nothing there.
+    nonisolated static let realBox = ProcessInfo.processInfo.environment["KORE_BOX_PROBE"]
+
+    @Test(.enabled(if: realBox != nil)) func aRealBoxsFailuresAreToldApart() async throws {
+        let box = try #require(Self.realBox)
+        let command = ProcessInfo.processInfo.environment["KORE_BOX_COMMAND"] ?? SSHTransport.defaultCommand
+        let root = Fixture.scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        func probe(_ alias: String, _ command: String) async throws -> BoxList.Status? {
+            let list = BoxList(defaults: try defaults(), hosts: { [] }, cacheRoot: root) { alias in
+                HostConnection(alias: alias, grant: "kore-ops-no-grant", command: command, cache: HostCache(alias: alias, root: root))
+            }
+            list.add(alias)
+            await list.probe(alias)
+            return list.box(alias)?.status
+        }
+        #expect(try await probe(box, "~/.local/bin/kore-host-not-here") == .notSetUp)
+        #expect(try await probe(box, command) == .noGrant)
+        #expect(try await probe("kore-ops-no-such-host.invalid", command) == .unreachable("Can't reach kore-ops-no-such-host.invalid"))
+    }
+
     // MARK: The list
 
     @Test func removingABoxForgetsItHereOnly() throws {
