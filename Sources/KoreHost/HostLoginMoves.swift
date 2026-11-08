@@ -278,12 +278,14 @@ package final class HostLoginMoves {
 
     // MARK: Fingerprints
 
+    /// Each login's keyed fingerprint (its file, read here: a box keeps no Keychain), and who it
+    /// is: its email and account id, what a Mac compares now.
     package func fingerprints(_ args: ControlArgs, id: String) -> LoginMoveResult {
         guard let key = args.key.flatMap({ Data(base64Encoded: $0) }) else { return .refused(id, .invalid, "Send the key.") }
         if args.provider == "codex" {
             let prints = [codexAuth].compactMap { url -> LoginPrint? in
                 guard let data = try? Data(contentsOf: url), let print = LoginFingerprint.of(data, cli: "codex", key: key) else { return nil }
-                return LoginPrint(cli: "codex", login: LinkAccount.main, email: nil, fingerprint: print)
+                return LoginPrint(cli: "codex", login: LinkAccount.main, email: nil, fingerprint: print, account: LoginIdentity.of(data, cli: "codex").account)
             }
             return LoginMoveResult(id: id, ok: true, prints: prints)
         }
@@ -293,9 +295,19 @@ package final class HostLoginMoves {
             guard let url = credentials(login), let data = try? Data(contentsOf: url),
                 let print = LoginFingerprint.of(data, cli: "claude", key: key)
             else { return nil }
-            return LoginPrint(cli: "claude", login: login, email: emails[login] ?? nil, fingerprint: print)
+            let who = accountFile(login).flatMap { try? Data(contentsOf: $0) }.map { LoginIdentity.of($0, cli: "claude") }
+            return LoginPrint(cli: "claude", login: login, email: (emails[login] ?? nil) ?? who?.email, fingerprint: print, account: who?.account)
         }
         return LoginMoveResult(id: id, ok: true, prints: prints)
+    }
+
+    /// A Claude login's account file (`.claude.json`): in an added account's folder; the
+    /// default's beside its folder when that's `~/.claude`, else in it.
+    private func accountFile(_ login: String) -> URL? {
+        if login != LinkAccount.main { return accounts.folder(login)?.appendingPathComponent(".claude.json") }
+        let inside = accounts.main.appendingPathComponent(".claude.json")
+        if FileManager.default.fileExists(atPath: inside.path) || accounts.main.lastPathComponent != ".claude" { return inside }
+        return accounts.main.deletingLastPathComponent().appendingPathComponent(".claude.json")
     }
 
     // MARK: Codex: the box's one login

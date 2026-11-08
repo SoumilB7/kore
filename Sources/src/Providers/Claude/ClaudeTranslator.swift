@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 import KoreCore
 
@@ -865,15 +866,15 @@ package final class ClaudeTranslator {
             body: Self.summary(of: r.input, in: folder), canAlwaysAllow: !r.suggestions.isEmpty,
             questions: [], changes: Self.proposedChange(r.toolName, r.input).map { [$0] } ?? [], agent: agent)
         // Auto asks a person (Kore's ask list, a safety check, the classifier): Run once or Deny,
-        // and for a Bash command the CLI lets keep, Always allow this exact command.
+        // and for a Bash command the CLI lets keep, Always allow its kind (`KoreAlwaysRule`).
         if r.personOnly {
-            let command = r.toolName == "Bash" ? r.input["command"]?.string : nil
-            let keepable = command != nil && r.raw["suppress_always_allow_rule"]?.bool != true
+            let rule = Self.alwaysRule(r, in: folder)
+            let keepable = rule != nil
             ask = Approval(
                 id: r.id, title: Self.autoStopTitle(r), detail: r.description, body: Self.summary(of: r.input, in: folder), canAlwaysAllow: keepable,
                 questions: [], changes: Self.proposedChange(r.toolName, r.input).map { [$0] } ?? [], agent: agent)
             ask.autoStop = true
-            if keepable { ask.exactRule = command }
+            ask.alwaysRule = rule
         }
         // An MCP server's sign-in (`mcp__<server>__authenticate`).
         ask.signIn = r.toolName.hasPrefix("mcp__") && r.toolName.hasSuffix("__authenticate")
@@ -881,6 +882,16 @@ package final class ClaudeTranslator {
         let written = [r.input["file_path"]?.string, r.input["notebook_path"]?.string].compactMap { $0 }
         if !written.isEmpty { ask.targets = written }
         return ask
+    }
+
+    /// What Always allow keeps for a person-only Bash ask: the CLI's own prefix rule when it
+    /// suggests one, else the kind Kore derives (`KoreAlwaysRule`); nil where the CLI suppresses
+    /// it or the command is a critical removal.
+    package static func alwaysRule(_ r: PermissionRequest, in folder: URL) -> String? {
+        guard r.toolName == "Bash", r.raw["suppress_always_allow_rule"]?.bool != true, let command = r.input["command"]?.string else { return nil }
+        let suggested = r.suggestions.filter { $0["type"]?.string == "addRules" && $0["behavior"]?.string == "allow" }
+            .flatMap { $0["rules"]?.array ?? [] }.filter { $0["toolName"]?.string == "Bash" }.compactMap { $0["ruleContent"]?.string }
+        return KoreAlwaysRule.rule(for: command, cwd: folder.path, suggested: suggested)
     }
 
     /// "Auto asks: <command> (<reason>)", a line: the reason's first line, without the escapes

@@ -369,6 +369,26 @@ struct LoginMoveTests {
         #expect(LoginCredential.freshness(refreshed, cli: "claude")! > LoginCredential.freshness(login, cli: "claude")!)
         #expect(LoginCredential.freshness(codex, cli: "codex") != nil)
     }
+
+    // MARK: Who a login is
+
+    @Test func theSameAccountIsToldByEmailOrIdNeverByAToken() {
+        let claude = LoginIdentity.of(Data(#"{"oauthAccount":{"emailAddress":"Me@Example.com","accountUuid":"u-1"}}"#.utf8), cli: "claude")
+        #expect(claude == LoginIdentity(email: "Me@Example.com", account: "u-1"))
+        // Same email (case and spaces aside), or the same id when an email is missing: the same.
+        #expect(claude.same(as: LoginIdentity(email: " me@example.com", account: nil)))
+        #expect(claude.same(as: LoginIdentity(email: nil, account: "U-1")))
+        // Another email, another id, or nothing known: not.
+        #expect(!claude.same(as: LoginIdentity(email: "you@example.com", account: nil)))
+        #expect(!claude.same(as: LoginIdentity(email: nil, account: "u-2")))
+        #expect(!LoginIdentity(email: nil, account: nil).same(as: LoginIdentity(email: nil, account: nil)))
+        // Codex: its id token's email and its account id; a team shares the id, not the person.
+        let claims = Data(#"{"email":"me@example.com"}"#.utf8).base64EncodedString().replacingOccurrences(of: "=", with: "")
+        let codex = LoginIdentity.of(Data(#"{"tokens":{"refresh_token":"cx","account_id":"team","id_token":"h.\#(claims).s"}}"#.utf8), cli: "codex")
+        #expect(codex == LoginIdentity(email: "me@example.com", account: "team"))
+        #expect(!codex.same(as: LoginIdentity(email: "colleague@example.com", account: "team")))
+        #expect(codex.same(as: LoginIdentity(email: nil, account: "team")))
+    }
 }
 
 /// Where a login's credential is, and how a file of one is written.

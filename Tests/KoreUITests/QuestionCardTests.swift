@@ -56,16 +56,86 @@ struct QuestionCardTests {
                 id: "Which colours?", text: "Which colours?",
                 options: [.init(label: "Red", description: ""), .init(label: "Blue", description: "")], multiple: true),
         ]
-        let picked: [String: Set<String>] = ["Which layout?": ["Grid"], "Which colours?": ["Blue", "Red"]]
-        #expect(
-            QuestionCard.answers(questions, picked: picked, other: ["Which colours?": "  Green \n"])
-                == ["Which layout?": ["Grid"], "Which colours?": ["Red", "Blue", "Green"]])
-        #expect(QuestionCard.complete(questions, picked: picked, other: [:]))
-        #expect(!QuestionCard.complete(questions, picked: picked, other: ["Which colours?": " "]))
-        #expect(!QuestionCard.complete(questions, picked: ["Which layout?": ["Grid"]], other: [:]))
+        var picks = QuestionPicks(options: ["Which layout?": ["Grid"], "Which colours?": ["Blue", "Red"]])
+        #expect(picks.complete(questions))
+        picks.pickOther(in: questions[1])
+        picks.typed["Which colours?"] = " "
+        #expect(!picks.complete(questions))
+        picks.typed["Which colours?"] = "  Green \n"
+        #expect(picks.answers(questions) == ["Which layout?": ["Grid"], "Which colours?": ["Red", "Blue", "Green"]])
+        #expect(!QuestionPicks(options: ["Which layout?": ["Grid"]]).complete(questions))
         // Claude gets each answer as one string, joined as before.
-        #expect(
-            QuestionCard.answers(questions, picked: picked, other: ["Which colours?": "Green"]).mapValues { $0.joined(separator: ", ") }
-                == ["Which layout?": "Grid", "Which colours?": "Red, Blue, Green"])
+        #expect(picks.answers(questions).mapValues { $0.joined(separator: ", ") } == ["Which layout?": "Grid", "Which colours?": "Red, Blue, Green"])
+    }
+
+    /// One question of each CLI's shape: Claude's (its text its id, Other always there) and
+    /// Codex's (an id of its own, isOther).
+    private func oneOf(_ cli: String, multiple: Bool = false) throws -> Approval.Question {
+        if cli == "claude" {
+            return try #require(
+                ClaudeTranslator.questions(
+                    json(#"{"questions":[{"question":"Which layout?","header":"Layout","multiSelect":\#(multiple),"options":[{"label":"Tabs","description":""},{"label":"Sidebar","description":""}]}]}"#)
+                ).first)
+        }
+        return CodexTranslator.question(
+            try json(#"{"id":"layout","header":"Layout","question":"Which layout?","isOther":true,"options":[{"label":"Tabs","description":""},{"label":"Sidebar","description":""}]}"#))
+    }
+
+    /// A one-of holds one pick: an option then Other leaves Other; Other (typed into) then an
+    /// option leaves the option, and the words stay for Other but aren't sent.
+    @Test(arguments: ["claude", "codex"]) func oneOfHoldsOnePick(_ cli: String) throws {
+        let question = try oneOf(cli)
+        #expect(question.other && !question.multiple)
+        let id = question.id
+        var picks = QuestionPicks()
+
+        picks.pick("Tabs", in: question)
+        let opened = picks.pickOther(in: question)
+        #expect(opened)
+        #expect(picks.options[id] == [] && picks.other == [id])
+        #expect(!picks.answered(question))
+        picks.typed[id] = "Tabs in a sidebar"
+        #expect(picks.answers([question]) == [id: ["Tabs in a sidebar"]])
+
+        picks.pick("Sidebar", in: question)
+        #expect(picks.options[id] == ["Sidebar"] && picks.other.isEmpty)
+        #expect(picks.typed[id] == "Tabs in a sidebar")
+        #expect(picks.answered(question) && picks.text(question) == nil)
+        #expect(picks.answers([question]) == [id: ["Sidebar"]])
+
+        // Other again: the words back, the option gone.
+        let again = picks.pickOther(in: question)
+        #expect(again)
+        #expect(picks.options[id] == [] && picks.answers([question]) == [id: ["Tabs in a sidebar"]])
+        // Other unpicked: nothing picked, nothing sent.
+        let closed = picks.pickOther(in: question)
+        #expect(!closed)
+        #expect(!picks.answered(question) && picks.answers([question]) == [id: []])
+    }
+
+    /// An any-of (Claude's multiSelect; Codex has none) keeps Other as one more box: options and
+    /// Other's words go together.
+    @Test func anyOfKeepsOtherBeside() throws {
+        let question = try oneOf("claude", multiple: true)
+        #expect(question.multiple)
+        let id = question.id
+        var picks = QuestionPicks()
+        let opened = picks.pickOther(in: question)
+        #expect(opened)
+        picks.typed[id] = "Window size"
+        picks.pick("Sidebar", in: question)
+        picks.pick("Tabs", in: question)
+        #expect(picks.other == [id] && picks.answers([question]) == [id: ["Tabs", "Sidebar", "Window size"]])
+        picks.pickOther(in: question)
+        #expect(picks.answers([question]) == [id: ["Tabs", "Sidebar"]])
+    }
+
+    /// A question with no options takes only words, Other or not.
+    @Test func noOptionsSendsTheWords() {
+        let question = Approval.Question(id: "name", text: "Name?", options: [])
+        var picks = QuestionPicks()
+        #expect(!picks.answered(question))
+        picks.typed["name"] = " Kore "
+        #expect(picks.answered(question) && picks.answers([question]) == ["name": ["Kore"]])
     }
 }

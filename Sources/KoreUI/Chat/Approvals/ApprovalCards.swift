@@ -55,14 +55,16 @@ struct PermissionCard: View {
                     .buttonStyle(SubtleButtonStyle())
                     .storyID(StoryID.Approval.card(approval.id).part(.deny))
                 if approval.canAlwaysAllow, approval.autoStop {
-                    // One exact rule for this command, in the project's local settings.
-                    Button("Always allow this command") { decide(.allowAlways) }
+                    // The kind of command, one rule in the project's local settings: the tooltip
+                    // shows exactly what it lets run.
+                    Button("Always allow") { decide(.allowAlways) }
                         .buttonStyle(SubtleButtonStyle())
-                        .help("Kept in this project's local Claude settings. In Auto it also skips Auto's check for this command.")
+                        .help(approval.alwaysHelp)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 } else if approval.canAlwaysAllow, !approval.autoStop {
                     Button("Always allow") { decide(.allowAlways) }
                         .buttonStyle(SubtleButtonStyle())
+                        .help(approval.alwaysHelp)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 } else if let note = approval.alwaysAllowNote {
                     // A box's chat: offered by its CLI, set on the box itself.

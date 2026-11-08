@@ -23,6 +23,8 @@ struct MacLoginMovesTests {
         var active: [String: String] = [:]
         var locked: Set<String> = []
         var working = 0
+        /// Each login's account id, by "cli/login", as its file names it.
+        var accounts: [String: String] = [:]
         /// Every CLI read, by "cli/login".
         var reads: [String] = []
         let server: Server
@@ -57,7 +59,9 @@ struct MacLoginMovesTests {
                     added[cli]?.removeAll { $0.id == id }
                 },
                 added: { [unowned self] in added[$0] ?? [] }, mainEmail: { _ in "main@example.com" },
-                main: { LoginVault.Place(cli: $0, folder: nil) })
+                main: { LoginVault.Place(cli: $0, folder: nil) },
+                account: { [unowned self] cli, login in accounts[cli + "/" + login] })
+            seams.name = { "MacBook B" }
             seams.lock = { [unowned self] cli, id in locked.insert(cli + "/" + (id ?? "main")).inserted }
             seams.unlock = { [unowned self] cli, id in locked.remove(cli + "/" + (id ?? "main")) }
             seams.chatsUsing = { [unowned self] _, _ in working }
@@ -163,6 +167,9 @@ struct MacLoginMovesTests {
         let all = copies(a, b, cli)
         #expect(all.count == 1 && LoginCredential.refreshToken(all[0], cli: cli) == server.current)
         #expect(b.reads == ["\(cli)/\(placed.id)"] && a.reads.isEmpty)
+        // Mac A reads its login twice (to send it, then to see it didn't refresh meanwhile);
+        // Mac B reads no vault item: the commit places the bytes it was sent.
+        #expect(a.vault.reads(cli) == 2 && b.vault.reads() == 0)
         #expect(a.locked.isEmpty && b.locked.isEmpty)
         if cli == "claude" {
             let account = try Data(contentsOf: b.folder(cli, placed.id).appendingPathComponent(".claude.json"))
@@ -179,7 +186,16 @@ struct MacLoginMovesTests {
         try FileManager.default.createDirectory(at: b.folder(cli, "work"), withIntermediateDirectories: true)
         b.vault.set(Server.login("r-1", 1, cli: cli), b.place(cli, "work"))
         let outcome = await LoginMove.back(Local(mac: a, cli: cli, id: "work"), from: Remote(mac: b, cli: cli), cli: cli)
+        if cli == "claude" {
+            // A Claude login is in Mac B's Keychain: never read for Mac A's ask. It's moved from B.
+            #expect(outcome.failure == .refused("Move it from MacBook B"))
+            #expect(b.vault.reads() == 0 && b.vault.held(b.place(cli, "work")) != nil && b.added[cli]?.count == 1)
+            #expect(a.vault.held(a.place(cli, "work")) == nil && a.locked.isEmpty && b.locked.isEmpty && !b.moves.paused(cli, "work"))
+            return
+        }
         #expect(outcome.failure == nil && outcome.signedIn == true)
+        // Mac A: one read to see it isn't here, one of the copy it wrote.
+        #expect(a.vault.reads(cli) == 2)
         // Mac B's login is gone, its folder too; never signed out there (no CLI read on B).
         #expect(b.added[cli]?.isEmpty == true && !FileManager.default.fileExists(atPath: b.folder(cli, "work").path))
         #expect(b.reads.isEmpty && a.reads == ["\(cli)/work"])
@@ -189,7 +205,8 @@ struct MacLoginMovesTests {
     }
 
     @Test func aLoginGoingOutIsPausedThroughARestartAndRefusedWhileAChatWorksOnIt() async throws {
-        let cli = "claude"
+        // A Codex login (a file): a Claude one is never sent from here for another Mac's ask.
+        let cli = "codex"
         let (_, b, _, root) = try macs(cli)
         defer { try? FileManager.default.removeItem(at: root) }
         b.added[cli] = [CLIProfiles.Profile(id: "work", email: "work@acme.dev", workspace: nil)]
@@ -199,29 +216,35 @@ struct MacLoginMovesTests {
         #expect(busy.ok == false && busy.message == "inUse:1" && b.locked.isEmpty)
         b.working = 0
         #expect(b.moves.exportPrepare(ControlArgs(provider: cli, login: "work", phase: "prepare", moveId: "move-0002"), id: "e2").ok)
-        #expect(b.locked == ["claude/work"])
+        #expect(b.locked == ["codex/work"])
         // Another move of it meanwhile: busy.
         #expect(b.moves.exportPrepare(ControlArgs(provider: cli, login: "work", phase: "prepare", moveId: "move-0003"), id: "e3").message == "busy")
         // Kore restarts: the pause holds, locked again.
         b.locked = []
         let again = MacLoginMoves(b.seams)
-        #expect(again.paused(cli, "work") && b.locked == ["claude/work"])
+        #expect(again.paused(cli, "work") && b.locked == ["codex/work"])
         // Abort: kept, and free.
         #expect(again.exportAbort(ControlArgs(provider: cli, phase: "abort", moveId: "move-0002"), id: "e4").ok)
         #expect(!again.paused(cli, "work") && b.locked.isEmpty && b.vault.held(b.place(cli, "work")) != nil)
     }
 
-    @Test func aKeychainKoreIsntTrustedForIsNeverAskedAtTheOtherMac() async throws {
+    @Test func theOtherMacsKeychainIsNeverReadForThisMacsAsk() async throws {
         let cli = "claude"
         let (a, b, _, root) = try macs(cli)
         defer { try? FileManager.default.removeItem(at: root) }
         b.added[cli] = [CLIProfiles.Profile(id: "work", email: "work@acme.dev", workspace: nil)]
         b.vault.set(Server.login("r-1", 1, cli: cli), b.place(cli, "work"))
-        b.vault.denySilent = true
-        let outcome = await LoginMove.back(Local(mac: a, cli: cli, id: "work"), from: Remote(mac: b, cli: cli), cli: cli)
-        #expect(outcome.failure == .keychainDenied)
-        #expect(b.vault.held(b.place(cli, "work")) != nil && !b.moves.paused(cli, "work") && b.locked.isEmpty)
-        #expect(a.vault.held(a.place(cli, "work")) == nil)
+        // Keep there and Keep here ask Mac B for its copy too: refused, nothing read or paused.
+        for keep in [true, false] {
+            let local = Local(mac: a, cli: cli, id: "work")
+            a.vault.set(Server.login("r-1", 1, cli: cli), a.place(cli, "work"))
+            let remote = Remote(mac: b, cli: cli, force: true)
+            let outcome = keep ? await LoginMove.keepThere(local, remote, cli: cli) : await LoginMove.keepHere(local, remote, cli: cli)
+            #expect(outcome.failure == .refused("Move it from MacBook B"))
+        }
+        let prints = b.moves.fingerprints(ControlArgs(provider: cli, key: Data(repeating: 1, count: 32).base64EncodedString()), id: "f")
+        #expect(prints.ok && prints.prints?.allSatisfy { $0.fingerprint.isEmpty } == true)
+        #expect(b.vault.reads() == 0 && b.vault.held(b.place(cli, "work")) != nil && !b.moves.paused(cli, "work") && b.locked.isEmpty)
     }
 
     @Test(arguments: ["claude", "codex"]) func wrongBytesTheSameSignInOrAnAbortLeaveNothingOnTheOtherMac(_ cli: String) async throws {
@@ -240,10 +263,19 @@ struct MacLoginMovesTests {
         #expect(b.reads.isEmpty)
         #expect(b.moves.importAbort(ControlArgs(provider: cli, phase: "abort", moveId: "move-0003"), id: "a3").ok)
         #expect(copies(MacLoginMovesTests.Mac(b.root.appendingPathComponent("none"), server: b.server), b, cli).isEmpty)
-        // The same sign-in held here already: refused, named.
-        b.vault.set(login, b.place(cli, nil))
-        let twice = b.moves.importPrepare(ControlArgs(provider: cli, data: login.base64EncodedString(), phase: "prepare", moveId: "move-0004", sha: LoginMove.sha(login)), id: "p4")
-        #expect(twice.ok == false && twice.message?.contains("main@example.com") == true)
+        // The same account held here already (its email, from what was sent): refused, named,
+        // with nothing read here.
+        b.added[cli] = [CLIProfiles.Profile(id: "work", email: "Work@Acme.dev", workspace: nil)]
+        let text = cli == "claude" ? #"{"oauthAccount":{"emailAddress":"work@acme.dev"}}"# : nil
+        let twice = b.moves.importPrepare(
+            ControlArgs(text: text, provider: cli, data: login.base64EncodedString(), phase: "prepare", moveId: "move-0004", sha: LoginMove.sha(login)), id: "p4")
+        #expect(twice.ok == false && twice.message?.contains("Work@Acme.dev") == true)
+        // Another account: taken.
+        b.added[cli] = [CLIProfiles.Profile(id: "work", email: "other@acme.dev", workspace: nil)]
+        let other = b.moves.importPrepare(
+            ControlArgs(text: text, provider: cli, data: login.base64EncodedString(), phase: "prepare", moveId: "move-0005", sha: LoginMove.sha(login)), id: "p5")
+        #expect(other.ok)
+        #expect(b.vault.reads() == 0)
     }
 
     @Test(arguments: ["claude", "codex"]) func aCommitSentAgainOrAnAbortAfterItNeverMovesItTwice(_ cli: String) async throws {
@@ -258,17 +290,21 @@ struct MacLoginMovesTests {
         #expect(b.added[cli]?.count == 1)
     }
 
-    @Test(arguments: ["claude", "codex"]) func fingerprintsNameEachLoginWithoutItsToken(_ cli: String) throws {
+    @Test(arguments: ["claude", "codex"]) func fingerprintsSayWhoEachLoginIsWithoutReadingIt(_ cli: String) throws {
         let (_, b, _, root) = try macs(cli)
         defer { try? FileManager.default.removeItem(at: root) }
         b.vault.set(Server.login("r-main", 1, cli: cli), b.place(cli, nil))
         b.added[cli] = [CLIProfiles.Profile(id: "work", email: "work@acme.dev", workspace: nil)]
+        b.accounts[cli + "/work"] = "uuid-w"
         b.vault.set(Server.login("r-work", 1, cli: cli), b.place(cli, "work"))
         let key = Data(repeating: 7, count: 32)
         let result = b.moves.fingerprints(ControlArgs(provider: cli, key: key.base64EncodedString()), id: "f")
         let prints = try #require(result.prints)
         #expect(prints.map(\.login) == [LinkAccount.main, "work"] && prints.map(\.email) == ["main@example.com", "work@acme.dev"])
-        #expect(prints[1].fingerprint == LoginFingerprint.of(Server.login("r-work", 1, cli: cli), cli: cli, key: key))
-        #expect(!String(describing: result).contains("r-work") && b.reads.isEmpty)
+        #expect(prints.map(\.account) == [nil, "uuid-w"] && prints.allSatisfy { $0.fingerprint.isEmpty })
+        #expect(!String(describing: result).contains("r-work") && b.reads.isEmpty && b.vault.reads() == 0)
+        // An older Mac decodes it as before: the new field is additive.
+        let old = try JSONDecoder().decode(LoginPrint.self, from: Data(#"{"cli":"claude","login":"main","email":"a@b.c","fingerprint":"ff"}"#.utf8))
+        #expect(old.account == nil && old.identity.same(as: LoginIdentity(email: "A@b.c", account: nil)))
     }
 }

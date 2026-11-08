@@ -31,15 +31,16 @@ struct AutoAsksTests {
         return translator.take().events.compactMap { if case .approvalRequested(let a) = $0 { a } else { nil } }.first
     }
 
-    @Test func aHookAskIsAutoAsksWithAnExactAlwaysAllow() throws {
+    @Test func aHookAskIsAutoAsksWithAnAlwaysAllowForItsKind() throws {
         let ask = try #require(try card(Self.hookAsk))
         #expect(ask.title == "Auto asks: echo kore-hook-ask (Kore probe hook: a person answers this one.)")
-        #expect(ask.autoStop && ask.canAlwaysAllow && ask.exactRule == "echo kore-hook-ask")
-        // Always allow sends one exact rule to the project's local settings, never the CLI's own.
-        let payload = PermissionDecision.allowExactly(command: "echo kore-hook-ask").payload(for: try Self.request(Self.hookAsk))
+        #expect(ask.autoStop && ask.canAlwaysAllow && ask.alwaysRule == "echo kore-hook-ask")
+        #expect(ask.alwaysHelp == "Always allow `echo kore-hook-ask`")
+        // Always allow sends the kind's one rule to the project's local settings.
+        let payload = PermissionDecision.allowRule("sudo apt install *").payload(for: try Self.request(Self.hookAsk))
         let rule = payload["updatedPermissions"]?.array?.first
-        #expect(rule?["destination"]?.string == "localSettings" && rule?["behavior"]?.string == "allow")
-        #expect(rule?["rules"]?.array?.first?["ruleContent"]?.string == "echo kore-hook-ask")
+        #expect(rule?["destination"]?.string == "localSettings" && rule?["behavior"]?.string == "allow" && rule?["type"]?.string == "addRules")
+        #expect(rule?["rules"]?.array?.first?["toolName"]?.string == "Bash" && rule?["rules"]?.array?.first?["ruleContent"]?.string == "sudo apt install *")
         // Run once persists nothing.
         #expect(PermissionDecision.allow.payload(for: try Self.request(Self.hookAsk))["updatedPermissions"] == nil)
     }
@@ -47,7 +48,7 @@ struct AutoAsksTests {
     @Test func aSafetyCheckAskHasNoAlwaysAllowAndAPlainAskStaysAsItWas() throws {
         let rm = try #require(try card(Self.safetyAsk))
         #expect(rm.title.hasPrefix("Auto asks: rm -rf /tmp/kc-probe-fopy/work (Dangerous rm operation on working directory"))
-        #expect(rm.autoStop && !rm.canAlwaysAllow && rm.exactRule == nil)
+        #expect(rm.autoStop && !rm.canAlwaysAllow && rm.alwaysRule == nil)
         let plain = try #require(try card(Self.plainAsk))
         #expect(plain.title == "Allow Bash?" && !plain.autoStop && plain.canAlwaysAllow)
     }
@@ -113,6 +114,42 @@ struct AutoAsksTests {
         }
         #expect(refusal.message == "Only you can run a command Auto asks about.")
         #expect((try? chat.arsenalAnswer("r-hook", [], deny: true, by: agent).get()) == "Denied.")
+    }
+
+    /// Always allow on Kore's own hook ask keeps the kind (`sudo apt install *`), never on a
+    /// critical removal; the backend sends the card's rule.
+    @Test func aSudoAskKeepsItsKindAndACriticalRemovalOffersNoAlways() throws {
+        func hook(_ command: String) -> String {
+            #"{"type":"control_request","request_id":"r-k","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"\#(command)"},"tool_use_id":"toolu_k","decision_reason_type":"hook","decision_reason":"Kore asks you first: sudo.","decision_reason_hook_event":"PreToolUse","decision_reason_hook_source":"settings"}}"#
+        }
+        let sudo = try #require(try card(hook("sudo apt install cowsay")))
+        #expect(sudo.canAlwaysAllow && sudo.alwaysRule == "sudo apt install *" && sudo.alwaysHelp == "Always allow `sudo apt install …`")
+        #expect(ClaudeTranslator.alwaysRule(try Self.request(hook("sudo apt install cowsay")), in: Self.folder) == "sudo apt install *")
+        for critical in ["rm -rf ~", "sudo rm -rf /usr", "rm -rf /tmp/kore-auto-asks"] {
+            let card = try #require(try card(hook(critical)))
+            #expect(card.autoStop && !card.canAlwaysAllow && card.alwaysRule == nil, "\(critical)")
+        }
+    }
+
+    /// Codex's "always" for a command is its own exec policy: the prefix it proposes, kept by
+    /// `acceptWithExecpolicyAmendment`; without one, the session's; never on a critical removal.
+    @Test func aCodexCommandAlwaysKeepsCodexsProposedPrefix() throws {
+        func approval(_ command: String, _ prefix: [String]?) throws -> (CodexApproval, Approval?) {
+            var params: [String: JSONValue] = ["threadId": "th", "itemId": "i1", "command": .string(command), "cwd": "/tmp/w"]
+            if let prefix { params["proposedExecpolicyAmendment"] = .array(prefix.map(JSONValue.string)) }
+            let request = try #require(CodexApproval(id: 7, method: "item/commandExecution/requestApproval", params: .object(params)))
+            let translator = CodexTranslator(folder: Self.folder)
+            translator.translate(.approvalRequest(request))
+            return (request, translator.take().events.compactMap { if case .approvalRequested(let a) = $0 { a } else { nil } }.first)
+        }
+        let (apt, aptCard) = try approval("sudo apt install cowsay", ["sudo", "apt", "install"])
+        #expect(aptCard?.canAlwaysAllow == true && aptCard?.alwaysHelp == "Always allow `sudo apt install …`")
+        let result = CodexDecision.acceptWithAmendment(["sudo", "apt", "install"]).result(for: apt)
+        #expect(result["decision"]?["acceptWithExecpolicyAmendment"]?["execpolicy_amendment"] == ["sudo", "apt", "install"])
+        let (_, plainCard) = try approval("make build", nil)
+        #expect(plainCard?.canAlwaysAllow == true && plainCard?.alwaysRule == nil)
+        let (_, rmCard) = try approval("rm -rf ~", ["rm", "-rf"])
+        #expect(rmCard?.canAlwaysAllow == false && rmCard?.alwaysRule == nil)
     }
 
     /// The hook runs a process per Bash call (about 11 ms, release): only an Auto chat has it.

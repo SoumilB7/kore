@@ -711,7 +711,7 @@ package final class CodexBackend: ChatBackend {
         let mapped: CodexDecision =
             switch decision {
             case .allow, .approvePlan: .accept
-            case .allowAlways: .acceptForSession
+            case .allowAlways: request.kind == .command ? request.proposedAmendment.map { .acceptWithAmendment($0) } ?? .acceptForSession : .acceptForSession
             case .deny, .keepPlanning: .decline
             case .answers(let answers): .answers(answers)
             }

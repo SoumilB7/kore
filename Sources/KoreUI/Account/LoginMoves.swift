@@ -10,8 +10,9 @@ import Observation
 /// here dimmed, "On mybox", never "Signed out". What a box couldn't be told at once (its link
 /// dropped) is kept in a file and sent again until it's taken.
 ///
-/// It also finds one sign-in held on two devices (the same refresh token, copied): each box's
-/// logins' fingerprints under this KoreNet's secret against this Mac's own, read without a prompt.
+/// It also finds one account held on two devices: each place's logins against this Mac's own by
+/// who they are (email, account id), never by a token. Kore reads a Claude login's Keychain item
+/// only for a move the owner asked for here (Move, Move back, Keep): then the Keychain may ask.
 @MainActor @Observable
 package final class LoginMoves {
     package static let shared = LoginMoves()
@@ -24,7 +25,7 @@ package final class LoginMoves {
 
     /// By "cli/login".
     private(set) var lines: [String: Line] = [:]
-    /// Logins also held on a box (the same sign-in): by "cli/login", the box's key, and its
+    /// Logins also held on a box (the same account): by "cli/login", the box's key, and its
     /// name for it there.
     private(set) var incompatible: [String: String] = [:]
     @ObservationIgnored private var incompatibleLogin: [String: String] = [:]
@@ -286,46 +287,65 @@ package final class LoginMoves {
 
     // MARK: The same sign-in on two devices
 
-    /// This KoreNet's secret for fingerprints: made once, kept in Kore's own Keychain item.
-    private static func fingerprintKey() -> Data? {
-        let service = "Kore login fingerprints"
-        let store = Keychain.store.value
-        if let text = try? store.get(service: service), let key = Data(base64Encoded: text), key.count >= 32 { return key }
-        let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
-        guard (try? store.set(key.base64EncodedString(), service: service)) != nil else { return nil }
-        return key
+    /// One of this Mac's logins as the check compares it: its email as Kore lists it, and the file
+    /// that names its account (Claude's `.claude.json`, Codex's `auth.json`), read off the main
+    /// thread for the account's id only.
+    package struct Held: Sendable {
+        package let id: String?
+        package let email: String?
+        package let file: URL?
+        package init(id: String?, email: String?, file: URL?) { (self.id, self.email, self.file) = (id, email, file) }
     }
 
-    /// Compares each reachable box's logins with this Mac's: one sign-in on both is flagged on
-    /// its row. This Mac's are read without a prompt; one Kore may not read is skipped.
-    package func check() {
-        guard let key = Self.fingerprintKey() else { return }
+    /// This Mac's logins of a CLI that the check compares: those not read signed out and not on
+    /// another device. Storylines and tests give their own.
+    @ObservationIgnored package var held: @MainActor (String) -> [Held] = { cli in
+        AccountStore.shared.logins(cli).filter { !$0.signedOut && $0.onBox == nil }.map { Held(id: $0.id, email: $0.email, file: LoginMoves.identityFile(cli, $0.id)) }
+    }
+
+    /// Compares each reachable place's logins with this Mac's by who they are (email, account
+    /// id): one account on both is flagged on its row. Nothing secret is read on either side:
+    /// never a token, never the Keychain. The key is a throwaway an older peer asks for.
+    @discardableResult package func check() -> Task<Void, Never>? {
         let ready = places().filter { $0.unready == nil }
-        guard !ready.isEmpty else { return }
-        Task {
+        guard !ready.isEmpty else { return nil }
+        let held = LinkLogins.clis.sorted().map { ($0, self.held($0)) }.filter { !$0.1.isEmpty }
+        guard !held.isEmpty else { return nil }
+        let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        return Task {
             var found: [String: String] = [:]
             var names: [String: String] = [:]
-            for cli in LinkLogins.clis.sorted() {
-                let ids: [String?] = [nil] + CLIProfiles.added(cli).map(\.id)
-                var mine: [String: String] = [:]
-                for id in ids {
-                    let place = MacLogin(cli: cli, id: id).place
-                    let data = try? await Task.detached { try LoginVault.store.value.read(place, prompt: false) }.value
-                    if let data = data ?? nil, let print = LoginFingerprint.of(data, cli: cli, key: key) { mine[print] = Self.key(cli, id) }
-                }
-                guard !mine.isEmpty else { continue }
+            for (cli, logins) in held {
+                let mine = await Task.detached(priority: .utility) { logins.map { ($0.id, Self.identity(cli, $0)) } }.value
                 for box in ready {
                     for print in await box.prints(cli, key) ?? [] {
-                        if let login = mine[print.fingerprint] {
-                            found[login] = box.key
-                            names[login] = print.login
-                        }
+                        guard let login = mine.first(where: { $0.1.same(as: print.identity) }) else { continue }
+                        found[Self.key(cli, login.0)] = box.key
+                        names[Self.key(cli, login.0)] = print.login
                     }
                 }
             }
             incompatible = found
             incompatibleLogin = names
         }
+    }
+
+    /// Who one of this Mac's logins is: its listed email, and its account's id from its file.
+    nonisolated package static func identity(_ cli: String, _ held: Held) -> LoginIdentity {
+        let file = held.file.flatMap { try? Data(contentsOf: $0) }.map { LoginIdentity.of($0, cli: cli) }
+        return LoginIdentity(email: held.email ?? file?.email, account: file?.account)
+    }
+
+    /// The file that names a login's account: Claude's `.claude.json` (its folder's, or the home
+    /// one for the default folder), Codex's `auth.json` (a file: Codex keeps no Keychain item).
+    nonisolated package static func identityFile(_ cli: String, _ id: String?) -> URL? {
+        if cli == "codex" { return LoginVault.file(MacLogin(cli: cli, id: id).place) }
+        guard cli == "claude" else { return nil }
+        if let id { return CLIProfiles.folder(cli, id).appendingPathComponent(".claude.json") }
+        let main = CLIProfiles.mainFolder(cli)
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let isDefault = main.standardizedFileURL.path == home.appendingPathComponent(".claude").standardizedFileURL.path
+        return isDefault ? home.appendingPathComponent(".claude.json") : main.appendingPathComponent(".claude.json")
     }
 
     // MARK: Words
@@ -380,15 +400,7 @@ package final class LoginMoves {
     /// What Claude shows of the account (its `.claude.json`'s `oauthAccount` and `userID`), for
     /// the box's copy: who it is, never a token.
     static func profile(_ cli: String, _ id: String?) -> String? {
-        guard cli == "claude" else { return nil }
-        let file: URL
-        if let id {
-            file = CLIProfiles.folder(cli, id).appendingPathComponent(".claude.json")
-        } else {
-            let main = CLIProfiles.mainFolder(cli)
-            let isDefault = main.standardizedFileURL.path == FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").standardizedFileURL.path
-            file = isDefault ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json") : main.appendingPathComponent(".claude.json")
-        }
+        guard cli == "claude", let file = identityFile(cli, id) else { return nil }
         guard let data = try? Data(contentsOf: file), let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         var kept: [String: Any] = ["hasCompletedOnboarding": true]
         if let account = object["oauthAccount"] { kept["oauthAccount"] = account }

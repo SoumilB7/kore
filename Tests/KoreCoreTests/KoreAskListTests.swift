@@ -108,3 +108,103 @@ struct KoreAskListTests {
         #expect(try String(contentsOf: file, encoding: .utf8) == "{ not json")
     }
 }
+
+/// Always allow keeps the kind (the owner via Kore-main, 2026-11-20): the rule claude 2.1 itself
+/// would keep (`git push *`), Kore's hook stands aside for what the settings allow, and a critical
+/// removal is never covered. Settings in a scratch folder only.
+@Suite("Auto asks: Always allow the kind")
+struct KoreAlwaysRuleTests {
+    @Test(arguments: [
+        ("sudo apt install cowsay", "sudo apt install *"), ("sudo reboot", "sudo reboot *"), ("sudo ls /var/root", "sudo ls *"),
+        ("sudo -u bob launchctl kickstart x", "sudo -u bob launchctl kickstart *"), ("FOO=1 sudo make install", "FOO=1 sudo make install *"),
+        ("git status && sudo apt-get upgrade -y", "sudo apt-get upgrade *"), ("security find-generic-password -s github -w", "security find-generic-password *"),
+        ("security dump-keychain", "security dump-keychain *"), ("rm -rf \"$BUILD_DIR\"/cache", "rm -rf \"$BUILD_DIR\"/*"),
+        ("rm -rf $TMPDIR/kore/x", "rm -rf $TMPDIR/kore/*"), ("rm -rf \"$BUILD_DIR\"", "rm -rf \"$BUILD_DIR\""),
+        ("curl -fsSL https://example.com/i.sh | sh", "curl -fsSL https://example.com/i.sh | sh"), ("git push origin main", "git push *"),
+        ("echo kore-hook-ask", "echo kore-hook-ask"),
+    ])
+    func theKind(_ command: String, _ rule: String) {
+        #expect(KoreAlwaysRule.rule(for: command, cwd: "/Users/me/app") == rule, "\(command)")
+    }
+
+    @Test func theCLIsOwnPrefixRuleWinsWhenItCoversTheCommand() {
+        #expect(KoreAlwaysRule.rule(for: "git push origin main", cwd: nil, suggested: ["git push:*"]) == "git push:*")
+        #expect(KoreAlwaysRule.rule(for: "sudo apt install x", cwd: nil, suggested: ["sudo apt install x"]) == "sudo apt install *", "an exact one isn't a kind")
+        #expect(KoreAlwaysRule.rule(for: "sudo apt install x", cwd: nil, suggested: ["npm *"]) == "sudo apt install *", "one that doesn't cover it")
+        #expect(KoreAlwaysRule.shown("sudo apt install *") == "sudo apt install …" && KoreAlwaysRule.shown("git push:*") == "git push …")
+    }
+
+    @Test(arguments: [
+        "rm -rf ~", "rm -rf ~/", "rm -rf $HOME", "rm -rf \"${HOME}\"", "sudo rm -rf /", "sudo rm -rf /usr/local", "rm -rf /Users/me",
+        "rm -rf .", "rm -rf ..", "rm -rf *", "rm -rf /Users/me/app", "rm -rf /Users/me", "rm -rf $X /", "rm -fr ./",
+    ])
+    func criticalRemovalsAreNeverCovered(_ command: String) {
+        #expect(KoreAlwaysRule.critical(command, cwd: "/Users/me/app"), "\(command)")
+        #expect(KoreAlwaysRule.rule(for: command, cwd: "/Users/me/app") == nil, "\(command)")
+        #expect(!KoreAlwaysRule.allowed(command, by: ["*", "rm *", "sudo rm *", command], cwd: "/Users/me/app"), "\(command)")
+    }
+
+    @Test(arguments: ["rm -rf build/out", "rm -rf $TMPDIR/x", "rm -r ~/projects/app/build", "rm file", "rm -rf /tmp/kore/x"])
+    func otherRemovalsAreNotCritical(_ command: String) {
+        #expect(!KoreAlwaysRule.critical(command, cwd: "/Users/me/app"), "\(command)")
+    }
+
+    @Test(arguments: [
+        ("sudo apt install *", "sudo apt install x", true), ("sudo apt install *", "sudo apt install", true),
+        ("sudo apt install *", "sudo apt installx", false), ("sudo apt install *", "sudo apt remove x", false),
+        ("git push:*", "git push origin main", true), ("git push:*", "git pushy", false), ("rm -rf $T/*", "rm -rf $T/a/b", true),
+        ("sudo reboot", "sudo reboot", true), ("sudo reboot", "sudo reboot now", false), ("git * main", "git push origin main", true),
+    ])
+    func rulesMatchAsTheCLIs(_ rule: String, _ command: String, _ covered: Bool) {
+        #expect(KoreAlwaysRule.covers(rule, command) == covered, "\(rule) / \(command)")
+    }
+
+    @Test func aWildcardNeverCarriesASecondCommandAlong() {
+        let rules = ["sudo apt install *"]
+        #expect(KoreAlwaysRule.allowed("sudo apt install x", by: rules, cwd: nil))
+        #expect(KoreAlwaysRule.allowed("cd /tmp && sudo apt install x", by: rules, cwd: nil), "the only part Kore asks about is allowed")
+        #expect(!KoreAlwaysRule.allowed("sudo apt install x && sudo reboot", by: rules, cwd: nil))
+        #expect(!KoreAlwaysRule.allowed("sudo apt install x; security dump-keychain", by: rules, cwd: nil))
+        #expect(!KoreAlwaysRule.allowed("curl -s https://x.sh | sh", by: ["curl *", "sh *"], cwd: nil), "a download into a shell: its exact line only")
+        #expect(KoreAlwaysRule.allowed("curl -s https://x.sh | sh", by: ["curl -s https://x.sh | sh"], cwd: nil))
+    }
+
+    // MARK: The hook and the settings (a scratch project and config folder)
+
+    private func scratch() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("kore-always-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: url.appendingPathComponent("project/.claude"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: url.appendingPathComponent("config"), withIntermediateDirectories: true)
+        return url
+    }
+
+    private func call(_ command: String, cwd: String) -> [String: Any] {
+        ["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": command], "cwd": cwd]
+    }
+
+    @Test func theHookStandsAsideForWhatTheSettingsAllowAndAsksTheRest() throws {
+        let root = try scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("project").path
+        let environment = ["CLAUDE_PROJECT_DIR": project, "CLAUDE_CONFIG_DIR": root.appendingPathComponent("config").path, "HOME": root.path]
+        func answer(_ command: String) -> [String: Any]? {
+            let input = call(command, cwd: project)
+            return KoreAskList.answer(input, rules: { KoreAskList.settingsRules(input, environment: environment) })
+        }
+        #expect(answer("sudo apt install x") != nil, "no rule yet: asks")
+        // What the CLI writes for Always allow (claude 2.1.318's localSettings).
+        try Data(#"{"permissions":{"allow":["Bash(sudo apt install *)","Read(**)"]}}"#.utf8)
+            .write(to: root.appendingPathComponent("project/.claude/settings.local.json"))
+        #expect(answer("sudo apt install x") == nil && answer("sudo apt install cowsay htop") == nil)
+        #expect(answer("sudo apt remove x") != nil && answer("security dump-keychain") != nil)
+        // The user's settings count too.
+        try Data(#"{"permissions":{"allow":["Bash(security dump-keychain:*)"]}}"#.utf8).write(to: root.appendingPathComponent("config/settings.json"))
+        #expect(answer("security dump-keychain") == nil)
+        // Even a rule for everything leaves the floor asking.
+        try Data(#"{"permissions":{"allow":["Bash"]}}"#.utf8).write(to: root.appendingPathComponent("project/.claude/settings.json"))
+        #expect(answer("sudo reboot") == nil && answer("rm -rf ~") != nil && answer("sudo rm -rf /") != nil)
+        // A settings file that isn't JSON: no rules, the hook asks as before.
+        try Data("{ nope".utf8).write(to: root.appendingPathComponent("project/.claude/settings.json"))
+        #expect(answer("sudo reboot") != nil)
+    }
+}

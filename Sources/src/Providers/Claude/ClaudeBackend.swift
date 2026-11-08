@@ -1137,10 +1137,9 @@ package final class ClaudeBackend: ChatBackend {
         let mapped: PermissionDecision =
             switch decision {
             case .allow: .allow
-            // A person-only ask keeps only its own exact command, never the CLI's broader rule.
+            // A person-only ask keeps the kind its card showed (`ClaudeTranslator.alwaysRule`).
             case .allowAlways where request.personOnly:
-                request.toolName == "Bash" && request.raw["suppress_always_allow_rule"]?.bool != true
-                    ? request.input["command"]?.string.map { .allowExactly(command: $0) } ?? .allow : .allow
+                ClaudeTranslator.alwaysRule(request, in: options.folder).map { .allowRule($0) } ?? .allow
             case .allowAlways: .allowAlways
             case .deny: .deny(message: ClaudeTranslator.deniedCall)
             // Several picked go as one line, as Claude Code's own picker sends them.

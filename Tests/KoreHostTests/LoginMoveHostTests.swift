@@ -182,6 +182,8 @@ struct LoginMoveHostTests {
         try #require(rig.rig.host.accounts.root.path.hasPrefix(rig.rig.root.path))
         let dev = accountsRoot(rig).appendingPathComponent("dev", isDirectory: true)
         try LoginVault.writePrivate(login, to: dev.appendingPathComponent(".credentials.json"))
+        // Who it is: its account file, what a Mac compares now.
+        try LoginVault.writePrivate(Data(#"{"oauthAccount":{"emailAddress":"dev@acme.dev","accountUuid":"uuid-d"}}"#.utf8), to: dev.appendingPathComponent(".claude.json"))
         let mac = Device("mac")
         try rig.allow(mac)
         let owner = try dial(rig, mac)
@@ -191,6 +193,7 @@ struct LoginMoveHostTests {
         let prints = try #require(got["prints"] as? [[String: Any]])
         #expect(prints.count == 1 && prints[0]["login"] as? String == "dev")
         #expect(prints[0]["fingerprint"] as? String == LoginFingerprint.of(login, cli: "claude", key: key))
+        #expect(prints[0]["email"] as? String == "dev@acme.dev" && prints[0]["account"] as? String == "uuid-d")
         #expect(!String(describing: got).contains("r-1"))
     }
 

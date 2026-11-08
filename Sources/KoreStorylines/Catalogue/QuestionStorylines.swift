@@ -153,6 +153,8 @@ final class QuestionCardKeys: ChatStoryline {
             Expect("2 and Space ticked two") { _ in self.ticked(Self.sync, "Shortcuts") && self.ticked(Self.sync, "Appearance") },
             Key(.key("4")),
             WaitForElement(.id(StoryID.Approval.other(Self.sync).part(.field))),
+            // Typed before the field has the keys, the space would go to the card and close Other.
+            Expect("Other's field has the keys") { story in story.window?.firstResponder is NSText },
             TypeText("Window size"),
             Snapshot("keys-other"),
             Key(.escape),
@@ -169,7 +171,7 @@ final class QuestionCardKeys: ChatStoryline {
             Expect("a click on the card took them back") { _ in shown(card.part(.focus)) && shown(tab(0).part(.lit)) },
             Key(KeyChord(.returnKey, .command)),
             TurnFinished(1),
-            Expect("⌘↩ sent the answers") { story in
+            Expect("⌘↩ sent the answers", found: { story in (try? answers(story)).map { "\($0)" } }) { story in
                 try answers(story) == [Self.layout: ["One long page"], Self.sync: ["Appearance", "Shortcuts", "Window size"]]
             },
         ]
@@ -213,6 +215,51 @@ final class QuestionCardSingle: ChatStoryline {
             Press(.id(card.part(.submit))),
             TurnFinished(1),
             Expect("the pick and the typed answer") { story in try answers(story) == [Self.sync: ["Appearance", "Window size and position"]] },
+        ]
+    }
+}
+
+/// One-of holds one pick, Other included: Other typed into, then an option, leaves the option
+/// alone picked and Other closed; Other again brings its words back and clears the option; the
+/// answer is only the last pick. Each CLI's shape: Claude's question is its id, Codex's has its own.
+final class QuestionCardOtherThenOption: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .approvals] }
+    static let text = "Which settings layout?"
+    static let typed = "Tabs inside a sidebar"
+    private var id: String { variant == .codex ? "layout" : Self.text }
+
+    override func steps() -> [any Step] {
+        let id = id
+        let other = StoryID.Approval.other(id)
+        let option = { (label: String) in StoryID.Approval.option(id, label) }
+        let question = Approval.Question(
+            id: id, text: Self.text, header: "Layout",
+            options: [.init(label: "Tabs", description: "One pane per area"), .init(label: "Sidebar", description: "Sections left, detail right")])
+        return [UseScript(questionScript([question])), OpenFolder(), StartChat()] + [
+            Send("Ask me"),
+            WaitForElement(.id(other)),
+            Press(.id(other)),
+            WaitForElement(.id(other.part(.field))),
+            Click(.id(other.part(.field))),
+            TypeText(Self.typed),
+            Expect("Other picked with its words, Submit ready") { _ in shown(other.part(.ticks)) && shown(card.part(.done)) },
+            Click(.id(option("Sidebar"))),
+            Expect("Sidebar alone picked: Other closed") { _ in
+                shown(option("Sidebar").part(.ticks)) && !shown(other.part(.ticks)) && !shown(other.part(.field)) && shown(card.part(.done))
+            },
+            Snapshot("other-then-option"),
+            Press(.id(other)),
+            WaitForElement(.id(other.part(.field))),
+            Expect("Other again: its words back, Sidebar cleared", found: { story in "\(String(describing: (story.window?.firstResponder as? NSTextView)?.string))" }) { story in
+                (story.window?.firstResponder as? NSTextView)?.string == Self.typed && !shown(option("Sidebar").part(.ticks))
+            },
+            Click(.id(option("Tabs"))),
+            Expect("Tabs alone picked") { _ in shown(option("Tabs").part(.ticks)) && !shown(other.part(.ticks)) && !shown(option("Sidebar").part(.ticks)) },
+            Press(.id(card.part(.submit))),
+            TurnFinished(1),
+            Expect("only Tabs sent, not Other's words", found: { story in "\(String(describing: try? answers(story)))" }) { story in
+                try answers(story) == [id: ["Tabs"]]
+            },
         ]
     }
 }

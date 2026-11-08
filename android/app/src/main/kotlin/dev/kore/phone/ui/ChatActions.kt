@@ -1117,7 +1117,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val canSubmit = actions.any { it.str("id") == "submitAnswers" }
         // One single-choice question: a tap on an option is the answer.
         val tapAnswers = canSubmit && questions.size == 1 && !questions[0].bool("multiple")
-        val chosen = LinkedHashMap<String, MutableList<String>>()
+        val picks = CardPicks()
         val others = LinkedHashMap<String, EditText>()
         for (q in questions) {
             val qid = q.str("id") ?: q.str("text") ?: continue
@@ -1126,8 +1126,10 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 sheet.addView(activity.label(it).apply { type(Type.Body); setTextColor(Tone.text) }, lp(if (sheet.childCount > 2) 14 else 8))
             }
             val rows = ArrayList<Pair<String, LinearLayout>>()
+            // A one-of's option picked over Other gives Other's row back, its words kept.
+            var closeOther: () -> Unit = {}
             fun mark() = rows.forEach { (label, row) ->
-                val on = chosen[qid]?.contains(label) == true
+                val on = picks.on(qid, label)
                 row.pressFill(if (on) Tone.accentFill else Tone.l2, Tone.l3, Radius.row, if (on) Tone.b200 else null)
                 (row.getChildAt(1) as ImageView).visibility = if (on || tapAnswers) View.VISIBLE else View.INVISIBLE
             }
@@ -1136,8 +1138,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 val row = optionRow(label, o.str("description"), if (tapAnswers) dev.kore.phone.R.drawable.i_chevron else dev.kore.phone.R.drawable.i_check)
                 row.setOnClickListener {
                     if (tapAnswers) return@setOnClickListener answer(cardId, "submitAnswers", mapOf(qid to listOf(label)))
-                    val list = chosen.getOrPut(qid) { mutableListOf() }
-                    if (list.contains(label)) list.remove(label) else { if (!multiple) list.clear(); list.add(label) }
+                    picks.pick(qid, label, multiple)
+                    if (!multiple) closeOther()
                     mark()
                 }
                 rows += label to row
@@ -1153,10 +1155,12 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                     setPadding(dp(14), dp(12), dp(14), dp(12))
                     pressFill(null, Tone.l2, Radius.row, Tone.hair2)
                     setOnClickListener {
-                        // The field takes its place; with a single question, Send answers with it.
+                        // The field takes its place (the one typed in before, if Other was picked
+                        // and an option took it); with a single question, Send answers with it.
                         val at = sheet.indexOfChild(other)
                         sheet.removeView(other)
-                        val input = EditText(activity).apply {
+                        val made = others[qid]
+                        val input = made ?: EditText(activity).apply {
                             type(Type.Body)
                             setTextColor(Tone.text)
                             setHintTextColor(Tone.faint)
@@ -1169,8 +1173,10 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                         }
                         others[qid] = input
                         sheet.addView(input, at, lp(8))
+                        picks.pickOther(qid, multiple)
+                        mark()
                         // Send joins the card's pinned buttons, beside Skip, so the keyboard never hides it.
-                        if (tapAnswers) {
+                        if (tapAnswers && made == null) {
                             cardButtons.visibility = View.VISIBLE
                             (cardButtons.layoutParams as LinearLayout.LayoutParams).topMargin = dp(12)
                             cardButtons.addView(activity.button("Send", Btn.Primary) {
@@ -1180,6 +1186,14 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                         }
                         input.requestFocus()
                         activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.showSoftInput(input, 0)
+                    }
+                }
+                closeOther = {
+                    others[qid]?.takeIf { it.parent === sheet }?.let { input ->
+                        activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.hideSoftInputFromWindow(input.windowToken, 0)
+                        val at = sheet.indexOfChild(input)
+                        sheet.removeView(input)
+                        sheet.addView(other, at, lp(8))
                     }
                 }
                 sheet.addView(other, lp(8))
@@ -1199,10 +1213,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 else -> Btn.Secondary
             }
             row.addView(activity.button(a.str("label") ?: id, role) {
-                val answers = if (id != "submitAnswers") null else LinkedHashMap<String, List<String>>().apply {
-                    chosen.forEach { (k, v) -> put(k, v.toList()) }
-                    others.forEach { (k, f) -> f.text.toString().trim().takeIf { it.isNotEmpty() }?.let { put(k, (get(k) ?: emptyList()) + it) } }
-                }
+                val answers = if (id != "submitAnswers") null else picks.answers(others.mapValues { it.value.text.toString() })
                 answer(cardId, id, answers)
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(10) })
         }

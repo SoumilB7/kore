@@ -378,6 +378,54 @@ public enum LoginFingerprint {
     }
 }
 
+/// Who a login is, from what isn't secret: the account's email and its id. Two devices holding
+/// logins of the same account hold one sign-in twice, as far as Kore tells. Read from files only
+/// (Claude's `.claude.json`, Codex's `auth.json`), never a token and never the Keychain.
+public struct LoginIdentity: Sendable, Equatable {
+    public var email: String?
+    /// Claude's `oauthAccount.accountUuid`; Codex's `tokens.account_id`.
+    public var account: String?
+
+    public init(email: String?, account: String?) { (self.email, self.account) = (email, account) }
+
+    /// Claude's account file (`oauthAccount`) or Codex's `auth.json` (`tokens.account_id`, and
+    /// the email its id token's claims name).
+    public static func of(_ data: Data, cli: String) -> LoginIdentity {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return LoginIdentity(email: nil, account: nil) }
+        if cli == "codex" {
+            let tokens = object["tokens"] as? [String: Any]
+            return LoginIdentity(email: (tokens?["id_token"] as? String).flatMap(claimedEmail), account: tokens?["account_id"] as? String)
+        }
+        let account = object["oauthAccount"] as? [String: Any]
+        return LoginIdentity(email: account?["emailAddress"] as? String, account: account?["accountUuid"] as? String)
+    }
+
+    /// The same account: two known emails that differ never are (a Codex team shares one
+    /// account id); else both ids known and equal; else the same email.
+    public func same(as other: LoginIdentity) -> Bool {
+        let (mine, theirs) = (Self.plain(email), Self.plain(other.email))
+        if let mine, let theirs, mine != theirs { return false }
+        if let a = Self.plain(account), let b = Self.plain(other.account) { return a == b }
+        guard let mine, let theirs else { return false }
+        return mine == theirs
+    }
+
+    /// The `email` claim of a JWT's body (who it names, not a secret).
+    private static func claimedEmail(_ token: String) -> String? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var body = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while body.count % 4 != 0 { body += "=" }
+        let claims = Data(base64Encoded: body).flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
+        return claims?["email"] as? String
+    }
+
+    private static func plain(_ text: String?) -> String? {
+        guard let text = text?.trimmingCharacters(in: .whitespaces).lowercased(), !text.isEmpty else { return nil }
+        return text
+    }
+}
+
 /// The few fields Kore reads in a CLI's credential file, never sending or showing them.
 public enum LoginCredential {
     /// Claude's `.credentials.json` (or Keychain item): `claudeAiOauth.refreshToken`. Codex's

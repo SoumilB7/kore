@@ -20,11 +20,14 @@ package enum KoreAskList {
     }
 
     /// The hook's answer for one call (the PreToolUse input): its JSON when it asks, else nil.
-    /// Only in Auto: other modes ask by themselves.
-    package static func answer(_ input: [String: Any]) -> [String: Any]? {
+    /// Only in Auto: other modes ask by themselves. `rules`: the settings' `Bash` allow rules
+    /// (`KoreAlwaysRule.allowRules`, read only for a call on the list): a call they allow gets no
+    /// decision, so the CLI's own flow runs it, except a critical removal.
+    package static func answer(_ input: [String: Any], rules: (() -> [String])? = nil) -> [String: Any]? {
         guard input["permission_mode"] as? String == "auto", input["tool_name"] as? String == "Bash",
             let command = (input["tool_input"] as? [String: Any])?["command"] as? String, let why = reason(for: command)
         else { return nil }
+        if let rules, KoreAlwaysRule.allowed(command, by: rules(), cwd: input["cwd"] as? String) { return nil }
         return [
             "hookSpecificOutput": [
                 "hookEventName": "PreToolUse", "permissionDecision": "ask",
@@ -37,11 +40,21 @@ package enum KoreAskList {
     /// stdout; anything it can't read gets no decision, so the CLI goes on as without it.
     package static func runHook() -> Int32 {
         let data = FileHandle.standardInput.readDataToEndOfFile()
-        guard let input = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let answer = answer(input),
+        guard let input = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let answer = answer(input, rules: { settingsRules(input, environment: ProcessInfo.processInfo.environment) }),
             let out = try? JSONSerialization.data(withJSONObject: answer)
         else { return 0 }
         FileHandle.standardOutput.write(out)
         return 0
+    }
+
+    /// The allow rules a hook sees: the project's (`CLAUDE_PROJECT_DIR`, and the call's `cwd`)
+    /// and the user's (`CLAUDE_CONFIG_DIR`, else `~/.claude`), as the CLI that runs it reads them.
+    package static func settingsRules(_ input: [String: Any], environment: [String: String]) -> [String] {
+        let projects = [environment["CLAUDE_PROJECT_DIR"], input["cwd"] as? String].compactMap { $0 }.filter { !$0.isEmpty }
+        let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory()
+        let config = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.claude"
+        return KoreAlwaysRule.allowRules(projects: projects, configDirectory: config)
     }
 
     static let keychainReads: Set<String> = [

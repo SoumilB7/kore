@@ -23,10 +23,8 @@ struct QuestionCard: View {
     /// Gives the keys to the composer (true), or takes them from it (false).
     var composerKeys: (Bool) -> Void = { _ in }
     let submit: ([String: [String]]) -> Void
-    /// The options picked, by question id.
-    @StateObject private var picked = Local([String: Set<String>]())
-    /// What's typed under Other, by question id; there while Other is picked.
-    @StateObject private var other = Local([String: String]())
+    /// The options picked, Other's and what's typed under it.
+    @StateObject private var picks = Local(QuestionPicks())
     /// The question shown, and its current row (an option's place; Other's is after them).
     @StateObject private var page = Local(0)
     @StateObject private var row = Local<Int?>(nil)
@@ -46,7 +44,7 @@ struct QuestionCard: View {
     private var questions: [Approval.Question] { approval.questions }
     private var shownIndex: Int { min(max(page.value, 0), questions.count - 1) }
     private var card: StoryID { StoryID.Approval.card(approval.id) }
-    private var ready: Bool { Self.complete(questions, picked: picked.value, other: other.value) }
+    private var ready: Bool { picks.value.complete(questions) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
@@ -219,7 +217,7 @@ struct QuestionCard: View {
     }
 
     private func optionRow(_ question: Approval.Question, _ option: Approval.Option, place: Int, at index: Int, shown: Bool) -> some View {
-        let on = picked.value[question.id]?.contains(option.label) == true
+        let on = picks.value.options[question.id]?.contains(option.label) == true
         let current = shown && row.value == place
         let id = StoryID.Approval.option(question.id, option.label)
         return Button { choose(place, in: question) } label: {
@@ -249,7 +247,7 @@ struct QuestionCard: View {
     /// word, on its line, with the row's accent line the only border.
     @ViewBuilder
     private func otherRow(_ question: Approval.Question, at index: Int, shown: Bool) -> some View {
-        let open = other.value[question.id] != nil
+        let open = picks.value.other.contains(question.id)
         let place = question.options.count
         let current = shown && row.value == place
         let id = StoryID.Approval.other(question.id)
@@ -292,7 +290,9 @@ struct QuestionCard: View {
     /// The line an answer is typed in: Other's, bare in its row, or in a well for a question with
     /// no options, where it has no other border.
     private func field(_ question: Approval.Question, shown: Bool, well: Bool) -> some View {
-        let text = Binding(get: { other.value[question.id] ?? "" }, set: { other.value[question.id] = $0 })
+        // The field writes its text back as it goes (an option picked over Other): that's only
+        // the words kept, never Other picked again.
+        let text = Binding(get: { picks.value.typed[question.id] ?? "" }, set: { picks.value.typed[question.id] = $0 })
         return Group {
             if question.secret {
                 SecureField("", text: text, prompt: Text("Your answer").foregroundStyle(Theme.tertiary))
@@ -346,7 +346,7 @@ struct QuestionCard: View {
         {
             return question.options[place].label
         }
-        let labels = picked.value[question.id] ?? []
+        let labels = picks.value.options[question.id] ?? []
         return question.options.first { labels.contains($0.label) && $0.preview != nil }?.label
     }
 
@@ -386,40 +386,22 @@ struct QuestionCard: View {
     }
 
     private func answered(_ question: Approval.Question) -> Bool {
-        Self.answered(question, picked: picked.value[question.id], other: other.value[question.id])
+        picks.value.answered(question)
     }
 
     /// A row picked, by a click or a key: an option, or Other (after them).
     private func choose(_ place: Int, in question: Approval.Question) {
         take()
         if question.options.indices.contains(place) {
-            pick(question.options[place].label, in: question)
+            picks.value.pick(question.options[place].label, in: question)
+            if !picks.value.other.contains(question.id), typing == question.id { typing = nil }
         } else if question.other {
-            pickOther(question)
+            if picks.value.pickOther(in: question) {
+                typing = question.id
+            } else if typing == question.id {
+                typing = nil
+            }
         }
-    }
-
-    private func pick(_ label: String, in question: Approval.Question) {
-        var labels = picked.value[question.id] ?? []
-        if question.multiple {
-            if labels.remove(label) == nil { labels.insert(label) }
-        } else {
-            labels = [label]
-            other.value[question.id] = nil
-            if typing == question.id { typing = nil }
-        }
-        picked.value[question.id] = labels
-    }
-
-    private func pickOther(_ question: Approval.Question) {
-        if other.value[question.id] != nil {
-            other.value[question.id] = nil
-            if typing == question.id { typing = nil }
-            return
-        }
-        if !question.multiple { picked.value[question.id] = [] }
-        other.value[question.id] = ""
-        typing = question.id
     }
 
     /// Another question shown; by a key, its first row is current.
@@ -450,7 +432,7 @@ struct QuestionCard: View {
 
     private func send() {
         guard ready else { return }
-        submit(Self.answers(questions, picked: picked.value, other: other.value))
+        submit(picks.value.answers(questions))
     }
 
     // MARK: Keys
@@ -539,7 +521,7 @@ struct QuestionCard: View {
             if let place = row.value {
                 let isOther = place >= question.options.count
                 // Other opens its field; an option is picked (an any-of's only if none is yet).
-                if isOther || !question.multiple || (picked.value[question.id] ?? []).isEmpty { choose(place, in: question) }
+                if isOther || !question.multiple || (picks.value.options[question.id] ?? []).isEmpty { choose(place, in: question) }
                 if isOther { return true }
             }
             if let next = nextUnanswered { go(to: next, keyed: true) }
@@ -551,33 +533,63 @@ struct QuestionCard: View {
         }
         return true
     }
+}
 
-    // MARK: Answers
+/// What a question card holds: the options picked and Other's, by question id, and what's typed
+/// under Other. A one-of question holds one pick, an option or Other, whichever came last. The
+/// words stay while another pick has Other's place (Other picked again brings them back), and go
+/// only while Other is picked, or for a question with no options, where they're the only answer.
+struct QuestionPicks: Equatable {
+    var options: [String: Set<String>] = [:]
+    var other: Set<String> = []
+    var typed: [String: String] = [:]
+
+    /// An option picked, or an any-of's unpicked; a one-of's takes Other's place.
+    mutating func pick(_ label: String, in question: Approval.Question) {
+        var labels = options[question.id] ?? []
+        if question.multiple {
+            if labels.remove(label) == nil { labels.insert(label) }
+        } else {
+            labels = [label]
+            other.remove(question.id)
+        }
+        options[question.id] = labels
+    }
+
+    /// Other picked, true, or unpicked when it was; a one-of's takes the option's place.
+    @discardableResult
+    mutating func pickOther(in question: Approval.Question) -> Bool {
+        if other.remove(question.id) != nil { return false }
+        if !question.multiple { options[question.id] = [] }
+        other.insert(question.id)
+        return true
+    }
+
+    /// The typed answer a question sends: nil unless Other is picked or it has no options.
+    func text(_ question: Approval.Question) -> String? {
+        guard other.contains(question.id) || question.options.isEmpty else { return nil }
+        return (typed[question.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     /// Each question's options in their order, then what was typed: the CLIs' answers.
-    static func answers(_ questions: [Approval.Question], picked: [String: Set<String>], other: [String: String]) -> [String: [String]] {
+    func answers(_ questions: [Approval.Question]) -> [String: [String]] {
         var answers: [String: [String]] = [:]
         for question in questions {
-            let labels = picked[question.id] ?? []
+            let labels = options[question.id] ?? []
             var answer = question.options.map(\.label).filter(labels.contains)
-            let typed = (other[question.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !typed.isEmpty { answer.append(typed) }
+            if let text = text(question), !text.isEmpty { answer.append(text) }
             answers[question.id] = answer
         }
         return answers
     }
 
     /// Something picked or typed, and no Other left empty.
-    static func answered(_ question: Approval.Question, picked: Set<String>?, other: String?) -> Bool {
-        let typed = (other ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let otherOpen = other != nil || question.options.isEmpty
-        if otherOpen && typed.isEmpty { return false }
-        return !(picked ?? []).isEmpty || !typed.isEmpty
+    func answered(_ question: Approval.Question) -> Bool {
+        guard let text = text(question) else { return !(options[question.id] ?? []).isEmpty }
+        return !text.isEmpty
     }
 
-    static func complete(_ questions: [Approval.Question], picked: [String: Set<String>], other: [String: String]) -> Bool {
-        questions.allSatisfy { answered($0, picked: picked[$0.id], other: other[$0.id]) }
-    }
+    func complete(_ questions: [Approval.Question]) -> Bool { questions.allSatisfy(answered) }
 }
 
 /// Whether there's more of the questions past the top or the bottom of their scroll.
