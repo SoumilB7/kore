@@ -1,4 +1,4 @@
-# Link 1.4 and 1.5: the box (`kore-host`)
+# Link 1.4 to 1.6: the box (`kore-host`)
 
 A box is a headless machine running `kore-host`: the Mac reaches it with
 `ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Everything in link 1.0–1.3 holds unless this page says
@@ -35,7 +35,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 - `attach` exits 3 when no daemon listens, 4 when there's no such grant, 5 when there's no
   runtime folder, 2 on bad arguments; over ssh, 255 is ssh's own failure and 126/127 the shell's
   (kore-host can't run there, or isn't there).
-- `welcome`: `proto {1,5}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
+- `welcome`: `proto {1,6}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
   `policy {sendMaxLevel: 4, control: "full"|"standard"}` (`full` for a full grant),
   `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5). For a
   full grant each of `providers[]` carries `calls`: the `chat.call` types the box takes for that
@@ -152,9 +152,10 @@ most once a minute) and after `auth.gh`, never polled; a change goes out as a `d
 
 ## CLIs
 
-- A box chat's CLI has none of Kore's own tools: no `kore` helper, no MCP server, no Arsenal
-  notes. It starts with one paragraph saying it runs on the box through kore-host, seen as a tab
-  in Kore on the Mac.
+- A box chat's CLI starts with one paragraph saying it runs on the box through kore-host, seen as
+  a tab in Kore on the Mac, and that Kore's tools are available when the user turns Arsenal on for
+  the chat. It has no `kore` helper on its PATH; while Arsenal is on, it has the `kore_app` MCP
+  server (1.6, below).
 
 - A chat's CLI starts on its first send (or, 1.5, the first time a full grant follows a chat with
   nothing in its event log) and stops after 10 minutes with nothing to do: no turn, queue, card,
@@ -237,3 +238,47 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
 …}` with every tag and key spelled out (`ChatEvent+Coding.swift`), so a renamed Swift case never
 changes the wire. An event this side can't read is skipped; one inside a history leaves the rest.
 `Tests/Fixtures/stream/v1` holds every case's form.
+
+## Link 1.6: Arsenal on a box
+
+A box chat's agent uses Kore's `kore_app` tools on the Mac, as a Mac chat's does, under the tier
+and limits the Mac holds for that chat. All of it is additive: a 1.5 peer ignores the new fields
+and never sees the new messages.
+
+### The tier
+
+- `chat.call` with a `send` carries `arsenal`: the chat's tier on the Mac (`watch`, `own` or
+  `drive`; absent for off), and `note`: the line the Mac owes the agent when the tier changed
+  since it was last told (`Kore note: Arsenal is now …`). The box takes a `note` only in that
+  form, at most 400 characters, and gives it to the CLI before the message.
+- `chat.follow` carries `arsenal` too: a chat whose CLI starts for that follow starts with it.
+- While the tier isn't off, kore-host starts the chat's CLI with the `kore_app` MCP server,
+  `kore-host mcp`, and instructions saying what its tools do; claude's are allowed without asking
+  (`--allowedTools`), and codex's run without an approval (`default_tools_approval_mode`). A
+  message whose tier turns the server on or off finds the CLI idle and starts it again (the
+  session resumes); a CLI at work keeps what it has until a message finds it idle.
+- The tier decides nothing on the box: it says only whether the server is there.
+
+### Calls
+
+- `kore-host mcp` lists the same tools and schemas as the Mac's `kore mcp`, and `kore_new_chat`
+  takes `place`: `box` (the default: the same box and folder) or `mac` (the Mac window of the
+  folder this one syncs with, else the Mac's front window).
+- Its environment holds `KORE_AGENT_CHAT` (the box chat's id), `KORE_AGENT_PASS` (a secret made
+  for that CLI's run) and `KORE_AGENT_SOCKET` (`$XDG_RUNTIME_DIR/kore-host/agent.sock`, 0600 in
+  the runtime folder). Each call is one connection there: one frame
+  `{"t": "agent.ask", chatId, pass, tool, args}` (framed as the link is), answered with one
+  `{"t": "agent.result", ok, code?, text}`. A pass that isn't the one that chat's running CLI was
+  given is refused there, and goes nowhere.
+- `agent.call {id, chatId, tool, args}`, box to client, full grants only: kore-host passes the
+  call to the full grant that follows the chat, else the last full grant to connect. With none,
+  the answer is "Kore isn't connected to <box> right now"; a link that ends, or 30 s with no
+  answer (330 s for `kore_wait`, 75 s for `kore_fork`), ends the call so too.
+- `agent.result {id, ok, code?, text}`, client to box: `text` is what the agent reads, the
+  command's data as JSON or why not. `code` is the agent channel's (`denied`, `tier`, `limit`,
+  `no_chat`, …). The box takes an answer only from the connection the call went to.
+- The Mac answers a call only for its own tab of that chat on that box (`no_chat` otherwise), and
+  only at that chat's tier: off is `denied`, a tool above it is `tier`. Its limits are that
+  chat's, counted with everything else it does: 30 commands a minute, 10 messages a minute, 10 new
+  chats an hour and 6 of them open, wherever they opened.
+

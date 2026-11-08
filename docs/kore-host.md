@@ -4,7 +4,7 @@ kore-host runs Kore's chats on another machine, a "box": a Linux server, a works
 VM, a container or another Mac, anything you reach with `ssh`. A Kore window on your Mac shows a box folder's chats, while
 the claude and codex CLIs run on the box, in its files. The Mac talks to it over your own SSH:
 `ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Nothing on the box listens on the
-network, and nothing runs there while it's idle except one small daemon waiting on a Unix socket.
+network, and nothing runs there while it's idle except one small daemon waiting on its Unix sockets.
 
 The protocol is in [link-1.4-box.md](link-1.4-box.md).
 
@@ -208,6 +208,7 @@ What both sides last agreed on (each file's size and mtime) is kept in
 | `kore-host facts` | Prints the CLIs' MCP servers, skills, plugins, agents and default models, by name only, as JSON. |
 | `kore-host uninstall [--purge]` | Stops and removes the service, the LaunchAgent or the on-demand daemon. `--purge` also removes the state, grants and config. |
 | `kore-host --version` | Prints the version and the link version. |
+| `kore-host mcp` | The `kore_app` MCP server a chat's CLI starts with while its Arsenal is on. kore-host runs it; it isn't run by hand. |
 
 The control levels:
 - `watch` reads only.
@@ -224,7 +225,7 @@ The control levels:
 | `~/.local/state/kore-host/grants/<name>.json` | one per grant, with its secret (0600) |
 | `~/.local/state/kore-host/chats/<id>/` | each chat's record and log |
 | `~/.local/state/kore-host/models.json` | each CLI's models, as it last listed them |
-| `$XDG_RUNTIME_DIR/kore-host/` | `link.sock`, `run.lock` and `kore-host.pid` (`/run/user/<uid>` without `XDG_RUNTIME_DIR`) |
+| `$XDG_RUNTIME_DIR/kore-host/` | `link.sock`, `agent.sock`, `run.lock` and `kore-host.pid` (`/run/user/<uid>` without `XDG_RUNTIME_DIR`) |
 | `~/.config/systemd/user/kore-host.service` | the systemd service |
 | `~/Library/LaunchAgents/dev.kore.kore-host.plist` | the LaunchAgent, on a Mac |
 | `~/.local/state/kore-host/service` | `launchd` or `on-demand`, when kore-host isn't a systemd service |
@@ -243,6 +244,18 @@ How the box handles its files:
 - kore-host's own log lines go to the journal: `journalctl --user -u kore-host`. They cover
   start, stop, connections, refusals, CLI starts and stops, and failed writes. They never hold
   a secret or anything said in a chat.
+
+## Arsenal
+
+A box chat's agent can use Kore's own tools (new tabs, other chats, this chat's model), as a chat
+on the Mac can, once you turn Arsenal on for it: right-click its tab, or ⌥⌘K. The tier and its
+limits are the Mac's, and only the Mac decides each call.
+- While Arsenal is on, kore-host starts the chat's CLI with `kore-host mcp`, the `kore_app` MCP
+  server. Turned on or off, the CLI starts again at its next message.
+- Each tool call goes to the daemon on `agent.sock` with the chat's id and a secret the daemon gave
+  that CLI alone, then on to the Mac over the link. kore-host decides nothing.
+- New chats open on the same box and folder; `place: "mac"` opens one in a window on the Mac.
+- With no Mac connected, a call says "Kore isn't connected to <box> right now".
 
 ## Uninstalling
 
@@ -264,3 +277,6 @@ Mac, remove the box's row.
   lines, Always allow and API keys stay refused, and only a full grant may raise a chat's mode,
   up to Auto.
 - `revoke` (or `allow` again) ends that grant's live connection at its next command.
+- Arsenal's tool calls go only to a full grant's connection, and each is checked on the Mac against
+  that chat's tier there. `agent.sock` is yours alone, as `link.sock` is, and a call names its chat
+  by a secret that only that chat's running CLI has; it never leaves the box.
