@@ -64,6 +64,8 @@ final class StayAwake {
     private(set) var continuesAt: Date?
     /// The two minutes after the last agent ended, while it still holds.
     private(set) var idleUntil: Date?
+    /// Phones linked over KoreNet now: While Agents Work holds for them too (phase 18).
+    private(set) var phones = 0
     private(set) var battery = PowerState(onBattery: false, percent: nil)
 
     /// How long it holds after the last agent ends; a storyline shortens it.
@@ -190,6 +192,14 @@ final class StayAwake {
         apply()
     }
 
+    /// Phones linked now (`StayAwakePhones`): While Agents Work keeps the Mac awake for them, under
+    /// the same battery floor.
+    func phonesConnected(_ count: Int) {
+        guard count != phones else { return }
+        phones = max(0, count)
+        apply()
+    }
+
     var paused: Bool {
         guard battery.onBattery, let percent = battery.percent else { return false }
         return percent < Self.batteryFloor
@@ -211,6 +221,7 @@ final class StayAwake {
             if working > 0 { return "Kore: \(Self.agents(working)) working" }
             if continuesAt != nil { return "Kore: a chat continues when its limit resets" }
             if idleUntil != nil { return "Kore: agents just finished" }
+            if phones > 0 { return "Kore: \(phones == 1 ? "a phone is" : "\(phones) phones are") connected" }
             return nil
         }
     }
@@ -229,6 +240,7 @@ final class StayAwake {
             case .whileAgentsWork:
                 if working > 0 { return "Keeping awake · \(Self.agents(working))" }
                 if let at = continuesAt { return "Keeping awake · continues \(Self.time(at, now: now))" }
+                if idleUntil == nil, phones > 0 { return "Keeping awake · \(phones == 1 ? "phone" : "\(phones) phones") connected" }
                 return "Keeping awake · ends in \(Self.minutes(until: idleUntil ?? now, now: now))m"
             }
         }
@@ -334,6 +346,12 @@ final class StayAwake {
         guard let woke = slept.woke else { return true }
         return clock.now.timeIntervalSince(woke) <= Self.wakeSettle
     }
+}
+
+/// Where the link tells Stay awake how many phones are linked (KoreLink can't see `StayAwake`).
+@MainActor
+package enum StayAwakePhones {
+    package static func connected(_ count: Int) { StayAwake.current?.phonesConnected(count) }
 }
 
 // MARK: - The hold
