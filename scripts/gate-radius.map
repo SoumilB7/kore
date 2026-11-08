@@ -1,0 +1,55 @@
+# verify-fast.sh --radius: which storylines a change in a UI area reaches (gate-radius.py).
+# "<path prefix><TAB><catalogue files, without Storylines.swift> | ALL". The longest prefix wins.
+# A path in KoreUI (or code KoreUI uses) that no line names runs every gate storyline.
+Sources/KoreUI/Account/	AccountLogins AccountMethods Account LoginInput Usage UsageCue StayAwake
+Sources/KoreUI/Arsenal/	Arsenal ArsenalDrive ArsenalOwn ArsenalReach AgentChannel
+Sources/KoreUI/Board/	Board Readme Unload Sash
+Sources/KoreUI/Box/	Link Devices RemoteControl TabEdge
+Sources/KoreUI/Net/	Devices Link
+Sources/KoreUI/Chat/Agents/	AgentMap AgentTab AgentFloodChecks Turn TurnRetry Command
+Sources/KoreUI/Chat/Approvals/	Question Chat Options
+Sources/KoreUI/Chat/Composer/	Chat ComposerClick ComposerCopy AtMention AttachPanel CommandBox Picker Key MediaMenu LongMessage Recovery Options
+Sources/KoreUI/Chat/Context/	Compact UsageCue HistoryCost Turn
+Sources/KoreUI/Chat/Transcript/	Chat Selection TranscriptResize Sash FoldedWriteups Mermaid MessageRail LongMessage Unload PinchZoom MediaViewer Turn TurnRetry Command
+Sources/KoreUI/Chat/	Chat Turn Compact Recovery Key
+Sources/KoreUI/Files/	Editor ExplorerOps FileTab FolderRename AutoSave Readme Sash PinchZoom Mermaid
+Sources/KoreUI/History/	HistoryCost Import List MessageRail
+Sources/KoreUI/Import/	Import List
+Sources/KoreUI/Terminal/	Terminal
+Sources/KoreUI/Updates/	Update Install SendFeedback
+Sources/KoreUI/Resources/	ALL
+Sources/KoreUI/Shared/	ALL
+Sources/KoreUI/TabGroupViews.swift	TabGroup
+Sources/KoreUI/TabGroups.swift	TabGroup
+Sources/KoreUI/TabKeys.swift	Key Tab TabGroup
+Sources/KoreUI/StayAwake.swift	StayAwake
+Sources/KoreUI/StayAwakeButton.swift	StayAwake
+Sources/KoreUI/LinkViews.swift	Link Devices
+Sources/KoreUI/NewTabInstall.swift	Install Update
+Sources/KoreUI/QuitGuard.swift	Quit Compact
+Sources/KoreUI/ImageViewer.swift	MediaViewer MediaMenu
+Sources/KoreUI/VectorPage.swift	MediaViewer Readme
+Sources/KoreUI/Attachment.swift	AttachPanel MediaMenu MediaViewer
+Sources/KoreUI/DevNavProbe.swift	ALL
+Sources/KoreUI/DevBench.swift	NavCost
+Sources/KoreUI/DevFeed.swift	NavCost
+Sources/KoreUI/DevFramePacer.swift	ALL
+Sources/KoreUI/DevGallery.swift	Options
+Sources/KoreUI/DevMarkdownGallery.swift	Options
+Sources/KoreUI/DevTimelineGallery.swift	Options
+Sources/KoreUI/DevPowerBench.swift	NavCost
+Sources/KoreUI/DevResourceSampler.swift	NavCost Unload
+Sources/KoreUI/DevScroller.swift	ALL
+Sources/KoreUI/DevSnapshot.swift	ALL
+# Code the app's windows use, outside KoreUI.
+Sources/HostClient/	Link Devices RemoteControl TabEdge Board
+Sources/KoreLink/	Link Devices AgentChannel AgentChannelChecks Arsenal ArsenalDrive ArsenalOwn ArsenalReach RemoteControl StayAwake
+Sources/KoreNet/	Devices Link
+Sources/KoreTrust/	Devices Link
+Sources/Tailnet/	Devices
+Sources/AgentTools/	AgentChannel AgentChannelChecks Arsenal ArsenalDrive ArsenalOwn ArsenalReach
+Sources/kore-command/	AgentChannel AgentChannelChecks Arsenal ArsenalDrive ArsenalOwn ArsenalReach
+Sources/kore-storylines/	ALL
+Sources/Kore/	ALL
+# Always, whatever changed: about 20 short gate storylines across the app, and the two replays.
+smoke	ReplayDumpClaude ReplayDumpCodex SendAndStream StopMidTurn QueuedMessage ApproveAndDeny QuestionCardSubmit SlashMenuCaret TabSwitching TabKeys EscStops OnePopup ThemedOptions ModelPicker ExplorerFileOps EditorFindReplace AccountPopup UsagePopup WindowTerminal DevicesAddPhone LinkRingAndAct BoardCreate UpdateCueOnNewTab
