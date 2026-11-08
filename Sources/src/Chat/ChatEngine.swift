@@ -35,6 +35,8 @@ package protocol ChatServices: AnyObject {
     var modelScope: String? { get }
     /// The chat's transcript was built again in a new store (a rollback, a corrected history).
     func transcriptReplaced(_ chat: Chat)
+    /// A rollback cut the chat's history to `events` (`Chat.adoptRollback`), whichever side asked.
+    func rolledBack(_ chat: Chat, to events: [ChatEvent], more: Bool)
     /// Kore's stall watchdog runs for the chat's turns: not for a box's, whose box watches its own.
     var watchesStall: Bool { get }
     /// The chat runs on a box (its window's chats): what's this Mac's alone (Arsenal, its usage,

@@ -407,6 +407,7 @@ package final class CodexBackend: ChatBackend {
         SlashCommand(name: "plan", description: "Plan mode", hint: "", kind: .command),
         SlashCommand(name: "compact", description: "Summarize the thread to free up context", hint: "", kind: .command),
         SlashCommand(name: "goal", description: "Set a goal Codex keeps working toward until it is done", hint: "objective", kind: .command),
+        SlashCommand(name: "rename", description: "Rename the current thread", hint: "name", kind: .command),
     ]
 
     private func controls(_ session: CodexSession) async -> ChatControls {
@@ -513,6 +514,8 @@ package final class CodexBackend: ChatBackend {
             approval.allowNote = card.refusal
             approval.retryMessage = card.refusal == nil ? CodexAutoStops.retry(card.command) : nil
             approval.tool = "commandExecution"
+            approval.command = card.command
+            approval.cwd = params["action"]?["cwd"]?.string ?? options.folder.path
             yield(.approvalRequested(approval))
         case .exited:
             for id in stops.exited() { yield(.approvalWithdrawn(id)) }
@@ -637,6 +640,18 @@ package final class CodexBackend: ChatBackend {
             translator.compactRequested = true
             try await session.compact()
             return true
+        }
+        // The Codex TUI's /rename: the thread's name, set as Kore's own rename sets it.
+        if text == "/rename" || text.hasPrefix("/rename "), files.isEmpty {
+            let name = String(text.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else {
+                yield(.notice("Usage: /rename <name>"))
+                return false
+            }
+            try await rename(name)
+            yield(.titleChanged(name, rename: true))
+            yield(.notice("Renamed to \(name)"))
+            return false
         }
         if text.hasPrefix("/goal ") && files.isEmpty {
             try await session.setGoal(String(text.dropFirst(6)).trimmingCharacters(in: .whitespaces))

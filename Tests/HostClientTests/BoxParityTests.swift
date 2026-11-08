@@ -495,6 +495,60 @@ struct BoxParityTests {
         third.close()
     }
 
+    /// A phone goes back to a message on a box chat (its control, not this Mac's call): the box's
+    /// log starts again from what's left, so this Mac's tab, a Mac reading it with nothing kept,
+    /// and the next turn all go on from the cut, as the CLI does.
+    @Test(arguments: ["claude", "codex"]) func aPhonesRollbackReachesTheMac(_ cli: String) async throws {
+        let rig = try BoxRig()
+        defer { rig.finish() }
+        let provider = try #require(Registry.provider(cli))
+        let connection = rig.connection()
+        connection.retain()
+        defer { connection.release() }
+        #expect(await until(30) { connection.isOnline })
+        // A turn said on the box first: this Mac's tab takes it as its catch-up's history, and
+        // its own turn after that live.
+        let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: cli, modelId: nil))
+        let chatId = hc.id
+        _ = rig.host.apply(.send(chatId: chatId, text: "one"), id: "p1", control: .act) { _ in }
+        #expect(await until(30) { hc.chat.map { rows($0, .answer) == ["Hi: one"] && !$0.isBusy } ?? false })
+        let (chat, _) = rig.chat(connection, id: chatId, provider: provider)
+        await chat.startOnce()
+        #expect(await until(30) { rows(chat, .answer) == ["Hi: one"] })
+        #expect(chat.sendFromLink("two"))
+        #expect(await until(30) { rows(chat, .answer) == ["Hi: one", "Hi: two"] && !chat.isBusy })
+        let boxChat = try #require(hc.chat)
+        let two = try #require(boxChat.transcriptView.entries.first { $0.kind == .user && $0.text == "two" })
+        let log = hc.stream.id
+
+        // The phone (an act grant) goes back to “two”.
+        var answered: LinkMessage.Result?
+        let now = rig.host.apply(.control(.chatRollback, ControlArgs(chatId: chatId, entryId: two.id.uuidString)), id: "r1", control: .act) {
+            answered = $0
+        }
+        #expect(now == nil, "\(String(describing: now))")
+        guard now == nil else { return }
+        #expect(await until(30) { answered?.ok == true })
+        #expect(await until(30) { rows(boxChat, .user) == ["first"] && hc.stream.id != log })
+        #expect(rig.cli.calls.contains("rollback \(two.source ?? "-")"))
+        // This Mac's tab matches the box, and the next turn follows the cut.
+        #expect(await until(30) { rows(chat, .user) == ["first"] && rows(chat, .answer) == ["Hi: first"] }, "\(rows(chat, .user)) \(rows(chat, .answer))")
+        #expect(chat.sendFromLink("three"))
+        #expect(await until(30) { rows(chat, .answer) == ["Hi: first", "Hi: three"] && !chat.isBusy })
+        #expect(rows(chat, .user) == ["first", "three"])
+        chat.close()
+
+        // A Mac with nothing kept reads the new log whole: the same.
+        let fresh = rig.connection()
+        fresh.retain()
+        defer { fresh.release() }
+        let (other, _) = rig.chat(fresh, id: chatId, provider: provider)
+        try? FileManager.default.removeItem(at: rig.root.appendingPathComponent("cache"))
+        await other.startOnce()
+        #expect(await until(30) { rows(other, .user) == ["first", "three"] && rows(other, .answer) == ["Hi: first", "Hi: three"] })
+        other.close()
+    }
+
     /// A box's log kept from before it said the session (an older kore-host's) says it when a
     /// client follows, without a word from the CLI.
     @Test func aLogWithoutTheSessionSaysItAtTheFollow() async throws {

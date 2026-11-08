@@ -173,6 +173,11 @@ package final class HostDaemon {
         services.onPlanWindows = { [weak self] cli, snapshot in self?.planUsage.take(cli, snapshot: snapshot) }
         services.server = { [weak self] chat in self?.server(for: chat) }
         services.onTranscript = { [weak self] chat in self?.chats.first { $0.chat === chat }?.attach(chat, replaced: true) }
+        // Every rollback (a Mac's call, a phone's control, the box chat's own): the log starts
+        // again from the history left, so the Macs, their caches and later followers take it.
+        services.onRollback = { [weak self] chat, events, more in
+            self?.chats.first { $0.chat === chat }?.stream.restart(with: [.replayed(events), .earlierHistory(more)])
+        }
         services.accountEnvironment = { [weak self] id in try self?.accounts.environment(id) ?? [:] }
         // A Codex chat doesn't start while the box's Codex login is moving (1.14).
         let state = paths.state
@@ -992,8 +997,8 @@ package final class HostDaemon {
         case .accountSignIn, .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh, .accountList, .accountUsage, .accountSwitch:
             guard control == .full else { return fail(.deniedControl, "Accounts need a grant with full control.") }
             return account(kind, args, id: id, reply: reply)
-        case .chatRename, .chatFork, .chatCompact, .chatSetAutoCompact, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue,
-            .chatSetDraft, .chatSetArsenal, .arsenalStopAll:
+        case .chatRename, .chatFork, .chatRollback, .chatCompact, .chatSetAutoCompact, .chatRetry, .chatContinue, .chatSendAtReset,
+            .chatCancelContinue, .chatSetDraft, .chatSetArsenal, .arsenalStopAll:
             return chatOp(kind, args, id: id, control: control, reply: reply)
         case .historyOpen, .historyRename, .historyArchive:
             return historyOp(kind, args, id: id, reply: reply)

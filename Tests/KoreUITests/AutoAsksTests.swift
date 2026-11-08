@@ -96,7 +96,7 @@ struct AutoAsksTests {
         }
     }
 
-    @Test func autoCardsOutliveTheTurnAndOnlyAPersonRunsThem() {
+    @Test func autoCardsOutliveTheTurnAndAnAgentBelowAutoOnlyDenies() {
         let chat = Chat(provider: .claude, folder: Self.folder)
         var ask = Approval(id: "r-hook", title: "Auto asks: sudo reboot (sudo)", detail: nil, body: nil, canAlwaysAllow: true, questions: [])
         ask.autoStop = true
@@ -112,7 +112,7 @@ struct AutoAsksTests {
             Issue.record("an agent ran a command Auto asks about")
             return
         }
-        #expect(refusal.message == "Only you can run a command Auto asks about.")
+        #expect(refusal.message.hasPrefix("Only a chat at Auto or above runs a command Auto asks about"))
         #expect((try? chat.arsenalAnswer("r-hook", [], deny: true, by: agent).get()) == "Denied.")
     }
 

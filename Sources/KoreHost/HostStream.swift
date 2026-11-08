@@ -770,8 +770,8 @@ extension HostDaemon {
             case .rollback(let message, let text):
                 try await backend.start()
                 let left = try await backend.rollback(message: message, text: text)
+                // Its log starts again from there (`HostServices.rolledBack`).
                 chat.adoptRollback(left.events, more: left.more)
-                hc.stream.restart(with: [.replayed(left.events), .earlierHistory(left.more)])
                 var value = CallValue()
                 value.events = left.events
                 value.more = left.more

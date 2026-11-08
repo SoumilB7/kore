@@ -131,6 +131,30 @@ struct ChatCopyClientTests {
         #expect(((try? FileManager.default.contentsOfDirectory(atPath: m.copies.staging.path)) ?? []).isEmpty)
     }
 
+    /// A copy of a Claude chat cut back by a rollback it hasn't written past resumes where its
+    /// source does: the point goes with it to its new id, from a box and to one.
+    @Test func aCopyKeepsItsSourcesRollbackPoint() async throws {
+        let (b, m) = (try await box(), try mac())
+        let (here, there) = (SessionCopy.newId(), SessionCopy.newId())
+        defer {
+            b.rig.finish()
+            m.finish()
+            for id in [Self.session, here, there] { RollbackPoints.forget(id) }
+        }
+        let cut = "0a1b2c3d-0000-4000-8000-000000000003"
+        let hc = try #require(b.rig.host.newChat(folder: b.folder, provider: "claude", modelId: "haiku", title: "Repos", session: Self.session))
+        try write(Self.rows(b.real), b.projects.appendingPathComponent("\(Self.session).jsonl"))
+        RollbackPoints.set(cut, for: Self.session)
+        // Box to this Mac: the point is the box's, kept here under the copy's id.
+        let folder = try m.folder("elsewhere")
+        _ = try await m.copies.copy(CopySource(end: b.end, id: hc.id, provider: "claude", title: "Repos"), to: .mac(folder), as: here).get()
+        #expect(RollbackPoints.at(here) == cut)
+        // This Mac to the box: the box keeps it under its copy's id.
+        let source = CopySource(end: .mac(folder), id: here, provider: "claude", title: "Repos")
+        _ = try await m.copies.copy(source, to: b.end, as: there).get()
+        #expect(RollbackPoints.at(there) == cut)
+    }
+
     @Test func boxToBoxCopiesAndACutKeepsTheSourceUntilTheCopyIsPlaced() async throws {
         let (one, two, m) = (try await box(), try await box(), try mac())
         defer { one.rig.finish(); two.rig.finish(); m.finish() }

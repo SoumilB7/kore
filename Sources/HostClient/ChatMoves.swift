@@ -23,6 +23,8 @@ package struct MovedChat: Codable, Sendable, Equatable {
     package var title: String?
     /// The mirror's count when it last heard the box: what the replica holds.
     package var mirrored: Int?
+    /// A rollback cut it here: the replica's log is wrong, so the return resends it whole.
+    package var rolledBack: Bool?
 
     package init(alias: String, boxChat: String, boxFolder: String, macFolder: String, provider: String, session: String, gen: Int, title: String? = nil) {
         self.alias = alias
@@ -75,6 +77,12 @@ package final class MovedChats {
     package func noteMirrored(_ session: String, _ count: Int) {
         guard let at = all.firstIndex(where: { $0.session == session }), all[at].mirrored != count else { return }
         all[at].mirrored = count
+        save()
+    }
+
+    package func noteRolledBack(_ session: String) {
+        guard let at = all.firstIndex(where: { $0.session == session }), all[at].rolledBack != true else { return }
+        all[at].rolledBack = true
         save()
     }
 
@@ -141,6 +149,23 @@ package struct ChatMoves {
     package var stopper: Spawn?
     /// How often a pull's staged bytes are measured while rsync runs, beside its progress lines.
     package var pollEvery: Duration = .seconds(2)
+    /// This Mac's rollback points (a Claude cut its session file doesn't say yet): read for a
+    /// session that leaves, kept for one that comes (nil: none). Tests stand in for the store.
+    package var rollbackPoint: (_ session: String) -> String? = { RollbackPoints.at($0) }
+    package var keepRollbackPoint: (_ at: String?, _ session: String) -> Void = { at, session in
+        if let at { RollbackPoints.set(at, for: session) } else { RollbackPoints.forget(session) }
+    }
+
+    /// A session's rollback point as it goes to the box: Claude's only, and only a plain one.
+    func rollbackPoint(_ provider: String, session: String) -> String? {
+        provider == ProviderDescriptor.claude.id ? LinkMoves.rollbackPoint(rollbackPoint(session)) : nil
+    }
+
+    /// One a box's session came with: its CLI here resumes there, or at its file's end.
+    func keepRollbackPoint(_ at: String?, provider: String, session: String) {
+        guard provider == ProviderDescriptor.claude.id else { return }
+        keepRollbackPoint(LinkMoves.rollbackPoint(at), session)
+    }
 
     package init(connection: HostConnection, box: SyncBox, staging: URL? = nil, name: String? = nil, store: MovedChats? = nil) {
         self.connection = connection
@@ -264,6 +289,8 @@ package struct ChatMoves {
             title: info.title)
         moved.mirrored = 0
         store.keep(moved)
+        // Cut back on the box (a phone's rollback, say) with nothing written since: it resumes there here too.
+        keepRollbackPoint(info.rollbackAt, provider: info.provider, session: info.sessionId)
         HostLog.event(connection.alias, "move here", ["chat": chatId, "files": String(files.count), "bytes": String(cost.rsyncReceived)])
         // A box from before `settings` says the four it knows.
         var settings = (info.settings ?? ChatSettings(modelId: info.modelId, effort: info.effort, mode: info.mode)).linkable
@@ -327,6 +354,7 @@ package struct ChatMoves {
         commit.mode = said.mode
         commit.settings = said
         commit.seq = mirrored
+        commit.rollbackAt = rollbackPoint(moved.provider, session: moved.session)
         let adopted = await connection.move(.chatAdopt, commit)
         cost.linkBytes += connection.lastMoveBytes
         guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(NodeNames.name(connection.alias)) didn't take it", adopted.code)) }

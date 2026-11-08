@@ -517,6 +517,8 @@ final class BoxChatServices: ChatServices {
             binding?.workspace?.boxTurnEnded()
         }
     }
+    /// The box cut its own log as it rolled back: every follower takes it from there.
+    func rolledBack(_ chat: Chat, to events: [ChatEvent], more: Bool) {}
     func log(_ name: String, _ fields: KeyValuePairs<String, String?>) { app.log(name, fields) }
     var timeReplay: Bool { app.timeReplay }
     func logReplay(_ took: Duration) { app.logReplay(took) }

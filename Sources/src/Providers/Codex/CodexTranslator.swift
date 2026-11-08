@@ -194,7 +194,7 @@ package final class CodexTranslator {
             out.append(.sessionIdentified(id))
             // Codex names a thread only when a client sets one (a rename, or the Codex app's own
             // generated title); until then the chat goes by its first prompt.
-            if let name = Self.threadName(raw["thread"]?["name"]) { out.append(.titleChanged(name)) }
+            if let name = Self.threadName(raw["thread"]?["name"]) { out.append(.titleChanged(name, rename: true)) }
         case .turnStarted(let id):
             if case .sub(let thread) = agent {
                 // A follow-up (followup_task, resume_agent) runs a child again as a turn of its own.
@@ -296,7 +296,7 @@ package final class CodexTranslator {
             if method == "modelProvider/authRecoveryStarted" { authRecovering = true }
             if method == "modelProvider/authRecoveryCompleted" { authRecovering = false }
             if method == "thread/name/updated", agent == .main, let name = Self.threadName(params["threadName"]) {
-                out.append(.titleChanged(name))
+                out.append(.titleChanged(name, rename: true))
             }
             if method == "turn/diff/updated", agent == .main, let diff = params["diff"]?.string {
                 files.setTurnDiff(diff)

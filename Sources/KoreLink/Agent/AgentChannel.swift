@@ -529,7 +529,7 @@ package final class AgentChannel {
                 fail(client, id, .invalid, "Name the card, and give an answer per question or deny.")
                 return chat.id.uuidString
             }
-            done(chat.arsenalAnswer(card, args.answers ?? [], deny: args.deny ?? false, allow: args.allow ?? false, by: callerChat(client)), chat, client, id)
+            done(chat.arsenalAnswer(card, args.answers ?? [], deny: args.deny ?? false, allow: args.allow ?? false, always: args.always ?? false, by: callerChat(client), tier: ArsenalTier(rawValue: tier(client).rawValue)), chat, client, id)
             return chat.id.uuidString
         default:
             fail(client, id, .unknownCommand, Self.message(.unknownCommand))

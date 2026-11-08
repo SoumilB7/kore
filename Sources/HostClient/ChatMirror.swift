@@ -41,11 +41,19 @@ package final class ChatMirrors {
         return mirror
     }
 
+    /// A rollback cut a chat this Mac holds: the replica's events can't say it, so its return
+    /// says no count and the box takes the history from the session again.
+    package func rolledBack(session: String?) {
+        guard let session, store.session(session) != nil else { return }
+        store.noteRolledBack(session)
+    }
+
     /// Everything gathered for a chat, written: the Mac's count, which a return says (`seq`), so
-    /// the box knows whether its replica holds it all.
-    package func count(_ moved: MovedChat) -> Int {
+    /// the box knows whether its replica holds it all. None after a rollback: it doesn't.
+    package func count(_ moved: MovedChat) -> Int? {
         let mirror = mirror(moved)
         mirror.write()
+        if store.session(moved.session)?.rolledBack == true { return nil }
         return mirror.count
     }
 

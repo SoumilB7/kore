@@ -223,7 +223,8 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
 - The log is `chats/<id>/events.jsonl` (0600): a header `{"log": <id>}`, then one item per line.
   It starts at the chat's first history or first event. A CLI resumed after an idle stop replays
   its session, and the box doesn't send or keep that again; the log starts again (a new id, a
-  `reset` to followers) only when a rollback cuts the history or a resumed history finds the log
+  `reset` to followers) only when a rollback cuts the history (whichever client asked: a Mac's
+  `rollback` call or a phone's `chat.rollback`) or a resumed history finds the log
   past 16 MiB. A box that stopped mid-turn ends the turn in the log (`turnFinished`,
   `interrupted`) when it next reads it, and a CLI stopped mid-turn does the same; the commands
   still running in either end with it (`commandEnded`, `ended`).
@@ -674,7 +675,13 @@ and control kind on it, and starts no CLI: code `elsewhere` ("On MacBook · read
 Each is a `cmd` checked by `LinkPolicy.checkBox`. The answer is a `result` with these fields
 besides `{id, ok, code?, message?}`: `chatId?, owner?, move?, settled?, pending?, watching?,
 mirrored?, settings?` (`MoveResult`). `move` is `MoveInfo {moveId, chatId?, provider, sessionId, folders,
-root, files, gen, title?, modelId?, effort?, mode?, fastForward?, settings?}`.
+root, files, gen, title?, modelId?, effort?, mode?, fastForward?, settings?, rollbackAt?}`. `rollbackAt` (on
+`chat.release` and `chat.copy` prepare, and in `chat.adopt` and `chat.adoptCopy` commit's args) is a
+Claude session's rollback point: a rollback its CLI hasn't written past lives outside the file
+(`--resume-session-at <message uuid>`), so it goes with the session and the CLI on the other side
+resumes there. Only a message's uuid is taken; none (or anything else) resumes at the file's end.
+Codex keeps a rollback in its rollout (`thread/revert` replaces the persisted history), so it
+needs none.
 
 | `type` | fields | |
 |---|---|---|
@@ -682,7 +689,7 @@ root, files, gen, title?, modelId?, effort?, mode?, fastForward?, settings?}`.
 | `chat.release` | `chatId, phase: "commit", gen, moveId, host?` | The box records `owner {host: <grant>, gen: gen + 1, name: host, mirrored: 0}`; its copy is a replica now. Result `owner`. Another move, or another grant's: `stale.gen`. |
 | `chat.release` | `chatId, phase: "abort", gen, moveId` | The chat un-freezes; nothing changed. A link that ends between prepare and commit aborts the same way. |
 | `chat.adopt` | `phase: "prepare", moveId, chatId?, provider, sessionId, gen, from` | A return. The box makes `state/staging/<moveId>/` (0700) and answers it as `move.root`. While it still holds the chat `chatId` as the replica of this grant at `gen`, with that session (`fastForward: true`), it seeds staging with its own copy rewritten into `from` (the Mac's folder), so the Mac's rsync sends only what's new; `files` names them. |
-| `chat.adopt` | `phase: "commit", moveId, chatId?, provider, sessionId, gen, folder, folders, title?, modelId?, level?, mode?, host?, seq?` | The box rewrites what's in staging from `folders` (the Mac's folder, its spellings) to `folder` (the box's), places it in its CLI's folders and removes staging. A fast-forward: the same chat, `owner {host: "box", gen: gen + 1}`, its settings from the fields; when `seq` (the Mac's mirror count) isn't what the replica holds, its event log starts again and the CLI's next history fills it. Else a new chat (`from`: `host`), never merged; but while the box keeps that session for a chat of its own, `stale.gen` and nothing is placed (the copy stays on the Mac). Result `chatId`, `owner`. |
+| `chat.adopt` | `phase: "commit", moveId, chatId?, provider, sessionId, gen, folder, folders, title?, modelId?, level?, mode?, host?, seq?, rollbackAt?` | The box rewrites what's in staging from `folders` (the Mac's folder, its spellings) to `folder` (the box's), places it in its CLI's folders and removes staging. A fast-forward: the same chat, `owner {host: "box", gen: gen + 1}`, its settings from the fields; when `seq` (the Mac's mirror count) is missing or isn't what the replica holds, its event log starts again and the CLI's next history fills it. Else a new chat (`from`: `host`), never merged; but while the box keeps that session for a chat of its own, `stale.gen` and nothing is placed (the copy stays on the Mac). Result `chatId`, `owner`. |
 | `chat.adopt` | `phase: "abort", moveId` | Staging goes. |
 | `chat.mirror` | `chatId, gen, seq, events` | The holding Mac's new events, best effort, into the replica's event log, so a follower (`chat.follow`) sees them live. `events` is `[{s, e}]`, `s` from `seq` on (the Mac's own count, from 0 at the move); at most 400 events and 192 KiB. A repeat is skipped; a gap (`seq` past what the replica holds) is `invalid` with `mirrored`, where to send from. Another grant or gen: `stale.gen`. Result `mirrored`. |
 | `sync.flush` | `folder` | The folder's two-way sync on this link says everything it has gathered now (`sync.changed` goes before the result), and answers `settled: true` once it has nothing left, else after 10 s `settled: false, pending`. A folder this link doesn't `sync.watch`: `settled: true, watching: false`. |
@@ -700,7 +707,9 @@ Bring to this Mac:
 Send back:
 1. The Mac's CLI stops; `sync.flush`.
 2. `chat.adopt` prepare, `rsync -az --files-from=<files> <mac root>/ <box>:<staging>/`.
-3. `chat.adopt` commit (with `seq`, the mirror's count). Any failure before it: `chat.adopt` abort.
+3. `chat.adopt` commit (with `seq`, the mirror's count; none after a rollback on the Mac, which
+   the replica's events can't say, so the box's log starts again from the session). Any failure
+   before it: `chat.adopt` abort.
 
 ### What it costs
 
@@ -812,7 +821,7 @@ Each is a `cmd` checked by `LinkPolicy.checkBox`, answered with a `MoveResult` (
 | `chat.copy` | `phase: "prepare", sourceId, provider?, folder?, title?, stop?` | Names a chat's files for a copy. `sourceId` is a box chat's id (open or closed) or its session's, else a past session of `folder`'s CLI `provider`. Result `move`: `root`, `files`, `folders`, `sessionId` (the source's), and a box chat's title, model, effort and mode, as `chat.release` answers them; nothing freezes. `stop: true` (a cut) ends a working chat's CLI first. A replica or a moving chat: `elsewhere`, `moving`; no files: `gone.session`. |
 | `chat.copy` | `phase: "commit", sourceId, provider?, folder?` | A cut's copy is placed elsewhere: the source leaves the box's history. Its CLI ends, its session files go to `state/trash/chats/<time>-<session>/` (paths kept, never deleted), and a box chat's record goes. |
 | `chat.adoptCopy` | `phase: "prepare", moveId, provider, sessionId` | The box makes `state/staging/<moveId>/` (0700) and answers it as `move.root`; the Mac rsyncs the files there as they are. |
-| `chat.adoptCopy` | `phase: "commit", moveId, provider, sessionId, sourceId, folder, folders, title?, modelId?, level?, mode?, copiedFrom?` | Places what's in staging under session `sessionId` (from `sourceId`, the id in the files) in `folder` (from `folders`, the source's folder as kept and as its real path), checks it came out whole, and makes it a new box chat with those settings. `copiedFrom` is the one line above its history ("Copied from “Repos” · app on mybox"), kept in its `meta.json` (`copied`). An id the box has already: `stale.gen`, nothing placed. A folder it doesn't serve: `gone.folder`. Result `chatId`. |
+| `chat.adoptCopy` | `phase: "commit", moveId, provider, sessionId, sourceId, folder, folders, title?, modelId?, level?, mode?, copiedFrom?, rollbackAt?` | Places what's in staging under session `sessionId` (from `sourceId`, the id in the files) in `folder` (from `folders`, the source's folder as kept and as its real path), checks it came out whole, and makes it a new box chat with those settings. `copiedFrom` is the one line above its history ("Copied from “Repos” · app on mybox"), kept in its `meta.json` (`copied`). An id the box has already: `stale.gen`, nothing placed. A folder it doesn't serve: `gone.folder`. Result `chatId`. |
 | `chat.adoptCopy` | `phase: "abort", moveId` | Staging goes. A link that ends between prepare and commit aborts the same way. |
 
 #### How a paste goes

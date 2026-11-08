@@ -374,7 +374,7 @@ package final class Chat: Identifiable {
         store.provider = transcriptView.provider
         showImported(in: store)
         store.apply(.replayed(events))
-        for event in sinceReplay ?? [] { store.apply(event) }
+        if backend?.historiesWhole != true { for event in sinceReplay ?? [] { store.apply(event) } }
         if let since = transcriptView.pendingSendSince { store.sending(true, at: since) }
         transcriptView = store
         services.transcriptReplaced(self)
@@ -1504,9 +1504,7 @@ package final class Chat: Identifiable {
             }
             do {
                 let left = try await connect().rollback(message: entry.source, text: entry.text)
-                sinceReplay = []
-                replaceHistory(left.events)
-                dispatch(.earlierHistory(left.more))
+                adoptRollback(left.events, more: left.more)
                 dispatch(.notice("Rolled back. Files not changed."))
                 if giveBack { giveBackToComposer(entry.text, services.reattach(files)) }
             } catch {
@@ -1516,12 +1514,16 @@ package final class Chat: Identifiable {
         }
     }
 
-    /// A rollback another Kore's chat made through this one's backend (a Mac driving a box's
-    /// chat): the history left replaces this one's too.
+    /// The one way a rollback's history comes in: this chat's own, or one another Kore's chat
+    /// made through this one's backend (a Mac driving a box's chat). The history left replaces
+    /// this one's as a `historyReplaced` the taps see, and the services follow the cut (a box
+    /// starts its log again, so every follower takes it; a Mac holding a box's chat sends it
+    /// back whole).
     package func adoptRollback(_ events: [ChatEvent], more: Bool) {
         sinceReplay = []
-        replaceHistory(events)
+        dispatch(.historyReplaced(events))
         dispatch(.earlierHistory(more))
+        services.rolledBack(self, to: events, more: more)
     }
 
     /// The rollback is over, done or not: what was sent meanwhile goes now, after its rows.

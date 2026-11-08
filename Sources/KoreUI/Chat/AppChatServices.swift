@@ -65,6 +65,11 @@ final class AppChatServices: ChatServices {
         if !(chat.services is BoxChatServices) { ChatMirrors.shared.event(session: chat.sessionId, event) }
     }
 
+    /// A chat brought here from a box: its replica can't take the cut, so it goes back whole.
+    func rolledBack(_ chat: Chat, to events: [ChatEvent], more: Bool) {
+        ChatMirrors.shared.rolledBack(session: chat.sessionId)
+    }
+
     func log(_ name: String, _ fields: KeyValuePairs<String, String?>) { UILog.event(name, fields) }
 
     var timeReplay: Bool { DevSnapshot.timeReplay }

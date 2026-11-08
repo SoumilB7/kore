@@ -113,6 +113,17 @@ package struct ChatCopies {
 
     // MARK: Copy
 
+    /// A source's rollback point, as a copy takes it: a Claude cut its file doesn't say yet (Codex
+    /// keeps its own in the rollout). The copy resumes there.
+    static func rollbackPoint(_ provider: String, _ at: String?) -> String? {
+        provider == ProviderDescriptor.claude.id ? LinkMoves.rollbackPoint(at) : nil
+    }
+
+    static func keepRollbackPoint(_ at: String?, provider: String, session: String) {
+        guard let at = rollbackPoint(provider, at) else { return }
+        RollbackPoints.set(at, for: session)
+    }
+
     /// `moves` telling this copy's progress: its own bytes after `base`, of `total`.
     func metered(_ moves: ChatMoves, base: Int64, total: Int64) -> ChatMoves {
         var moves = moves
@@ -140,6 +151,7 @@ package struct ChatCopies {
         case .mac(let from):
             let found = SessionCopy.files(provider: source.provider, session: source.id, folder: from, known: source.known, env: env)
             guard !found.files.isEmpty else { return .failure(MoveFailure("The chat's session isn't on this Mac")) }
+            let cut = Self.rollbackPoint(source.provider, RollbackPoints.at(source.id))
             let total = SessionFiles.bytes(found)
             progress?(0, total)
             switch target {
@@ -154,13 +166,16 @@ package struct ChatCopies {
                         return .failure(MoveFailure(Self.line(error)))
                     }
                 }.value
-                if case .success = placed { progress?(total, total) }
+                if case .success = placed {
+                    progress?(total, total)
+                    Self.keepRollbackPoint(cut, provider: provider, session: new)
+                }
                 let settings = carried(source.settings)
                 return placed.map { _ in ChatCopy(provider: provider, session: new, title: title, settings: settings) }
             case .box(let moves, let folder):
                 return await push(
                     found, provider: source.provider, old: source.id, folders: SessionCopy.spellings(from), to: metered(moves, base: 0, total: total), folder: folder, as: new,
-                    settings: ChatCopy(provider: source.provider, session: new, title: title, settings: carried(source.settings)), line: line)
+                    settings: ChatCopy(provider: source.provider, session: new, title: title, settings: carried(source.settings)), line: line, rollbackAt: cut)
             }
         case .box(let moves, let folder):
             guard moves.connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(NodeNames.name(moves.connection.alias)) to copy chats")) }
@@ -198,12 +213,15 @@ package struct ChatCopies {
                     }
                 }.value
                 made.cost.files = files.count
-                if case .success = placed { progress?(total, total) }
+                if case .success = placed {
+                    progress?(total, total)
+                    Self.keepRollbackPoint(info.rollbackAt, provider: info.provider, session: new)
+                }
                 return placed.map { _ in made }
             case .box(let other, let folder):
                 return await push(
                     found, provider: info.provider, old: info.sessionId, folders: info.folders, to: metered(other, base: size, total: total), folder: folder, as: new,
-                    settings: made, line: line)
+                    settings: made, line: line, rollbackAt: Self.rollbackPoint(info.provider, info.rollbackAt))
             }
         }
     }
@@ -212,7 +230,7 @@ package struct ChatCopies {
     /// `chat.adoptCopy` prepare, rsync into its staging, commit. Any failure before the commit aborts.
     func push(
         _ found: SessionFiles.Found, provider: String, old: String, folders: [String], to moves: ChatMoves, folder: String, as new: String,
-        settings: ChatCopy, line: String?
+        settings: ChatCopy, line: String?, rollbackAt: String? = nil
     ) async -> Result<ChatCopy, MoveFailure> {
         let connection = moves.connection
         guard connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(NodeNames.name(connection.alias)) to copy chats")) }
@@ -231,10 +249,11 @@ package struct ChatCopies {
         made.cost.files = found.files.count
         guard pushed.ok else { return await abort("Couldn't copy the session: \(pushed.said)") }
         made.settings = settings.settings.said(to: connection, arsenal: arsenalAllowed, notes: &made.notes).linkable
-        let commit = ControlArgs(
+        var commit = ControlArgs(
             title: settings.title.map { String($0.prefix(LinkPolicy.maxTitle)) }, modelId: made.settings.modelId, level: made.settings.effort, sourceId: old,
             provider: provider, sessionId: new, mode: made.settings.mode, folder: folder, folders: folders, phase: MovePhase.commit.rawValue, moveId: moveId,
             copiedFrom: line, settings: made.settings)
+        commit.rollbackAt = rollbackAt
         let adopted = await connection.move(.chatAdoptCopy, commit)
         made.cost.linkBytes += connection.lastMoveBytes
         guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(NodeNames.name(connection.alias)) didn't take it", adopted.code)) }

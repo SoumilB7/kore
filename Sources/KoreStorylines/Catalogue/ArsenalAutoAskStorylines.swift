@@ -4,8 +4,8 @@ import KoreUI
 import src
 
 /// Auto asks (the owner via Kore-main, 2026-11-19): an Auto chat's ask (Kore's ask list, a safety
-/// check) is a card with Run once and Deny that only a person runs; another chat's agent may only
-/// Deny it. A call Auto refused outright is a card that says why, with OK only. On Codex, Run
+/// check) is a card with Run once and Deny; another chat's agent runs it only from Auto with Act
+/// unlimited or above (`arsenalRunAutoAsk`'s unit tests), so a's, below Auto, may only Deny it. A call Auto refused outright is a card that says why, with OK only. On Codex, Run
 /// once is Codex's one retry of a reviewer's denial, and the idle chat is asked to try again. The
 /// cards here are the ones `ClaudeTranslator`, `ClaudeAutoStops` and `CodexAutoStops` make: the
 /// CLIs' frames are their unit tests'.
@@ -49,12 +49,14 @@ final class ArsenalAutoAsk: ChatStoryline {
             Do("a at Act unlimited") { story in Arsenal.shared.choose(.drive, try AgentCast.of(story).chat("a")) },
             CastChat("b"), SendTo("b", "hello"), TurnsDone("b", 1),
 
-            // An ask: on screen with Run once; another chat's agent can't run it, only deny.
+            // An ask: on screen with Run once; a's agent, below Auto, can't run it, only deny.
             raise(ask, title, retry: codex ? CodexAutoStops.retry("curl -sI https://example.com") : nil),
             WaitForElement(.id(StoryID.Approval.card(ask).part(.allow))),
             KoreAs(["pending", "{b}"], a, "kore pending lists it") { status, out, _ in status == 0 && out.contains(String(title.prefix(30))) },
-            KoreAs(["answer", "{b}", ask, "--allow"], a, "an agent can't run it", status: 1, says: "Only you can run a command Auto asks about"),
+        ] + (codex ? [] : [
+            KoreAs(["answer", "{b}", ask, "--allow"], a, "an agent below Auto can't run it", status: 1, says: "Only a chat at Auto or above"),
             card(ask, true, "still asking"),
+        ]) + [
             KoreAs(["answer", "{b}", ask, "--deny"], a, "an agent may deny it", expect: ["Denied."]),
             card(ask, false, "denied: gone"),
 

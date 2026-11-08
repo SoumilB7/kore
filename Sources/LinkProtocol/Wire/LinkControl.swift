@@ -216,6 +216,8 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var host: String?
     package var seq: Int?
     package var events: MirrorItems?
+    /// `chat.adopt` and `chat.adoptCopy` commit: the Claude session's rollback point (`MoveInfo.rollbackAt`).
+    package var rollbackAt: String?
     /// 1.11: `fs.cancel`'s copy: the `fs.copy` command's id.
     package var copyId: String?
     /// 1.11: `fs.copy` resumable: into a hidden name fixed by `to` (`LinkFiles.copyLanding`), kept

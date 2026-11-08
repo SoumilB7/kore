@@ -77,7 +77,9 @@ struct BoxRelayOnceTests {
         #expect(await follow(dials, 1)["after"] == nil)
         let turn = Self.turn("t1", from: 1, text: "done")
         frame(dials.hosts[0], reset: true, Array(turn[0..<3]))
-        #expect(await until { log.events.count == 3 })
+        // The turn's three rows; the box's meta may also seed the tab's mode (box-state), which
+        // isn't one of the turn's events.
+        #expect(await until { log.events.filter { if case .modeChanged = $0 { false } else { true } }.count == 3 })
 
         // The link drops mid-turn; the next follows from where this copy is.
         dials.hosts[0].close()
