@@ -25,6 +25,10 @@ public actor KoreUsage {
     private let sessions: KoreSessions
     private var claude: ClaudeUsageIndex?
     private var codex: CodexUsageIndex?
+    /// Box chats' requests (`ForwardedUsage.swift`), by chat and request id.
+    var forwardedRequests: [String: ForwardedRequest] = [:]
+    var forwardedLoaded = false
+    var forwardedSupport: URL? { paths.support }
     /// A CLI's added logins (`PlanSnapshot.account`): what Kore didn't note ran on none of them.
     private let added: @Sendable (String) -> Set<String>
 
@@ -66,6 +70,9 @@ public actor KoreUsage {
         default:
             return nil
         }
+        // Kore's chats on a box, as their events said: counted for the main login (the box's CLI
+        // runs as it, not as an added one).
+        if account == nil || !added(cli).contains(account ?? "") { requests += forwardedRequests(cli: cli, since: since) }
         let logged = snapshots.entries(since: since).filter { $0.cli == cli }
         var limits: [String: KoreShare] = [:]
         for bar in bars {

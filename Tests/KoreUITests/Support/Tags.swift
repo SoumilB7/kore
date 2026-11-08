@@ -57,6 +57,7 @@ func tag(_ event: ChatEvent) -> String {
     case .compactionStopped: "compactionStopped"
     case .connection(let state): "connection \(state)"
     case .contextUsage: "context"
+    case .requestUsage: "request"
     case .earlierHistory: "earlier"
     case .replayed: "replayed"
     case .historyReplaced: "historyReplaced"
@@ -68,8 +69,13 @@ func tags(_ events: [ChatEvent]) -> [String] {
     events.map(tag).reduce(into: []) { if $0.last != $1 { $0.append($1) } }
 }
 
-/// The tags without context reports, which come after most model calls and say nothing about
-/// the turn's shape.
+/// The tags without context and request reports, which come after most model calls and say
+/// nothing about the turn's shape.
 func shape(_ events: [ChatEvent]) -> [String] {
-    tags(events.filter { if case .contextUsage = $0 { false } else { true } })
+    tags(events.filter {
+        switch $0 {
+        case .contextUsage, .requestUsage: false
+        default: true
+        }
+    })
 }

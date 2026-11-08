@@ -302,6 +302,16 @@ package final class CodexTranslator {
             if method == "thread/settings/updated", agent == .main, let settings = CodexTurnSettings(params["threadSettings"] ?? .null) {
                 apply(settings, .user, at: .now)
             }
+            // Each model call's tokens, keyed by its thread and the thread's running total.
+            if method == "thread/tokenUsage/updated", !replaying, let last = params["tokenUsage"]?["last"],
+                let total = params["tokenUsage"]?["total"]?["totalTokens"]?.int
+            {
+                let thread = params["threadId"]?.string ?? agent.sub ?? "main"
+                let request = RequestUsage(
+                    id: "\(thread)-\(total)", at: .now, model: nil, agent: agent.sub, input: last["inputTokens"]?.int ?? 0,
+                    output: last["outputTokens"]?.int ?? 0, cacheRead: last["cachedInputTokens"]?.int ?? 0)
+                if request.input + request.output > 0 { out.append(.requestUsage(request)) }
+            }
             // A sub-agent's own count, as its card shows it: everything it has used so far.
             if method == "thread/tokenUsage/updated", case .sub(let thread) = agent, !replaying,
                 let total = params["tokenUsage"]?["total"]?["totalTokens"]?.int

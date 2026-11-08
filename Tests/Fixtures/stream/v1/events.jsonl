@@ -47,5 +47,6 @@
 {"state":{"type":"away","words":"mybox offline"},"type":"connection"}
 {"type":"contextUsage","usage":{"approximate":false,"at":821692800,"autoCompacts":true,"used":10,"window":100}}
 {"more":true,"type":"earlierHistory"}
+{"type":"requestUsage","usage":{"agent":"ag1","at":821692800,"cacheRead":100,"cacheWrite1h":0,"cacheWrite5m":20,"id":"msg1","input":10,"model":"small","output":5}}
 {"events":[{"attachments":[],"id":"m0","text":"old","type":"userMessage"}],"type":"replayed"}
 {"events":[],"type":"historyReplaced"}

@@ -49,6 +49,7 @@ struct StreamCodingTests {
             .compacted(at: at, from: 1000, auto: false), .compactionStarted(auto: true), .compactionSummary("sum"), .compactionFailed("no"),
             .compactionStopped, .connection(.retrying(attempt: 1, of: 3)), .connection(.away("mybox offline")),
             .contextUsage(ContextUsage(used: 10, window: 100, autoCompacts: true, at: at)), .earlierHistory(true),
+            .requestUsage(RequestUsage(id: "msg1", at: at, model: "small", agent: "ag1", input: 10, output: 5, cacheRead: 100, cacheWrite5m: 20, cacheWrite1h: 0)),
             .replayed([.userMessage(text: "old", attachments: [], id: "m0")]), .historyReplaced([]),
         ]
     }

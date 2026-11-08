@@ -309,6 +309,9 @@ package final class ClaudeTranslator {
             if parent == nil, turn != nil, turnKey == nil { turnKey = messageId }
             assistant(blocks, agent: agentID(parent))
             if parent == nil, let usage { context(usage) }
+            if let usage, !replaying, let request = Self.request(messageId, usage, model: model, agent: agentID(parent).sub) {
+                out.append(.requestUsage(request))
+            }
         case .user(let blocks, let parent, let result):
             // After a compaction's boundary, stdout sends its summary as a plain user message
             // (`isSynthetic`), the transcript's `isCompactSummary` entry.
@@ -918,6 +921,19 @@ package final class ClaudeTranslator {
     }
 
     // MARK: - Context
+
+    /// A message's usage as one request's tokens; nil without any.
+    static func request(_ id: String?, _ usage: JSONValue, model: String?, agent: String?) -> RequestUsage? {
+        guard let id, !id.isEmpty else { return nil }
+        let cache = usage["cache_creation"]
+        let written = usage["cache_creation_input_tokens"]?.int ?? 0
+        let hour = cache?["ephemeral_1h_input_tokens"]?.int ?? 0
+        let request = RequestUsage(
+            id: id, at: .now, model: model, agent: agent, input: usage["input_tokens"]?.int ?? 0, output: usage["output_tokens"]?.int ?? 0,
+            cacheRead: usage["cache_read_input_tokens"]?.int ?? 0, cacheWrite5m: cache?["ephemeral_5m_input_tokens"]?.int ?? max(written - hour, 0),
+            cacheWrite1h: hour)
+        return request.input + request.output + request.cacheRead + request.cacheWrite5m + request.cacheWrite1h > 0 ? request : nil
+    }
 
     private func context(_ usage: JSONValue) {
         let used = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"]

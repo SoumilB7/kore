@@ -127,6 +127,10 @@ package enum ChatEvent: Sendable {
     /// How full the context is: when the CLI comes up, after the main agent's model calls and after
     /// a compaction, and once in a replay (the last known value). Sent only when it changes.
     case contextUsage(ContextUsage)
+    /// One model request's tokens, as the CLI reported it live (never in a replay). A box's chat
+    /// forwards them so the Mac counts the box's work in Kore's share of the plan's limits; nothing
+    /// shows them.
+    case requestUsage(RequestUsage)
     /// Older conversation exists before the history shown (before a compaction):
     /// `ChatBackend.earlier()` loads it.
     case earlierHistory(Bool)
@@ -208,6 +212,42 @@ package struct ContextUsage: Sendable, Equatable, Codable {
         self.window = window
         self.autoCompacts = autoCompacts
         self.at = at
+    }
+}
+
+/// One model request's tokens (`ChatEvent.requestUsage`). `id` is the request's own (Claude's
+/// message id; Codex's thread and running total), the same for every copy of it. Codex counts its
+/// cached input inside `input`, and has no cache writes.
+package struct RequestUsage: Sendable, Equatable, Codable {
+    package var id: String
+    package var at: Date
+    package var model: String?
+    /// The sub-agent that made it; nil for the chat's own.
+    package var agent: String?
+    package var input: Int
+    package var output: Int
+    package var cacheRead: Int
+    package var cacheWrite5m: Int
+    package var cacheWrite1h: Int
+
+    package init(
+        id: String, at: Date, model: String?, agent: String? = nil, input: Int, output: Int, cacheRead: Int = 0, cacheWrite5m: Int = 0,
+        cacheWrite1h: Int = 0
+    ) {
+        self.id = id
+        self.at = at
+        self.model = model
+        self.agent = agent
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite5m = cacheWrite5m
+        self.cacheWrite1h = cacheWrite1h
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id = "id", at = "at", model = "model", agent = "agent", input = "input", output = "output", cacheRead = "cacheRead"
+        case cacheWrite5m = "cacheWrite5m", cacheWrite1h = "cacheWrite1h"
     }
 }
 

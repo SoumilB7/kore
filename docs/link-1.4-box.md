@@ -68,9 +68,11 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 - As §5, with no rendering on the box: answers, plans and summaries carry `text`, never `doc`.
   The client renders markdown.
 - `tx.open` never starts a CLI; it answers from the chat's log at once, a restarted box included.
-- When a chat's CLI resumes (its first send after a restart or an idle stop), the history it
-  reads in replaces the log: the box sends `tx.reset` and a new `tx.page` (entry ids change).
-  Streaming text goes to the log once it's done; a torn last line is skipped on reading.
+- When a chat's CLI resumes (its first send after a restart or an idle stop), the log keeps what
+  it had and goes on from there: the history the CLI reads in is neither sent again nor cut to
+  the CLI's page of it. A rollback or a corrected history replaces the log (`tx.reset`, then a
+  page with new ids). Streaming text goes to the log once it's done; a torn last line is skipped
+  on reading. A page's frame stays under 900 KiB: fewer of the newest entries when they don't fit.
 - `entry.more` reads from the live chat only; for a chat whose CLI is stopped it answers
   `result {id, ok: false, code: "gone.chat"}`.
 - No `tx.earlier`, `history.*`, `diff.get`, `blob.*` on the box (uploads: `chat.send` with `blobs`
@@ -145,6 +147,11 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
   `userMessage`/`messageQueued`, an answered card's `approvalWithdrawn`); that client already
   shows it. Frames stay under 512 KiB; a catch-up goes a part at a time as the socket drains, and
   an event too large for a frame has its long text cut.
+- `requestUsage {id, at, model?, agent?, input, output, cacheRead, cacheWrite5m, cacheWrite1h}`:
+  one model request's tokens, as the CLI reported it live. The Mac weighs each as its own usage
+  index does and keeps it (`usage/forwarded.json`, a week, once per chat and request id), so
+  Kore's share of the plan's limits counts the box's chats as Kore's; the chat doesn't show it.
+  The box keeps no usage record of its own.
 - Events are the backend's own, sent once, unrendered. Streamed text, tool output and command
   output arriving together go as one event, at most 30 times a second per chat; nothing else
   waits. No timer runs while a chat is quiet.
@@ -167,8 +174,9 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
   `watchCommands {on}`, `agentHistory {id}`, `fork {message?, text}`, `forkAtEnd`, `rollback
   {message?, text}`, `earlier {turns?}`, `earlierMessages`, `unloadPoint {message?, text}`,
   `unloaded {earlier}`, `compact {instructions}`, `usage`, `useReset {credit?, attempt}`,
-  `setRemoteControl {on}`, `relaunch {reason}`, `listModels`, and `close` (the tab closed, as
-  `chat.close`). A type the box doesn't know reads as unknown and is refused `invalid`.
+  `setRemoteControl {on}`, `relaunch {reason}`, `listModels`, `close` (the tab closed, as
+  `chat.close`), and `keepRow {text, id}` (a typed /compact's row, which the CLI isn't sent: the
+  box's chat and log keep it; only a /compact row is taken). A type the box doesn't know reads as unknown and is refused `invalid`.
 - The answer is a `result {id, ok, code?, message?, value?}`. `value` holds the call's one return:
   `bool` (send: a turn is under way), `text`, `events` and `more` (agent history, earlier pages,
   rollback), `forkFrom`/`forkAt` (a fork's start; none for a fresh chat), `messages`,
@@ -178,7 +186,8 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
   mode, model or effort into its controls and record, a rollback into its history.
 - Files: the client uploads each with `blob.put.*` (1.1, full grants) and names its blob in
   `send.files`; the box saves it under `state/uploads/<blob>/` and the CLI gets that path.
-  Uploads older than a day go when the daemon starts and before each new one.
+  Uploads older than a day go when the daemon starts and before each new one, and together they
+  take at most 200 MiB (the oldest go first).
 - Policy, one exhaustive rule per call (`LinkPolicy.check(ChatCommand)`): `send` as `chat.send`
   (no `!` lines, the chat's own `/` commands only); `setMode` and `setPlanMode` off up to Auto;
   `respond` never Always allow, never a sign-in card, and approving a plan into the chat's own

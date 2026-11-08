@@ -1,5 +1,6 @@
 import Foundation
 import HostClient
+import KoreCore
 import LinkProtocol
 import src
 import Testing
@@ -63,6 +64,9 @@ struct RealHostTests {
         #expect(folders.map(\.path) == [project.path])
         let backend = LinkChatBackend(connection: connection, provider: provider, folder: project.path, chatId: nil, model: model)
         let log = EventLog(backend.events)
+        // The box forwards each model request's tokens for Kore's share of the plan.
+        let counted = Counted()
+        backend.usage = { request in Task { @MainActor in counted.requests.append(request) } }
         try await backend.start()
         let chatId = try #require(backend.chatId)
         _ = try await backend.send("Reply with the single word: pong", files: [], queued: nil, id: "m1")
@@ -73,6 +77,8 @@ struct RealHostTests {
         let answer = log.texts.joined().lowercased()
         print("box answer (\(cli)/\(model)): \(answer) · events \(log.events.count)")
         #expect(answer.contains("pong"))
+        #expect(await until(5) { !counted.requests.isEmpty })
+        print("forwarded requests: \(counted.requests.map { "\($0.request) \($0.units)" })")
         #expect(await until(5) { connection.chats(in: project.path).map(\.id).contains(chatId) })
         try await Task.sleep(for: .milliseconds(1200))
         connection.cache.flush()
@@ -94,4 +100,9 @@ struct RealHostTests {
         await reopened.close()
         again.release()
     }
+}
+
+@MainActor
+final class Counted {
+    var requests: [ForwardedRequest] = []
 }

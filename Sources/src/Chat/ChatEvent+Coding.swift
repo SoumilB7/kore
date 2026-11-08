@@ -212,6 +212,9 @@ extension ChatEvent: Codable {
         case .contextUsage(let usage):
             var t = try Tagged(encoder, "contextUsage")
             try t.put("usage", usage)
+        case .requestUsage(let usage):
+            var t = try Tagged(encoder, "requestUsage")
+            try t.put("usage", usage)
         case .earlierHistory(let more):
             var t = try Tagged(encoder, "earlierHistory")
             try t.put("more", more)
@@ -273,6 +276,7 @@ extension ChatEvent: Codable {
         case "compactionStopped": self = .compactionStopped
         case "connection": self = .connection(try u.get("state"))
         case "contextUsage": self = .contextUsage(try u.get("usage"))
+        case "requestUsage": self = .requestUsage(try u.get("usage"))
         case "earlierHistory": self = .earlierHistory(try u.get("more"))
         case "replayed": self = .replayed(Self.lossy(u, "events"))
         case "historyReplaced": self = .historyReplaced(Self.lossy(u, "events"))

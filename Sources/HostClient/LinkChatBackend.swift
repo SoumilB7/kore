@@ -62,6 +62,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     package var onTitle: ((String) -> Void)?
     /// A chat made from this Mac has its id on the box.
     package var onCreated: ((String) -> Void)?
+    /// Where the box chat's model requests go: this Mac's usage, so Kore's share of the plan's
+    /// limits counts them (tests set their own).
+    package var usage: @Sendable (ForwardedRequest) -> Void = { request in Task { await KoreUsage.shared.forwarded(request) } }
 
     package init(connection: HostConnection, provider: ProviderDescriptor, folder: String, chatId: String?, making: Making = Making()) {
         self.connection = connection
@@ -162,9 +165,33 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     }
 
     private func show(_ list: [ChatEvent]) {
-        guard !list.isEmpty else { return }
+        // Request usage is the box's work for Kore's share, not something the chat shows.
+        let shownList = list.filter { event in
+            guard case .requestUsage(let request) = event else { return true }
+            count(request)
+            return false
+        }
+        guard !shownList.isEmpty else { return }
         shown = true
-        emit(list.map(boxed))
+        emit(shownList.map(boxed))
+    }
+
+    /// One request, weighed as the Mac's index weighs its own, under the box's chat. Copies (a
+    /// catch-up again, a copy of a streamed message) are kept once.
+    private func count(_ request: RequestUsage) {
+        guard let chatId else { return }
+        let model = request.model ?? ""
+        let units =
+            provider.id == "codex"
+            ? UsageAttribution.codexUnits(input: Double(request.input), cached: Double(request.cacheRead), output: Double(request.output))
+            : UsageAttribution.units(
+                ClaudeTokens(
+                    input: Double(request.input), output: Double(request.output), cacheRead: Double(request.cacheRead),
+                    cacheWrite5m: Double(request.cacheWrite5m), cacheWrite1h: Double(request.cacheWrite1h)), model: model)
+        usage(
+            ForwardedRequest(
+                cli: provider.id, chat: connection.alias + "/" + chatId, request: request.id, time: request.at, model: model, agent: request.agent,
+                units: units))
     }
 
     /// What the box doesn't take from here (its provider's capabilities don't list it) is said as

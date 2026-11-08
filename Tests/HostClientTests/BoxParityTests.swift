@@ -33,6 +33,10 @@ final class BoxCLI: ChatBackend {
         self.files += files
         let turn = "t\(calls.count)"
         sink.yield(.turnStarted(turn, origin: .user, at: .now))
+        // One model request, its copy streamed twice as the CLI does.
+        let request = RequestUsage(id: "msg-\(turn)", at: .now, model: "small", input: 1000, output: 200)
+        sink.yield(.requestUsage(request))
+        sink.yield(.requestUsage(request))
         for piece in ["Hi", ": ", text] { sink.yield(.text("b-\(turn)", .answer, piece)) }
         sink.yield(.turnFinished(turn, .completed, duration: .seconds(1)))
         return true
@@ -123,6 +127,8 @@ final class BoxRig {
     let grant: Grant
     let folder: URL
     var made: [BoxCLI] = []
+    /// Where the Mac's chats count the box's requests; nil keeps them out.
+    var usage: KoreUsage?
     var cli: BoxCLI { made.last! }
 
     init(control: GrantControl = .full) throws {
@@ -157,6 +163,7 @@ final class BoxRig {
         let folder = folder.path
         services.backend = { provider, options in
             let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: id, model: options.model)
+            if let usage = self.usage { backend.usage = { request in Task { await usage.forwarded(request) } } }
             made = backend
             return backend
         }
@@ -319,6 +326,42 @@ struct BoxParityTests {
         let log = EventLog(backend.events)
         try await backend.start()
         #expect(await until { log.events.contains { if case .notice(let text, true) = $0 { text.contains("full control") } else { false } } })
+        connection.release()
+    }
+
+    @Test func aBoxChatsRequestsCountInKoresShare() async throws {
+        let rig = try BoxRig()
+        defer { rig.finish() }
+        let paths = UsagePaths(
+            support: rig.root.appendingPathComponent("usage"), caches: rig.root.appendingPathComponent("caches"),
+            claudeProjects: rig.root.appendingPathComponent("projects"), codexSessions: rig.root.appendingPathComponent("sessions"))
+        func usage() -> KoreUsage { KoreUsage(paths: paths, added: { _ in [] }) }
+        rig.usage = usage()
+        let connection = rig.connection()
+        connection.retain()
+        #expect(await until(5) { connection.isOnline })
+        let (chat, backend) = rig.chat(connection, id: nil)
+        await chat.startOnce()
+        #expect(chat.sendFromLink("one"))
+        #expect(await until(5) { rows(chat, .answer) == ["Hi: one"] && !chat.isBusy })
+        let chatId = try #require(backend()?.chatId)
+        // Nothing of it shows in the chat.
+        let reading = PlanReading(
+            account: PlanAccount(access: .plan),
+            limits: PlanLimits(bars: [PlanLimit(title: "Session", used: 20, resetsAt: Date().addingTimeInterval(3600), window: 5 * 3600)]))
+        var share: KoreShare?
+        for _ in 0..<50 {
+            share = await rig.usage?.shares(for: reading, cli: "claude")?.limits["Session"]
+            if share?.kore ?? 0 > 0 { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        // The plan's use in the window was all Kore's box chat, counted once.
+        #expect(share?.kore == 20)
+        #expect(share?.chats.map(\.id) == ["local/" + chatId])
+        // Kept across a restart of the Mac's usage.
+        let again = await usage().shares(for: reading, cli: "claude")?.limits["Session"]
+        #expect(again?.kore == 20)
+        chat.close()
         connection.release()
     }
 }
