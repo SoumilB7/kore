@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import LinkProtocol
 import Security
+import Tailnet
 
 /// A requirement to check peers against on the link's queue (a SecRequirement is immutable).
 package struct PinnedRequirement: @unchecked Sendable {
@@ -247,24 +248,15 @@ package final class LinkConnection: @unchecked Sendable {
         writer.resume()
     }
 
-    /// Sends what's queued (best effort, briefly), then closes (any thread).
+    /// Sends what's queued, then `payload`, and closes (any thread). The socket's end is
+    /// `SocketEnd`'s: the client still writing gets it, and reads to its end.
     package func finish(after payload: Data? = nil) {
         // Held until it's done: the host lets go of the connection as it asks for this.
         queue.async { [self] in
             guard !self.closed else { return }
-            if let payload {
-                self.outbox.append(LinkFrame.frame(payload))
-                // The last message (`bye`) goes after what's queued, blocking for at most a
-                // quarter second here on the link's queue: never on Kore's main thread.
-                _ = fcntl(self.fd, F_SETFL, fcntl(self.fd, F_GETFL) & ~O_NONBLOCK)
-                var limit = timeval(tv_sec: 0, tv_usec: 250_000)
-                setsockopt(self.fd, SOL_SOCKET, SO_SNDTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
-                while !self.outbox.isEmpty {
-                    let n = self.outbox.withUnsafeBytes { Darwin.write(self.fd, $0.baseAddress, $0.count) }
-                    guard n > 0 else { break }
-                    self.outbox.removeFirst(n)
-                }
-            }
+            var owed = self.outbox
+            if let payload { owed.append(LinkFrame.frame(payload)) }
+            SocketEnd.start(copying: self.fd, owed: owed)
             self.close(notify: false)
         }
     }

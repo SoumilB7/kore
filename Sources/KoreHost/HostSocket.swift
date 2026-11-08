@@ -7,6 +7,7 @@ import Glibc
 import Musl
 #endif
 import LinkProtocol
+import Tailnet
 
 #if canImport(Glibc)
 private let streamType = Int32(SOCK_STREAM.rawValue)
@@ -272,20 +273,26 @@ package final class HostSocket {
         }
     }
 
-    package func close() {
+    /// This side is done: what's queued (its `bye`) still goes, and the client reads to its end
+    /// (`SocketEnd`), while nothing more reaches the link.
+    package func close() { close(ending: true) }
+
+    private func close(ending: Bool) {
         guard !closed else { return }
         closed = true
         source?.cancel()
         source = nil
         writer?.cancel()
         writer = nil
+        if ending { SocketEnd.start(copying: fd, owed: pending) }
         pending = Data()
         _ = Glue2.close(fd)
     }
 
+    /// The peer went, sent too much, or fell too far behind: closed now.
     private func end() {
         guard !closed else { return }
-        close()
+        close(ending: false)
         ended?()
     }
 }

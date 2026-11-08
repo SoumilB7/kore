@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Tailnet
 
 /// One caller's connection: lines in and out on the channel's queue. What Kore sends is queued,
 /// and a caller more than `backlogMax` behind is dropped, so Kore never waits on it. One batch of
@@ -159,23 +160,17 @@ final class AgentConnection: @unchecked Sendable {
         writer.resume()
     }
 
-    /// Sends `last` after what's queued (best effort, a quarter second at most, on this queue),
-    /// then closes, without telling `onClose` (any thread).
+    /// Sends `last` after what's queued, then closes, without telling `onClose` (any thread).
+    /// The socket's end is `SocketEnd`'s: a caller still writing gets `last`, and reads to its end.
     func finish(after last: Data? = nil) {
         queue.async { [self] in
             guard !closed else { return }
+            var owed = outbox
             if let last {
-                outbox.append(last)
-                outbox.append(0x0A)
-                _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
-                var limit = timeval(tv_sec: 0, tv_usec: 250_000)
-                setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
-                while !outbox.isEmpty {
-                    let n = outbox.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
-                    guard n > 0 else { break }
-                    outbox.removeFirst(n)
-                }
+                owed.append(last)
+                owed.append(0x0A)
             }
+            SocketEnd.start(copying: fd, owed: owed)
             close(notify: false)
         }
     }

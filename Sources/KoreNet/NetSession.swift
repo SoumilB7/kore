@@ -354,19 +354,27 @@ package final class NetSession {
         scheduler.enqueue(bytes, queue: .interactive, stream: NetFrame.controlStream)
     }
 
+    /// This side ends it: `bye` goes after the interactive queue, and what the socket hasn't
+    /// taken yet goes with the descriptor to `SocketEnd`, so a peer still writing gets it and
+    /// reads to its end.
     private func fail(_ reason: String) {
         guard !isClosed else { return }
         control(.bye(reason))
+        // What the socket takes now (most often all of it); the rest is owed.
         flush()
-        end(reason)
+        var owed = out
+        out = Data()
+        while let frame = scheduler.next(), frame.queue == .interactive { owed.append(frame.encoded) }
+        end(reason, owed: owed)
     }
 
-    private func end(_ reason: String) {
+    /// Ended: by the peer (it went, or said `bye`), or by this side with what's `owed` it.
+    private func end(_ reason: String, owed: Data? = nil) {
         guard !isClosed else { return }
         state = .closed(reason)
         held = nil
         deadline = nil
-        Sockets.closeFD(fd)
+        if let owed { SocketEnd.start(fd, owed: owed) } else { Sockets.closeFD(fd) }
     }
 
     private func handleControl(_ payload: Data) {

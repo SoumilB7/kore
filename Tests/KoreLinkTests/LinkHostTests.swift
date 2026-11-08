@@ -221,7 +221,9 @@ struct LinkHostTests {
         defer { LinkRun.current?.revoke() }
         let (client, _) = try await Self.link(host)
         defer { client.close() }
-        let (limited, bye): (Bool, LinkMessage?) = await off {
+        // Kore keeps reading (and dropping) the flood while its bye goes, so a client still
+        // writing gets it, then the link's end.
+        let (limited, bye, ended): (Bool, LinkMessage?, Bool) = await off {
             for i in 0..<400 { client.send(.cmd(id: "\(i)", .stop(chatId: "x"))) }
             var limited = false
             var bye: LinkMessage?
@@ -232,10 +234,11 @@ struct LinkHostTests {
                     break
                 }
             }
-            return (limited, bye)
+            return (limited, bye, client.closedByPeer())
         }
         #expect(limited)
         #expect(bye == .bye(.rateLimited))
+        #expect(ended)
         #expect(LinkHost.current == nil)
         LinkRun.current?.revoke()
     }
