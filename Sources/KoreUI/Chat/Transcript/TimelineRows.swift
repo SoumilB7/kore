@@ -506,6 +506,10 @@ struct MessageHeader: View {
         .modifier(StickyBackground(on: place == .sticky))
         .contentShape(Rectangle())
         .onHover { if place == .row { hovered.value = $0 } }
+        // A storyline's stand-in for the pointer over it (its actions show).
+        .storyAction((entry.kind == .peer ? StoryID.Transcript.peer(entry.id) : StoryID.Transcript.user(entry.id)).part(.hover)) {
+            if place == .row { hovered.value = true }
+        }
         .onTapGesture(perform: tapped)
         // The row's name is its row's (`TimelineRow`); the pinned copy names itself.
         .storyID(place == .sticky ? story : nil, press: tapped)
@@ -923,6 +927,8 @@ private struct AnswerWithActions: View {
                 fork: { actions.forkAfter(entry) }, rollBack: { actions.rollBackAfter(entry) })
         }
         .onHover { if hovered.value != $0 { hovered.value = $0 } }
+        // A storyline's stand-in for the pointer over it (its actions show).
+        .storyAction(StoryID.Transcript.answer(entry.id).part(.hover)) { hovered.value = true }
         .messageActions(text: entry.text, canFork: messageActions.canFork) { actions.forkAfter(entry) }
     }
 }
@@ -959,6 +965,7 @@ struct MessageActionsRow: View {
                             .buttonStyle(.plain)
                             .font(Chrome.label)
                             .foregroundStyle(Theme.accent)
+                            .storyID(story.part(.rollback).part(.done))
                     }
                 }
             }
@@ -996,9 +1003,11 @@ struct MessageActionsRow: View {
 }
 
 extension MessageActionsRow {
+    /// To the clipboard ⌘C uses (a storyline host's own board, never the owner's).
     static func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        let board = TranscriptSelection.pasteboard
+        board.clearContents()
+        board.setString(text, forType: .string)
     }
 }
 

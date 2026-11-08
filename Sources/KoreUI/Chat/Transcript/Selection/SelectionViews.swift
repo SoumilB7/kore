@@ -245,13 +245,13 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
     // MARK: Pointer
 
     /// The content-space point of an event in this window.
-    private func point(_ event: NSEvent) -> CGPoint { convert(event.locationInWindow, from: nil) }
+    private func point(_ event: NSEvent) -> CGPoint { convert(event.drawnLocation, from: nil) }
 
     /// Whether a press at this event is the transcript's: inside its scroll view, on nothing
     /// floating over it.
     private func isTranscript(_ event: NSEvent) -> Bool {
         guard !hiddenTab, event.window === window, let window, let content = window.contentView, let scroll = enclosingScrollView,
-            let hit = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow),
+            let hit = content.hitTest(content.superview?.convert(event.drawnLocation, from: nil) ?? event.drawnLocation),
             hit.isDescendant(of: scroll)
         else { return false }
         return selection?.isBlocked(point(event)) != true
@@ -260,7 +260,7 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
     /// AppKit text views inside the transcript (a diff's own selection) keep their presses.
     private func isOwnText(_ event: NSEvent) -> Bool {
         guard let content = window?.contentView,
-            let hit = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow)
+            let hit = content.hitTest(content.superview?.convert(event.drawnLocation, from: nil) ?? event.drawnLocation)
         else { return false }
         return hit is NSText || String(describing: type(of: hit)).contains("Selection")
     }
@@ -344,7 +344,7 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
             return showFileMenu(event)
         }
         OptionsMenu.shared.show([OptionItem("Copy") { [weak self] in self?.copy(nil) }],
-                                at: event.locationInWindow, in: window, source: "selection")
+                                at: event.drawnLocation, in: window, source: "selection")
         return true
     }
 
@@ -352,7 +352,7 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
     private func showFileMenu(_ event: NSEvent) -> Bool {
         guard let selection, isTranscript(event), let window, let url = selection.link(at: point(event)),
               let items = selection.fileMenu(url) else { return false }
-        OptionsMenu.shared.show(items, at: event.locationInWindow, in: window, source: "file-link")
+        OptionsMenu.shared.show(items, at: event.drawnLocation, in: window, source: "file-link")
         return true
     }
 
@@ -382,7 +382,7 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
         guard let scroll = enclosingScrollView else { return 0 }
         let frame = scroll.convert(scroll.bounds, to: nil)
         let (top, bottom) = (frame.maxY - scroll.contentInsets.top, frame.minY + scroll.contentInsets.bottom)
-        let y = event.locationInWindow.y
+        let y = event.drawnLocation.y
         return y > top ? -(y - top) : y < bottom ? bottom - y : 0
     }
 
