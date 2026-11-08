@@ -25,6 +25,6 @@ for arch in $archs; do
     echo "built $OUT/kore-host-linux-$arch.xz ($(( $(stat -f %z "$OUT/kore-host-linux-$arch.xz") / 1024 )) KB)"
 done
 
-# kore-tailnet (phase 18): the Go tsnet sidecar, kore-tailnet-{linux-x86_64,linux-aarch64,macos-arm64},
-# built here once its source lands (`go build -trimpath -ldflags='-s -w' -tags <ts_omit_*>`).
-# release.sh attaches whichever of them are in build/release/.
+# kore-tailnet (phase 18), the Go tsnet sidecar for boxes without tailscaled, for the same CPUs.
+# Skipped with a note when Go isn't installed; release.sh attaches whichever were built.
+scripts/build-tailnet.sh linux-${^archs}

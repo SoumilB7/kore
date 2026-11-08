@@ -8,9 +8,10 @@
 #
 # Assets come from build/release/ (KORE_RELEASE_DIR for another folder): kore-host-linux-*.xz
 # (built by build-host.sh when missing), kore-host.sh, kore-src.tar.gz (this commit's source,
-# which install.sh builds), and kore-tailnet-* / kore.apk when they're there. SHA256SUMS is
-# signed with the release key in the Keychain (scripts/sign/sign.swift); a dry run signs with a
-# throwaway key and only says what it would publish.
+# which install.sh builds), kore-tailnet-* (built by build-tailnet.sh when missing and Go is
+# there) and kore.apk when it's there. SHA256SUMS is signed with the release key in the Keychain
+# (scripts/sign/sign.swift); a dry run signs with a throwaway key and only says what it would
+# publish.
 set -euo pipefail
 
 cd "${0:A:h}/.."
@@ -52,10 +53,17 @@ for arch in x86_64 aarch64; do
     scripts/build-host.sh $arch
     [[ "$OUT" -ef build/release ]] || cp "build/release/kore-host-linux-$arch.xz" "$OUT/"
 done
+tailnet=(kore-tailnet-linux-x86_64.xz kore-tailnet-linux-aarch64.xz kore-tailnet-macos-arm64)
+for name in $tailnet; do
+    [[ -f "$OUT/$name" ]] && continue
+    target=${${name#kore-tailnet-}%.xz}
+    scripts/build-tailnet.sh $target
+    if [[ -f "build/release/$name" && ! "$OUT" -ef build/release ]]; then cp "build/release/$name" "$OUT/"; fi
+done
 cp scripts/kore-host.sh "$OUT/kore-host.sh"
 git archive --format=tar.gz --prefix=kore/ -o "$OUT/kore-src.tar.gz" HEAD
 assets=(kore-host-linux-x86_64.xz kore-host-linux-aarch64.xz kore-host.sh kore-src.tar.gz)
-for optional in kore-tailnet-linux-x86_64 kore-tailnet-linux-aarch64 kore-tailnet-macos-arm64 kore.apk; do
+for optional in $tailnet kore.apk; do
     if [[ -f "$OUT/$optional" ]]; then assets+=($optional); else print "skipped $optional (not built)"; fi
 done
 
