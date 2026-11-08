@@ -34,7 +34,13 @@ enum CodexModes {
         ModeOption(id: "askForApproval", label: "Ask for approval", icon: ModeIcons.askForApproval, rung: nil, iconSize: 15),
         ModeOption(id: "approveForMe", label: "Approve for me", icon: ModeIcons.approveForMe, rung: .auto, iconSize: 15),
         ModeOption(id: fullAccess, label: "Full access", icon: ModeIcons.fullAccess, rung: .danger, iconSize: 15),
+        // Not in the menu: a start Arsenal can give a Codex chat it opens (read-only sandbox,
+        // asking on request before any edit). It reads any file without asking, so it ranks above
+        // Edit automatically.
+        ModeOption(id: readOnly, label: "Read only", icon: ModeIcons.askForApproval, rung: nil, listed: false, iconSize: 15),
     ]
+
+    static let readOnly = "readOnly"
 
     static let plan = ModeOption(id: "plan", label: "Plan", icon: ModeIcons.codexPlan, rung: .plan, iconSize: 14)
 }

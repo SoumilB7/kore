@@ -131,6 +131,8 @@ extension CLIScript {
 /// What Kore asks of the backend, as the script waits for it and the log records it.
 package enum Call: Sendable, Equatable {
     case send(String)
+    /// Kore's line for the next message (`noteNextTurn`): Arsenal changed for the chat.
+    case note(String)
     /// A send made while a turn ran (the composer's queue): its text.
     case queued(String)
     case interrupt

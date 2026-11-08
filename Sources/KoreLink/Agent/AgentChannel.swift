@@ -17,6 +17,10 @@ package final class AgentChannel {
     /// `~/Library/Application Support/Kore/agent`; tests and storylines use their own.
     package static var directory: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Kore", isDirectory: true).appendingPathComponent("agent", isDirectory: true)
+    {
+        // Chats launched from now on are told of a socket other than the default (`KoreReach`).
+        didSet { KoreReach.socket = directory.appendingPathComponent(socketName).path }
+    }
     package static let socketName = "kore.sock"
 
     /// Commands a caller may run a minute.
@@ -324,7 +328,7 @@ package final class AgentChannel {
                 return refuse(client, .denied, "That chat isn't open in Kore.")
             }
             client.chat = chat.id.uuidString
-            guard tier(client) != .off else { return refuse(client, .denied, "Kore access is off for this chat.") }
+            guard tier(client) != .off else { return refuse(client, .denied, AgentChannel.offLine) }
             client.named = true
         }
         let tier = tier(client)
@@ -585,6 +589,9 @@ package final class AgentChannel {
         lastResult = code.rawValue
         send(client, AgentResult<AgentEmpty>(id: id, ok: false, code: code, message: message))
     }
+
+    /// A chat's caller refused for having no grant: what the agent tells the user.
+    static let offLine = "Arsenal is off for this chat. The user turns it on: right-click its tab → Arsenal, or ⌥⌘K (a Codex chat needs Full access)."
 
     static func message(_ code: AgentCode) -> String {
         switch code {

@@ -107,11 +107,17 @@ final class CodexBackend: ChatBackend {
         let session: CodexSession
         do {
             try Task.checkCancellation()
-            let launch = CodexSession.Options(
+            var launch = CodexSession.Options(
                 cwd: options.folder, model: options.model, effort: options.effort,
                 permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
                 plan: options.planMode, resume: resume, forkAt: forkAt, developerInstructions: instructions,
-                environment: options.agentPass.map { [AgentPasses.variable: $0] } ?? [:])
+                environment: options.agentPass.map { KoreReach.variables(pass: $0) } ?? [:])
+            if options.agentPass != nil {
+                // Kore's own tools for the agent (`KoreReach`).
+                launch.serverArguments = KoreReach.codexArguments()
+                launch.pathFirst = KoreReach.pathFolder
+                launch.developerInstructions = KoreReach.instructions(with: instructions)
+            }
             let task = Task { try await CodexSession.launch(launch) }
             opening = task
             session = try await task.value
@@ -577,6 +583,11 @@ final class CodexBackend: ChatBackend {
     /// Kore's (`send`'s `id`), a turn's is Codex's.
     private var sentTurns: [String: String] = [:]
 
+    /// Arsenal's change, for the next message (`send`).
+    private var turnNote: String?
+
+    func noteNextTurn(_ note: String) { turnNote = note }
+
     func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
         // The Codex extension's /plan is a local toggle: nothing is sent.
         if text == "/plan" && files.isEmpty {
@@ -599,6 +610,12 @@ final class CodexBackend: ChatBackend {
         if mayTitle, titlePrompt == nil {
             titlePrompt = FallbackTitle.from(text)
             titlePromptText = text
+        }
+        // Kore's note joins the thread's history as a developer message, seen from this turn and
+        // in no Codex view (`thread/inject_items`).
+        if let note = turnNote {
+            turnNote = nil
+            try? await session.inject([["type": "message", "role": "developer", "content": [["type": "input_text", "text": .string(note)]]]])
         }
         let input: JSONValue =
             files.isEmpty

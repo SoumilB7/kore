@@ -55,6 +55,7 @@ package final class ControlsStore {
         switch event {
         case .controlsLoaded(let controls):
             models = controls.models
+            ArsenalModels.record(provider.id, controls.models)
             modelId = controls.model
             effort = controls.effort
             commands = controls.commands

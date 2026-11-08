@@ -157,8 +157,16 @@ final class ClaudeBackend: ChatBackend {
         } else if let rollbackAt {
             launch.extraArgs += ["--resume-session-at", rollbackAt]
         }
-        if let instructions = options.instructions { launch.extraArgs += ["--append-system-prompt-file", instructions.path] }
-        if let pass = options.agentPass { launch.environment[AgentPasses.variable] = pass }
+        if let pass = options.agentPass {
+            // Kore's own tools for the agent, said in one prompt with an imported chat's instructions.
+            launch.environment.merge(KoreReach.variables(pass: pass)) { $1 }
+            launch.pathFirst = KoreReach.pathFolder
+            var imported: String?
+            if let file = options.instructions { imported = await Task.detached { HandoffWriters.instructionText(file) }.value }
+            launch.extraArgs += KoreReach.claudeLaunchArguments(instructions: imported)
+        } else if let instructions = options.instructions {
+            launch.extraArgs += ["--append-system-prompt-file", instructions.path]
+        }
         let starting = Task { try await ClaudeSession.start(launch) }
         opening = starting
         launches += 1
@@ -959,8 +967,14 @@ final class ClaudeBackend: ChatBackend {
         flush()
         // Snapshot before the CLI can edit anything.
         await translator.files.ready()
+        // Kore's note goes as a text block before the user's: Kore reads a message's last text
+        // block as what the user said (`ClaudeTranslator.sentText`).
+        let note = turnNote.map { JSONValue.object(["type": "text", "text": .string($0)]) }
+        turnNote = nil
         do {
-            if files.isEmpty {
+            if let note, files.isEmpty {
+                try await session.send(content: [note, ["type": "text", "text": .string(text)]], uuid: uuid)
+            } else if files.isEmpty {
                 try await session.send(text, uuid: uuid)
             } else {
                 // Reading and encoding files can take a moment; keep it off the main actor.
@@ -968,7 +982,7 @@ final class ClaudeBackend: ChatBackend {
                 let content = await Task.detached {
                     Attachments.claudeContent(text: text, files: files, folder: folder, media: await AttachedMedia.read(files))
                 }.value
-                try await session.send(content: content, uuid: uuid)
+                try await session.send(content: note.map { JSONValue.array([$0] + (content.array ?? [content])) } ?? content, uuid: uuid)
             }
         } catch {
             if let queued, midTurn {
@@ -992,6 +1006,11 @@ final class ClaudeBackend: ChatBackend {
         }
         return true
     }
+
+    /// Arsenal's change, for the next message (`send`).
+    private var turnNote: String?
+
+    func noteNextTurn(_ note: String) { turnNote = note }
 
     /// Also drops messages queued behind the turn (Stop gives their text back to the composer).
     func interrupt() async {

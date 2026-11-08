@@ -36,21 +36,24 @@ package struct ArsenalOptions: Sendable {
 extension Chat {
     /// How far a mode lets the CLI go without asking, lowest first: planning; asking for each
     /// command (Claude's Manual, and Don't ask, which refuses what Manual would ask); editing; Codex's
-    /// Ask for approval, which runs commands in the workspace without asking; approving by itself;
-    /// everything. Codex's modes sit on rungs of their own, so none is a step down from another.
+    /// Read only, which reads any file on the Mac without asking (Claude's modes below it ask for a
+    /// read outside the folder), the start Arsenal gives a Codex chat it opens; Codex's Ask for
+    /// approval, which runs commands in the workspace without asking; approving by itself;
+    /// everything. Codex's modes sit on rungs of their own, so none is a step down to a freer one.
     static func modeLevel(_ id: String) -> Int {
         switch id {
         case "plan": 0
         case "default", "dontAsk": 1
         case "acceptEdits": 2
-        case "askForApproval": 3
-        case "auto", "approveForMe": 4
+        case "readOnly": 3
+        case "askForApproval": 4
+        case "auto", "approveForMe": 5
         default: top
         }
     }
 
     /// Bypass permissions, Full access, and any mode Kore doesn't know.
-    static let top = 5
+    static let top = 6
 
     /// The mode that says what the CLI may do on its own. Codex's Plan switch changes how it works
     /// but restricts nothing (its sandbox and approvals stay the permissions'), so a Codex chat
@@ -116,8 +119,7 @@ extension Chat {
     /// `name`: a model's id or name, as the picker lists it.
     package func arsenalModel(_ name: String) -> Result<String, ArsenalRefusal> {
         guard !controls.models.isEmpty else { return .failure(.init("Kore doesn't have this CLI's models yet. Try again after its first turn.")) }
-        let wanted = name.lowercased()
-        guard let option = controls.models.first(where: { $0.id.lowercased() == wanted || $0.name.lowercased() == wanted }) else {
+        guard let option = ArsenalModels.match(name, in: controls.models) else {
             return .failure(.init("This chat offers: " + controls.models.map(\.id).joined(separator: ", ")))
         }
         guard option.id != controls.modelId else { return .success("Already \(option.name).") }

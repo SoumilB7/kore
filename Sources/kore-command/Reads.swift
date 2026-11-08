@@ -33,7 +33,7 @@ enum Reads {
             }
             return 0
         } catch .unreachable {
-            return fail("Kore isn't running, or agent control is off.", code: 5)
+            return fail(MCPServer.unreachableLine, code: 5)
         } catch .notKore {
             return fail("What's at Kore's socket isn't the Kore this came with.", code: 5)
         } catch .refused(let code, let message) {

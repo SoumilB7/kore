@@ -199,7 +199,8 @@ final class ArsenalDrive: ChatStoryline {
             },
             KoreAs(["send", "{b}", "hi"], a, "Edit automatically isn't under Auto", status: 5, says: drive),
 
-            // Codex from Claude: Ask for approval runs commands in the folder by itself, above Manual.
+            // Codex from Claude: Ask for approval runs commands in the folder by itself, and Read only
+            // reads any file without asking, both above Manual.
             Do("a back in Manual") { story in try AgentCast.of(story).chat("a").storySetMode("default") },
             KoreAs(["new", "--codex"], a, "no Codex chat from Manual", status: 1, says: "Only you can open a Codex chat"),
             Do("the user puts a in Auto") { story in try AgentCast.of(story).chat("a").storySetMode("auto") },

@@ -625,7 +625,8 @@ public enum ClaudeHistory {
     }
 
     private static func promptText(_ content: JSONValue?) -> String? {
-        let text = content?.string ?? content?.array?.first { $0["type"]?.string == "text" }?["text"]?.string
+        // Not a note Kore put before the user's words (`KoreReach`).
+        let text = content?.string ?? content?.array?.first { $0["type"]?.string == "text" && !KoreReach.isNote($0["text"]?.string ?? "") }?["text"]?.string
         guard let text, !text.hasPrefix("<") else { return nil }  // command caveats, tool results
         let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
         return line.isEmpty ? nil : line

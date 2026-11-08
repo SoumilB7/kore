@@ -32,6 +32,8 @@ public actor ClaudeSession {
         public var executable: URL?
         public var extraArgs: [String]
         public var environment: [String: String]
+        /// Put at the front of PATH (where `kore` is, `KoreReach`).
+        public var pathFirst: String?
 
         public init(
             cwd: URL,
@@ -322,7 +324,7 @@ public actor ClaudeSession {
             executable: resolved.url,
             arguments: options.arguments,
             cwd: options.cwd,
-            environment: resolved.environment.merging(options.environment) { $1 })
+            environment: KoreReach.environment(resolved.environment, options.environment, pathFirst: options.pathFirst))
         self.io = io
         running = true
 

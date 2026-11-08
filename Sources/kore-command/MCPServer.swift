@@ -1,8 +1,10 @@
 import Foundation
 
-/// `kore mcp`: Kore's reads as an MCP server on stdio (JSON-RPC, one message a line). Its tools
-/// are the commands the caller's access allows, asked of Kore at each list; each call is one
-/// connection to Kore, so access changed in Kore holds from the next call.
+/// `kore mcp`: Kore as an MCP server on stdio (JSON-RPC, one message a line), which Kore gives every
+/// chat's CLI at launch (`KoreReach`). Under a chat it lists every tool, whatever the chat's access
+/// now: the CLI reads the list once, and the user may turn Arsenal on later. Each call is one
+/// connection to Kore, which checks the chat's tier then: off, a call answers how the user turns it
+/// on; below the tool's tier, which tier it needs. Outside Kore's chats it lists what Kore allows.
 enum MCPServer {
     typealias Object = AgentClient.Object
 
@@ -22,13 +24,13 @@ enum MCPServer {
         Tool(name: "kore_caps", command: "agent.caps", description: "The Kore commands this caller's access allows.", args: [], required: []),
         Tool(
             name: "kore_list_chats", command: "chats.list",
-            description: "Every chat open in Kore: id, title, CLI, folder, state (working, idle, needs-you), mode, model, waiting cards.", args: [],
+            description: "List the chats open in Kore (its tabs): id, title, CLI, folder, state (working, idle, needs-you), mode, model, waiting cards.", args: [],
             required: []),
         Tool(
             name: "kore_show_chat", command: "chat.show", description: "One chat in detail: state, model, effort, context use, waiting cards.",
             args: [chatArg], required: ["chat"]),
         Tool(
-            name: "kore_read_transcript", command: "tx.read", description: "A chat's transcript rows, newest last, a page at a time.",
+            name: "kore_read_chat", command: "tx.read", description: "Read a chat's transcript, newest last, a page at a time.",
             args: [
                 chatArg, ("last", "integer", "How many rows (default 20, at most 200)."),
                 ("before", "string", "A row id: read the rows before it (the next page back)."),
@@ -63,13 +65,14 @@ enum MCPServer {
         Tool(name: "kore_compact", command: "chat.compact", description: "Compact this chat once the current turn ends (Own access).", args: [], required: []),
         Tool(
             name: "kore_new_chat", command: "chat.new",
-            description: "Open a new chat in this window, in front, at or below this chat's mode, with a first message if given (Drive access).",
+            description: "Open a new chat in a new Kore tab, in front, in this window, and send it a first message if given. Use when the user asks for another tab, chat or agent. It starts at this chat's mode or lower, with its own Arsenal off. Returns its short id for kore_send (Drive access).",
             args: [
-                ("provider", "string", "claude or codex (default: this chat's)."), ("model", "string", "A model id."),
-                ("mode", "string", "A mode at or below this chat's."), ("text", "string", "The first message."),
+                ("provider", "string", "claude or codex (default: this chat's)."),
+                ("model", "string", "A model the CLI lists, by id or name, written loosely (\"gpt 6 sol\" is gpt-6-sol). Default: the CLI's."),
+                ("mode", "string", "A mode at or below this chat's (default: the CLI's usual one, capped)."), ("text", "string", "The first message."),
             ], required: []),
         Tool(
-            name: "kore_send", command: "chat.send", description: "Send a message to another chat at or below this chat's mode; queued while it works (Drive access).",
+            name: "kore_send", command: "chat.send", description: "Send a message to another chat, as the user would type it, queued while it works. It shows who sent it. Only chats at this chat's mode or lower (Drive access).",
             args: [chatArg, ("text", "string", "The message.")], required: ["chat", "text"]),
         Tool(name: "kore_stop", command: "chat.stop", description: "Stop another chat's turn (Drive access).", args: [chatArg], required: ["chat"]),
         Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Drive access).", args: [chatArg], required: ["chat"]),
@@ -94,11 +97,14 @@ enum MCPServer {
             switch message["method"] as? String {
             case "initialize":
                 let version = params["protocolVersion"] as? String ?? "2025-06-18"
-                answer(id, ["protocolVersion": version, "capabilities": ["tools": ["listChanged": false]], "serverInfo": ["name": "kore", "version": "1"]])
+                answer(id, [
+                    "protocolVersion": version, "capabilities": ["tools": ["listChanged": false]], "serverInfo": ["name": "kore", "version": "1"],
+                    "instructions": serverInstructions,
+                ])
             case "ping":
                 answer(id, [:])
             case "tools/list":
-                answer(id, ["tools": allowed().map(describe)])
+                answer(id, ["tools": listed().map(describe)])
             case "tools/call":
                 answer(id, call(params["name"] as? String ?? "", params["arguments"] as? Object ?? [:]))
             default:
@@ -108,12 +114,40 @@ enum MCPServer {
         return 0
     }
 
-    /// The tools Kore allows this caller now (none while Kore can't be reached).
-    static func allowed() -> [Tool] {
+    static let serverInstructions = """
+        Kore's own controls, for when the user asks for something in Kore: open a tab with a new claude or codex \
+        chat (kore_new_chat), message another chat (kore_send), list and read chats, change this chat's model. \
+        They act only while the user has Arsenal on for this chat; a tool says so when it's off.
+        """
+
+    /// The chat's pass: this runs under one of Kore's chats.
+    static var inChat: Bool { !(ProcessInfo.processInfo.environment["KORE_AGENT_PASS"] ?? "").isEmpty }
+
+    /// Under a chat, every tool; outside, those Kore allows now (none while it can't be reached).
+    static func listed() -> [Tool] {
+        if inChat { return tools }
         guard let client = try? AgentClient() else { return [] }
         let commands = Set(client.welcome["commands"] as? [String] ?? [])
         return tools.filter { commands.contains($0.command) }
     }
+
+    /// Kore's off, or this chat's Arsenal is: what the agent tells the user.
+    static let offLine = "Arsenal is off for this chat. The user turns it on: right-click its tab → Arsenal, or ⌥⌘K (a Codex chat needs Full access)."
+
+    /// No socket: agent control is off in Kore (or, outside its chats, Kore may not be running).
+    static var unreachableLine: String {
+        inChat ? "Kore's agent control is off, so Arsenal is off for this chat. The user turns it on: right-click its tab → Arsenal, or ⌥⌘K."
+            : "Kore isn't running, or agent control is off."
+    }
+
+    /// The tier each command needs, lowest first.
+    static func tierNeeded(_ command: String) -> String {
+        if ["chat.new", "chat.send", "chat.stop", "tab.show", "cards.answer"].contains(command) { return "drive" }
+        if ownCommands.contains(command) { return "own" }
+        return "watch"
+    }
+
+    static let ownCommands = ["chat.options", "chat.rename", "chat.model", "chat.effort", "chat.fast", "chat.mode", "chat.compact"]
 
     static func describe(_ tool: Tool) -> Object {
         var properties: Object = [:]
@@ -130,18 +164,23 @@ enum MCPServer {
         guard let tool = tools.first(where: { $0.name == name }) else { return failure("No such tool: \(name).") }
         var args = arguments.filter { key, _ in tool.args.contains { $0.0 == key } }
         // Own's tools act on the chat this runs in.
-        if ["chat.options", "chat.rename", "chat.model", "chat.effort", "chat.fast", "chat.mode", "chat.compact"].contains(tool.command) {
-            args["chat"] = args["chat"] ?? "."
-        }
+        if ownCommands.contains(tool.command) { args["chat"] = args["chat"] ?? "." }
         do {
             let client = try AgentClient()
+            // Kore checks the tier too: this only says it in the agent's terms.
+            let allowed = client.welcome["commands"] as? [String] ?? []
+            if !allowed.contains(tool.command) {
+                let tier = client.welcome["tier"] as? String ?? "off"
+                return failure("This needs Arsenal's \(tierNeeded(tool.command).capitalized) tier; this chat has \(tier.capitalized). "
+                    + "The user picks a tier from its name beside the K on the chat's tab.")
+            }
             let data = try client.run(tool.command, args)
             let text = (try? JSONSerialization.data(withJSONObject: data, options: [.sortedKeys, .withoutEscapingSlashes])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
             return ["content": [["type": "text", "text": text]], "isError": false]
         } catch .unreachable {
-            return failure("Kore isn't running, or agent control is off.")
-        } catch .refused(_, let message) {
-            return failure(message)
+            return failure(unreachableLine)
+        } catch .refused(let code, let message) {
+            return failure(code == "denied" && inChat ? offLine : message)
         } catch {
             return failure("Kore closed the connection.")
         }

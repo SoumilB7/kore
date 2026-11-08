@@ -54,13 +54,14 @@ public actor CodexAppServer {
         cwd: URL,
         executable: URL? = nil,
         arguments: [String] = [],
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        pathFirst: String? = nil
     ) async throws -> CodexAppServer {
         let server = CodexAppServer()
         do {
             try await withTaskCancellationHandler {
                 try Task.checkCancellation()
-                try await server.launch(cwd: cwd, executable: executable, arguments: arguments, environment: environment)
+                try await server.launch(cwd: cwd, executable: executable, arguments: arguments, environment: environment, pathFirst: pathFirst)
                 try Task.checkCancellation()
             } onCancel: {
                 Task { _ = await server.close(waiting: .seconds(6)) }
@@ -155,14 +156,14 @@ public actor CodexAppServer {
 
     // MARK: - Process lifecycle
 
-    private func launch(cwd: URL, executable: URL?, arguments: [String], environment: [String: String]) async throws {
+    private func launch(cwd: URL, executable: URL?, arguments: [String], environment: [String: String], pathFirst: String?) async throws {
         let resolved = try await CLIExecutable.resolve("codex", override: executable)
         try Task.checkCancellation()
         let io = try StdioProcess(
             executable: resolved.url,
             arguments: ["app-server"] + arguments,
             cwd: cwd,
-            environment: resolved.environment.merging(environment) { $1 })
+            environment: KoreReach.environment(resolved.environment, environment, pathFirst: pathFirst))
         self.io = io
         running = true
 

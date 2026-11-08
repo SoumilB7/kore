@@ -466,7 +466,7 @@ final class AgentChannelAll: ChatStoryline {
                 AgentChannel.current == nil && !FileManager.default.fileExists(atPath: directory.path)
             },
             KoreAs(["ls"], a, "1. refused at once, plainly") { status, out, story in
-                status == 5 && out.contains(unreachable) && (AgentCast.of(story).notes.last.map(Self.fast) ?? false)
+                status == 5 && out.contains("agent control is off, so Arsenal is off for this chat") && (AgentCast.of(story).notes.last.map(Self.fast) ?? false)
             },
 
             // 2. On, but no grant.
@@ -596,7 +596,7 @@ final class AgentChannelAll: ChatStoryline {
             KoreAs(["whoami"], .tree("a", pass: "?"), "5. a made-up pass in a's tree: mismatch", status: 5, says: "doesn't match"),
             KoreAs(["whoami"], .tree("a", pass: nil), "5. no pass in a's tree: mismatch", status: 5, says: "doesn't match"),
             KoreAs(["whoami"], .tree("b", pass: "a"), "5. a's pass in b's tree: mismatch", status: 5, says: "doesn't match"),
-            KoreAs(["whoami"], b, "5. b itself, no grant: denied", status: 5, says: "Kore access is off for this chat."),
+            KoreAs(["whoami"], b, "5. b itself, no grant: denied", status: 5, says: "Arsenal is off for this chat."),
             KoreAs(["whoami"], .outside(), "5. outside, no pass: refused", status: 5, says: "Only Kore's chats"),
             KoreAs(["whoami"], .outside(copied: "a"), "5. a's pass copied outside: mismatch", status: 5, says: "doesn't match"),
             KoreAs(["show", "{b.title}"], a, "5. a title two chats share (b, c): ambiguous", status: 1, says: "Several chats match"),
@@ -638,7 +638,7 @@ final class AgentChannelAll: ChatStoryline {
 
             // 9. `kore mcp`.
             KoreAs(
-                ["mcp"], a, "9. initialize, Watch's seven tools, each read tool once",
+                ["mcp"], a, "9. initialize, every tool, each read tool once, Drive's refused at Watch",
                 input: [
                     #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#,
                     #"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
@@ -648,7 +648,7 @@ final class AgentChannelAll: ChatStoryline {
                     #"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"kore_caps","arguments":{}}}"#,
                     #"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"kore_list_chats","arguments":{}}}"#,
                     #"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"kore_show_chat","arguments":{"chat":"."}}}"#,
-                    #"{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"kore_read_transcript","arguments":{"chat":".","last":2}}}"#,
+                    #"{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"kore_read_chat","arguments":{"chat":".","last":2}}}"#,
                     #"{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"kore_pending","arguments":{}}}"#,
                     #"{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"kore_history","arguments":{}}}"#,
                     #"{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"kore_send","arguments":{}}}"#,
@@ -665,7 +665,7 @@ final class AgentChannelAll: ChatStoryline {
                 }
                 let tools = (AgentJSON.path(replies[2], "result", "tools") as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
                 return try status == 0 && AgentJSON.path(replies[1], "result", "serverInfo", "name") as? String == "kore"
-                    && Set(tools) == ["kore_whoami", "kore_caps", "kore_list_chats", "kore_show_chat", "kore_read_transcript", "kore_pending", "kore_history"]
+                    && tools.count == 19 && tools.contains("kore_new_chat") && tools.contains("kore_read_chat")
                     && replies[3]?["result"] != nil
                     && AgentJSON.path(text(10), "caller", "chat") as? String == cast.id("a")
                     && text(11)?["tier"] as? String == "watch"
@@ -675,6 +675,7 @@ final class AgentChannelAll: ChatStoryline {
                     && text(15)?["cards"] is [Any]
                     && text(16)?["sessions"] is [Any]
                     && AgentJSON.path(replies[17], "result", "isError") as? Bool == true
+                    && ((AgentJSON.path(replies[17], "result", "content") as? [[String: Any]])?.first?["text"] as? String ?? "").hasPrefix("This needs Arsenal's Drive tier; this chat has Watch.")
                     && AgentJSON.path(replies[18], "error", "code") as? Int == -32601
             },
             KoreAs(
@@ -723,7 +724,7 @@ final class AgentChannelAll: ChatStoryline {
             Expect("8. stop all: no channel, no socket") { _ in AgentChannel.current == nil && !exists() },
             Followed("f1", "8. ended cleanly", timeout: .seconds(3)) { _, status, _ in status == 0 },
             Followed("f2", "8. ended cleanly", timeout: .seconds(3)) { _, status, _ in status == 0 },
-            KoreAs(["ls"], a, "8. refused after stop all", status: 5, says: unreachable),
+            KoreAs(["ls"], a, "8. refused after stop all", status: 5, says: "agent control is off, so Arsenal is off for this chat"),
             Expect("8. stop all in the log") { _ in try AgentAudit.lines().contains { $0.contains("\tagent-stop-all") } },
 
             Do("grant a again") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("a")) },

@@ -57,6 +57,9 @@ public actor CodexSession {
         public var developerInstructions: String?
         public var executable: URL?
         public var environment: [String: String]
+        /// `codex app-server`'s own arguments (`-c` overrides, `KoreReach`) and the front of its PATH.
+        public var serverArguments: [String] = []
+        public var pathFirst: String?
 
         public init(
             cwd: URL,
@@ -144,7 +147,8 @@ public actor CodexSession {
     /// Spawns the app-server only; `open` opens the thread.
     public static func launch(_ options: Options) async throws -> CodexSession {
         let server = try await CodexAppServer.start(
-            cwd: options.cwd, executable: options.executable, environment: options.environment)
+            cwd: options.cwd, executable: options.executable, arguments: options.serverArguments, environment: options.environment,
+            pathFirst: options.pathFirst)
         return CodexSession(server: server, options: options)
     }
 

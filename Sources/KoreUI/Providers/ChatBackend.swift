@@ -26,6 +26,9 @@ package protocol ChatBackend: AnyObject {
     /// `fork` and `rollback` find it: the CLI keeps it as the message's own (Claude's uuid), or
     /// the backend keeps what it stands for (Codex's turn).
     func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool
+    /// A line of Kore's the next message carries to the agent, unseen in the transcript (Arsenal
+    /// turned on, off or to another tier: `KoreReach.note`).
+    func noteNextTurn(_ note: String)
     func interrupt() async
     func respond(to approvalID: String, _ decision: Decision) async
     /// Before `start()`, sets what the CLI launches with.
@@ -239,6 +242,9 @@ extension ChatBackend {
     package func send(_ text: String, files: [Attachments.File], queued: String?) async throws -> Bool {
         try await send(text, files: files, queued: queued, id: queued)
     }
+
+    /// For a backend whose CLI has no Kore tools.
+    package func noteNextTurn(_ note: String) {}
 
     /// For a backend without fast mode: it never reports one, so nothing offers it.
     package func setFastMode(_ on: Bool) async throws {}

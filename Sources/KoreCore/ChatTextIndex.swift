@@ -346,7 +346,7 @@ public final class ChatTextIndex: @unchecked Sendable {
             words = plain
         } else if let blocks = body["content"] as? [[String: Any]] {
             if blocks.contains(where: { $0["type"] as? String == "tool_result" }) { return nil }
-            words = blocks.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.joined(separator: "\n")
+            words = blocks.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }.filter { !KoreReach.isNote($0) }.joined(separator: "\n")
         } else {
             return nil
         }

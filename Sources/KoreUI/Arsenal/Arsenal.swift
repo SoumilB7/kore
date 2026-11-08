@@ -84,6 +84,7 @@ package final class Arsenal {
         anyOn = true
         AgentTaps.setTier?(chat.id.uuidString, chat.arsenalLast)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": chat.arsenalLast.rawValue])
+        if chat.arsenalLast == .drive { ArsenalModels.fetch("codex", folder: chat.folder) }
     }
 
     /// A tier from its popup: on at it, or moved to it while on. It's the chat's last tier from then.
@@ -97,6 +98,8 @@ package final class Arsenal {
         chat.arsenal = tier
         AgentTaps.setTier?(chat.id.uuidString, tier)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": tier.rawValue])
+        // Drive opens chats on a model the CLI lists: Codex's, when no chat of it has said them yet.
+        if tier == .drive { ArsenalModels.fetch("codex", folder: chat.folder) }
     }
 
     package func turnOff(_ chat: Chat) {

@@ -183,6 +183,8 @@ package final class ScriptedBackend: ChatBackend {
     package func setModel(_ id: String) async throws { log.append(.setModel(id)) }
     package func setEffort(_ level: String) async { log.append(.setEffort(level)) }
 
+    package func noteNextTurn(_ note: String) { log.append(.note(note)) }
+
     /// As both CLIs answer: the setting took.
     package func setFastMode(_ on: Bool) async throws {
         log.append(.setFastMode(on))

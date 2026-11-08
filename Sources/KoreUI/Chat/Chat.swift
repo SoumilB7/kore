@@ -196,6 +196,8 @@ package final class Chat: Identifiable {
     /// Its Arsenal tier while on, and the one turning it on goes back to. Set through `Arsenal`.
     package internal(set) var arsenal: ArsenalTier?
     package internal(set) var arsenalLast = ArsenalTier.watch
+    /// The tier the agent was last told of (nil: off, as its launch instructions say until told).
+    @ObservationIgnored var arsenalTold: ArsenalTier?
 
     package var sessionId: String? { status.sessionId }
     /// The id the folder's history lists it under: its session's, or a fork's own before its
@@ -1037,6 +1039,11 @@ package final class Chat: Identifiable {
                     }
                 }
                 guard currentWork(epoch), !Task.isCancelled else { return }
+                // Arsenal changed since the agent was last told: this message carries a line saying so.
+                if arsenal != arsenalTold {
+                    arsenalTold = arsenal
+                    backend.noteNextTurn(KoreReach.note(tier: arsenal?.rawValue, chat: String(self.id.uuidString.prefix(8)).lowercased()))
+                }
                 let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued, id: id)
                 // A fork's CLI has its session once a message went out, not when it was shown.
                 if let key = fork?.id { KoreForks.shared.sent(cli: provider.id, key: key) }

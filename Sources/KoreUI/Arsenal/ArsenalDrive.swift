@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 
 /// What Drive adds (`z-docs/agent-protocol.md`): new chats in the caller's window, sends, stops,
 /// a tab brought to the front, question cards answered, and Own's changes on the window's other
@@ -68,7 +69,8 @@ extension Workspace {
         let rank = caller.arsenalRank
         let cap = { (mode: String) in Chat.noFreer(mode, unreviewed: false, than: rank.id, unreviewed: rank.unreviewed) }
         guard let provider = Registry.provider(id) else { return .failure(.init("Kore runs claude or codex.")) }
-        let modes = provider.modes.filter(\.listed)
+        // Codex's Read only isn't in the menu, but a chat can start in it here.
+        let modes = provider.modes.filter { $0.listed || $0.id == CodexModes.readOnly }
         let named = { (option: ModeOption, name: String) in option.id.lowercased() == name.lowercased() || option.label.lowercased() == name.lowercased() }
         var wanted: ModeOption?
         var plan = false
@@ -90,8 +92,11 @@ extension Workspace {
         var launch: String?
         if let model {
             let known = arsenalModels(provider.id, caller: caller)
-            guard !known.isEmpty else { return .failure(.init("Kore doesn't have \(provider.name)'s models yet: open it without --model, then set one.")) }
-            guard let option = known.first(where: { $0.id.lowercased() == model.lowercased() || $0.name.lowercased() == model.lowercased() }) else {
+            guard !known.isEmpty else {
+                ArsenalModels.fetch(provider.id, folder: folder)
+                return .failure(.init("Kore is still reading \(provider.name)'s models: ask again in a moment, or open it without a model."))
+            }
+            guard let option = ArsenalModels.match(model, in: known) else {
                 return .failure(.init("\(provider.name) offers: " + known.map(\.id).joined(separator: ", ")))
             }
             launch = option.id
@@ -105,10 +110,11 @@ extension Workspace {
         return .success(chat)
     }
 
-    /// The models a CLI lists, from a chat of it in this window that has them (the caller's first).
+    /// The models a CLI lists, from a chat of it in this window that has them (the caller's first),
+    /// else as any chat of it last listed them in this run (`ArsenalModels`).
     func arsenalModels(_ provider: String, caller: Chat) -> [ModelOption] {
         let chats = [caller] + tabs.compactMap(\.chat)
-        return chats.first { $0.provider.id == provider && !$0.controls.models.isEmpty }?.controls.models ?? []
+        return chats.first { $0.provider.id == provider && !$0.controls.models.isEmpty }?.controls.models ?? ArsenalModels.seen[provider] ?? []
     }
 
     /// The chat's tab to the front, as a click on it.
@@ -117,4 +123,63 @@ extension Workspace {
         select(tab)
         return true
     }
+}
+
+/// Each CLI's models as a chat of it last listed them in this run, so Drive can check a model for a
+/// CLI with no chat open in the caller's window. Codex's are read once, when Drive is first given
+/// and no Codex chat has listed them, from a short-lived app-server (`model/list`).
+@MainActor
+package enum ArsenalModels {
+    package private(set) static var seen: [String: [ModelOption]] = [:]
+    private static var fetching: Set<String> = []
+
+    static func record(_ provider: String, _ models: [ModelOption]) {
+        if !models.isEmpty { seen[provider] = models }
+    }
+
+    /// A model by its id or name, as the CLI lists it, case, spaces, hyphens and underscores aside:
+    /// "gpt 6 sol" is gpt-6-sol.
+    package static func match(_ name: String, in models: [ModelOption]) -> ModelOption? {
+        let key = { (text: String) in text.lowercased().filter { !" -_".contains($0) } }
+        let wanted = key(name)
+        guard !wanted.isEmpty else { return nil }
+        return models.first { $0.id.lowercased() == name.lowercased() || $0.name.lowercased() == name.lowercased() }
+            ?? models.first { key($0.id) == wanted || key($0.name) == wanted }
+    }
+
+    /// Codex's models, read off the main thread once in a run; nothing for a CLI that can't list
+    /// them without a chat, and nothing in a storyline (its CLIs are scripted). Given up after
+    /// `patience`, the app-server closed; a later Drive or model asked for tries again.
+    static func fetch(_ provider: String, folder: URL) {
+        guard provider == "codex", seen[provider] == nil, !fetching.contains(provider), StorylineSeams.backend == nil else { return }
+        fetching.insert(provider)
+        Task {
+            defer { fetching.remove(provider) }
+            let patience = Self.patience
+            let work = Task.detached { () -> [JSONValue] in
+                guard let server = try? await CodexAppServer.start(cwd: folder) else { return [] }
+                // Closing it ends the process, which fails the request still waiting.
+                let list = await withTaskCancellationHandler {
+                    (try? await server.request("model/list"))?["data"]?.array ?? []
+                } onCancel: {
+                    Task { await server.close() }
+                }
+                await server.close()
+                return list
+            }
+            let timer = Task.detached {
+                try await Task.sleep(for: patience)
+                work.cancel()
+            }
+            let list = await work.value
+            timer.cancel()
+            record(provider, list.compactMap { json -> ModelOption? in
+                guard let id = json["id"]?.string, json["hidden"]?.bool != true else { return nil }
+                let efforts = json["supportedReasoningEfforts"]?.array?.compactMap { $0["reasoningEffort"]?.string ?? $0.string }
+                return ModelOption(id: id, name: json["displayName"]?.string ?? id, resolved: json["model"]?.string ?? id, efforts: efforts ?? [])
+            })
+        }
+    }
+
+    static let patience = Duration.seconds(10)
 }
