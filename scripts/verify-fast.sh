@@ -244,7 +244,16 @@ if (( ${#test_targets} )); then
   (
     cd $src
     swift build --build-tests --scratch-path .build-test $plugin 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > $out/swift-test-build.log
+    built=$pipestatus[1]
     print $EPOCHREALTIME > $out/t-tests-built
+    # A test build that failed leaves the last good bundles behind: running them would check old
+    # code. It's a failure of its own, and nothing runs.
+    if (( built != 0 )) || grep -qE '(^|: )error:' $out/swift-test-build.log; then
+      print $built > $out/tests-build-failed
+      grep -E 'error:' $out/swift-test-build.log | head -20 > $out/swift-test.log
+      print $EPOCHREALTIME > $out/t-tests
+      exit 0
+    fi
     bins=$(swift build --scratch-path .build-test --show-bin-path 2>/dev/null)
     clt=/Library/Developer/CommandLineTools
     helper=$clt/usr/libexec/swift/pm/swiftpm-testing-helper
@@ -291,8 +300,12 @@ else
 fi
 {
   print "== release build"
-  (cd $src && swift build -c release 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'error:|warning: [^s]|Build complete' | grep -v 'search path' | tail -20)
-  if [[ -x $src/.build/release/Kore ]]; then
+  (cd $src && swift build -c release > $out/release-build.log 2>&1; print $? > $out/release-built)
+  sed 's/\x1b\[[0-9;]*m//g' $out/release-build.log | grep -E 'error:|warning: [^s]|Build complete' | grep -v 'search path' | tail -20
+  # A failed build leaves the last good binary behind: the launch check and the storylines would
+  # run old code, so they don't run.
+  release_ok=1; [[ $(<$out/release-built) == 0 ]] || { release_ok=0; print "✘ release-build failed (exit $(<$out/release-built)): no launch check, no storylines" }
+  if (( release_ok )) && [[ -x $src/.build/release/Kore ]]; then
     inits=$(otool -l $src/.build/release/Kore 2>/dev/null | grep -cE '__mod_init_func|__init_offsets')
     if (( inits == 0 )); then print "static-initializers 0"; else print "✘ static-initializers $inits"; fi
   fi
@@ -300,6 +313,7 @@ fi
 done_ build
 print "release build: $warmth, $(printf %.1f $(( ended[build] - began[build] ))) s" >> $out/r-build.txt
 rel=$src/.build/release
+[[ $(<$out/release-built) == 0 ]] || rel=$out/no-release
 
 if [[ -x $rel/Kore ]]; then
   phase launch
@@ -416,9 +430,14 @@ if [[ -n ${tests_pid:-} ]]; then
   ended[tests]=$(<$out/t-tests)
   {
     print "== swift test"
-    grep -E 'Test run with|failed|error:' $out/swift-test.log | tail -20
-    summaries=$(grep -c 'Test run with' $out/swift-test.log)
-    (( summaries < ${#test_targets} )) && print "swift-test-INCOMPLETE: $summaries of ${#test_targets} test targets reported"
+    if [[ -f $out/tests-build-failed ]]; then
+      print "✘ swift-test-build failed (exit $(<$out/tests-build-failed)): no tests ran"
+      sed 's/^/    /' $out/swift-test.log
+    else
+      grep -E 'Test run with|failed|error:' $out/swift-test.log | tail -20
+      summaries=$(grep -c 'Test run with' $out/swift-test.log)
+      (( summaries < ${#test_targets} )) && print "✘ swift-test-INCOMPLETE: $summaries of ${#test_targets} test targets reported"
+    fi
   } > $out/r-tests.txt 2>&1
 fi
 # The heavy phases are over: the slots go back.
