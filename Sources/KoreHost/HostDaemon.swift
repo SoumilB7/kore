@@ -454,7 +454,7 @@ package final class HostDaemon {
         net.port = netPort
         switch pick {
         case .installed(let tailnet, let choice):
-            net.join(tailnet)
+            net.join(tailnet, choice: choice)
             HostJournal.note("korenet on", ["tailnet": "tailscale", "choice": "\(choice)"])
             Self.tailnetChosen?("installed")
         case .kore(let tailnet, let alive, let stop):
