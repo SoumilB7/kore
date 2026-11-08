@@ -123,7 +123,7 @@ dump('control.json', {
 dump('manifest.json', {
     'proto': {'major': 2, 'minor': 0},
     'files': {'bind': 'bind.json', 'raise': 'raise.json', 'frames': 'frames.json', 'control': 'control.json'},
-    'capDomain': 'kore.invalid/cap/kore',
+    'capDomain': 'github.com/SoumilB7/kore/cap/device',
     'port': 47470,
 })
 print('ok')

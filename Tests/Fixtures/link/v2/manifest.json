@@ -1,5 +1,5 @@
 {
-  "capDomain": "kore.invalid/cap/kore",
+  "capDomain": "github.com/SoumilB7/kore/cap/device",
   "files": {
     "bind": "bind.json",
     "control": "control.json",

@@ -19,7 +19,7 @@ let statusJSON = #"""
 let whoisJSON = #"""
 {"Node":{"ID":5810962271697991,"Name":"phone.tail.ts.net.","User":1,"Key":"nodekey:0b99","Addresses":["100.104.65.22/32"],"Tags":["tag:phone"]},
 "UserProfile":{"ID":42,"LoginName":"tagged-devices","DisplayName":"Tagged Devices"},
-"CapMap":{"kore.invalid/cap/kore":[{"v":1,"abilities":["read","ask","run"]}],"other":null}}
+"CapMap":{"github.com/SoumilB7/kore/cap/device":[{"v":1,"abilities":["read","ask","run"]}],"other":null}}
 """#
 
 /// Hands out prepared connections in order (each a fake server), counting discoveries.

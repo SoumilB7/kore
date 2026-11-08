@@ -7,13 +7,30 @@ import Glibc
 import Musl
 #endif
 
-/// The devices this one trusts: a 0600 JSON file, read on every call (a revoke holds from the next
-/// command on, like `GrantStore.current`), written whole by rename under a lock, its `rev` raised
-/// on every change so offline peers catch up by comparing revs.
+/// The devices this one trusts, read on every call (a revoke holds from the next command on, like
+/// `GrantStore.current`), changed under a lock, its `rev` raised on every change so offline peers
+/// catch up by comparing revs. Kept as one 0600 JSON file (a Mac, a phone), or as a 0700 folder
+/// of `<id>.json` records plus `rev.json` (a box's `devices/`, phase 18 §4), where a command's
+/// check reads its one record.
 package struct DeviceBook: Sendable {
+    /// The book's file, or (folder form) its folder.
     package let url: URL
+    package let folder: Bool
 
-    package init(url: URL) { self.url = url }
+    package init(url: URL) {
+        self.url = url
+        folder = false
+    }
+
+    /// The folder form: `<id>.json` per device, `rev.json` for the rev.
+    package init(folder: URL) {
+        url = folder
+        self.folder = true
+    }
+
+    private var revFile: URL { url.appendingPathComponent("rev.json") }
+
+    private func recordFile(_ id: UUID) -> URL { url.appendingPathComponent(id.uuidString.lowercased() + ".json") }
 
     package struct Contents: Codable, Equatable, Sendable {
         package var v = 1
@@ -39,6 +56,11 @@ package struct DeviceBook: Sendable {
 
     /// The book as it is on disk now; empty at rev 0 before the first write.
     package func read() throws -> Contents {
+        guard folder else { return try readFile() }
+        return try locked(LOCK_SH) { try readFolder() }
+    }
+
+    private func readFile() throws -> Contents {
         guard let data = try PrivateFile.read(url) else { return .empty }
         do {
             return try TrustJSON.decoder().decode(Contents.self, from: data)
@@ -47,7 +69,42 @@ package struct DeviceBook: Sendable {
         }
     }
 
-    package func record(_ id: UUID) throws -> DeviceRecord? { try read().devices.first { $0.id == id } }
+    private struct RevFile: Codable {
+        var v = 1
+        var rev: Int
+    }
+
+    private func readFolder() throws -> Contents {
+        var rev = 0
+        if let data = try PrivateFile.read(revFile) {
+            guard let kept = try? TrustJSON.decoder().decode(RevFile.self, from: data), kept.v == 1, kept.rev >= 0 else {
+                throw TrustError.io("unreadable rev")
+            }
+            rev = kept.rev
+        }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
+        var devices: [DeviceRecord] = []
+        for name in names.sorted() where name.hasSuffix(".json") {
+            guard let id = UUID(uuidString: String(name.dropLast(5))) else { continue }
+            if let record = try readRecord(id) { devices.append(record) }
+        }
+        devices.sort { $0.added == $1.added ? $0.id.uuidString < $1.id.uuidString : $0.added < $1.added }
+        return Contents(rev: rev, devices: devices)
+    }
+
+    private func readRecord(_ id: UUID) throws -> DeviceRecord? {
+        guard let data = try PrivateFile.read(recordFile(id)) else { return nil }
+        guard let record = try? TrustJSON.decoder().decode(DeviceRecord.self, from: data), record.id == id else {
+            throw TrustError.io("unreadable \(id.uuidString.lowercased()).json")
+        }
+        return record
+    }
+
+    /// One device's record; the folder form reads just its file (each command's check).
+    package func record(_ id: UUID) throws -> DeviceRecord? {
+        if folder { return try readRecord(id) }
+        return try read().devices.first { $0.id == id }
+    }
 
     /// The device a node key belongs to.
     package func record(nodeKey: String) throws -> DeviceRecord? { try read().devices.first { $0.nodeKeys.contains(nodeKey) } }
@@ -56,15 +113,16 @@ package struct DeviceBook: Sendable {
     @discardableResult
     package func update(_ change: (inout [DeviceRecord]) throws -> Void) throws -> Contents {
         try locked {
-            var book = try read()
+            var book = try readUnlocked()
             var devices = book.devices
             try change(&devices)
             guard devices != book.devices else { return book }
             for record in devices { try record.validate() }
             guard Set(devices.map(\.id)).count == devices.count else { throw TrustError.invalidRecord("duplicate id") }
+            let before = book
             book.devices = devices
             book.rev += 1
-            try write(book)
+            try write(book, over: before)
             return book
         }
     }
@@ -74,14 +132,17 @@ package struct DeviceBook: Sendable {
     @discardableResult
     package func apply(rev: Int, devices: [DeviceRecord], from issuer: VerifiedPeer) throws -> Contents {
         try locked {
-            let book = try read()
+            let book = try readUnlocked()
             guard let mac = book.devices.first(where: { $0.id == issuer.device }), mac.kind == .mac, mac.owner,
                   mac.identityKey == issuer.identityKey else { throw TrustError.refused("devices.set from a non-owner") }
             guard rev > book.rev else { throw TrustError.staleRev }
             for record in devices { try record.validate() }
             guard Set(devices.map(\.id)).count == devices.count else { throw TrustError.invalidRecord("duplicate id") }
-            let next = Contents(rev: rev, devices: devices)
-            try write(next)
+            // Records the set's Macs didn't issue stay out: a Mac gone takes what it issued.
+            let macs = Set(devices.filter { $0.kind == .mac }.map(\.id))
+            let kept = devices.filter { $0.issuedBy.map(macs.contains) ?? true }
+            let next = Contents(rev: rev, devices: kept)
+            try write(next, over: book)
             return next
         }
     }
@@ -100,9 +161,11 @@ package struct DeviceBook: Sendable {
 
     /// A node key the device signed a binding with (rotation): kept only after the identity proof
     /// and a fresh WhoIs of the same user (or the same tags); the last three are kept. A WhoIs
-    /// failure (no user, no tags) refuses, and the SSH route's `"ssh"` is never appended.
+    /// failure (no user, no tags) refuses, and the SSH route's `"ssh"` is never appended. A device
+    /// enrolled over SSH (no user yet) takes its first node key only from a WhoIs of `ownUser`,
+    /// this device's own Tailscale user, and is that user's from then on.
     @discardableResult
-    package func appendNodeKey(_ peer: VerifiedPeer, whoisUserId: Int64?, whoisTags: [String]) throws -> NodeKeyAppend {
+    package func appendNodeKey(_ peer: VerifiedPeer, whoisUserId: Int64?, whoisTags: [String], ownUser: Int64? = nil) throws -> NodeKeyAppend {
         guard peer.binding.route == Binding.Route.tailnet.rawValue, peer.nodeKey != Binding.Route.sshNodeKey else {
             throw TrustError.refused("node key off the tailnet")
         }
@@ -111,6 +174,13 @@ package struct DeviceBook: Sendable {
             guard let i = devices.firstIndex(where: { $0.id == peer.device }) else { throw TrustError.unknownDevice }
             let record = devices[i]
             guard record.identityKey == peer.identityKey else { throw TrustError.refused("identity key differs") }
+            if record.sshOnly {
+                guard let user = whoisUserId, whoisTags.isEmpty, user == ownUser else { throw TrustError.refused("whois") }
+                devices[i].userId = user
+                devices[i].nodeKeys = [peer.nodeKey]
+                outcome = .appended(dropped: nil)
+                return
+            }
             let sameOwner: Bool = if let user = record.userId {
                 whoisUserId == user && whoisTags.isEmpty
             } else {
@@ -126,18 +196,38 @@ package struct DeviceBook: Sendable {
         return outcome
     }
 
-    private func write(_ book: Contents) throws {
-        try PrivateFile.write(try TrustJSON.encoder().encode(book), to: url)
+    private func readUnlocked() throws -> Contents { folder ? try readFolder() : try readFile() }
+
+    /// The file form: written whole. The folder form: changed records written, gone ones removed,
+    /// then the rev (a reader holds the shared lock, so it never sees half).
+    private func write(_ book: Contents, over before: Contents) throws {
+        guard folder else { return try PrivateFile.write(try TrustJSON.encoder().encode(book), to: url) }
+        let old = Dictionary(before.devices.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for record in book.devices where old[record.id] != record {
+            try PrivateFile.write(try TrustJSON.encoder().encode(record), to: recordFile(record.id))
+        }
+        let ids = Set(book.devices.map(\.id))
+        for id in old.keys where !ids.contains(id) {
+            if unlink(recordFile(id).path) != 0 && errno != ENOENT { throw TrustError.io("remove \(errno)") }
+        }
+        try PrivateFile.write(try TrustJSON.encoder().encode(RevFile(rev: book.rev)), to: revFile)
     }
 
-    /// Runs `body` holding an exclusive `flock` on the book's lock file (other processes too).
-    private func locked<T>(_ body: () throws -> T) throws -> T {
-        try PrivateFile.folder(url.deletingLastPathComponent())
-        let path = url.path + ".lock"
+    /// Runs `body` holding a `flock` (exclusive unless asked) on the book's lock file (other
+    /// processes too).
+    private func locked<T>(_ mode: Int32 = LOCK_EX, _ body: () throws -> T) throws -> T {
+        let path: String
+        if folder {
+            try PrivateFile.folder(url)
+            path = url.appendingPathComponent(".lock").path
+        } else {
+            try PrivateFile.folder(url.deletingLastPathComponent())
+            path = url.path + ".lock"
+        }
         let fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw TrustError.io("lock \(errno)") }
         defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else { throw TrustError.io("flock \(errno)") }
+        guard flock(fd, mode) == 0 else { throw TrustError.io("flock \(errno)") }
         defer { flock(fd, LOCK_UN) }
         return try body()
     }

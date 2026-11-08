@@ -81,10 +81,22 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
         package var publicKey: String
         package var tailscaleIPs: [String]
         package var userID: Int64?
+        /// A tagged node's tags (its `UserID` is then Tailscale's stand-in, never a person).
+        package var tags: [String]?
 
         enum CodingKeys: String, CodingKey {
-            case publicKey = "PublicKey", tailscaleIPs = "TailscaleIPs", userID = "UserID"
+            case publicKey = "PublicKey", tailscaleIPs = "TailscaleIPs", userID = "UserID", tags = "Tags"
         }
+
+        package init(publicKey: String, tailscaleIPs: [String], userID: Int64?, tags: [String]? = nil) {
+            self.publicKey = publicKey
+            self.tailscaleIPs = tailscaleIPs
+            self.userID = userID
+            self.tags = tags
+        }
+
+        /// The person this node belongs to; nil for a tagged node.
+        package var owner: Int64? { (tags ?? []).isEmpty ? userID : nil }
     }
 
     package struct Peer: Decodable, Sendable, Equatable {

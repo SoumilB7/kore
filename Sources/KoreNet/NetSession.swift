@@ -68,6 +68,13 @@ package final class NetSession {
         package var services = ServiceTable.v1
         package var tickets: ResumeTickets
         package var credit = NetSession.initialCredit
+        /// A hello from a device the book doesn't hold: refused (`bye unknown` unless said
+        /// otherwise), or checked against a record made from its enroll, kept only once its proof
+        /// holds (`commit`; false refuses).
+        package var stranger: ((NetControl.Hello) -> Stranger)?
+        /// This node's own Tailscale user: a device enrolled over SSH takes its first node key only
+        /// from a WhoIs of this user.
+        package var ownUser: Int64?
 
         package init(local: NetLocal, route: Binding.Route, peer: NetPeerFacts, book: DeviceBook, tickets: ResumeTickets) {
             self.local = local
@@ -88,6 +95,9 @@ package final class NetSession {
         package var service: String
         package var resume: NetControl.Resume?
         package var credit = NetSession.initialCredit
+        /// Who this device is, for a server without its record (a box being claimed, the Add
+        /// device window, the SSH upgrade).
+        package var enroll: NetControl.Enroll?
 
         package init(local: NetLocal, route: Binding.Route, peer: NetPeerFacts, book: DeviceBook, server: UUID, service: String, resume: NetControl.Resume? = nil) {
             self.local = local
@@ -103,6 +113,12 @@ package final class NetSession {
     package enum Role {
         case server(Server)
         case client(Client)
+    }
+
+    /// What a server makes of a hello from a device it has no record of.
+    package enum Stranger: Sendable {
+        case refuse(String)
+        case enroll(DeviceRecord, commit: @Sendable (VerifiedPeer) -> Bool)
     }
 
     package enum State: Equatable {
@@ -123,6 +139,14 @@ package final class NetSession {
     package private(set) var state = State.handshaking
     /// Server side: the cursors the client sent in its first message after the welcome.
     package private(set) var cursors: [String: JSONValue]?
+    /// Server side: the hello as it came (who asked, for the journal and the pending list).
+    package private(set) var hello: NetControl.Hello?
+    /// The peer once its proof held.
+    package private(set) var verified: VerifiedPeer?
+    /// Server side: a node key the handshake kept for the peer (rotation), for the journal.
+    package private(set) var nodeKeyAppend: DeviceBook.NodeKeyAppend?
+    /// Server side: the device came in through its enroll (a record made now).
+    package private(set) var enrolled = false
     /// When the handshake gives up; nil once established.
     package private(set) var deadline: Date?
 
@@ -232,6 +256,12 @@ package final class NetSession {
     /// Stream-queue bytes the peer will still take from this side.
     package var credit: Int { scheduler.credit }
 
+    /// Bytes waiting to go: queued messages and the frame part the socket hasn't taken.
+    package var backlog: Int { out.count + scheduler.queuedBytes.values.reduce(0, +) }
+
+    /// The descriptor, for the owner's read and write sources.
+    package var descriptor: Int32 { fd }
+
     /// Says `bye` (as far as the socket takes it) and ends.
     package func close(_ reason: String) { fail(reason) }
 
@@ -301,25 +331,54 @@ package final class NetSession {
     }
 
     private func serverHello(_ server: Server, _ hello: NetControl.Hello) {
+        self.hello = hello
         guard hello.v == NetControl.version else { return fail(NetControl.Reason.version) }
         guard let entry = server.services[hello.service] else { return fail(NetControl.Reason.service) }
-        guard let record = try? server.book.record(hello.device) else { return fail(NetControl.Reason.unknown) }
+        let known: DeviceRecord?
+        do {
+            known = try server.book.record(hello.device)
+        } catch {
+            return fail(NetControl.Reason.unknown)
+        }
+        var commit: (@Sendable (VerifiedPeer) -> Bool)?
+        let record: DeviceRecord
+        if let known {
+            guard !known.isPaused else { return fail(NetControl.Reason.paused) }
+            record = known
+        } else {
+            switch server.stranger?(hello) ?? .refuse(NetControl.Reason.unknown) {
+            case .refuse(let reason): return fail(reason)
+            case .enroll(let made, let keep):
+                guard made.id == hello.device else { return fail(NetControl.Reason.proof) }
+                record = made
+                commit = keep
+            }
+        }
         guard let binding = try? Binding(
             route: server.route.rawValue, nonceS: nonceS, nonceC: hello.nonce, deviceC: hello.device, deviceS: server.local.device,
             nodeKeyC: server.peer.nodeKey, nodeKeyS: server.local.nodeKey),
-              let peer = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: record),
-              adopt(peer, record: record, route: server.route, facts: server.peer, book: server.book)
+              let peer = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: record)
         else { return fail(NetControl.Reason.proof) }
         let request = PolicyTable.Request(
             pair: .init(record.kind, server.local.kind), service: entry.policy, queue: entry.queue,
             path: PolicyTable.Path(rawValue: server.route.rawValue)!, abilities: record.abilities)
         guard case .allow(_, let granted) = PolicyTable.decide(request) else { return fail(NetControl.Reason.refused) }
         guard (1...Self.maxCredit).contains(hello.credit) else { return fail(NetControl.Reason.protocolError) }
+        if let commit {
+            guard commit(peer) else { return fail(NetControl.Reason.refused) }
+            enrolled = true
+        } else {
+            guard adopt(peer, record: record, route: server.route, facts: server.peer, book: server.book, ownUser: server.ownUser) else {
+                return fail(NetControl.Reason.proof)
+            }
+        }
+        verified = peer
         guard let sig = try? IdentityProof.sign(binding, with: server.local.signer) else { return fail(NetControl.Reason.proof) }
         let resumed = hello.ticket.map { server.tickets.redeem($0, for: record.id) } ?? false
         let ticket = server.tickets.issue(for: record.id)
         scheduler.grant(hello.credit)
-        control(.welcome(.init(sig: sig, credit: server.credit, ticket: ticket, resumed: resumed, abilities: granted)))
+        let rev = (try? server.book.read().rev) ?? 0
+        control(.welcome(.init(sig: sig, credit: server.credit, ticket: ticket, resumed: resumed, abilities: granted, devicesRev: rev)))
         self.binding = binding
         decoder.preAuth = false
         deadline = nil
@@ -339,16 +398,22 @@ package final class NetSession {
         else { return fail(NetControl.Reason.proof) }
         self.binding = binding
         serverRecord = record
-        control(.hello(.init(service: client.service, device: client.local.device, nonce: nonceC, sig: sig, credit: client.credit, ticket: client.resume?.ticket)))
-        decoder.expectAnotherPreAuthFrame()
+        control(.hello(.init(
+            service: client.service, device: client.local.device, nonce: nonceC, sig: sig, credit: client.credit, ticket: client.resume?.ticket,
+            enroll: client.enroll)))
+        // The welcome and the service's first messages may come in one read: past the challenge
+        // the client reads whole frames (the server it dialled is the one its book pins, and the
+        // welcome's proof decides within `clientWindow`).
+        decoder.preAuth = false
     }
 
     private func clientWelcome(_ client: Client, _ welcome: NetControl.Welcome) {
         guard let binding, let record = serverRecord else { return fail(NetControl.Reason.protocolError) }
         guard welcome.v == NetControl.version else { return fail(NetControl.Reason.version) }
         guard let peer = IdentityProof.verify(welcome.sig, binding: binding, side: .server, record: record),
-              adopt(peer, record: record, route: client.route, facts: client.peer, book: client.book)
+              adopt(peer, record: record, route: client.route, facts: client.peer, book: client.book, ownUser: nil)
         else { return fail(NetControl.Reason.proof) }
+        verified = peer
         guard (1...Self.maxCredit).contains(welcome.credit) else { return fail(NetControl.Reason.protocolError) }
         scheduler.grant(welcome.credit)
         decoder.preAuth = false
@@ -359,9 +424,11 @@ package final class NetSession {
 
     /// The peer's node key is one its record holds, or (rotation) it's kept now: a valid proof
     /// and a same-user WhoIs. The SSH route has no node keys to check.
-    private func adopt(_ peer: VerifiedPeer, record: DeviceRecord, route: Binding.Route, facts: NetPeerFacts, book: DeviceBook) -> Bool {
+    private func adopt(_ peer: VerifiedPeer, record: DeviceRecord, route: Binding.Route, facts: NetPeerFacts, book: DeviceBook, ownUser: Int64?) -> Bool {
         if route == .ssh { return facts.nodeKey == Binding.Route.sshNodeKey }
         if record.nodeKeys.contains(peer.nodeKey) { return true }
-        return (try? book.appendNodeKey(peer, whoisUserId: facts.userId, whoisTags: facts.tags)) != nil
+        guard let outcome = try? book.appendNodeKey(peer, whoisUserId: facts.userId, whoisTags: facts.tags, ownUser: ownUser) else { return false }
+        nodeKeyAppend = outcome
+        return true
     }
 }

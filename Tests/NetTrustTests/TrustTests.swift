@@ -331,6 +331,6 @@ struct AppCapTests {
 
     @Test func noCapMapIsNoGrant() {
         #expect(AppCap.abilities(capMap: nil, tagged: true) == nil)
-        #expect(KoreCapDomain.hasPrefix("kore.invalid/"))
+        #expect(KoreCapDomain == "github.com/SoumilB7/kore/cap/device")
     }
 }

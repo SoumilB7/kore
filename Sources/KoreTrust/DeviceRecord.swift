@@ -27,8 +27,13 @@ package struct DeviceRecord: Codable, Hashable, Sendable, Identifiable {
     package var issuedBy: UUID?
     package var added: Date
     package var lastSeen: Date?
+    /// Paused by an owner Mac (`devices.set`): its sessions are refused (`bye paused`), its record
+    /// kept. Absent when not paused.
+    package var paused: Bool?
 
     package static let maxNodeKeys = 3
+
+    package var isPaused: Bool { paused == true }
 
     package init(
         id: UUID, name: String, kind: NodeKind, abilities: Ability, owner: Bool = false, identityKey: Data,
@@ -53,12 +58,29 @@ package struct DeviceRecord: Codable, Hashable, Sendable, Identifiable {
 
     package var tagged: Bool { !tags.isEmpty }
 
+    /// Enrolled over SSH and not seen on the tailnet yet: no user, no tags, only `"ssh"`.
+    package var sshOnly: Bool { userId == nil && tags.isEmpty && nodeKeys == [Binding.Route.sshNodeKey] }
+
+    /// The 8 hex digits people compare by eye (`kore-host join`, the claim card): the id's first
+    /// eight, shown as two groups of four.
+    package static func code(_ id: UUID) -> String {
+        let hex = String(id.uuidString.lowercased().prefix(8))
+        return hex.prefix(4) + " " + hex.suffix(4)
+    }
+
+    /// `code`'s digits as typed (`a1b2 c3d4`, `a1b2-c3d4`, `A1B2C3D4`), or nil.
+    package static func codeDigits(_ typed: String) -> String? {
+        let digits = typed.lowercased().filter { $0 != " " && $0 != "-" }
+        guard digits.count == 8, digits.allSatisfy(\.isHexDigit) else { return nil }
+        return digits
+    }
+
     /// The record's own rules: at most three node keys, an owner only among Macs, a user or tags
     /// (never both), a tagged device at most read+ask.
     package func validate() throws {
         guard nodeKeys.count <= Self.maxNodeKeys, Set(nodeKeys).count == nodeKeys.count else { throw TrustError.invalidRecord("nodeKeys") }
         guard !owner || kind == .mac else { throw TrustError.invalidRecord("owner") }
-        guard (userId == nil) != tags.isEmpty else { throw TrustError.invalidRecord("userId|tags") }
+        guard (userId == nil) != tags.isEmpty || sshOnly else { throw TrustError.invalidRecord("userId|tags") }
         guard !tagged || Ability([.read, .ask]).isSuperset(of: abilities) else { throw TrustError.invalidRecord("tagged abilities") }
         guard !identityKey.isEmpty else { throw TrustError.invalidRecord("identityKey") }
     }
@@ -79,6 +101,7 @@ package struct DeviceRecord: Codable, Hashable, Sendable, Identifiable {
         issuedBy = try c.decodeIfPresent(UUID.self, forKey: .issuedBy)
         added = try c.decode(Date.self, forKey: .added)
         lastSeen = try c.decodeIfPresent(Date.self, forKey: .lastSeen)
+        paused = try c.decodeIfPresent(Bool.self, forKey: .paused)
         try validate()
     }
 }

@@ -4,7 +4,7 @@ import Foundation
 /// (`{"<KoreCapDomain>": [{"v":1,"abilities":["read","ask"]}]}`): a tagged node is let in only
 /// with one, and then at most read+ask. Parsing is strict: any other key, version, type, unknown
 /// or repeated ability makes the whole capability absent.
-package let KoreCapDomain = "kore.invalid/cap/kore" // PLACEHOLDER: the owner hasn't picked Kore's domain (plan §11 q2).
+package let KoreCapDomain = "github.com/SoumilB7/kore/cap/device"
 
 package enum AppCap {
     /// The most a tagged node gets, whatever its grant says.

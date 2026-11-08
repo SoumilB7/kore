@@ -42,10 +42,17 @@ package enum NetControl: Equatable, Sendable {
         package var sig: Data
         package var credit: Int
         package var ticket: Data?
-        /// Only inside the Mac's Add device window (later steps); absent otherwise.
+        /// A device the server has no record of says who it is: inside the Mac's Add device
+        /// window, a Mac reaching a box it hasn't claimed, or the SSH → KoreNet upgrade.
         package var enroll: Enroll?
+        /// The SSH route's upgrade (`kore-host attach --proto 2` fills it in from the grant file,
+        /// as `attach` fills in today's proof): the old grant, honoured once.
+        package var legacyGrant: LegacyGrant?
 
-        package init(service: String, device: UUID, nonce: Data, sig: Data, credit: Int, ticket: Data? = nil, enroll: Enroll? = nil) {
+        package init(
+            service: String, device: UUID, nonce: Data, sig: Data, credit: Int, ticket: Data? = nil, enroll: Enroll? = nil,
+            legacyGrant: LegacyGrant? = nil
+        ) {
             v = NetControl.version
             self.service = service
             self.device = device
@@ -54,6 +61,17 @@ package enum NetControl: Equatable, Sendable {
             self.credit = credit
             self.ticket = ticket
             self.enroll = enroll
+            self.legacyGrant = legacyGrant
+        }
+    }
+
+    package struct LegacyGrant: Codable, Equatable, Sendable {
+        package var name: String
+        package var secret: String
+
+        package init(name: String, secret: String) {
+            self.name = name
+            self.secret = secret
         }
     }
 
@@ -71,9 +89,22 @@ package enum NetControl: Equatable, Sendable {
 
     package struct Enroll: Codable, Equatable, Sendable {
         package var name: String
-        package var model: String
+        package var model: String?
+        package var kind: NodeKind?
+        /// SPKI DER: the key the hello's signature is checked against.
         package var identityKey: Data
         package var raiseKey: Data?
+        /// A Mac claiming an unclaimed box: its owner Allowed the box's claim card.
+        package var claim: Bool?
+
+        package init(name: String, model: String? = nil, kind: NodeKind? = nil, identityKey: Data, raiseKey: Data? = nil, claim: Bool? = nil) {
+            self.name = name
+            self.model = model
+            self.kind = kind
+            self.identityKey = identityKey
+            self.raiseKey = raiseKey
+            self.claim = claim
+        }
     }
 
     /// Server → client: its signature over B, the credit it gives, the next resume ticket, whether
@@ -85,21 +116,29 @@ package enum NetControl: Equatable, Sendable {
         package var ticket: Data
         package var resumed: Bool
         package var abilities: Ability
+        /// The server's device book rev: an owner Mac pushes `devices.set` when it holds a newer
+        /// one (a box offline through a change catches up).
+        package var devicesRev: Int?
 
-        package init(sig: Data, credit: Int, ticket: Data, resumed: Bool, abilities: Ability) {
+        package init(sig: Data, credit: Int, ticket: Data, resumed: Bool, abilities: Ability, devicesRev: Int? = nil) {
             v = NetControl.version
             self.sig = sig
             self.credit = credit
             self.ticket = ticket
             self.resumed = resumed
             self.abilities = abilities
+            self.devicesRev = devicesRev
         }
     }
 
     /// Why a session ended, as `bye` says it.
     package enum Reason {
         package static let unknown = "unknown"
+        /// The grant the upgrade named was used already, or doesn't match.
+        package static let grant = "grant"
         package static let revoked = "revoked"
+        /// The device's record is kept but an owner Mac paused it.
+        package static let paused = "paused"
         package static let replaced = "replaced"
         package static let proof = "proof"
         package static let refused = "refused"
