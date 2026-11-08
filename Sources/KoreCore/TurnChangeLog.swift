@@ -84,7 +84,7 @@ public enum TurnChangeLog {
                 if info.st_ino != inode || info.st_size < indexed {
                     spans = [:]
                     indexed = 0
-                    inode = info.st_ino
+                    inode = UInt64(info.st_ino)
                 }
                 guard info.st_size > indexed else { return }
                 let fd = open(path, O_RDONLY)

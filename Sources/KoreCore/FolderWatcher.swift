@@ -1,6 +1,6 @@
+import Foundation
 #if canImport(Darwin)
 import CoreServices
-import Foundation
 
 /// Reports changes anywhere under a folder: one FSEvents stream for the whole tree, coalesced
 /// over `latency`, delivered on the main queue as the changed paths (files and folders).
@@ -47,6 +47,7 @@ public final class FolderWatcher: @unchecked Sendable {
 
     deinit { stop() }
 }
+#endif
 
 /// A path with every link resolved, as FSEvents and the CLIs report it (`/private/tmp`, not
 /// Foundation's `/tmp`); the path itself when it doesn't exist.
@@ -55,4 +56,3 @@ public func realPath(_ path: String) -> String {
     defer { free(resolved) }
     return String(cString: resolved)
 }
-#endif

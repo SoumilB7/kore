@@ -1,3 +1,4 @@
+import Foundation
 #if canImport(AVFoundation)
 import AVFoundation
 import ImageIO

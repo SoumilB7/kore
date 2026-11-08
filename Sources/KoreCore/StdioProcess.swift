@@ -256,9 +256,13 @@ package final class StdioProcess: @unchecked Sendable {
     /// Running, not a zombie (one that has exited runs nothing).
     private static func alive(_ pid: pid_t) -> Bool {
         guard kill(pid, 0) == 0 else { return false }
+        #if canImport(Darwin)
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         return !(proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size && info.pbi_status == SZOMB)
+        #else
+        return ProcessChild(pid)?.alive ?? false
+        #endif
     }
 
     /// Signals the child and its group, only while it is running: once reaped, its pid may be
@@ -273,9 +277,13 @@ package final class StdioProcess: @unchecked Sendable {
     /// `pid` and every process under it, deepest first. Taken before killing: a killed parent's
     /// children move to launchd.
     static func tree(_ pid: pid_t) -> [pid_t] {
+        #if canImport(Darwin)
         var buffer = [pid_t](repeating: 0, count: 256)
         _ = proc_listchildpids(pid, &buffer, Int32(buffer.count * MemoryLayout<pid_t>.size))
         return buffer.filter { $0 > 0 }.flatMap(tree) + [pid]
+        #else
+        return (ProcessChild(pid)?.descendants().map(\.pid) ?? []) + [pid]
+        #endif
     }
 
     final class Running: @unchecked Sendable {

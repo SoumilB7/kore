@@ -7,15 +7,24 @@ public struct FolderIdentity: Sendable {
     private let bookmark: Data?
 
     public init(_ folder: URL) {
+        #if canImport(Darwin)
         bookmark = try? folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        #else
+        // No bookmarks off macOS: the folder is followed by its path.
+        bookmark = Data(folder.path.utf8)
+        #endif
     }
 
     /// Where the folder is now; nil once it's deleted, in the Trash, or its volume is gone.
     public func current() -> URL? {
         guard let bookmark else { return nil }
+        #if canImport(Darwin)
         var stale = false
         guard let path = try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale)
         else { return nil }
+        #else
+        let path = URL(fileURLWithPath: String(decoding: bookmark, as: UTF8.self))
+        #endif
         var isFolder: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path.path, isDirectory: &isFolder), isFolder.boolValue else { return nil }
         if path.pathComponents.contains(".Trash") { return nil }

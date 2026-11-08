@@ -34,7 +34,12 @@ public enum JSONValue: Sendable, Hashable {
     init(foundation value: Any) {
         switch value {
         case let number as NSNumber:
+            #if canImport(ObjectiveC)
             self = CFGetTypeID(number) == CFBooleanGetTypeID() ? .bool(number.boolValue) : .number(number.doubleValue)
+            #else
+            // swift-corelibs-foundation: a JSON true or false is an NSNumber of a C char.
+            self = String(cString: number.objCType) == "c" ? .bool(number.boolValue) : .number(number.doubleValue)
+            #endif
         case let string as String: self = .string(string)
         case let array as [Any]: self = .array(array.map(JSONValue.init(foundation:)))
         case let object as [String: Any]: self = .object(object.mapValues(JSONValue.init(foundation:)))

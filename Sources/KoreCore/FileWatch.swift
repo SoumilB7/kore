@@ -6,7 +6,11 @@ import Foundation
 public final class FileWatch: @unchecked Sendable {
     private let path: String
     private let handler: @MainActor () -> Void
+    #if canImport(Darwin)
     private var source: DispatchSourceFileSystemObject?
+    #else
+    private var source: AnyObject?
+    #endif
 
     public init(_ url: URL, handler: @escaping @MainActor () -> Void) {
         path = url.path
@@ -19,6 +23,7 @@ public final class FileWatch: @unchecked Sendable {
         if source == nil { arm() }
     }
 
+    #if canImport(Darwin)
     private func arm() {
         let fd = open(path, O_EVTONLY)
         guard fd >= 0 else { return }
@@ -39,9 +44,15 @@ public final class FileWatch: @unchecked Sendable {
         self.source = source
         source.resume()
     }
+    #else
+    /// Off macOS nothing watches (the box watches no files): changes are seen when read.
+    private func arm() {}
+    #endif
 
     public func stop() {
+        #if canImport(Darwin)
         source?.cancel()
+        #endif
         source = nil
     }
 

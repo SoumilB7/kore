@@ -435,12 +435,16 @@ package enum EventLog {
     /// KORE_EVENT_TIMES=1: each line starts with the time since the process started.
     private static let times: TimeInterval? = {
         guard ProcessInfo.processInfo.environment["KORE_EVENT_TIMES"] == "1" else { return nil }
+        #if canImport(Darwin)
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.size
         var mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
         guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return nil }
         let start = info.kp_proc.p_un.__p_starttime
         return TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000
+        #else
+        return Date().timeIntervalSince1970
+        #endif
     }()
 }
 

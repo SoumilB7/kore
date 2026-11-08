@@ -60,7 +60,7 @@ struct UsageFileScan {
         var info = stat()
         guard stat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
         func seconds(_ spec: timespec) -> Double { Double(spec.tv_sec) + Double(spec.tv_nsec) / 1e9 }
-        return (UInt64(info.st_ino), UInt64(info.st_size), seconds(info.st_mtimespec), seconds(info.st_birthtimespec))
+        return (UInt64(info.st_ino), UInt64(info.st_size), seconds(info.modified), seconds(info.born))
     }
 
     static func number(_ value: Any?) -> Double { (value as? NSNumber)?.doubleValue ?? 0 }

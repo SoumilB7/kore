@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Short-lived OAuth input. Parsed values never belong in settings, logs or error messages.
 public enum LoginCallback {

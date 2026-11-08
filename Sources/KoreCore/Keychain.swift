@@ -19,12 +19,16 @@ package enum Keychain {
 
     /// A failure, in the Security framework's words.
     package struct Failure: LocalizedError, Equatable {
-        package let status: OSStatus
+        package let status: Int32
         package let words: String
 
-        package init(_ status: OSStatus) {
+        package init(_ status: Int32) {
             self.status = status
+            #if canImport(Security)
             words = (SecCopyErrorMessageString(status, nil) as String?) ?? "error \(status)"
+            #else
+            words = "error \(status)"
+            #endif
         }
 
         package var errorDescription: String? { words }
@@ -114,7 +118,7 @@ package final class MemoryKeychain: SecretStore, @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String: String] = [:]
     /// The next `set` fails with this status.
-    package var failNext: OSStatus?
+    package var failNext: Int32?
 
     package init() {}
 

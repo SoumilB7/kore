@@ -69,11 +69,19 @@ package final class HostListener {
         }
     }
 
-    /// The peer's uid is this user's (getpeereid; musl and Darwin both have it).
+    /// The peer's uid is this user's: getpeereid on macOS, SO_PEERCRED on Linux.
     static func peerIsUser(_ fd: Int32) -> Bool {
+        #if canImport(Darwin)
         var uid = uid_t(0), gid = gid_t(0)
         guard getpeereid(fd, &uid, &gid) == 0 else { return false }
         return uid == getuid()
+        #else
+        // struct ucred { pid_t pid; uid_t uid; gid_t gid; }, SO_PEERCRED being 17 on Linux.
+        var cred: (pid: Int32, uid: UInt32, gid: UInt32) = (0, 0, 0)
+        var length = socklen_t(MemoryLayout.size(ofValue: cred))
+        guard getsockopt(fd, SOL_SOCKET, 17, &cred, &length) == 0 else { return false }
+        return cred.uid == getuid()
+        #endif
     }
 
     /// A client's connection to a path: what `attach` and tests use.

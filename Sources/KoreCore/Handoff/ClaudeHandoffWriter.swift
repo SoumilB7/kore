@@ -109,10 +109,10 @@ public struct ClaudeHandoffWriter: HandoffWriter {
 
     /// A new file with `data`, failing if anything is already there (`O_EXCL`).
     static func create(_ file: URL, _ data: Data) throws {
-        let fd = Darwin.open(file.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        let fd = Posix.open(file.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
         guard fd >= 0 else { throw HandoffError.cantWrite(file.path, String(cString: strerror(errno))) }
-        defer { Darwin.close(fd) }
-        let written = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        defer { Posix.close(fd) }
+        let written = data.withUnsafeBytes { Posix.write(fd, $0.baseAddress, $0.count) }
         guard written == data.count else { throw HandoffError.cantWrite(file.path, String(cString: strerror(errno))) }
     }
 

@@ -268,6 +268,7 @@ private final class InstallRun: @unchecked Sendable {
     }
 
     private func run() -> Result<Void, any Error> {
+        #if canImport(Darwin)
         var fds: [Int32] = [0, 0]
         guard pipe(&fds) == 0 else { return .failure(CLIInstaller.Reason.other) }
         let (readEnd, writeEnd) = (fds[0], fds[1])
@@ -328,6 +329,11 @@ private final class InstallRun: @unchecked Sendable {
         let code = (status >> 8) & 0xff
         guard exited, code == 0 else { return .failure(CLIInstaller.reason(output: said, status: exited ? code : -1)) }
         return .success(())
+        #else
+        // The box installs no CLIs: they are set up by hand there.
+        return .failure(CLIInstaller.Reason.other)
+        #endif
+
     }
 
     private func take(_ line: Data) {

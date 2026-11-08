@@ -180,7 +180,7 @@ public final class ChatTextIndex: @unchecked Sendable {
     private static func stamp(_ file: URL) -> (UInt64, Date)? {
         var info = stat()
         guard stat(file.path, &info) == 0 else { return nil }
-        let at = info.st_mtimespec
+        let at = info.modified
         return (UInt64(info.st_size), Date(timeIntervalSince1970: TimeInterval(at.tv_sec) + TimeInterval(at.tv_nsec) / 1e9))
     }
 
@@ -238,7 +238,7 @@ public final class ChatTextIndex: @unchecked Sendable {
                 buffer = grown
                 capacity *= 2
             }
-            let count = Darwin.read(fd, buffer + filled, capacity - filled)
+            let count = Posix.read(fd, buffer + filled, capacity - filled)
             guard count > 0 else { break }
             filled += count
             var position = 0

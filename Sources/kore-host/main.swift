@@ -26,7 +26,7 @@ func fail(_ message: String) -> Never {
 let arguments = Array(CommandLine.arguments.dropFirst())
 let paths = HostPaths()
 let grants = GrantStore(paths.grants)
-var keep: [AnyObject] = []
+var keep: [Any] = []
 
 switch arguments.first {
 case "run":

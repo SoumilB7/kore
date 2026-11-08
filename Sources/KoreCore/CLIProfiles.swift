@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#endif
 
 /// A CLI's extra logins. Each one is a config folder of its own (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`)
 /// under Kore's, where the CLI keeps that login (Claude in a Keychain item named for the folder,
@@ -268,6 +270,7 @@ public enum CLIProfiles {
     /// runs in a folder (20 s and more): a new login starts with a copy of main's, by SQLite's
     /// own backup, so a sign-in starts at once and the threads are there.
     private static func seedCodexState(in dir: URL) {
+        #if canImport(SQLite3)
         let main = mainFolder("codex")
         let names = (try? FileManager.default.contentsOfDirectory(atPath: main.path)) ?? []
         for name in names where name.hasPrefix("state_") && name.hasSuffix(".sqlite") {
@@ -284,6 +287,7 @@ public enum CLIProfiles {
             sqlite3_backup_step(backup, -1)
             sqlite3_backup_finish(backup)
         }
+        #endif
     }
 
     /// Claude's MCP servers and other user-wide choices live in `.claude.json` beside the login:

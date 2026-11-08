@@ -227,7 +227,7 @@ public final class PlanSnapshotLog: @unchecked Sendable {
         let fd = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
         guard fd >= 0 else { return }
         defer { close(fd) }
-        _ = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        _ = data.withUnsafeBytes { Posix.write(fd, $0.baseAddress, $0.count) }
     }
 
     private func read() -> [Entry] {
