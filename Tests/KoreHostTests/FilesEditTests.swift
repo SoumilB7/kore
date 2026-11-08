@@ -185,9 +185,11 @@ struct FilesEditTests {
         #expect(watches.set([(rig.work, real)]))
         try await Task.sleep(for: .milliseconds(200))
         try Data("x".utf8).write(to: URL(fileURLWithPath: rig.work + "/fresh.txt"))
-        try await until { !got.value.isEmpty }
-        #expect(got.value.first?.folders == [rig.work])
-        #expect(got.value.first?.names?[rig.work]?.contains("fresh.txt") == true)
+        // The change that names the new file (a busy Mac can first report the folder's own setup
+        // separately, in an earlier batch without it).
+        try await until { got.value.contains { $0.names?[rig.work]?.contains("fresh.txt") == true } }
+        let change = got.value.first { $0.names?[rig.work]?.contains("fresh.txt") == true }
+        #expect(change?.folders == [rig.work])
     }
 
     @Test func onlyAFullGrantEditsAndTheOpenFoldersAreWatched() async throws {

@@ -221,7 +221,9 @@ struct FloodTests {
                 FileManager.default.createFile(atPath: dir.appendingPathComponent("f\(i).py").path, contents: Data("x".utf8))
             }
         }.value
-        let end = ContinuousClock.now + .seconds(30)
+        // Ends as soon as every file was said; the bound only ends a watch that never would (30 s
+        // ran out with the parallel gate's load, the files still coming).
+        let end = ContinuousClock.now + .seconds(120)
         while Set(said.compactMap { $0["p"] as? String }).filter({ $0.hasSuffix(".py") }).count < count, ContinuousClock.now < end {
             try await Task.sleep(for: .milliseconds(20))
         }

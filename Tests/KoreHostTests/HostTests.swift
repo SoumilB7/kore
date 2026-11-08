@@ -81,7 +81,7 @@ enum Waited: Error { case timeout }
 
 @MainActor
 func until(_ check: () -> Bool) async throws {
-    let end = ContinuousClock.now + .seconds(5)
+    let end = ContinuousClock.now + .seconds(30)
     while !check() {
         guard ContinuousClock.now < end else { throw Waited.timeout }
         try await Task.sleep(for: .milliseconds(5))

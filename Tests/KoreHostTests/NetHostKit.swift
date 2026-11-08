@@ -175,7 +175,7 @@ final class Dialled {
 
     /// Waits (yielding to the main queue, never sleeping) until `check` holds.
     func until(_ check: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async throws {
-        let end = ContinuousClock.now + .seconds(5)
+        let end = ContinuousClock.now + .seconds(30)
         while !check() {
             pump()
             guard ContinuousClock.now < end else {
