@@ -275,10 +275,11 @@ struct NetReviewTests {
         let fd = try #require(rig.net.firstListener)
         let port = try #require(rig.net.listenerPort)
         // The socket itself, not its number: tests running alongside get freed numbers at once.
-        func identity(_ fd: Int32) -> (UInt64, UInt64)? {
+        // st_dev is signed on Darwin and a socket's is negative: kept as raw bits, never converted.
+        func identity(_ fd: Int32) -> (Int64, Int64)? {
             var info = stat()
             guard fstat(fd, &info) == 0 else { return nil }
-            return (UInt64(info.st_dev), UInt64(info.st_ino))
+            return (Int64(truncatingIfNeeded: info.st_dev), Int64(truncatingIfNeeded: info.st_ino))
         }
         let was = try #require(identity(fd))
         rig.net.leave()
