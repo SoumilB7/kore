@@ -625,6 +625,15 @@ package struct Approval: Identifiable, Sendable, Codable {
     package var held: [HeldSender]? = nil
     /// Why Allow can't be picked here (a hold a flag can't lift): the card shows it dim, saying so.
     package var allowNote: String? = nil
+    /// A call Auto asks a person about (Kore's ask list, a safety check, the classifier) or
+    /// refused (`ClaudeAutoStops`): Allow reads Run once, and only a person runs it.
+    package var autoStop = false
+    /// Run once's follow-up (a Codex review's one retry): sent once the answer's in, when the chat
+    /// is idle, so the agent tries it again.
+    package var retryMessage: String? = nil
+    /// Its Always allow writes one exact rule for this command (`Approval.exactRule`), not the CLI's
+    /// broader suggestion.
+    package var exactRule: String? = nil
 
     package struct HeldSender: Equatable, Sendable, Codable {
         /// Its address (`uds:/tmp/cc-socks/<pid>.sock`) and name, as it gave them.
@@ -659,6 +668,9 @@ package struct Approval: Identifiable, Sendable, Codable {
         copy.targets = targets
         copy.held = held
         copy.allowNote = allowNote
+        copy.autoStop = autoStop
+        copy.exactRule = exactRule
+        copy.retryMessage = retryMessage
         if canAlwaysAllow { copy.alwaysAllowNote = note }
         return copy
     }

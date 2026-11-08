@@ -116,6 +116,15 @@ public struct PermissionRequest: Sendable, Identifiable {
     /// Rule updates the CLI proposes for "always allow"; echoed back by `.allowAlways`.
     public let suggestions: [JSONValue]
     public let raw: JSONValue
+    /// Why the ask escalated (`decision_reason`), and what kind (`decision_reason_type`:
+    /// `safetyCheck`, `classifier`, `rule`, …); `classifier_approvable` false: only a person may
+    /// approve it; `requires_user_interaction`: no stored grant or automatic answer may.
+    public var decisionReason: String? { raw["decision_reason"]?.string }
+    public var decisionReasonType: String? { raw["decision_reason_type"]?.string }
+    public var personOnly: Bool {
+        ["hook", "safetyCheck", "classifier"].contains(decisionReasonType ?? "") || raw["requires_user_interaction"]?.bool == true
+            || raw["classifier_approvable"]?.bool == false
+    }
 
     /// AskUserQuestion is routed through the permission channel; answer it with `.answers`.
     public var isQuestion: Bool { toolName == "AskUserQuestion" }
@@ -140,6 +149,9 @@ public enum PermissionDecision: Sendable {
     case allowSettingMode(String)
     /// Answers for AskUserQuestion, keyed by question text.
     case answers([String: String])
+    /// Allow, and keep allowing this exact Bash command: one rule in the project's local
+    /// settings (`.claude/settings.local.json`), the CLI's own writer, never its broader suggestion.
+    case allowExactly(command: String)
     case deny(message: String, interrupt: Bool = false)
 
     func payload(for request: PermissionRequest) -> JSONValue {
@@ -150,6 +162,16 @@ public enum PermissionDecision: Sendable {
             ["behavior": "allow", "updatedInput": request.input, "updatedPermissions": .array(request.suggestions)]
         case .allowWithInput(let input):
             ["behavior": "allow", "updatedInput": input]
+        case .allowExactly(let command):
+            [
+                "behavior": "allow", "updatedInput": request.input,
+                "updatedPermissions": [
+                    [
+                        "type": "addRules", "rules": [["toolName": "Bash", "ruleContent": .string(command)]], "behavior": "allow",
+                        "destination": "localSettings",
+                    ]
+                ],
+            ]
         case .allowSettingMode(let mode):
             [
                 "behavior": "allow", "updatedInput": request.input,

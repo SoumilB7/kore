@@ -126,6 +126,8 @@ extension Chat {
         if allow, let senders = card.held {
             return arsenalLetIn(card, senders: senders, by: caller)
         }
+        // A call Auto stopped is a person's to run, at every tier.
+        if allow, card.autoStop { return .failure(.init("Only you can run a command Auto asks about.")) }
         if allow {
             guard card.isPermission else { return .failure(.init("Only a permission card is allowed this way; plans stay yours to approve.")) }
             guard let caller, Self.mayApprove(caller) else {

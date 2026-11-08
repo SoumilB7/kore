@@ -151,6 +151,7 @@ package final class ClaudeBackend: ChatBackend {
             permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
             fastMode: options.fastMode ?? false, resume: fork?.from ?? sessionId)
         launch.switchModelsOnFlag = RefusalFallback.saved
+        launch.askHook = Self.askHook
         if let environment = options.environment { launch.environment.merge(try environment()) { $1 } }
         if let fork {
             launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at]
@@ -452,6 +453,46 @@ package final class ClaudeBackend: ChatBackend {
     /// What the running CLI wrote to stderr, for its exit line.
     private var stderrTail = StderrTail()
 
+    /// Kore's ask-list hook for every launch (`KoreAskList`): this Mac's `kore` helper; a box's
+    /// kore-host sets its own (`HostAskHook.install`). Nil: none.
+    package static var askHook: String? = KoreReach.helper.map { quoted($0.path) + " hook pretool" }
+
+    /// A path as one shell word, single-quoted.
+    nonisolated package static func quoted(_ path: String) -> String { "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
+    /// Calls Auto refused without asking: their cards (`ClaudeAutoStops`).
+    private let stops = ClaudeAutoStops()
+    /// The calls of this turn and the last few, for a refused one's command.
+    private var calls: [String: (tool: String, input: JSONValue)] = [:]
+
+    /// The model's calls and their results, as they pass: a hard stop becomes a card.
+    private func watchCalls(_ event: ClaudeEvent) {
+        switch event {
+        case .assistant(_, let blocks, _, _):
+            for case .toolUse(let id, let name, let input) in blocks {
+                if calls.count > 64 { calls.removeAll() }
+                calls[id] = (name, input)
+            }
+        case .user(let blocks, _, _):
+            for case .toolResult(let id, let content, let isError) in blocks {
+                if isError, let call = calls[id],
+                    let card = stops.denied(toolUseId: id, tool: call.tool, input: call.input, error: ClaudeTranslator.text(of: content))
+                {
+                    var approval = Approval(id: card.id, title: card.title, detail: card.line, body: nil, canAlwaysAllow: false, questions: [])
+                    approval.autoStop = true
+                    approval.allowNote = card.line
+                    approval.tool = call.tool
+                    yield(.approvalRequested(approval))
+                }
+                calls[id] = nil
+            }
+        case .exited:
+            for id in stops.exited() { yield(.approvalWithdrawn(id)) }
+            calls.removeAll()
+        default: break
+        }
+    }
+
     /// Cross-session messages the CLI held: their card and the policy window.
     private let holds = ClaudePeerHolds()
     package private(set) var peerAddress: String?
@@ -504,8 +545,11 @@ package final class ClaudeBackend: ChatBackend {
         case .peerHold(let hold):
             holds.bypass = options.mode == "bypassPermissions"
             held(holds.frame(hold))
+        case .assistant, .user:
+            watchCalls(event)
         case .exited:
             held(holds.exited())
+            watchCalls(event)
         default: break
         }
         translator.translate(event)
@@ -1078,6 +1122,8 @@ package final class ClaudeBackend: ChatBackend {
     }
 
     package func respond(to approvalID: String, _ decision: Decision) async {
+        // A card for a call the CLI already refused: nothing to answer it.
+        if approvalID.hasPrefix(ClaudeAutoStops.idPrefix) { return }
         if approvalID == ClaudePeerHolds.cardID {
             if case .deny = decision { return await answerHeld(allow: false, by: nil) }
             return await answerHeld(allow: true, by: nil)
@@ -1086,6 +1132,10 @@ package final class ClaudeBackend: ChatBackend {
         let mapped: PermissionDecision =
             switch decision {
             case .allow: .allow
+            // A person-only ask keeps only its own exact command, never the CLI's broader rule.
+            case .allowAlways where request.personOnly:
+                request.toolName == "Bash" && request.raw["suppress_always_allow_rule"]?.bool != true
+                    ? request.input["command"]?.string.map { .allowExactly(command: $0) } ?? .allow : .allow
             case .allowAlways: .allowAlways
             case .deny: .deny(message: ClaudeTranslator.deniedCall)
             // Several picked go as one line, as Claude Code's own picker sends them.

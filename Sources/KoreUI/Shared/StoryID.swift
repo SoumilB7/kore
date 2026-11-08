@@ -36,6 +36,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
         case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track, outside, extended
         case signIn = "signin", signOut = "signout"
+        /// An Auto ask's "Always ask for these in my settings".
+        case settings
         /// The install card's Install, Try again and Locate….
         case install, retry, locate
         case `continue`, background, submit, other

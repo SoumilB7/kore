@@ -1832,11 +1832,22 @@ package final class Chat: Identifiable {
 
     package func answer(_ approval: Approval, _ decision: Decision) {
         if approval.held != nil { return answerHeld(approval, allow: !Self.denies(decision), by: nil) }
+        // Allow dim with a reason (a call Auto never runs): nothing, and the card stays.
+        if approval.allowNote != nil, !Self.denies(decision) { return }
         if case .allowAlways = decision { alwaysAllowed = true }
         approvals.remove(approval.id)
         transcriptView.approvalSettled(approval.id)
         if case .deny = decision { transcriptView.actionDenied() }
         let backend = backend
+        // Codex's one retry of a denied action: recorded first, then, if nothing's running, the agent
+        // is asked to try it again (a running turn sees the approval itself).
+        if let retry = approval.retryMessage, case .allow = decision {
+            Task {
+                await backend?.respond(to: approval.id, decision)
+                if !self.status.isRunning { self.sendFromLink(retry) }
+            }
+            return
+        }
         Task { await backend?.respond(to: approval.id, decision) }
     }
 
