@@ -80,13 +80,13 @@ val SWATCHES = listOf("b200", "b300", "b400", "b600", "neutral")
 
 /** The sheet's ground: rounded top, a hairline, and the two accent corner marks. */
 private class SheetGround(private val density: Float, var corner: Int) : Drawable() {
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = KS.pop }
-    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = K.line; style = Paint.Style.STROKE; strokeWidth = density }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Tone.l1 }
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Tone.hair2; style = Paint.Style.STROKE; strokeWidth = density }
     private val mark = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.5f * density; strokeCap = Paint.Cap.ROUND }
 
     override fun draw(c: Canvas) {
         val b = bounds
-        val r = 22 * density
+        val r = Radius.sheet * density
         val path = Path().apply {
             addRoundRect(RectF(b), floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f), Path.Direction.CW)
         }
@@ -94,8 +94,8 @@ private class SheetGround(private val density: Float, var corner: Int) : Drawabl
         c.drawLine(b.left + r, b.top + line.strokeWidth / 2, b.right - r, b.top + line.strokeWidth / 2, line)
         mark.color = corner
         val h = mark.strokeWidth / 2
-        // Each mark is 20 dp of the corner's arc, centred on it, as the Mac's corner marks.
-        val sweep = Math.toDegrees(20.0 / 22.0).toFloat()
+        // Each mark is 24 dp of the corner's arc, centred on it (spec §5), as the Mac's corner marks.
+        val sweep = Math.toDegrees(24.0 / Radius.sheet).toFloat()
         c.drawArc(RectF(b.left + h, b.top + h, b.left + 2 * r, b.top + 2 * r), 225f - sweep / 2, sweep, false, mark)
         c.drawArc(RectF(b.right - 2 * r, b.top + h, b.right - h, b.top + 2 * r), 315f - sweep / 2, sweep, false, mark)
     }
@@ -113,7 +113,8 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
     private val dialog = Dialog(a).apply { requestWindowFeature(Window.FEATURE_NO_TITLE) }
     private val ground = SheetGround(a.resources.displayMetrics.density, corner)
     val body: LinearLayout = a.column()
-    private val note = a.label("", 12f, K.faint).apply {
+    private val note = a.label("").apply {
+        type(Type.Caption); setTextColor(Tone.faint)
         visibility = View.GONE
         setPadding(a.dp(4), a.dp(8), a.dp(4), 0)
     }
@@ -123,13 +124,13 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
     init {
         val scroll = object : ScrollView(a) {
             override fun onMeasure(w: Int, h: Int) =
-                super.onMeasure(w, MeasureSpec.makeMeasureSpec((a.resources.displayMetrics.heightPixels * 0.8f).toInt(), MeasureSpec.AT_MOST))
+                super.onMeasure(w, MeasureSpec.makeMeasureSpec((a.resources.displayMetrics.heightPixels * 0.82f).toInt(), MeasureSpec.AT_MOST))
         }.apply { addView(body); isVerticalScrollBarEnabled = false }
         val root = a.column().apply {
             background = ground
-            setPadding(a.dp(16), a.dp(10), a.dp(16), a.dp(22))
-            addView(View(a).apply { background = a.rounded(KS.grab, 2) }, LinearLayout.LayoutParams(a.dp(36), a.dp(4)).apply {
-                gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = a.dp(10)
+            setPadding(a.dp(16), a.dp(8), a.dp(16), a.dp(26))
+            addView(View(a).apply { background = a.shape(Tone.grab, 2) }, LinearLayout.LayoutParams(a.dp(36), a.dp(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL; topMargin = a.dp(4); bottomMargin = a.dp(14)
             })
             addView(scroll)
             addView(note)
@@ -140,7 +141,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
             setGravity(Gravity.BOTTOM)
             setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-            setDimAmount(0.55f)
+            setDimAmount(0.6f)
             @Suppress("DEPRECATION")
             setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         }
@@ -185,12 +186,13 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
     }
 
     fun title(text: String, sub: String? = null) {
-        add(a.label(text, 16f, K.text, bold = true).apply { setPadding(a.dp(4), a.dp(2), a.dp(4), 0) })
-        if (sub != null) add(a.label(sub, 13f, K.dim).apply { setPadding(a.dp(4), a.dp(3), a.dp(4), a.dp(6)) })
+        add(a.label(text).apply { type(Type.Headline); setTextColor(Tone.text); setPadding(a.dp(4), a.dp(2), a.dp(4), 0) })
+        if (sub != null) add(a.label(sub).apply { type(Type.Callout); setTextColor(Tone.dim); setPadding(a.dp(4), a.dp(4), a.dp(4), a.dp(6)) })
     }
 
+    /** A section label (spec §2): sentence case, Label, dim; never uppercase and tracked. */
     fun section(text: String) =
-        add(a.label(text.uppercase(), 11f, K.faint).apply { letterSpacing = 0.06f; setPadding(a.dp(4), a.dp(14), a.dp(4), a.dp(4)) })
+        add(a.label(text).apply { type(Type.Label); setTextColor(Tone.dim); setPadding(a.dp(4), a.dp(16), a.dp(4), a.dp(6)) })
 
     /**
      * A row: an optional glyph or coloured dot, the title, and on the right one fact, a ✓ or ›.
@@ -204,22 +206,24 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
         val row = LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = a.dp(50)
+            minimumHeight = a.dp(52)
             setPadding(a.dp(4), a.dp(10), a.dp(4), a.dp(10))
-            if (dot != null) addView(View(a).apply { background = a.rounded(dot, 4) }, LinearLayout.LayoutParams(a.dp(8), a.dp(8)).apply { marginEnd = a.dp(14) })
-            if (glyph != null) addView(a.label(glyph, 14f, if (danger) K.err else K.dim).apply { gravity = Gravity.CENTER },
+            if (dot != null) addView(View(a).apply { background = a.shape(dot, 4) }, LinearLayout.LayoutParams(a.dp(8), a.dp(8)).apply { marginEnd = a.dp(14) })
+            val icon = glyph?.let { iconFor(it.toString()) }
+            if (icon != null) addView(android.widget.ImageView(a).apply {
+                setImageResource(icon)
+                imageTintList = android.content.res.ColorStateList.valueOf(if (danger) Tone.err else Tone.dim)
+            }, LinearLayout.LayoutParams(a.dp(18), a.dp(18)).apply { marginEnd = a.dp(14) })
+            else if (glyph != null) addView(a.label(glyph, 14f, if (danger) Tone.err else Tone.dim).apply { gravity = Gravity.CENTER },
                 LinearLayout.LayoutParams(a.dp(20), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = a.dp(12) })
-            addView(a.label(title, 15f, if (danger) K.err else K.text).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END },
+            addView(a.label(title).apply { type(Type.Body); setTextColor(if (danger) Tone.err else Tone.text); maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END },
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            val right = when {
-                checked -> "✓"
-                detail != null && chevron -> android.text.SpannableStringBuilder(detail).append(" ›")
-                chevron -> "›"
-                else -> detail
-            }
-            if (right != null) addView(a.label(right, if (checked) 16f else 13f, if (checked) K.accent else K.faint).apply {
-                maxLines = 1; setPadding(a.dp(10), 0, 0, 0)
-            })
+            if (detail != null && !checked) addView(a.label(detail).apply { type(Type.Caption); setTextColor(Tone.faint); maxLines = 1; setPadding(a.dp(10), 0, 0, 0) })
+            val end = when { checked -> dev.kore.phone.R.drawable.i_check; chevron -> dev.kore.phone.R.drawable.i_chevron; else -> null }
+            if (end != null) addView(android.widget.ImageView(a).apply {
+                setImageResource(end)
+                imageTintList = android.content.res.ColorStateList.valueOf(if (checked) Tone.accent else Tone.faint)
+            }, LinearLayout.LayoutParams(a.dp(18), a.dp(18)).apply { marginStart = a.dp(8) })
             contentDescription = tag ?: title.toString()
             isEnabled = enabled
             alpha = if (enabled) 1f else 0.4f
@@ -241,21 +245,25 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
         options: List<Pair<String, String>>, selected: String?, enabled: Boolean = true, off: Set<String> = emptySet(),
         marked: Set<String> = emptySet(), onPick: (String) -> Unit,
     ) {
+        // Spec §5: a bg well (radius 12, padding 3, a hair edge); segments 34 high, radius 9, Label;
+        // the chosen one lifted on l3.
         val bar = LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = a.rounded(Color.TRANSPARENT, 10, K.line)
-            clipToOutline = true
+            background = a.shape(Tone.bg, 12, Tone.hair)
+            val p = a.dp(3)
+            setPadding(p, p, p, p)
             alpha = if (enabled) 1f else 0.4f
         }
         options.forEachIndexed { i, (key, label) ->
-            if (i > 0) bar.addView(View(a).apply { setBackgroundColor(K.line) }, LinearLayout.LayoutParams(1, ViewGroup.LayoutParams.MATCH_PARENT))
             val on = key == selected
             val struck = key in off
-            bar.addView(a.label(label, 13f, if (on) K.text else if (struck) K.faint else K.dim).apply {
+            bar.addView(a.label(label).apply {
+                type(Type.Label)
+                setTextColor(if (on) Tone.text else if (struck) Tone.faint else Tone.dim)
                 gravity = Gravity.CENTER
                 maxLines = 1
-                setPadding(0, a.dp(9), 0, a.dp(9))
-                if (on) setBackgroundColor(KS.segOn)
+                minHeight = a.dp(34)
+                if (on) { background = a.shape(Tone.l3, 9); elevation = a.dp(1).toFloat() }
                 if (struck) { paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG; alpha = 0.5f }
                 if (key in marked) {
                     setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, dev.kore.phone.R.drawable.ic_fingerprint, 0)
@@ -267,7 +275,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
                     else -> label
                 }
                 isSelected = on
-                if (enabled && !on && !struck) { setOnClickListener { onPick(key) }; pressable(0) }
+                if (enabled && !on && !struck) { setOnClickListener { onPick(key) }; pressFill(null, Tone.l2, 9) }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
         add(bar, lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -280,9 +288,14 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
         val line = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; setPadding(a.dp(22), 0, 0, a.dp(8)) }
         for ((key, label) in options) {
             val on = key == selected
-            line.addView(a.label(label, 13f, if (on) K.text else K.dim).apply {
-                background = a.rounded(if (on) KS.chipOn else Color.TRANSPARENT, 8, if (on) K.accent else K.line)
-                setPadding(a.dp(10), a.dp(4), a.dp(10), a.dp(4))
+            // Spec §5 version chip: 30 high, radius 15, l2 + dim at rest, accentFill + b200 chosen.
+            line.addView(a.label(label).apply {
+                type(Type.Label)
+                setTextColor(if (on) Tone.b200 else Tone.dim)
+                background = a.shape(if (on) Tone.accentFill else Tone.l2, 15)
+                gravity = Gravity.CENTER
+                minHeight = a.dp(30)
+                setPadding(a.dp(12), 0, a.dp(12), 0)
                 contentDescription = label
                 isSelected = on
                 alpha = if (enabled) 1f else 0.4f
@@ -377,16 +390,20 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
     /** Cancel and the one action, side by side. */
     fun buttons(primary: String, danger: Boolean = false, cancel: String = "Cancel", onPrimary: () -> Unit) {
         val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        fun button(text: String, fill: Int, ink: Int, stroke: Int?, go: () -> Unit) = a.label(text, 15f, ink, bold = fill != Color.TRANSPARENT && ink != K.text).apply {
+        // Spec §5 buttons: 46 high, radius 14, Body at 600. Cancel is secondary (l3); the primary is
+        // accent, or errFill with err text when it destroys something.
+        fun button(text: String, fill: Int, pressed: Int, ink: Int, go: () -> Unit) = a.label(text).apply {
+            type(Type.Body)
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, 600, false)
+            setTextColor(ink)
             gravity = Gravity.CENTER
-            background = a.rounded(fill, 12, stroke)
-            setPadding(0, a.dp(12), 0, a.dp(12))
+            minHeight = a.dp(46)
             contentDescription = text
             setOnClickListener { go() }
-            pressable(12)
+            pressFill(fill, pressed, Radius.row)
         }
-        row.addView(button(cancel, Color.TRANSPARENT, K.dim, K.line) { dismiss() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = a.dp(8) })
-        row.addView(if (danger) button(primary, Color.TRANSPARENT, K.err, K.err) { onPrimary() } else button(primary, Tone.accent, Tone.onAccent, null) { onPrimary() },
+        row.addView(button(cancel, Tone.l3, 0xFF2E3A41.toInt(), Tone.text) { dismiss() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = a.dp(8) })
+        row.addView(if (danger) button(primary, Tone.errFill, 0x33F0736B, Tone.err) { onPrimary() } else button(primary, Tone.accent, Tone.b400, Tone.onAccent) { onPrimary() },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         add(row, lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             setMargins(a.dp(4), a.dp(12), a.dp(4), 0)
@@ -407,13 +424,14 @@ class PopMenu(private val a: Activity) {
         val sub: (() -> List<Item>)? = null, val onTap: (() -> Unit)? = null,
     )
 
-    private val list = a.column().apply { setPadding(0, a.dp(4), 0, a.dp(4)) }
+    private val list = a.column().apply { val p = a.dp(6); setPadding(p, p, p, p) }
+    // Spec §5 pop menu: l2, radius 16, padding 6, a hair2 edge; rows 46 high, radius 11.
     private val popup = PopupWindow(ScrollView(a).apply {
         addView(list)
-        background = a.rounded(KS.menu, 14, K.line)
+        background = a.shape(Tone.l2, Radius.menu, Tone.hair2)
         isVerticalScrollBarEnabled = false
     }, a.dp(232), ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
-        elevation = a.dp(12).toFloat()
+        elevation = a.dp(16).toFloat()
         setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         isOutsideTouchable = true
     }
@@ -421,7 +439,8 @@ class PopMenu(private val a: Activity) {
     fun show(anchor: View, items: List<Item>) {
         fill(items, null)
         val oldBg = anchor.foreground
-        anchor.foreground = a.rounded(Color.argb(40, 255, 255, 255), 12, KS.heldLine)
+        // The held item gets a 2 dp accent ring at 50 %.
+        anchor.foreground = a.shape(0, 12, null).apply { setStroke(a.dp(2), 0x806AB1E7.toInt()) }
         popup.setOnDismissListener { anchor.foreground = oldBg }
         // Just below the row, so the menu never covers the text it acts on.
         popup.showAsDropDown(anchor, a.dp(56), a.dp(4))
@@ -448,14 +467,18 @@ class PopMenu(private val a: Activity) {
     private fun entry(title: String, right: String?, color: Int, enabled: Boolean, dot: Int? = null, go: () -> Unit) = LinearLayout(a).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = a.dp(44)
-        setPadding(a.dp(16), a.dp(8), a.dp(14), a.dp(8))
-        if (dot != null) addView(View(a).apply { background = a.rounded(dot, 3) }, LinearLayout.LayoutParams(a.dp(10), a.dp(10)).apply { marginEnd = a.dp(10) })
-        addView(a.label(title, 15f, color).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        if (right != null) addView(a.label(right, 13f, if (right == "✓") K.accent else K.faint).apply { setPadding(a.dp(8), 0, 0, 0) })
+        minimumHeight = a.dp(46)
+        setPadding(a.dp(12), 0, a.dp(12), 0)
+        if (dot != null) addView(View(a).apply { background = a.shape(dot, 3) }, LinearLayout.LayoutParams(a.dp(10), a.dp(10)).apply { marginEnd = a.dp(12) })
+        iconFor(title)?.let { icon ->
+            addView(android.widget.ImageView(a).apply { setImageResource(icon); imageTintList = android.content.res.ColorStateList.valueOf(if (color == K.err) Tone.err else Tone.dim) },
+                LinearLayout.LayoutParams(a.dp(18), a.dp(18)).apply { marginEnd = a.dp(12) })
+        }
+        addView(a.label(title).apply { type(Type.Body); setTextColor(color); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (right != null) addView(a.label(right).apply { type(Type.Callout); setTextColor(if (right == "✓") Tone.accent else Tone.faint); setPadding(a.dp(8), 0, 0, 0) })
         contentDescription = title
         alpha = if (enabled) 1f else 0.4f
-        if (enabled) { pressable(0); setOnClickListener { go() } }
+        if (enabled) { pressFill(null, Tone.l3, Radius.menuRow); setOnClickListener { go() } }
     }
 }
 
@@ -465,14 +488,18 @@ object Quiet {
         val root = a.findViewById<FrameLayout>(android.R.id.content) ?: return
         val old = root.findViewWithTag<View>("kore.quiet")
         if (old != null) root.removeView(old)
-        val v = a.label(text, 13f, K.dim).apply {
+        // Spec §5 toast: l3, radius 20, padding 10 × 16, Callout; 110 above the bottom, centred, 3.5 s.
+        val v = a.label(text).apply {
             tag = "kore.quiet"
-            background = a.rounded(K.surface, 12, K.line)
-            setPadding(a.dp(14), a.dp(9), a.dp(14), a.dp(9))
+            type(Type.Callout)
+            setTextColor(Tone.text)
+            background = a.shape(Tone.l3, 20)
+            elevation = a.dp(10).toFloat()
+            setPadding(a.dp(16), a.dp(10), a.dp(16), a.dp(10))
             maxLines = 2
         }
         root.addView(v, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-            setMargins(a.dp(24), 0, a.dp(24), a.dp(28))
+            setMargins(a.dp(24), 0, a.dp(24), a.dp(110))
         })
         v.postDelayed({ root.removeView(v) }, 3500)
     }
@@ -599,4 +626,21 @@ class Flow(context: android.content.Context, private val gap: Int) : ViewGroup(c
             line = maxOf(line, c.measuredHeight)
         }
     }
+}
+
+/**
+ * The icon set for a row's glyph or a menu row's title (spec §4): the old text glyphs and the
+ * long-press menu's words map to their vector; anything else keeps its text.
+ */
+fun iconFor(glyphOrTitle: String): Int? = when (glyphOrTitle.trim()) {
+    "✎", "Rename…", "Rename" -> dev.kore.phone.R.drawable.i_pencil
+    "◔", "↓", "⤓", "Compact now", "Compact", "Auto-compact" -> dev.kore.phone.R.drawable.i_compact
+    "□", "▦" -> dev.kore.phone.R.drawable.i_folder
+    "⇢", "Show on the Mac" -> dev.kore.phone.R.drawable.i_mac_display
+    "×", "Close window", "Close tab" -> dev.kore.phone.R.drawable.i_close_window
+    "Copy" -> dev.kore.phone.R.drawable.i_copy
+    "Fork from here", "Fork after this" -> dev.kore.phone.R.drawable.i_fork
+    "Revert to here" -> dev.kore.phone.R.drawable.i_revert
+    "Forget on this phone" -> dev.kore.phone.R.drawable.i_logout
+    else -> null
 }

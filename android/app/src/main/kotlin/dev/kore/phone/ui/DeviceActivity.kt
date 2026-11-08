@@ -99,7 +99,7 @@ class DeviceActivity : NodeActivity() {
             windowLine.visibility = View.GONE
             rows.submitList(emptyList())
             if (linkState == dev.kore.link.node.NodeMachine.State.Up || linkState == dev.kore.link.node.NodeMachine.State.Connecting) {
-                notes.addView(empty("Waiting for $macName…", "It shows here as soon as Kore there answers."))
+                notes.addView(emptyState(dev.kore.phone.R.drawable.i_laptop, "Waiting for $macName", "It shows here as soon as Kore there answers.", waiting = true))
             }
             return
         }
@@ -108,7 +108,7 @@ class DeviceActivity : NodeActivity() {
             chipsRow.visibility = View.GONE
             windowLine.visibility = View.GONE
             rows.submitList(emptyList())
-            notes.addView(empty("No windows open", "Open a folder in Kore there and it appears here."))
+            notes.addView(emptyState(dev.kore.phone.R.drawable.i_folder, "No windows open", "Open a folder in Kore on the Mac, or start one from here.", "New window" to { createSheet() }))
             return
         }
         if (filter != null && windows.none { it.windowId == filter }) filter = null
@@ -378,14 +378,5 @@ class DeviceActivity : NodeActivity() {
         }
     }
 
-    private fun empty(title: String, line: String): View = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(dp(24), dp(80), dp(24), dp(24))
-        addView(android.widget.ImageView(this@DeviceActivity).apply { setImageResource(dev.kore.phone.R.drawable.kore_mark); alpha = 0.5f },
-            LinearLayout.LayoutParams(dp(48), dp(48)).apply { bottomMargin = dp(16) })
-        addView(label(title, 16f, K.text, bold = true).apply { gravity = Gravity.CENTER })
-        addView(label(line, 14f, K.dim).apply { gravity = Gravity.CENTER; setPadding(0, dp(6), 0, 0) })
-    }
 
 }

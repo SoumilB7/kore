@@ -707,7 +707,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         if (has("rename")) item("Rename…", glyph = "✎", enabled = can!!.bool("rename")) { dismiss(); rename() }
         if (has("compact") || controls != null) {
             val pct = controls?.get("contextPct").int()
-            val detail = if (controls?.bool("compacting") == true) "compacting…" else pct?.let { "context $it%" }
+            val detail = if (controls?.bool("compacting") == true) "compacting…" else pct?.let { "Context $it%" }
             item("Compact now", glyph = "◔", detail = detail, enabled = can?.bool("compact") == true) { dismiss(); compactSheet() }
         }
         if (controls != null) {

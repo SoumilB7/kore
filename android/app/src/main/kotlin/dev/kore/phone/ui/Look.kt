@@ -260,3 +260,74 @@ fun android.content.Context.point(color: Int, size: Int = 7): View = View(this).
     background = shape(color, size)
     layoutParams = android.widget.LinearLayout.LayoutParams(dp(size), dp(size))
 }
+
+/**
+ * An empty state (spec §5): centred, 40 side padding; an 88 tile (`l1`, radius 28, a hair2 edge)
+ * holding a 32 [icon] in b200; [title] in Display 8 below; [line] in Callout dim, at most 250 wide;
+ * at most one [button] (primary, at most 260 wide, 24 above). [waiting]: a ring 8 outside the tile
+ * (accent at 35 %, 1.5) breathes from 0.25 at 97 % to 1 at 100 % over 2.4 s; still with animations off.
+ */
+fun android.app.Activity.emptyState(
+    icon: Int, title: String, line: String, button: Pair<String, () -> Unit>? = null, waiting: Boolean = false,
+): View = android.widget.LinearLayout(this).apply {
+    orientation = android.widget.LinearLayout.VERTICAL
+    gravity = android.view.Gravity.CENTER_HORIZONTAL
+    setPadding(dp(40), dp(72), dp(40), dp(32))
+    val tile = android.widget.FrameLayout(context).apply {
+        if (waiting) {
+            val ring = View(context).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = dp(Radius.tile + 8).toFloat()
+                    setStroke((1.5f * resources.displayMetrics.density).toInt(), 0x596AB1E7)
+                }
+            }
+            if (Motion.scale > 0f) {
+                val breathe = ValueAnimator.ofFloat(0f, 1f).apply {
+                    duration = 2400
+                    repeatMode = ValueAnimator.REVERSE
+                    repeatCount = ValueAnimator.INFINITE
+                    addUpdateListener { a ->
+                        val t = a.animatedValue as Float
+                        ring.alpha = 0.25f + 0.75f * t
+                        ring.scaleX = 0.97f + 0.03f * t
+                        ring.scaleY = ring.scaleX
+                    }
+                }
+                // It runs while the ring is on screen, and stops when it leaves.
+                ring.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                    override fun onViewAttachedToWindow(v: View) = breathe.start()
+                    override fun onViewDetachedFromWindow(v: View) = breathe.cancel()
+                })
+            }
+            addView(ring, android.widget.FrameLayout.LayoutParams(dp(104), dp(104), android.view.Gravity.CENTER))
+        }
+        addView(android.widget.FrameLayout(context).apply {
+            background = shape(Tone.l1, Radius.tile, Tone.hair2)
+            addView(android.widget.ImageView(context).apply {
+                setImageResource(icon)
+                imageTintList = ColorStateList.valueOf(Tone.b200)
+            }, android.widget.FrameLayout.LayoutParams(dp(32), dp(32), android.view.Gravity.CENTER))
+        }, android.widget.FrameLayout.LayoutParams(dp(88), dp(88), android.view.Gravity.CENTER))
+    }
+    addView(tile, android.widget.LinearLayout.LayoutParams(dp(104), dp(104)))
+    addView(TextView(context).apply {
+        text = title; type(Type.Display); setTextColor(Tone.text); gravity = android.view.Gravity.CENTER
+    }, android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+    addView(TextView(context).apply {
+        text = line; type(Type.Callout); setTextColor(Tone.dim); gravity = android.view.Gravity.CENTER
+        maxWidth = dp(250)
+    }, android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+    if (button != null) addView(TextView(context).apply {
+        text = button.first
+        type(Type.Body)
+        typeface = Typeface.create(Typeface.DEFAULT, 600, false)
+        setTextColor(Tone.onAccent)
+        gravity = android.view.Gravity.CENTER
+        minHeight = dp(46)
+        setPadding(dp(24), 0, dp(24), 0)
+        maxWidth = dp(260)
+        setOnClickListener { button.second() }
+        pressFill(Tone.accent, Tone.b400, Radius.row)
+    }, android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(24) })
+}

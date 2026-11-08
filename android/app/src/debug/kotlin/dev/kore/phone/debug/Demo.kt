@@ -39,7 +39,8 @@ import kotlinx.serialization.json.put
 class DemoStart : ContentProvider() {
     override fun onCreate(): Boolean {
         val context = context ?: return true
-        if (File(context.filesDir, "demo").exists()) StandIns.current = Demo(context)
+        val flag = File(context.filesDir, "demo")
+        if (flag.exists()) StandIns.current = Demo(context, flag.readText().trim())
         return true
     }
     override fun query(uri: Uri, p: Array<out String>?, s: String?, a: Array<out String>?, o: String?): Cursor? = null
@@ -49,11 +50,15 @@ class DemoStart : ContentProvider() {
     override fun update(uri: Uri, v: ContentValues?, s: String?, a: Array<out String>?) = 0
 }
 
-class Demo(private val context: Context) : StandIn {
+/**
+ * [scenario] (the text in files/demo): "" the normal demo; `waiting` the Mac never answers (no
+ * snapshot); `no-windows` the Mac has none open; `no-devices` this phone knows none.
+ */
+class Demo(private val context: Context, private val scenario: String = "") : StandIn {
     private val mac = Device(UUID.fromString("B3D9E1F0-7A2C-4E6B-8D41-5C0F9A3E2B02"), "MacBook", NodeKind.MAC, ByteArray(91) { 1 }, listOf("nodekey:mac"), "macbook.tail.ts.net.")
     private val box = Device(UUID.fromString("0E4C2A91-5B7D-4F3E-9A61-2D8C7B5E1F04"), "mybox", NodeKind.BOX, ByteArray(91) { 2 }, listOf("nodekey:box"), "mybox.tail.ts.net.",
         via = setOf(UUID.fromString("B3D9E1F0-7A2C-4E6B-8D41-5C0F9A3E2B02")))
-    override val devices = listOf(mac, box)
+    override val devices = if (scenario == "no-devices") emptyList() else listOf(mac, box)
 
     override val tailnet: Tailnet = object : Tailnet {
         private fun node(name: String, os: String, key: String, ip: String) =
@@ -94,10 +99,14 @@ class Demo(private val context: Context) : StandIn {
         override var lastInbound = System.currentTimeMillis()
 
         /** The snapshot as it stands: a send to a working chat queues behind its turn (`queued`). */
-        private var snapshot: JsonObject? = asset("$dir/snapshot.json")
+        private var snapshot: JsonObject? = when (scenario) {
+            "waiting" -> null
+            "no-windows" -> buildJsonObject { put("t", "snapshot"); put("rev", 1); put("windows", kotlinx.serialization.json.JsonArray(emptyList())); put("chats", kotlinx.serialization.json.JsonArray(emptyList())) }
+            else -> asset("$dir/snapshot.json")
+        }
 
         init {
-            asset("$dir/welcome.json")?.let(::push)
+            if (scenario != "waiting") asset("$dir/welcome.json")?.let(::push)
             snapshot?.let(::push)
             asset("$dir/attn.state.json")?.let(::push)
         }

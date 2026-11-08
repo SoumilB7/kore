@@ -91,7 +91,7 @@ class HomeActivity : Activity() {
             content.addView(sectionLabel("Devices", first = look.cue == null), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(16), 0, dp(16), 0) })
             content.addView(grouped(look.devices.map { d -> rows.row(d) { deviceRow(d) } }), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(16), 0, dp(16), 0) })
         }
-        if (look.devices.isEmpty()) content.addView(quietLine("No devices", "Settings ›") { startActivity(Intent(this, SettingsActivity::class.java)) })
+        if (look.devices.isEmpty()) content.addView(emptyState(R.drawable.i_laptop, "No devices yet", "On your Mac, open Kore's Devices and press +. This phone shows up there."))
         (Updates.status.value as? Updates.Status.Available)?.let { st ->
             // One line whichever source: from a Mac, one tap downloads, checks and installs it.
             val mac = look.update?.mac
