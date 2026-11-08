@@ -48,6 +48,9 @@ package final class Chat: Identifiable {
     @ObservationIgnored package var launchModel: String?
     @ObservationIgnored package var launchEffort: String?
     @ObservationIgnored package var launchFastMode: Bool?
+    /// Variables its CLI starts with, read at each start (a box chat's Claude account,
+    /// `CLAUDE_CONFIG_DIR`); throws when the CLI mustn't start (that account is gone).
+    @ObservationIgnored package var launchEnvironment: (@MainActor () throws -> [String: String])?
 
     /// The backend, its events' pump and the send chain.
     @ObservationIgnored private let engine: ChatEngine
@@ -456,6 +459,7 @@ package final class Chat: Identifiable {
                 folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
                 model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
             options.fastMode = launchFastMode
+            options.environment = launchEnvironment
             if services.agentTools {
                 options.agentPass = agentPass
             } else if let server = services.agentServer(self) {

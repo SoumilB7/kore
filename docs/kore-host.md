@@ -153,8 +153,19 @@ code back in a field. The login stays on the box. Kore never copies this Mac's l
 settings to a box.
 
 In a box chat, the Account popup is the same as a local chat's, with the box's login for that
-chat's CLI: its sign-in (no browser on the box, no key), sign-out and the account it shows are
-the box's. A box keeps one login per CLI.
+chat's CLI: its sign-in (no browser on the box, no key) and the account it shows are the box's.
+Kore never signs anyone out on a box: a CLI's sign-out ends the login on every machine.
+
+Claude can have more than one account on a box: the default (`~/.claude`) and each folder of
+`~/.config/claude-accounts`, a config folder you signed in there yourself
+(`CLAUDE_CONFIG_DIR=~/.config/claude-accounts/<name> claude auth login`). With more than one, a box
+chat's Account popup lists them, each with its usage when hovered, and the chat's own checked.
+Picking another moves that chat: its CLI starts again on the same session as that account, and
+new chats in its folder start on it too. Before a chat or a usage read runs in an account's
+folder, the default's chats, settings and skills are linked into it where it has none of its own;
+its login files are never touched. A login you moved to a box this way (its sign-in deleted from
+this Mac) shows in this Mac's own list as on that box, never as signed out, and Kore doesn't
+switch to it, read it or sign it out here. Codex keeps one login per box for now.
 
 ## A box window
 

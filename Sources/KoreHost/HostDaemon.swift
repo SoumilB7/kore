@@ -93,6 +93,9 @@ package final class HostDaemon {
     package var netPort = NetListener.configured()
     /// Phase 18 §4: what this box's chats spent, a week of it (`usage/ledger.jsonl`).
     package private(set) lazy var usage = UsageLedger(url: paths.usageLedger, now: { [weak self] in self?.now() ?? Date() })
+    /// The box's Claude accounts, under this user's home as `sessionEnv` names it (tests set
+    /// their own before the first use).
+    package lazy var accounts = HostAccounts(home: HostPaths.home(sessionEnv), environment: sessionEnv, state: paths.state)
 
     package init(paths: HostPaths) {
         self.paths = paths
@@ -102,6 +105,7 @@ package final class HostDaemon {
         services.onModels = { [weak self] cli, models in self?.listed(cli, models) }
         services.server = { [weak self] chat in self?.server(for: chat) }
         services.onTranscript = { [weak self] chat in self?.chats.first { $0.chat === chat }?.attach(chat, replaced: true) }
+        services.accountEnvironment = { [weak self] id in try self?.accounts.environment(id) ?? [:] }
         if let data = try? Data(contentsOf: paths.models), let kept = try? JSONDecoder().decode([CLIState].self, from: data) { clis = kept }
         let note = paths.state.appendingPathComponent("instructions.md")
         try? HostPaths.privateFile(Data(HostServices.instructions(host: ProcessInfo.processInfo.hostName).utf8), to: note)
@@ -192,7 +196,7 @@ package final class HostDaemon {
         guard config.folders.contains(folder), !HostConfig.missing(folder), Registry.provider(provider) != nil,
             let chat = try? HostChat.create(
                 provider: provider, folder: folder, modelId: modelId, in: paths.chats, fork: fork, title: title, mode: mode, effort: effort,
-                session: session)
+                session: session, account: provider == "claude" ? accounts.folderDefault(folder) : nil)
         else { return nil }
         chats.append(chat)
         watch(chat)
@@ -672,7 +676,7 @@ package final class HostDaemon {
         case .authGh:
             guard control == .full else { return fail(.deniedControl, "GitHub's sign-in needs a grant with full control.") }
             return gitHub(id: id, reply: reply)
-        case .accountSignIn, .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh:
+        case .accountSignIn, .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh, .accountList, .accountUsage, .accountSwitch:
             guard control == .full else { return fail(.deniedControl, "Accounts need a grant with full control.") }
             return account(kind, args, id: id, reply: reply)
         case .chatRename, .chatFork, .chatCompact, .chatSetAutoCompact, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue,
@@ -768,11 +772,17 @@ package final class HostDaemon {
         let cli = provider.id
         switch kind {
         case .accountRefresh:
+            // A Claude chat's own account (or one named), read in its folder.
+            let login = cli == "claude" ? args.login ?? args.chatId.flatMap(chat).map { $0.record.account ?? LinkAccount.main } : nil
+            let accounts = accounts
             Task {
-                let reading = (try? await ops.calls.status()).map(ops.parse)
-                reply(Self.told(id: id, provider: cli, reading: reading))
+                let reply1: KoreCore.JSONValue?
+                if let login { reply1 = try? await accounts.status(login) } else { reply1 = try? await ops.calls.status() }
+                reply(Self.told(id: id, provider: cli, reading: reply1.map(ops.parse)))
             }
             return nil
+        case .accountList, .accountUsage, .accountSwitch:
+            return claudeAccounts(kind, args, id: id, reply: reply)
         case .accountSignIn:
             // No browser on the box: Codex's device code, and Claude's page whose code is typed back.
             let method = ops.methods.first { $0.id == (args.method ?? Self.boxMethod[cli]) } ?? ops.methods.first
@@ -806,14 +816,69 @@ package final class HostDaemon {
             if let handle = signIns.removeValue(forKey: cli) { Task { await handle.cancel() } }
             return .init(id: id, ok: true)
         case .accountSignOut:
-            Task {
-                let done = (try? await ops.calls.signOut()) != nil
-                reply(.init(id: id, ok: done, code: done ? nil : .invalid, message: done ? "Signed out." : "Couldn't sign out."))
-            }
-            return nil
+            // Never: a CLI's sign-out revokes its tokens on every machine (the policy refuses it
+            // first; this holds even if a rule there changes).
+            return .init(id: id, ok: false, code: .invalid, message: LinkPolicy.boxSignOutRefused)
         default:
             return .init(id: id, ok: false, code: .invalid, message: "Not taken here.")
         }
+    }
+
+    /// `account.list`, `account.usage` and `account.switch`: the box's Claude accounts, one's
+    /// usage, and the account a chat (and its folder's new chats) runs on. A chat switched
+    /// stops its work, and its CLI starts again on its session as the new account.
+    private func claudeAccounts(
+        _ kind: ControlKind, _ args: ControlArgs, id: String, reply: @escaping @MainActor (LinkMessage.Result) -> Void
+    ) -> LinkMessage.Result? {
+        func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
+        guard args.provider == "claude" else { return fail(.invalid, LinkPolicy.boxAccountsClaudeOnly) }
+        let accounts = accounts
+        let hc = args.chatId.flatMap(chat)
+        if args.chatId != nil, hc == nil { return fail(.goneChat, "That chat isn't on the box any more.") }
+        if let hc, hc.record.provider != "claude" { return fail(.invalid, LinkPolicy.boxAccountsClaudeOnly) }
+        let folder = hc?.record.folder ?? args.folder.map(Self.standard)
+        switch kind {
+        case .accountList:
+            Task {
+                let list = await accounts.list()
+                reply(
+                    .init(
+                        id: id, ok: true, accounts: list, login: hc.map { $0.record.account ?? LinkAccount.main },
+                        folderLogin: folder.map { accounts.folderDefault($0) ?? LinkAccount.main }))
+            }
+            return nil
+        case .accountUsage:
+            guard let login = args.login, accounts.exists(login) else { return fail(.goneLogin, "That account isn't on the box any more.") }
+            Task {
+                do {
+                    reply(.init(id: id, ok: true, reading: try await accounts.usage(login)))
+                } catch {
+                    reply(.init(id: id, ok: false, code: .invalid, message: AccountReason.of(error) ?? "Couldn't read that account's usage."))
+                }
+            }
+            return nil
+        case .accountSwitch:
+            guard let login = args.login, accounts.exists(login) else { return fail(.goneLogin, "That account isn't on the box any more.") }
+            guard let folder, config.folders.contains(folder) else { return fail(.goneFolder, "That folder isn't on this box.") }
+            accounts.setFolderDefault(folder, login)
+            if let hc { switchAccount(hc, to: login) }
+            return .init(id: id, ok: true, login: hc.map { $0.record.account ?? LinkAccount.main }, folderLogin: accounts.folderDefault(folder) ?? LinkAccount.main)
+        default:
+            return fail(.invalid, "Not taken here.")
+        }
+    }
+
+    /// The chat runs on `login` from now on: its work stops (as a switch on the Mac stops a
+    /// login's chats), then its CLI starts again resuming its session, as that account.
+    package func switchAccount(_ hc: HostChat, to login: String) {
+        let account: String? = login == LinkAccount.main ? nil : login
+        guard hc.record.account != account else { return }
+        hc.setAccount(account)
+        HostJournal.note("account switch", ["chat": hc.id, "account": login])
+        guard let chat = hc.chat else { return }
+        if chat.hasWork { chat.stopAllWork() }
+        chat.accountChanged()
+        broadcast(chats: [hc])
     }
 
     /// The sign-in a box uses when the client names none.

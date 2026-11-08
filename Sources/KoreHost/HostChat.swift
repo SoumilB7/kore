@@ -46,6 +46,8 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     /// (`ChatMeta.lastAt` / `last`), moved at a message or a turn's start or end.
     package var lastAt: Int64?
     package var last: String?
+    /// A Claude chat's account (`HostAccounts`): an added one's folder name; nil, the default.
+    package var account: String?
 }
 
 /// A chat frozen for a move (`chat.release` prepare): which move, the grant it goes to, and since
@@ -144,12 +146,13 @@ package final class HostChat {
 
     static func create(
         provider: String, folder: String, modelId: String?, in chats: URL, fork: (from: String, at: String)? = nil, title: String? = nil,
-        mode: String? = nil, effort: String? = nil, session: String? = nil
+        mode: String? = nil, effort: String? = nil, session: String? = nil, account: String? = nil
     ) throws -> HostChat {
         let id = UUID().uuidString.lowercased()
         var record = ChatRecord(
             id: id, provider: provider, folder: folder, title: title, session: session, mode: mode, modelId: modelId,
             created: Int(Date().timeIntervalSince1970), effort: effort)
+        if provider == "claude" { record.account = account }
         record.forkFrom = fork?.from
         record.forkAt = fork?.at
         let chat = HostChat(record: record, dir: chats.appendingPathComponent(id))
@@ -251,6 +254,10 @@ package final class HostChat {
         chat.backendTap = { [weak self] event in self?.stream.raw(event) }
         chat.launchModel = record.modelId
         chat.launchEffort = record.effort
+        // Its account's folder, read at each start: a switch takes effect at the next.
+        if record.provider == "claude" {
+            chat.launchEnvironment = { [weak self, weak services] in try services?.accountEnvironment?(self?.record.account) ?? [:] }
+        }
         if let point = record.autoCompact { chat.setAutoCompact(point == 0 ? nil : point) }
         expectingWake = session != nil && !entries.isEmpty
         (wakeKept, wakeBase) = (nil, nil)
@@ -493,6 +500,13 @@ package final class HostChat {
 
     func setArchived(_ on: Bool) {
         record.archived = on ? true : nil
+        try? saveRecord()
+    }
+
+    /// The chat's Claude account from now on (nil: the default); its next CLI starts on it.
+    func setAccount(_ id: String?) {
+        guard record.account != id else { return }
+        record.account = id
         try? saveRecord()
     }
 

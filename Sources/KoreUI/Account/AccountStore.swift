@@ -19,10 +19,56 @@ package final class AccountStore {
     /// Mac's own.
     @ObservationIgnored package let calls: (@MainActor (String) -> AccountOps?)?
 
-    package init(calls: (@MainActor (String) -> AccountOps?)? = nil) { self.calls = calls }
+    package init(calls: (@MainActor (String) -> AccountOps?)? = nil) {
+        self.calls = calls
+        // A box's usage reads go to the box, and never feed this Mac's usage cues.
+        if calls != nil {
+            loginUsage = LoginUsage(
+                read: { [weak self] provider, login in
+                    guard let box = self?.box else { throw UsageUnavailable() }
+                    return try await box.usage(provider, login)
+                }, cues: false)
+        }
+    }
 
     /// A box's logins, not this Mac's.
     var onBox: Bool { calls != nil }
+
+    /// A box's Claude accounts (`BoxAccountStores`, Claude only: Codex keeps its one login on a
+    /// box): their rows as the box lists them, the shown chat's marked active; moving that chat
+    /// to one (`login` nil: the default); one's usage; and whether the shown chat is on the
+    /// default, the only one a box signs in. Nil on this Mac, and for a box before them.
+    package struct BoxLogins {
+        package var list: @MainActor (_ provider: String) async -> [Login]?
+        package var switchTo: @MainActor (_ provider: String, _ login: String?) async -> String?
+        package var usage: @MainActor (_ provider: String, _ login: String?) async throws -> PlanReading
+        package var viewedIsMain: @MainActor () -> Bool
+        /// The shown chat moved: its usage is read again.
+        package var switched: @MainActor () -> Void = {}
+
+        package init(
+            list: @escaping @MainActor (String) async -> [Login]?, switchTo: @escaping @MainActor (String, String?) async -> String?,
+            usage: @escaping @MainActor (String, String?) async throws -> PlanReading, viewedIsMain: @escaping @MainActor () -> Bool
+        ) {
+            (self.list, self.switchTo, self.usage, self.viewedIsMain) = (list, switchTo, usage, viewedIsMain)
+        }
+    }
+
+    @ObservationIgnored package var box: BoxLogins?
+    /// The box's rows by CLI, as last listed.
+    private(set) var boxLogins: [String: [Login]] = [:]
+    /// The account cards' usage reads: this Mac's, or the box's.
+    @ObservationIgnored private(set) var loginUsage: LoginUsage = .shared
+    /// Logins read signed in on this Mac this run, by CLI ("main" or an id): a box listing the
+    /// same email doesn't make them "on" the box.
+    @ObservationIgnored private var signedInHere: [String: Set<String>] = [:]
+
+    /// Why a sign-out isn't run: on a box, never; on this Mac, not for a login moved to a box.
+    static func signOutRefusal(onBox: Bool, movedTo box: String?) -> String? {
+        if onBox { return "Kore doesn't sign anyone out on a box: that would end the login on every machine." }
+        if let box { return "This login is signed in on \(box) now: signing out here would end it there too." }
+        return nil
+    }
 
     /// The longest a sign-in waits for the browser before it's cancelled.
     static let patience: Duration = .seconds(10 * 60)
@@ -176,7 +222,9 @@ package final class AccountStore {
     /// A login's ⋯: the active one's every method; another's, those that sign its own folder in
     /// (a key or a platform is in the settings every login shares, so it's only the active one's).
     func loginMenu(_ provider: String, _ id: String?) -> [MethodMenuItem] {
-        CLIProfiles.active(provider) == id ? menu(provider) : addMenu(provider)
+        // A box signs in its default account only: an added one is signed in on the box itself.
+        if onBox { return id == nil ? menu(provider) : [] }
+        return CLIProfiles.active(provider) == id ? menu(provider) : addMenu(provider)
     }
 
     /// The method a plain Sign in runs: the last one Kore ran, else the account's own, else the
@@ -191,8 +239,18 @@ package final class AccountStore {
         return runnable.first
     }
 
-    /// Reads the CLI's status once (a read already under way is waited for).
+    /// Reads the CLI's status once (a read already under way is waited for); on a box, its
+    /// accounts too.
     package func refresh(_ provider: String) async {
+        if let box, provider == "claude" {
+            Task {
+                let rows = await box.list(provider)
+                if boxLogins[provider] != rows {
+                    boxLogins[provider] = rows
+                    loginsVersion += 1
+                }
+            }
+        }
         if let read = reads[provider] { return await read.value }
         guard let ops = ops(provider) else { return }
         reading.insert(provider)
@@ -231,6 +289,10 @@ package final class AccountStore {
         switch reading {
         case .signedIn(let identity):
             statuses[provider] = .signedIn(identity)
+            if !onBox {
+                signedInHere[provider, default: []].insert(login)
+                if CLIProfiles.noteBack(provider, email: identity.email) { loginsVersion += 1 }
+            }
             if !onBox, (!StoryHost.installed || CLIProfiles.root.value != nil), CLIProfiles.note(provider, email: identity.email, workspace: identity.workspace) {
                 loginsVersion += 1
                 // The first status read can correct saved identity without a prior `known`
@@ -340,7 +402,7 @@ package final class AccountStore {
                     adding[provider] = nil
                     guard case .signedIn(let now) = reading, !isListed(provider, now, before) else {
                         flows[provider]?.step = .same
-                        return await discard(pin, signOut: ops)
+                        return await discard(pin, signOut: ops, email: Self.email(reading))
                     }
                     CLIProfiles.adopt(provider, id, email: now.email, workspace: now.workspace)
                     loginsVersion += 1
@@ -444,7 +506,7 @@ package final class AccountStore {
                 if let pin, let id = pin.id, adds {
                     guard case .signedIn(let now) = reading, !isListed(provider, now, before) else {
                         flows[provider]?.step = .same
-                        await discard(pin, signOut: ops)
+                        await discard(pin, signOut: ops, email: Self.email(reading))
                         return done(true)
                     }
                     CLIProfiles.adopt(provider, id, email: now.email, workspace: now.workspace)
@@ -521,6 +583,11 @@ package final class AccountStore {
     /// popup is the signed-out row.
     func signOut(_ provider: String) {
         guard flows[provider]?.step.live != true, let ops = ops(provider) else { return }
+        // The owner's rule: never sign out a box's login, nor one moved to a box.
+        if let why = Self.signOutRefusal(onBox: onBox, movedTo: movedActive(provider)) {
+            flows[provider] = Flow(method: nil, step: .signOutFailed(why), switching: false)
+            return
+        }
         let serial = (serials[provider] ?? 0) + 1
         serials[provider] = serial
         // A box's login is the box's: nothing in this Mac's settings is touched.
@@ -557,6 +624,22 @@ package final class AccountStore {
         }
     }
 
+    /// Whether the row offers Sign out: never on a box, nor for a login moved to one.
+    func signOutOffered(_ provider: String) -> Bool { Self.signOutRefusal(onBox: onBox, movedTo: movedActive(provider)) == nil }
+
+    /// The box the active login was moved to, while it isn't read signed in on this Mac.
+    private func movedActive(_ provider: String) -> String? {
+        guard !onBox else { return nil }
+        let id = CLIProfiles.active(provider)
+        guard !signedInHere[provider, default: []].contains(Self.loginKey(id)) else { return nil }
+        let email = id.map { id in CLIProfiles.added(provider).first { $0.id == id }?.email } ?? CLIProfiles.mainEmail(provider)
+        return CLIProfiles.movedTo(provider, email: email)
+    }
+
+    /// Whether the row offers a sign-in (or Switch account) for the login shown: on a box, only
+    /// for the default account, the one a box signs in.
+    func signInOffered(_ provider: String) -> Bool { !onBox || box?.viewedIsMain() ?? true }
+
     // MARK: Logins
 
     /// One of a CLI's logins in the Account popup: main (`id` nil) or an added one.
@@ -570,11 +653,34 @@ package final class AccountStore {
         package var signedOut = false
         /// The same account as one listed with it: removing it loses nothing.
         package var duplicate = false
+        /// This Mac's login whose owner moved it to a box: signed in there, not here. Never shown
+        /// as signed out, never switched to, read or signed out here.
+        package var onBox: String?
+
+        package init(
+            id: String?, email: String?, active: Bool, workspace: String? = nil, signedOut: Bool = false, duplicate: Bool = false,
+            onBox: String? = nil
+        ) {
+            (self.id, self.email, self.active, self.workspace) = (id, email, active, workspace)
+            (self.signedOut, self.duplicate, self.onBox) = (signedOut, duplicate, onBox)
+        }
     }
 
-    /// Main and the added logins, once there's more than main.
+    /// What a box says is signed in there (`account.list`): this Mac's logins with those emails
+    /// show as on that box, unless read signed in here this run.
+    package func noteBox(_ box: String, cli: String, signedIn emails: [String]) {
+        guard !onBox else { return }
+        let here = signedInHere[cli, default: []]
+        let mine = ([(nil as String?, CLIProfiles.mainEmail(cli))] + CLIProfiles.added(cli).map { ($0.id, $0.email) })
+            .filter { !here.contains(Self.loginKey($0.0)) }.compactMap { $0.1?.lowercased() }
+        let moved = Set(emails.map { $0.lowercased() }).intersection(mine)
+        if CLIProfiles.noteMoved(cli, box: box, emails: moved) { loginsVersion += 1 }
+    }
+
+    /// Main and the added logins, once there's more than main; a box's accounts on a box.
     func logins(_ provider: String) -> [Login] {
         _ = loginsVersion
+        if onBox { return boxLogins[provider] ?? [] }
         // Under a storyline host, only where it gave the logins a folder of their own.
         guard !onBox, CLIProfiles.supports(provider), !StoryHost.installed || CLIProfiles.root.value != nil else { return [] }
         let active = CLIProfiles.active(provider)
@@ -585,7 +691,14 @@ package final class AccountStore {
         let added = CLIProfiles.added(provider).map {
             Login(id: $0.id, email: $0.email, active: active == $0.id, workspace: $0.workspace, signedOut: out.contains($0.id))
         }
-        return Self.flaggingDuplicates([main] + added)
+        let here = signedInHere[provider, default: []]
+        let marked = ([main] + added).map { login in
+            guard !here.contains(Self.loginKey(login.id)), let box = CLIProfiles.movedTo(provider, email: login.email) else { return login }
+            var moved = login
+            (moved.onBox, moved.signedOut) = (box, false)
+            return moved
+        }
+        return Self.flaggingDuplicates(marked)
     }
 
     /// Flags the logins that are the same account (email and workspace) as one kept with them:
@@ -620,7 +733,10 @@ package final class AccountStore {
     /// working chats stop first, then each starts again as the new login. Only a login picked by
     /// hand gets here (`LoginPick`): no limit, error, timer or restore moves a CLI to another.
     func switchLogin(_ provider: String, to id: String?, _ pick: LoginPick) {
-        guard !onBox, flows[provider]?.step.live != true, CLIProfiles.active(provider) != id else { return }
+        if onBox { return switchBox(provider, to: id) }
+        guard flows[provider]?.step.live != true, CLIProfiles.active(provider) != id else { return }
+        // A login on a box isn't this Mac's to run.
+        guard logins(provider).first(where: { $0.id == id })?.onBox == nil else { return }
         UILog.event("account-switch", ["cli": provider, "login": Self.loginKey(id)])
         stopWork(provider)
         CLIProfiles.activate(provider, id)
@@ -637,6 +753,30 @@ package final class AccountStore {
         Task { await refresh(provider) }
     }
 
+    /// A box chat moves to another of the box's accounts (its folder's new chats too): the box
+    /// stops its work and starts its CLI again on its session. Nothing on this Mac changes.
+    private func switchBox(_ provider: String, to id: String?) {
+        guard let box, flows[provider]?.step.live != true, let rows = boxLogins[provider],
+            let row = rows.first(where: { $0.id == id }), !row.active
+        else { return }
+        UILog.event("account-switch", ["cli": provider, "login": Self.loginKey(id), "on": "box"])
+        boxLogins[provider] = rows.map { Login(id: $0.id, email: $0.email, active: $0.id == id, workspace: $0.workspace, signedOut: $0.signedOut) }
+        dismissOutcome(provider)
+        // A read of the old account still under way is dropped (as a switch here drops them all).
+        epoch += 1
+        reads = [:]
+        reading = []
+        statuses[provider] = .unknown
+        known[provider] = nil
+        Task {
+            if let why = await box.switchTo(provider, id) {
+                flows[provider] = Flow(method: nil, step: .failed(why), switching: false)
+            }
+            await refresh(provider)
+            box.switched()
+        }
+    }
+
     /// Signs an added login out (its folder's only) and forgets it.
     func removeLogin(_ provider: String, _ id: String) {
         guard !onBox, CLIProfiles.active(provider) != id, let ops = ops(provider) else { return }
@@ -645,9 +785,15 @@ package final class AccountStore {
         Task { await discard(CLIProfiles.Pin(cli: provider, id: id), signOut: ops) }
     }
 
-    private func discard(_ pin: CLIProfiles.Pin, signOut ops: AccountOps) async {
+    private func discard(_ pin: CLIProfiles.Pin, signOut ops: AccountOps, email signedInAs: String? = nil) async {
         guard let id = pin.id else { return }
-        await CLIProfiles.$pinned.withValue(pin) { try? await ops.calls.signOut() }
+        // A login moved to a box (or a new one that landed on such an account) is only
+        // forgotten here: its sign-out would end it there.
+        let email = signedInAs ?? CLIProfiles.added(pin.cli).first { $0.id == id }?.email
+        let moved = signedInHere[pin.cli, default: []].contains(id) ? nil : CLIProfiles.movedTo(pin.cli, email: email)
+        if Self.signOutRefusal(onBox: onBox, movedTo: moved) == nil {
+            await CLIProfiles.$pinned.withValue(pin) { try? await ops.calls.signOut() }
+        }
         CLIProfiles.remove(pin.cli, id)
         lapsed[pin.cli]?.remove(id)
         loginsVersion += 1
@@ -678,10 +824,16 @@ package final class AccountStore {
         switch reading {
         case .signedIn(let identity):
             lapsed[provider]?.remove(Self.loginKey(id))
+            signedInHere[provider, default: []].insert(Self.loginKey(id))
+            if CLIProfiles.noteBack(provider, email: identity.email) { loginsVersion += 1 }
             if CLIProfiles.note(provider, login: id, email: identity.email, workspace: identity.workspace) { loginsVersion += 1 }
         case .signedOut:
             lapsed[provider, default: []].insert(Self.loginKey(id))
         }
+    }
+
+    private static func email(_ reading: AccountReading) -> String? {
+        if case .signedIn(let identity) = reading { identity.email } else { nil }
     }
 
     /// A login as the logs and `lapsed` name it: "main" or its id.
@@ -831,7 +983,8 @@ package final class AccountStore {
 
     /// Back to nothing known, nothing under way (a storyline's start).
     package func reset() {
-        LoginUsage.shared.reset()
+        loginUsage.reset()
+        signedInHere = [:]
         epoch += 1
         for provider in Array(handles.keys) { let handle = end(provider); Task { await handle?.cancel() } }
         for provider in serials.keys { serials[provider, default: 0] += 1 }

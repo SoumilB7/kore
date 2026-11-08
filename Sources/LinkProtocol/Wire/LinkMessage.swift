@@ -4,6 +4,7 @@ import CryptoKit
 import Crypto
 #endif
 import Foundation
+import KoreCore
 import src
 
 /// One message on the link: its type in `t`, then its fields.
@@ -146,12 +147,24 @@ package enum LinkMessage: Sendable, Equatable {
         package var signedIn: Bool?
         /// 1.7, with `signedIn: true`: who the CLI there is signed in as, for the Account popup.
         package var account: LinkIdentity?
+        /// `account.list` (a box, Claude only): the box's Claude accounts, the one the named chat
+        /// runs on (`login`, "main" for the default) and the folder's default for new chats.
+        package var accounts: [LinkAccount]?
+        package var login: String?
+        package var folderLogin: String?
+        /// `account.usage`: that account's plan and limits, as its CLI reads them.
+        package var reading: PlanReading?
         package init(
             id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, chatId: String? = nil, windowId: String? = nil,
             blobId: String? = nil, tabId: String? = nil, folders: [Folder]? = nil, url: String? = nil, authCode: String? = nil,
-            signedIn: Bool? = nil, account: LinkIdentity? = nil
+            signedIn: Bool? = nil, account: LinkIdentity? = nil, accounts: [LinkAccount]? = nil, login: String? = nil,
+            folderLogin: String? = nil, reading: PlanReading? = nil
         ) {
             self.account = account
+            self.accounts = accounts
+            self.login = login
+            self.folderLogin = folderLogin
+            self.reading = reading
             self.id = id
             self.ok = ok
             self.code = code
@@ -276,7 +289,8 @@ extension LinkMessage: Codable {
         case t, nonce, proto, client, proof, commands, epoch, host, providers, policy, caps, reason, rev, windows, chats, removed, chatId, last,
             count, txRev, entries, turns, hasEarlier, upserts, order, id, entryId, field, offset, text, total, cardId, cmd, ok, code,
             message, windowId, aid, open, recent, op, item, key, turn, uploadId, name, mime, size, sha256, index, data, ref, variant, blobId,
-            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders, ghSignedIn, url, authCode, signedIn, account, onScreen, part
+            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders, ghSignedIn, url, authCode, signedIn, account, onScreen, part,
+            accounts, login, folderLogin, reading
     }
 
     package init(from decoder: any Decoder) throws {
@@ -341,7 +355,8 @@ extension LinkMessage: Codable {
                 .init(
                     id: try d(.id), ok: try d(.ok), code: try o(.code), message: try o(.message), chatId: try o(.chatId), windowId: try o(.windowId),
                     blobId: try o(.blobId), tabId: try o(.tabId), folders: try o(.folders), url: try o(.url),
-                    authCode: try o(.authCode), signedIn: try o(.signedIn), account: try? o(.account)))
+                    authCode: try o(.authCode), signedIn: try o(.signedIn), account: try? o(.account), accounts: try? o(.accounts),
+                    login: try? o(.login), folderLogin: try? o(.folderLogin), reading: try? o(.reading)))
         case "attn.state": self = .attnState(aid: try d(.aid), open: try d(.open), recent: try d(.recent))
         case "attn.event": self = .attnEvent(aid: try d(.aid), op: try d(.op), item: try o(.item), key: try o(.key), turn: try o(.turn))
         case "presence": self = .presence(onScreen: try d(.onScreen), chatId: try o(.chatId))
@@ -490,6 +505,10 @@ extension LinkMessage: Codable {
             try c.encodeIfPresent(r.authCode, forKey: .authCode)
             try c.encodeIfPresent(r.signedIn, forKey: .signedIn)
             try c.encodeIfPresent(r.account, forKey: .account)
+            try c.encodeIfPresent(r.accounts, forKey: .accounts)
+            try c.encodeIfPresent(r.login, forKey: .login)
+            try c.encodeIfPresent(r.folderLogin, forKey: .folderLogin)
+            try c.encodeIfPresent(r.reading, forKey: .reading)
         case .attnState(let aid, let open, let recent):
             try c.encode(aid, forKey: .aid)
             try c.encode(open, forKey: .open)
@@ -583,6 +602,29 @@ package enum LinkProof {
         let bytes = (0..<count).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
         return Data(bytes).base64EncodedString()
     }
+}
+
+/// One of a box's Claude accounts (`account.list`): the default (`~/.claude`, id "main") or a
+/// folder of `~/.config/claude-accounts`, by its folder's name. Who it is and whether it's
+/// signed in, as `claude auth status` says it there; never a token, never a path.
+package struct LinkAccount: Codable, Sendable, Equatable, Identifiable {
+    package var id: String
+    package var email: String?
+    package var organization: String?
+    package var plan: String?
+    /// Nil: its status couldn't be read.
+    package var signedIn: Bool?
+
+    package init(id: String, email: String? = nil, organization: String? = nil, plan: String? = nil, signedIn: Bool? = nil) {
+        self.id = id
+        self.email = email
+        self.organization = organization
+        self.plan = plan
+        self.signedIn = signedIn
+    }
+
+    /// The default account's id on the wire.
+    package static let main = "main"
 }
 
 /// Who a box's CLI is signed in as (1.7): `AccountIdentity` on the wire, never a token.

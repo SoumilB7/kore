@@ -75,7 +75,13 @@ extension Chat {
     /// Opens the Account popup for this chat's CLI.
     func openAccount() {
         closePopups(keeping: .account)
-        account.open(provider: provider.id, folder: folder, store: accountStore)
+        let store = accountStore
+        if let box = services as? BoxChatServices {
+            // The box's accounts are listed for this chat: the one it runs on is the active row.
+            box.connection.accounts.viewing = (box.chatId, box.folder)
+            store.box?.switched = { [weak self] in self?.usage.accountChanged() }
+        }
+        account.open(provider: provider.id, folder: folder, store: store)
     }
 
     /// The model chip or the mode pill: its picker opens in the popups' place, or closes when

@@ -54,6 +54,10 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case accountSignOut = "account.signOut"
     case accountRefresh = "account.refresh"
     case accountPrivacy = "account.privacy"
+    /// A box's Claude accounts (`LinkAccount`), read when asked, never polled; and one account's
+    /// usage (`login`). Claude only.
+    case accountList = "account.list"
+    case accountUsage = "account.usage"
     // 1.3: Arsenal, a chat's agent-control tier, and Stop agent control.
     case chatSetArsenal = "chat.setArsenal"
     case arsenalStopAll = "arsenal.stopAll"

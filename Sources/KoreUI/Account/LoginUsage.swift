@@ -26,7 +26,8 @@ final class LoginUsage {
             self.login = login.id
             email = login.email?.lowercased()
             workspace = login.workspace
-            signedOut = login.signedOut
+            // A login on a box is never read here.
+            signedOut = login.signedOut || login.onBox != nil
             active = login.active
             self.generation = generation
         }
@@ -67,6 +68,8 @@ final class LoginUsage {
     @ObservationIgnored private var viewers: [String: Int] = [:]
     private let read: @MainActor (String, String?) async throws -> PlanReading
     private let clock: @MainActor () -> Date
+    /// The active login's reading feeds this Mac's usage cues: not a box's.
+    private let cues: Bool
 
     init(
         read: @escaping @MainActor (String, String?) async throws -> PlanReading = { provider, login in
@@ -83,10 +86,11 @@ final class LoginUsage {
                 }
             }
         },
-        clock: @escaping @MainActor () -> Date = Date.init
+        clock: @escaping @MainActor () -> Date = Date.init, cues: Bool = true
     ) {
         self.read = read
         self.clock = clock
+        self.cues = cues
     }
 
     func state(_ key: Key) -> State { states[key] ?? confirmed(key) ?? (key.active ? .loading : .idle) }
@@ -218,7 +222,7 @@ final class LoginUsage {
             if let reading {
                 // A confirmed different identity must clear the old reading immediately.
                 states[key] = Self.matches(reading.account, key) ? .ready(reading, clock()) : .unavailable
-                if key.active, Self.matches(reading.account, key) { UsageCues.shared.take(key.provider, reading: reading) }
+                if cues, key.active, Self.matches(reading.account, key) { UsageCues.shared.take(key.provider, reading: reading) }
             } else if case .ready = states[key] {
                 // Transient failures keep the real timestamp of the last confirmed read.
             } else {

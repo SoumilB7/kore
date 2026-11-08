@@ -11,10 +11,14 @@ struct LoginMeters: View {
     let now: Date
     /// The card's longest limit name (`labelWidth`): every login's bars start in one place.
     var labelWidth: CGFloat = Size.usageTitleMax
+    /// A login moved to a box (its row says which): signed in there, not read here.
+    var onBox = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
-            if signedOut {
+            if onBox {
+                note("Signed in there, not on this Mac")
+            } else if signedOut {
                 note("Sign in to see usage")
             } else {
                 switch state {

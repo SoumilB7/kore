@@ -24,6 +24,8 @@ public enum CLIProfiles {
         var mainEmail: [String: String] = [:]
         /// Optional, so a list saved before it reads.
         var mainWorkspace: [String: String]?
+        /// Logins moved to a box: by CLI, each email (lowercased) and the box it's signed in on.
+        var moved: [String: [String: String]]?
     }
 
     static let variables = ["claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"]
@@ -74,6 +76,38 @@ public enum CLIProfiles {
     public static func mainEmail(_ cli: String) -> String? { saved.mainEmail[cli] }
     public static func mainWorkspace(_ cli: String) -> String? { saved.mainWorkspace?[cli] }
 
+    /// The box a login with this email is signed in on instead of this Mac (its owner moved it
+    /// there), as a box's account list last said.
+    public static func movedTo(_ cli: String, email: String?) -> String? {
+        guard let email = email?.lowercased(), !email.isEmpty else { return nil }
+        return saved.moved?[cli]?[email]
+    }
+
+    /// What `box` says is signed in there now, of this Mac's logins: those emails are on `box`,
+    /// and no others are any more. Whether that changed the list.
+    @discardableResult
+    public static func noteMoved(_ cli: String, box: String, emails: Set<String>) -> Bool {
+        let now = Set(emails.map { $0.lowercased() })
+        var marks = saved.moved?[cli] ?? [:]
+        for (email, on) in marks where on == box && !now.contains(email) { marks[email] = nil }
+        for email in now { marks[email] = box }
+        guard marks != saved.moved?[cli] ?? [:] else { return false }
+        change {
+            var moved = $0.moved ?? [:]
+            moved[cli] = marks.isEmpty ? nil : marks
+            $0.moved = moved
+        }
+        return true
+    }
+
+    /// The login is back on this Mac (read signed in here): no longer said to be on a box.
+    @discardableResult
+    public static func noteBack(_ cli: String, email: String?) -> Bool {
+        guard let email = email?.lowercased(), saved.moved?[cli]?[email] != nil else { return false }
+        change { $0.moved?[cli]?[email] = nil }
+        return true
+    }
+
     /// The CLI's main folder: its variable as Kore was started with it, else its default.
     public static func mainFolder(_ cli: String, environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
         if let main = mains.value[cli] { return main }
@@ -99,7 +133,10 @@ public enum CLIProfiles {
         public let cli: String
         /// nil: main.
         public let id: String?
-        public init(cli: String, id: String?) { (self.cli, self.id) = (cli, id) }
+        /// A config folder of its own outside Kore's list (a box's account folder): `id` is nil.
+        public let folder: URL?
+        public init(cli: String, id: String?) { (self.cli, self.id, folder) = (cli, id, nil) }
+        public init(cli: String, folder: URL) { (self.cli, id, self.folder) = (cli, nil, folder) }
     }
 
     /// A login's folder for the CLIs one task starts: an added login's sign-in, before it's
@@ -109,7 +146,10 @@ public enum CLIProfiles {
     /// What a CLI starts with for the active (or pinned) login: nothing for main.
     public static func overrides(_ cli: String) -> [String: String] {
         guard let name = variables[cli] else { return [:] }
-        if let pin = pinned, pin.cli == cli { return pin.id.map { [name: folder(cli, $0).path] } ?? [:] }
+        if let pin = pinned, pin.cli == cli {
+            if let dir = pin.folder { return [name: dir.path] }
+            return pin.id.map { [name: folder(cli, $0).path] } ?? [:]
+        }
         guard let id = saved.active[cli] else { return [:] }
         return [name: folder(cli, id).path]
     }
@@ -232,14 +272,21 @@ public enum CLIProfiles {
     /// what main gained since, too. A link the CLI replaced with a file of its own stays.
     static func link(_ cli: String, _ id: String) {
         let files = FileManager.default
-        let main = mainFolder(cli)
         let dir = folder(cli, id)
-        let skip = own[cli] ?? []
-        guard let names = try? files.contentsOfDirectory(atPath: main.path) else { return }
-        for name in skip where (try? files.destinationOfSymbolicLink(atPath: dir.appendingPathComponent(name).path)) != nil {
+        for name in own[cli] ?? [] where (try? files.destinationOfSymbolicLink(atPath: dir.appendingPathComponent(name).path)) != nil {
             // Linked by an older Kore: the login's own from now on.
             try? files.removeItem(at: dir.appendingPathComponent(name))
         }
+        linkShared(cli, into: dir, from: mainFolder(cli))
+    }
+
+    /// Links each entry of `main` that a login doesn't keep for itself into `dir`, where `dir`
+    /// has nothing by that name: chats, settings and skills stay one. It only adds links: nothing
+    /// in `dir` is replaced or removed, and a login's own files (`own`) are never touched.
+    package static func linkShared(_ cli: String, into dir: URL, from main: URL) {
+        let files = FileManager.default
+        let skip = own[cli] ?? []
+        guard let names = try? files.contentsOfDirectory(atPath: main.path) else { return }
         for name in names where !skip.contains(name) && !name.hasSuffix(".sqlite") && !name.contains(".sqlite-") && !name.hasPrefix("logs_") {
             let target = dir.appendingPathComponent(name)
             guard (try? files.destinationOfSymbolicLink(atPath: target.path)) == nil, !files.fileExists(atPath: target.path) else { continue }

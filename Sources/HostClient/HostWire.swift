@@ -160,8 +160,28 @@ package enum HostWire {
         command(id: id, type: "account.submit", ["provider": provider, "serial": 0, "input": input])
     }
     package static func cancelSignIn(id: String, provider: String) -> Data { command(id: id, type: "account.cancel", ["provider": provider]) }
-    package static func signOut(id: String, provider: String) -> Data { command(id: id, type: "account.signOut", ["provider": provider]) }
     package static func refresh(id: String, provider: String) -> Data { command(id: id, type: "account.refresh", ["provider": provider]) }
+    /// A chat's own account (a box's Claude accounts): its status, read in its folder.
+    package static func refresh(id: String, provider: String, chatId: String) -> Data {
+        command(id: id, type: "account.refresh", ["provider": provider, "chatId": chatId])
+    }
+    /// The box's Claude accounts, the one `chatId` runs on and `folder`'s default.
+    package static func accountList(id: String, provider: String, chatId: String?, folder: String?) -> Data {
+        var fields: [String: Any] = ["provider": provider]
+        if let chatId { fields["chatId"] = chatId }
+        if let folder { fields["folder"] = folder }
+        return command(id: id, type: "account.list", fields)
+    }
+    /// The chat (or, without one, the folder's new chats) on `login` from now on.
+    package static func accountSwitch(id: String, provider: String, login: String, chatId: String?, folder: String?) -> Data {
+        var fields: [String: Any] = ["provider": provider, "login": login]
+        if let chatId { fields["chatId"] = chatId }
+        if let folder { fields["folder"] = folder }
+        return command(id: id, type: "account.switch", fields)
+    }
+    package static func accountUsage(id: String, provider: String, login: String) -> Data {
+        command(id: id, type: "account.usage", ["provider": provider, "login": login])
+    }
     package static func gitHub(id: String) -> Data { command(id: id, type: "auth.gh", [:]) }
 
     /// A page to open and the code to enter there.

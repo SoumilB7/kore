@@ -34,6 +34,53 @@ package final class BoxAccounts {
     /// GitHub's line, beside the CLIs'.
     package static let gitHub = "gh"
 
+    /// The box's Claude accounts as last listed (`account.list`, Claude only: Codex keeps one
+    /// login on a box), the account each chat runs on as last said, and each folder's default.
+    package private(set) var claude: [LinkAccount] = []
+    package private(set) var chatLogins: [String: String] = [:]
+    package private(set) var folderLogins: [String: String] = [:]
+    /// The chat whose Account popup shows the accounts (nil: a chat not made on the box yet), and
+    /// its folder there: a status read is that chat's account's.
+    package var viewing: (chatId: String?, folder: String?) = (nil, nil)
+
+    /// The account the chat shown runs on, as last said: "main" until the box says otherwise.
+    package var viewedLogin: String { viewing.chatId.flatMap { chatLogins[$0] } ?? viewing.folder.flatMap { folderLogins[$0] } ?? LinkAccount.main }
+
+    /// Reads the list again (one `claude auth status` per account on the box). False when the box
+    /// refused or doesn't know the command (a box before this one): its one login stands.
+    @discardableResult
+    package func listClaude() async -> Bool {
+        let (chatId, folder) = viewing
+        let result = await connection.command { HostWire.accountList(id: $0, provider: "claude", chatId: chatId, folder: folder) }
+        guard result.ok, let accounts = result.accounts else { return false }
+        claude = accounts
+        if let chatId, let login = result.login { chatLogins[chatId] = login }
+        if let folder, let login = result.folderLogin { folderLogins[folder] = login }
+        return true
+    }
+
+    /// The shown chat runs on `login` from now on (and its folder's new chats start on it): the
+    /// box stops its work and starts its CLI again on its session. The box's reason when it refused.
+    package func switchClaude(to login: String) async -> String? {
+        let (chatId, folder) = viewing
+        let result = await connection.command {
+            HostWire.accountSwitch(id: $0, provider: "claude", login: login, chatId: chatId, folder: chatId == nil ? folder : nil)
+        }
+        guard result.ok else { return result.message ?? "Couldn't switch on \(NodeNames.name(alias))" }
+        if let chatId { chatLogins[chatId] = result.login ?? login }
+        if let folder { folderLogins[folder] = result.folderLogin ?? login }
+        return nil
+    }
+
+    /// One account's plan and limits, read on the box.
+    package func claudeUsage(_ login: String) async throws -> PlanReading {
+        let result = await connection.command { HostWire.accountUsage(id: $0, provider: "claude", login: login) }
+        guard result.ok, let reading = result.reading else {
+            throw HostRefusal(message: result.message ?? "Couldn't read usage on \(NodeNames.name(alias))")
+        }
+        return reading
+    }
+
     package private(set) var lines: [String: Line] = [:]
     @ObservationIgnored private unowned let connection: HostConnection
 

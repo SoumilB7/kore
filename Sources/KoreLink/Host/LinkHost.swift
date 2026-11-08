@@ -292,7 +292,7 @@ package final class LinkHost {
         case .accountSwitch: "Switched login"
         case .accountRemove: "Removed a login"
         case .accountSignOut: "Signed out"
-        case .accountRefresh: "Read the account"
+        case .accountRefresh, .accountList, .accountUsage: "Read the account"
         case .accountPrivacy: "Changed email privacy"
         case .chatSetArsenal: "Changed Arsenal"
         case .arsenalStopAll: "Stopped agent control"

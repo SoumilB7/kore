@@ -378,7 +378,8 @@ final class BoxChatServices: ChatServices {
     private let app = AppChatServices.shared
     private weak var binding: BoxBinding?
     let connection: HostConnection
-    private let folder: String
+    /// Its folder on the box.
+    let folder: String
     private(set) var chatId: String?
     /// Sync level 2: a mirror in the paired Mac folder's window (shows this Mac's copy, follows
     /// nothing; `ChatMirrorBatches` brings the copy up to date).

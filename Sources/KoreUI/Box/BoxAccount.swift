@@ -8,8 +8,12 @@ import SwiftUI
 /// A box chat's Account popup is Kore's own, the same design and words; only its logins are the
 /// box's. Each box has an `AccountStore` whose calls go to the box (`account.*`): a sign-in runs
 /// there without a browser (Codex's device code, Claude's page whose code is typed back here),
-/// its page opens in this Mac's browser, and the token stays on the box. A box keeps one login
-/// per CLI; nothing of this Mac's logins is read or written for it.
+/// its page opens in this Mac's browser, and the token stays on the box. Codex keeps one login
+/// on a box. Claude may have several (`account.list`: the default and each folder of the box's
+/// `~/.config/claude-accounts`); each box chat runs on one, picked in the list like this Mac's
+/// logins, and a switch moves that chat alone (and its folder's new chats). Nothing of this Mac's
+/// logins is read or written for it, but a box's signed-in emails mark this Mac's logins with
+/// them as on that box. Kore never signs anyone out on a box.
 @MainActor
 enum BoxAccountStores {
     private static var stores: [String: AccountStore] = [:]
@@ -17,8 +21,32 @@ enum BoxAccountStores {
     static func store(_ connection: HostConnection) -> AccountStore {
         if let store = stores[connection.alias] { return store }
         let store = AccountStore(calls: { provider in ops(provider, connection) })
+        store.box = logins(connection)
         stores[connection.alias] = store
         return store
+    }
+
+    /// The box's Claude accounts as the popup's rows: the shown chat's active.
+    static func logins(_ connection: HostConnection) -> AccountStore.BoxLogins {
+        let accounts = connection.accounts
+        let alias = connection.alias
+        return AccountStore.BoxLogins(
+            list: { provider in
+                guard provider == "claude", await accounts.listClaude() else { return nil }
+                AccountStore.shared.noteBox(alias, cli: provider, signedIn: accounts.claude.filter { $0.signedIn == true }.compactMap(\.email))
+                return rows(accounts.claude, active: accounts.viewedLogin)
+            },
+            switchTo: { _, login in await accounts.switchClaude(to: login ?? LinkAccount.main) },
+            usage: { _, login in try await accounts.claudeUsage(login ?? LinkAccount.main) },
+            viewedIsMain: { accounts.viewedLogin == LinkAccount.main })
+    }
+
+    nonisolated static func rows(_ accounts: [LinkAccount], active: String) -> [AccountStore.Login] {
+        accounts.map {
+            AccountStore.Login(
+                id: $0.id == LinkAccount.main ? nil : $0.id, email: $0.email, active: $0.id == active,
+                workspace: $0.signedIn == true ? $0.organization ?? $0.plan ?? "" : nil, signedOut: $0.signedIn == false)
+        }
     }
 
     /// The CLI's login as the box runs it: the methods a box takes (no key, no platform), and the
@@ -56,7 +84,11 @@ enum BoxAccountStores {
     private static func calls(_ provider: String, _ connection: HostConnection) -> AccountCalls {
         let alias = connection.alias
         let status: @MainActor @Sendable () async throws -> JSONValue = {
-            let result = await connection.command { HostWire.refresh(id: $0, provider: provider) }
+            // A Claude chat's own account (a box before accounts reads its one login).
+            let chatId = provider == "claude" ? connection.accounts.viewing.chatId : nil
+            let result = await connection.command {
+                if let chatId { HostWire.refresh(id: $0, provider: provider, chatId: chatId) } else { HostWire.refresh(id: $0, provider: provider) }
+            }
             guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't read the login on \(NodeNames.name(alias))") }
             return Self.status(result)
         }
@@ -66,9 +98,10 @@ enum BoxAccountStores {
             guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't sign in on \(NodeNames.name(alias))") }
             return handle(HostWire.page(result.message), done: result.id + HostWire.doneSuffix, provider: provider, connection)
         }
+        // Never sent: Kore doesn't sign anyone out on a box (`AccountStore.signOutRefusal`), and
+        // the box refuses it too.
         let signOut: @MainActor @Sendable () async throws -> Void = {
-            let result = await connection.command { HostWire.signOut(id: $0, provider: provider) }
-            guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't sign out on \(NodeNames.name(alias))") }
+            throw HostRefusal(message: LinkPolicy.boxSignOutRefused)
         }
         return AccountCalls(
             status: status, signIn: signIn, useKey: { _ in throw HostRefusal(message: "Keys aren't sent to a box") }, signOut: signOut)

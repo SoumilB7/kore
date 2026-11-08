@@ -98,10 +98,14 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 | `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as in link 1.0 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link under full control (1.2). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
 | `folders.list` | | Result: `folders: [{windowId, path, missing?}]`; `missing: true` for a served folder that isn't there any more. |
 | `folder.add` | `path` | An existing folder, by absolute path or under `~` (the box's home); it's added to `config.json`. Result: `folders`. `gone.folder` otherwise. |
-| `account.refresh` | `provider` | Result `message`: "Signed in as …" / "… isn't signed in.". |
+| `account.refresh` | `provider, chatId?, login?` | Result `message`: "Signed in as …" / "… isn't signed in.". With `chatId` (or `login`), Claude's status in that chat's (or that) account's folder. |
+| `account.list` | `provider, chatId?, folder?` | Claude only. Result `accounts: [{id, email?, organization?, plan?, signedIn?}]`: the default (`id: "main"`, `~/.claude`) and each folder of the box's `~/.config/claude-accounts` by name, each read with `claude auth status` there when asked (a list read in the last 30 s is answered as it is); `signedIn` absent when it couldn't be read. `login`: the account `chatId` runs on; `folderLogin`: the one new chats in `folder` (or the chat's) start on. |
+| `account.switch` | `provider, login, chatId?, folder?` | Claude only. The chat runs on `login` from now on (its work stops, its CLI starts again on its session with `CLAUDE_CONFIG_DIR` at that account's folder), and its folder's new chats start on it; with `folder` alone, only the folder's default. `gone.login` for an account that isn't there. |
+| `account.usage` | `provider, login` | Claude only. Result `reading`: that account's plan and limits (`get_usage` on a message-less `claude -p` there). |
 | `account.signIn` | `provider, method?` | Result `message`: the page to open (and `code …` for a device code), space-separated. When the sign-in ends: `result {id: "<id>:done", ok, message}`. |
 | `account.submit` | `provider, serial, input` | The code from the page. |
-| `account.cancel`, `account.signOut` | `provider` | |
+| `account.cancel` | `provider` | |
+| `account.signOut` | `provider` | Always `invalid`: Kore never signs anyone out on a box (a CLI's sign-out ends the login on every machine that holds it). |
 | `auth.gh` | | `gh auth login --web` on the box. Result: `url` and `authCode` (the one-time code to type at `url`; `code` stays the error field). When it ends: `result {id: "<id>:done", ok}`, `gh auth setup-git` run, and a `delta` with `ghSignedIn`. |
 
 Every control command goes through the box's rule table (`LinkPolicy.checkBox`); all other

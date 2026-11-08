@@ -244,6 +244,11 @@ package enum LinkPolicy {
     /// The calls a full grant may make (1.5): every one but those this policy always refuses.
     package static let callable = ChatCommand.tags.filter { $0 != "setRemoteControl" }
 
+    /// Why a box refuses `account.signOut`, whatever the grant.
+    package static let boxSignOutRefused = "Kore doesn't sign anyone out on a box: that would end the login on every machine."
+    /// A box's accounts are Claude's only: Codex keeps its one login (`account.refresh`).
+    package static let boxAccountsClaudeOnly = "Accounts on a box are Claude's only for now."
+
     /// The sign-ins a box runs: the ones with no browser on the box. Never a key: no message
     /// carries one.
     package static let boxSignIns: Set<String> = ["claudeai", "chatgptDeviceCode"]
@@ -374,9 +379,23 @@ package enum LinkPolicy {
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             if let method = args.method, !boxSignIns.contains(method) { return .deny(.invalid, "That sign-in isn't taken here.") }
             return check(kind, args, chat, control: control)
-        case .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh:
+        case .accountSubmit, .accountCancel, .accountRefresh:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             return check(kind, args, chat, control: control)
+        case .accountSignOut:
+            // The owner's rule: Kore never signs anyone out of a box. A CLI's sign-out ends the
+            // login (its tokens revoked) on every machine that holds it.
+            return .deny(.invalid, boxSignOutRefused)
+        case .accountList:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            return args.provider == "claude" ? .allow : .deny(.invalid, boxAccountsClaudeOnly)
+        case .accountUsage, .accountSwitch:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard args.provider == "claude" else { return .deny(.invalid, boxAccountsClaudeOnly) }
+            guard let login = args.login, plainID(login) else { return .deny(.invalid, "Name the account.") }
+            if kind == .accountSwitch, args.chatId == nil, args.folder == nil { return .deny(.invalid, "Name the chat or the folder.") }
+            if let folder = args.folder, !folder.hasPrefix("/") || folder.contains("\0") { return .deny(.invalid, "Name the folder.") }
+            return .allow
         // 1.10: a chat's move between the box and a Mac, full grants only. The box also checks
         // the chat's owner and gen, and where the files lead (its own staging folder only).
         case .chatRelease:

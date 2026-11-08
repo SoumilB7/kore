@@ -14,6 +14,8 @@ package final class HostServices: ChatServices {
     package var onModels: ((String, [ModelOption]) -> Void)?
     /// Makes the backend; tests set a stand-in.
     package var backend: (ProviderDescriptor, BackendOptions) -> any ChatBackend = { $0.makeBackend($1) }
+    /// What a Claude chat's CLI starts with for its account (`HostAccounts.environment`).
+    package var accountEnvironment: ((String?) throws -> [String: String])?
 
     /// The box's paragraph for every chat (`HostDaemon` writes it): where it runs, and when
     /// Kore's tools are there.

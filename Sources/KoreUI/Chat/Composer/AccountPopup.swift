@@ -1,4 +1,5 @@
 import AppKit
+import HostClient
 import KoreCore
 import Observation
 import src
@@ -180,7 +181,8 @@ final class AccountState {
 
     /// Signed in, with logins Kore can keep side by side: the row's sign-in adds one.
     var addsLogins: Bool {
-        guard case .signedIn = store.status(provider) else { return false }
+        // A box's accounts are added on the box itself.
+        guard !store.onBox, case .signedIn = store.status(provider) else { return false }
         return !store.logins(provider).isEmpty
     }
 
@@ -203,8 +205,13 @@ final class AccountState {
 
     /// The ⋯'s Remove, under its methods: an added login not in use, and whether it's a duplicate.
     var removable: AccountStore.Login? {
-        guard case .login(let id?) = palette else { return nil }
+        guard !store.onBox, case .login(let id?) = palette else { return nil }
         return store.logins(provider).first { $0.id == id && !$0.active }
+    }
+
+    /// A login's ⋯ has something in it: its methods, or Remove.
+    func hasLoginMenu(_ login: AccountStore.Login) -> Bool {
+        !store.loginMenu(provider, login.id).isEmpty || (!store.onBox && login.id != nil && !login.active)
     }
 
     func switchLogin(_ id: String?, _ pick: LoginPick) {
@@ -622,7 +629,7 @@ private struct AccountRow: View {
                             .smallButton()
                             .storyID(id.part(.switch))
                             .tabStop(id.part(.switch)) { state.toggleAdd() }
-                    } else {
+                    } else if state.store.signInOffered(provider) {
                         Button("Switch account") { state.signIn() }
                             .smallButton()
                             .storyID(id.part(.switch))
@@ -630,10 +637,13 @@ private struct AccountRow: View {
                         if state.hasMenu { MethodMenuButton(state: state).storyID(id.part(.method)) }
                     }
                 }
-                Button("Sign out") { state.askSignOut() }
-                    .smallButton()
-                    .storyID(id.part(.signOut))
-                    .tabStop(id.part(.signOut), after: id.part(.cancel)) { state.askSignOut() }
+                // Never on a box, nor for a login moved to one: the owner's rule.
+                if state.store.signOutOffered(provider) {
+                    Button("Sign out") { state.askSignOut() }
+                        .smallButton()
+                        .storyID(id.part(.signOut))
+                        .tabStop(id.part(.signOut), after: id.part(.cancel)) { state.askSignOut() }
+                }
             } else {
                 Text(AccountText.signedOut(product))
                     .font(TextStyle.label)
@@ -641,7 +651,7 @@ private struct AccountRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
-                signInControl("Sign in", id: id) { state.signIn() }
+                if state.store.signInOffered(provider) { signInControl("Sign in", id: id) { state.signIn() } }
             }
         }
         .font(TextStyle.label)
@@ -908,7 +918,7 @@ private struct LoginList: View {
         let keys = logins.map { LoginUsage.Key(provider, $0, generation: store.generation(provider)) }
         // One visible-card clock updates every login's countdown; reads keep their own cache.
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            let usages = keys.map { LoginUsage.shared.state($0) }
+            let usages = keys.map { store.loginUsage.state($0) }
             let labelWidth = LoginMeters.labelWidth(usages, now: context.date)
             VStack(alignment: .leading, spacing: Space.md) {
                 ForEach(Array(logins.enumerated()), id: \.element.id) { index, login in
@@ -924,13 +934,13 @@ private struct LoginList: View {
             }
         }
         .padding(.horizontal, -Space.sm)
-        .task(id: keys) { await LoginUsage.shared.show(keys) }
+        .task(id: keys) { await store.loginUsage.show(keys) }
     }
 
     private func caption(_ login: AccountStore.Login) -> String? {
         // The plan is the row's pill: the caption keeps only what the login is to Kore.
-        let main = login.id == nil ? "Main" : nil
-        let state = login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil
+        let main = login.id == nil ? (store.onBox ? "Default" : "Main") : nil
+        let state = login.onBox.map { "On " + NodeNames.name($0) } ?? (login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil)
         let words = [main, state].compactMap { $0 }
         return words.isEmpty ? nil : words.joined(separator: " · ")
     }
@@ -973,7 +983,7 @@ struct LoginRow: View {
         let id = StoryID.Composer.accountLogin(AccountStore.loginKey(login.id))
         let title = login.email.map(AccountPrivacy.shared.shown) ?? (login.id == nil ? "Main account" : "Account")
         let menuOpen = state.palette == .login(login.id)
-        Button { if !login.active { state.switchLogin(login.id, LoginPick()) } } label: {
+        Button { if !login.active, login.onBox == nil { state.switchLogin(login.id, LoginPick()) } } label: {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: Space.sm) {
                     Text(title)
@@ -985,7 +995,7 @@ struct LoginRow: View {
                     if let pill = LoginRow.pill(usage, plan: plan) { PlanPill(text: pill) }
                     // One trailing slot in every row, ✓ or (on hover) ⋯: the pills line up beside it.
                     ZStack {
-                        if hovered || menuOpen {
+                        if (hovered || menuOpen) && state.hasLoginMenu(login) {
                             LoginMenuButton(state: state, login: login.id)
                         } else if reading {
                             SpinningArc().frame(width: Size.spinner, height: Size.spinner)
@@ -1000,7 +1010,7 @@ struct LoginRow: View {
                     Text(caption).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
                 }
                 // Under the slot too: the bars run to the card's edge.
-                LoginMeters(state: usage, signedOut: login.signedOut, now: now, labelWidth: labelWidth)
+                LoginMeters(state: usage, signedOut: login.signedOut, now: now, labelWidth: labelWidth, onBox: login.onBox != nil)
                     .padding(.top, Space.xs)
             }
             .padding(.horizontal, Space.sm)
@@ -1018,9 +1028,9 @@ struct LoginRow: View {
             guard !login.active, hovered || stops?.current == id.raw else { return }
             try? await Task.sleep(for: Self.hoverRead)
             guard !Task.isCancelled else { return }
-            LoginUsage.shared.hover(usageKey)
+            state.store.loginUsage.hover(usageKey)
         }
-        .tabStop(id) { state.switchLogin(login.id, LoginPick()) }
+        .tabStop(id) { if login.onBox == nil { state.switchLogin(login.id, LoginPick()) } }
         .accessibilityAddTraits(login.active ? .isSelected : [])
     }
 
