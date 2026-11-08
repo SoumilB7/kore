@@ -79,10 +79,25 @@ struct MacNetTests {
                     if case .challenge(let n)? = try? LinkMessage.decode(data) { self?.nonce = n }
                     try? Sockets.writeAll(relay, LinkFrame.frame(data))
                 }, ended: {})
-            let source = DispatchSource.makeReadSource(fileDescriptor: relay, queue: .main)
+            // Its own copy of the descriptor, read and closed by the source alone: `close` frees
+            // `relay`'s number at once, and a read still queued then never takes another
+            // socket's bytes under it.
+            guard let watched = Sockets.duplicate(relay) else { throw SocketError.closed }
+            let source = DispatchSource.makeReadSource(fileDescriptor: watched, queue: .main)
+            source.setCancelHandler { Sockets.closeFD(watched) }
             source.setEventHandler { [weak self] in
                 MainActor.assumeIsolated {
-                    guard let self, let bytes = try? Sockets.read(self.relay, max: 65536), !bytes.isEmpty else { return }
+                    guard let self else { return }
+                    let bytes: [UInt8]
+                    do {
+                        bytes = try Sockets.read(watched, max: 65536)
+                    } catch SocketError.timedOut {
+                        return
+                    } catch {
+                        return self.endRead()
+                    }
+                    // The Mac's end went: read no more (an end left watched fires without end).
+                    guard !bytes.isEmpty else { return self.endRead() }
                     self.input.append(contentsOf: bytes)
                     for frame in (try? LinkFrame.take(&self.input, max: LinkFrame.inboundMax)) ?? [] { self.fromMac(frame, grant: grant) }
                 }
@@ -106,8 +121,13 @@ struct MacNetTests {
             PipeTransport(input: FileHandle(fileDescriptor: mac, closeOnDealloc: false), output: FileHandle(fileDescriptor: dup(mac), closeOnDealloc: true))
         }
 
-        func close() {
+        private func endRead() {
             source?.cancel()
+            source = nil
+        }
+
+        func close() {
+            endRead()
             socket.close()
             Sockets.closeFD(relay)
         }
@@ -167,6 +187,11 @@ struct MacNetTests {
         let ups = Events<Bool>()
         connection.onLink("test") { ups.send($0) }
         connection.retain()
+        // Let go however the test ends: a link still held would dial the rig after it's gone.
+        defer {
+            connection.release()
+            relays.forEach { $0.close() }
+        }
         #expect(try await ups.next())
         #expect(connection.route == .net)
 
@@ -190,8 +215,6 @@ struct MacNetTests {
         try await router.told.next()
         try await router.told.next()
         #expect(router.nodes.allSatisfy { $0.device == rig.identity.device && $0.enrolled == mac.id && $0.identityKey == rig.identity.signer.publicKey })
-        connection.release()
-        relays.forEach { $0.close() }
     }
 }
 

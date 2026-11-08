@@ -6,11 +6,12 @@ import Synchronization
 import Tailnet
 
 /// Things that happen, awaited as they happen: each `next` takes the first one that matches,
-/// already here or still to come. No polling, no wall clock; a suite's time limit bounds a hang.
+/// already here or still to come. No polling, no wall clock: a wait the test's time limit
+/// cancels ends there (throwing), so a lost message fails its test instead of holding the run.
 final class Feed<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [T] = []
-    private var waiters: [(match: (T) -> Bool, wake: CheckedContinuation<T, Never>)] = []
+    private var waiters: [(id: UUID, match: (T) -> Bool, wake: CheckedContinuation<T, any Error>)] = []
 
     init() {}
 
@@ -27,17 +28,29 @@ final class Feed<T: Sendable>: @unchecked Sendable {
     }
 
     @discardableResult
-    func next(_ match: @escaping @Sendable (T) -> Bool = { _ in true }) async -> T {
-        await withCheckedContinuation { wake in
-            lock.lock()
-            if let i = items.firstIndex(where: match) {
-                let item = items.remove(at: i)
+    func next(_ match: @escaping @Sendable (T) -> Bool = { _ in true }) async throws -> T {
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { wake in
+                lock.lock()
+                if Task.isCancelled {
+                    lock.unlock()
+                    return wake.resume(throwing: CancellationError())
+                }
+                if let i = items.firstIndex(where: match) {
+                    let item = items.remove(at: i)
+                    lock.unlock()
+                    return wake.resume(returning: item)
+                }
+                waiters.append((id, match, wake))
                 lock.unlock()
-                wake.resume(returning: item)
-                return
             }
-            waiters.append((match, wake))
+        } onCancel: {
+            lock.lock()
+            guard let i = waiters.firstIndex(where: { $0.id == id }) else { return lock.unlock() }
+            let waiter = waiters.remove(at: i)
             lock.unlock()
+            waiter.wake.resume(throwing: CancellationError())
         }
     }
 }
@@ -124,12 +137,12 @@ final class LiveEnd: @unchecked Sendable {
 
     // MARK: Awaiting
 
-    func up() async { await events.next { if case .up = $0 { true } else { false } } }
+    func up() async throws { try await events.next { if case .up = $0 { true } else { false } } }
 
     /// The next message of type `t` (and `id`, when given).
     @discardableResult
-    func next(_ t: String, id: String? = nil) async -> Object {
-        let event = await events.next {
+    func next(_ t: String, id: String? = nil) async throws -> Object {
+        let event = try await events.next {
             if case .message(let o) = $0 { o.type == t && (id == nil || o.id == id) } else { false }
         }
         if case .message(let o) = event { return o }
@@ -137,12 +150,12 @@ final class LiveEnd: @unchecked Sendable {
     }
 
     /// Why the session ended.
-    func closed() async -> String {
-        if case .closed(let why) = await events.next({ if case .closed = $0 { true } else { false } }) { return why }
+    func closed() async throws -> String {
+        if case .closed(let why) = try await events.next({ if case .closed = $0 { true } else { false } }) { return why }
         return ""
     }
 
-    func pong(_ n: Int) async { await events.next { if case .pong(n) = $0 { true } else { false } } }
+    func pong(_ n: Int) async throws { try await events.next { if case .pong(n) = $0 { true } else { false } } }
 
     private func pump() {
         guard !toldClosed else { return }

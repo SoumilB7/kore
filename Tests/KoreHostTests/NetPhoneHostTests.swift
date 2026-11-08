@@ -38,13 +38,13 @@ struct NetPhoneHostTests {
 
     func raise(_ d: LiveEnd, id: String, chal: String, key: SoftwareIdentity, modeId: String = "auto") async throws -> Object {
         d.send(#"{"t":"raise.chal","id":"\#(chal)","chatId":"c-1","modeId":"\#(modeId)"}"#)
-        let reply = await d.next("raise.chal", id: chal)
+        let reply = try await d.next("raise.chal", id: chal)
         let text = try #require(reply["nonce"] as? String)
         let nonce = try #require(Data(base64Encoded: text))
         let binding = try #require(d.binding)
         let sig = try key.sign(RaiseCheck.digest(binding: binding, nonce: nonce, chatId: "c-1", modeId: modeId))
         d.send(#"{"t":"cmd","id":"\#(id)","cmd":{"type":"raise","chatId":"c-1","modeId":"\#(modeId)","nonce":"\#(text)","sig":"\#(sig.base64EncodedString())"}}"#)
-        return await d.next("result", id: id)
+        return try await d.next("result", id: id)
     }
 
     @Test func aPhonesRaiseIsVerifiedOnceWithTheSharedGate() async throws {
@@ -56,7 +56,7 @@ struct NetPhoneHostTests {
         let made = phoneRecord(rig, phone, raise: raiseKey)
         try rig.store.book.update { $0.append(made) }
         let d = try dial(rig, phone)
-        await d.next("attn.state")
+        try await d.next("attn.state")
         // Verified; the chat isn't on this box, so the change itself answers gone.
         let ok = try await raise(d, id: "r1", chal: "c1", key: raiseKey)
         #expect(ok["code"] as? String == "gone.chat")
@@ -66,7 +66,7 @@ struct NetPhoneHostTests {
         #expect(wrong["code"] as? String == "denied.raiseMode" && wrong["message"] as? String == "The fingerprint didn't check out.")
         // A new key is the Mac's to allow.
         d.send(#"{"t":"raise.key","id":"k","pub":"AAEC"}"#)
-        #expect(await d.next("result", id: "raise.key:k")["code"] as? String == "denied.control")
+        #expect(try await d.next("result", id: "raise.key:k")["code"] as? String == "denied.control")
     }
 
     @Test func aPingIsAnsweredOnTheBox() async throws {
@@ -75,9 +75,9 @@ struct NetPhoneHostTests {
         let mac = Device("mac")
         try rig.allow(mac)
         let d = try dial(rig, mac)
-        await d.next("attn.state")
+        try await d.next("attn.state")
         let n = try #require(d.ping())
-        await d.pong(n)
+        try await d.pong(n)
     }
 
     @Test func aResumesCursorsComeBeforeItsWelcome() async throws {
@@ -86,11 +86,11 @@ struct NetPhoneHostTests {
         let mac = Device("mac")
         try rig.allow(mac)
         let first = try dial(rig, mac)
-        await first.next("attn.state")
+        try await first.next("attn.state")
         let ticket = try #require(first.peer?.ticket)
         // With the ticket and cursors: the box waits for them, then welcomes.
         let again = try dial(rig, mac, resume: .init(ticket: ticket, cursors: LinkResume.cursors(aid: 0, rev: 4)))
-        await again.next("attn.state")
+        try await again.next("attn.state")
         #expect(again.peer?.resumed == true)
         #expect(Array(again.types.prefix(3)) == ["welcome", "snapshot", "attn.state"])
     }
@@ -102,22 +102,22 @@ struct NetPhoneHostTests {
         try rig.allow(mac)
         try rig.allow(other)
         let owner = try dial(rig, mac)
-        let welcome = await owner.next("welcome")
+        let welcome = try await owner.next("welcome")
         #expect((welcome["caps"] as? [String])?.contains(DevicesWire.mergeCap) == true)
-        await owner.next("attn.state")
+        try await owner.next("attn.state")
         let phone = Device("pixel", kind: .phone)
         let raiseKey = SoftwareIdentity()
         var record = phoneRecord(rig, phone, raise: raiseKey, issuedBy: mac.id)
         // Asked for more than a phone gets: capped to read+ask.
         record.abilities = [.read, .ask, .run]
         owner.send(String(decoding: DevicesWire.encode(DevicesWire.Set(id: "m1", rev: 0, records: [record], merge: true)), as: UTF8.self))
-        #expect(await owner.next(DevicesWire.result, id: "m1")["ok"] as? Bool == true)
+        #expect(try await owner.next(DevicesWire.result, id: "m1")["ok"] as? Bool == true)
         let held = rig.store.all()
         #expect(Set(held.map(\.id)) == [mac.id, other.id, phone.id])
         #expect(held.first { $0.id == phone.id }?.abilities == [.read, .ask] && held.first { $0.id == phone.id }?.raiseKey == raiseKey.publicKey)
         // The phone reaches the box now.
         let p = try dial(rig, phone)
-        await p.up()
-        await p.next("attn.state")
+        try await p.up()
+        try await p.next("attn.state")
     }
 }
