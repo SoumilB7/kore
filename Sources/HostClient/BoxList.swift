@@ -188,6 +188,9 @@ package final class BoxList {
 
     package func box(_ alias: String) -> Box? { boxes.first { $0.alias == alias } }
 
+    /// The box's link, for what holds it a while (its agents popup): retain, then release.
+    package func link(_ alias: String) -> HostConnection { connection(alias) }
+
     /// Dials the box's kore-host once: its state and folders, then the link closes unless a window
     /// holds it. A probe already under way is the one waited on.
     package func probe(_ alias: String) async {

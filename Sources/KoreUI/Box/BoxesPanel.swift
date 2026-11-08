@@ -31,6 +31,8 @@ struct BoxesPanel: View {
     @StateObject private var checking = Held<Task<Void, Never>?>(nil)
     @FocusState private var keyed: Bool
     @Environment(\.openWindow) private var openWindow
+    /// Each box row's view, by alias, for placing its popup.
+    @StateObject private var anchors = Held<[String: NSView]>([:])
 
     init(workspace: Workspace) {
         self.workspace = workspace
@@ -100,13 +102,27 @@ struct BoxesPanel: View {
             Image(systemName: open.value.contains(box.alias) ? "chevron.down" : "chevron.right")
                 .font(Chrome.caption).foregroundStyle(Theme.tertiary).frame(width: Space.md)
             StatusDot(state: box.dotState)
-            Text(box.alias).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
+            Text(box.alias).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
         }
-        .koreContextMenu("box-row") {
-            // Remove asks once, a step in: it forgets the box here and leaves the box as it is.
-            [OptionItem("Remove", destructive: true, children: [OptionItem("Forget \(box.alias) on this Mac", destructive: true) { list.remove(box.alias) }])]
-        }
+        // The hover card: what kind of machine it is, once it's been found.
+        .popupAwareHelp(box.kind ?? "")
+        .background(BoxAnchor { [anchors] view in anchors.value[box.alias] = view })
+        .koreContextMenu("box-row") { boxMenu(box) }
     }
+
+    /// Set up agents… once kore-host answers, Check again, and Remove (a step in: it forgets the box
+    /// here and leaves the box as it is).
+    private func boxMenu(_ box: BoxList.Box) -> [OptionItem] {
+        var items: [OptionItem] = []
+        if box.status == .ready {
+            items.append(OptionItem("Set up agents…") { [anchors] in BoxCard.shared.showAgents(box.alias, under: anchors.value[box.alias]) })
+        }
+        items.append(OptionItem("Check again") { Task { await list.act(.tryAgain, on: box.alias) } })
+        items.append(.rule)
+        items.append(OptionItem("Remove", destructive: true, children: [OptionItem("Forget \(box.alias) on this Mac", destructive: true) { list.remove(box.alias) }]))
+        return items
+    }
+
 
     @ViewBuilder private func inside(_ box: BoxList.Box) -> some View {
         if let note = box.note { BoxNoteLine(note: note, alias: box.alias).padding(.leading, Space.xl + Space.md).padding(.vertical, Space.xs) }

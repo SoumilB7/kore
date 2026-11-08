@@ -27,7 +27,7 @@ struct BoxAccountLines: View {
 
 /// One login: its name and what the box says, Sign in; while it runs, the page to open, its code,
 /// and (Claude) the field for the code the page shows.
-private struct BoxAccountLine: View {
+struct BoxAccountLine: View {
     let title: String
     let key: String
     let accounts: BoxAccounts

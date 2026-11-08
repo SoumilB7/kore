@@ -204,7 +204,7 @@ struct BoxPopup: View {
         ]
         // The box's one line (BoxList's note), with its action (Set up, Start, Update) when it has one.
         if let note = box?.note {
-            pieces.append(.view("status", AnyView(BoxNoteLine(note: note, alias: alias).padding(.horizontal, Space.sm).padding(.vertical, Space.xs))))
+            pieces.append(.view("status", AnyView(BoxNoteLine(note: note, alias: alias, opened: close).padding(.horizontal, Space.sm).padding(.vertical, Space.xs))))
         }
         let here = workspace.map(\.givesWay) ?? window.value
         for folder in box?.folders ?? [] {

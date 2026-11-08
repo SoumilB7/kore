@@ -12,6 +12,8 @@ extension Size {
     /// The box button's popup.
     enum Box {
         static let popupWidth: CGFloat = 260
+        /// The box row's agents popup: a line per agent, with its code and paste field.
+        static let agentsWidth: CGFloat = 340
         /// The popup rows' leading glyph or dot column.
         static let lead: CGFloat = 14
         /// The new window's button: the title row's size, after the traffic lights.
