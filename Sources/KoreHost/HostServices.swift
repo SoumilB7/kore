@@ -39,7 +39,7 @@ package final class HostServices: ChatServices {
 
     nonisolated package static func instructions(host: String, machine: String = machine) -> String {
         "This chat runs on \(host), \(machine), through kore-host. The user sees it as a tab in Kore on their Mac. "
-            + "Kore's tools are available when the user turns Arsenal on for this chat."
+            + "Kore's tools act only while the user has Arsenal on for this chat; otherwise a tool says how to turn it on."
     }
 
     /// Told with the `kore_app` server, after the box's paragraph.

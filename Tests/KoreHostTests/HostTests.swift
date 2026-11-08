@@ -302,9 +302,9 @@ struct HostTests {
         #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "nope"), id: "4", control: .full) { _ in }?.code == .invalid)
     }
 
-    /// With Arsenal off (an act grant's sends never say a tier), no server; the paragraph says
-    /// when Kore's tools come.
-    @Test func boxChatsGetTheBoxsInstructionsAndNoKoreTools() async throws {
+    /// With Arsenal off (an act grant's sends never say a tier), the server all the same (the Mac
+    /// refuses each call under the tier); the paragraph says when Kore's tools act.
+    @Test func boxChatsGetTheBoxsInstructionsAndKoreToolsThatActWithArsenal() async throws {
         let rig = try HostRig()
         defer { rig.finish() }
         var launched: BackendOptions?
@@ -316,13 +316,13 @@ struct HostTests {
         let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: "codex", modelId: nil))
         _ = rig.host.apply(.send(chatId: hc.id, text: "hi"), id: "1", control: .act) { _ in }
         try await until { launched != nil }
-        #expect(launched?.agentPass == nil)
+        #expect(launched?.agentPass != nil)
         let file = try #require(launched?.instructions)
         let text = try String(contentsOf: file, encoding: .utf8)
         #expect(text.contains("through kore-host"))
         #expect(text.contains(ProcessInfo.processInfo.hostName))
-        #expect(launched?.agentServer == nil)
-        #expect(text.contains("Kore's tools are available when the user turns Arsenal on for this chat."))
+        #expect(launched?.agentServer != nil)
+        #expect(text.contains("Kore's tools act only while the user has Arsenal on for this chat"))
     }
 
     @Test func planCardsOfferAutoAcceptToFullControlOnly() throws {

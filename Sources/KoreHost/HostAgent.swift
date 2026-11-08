@@ -21,25 +21,23 @@ extension HostDaemon {
     /// Calls being asked at once (each one `kore-host mcp` connection).
     static let askersMax = 16
 
-    /// The `kore_app` server for a chat whose Arsenal is on; nil while it's off. Asked as the chat's
-    /// CLI is set up: what it was given is kept, so a change starts it again at the next message.
+    /// The `kore_app` server, given to every chat's CLI as the Mac gives its own: each tool call
+    /// goes to the Mac, which answers it under the chat's tier there (off: refused, saying how to
+    /// turn it on). A tier that changes needs no new CLI, so a chat that's always working (a long
+    /// turn, a background command) has its tools the moment Arsenal is turned on.
     func server(for chat: Chat) -> KoreReach.Server? {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return nil }
-        hc.serverGiven = hc.arsenal != nil
-        guard hc.arsenal != nil else { return nil }
+        hc.serverGiven = true
         return KoreReach.Server(
             command: mcpCommand, arguments: ["mcp"], pathFolder: nil, instructions: HostServices.toolInstructions,
             variables: ["KORE_AGENT_SOCKET": paths.agentSocket.path, KoreReach.chatVariable: hc.id], approved: true)
     }
 
-    /// A message from the Mac, with the chat's tier there: kept, and a CLI given the other (the
-    /// server, or none) stops, to start again with this one. A CLI at work keeps what it has until
-    /// a message finds it idle.
+    /// The chat's tier on the Mac, said with a message, a follow or a change there: kept, for its
+    /// meta and its notes. Its CLI has the server whatever the tier (`server(for:)`), so nothing
+    /// starts again.
     func arsenalSaid(_ tier: String?, _ hc: HostChat) {
         hc.arsenal = tier.flatMap { BoxTools.tiers.contains($0) ? $0 : nil }
-        guard hc.cliRunning, let given = hc.serverGiven, given != (hc.arsenal != nil), hc.idle else { return }
-        HostJournal.note("cli restart", ["chat": hc.id, "reason": "arsenal"])
-        sleep(hc)
     }
 
     // MARK: agent.sock
