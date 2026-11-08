@@ -57,15 +57,16 @@ abstract class NodeActivity : Activity() {
         gravity = android.view.Gravity.CENTER_VERTICAL
         setPadding(dp(4), dp(4), if (showsGear) dp(4) else dp(16), dp(4))
         minimumHeight = dp(56)
-        if (showsBack) addView(label("‹", 30f, K.text).apply {
-            gravity = android.view.Gravity.CENTER
-            contentDescription = "Back"
-            isClickable = true
+        if (showsBack) addView(barIcon(dev.kore.phone.R.drawable.i_back, "Back").apply {
+            imageTintList = android.content.res.ColorStateList.valueOf(Tone.text)
             setOnClickListener { finish() }
+            pressFill(null, Tone.l2, 24)
         }, LinearLayout.LayoutParams(dp(48), dp(48))) else addView(android.view.View(this@NodeActivity), LinearLayout.LayoutParams(dp(12), 1))
-        barTitle = label("", 17f, bold = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
-        // The link's state is one quiet line under the title, so the name keeps its width.
-        banner = label("", 12f, K.dim).apply {
+        barTitle = label("").apply { type(Type.Title); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        // The link's state is one quiet line under the title (spec §5: Caption, warn), so the name keeps its width.
+        banner = label("").apply {
+            type(Type.Caption)
+            setTextColor(Tone.warn)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
             visibility = android.view.View.GONE
@@ -80,11 +81,9 @@ abstract class NodeActivity : Activity() {
         addView(titleColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         barDot = android.view.View(this@NodeActivity).apply { visibility = android.view.View.GONE }
         addView(barDot, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginStart = dp(10) })
-        if (showsGear) addView(label("⚙\uFE0E", 20f, K.dim).apply {
-            gravity = android.view.Gravity.CENTER
-            contentDescription = "Settings"
-            isClickable = true
+        if (showsGear) addView(barIcon(dev.kore.phone.R.drawable.i_gear, "Settings").apply {
             setOnClickListener { startActivity(Intent(this@NodeActivity, SettingsActivity::class.java)) }
+            pressFill(null, Tone.l2, 24)
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
     }
 

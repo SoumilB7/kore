@@ -50,12 +50,10 @@ class HomeActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = dp(52)
             setPadding(dp(20), 0, dp(6), 0)
-            addView(label("Kore", 17f, bold = true), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(label("⚙︎", 18f, K.dim).apply {
-                gravity = Gravity.CENTER
-                contentDescription = "Settings"
+            addView(label("Kore").apply { type(Type.Title) }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(barIcon(dev.kore.phone.R.drawable.i_gear, "Settings").apply {
                 setOnClickListener { startActivity(Intent(this@HomeActivity, SettingsActivity::class.java)) }
-                pressable(24)
+                pressFill(null, Tone.l2, 24)
             }, LinearLayout.LayoutParams(dp(48), dp(48)))
         })
         content = column().apply { setPadding(0, dp(4), 0, dp(16)) }
@@ -88,8 +86,11 @@ class HomeActivity : Activity() {
         if (look == shown) return
         shown = look
         content.removeAllViews()
-        look.cue?.let { cue -> content.addView(rows.row(cue) { needYou(cue) }) }
-        look.devices.forEach { d -> content.addView(rows.row(d) { deviceRow(d) }) }
+        look.cue?.let { cue -> content.addView(rows.row(cue) { needYou(cue) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(16), dp(4), dp(16), 0) }) }
+        if (look.devices.isNotEmpty()) {
+            content.addView(sectionLabel("Devices", first = look.cue == null), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(16), 0, dp(16), 0) })
+            content.addView(grouped(look.devices.map { d -> rows.row(d) { deviceRow(d) } }), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(16), 0, dp(16), 0) })
+        }
         if (look.devices.isEmpty()) content.addView(quietLine("No devices", "Settings ›") { startActivity(Intent(this, SettingsActivity::class.java)) })
         (Updates.status.value as? Updates.Status.Available)?.let { st ->
             // One line whichever source: from a Mac, one tap downloads, checks and installs it.
@@ -128,50 +129,42 @@ class HomeActivity : Activity() {
     /** One cue (mockup E8 .need), amber as chats that need you are everywhere: how many wait, the first one's title and device; a tap opens it. */
     private fun needYou(cue: Cue): View = LinearLayout(this).apply {
         gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = dp(48)
-        setPadding(dp(14), 0, dp(14), 0)
-        background = rounded(Tone.warnFill, 14, Tone.warnEdge)
-        addView(label((if (cue.count == 1) "1 needs you" else "${cue.count} need you"), 14f, K.warn).apply { typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL) })
-        addView(label("${cue.title} · ${cue.nodeName}", 12.5f, K.dim).apply {
-            gravity = Gravity.END
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(dp(8), 0, 0, 0)
+        setPadding(dp(16), dp(12), dp(16), dp(12))
+        addView(point(Tone.warn), LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginEnd = dp(12) })
+        addView(column().apply {
+            addView(label(if (cue.count == 1) "1 needs you" else "${cue.count} need you").apply { type(Type.BodyMedium); setTextColor(Tone.warn) })
+            addView(label("${cue.title} · ${cue.nodeName}").apply {
+                type(Type.Callout); setTextColor(Tone.dim)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(ImageView(this@HomeActivity).apply {
+            setImageResource(R.drawable.i_chevron)
+            imageTintList = android.content.res.ColorStateList.valueOf(Tone.warn)
+        }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginStart = dp(8) })
         tag = "need you"
         contentDescription = "${cue.count} need you: ${cue.title} on ${cue.nodeName}"
         setOnClickListener {
             startActivity(Intent(this@HomeActivity, ChatActivity::class.java).putExtra("node", cue.node).putExtra("chat", cue.chat))
         }
-        pressable(12)
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(20), dp(4), dp(20), dp(12)) }
+        pressFill(Tone.warnFill, 0x29E1C08D, Radius.row, Tone.warnEdge)
     }
 
-    /** A device (mockup E8 .pr): a flat row under a hairline, its glyph, name, one fact under it, and a status dot. */
-    private fun deviceRow(d: Device): View = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        addView(View(context).apply { setBackgroundColor(K.line) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1))
-        addView(LinearLayout(context).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(13), dp(20), dp(13))
-            addView(ImageView(this@HomeActivity).apply {
-                setImageResource(if (d.mac) R.drawable.ic_mac else R.drawable.ic_box)
-                if (!d.up) setColorFilter(K.faint)
-            }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(12) })
-            addView(column().apply {
-                addView(label(d.name, 15f, if (d.up) K.text else K.faint).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
-                addView(label(d.fact, 12f, if (d.action != null) K.accent else K.faint).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
-            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(View(this@HomeActivity).apply { background = rounded(d.dot, 4) }, LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginStart = dp(12) })
-        })
+    /** A device in the grouped list: its icon, name, fact, a point in its state's colour, a chevron. */
+    private fun deviceRow(d: Device): View = groupRow(
+        icon = if (d.mac) R.drawable.i_laptop else R.drawable.i_server,
+        title = d.name, second = d.fact,
+        titleColor = if (d.up) Tone.text else Tone.faint,
+        secondColor = if (d.action != null) Tone.accent else Tone.dim,
+        iconTint = if (d.up) Tone.dim else Tone.faint,
+        end = point(d.dot), chevron = d.action == null,
+    ) {
+        val node = latest.firstOrNull { it.first.id.toString() == d.id }?.first
+        if (d.action != null && node != null) rowAction(node, d.action) else startActivity(Intent(this@HomeActivity, DeviceActivity::class.java).putExtra("node", d.id))
+    }.apply {
         contentDescription = "${d.name}: ${d.fact}"
         tag = "device ${d.name}"
-        // A device that won't take this phone: the row does its one action.
-        setOnClickListener {
-            val node = latest.firstOrNull { it.first.id.toString() == d.id }?.first
-            if (d.action != null && node != null) rowAction(node, d.action) else startActivity(Intent(this@HomeActivity, DeviceActivity::class.java).putExtra("node", d.id))
-        }
-        pressable(0)
     }
 
     /** One quiet line at the list's end: what it is, and the one thing to do. */

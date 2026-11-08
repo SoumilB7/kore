@@ -32,7 +32,7 @@ class HistoryActivity : NodeActivity() {
     private var reading: Job? = null
     private var started = false
     private lateinit var list: LinearLayout
-    private lateinit var archiveButton: android.widget.TextView
+    private lateinit var archiveButton: android.view.View
     private lateinit var state: android.widget.TextView
 
     override fun body(): View {
@@ -79,7 +79,7 @@ class HistoryActivity : NodeActivity() {
         val l = link ?: return
         reading?.cancel()
         barTitle.text = if (archived) "Archived" else "History"
-        archiveButton.setTextColor(if (archived) K.accent else K.dim)
+        (archiveButton as android.widget.ImageView).imageTintList = android.content.res.ColorStateList.valueOf(if (archived) Tone.accent else Tone.dim)
         val offset = if (reset) 0 else rows.size
         reading = kore.scope.launch {
             if (wait > 0) delay(wait)

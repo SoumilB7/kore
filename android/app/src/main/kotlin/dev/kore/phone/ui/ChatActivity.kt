@@ -34,7 +34,7 @@ class ChatActivity : NodeActivity() {
     private var loaded = false
     private var provider: String? = null
 
-    private var menuButton: TextView? = null
+    private var menuButton: android.view.View? = null
     /** Asked for the earlier conversation; the row says so until the transcript grows. */
     private var askedEarlier = false
 

@@ -192,3 +192,71 @@ class Spinner(context: Context, var tint: Int) : View(context) {
         }
     }
 }
+
+/** A section's label (spec §2/§3: Label, sentence case, 18 above its list and 8 below; 6 above the first). */
+fun android.app.Activity.sectionLabel(text: String, first: Boolean = false): TextView = TextView(this).apply {
+    this.text = text
+    type(Type.Label)
+    setTextColor(Tone.dim)
+    setPadding(dp(4), dp(if (first) 6 else 18), dp(4), dp(8))
+}
+
+/**
+ * A grouped list (spec §5): `l1`, radius 16, a hair edge, its rows separated by hairlines inset
+ * [inset] dp (52 past an icon column, 16 without). Rows made earlier and kept (a [RowCache]) move in.
+ */
+fun android.app.Activity.grouped(rows: List<View>, inset: Int = 52): android.widget.LinearLayout = android.widget.LinearLayout(this).apply {
+    orientation = android.widget.LinearLayout.VERTICAL
+    background = shape(Tone.l1, Radius.group, Tone.hair)
+    clipToOutline = true
+    rows.forEachIndexed { i, row ->
+        (row.parent as? android.view.ViewGroup)?.removeView(row)
+        if (i > 0) addView(View(context).apply { setBackgroundColor(Tone.hair) },
+            android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 1).apply { marginStart = dp(inset) })
+        addView(row, android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.MATCH_PARENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT))
+    }
+}
+
+/**
+ * One grouped row (spec §3/§5): at least 60 high, padding 12 × 16, an 18 icon in a 24 column with
+ * a 14 gap, a title (Body medium) over a second line (Callout), then [end] and, when it opens
+ * something, a faint chevron.
+ */
+fun android.app.Activity.groupRow(
+    icon: Int?, title: String, second: String?, titleColor: Int = Tone.text, secondColor: Int = Tone.dim,
+    iconTint: Int = Tone.dim, end: View? = null, chevron: Boolean = false, go: (() -> Unit)? = null,
+): android.widget.LinearLayout = android.widget.LinearLayout(this).apply {
+    gravity = android.view.Gravity.CENTER_VERTICAL
+    minimumHeight = dp(Space.rowMin)
+    setPadding(dp(16), dp(12), dp(16), dp(12))
+    if (icon != null) addView(android.widget.ImageView(context).apply {
+        setImageResource(icon)
+        imageTintList = ColorStateList.valueOf(iconTint)
+    }, android.widget.LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginStart = dp(3); marginEnd = dp(3 + 14) })
+    addView(android.widget.LinearLayout(context).apply {
+        orientation = android.widget.LinearLayout.VERTICAL
+        addView(TextView(context).apply { text = title; type(Type.BodyMedium); setTextColor(titleColor) })
+        if (second != null) addView(TextView(context).apply { text = second; type(Type.Callout); setTextColor(secondColor) })
+    }, android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+    // An end view keeps the size it was made with (a 7 dp point would otherwise take the row's width).
+    if (end != null) {
+        val own = end.layoutParams
+        val w = own?.width ?: android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        val h = own?.height ?: android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        addView(end, android.widget.LinearLayout.LayoutParams(w, h).apply { marginStart = dp(12) })
+    }
+    if (chevron) addView(android.widget.ImageView(context).apply {
+        setImageResource(dev.kore.phone.R.drawable.i_chevron)
+        imageTintList = ColorStateList.valueOf(Tone.faint)
+    }, android.widget.LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginStart = dp(8) })
+    if (go != null) {
+        setOnClickListener { go() }
+        pressFill(null, Tone.l2, 0)
+    }
+}
+
+/** A small round point (the connected dot, the need-you point). */
+fun android.content.Context.point(color: Int, size: Int = 7): View = View(this).apply {
+    background = shape(color, size)
+    layoutParams = android.widget.LinearLayout.LayoutParams(dp(size), dp(size))
+}

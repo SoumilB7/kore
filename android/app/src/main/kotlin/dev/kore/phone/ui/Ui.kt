@@ -69,10 +69,13 @@ fun View.pressable(radius: Int = 10): View {
 }
 
 /** Kore's switch (38×22, the full-control mockup's pill): the one toggle style on the phone. */
+/** Kore's switch (spec §5): a 44 × 26 track, radius 13, accent when on; a 20 knob with a small shadow. */
 fun Context.switchTrack(on: Boolean): View = android.widget.FrameLayout(this).apply {
-    background = rounded(if (on) Tone.accent else Tone.l3, 11)
-    addView(View(context).apply { background = rounded(if (on) Tone.knobOn else Tone.knobOff, 8) },
-        android.widget.FrameLayout.LayoutParams(dp(16), dp(16), Gravity.CENTER_VERTICAL or if (on) Gravity.END else Gravity.START).apply { setMargins(dp(2), 0, dp(2), 0) })
+    background = shape(if (on) Tone.accent else Tone.l3, 13)
+    minimumWidth = dp(44)
+    minimumHeight = dp(26)
+    addView(View(context).apply { background = shape(if (on) Tone.knobOn else Tone.knobOff, 10); elevation = dp(1).toFloat() },
+        android.widget.FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER_VERTICAL or if (on) Gravity.END else Gravity.START).apply { setMargins(dp(3), 0, dp(3), 0) })
     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
 }
 

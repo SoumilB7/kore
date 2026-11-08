@@ -533,20 +533,38 @@ fun NodeClient?.hasControl(snapshot: JsonObject?): Boolean {
 }
 
 /** Adds a glyph button at the end of a [NodeActivity]'s top bar. */
-fun Activity.barButton(bar: View, glyph: String, description: String, go: (View) -> Unit): TextView {
-    val b = label(glyph, 20f, K.dim).apply {
-        gravity = Gravity.CENTER
-        contentDescription = description
-        isClickable = true
-        setOnClickListener { go(it) }
-        pressable(22)
+fun Activity.barButton(bar: View, glyph: String, description: String, go: (View) -> Unit): View {
+    // The bar's glyphs as the icon set (spec §4: 22 in a 48 round target); another glyph stays text.
+    val icon = when (glyph) {
+        "＋" -> dev.kore.phone.R.drawable.i_plus
+        "⋮" -> dev.kore.phone.R.drawable.i_more
+        "▣" -> dev.kore.phone.R.drawable.i_archive
+        else -> null
     }
+    val b: View = if (icon != null) barIcon(icon, description) else label(glyph, 20f, K.dim).apply { gravity = Gravity.CENTER; contentDescription = description }
+    b.setOnClickListener { go(it) }
+    b.pressFill(null, Tone.l2, 24)
+    if (glyph == "⋮") b.tag = MORE
     // The bar's row: the title sits in a column (its state line goes under it), so the button
-    // goes on the first horizontal row above it, at the end, never under the title.
+    // goes on the first horizontal row above it, at the end, never under the title; ⋮ stays last.
     var row = bar.parent
     while (row is LinearLayout && row.orientation != LinearLayout.HORIZONTAL) row = row.parent
-    (row as LinearLayout).addView(b, LinearLayout.LayoutParams(dp(48), dp(48)))
+    val bar = row as LinearLayout
+    val more = (0 until bar.childCount).firstOrNull { bar.getChildAt(it).tag == MORE }
+    bar.addView(b, if (more != null && glyph != "⋮") more else bar.childCount, LinearLayout.LayoutParams(dp(48), dp(48)))
     return b
+}
+
+private const val MORE = "bar.more"
+
+/** One of the bar's icons: 22 dp in a 48 dp round target, `dim` at rest. */
+fun Activity.barIcon(icon: Int, description: String): android.widget.ImageView = android.widget.ImageView(this).apply {
+    setImageResource(icon)
+    imageTintList = android.content.res.ColorStateList.valueOf(Tone.dim)
+    scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+    val pad = dp(13)
+    setPadding(pad, pad, pad, pad)
+    contentDescription = description
 }
 
 /** Children left to right, wrapping to the next line when the row is full (a family's version chips). */

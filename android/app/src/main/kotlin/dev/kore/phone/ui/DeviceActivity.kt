@@ -24,7 +24,7 @@ import kotlinx.serialization.json.JsonObject
  */
 class DeviceActivity : NodeActivity() {
     private var last: JsonObject? = null
-    private var plus: TextView? = null
+    private var plus: android.view.View? = null
     /** The window the list is filtered to (null: all). */
     private var filter: String? = null
     private val rows = Rows()

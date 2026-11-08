@@ -10,6 +10,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import dev.kore.link.node.NodeClient
 import dev.kore.link.trust.NodeKind
+import dev.kore.phone.R
 import dev.kore.phone.kore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
@@ -61,53 +62,55 @@ class SettingsActivity : Activity() {
     private fun render() {
         content.removeAllViews()
         val mesh = kore.mesh
-        heading("Devices")
-        for (n in mesh.nodes.value) content.addView(deviceRow(n))
-        if (mesh.nodes.value.isEmpty()) content.addView(label("No devices yet.", 14f, K.dim).apply { setPadding(dp(4), 0, 0, dp(6)) })
-        content.addView(toggle("KoreNet on this phone", mesh.networkOn) { mesh.networkOn = it })
-        content.addView(label("Kore connects only while it's open, so it can't notify you while it's closed.", 13f, K.faint).apply { setPadding(dp(4), dp(6), dp(4), 0) })
-        heading("Notifications")
-        content.addView(button("Notification settings", K.text) {
-            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
-        })
-        heading("Privacy")
-        content.addView(toggle("Allow screenshots", kore.screenshotsAllowed) { kore.screenshotsAllowed = it; recreate() })
-        heading("Updates")
-        content.addView(updateRow())
-        heading("About")
+        val full = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        content.addView(sectionLabel("Devices", first = true))
+        if (mesh.nodes.value.isEmpty()) content.addView(grouped(listOf(groupRow(null, "No devices yet", null))), full)
+        else content.addView(grouped(mesh.nodes.value.map(::deviceRow)), full)
+        content.addView(sectionLabel("This phone"))
+        content.addView(grouped(listOf(
+            switchRow(R.drawable.i_net, "KoreNet", "Kore connects only while it's open, so it can't notify you while it's closed.", mesh.networkOn) { mesh.networkOn = it },
+            groupRow(R.drawable.i_bell, "Notifications", null, chevron = true) {
+                startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+            },
+            switchRow(R.drawable.i_shield, "Allow screenshots", null, kore.screenshotsAllowed) { kore.screenshotsAllowed = it; recreate() },
+            updateRow(),
+        )), full)
+        // The one destructive step, alone and last (spec §6: err, centred).
+        content.addView(grouped(listOf(LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            minimumHeight = dp(52)
+            addView(label("Leave KoreNet").apply { type(Type.BodyMedium); setTextColor(Tone.err) })
+            contentDescription = "Leave KoreNet"
+            setOnClickListener { leave() }
+            pressFill(null, Tone.l2, 0)
+        })), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(24) })
         val code = mesh.deviceId.toString().take(8).let { it.take(4) + " " + it.drop(4) }
-        content.addView(label("Kore for Android ${packageManager.getPackageInfo(packageName, 0).versionName} · this phone $code", 13f, K.faint).apply { setPadding(dp(4), 0, 0, 0) })
-        // The one destructive step, last and outlined (phone-app §9).
-        content.addView(button("Leave KoreNet", K.err) { leave() }.apply {
-            background = rounded(android.graphics.Color.TRANSPARENT, 10, K.err)
-            pressable()
-            (layoutParams as LinearLayout.LayoutParams).apply { topMargin = dp(24); bottomMargin = dp(24) }
-        })
+        content.addView(label("Kore for Android ${packageManager.getPackageInfo(packageName, 0).versionName} · this phone $code").apply {
+            type(Type.Caption); setTextColor(Tone.faint); gravity = Gravity.CENTER
+            setPadding(0, dp(16), 0, dp(24))
+        }, full)
     }
 
-    /** One device: its glyph, name and state; ⋯ forgets it on this phone. */
-    private fun deviceRow(n: NodeClient): View = LinearLayout(this).apply {
-        gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = dp(48)
-        setPadding(dp(14), 0, dp(4), 0)
-        background = rounded(K.surface)
-        val (glyph, color) = nodeLook(n.state.value)
-        addView(label(glyph, 12f, color))
-        val kind = if (n.device.value.kind == NodeKind.MAC) "Mac" else "box"
-        addView(label(" ${n.name}", 15f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(label(kind, 12f, K.faint).apply { setPadding(dp(8), 0, dp(4), 0) })
-        // Forget is for a Mac only: a box comes back with the next Mac welcome's directory (T-A5),
-        // so it's removed on the Mac, which tells this phone.
-        if (n.device.value.kind == dev.kore.link.trust.NodeKind.MAC) addView(label("⋯", 18f, K.dim).apply {
-            gravity = Gravity.CENTER
-            minHeight = dp(44)
-            setPadding(dp(10), 0, dp(10), 0)
-            contentDescription = "More for ${n.name}"
-            pressable(22)
+    /** One device: its icon, name and kind, a point in its state's colour; a Mac's ⋯ forgets it on this phone. */
+    private fun deviceRow(n: NodeClient): View {
+        val mac = n.device.value.kind == NodeKind.MAC
+        val (_, color) = nodeLook(n.state.value)
+        val more = if (!mac) null else barIcon(R.drawable.i_more, "More for ${n.name}").apply {
+            // Forget is for a Mac only: a box comes back with the next Mac welcome's directory (T-A5).
             setOnClickListener { v -> PopMenu(this@SettingsActivity).show(v, listOf(PopMenu.Item("Forget on this phone", danger = true) { kore.mesh.forget(n.id); render() })) }
-        })
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
+            pressFill(null, Tone.l3, 22)
+        }
+        return groupRow(if (mac) R.drawable.i_laptop else R.drawable.i_server, n.name, if (mac) "Mac" else "box",
+            end = LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                addView(point(color))
+                if (more != null) addView(more, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(4) })
+            })
     }
+
+    /** A row that holds Kore's switch: the whole row takes the tap; read aloud as a switch. */
+    private fun switchRow(icon: Int, title: String, note: String?, on: Boolean, change: (Boolean) -> Unit): View =
+        groupRow(icon, title, note, end = switchTrack(on)) { change(!on); if (!isFinishing) render() }.apply { switchSemantics(title, on) }
 
     private fun leave() {
         lateinit var s: Sheet
@@ -122,40 +125,20 @@ class SettingsActivity : Activity() {
         }
     }
 
-    private fun updateRow(): View = when (val st = Updates.status.value) {
-        is Updates.Status.Available -> button("Update available · ${st.offer.version}  ·  Install", K.accent) { kore.scope.launch { Updates.install(kore, st.offer) } }
-        is Updates.Status.Downloading -> button("Downloading… ${st.percent}%", K.dim) {}
-        Updates.Status.Installing -> button("Installing…", K.dim) {}
-        Updates.Status.Checking -> button("Checking…", K.dim) {}
-        Updates.Status.UpToDate -> button("Up to date · Check again", K.text) { kore.scope.launch { Updates.check(this@SettingsActivity) } }
-        is Updates.Status.Problem -> button(st.line, K.warn) { kore.scope.launch { Updates.check(this@SettingsActivity) } }
-        Updates.Status.Idle -> button("Check for updates", K.text) { kore.scope.launch { Updates.check(this@SettingsActivity) } }
+    /** Updates (spec §6): what's true now on the row, its one action in accent at the end. */
+    private fun updateRow(): View {
+        val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
+        fun action(text: String, go: () -> Unit) = label(text).apply { type(Type.BodyMedium); setTextColor(Tone.accent); setOnClickListener { go() } }
+        val check = { kore.scope.launch { Updates.check(this@SettingsActivity) }; Unit }
+        return when (val st = Updates.status.value) {
+            is Updates.Status.Available -> groupRow(R.drawable.i_download, "Update ready", "Kore ${st.offer.version}", end = action("Install") { kore.scope.launch { Updates.install(kore, st.offer) } })
+            is Updates.Status.Downloading -> groupRow(R.drawable.i_download, "Downloading…", "${st.percent}%")
+            Updates.Status.Installing -> groupRow(R.drawable.i_download, "Installing…", null)
+            Updates.Status.Checking -> groupRow(R.drawable.i_download, "Checking…", null)
+            Updates.Status.UpToDate -> groupRow(R.drawable.i_download, "Updates", "Up to date · $version", end = action("Check", check))
+            is Updates.Status.Problem -> groupRow(R.drawable.i_download, "Updates", st.line, secondColor = Tone.warn, end = action("Check", check))
+            Updates.Status.Idle -> groupRow(R.drawable.i_download, "Updates", version, end = action("Check", check))
+        }
     }
 
-    private fun heading(text: String) = content.addView(label(text, 13f, K.dim, bold = true).apply { setPadding(dp(4), dp(18), 0, dp(8)) })
-
-    private fun button(text: String, color: Int, onClick: () -> Unit): View = label(text, 15f, color).apply {
-        gravity = Gravity.CENTER_VERTICAL
-        minHeight = dp(48)
-        setPadding(dp(14), 0, dp(14), 0)
-        background = rounded(K.surface)
-        setOnClickListener { onClick() }
-        pressable()
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
-    }
-
-    private fun toggle(text: String, on: Boolean, change: (Boolean) -> Unit): View = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = dp(48)
-        setPadding(dp(14), 0, dp(10), 0)
-        background = rounded(K.surface)
-        addView(label(text, 15f), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        // Kore's one switch, as in the sheets; the whole row takes the tap.
-        addView(switchTrack(on), LinearLayout.LayoutParams(dp(38), dp(22)).apply { marginEnd = dp(4) })
-        switchSemantics(text, on)
-        setOnClickListener { change(!on); if (!isFinishing) render() }
-        pressable()
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
-    }
 }

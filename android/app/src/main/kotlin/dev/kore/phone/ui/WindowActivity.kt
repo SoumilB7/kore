@@ -15,7 +15,7 @@ import kotlinx.serialization.json.JsonObject
  */
 class WindowActivity : NodeActivity() {
     private val windowId by lazy { intent.getStringExtra("window") ?: "" }
-    private var plus: android.widget.TextView? = null
+    private var plus: android.view.View? = null
     private var snapshot: JsonObject? = null
     /** Groups opened or folded on the phone only; the Mac's fold is where each starts. */
     private val unfolded = HashMap<String, Boolean>()
