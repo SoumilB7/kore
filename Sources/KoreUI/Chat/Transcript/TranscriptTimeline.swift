@@ -34,6 +34,9 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var nudge = Local(0)
     /// A scroll gesture is under way (from its phase): the geometry rules leave following to it.
     @StateObject private var gesturing = Held(false)
+    /// A gesture ended short of the end as its geometry read then: looked at again once the
+    /// rows it brought in are measured (a busy Mac measures them a pass or more later).
+    @StateObject private var endAfterGesture = Held(false)
     /// The last content height and offset, to undo a fold's shrink above the reader.
     @StateObject private var geometry = Held((height: CGFloat(0), offset: CGFloat(0)))
     @StateObject private var pendingFold = Held(false)
@@ -231,7 +234,9 @@ struct TranscriptTimeline: View, Equatable {
                 } else if new == .idle, old == .interacting || old == .decelerating {
                     let g = context.geometry
                     following.value = g.contentOffset.y + g.containerSize.height >= g.contentSize.height - Self.atBottom
+                    endAfterGesture.value = !following.value
                 }
+                if new != .idle { endAfterGesture.value = false }
             }
             .onScrollGeometryChange(for: [CGFloat].self) {
                 [$0.contentSize.height, $0.contentOffset.y, $0.containerSize.height, $0.contentInsets.top, $0.containerSize.width]
@@ -242,9 +247,12 @@ struct TranscriptTimeline: View, Equatable {
                 if !shift.keep(), !widthHold.holding, old.count == new.count, new[4] == old[4] {
                     // The content's height is partly estimated: at its end only with no built row
                     // reaching past the bottom of the view. Followed, a row still being laid out
-                    // past it is the end coming (pinned to as it lands), not a reader above it.
-                    widthHold.rest = (new[1], new[1] + new[2] >= new[0] - Self.atBottom
-                        && (following.value || widthHold.rowsEnd(above: new[1] + new[3] + new[2] + Self.atBottom)))
+                    // past it is the end coming (pinned to as it lands), not a reader above it; and
+                    // so is content that grew in this pass, before the pin below brings the view to
+                    // it (a busy Mac can change the width next, with no pass between to read it).
+                    let grew = following.value && new[0] > old[0]
+                    widthHold.rest = (new[1], grew || (new[1] + new[2] >= new[0] - Self.atBottom
+                        && (following.value || widthHold.rowsEnd(above: new[1] + new[3] + new[2] + Self.atBottom))))
                 }
                 let insetMoved = new[3] != insetTop.value
                 insetTop.value = new[3]
@@ -434,6 +442,12 @@ struct TranscriptTimeline: View, Equatable {
                 // even while a reply streams in. Only between gestures, and only on a move down:
                 // content arriving under a reader held just above the end doesn't move them, so
                 // it doesn't pull them along.
+                // The first settled pass after a gesture that ended short: at the end by now, it's
+                // followed, as if the gesture had ended there.
+                if endAfterGesture.value, !gesturing.value, height == geometry.value.height {
+                    endAfterGesture.value = false
+                    if !shift.zoomAdjusting, !following.value, offset + new[2] >= height - Self.atBottom { following.value = true }
+                }
                 if !shift.zoomAdjusting, !following.value, !widthHeld, !gesturing.value, offset > geometry.value.offset + 1,
                     offset + new[2] >= height - Self.atBottom
                 {
@@ -1276,3 +1290,4 @@ private struct TimelineSection: View, Equatable {
         }
     }
 }
+

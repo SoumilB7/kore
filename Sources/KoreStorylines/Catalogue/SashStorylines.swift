@@ -229,9 +229,20 @@ struct SashDrag: Step {
                 after.append(sample())
             }
         }
-        // On past the second a blank may last, outside the frame times.
+        // On past the second a blank may last, outside the frame times, and then until the rows
+        // at the new width are all laid out: the place read is where it comes to rest, not where
+        // a busy Mac's layout happened to be at a given moment (two idle passes in a row with the
+        // view and the content unchanged; 10 s at most).
         if row == nil {
             try? await Task.sleep(for: .milliseconds(1000))
+            var last = DevNavProbe.scrollPlace(workspace).map { [$0.offset, $0.height] }, still = 0
+            for _ in 0..<100 where still < 2 {
+                try? await story.idle(timeout: .seconds(2))
+                try? await Task.sleep(for: .milliseconds(100))
+                let now = DevNavProbe.scrollPlace(workspace).map { [$0.offset, $0.height] }
+                still = now == last ? still + 1 : 0
+                last = now
+            }
             after.append(sample())
         }
 
@@ -301,7 +312,7 @@ struct SashDrag: Step {
             guard let drift, abs(drift) <= 2 else { throw StoryFailure.expectation("the reader's place kept on release (moved \(drift.map { f(Double($0)) } ?? "off the built rows"))") }
         } else {
             guard (settled?.fromEnd ?? .infinity) <= 2 else {
-                throw StoryFailure.expectation("the view at the end after release (above it by \(Int(settled?.fromEnd ?? -1)))")
+                throw StoryFailure.expectation("the view at the end after release (above it by \(Int(settled?.fromEnd ?? -1)); \((try? story.activeChat().storyTranscript.endWhy) ?? "-"))")
             }
             // Blank for a moment can happen; never past a second of the main thread's own work (its
             // CPU time, which a busy Mac doesn't stretch), and never past 5 s on the clock.
