@@ -21,7 +21,7 @@ struct HostNetTests {
     }
 
     @Test func aKnownDeviceGetsTheLinkWithTheBooksRev() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let journal = Journal()
         let mac = Device("mac")
@@ -35,7 +35,7 @@ struct HostNetTests {
     }
 
     @Test func anUnknownDeviceIsToldUnknownAndWaitsAsPending() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let journal = Journal()
         try rig.allow(Device("owner"))
@@ -68,7 +68,7 @@ struct HostNetTests {
     }
 
     @Test func anOwnerMacIsToldWhenADeviceWaits() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac")
         try rig.allow(mac)
@@ -82,7 +82,7 @@ struct HostNetTests {
     }
 
     @Test func anUnclaimedBoxKeepsItsFirstMacUntilItsOwnerAllows() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let journal = Journal()
         let mac = Device("mac")
@@ -121,7 +121,7 @@ struct HostNetTests {
     }
 
     @Test func aClaimNeedsTheSameUserAndKey() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac")
         // Another user's Mac never becomes the claimant.
@@ -140,7 +140,7 @@ struct HostNetTests {
     }
 
     @Test func devicesSetIsTakenOnlyFromAnOwnerMacAndRevokesAtOnce() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let journal = Journal()
         let mac = Device("mac"), phone = Device("pixel", kind: .phone)
@@ -169,7 +169,7 @@ struct HostNetTests {
     }
 
     @Test func aRecordRemovedEndsTheLinkAtItsNextCommand() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac")
         try rig.allow(mac)
@@ -181,7 +181,7 @@ struct HostNetTests {
     }
 
     @Test func aRotatedNodeKeyIsKeptOnlyAfterProofAndTheLastThreeStay() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let journal = Journal()
         var mac = Device("mac")
@@ -209,7 +209,7 @@ struct HostNetTests {
     }
 
     @Test func preAuthFramesAreSmall() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let (client, box) = try Sockets.pair()
         defer { Sockets.closeFD(client) }
@@ -226,13 +226,14 @@ struct HostNetTests {
     }
 
     @Test func thePortAdmitsThreeConnectionsAMinutePerSource() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let clock = HandClock()
         let tailnet = FakeTailnet(status: FakeTailnet.status(.running, ips: ["127.0.0.1"]))
         tailnet.state.withLock { $0.whois["127.0.0.1"] = FakeTailnet.who(key: "nodekey:lo") }
         let net = HostNet(host: rig.rig.host, identity: rig.identity, port: 0, limiter: PreAuthLimiter(clock: { clock.now }))
         net.join(tailnet)
+        await net.settled()
         defer { net.stop() }
         #expect(net.bound == ["127.0.0.1"])
         // Port 0 for the test: the kernel's pick.
@@ -255,14 +256,18 @@ struct HostNetTests {
                     outcome = false
                 }
             }
-            if outcome == true { answered += 1 }
+            if outcome == true {
+                answered += 1
+                // It speaks (a probe that only connects and closes costs no slot).
+                try? Sockets.writeAll(fd, Data([0]))
+            }
         }
         // Three got a challenge; the fourth was closed unread.
         #expect(answered == 3)
     }
 
     @Test func aTailnetLinkReplacesAnSSHOneNeverTheReverse() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac")
         try rig.allow(mac)
@@ -284,7 +289,7 @@ struct HostNetTests {
     }
 
     @Test func limitsAreKeptPerDeviceAcrossReconnects() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let phone = Device("pixel", kind: .phone)
         try rig.allow(phone)
@@ -305,7 +310,7 @@ struct HostNetTests {
     }
 
     @Test func aPhoneMayNotDriveAChatAndTheJournalSaysOnlyTheKind() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let journal = Journal()
         let phone = Device("pixel", kind: .phone)
@@ -321,7 +326,7 @@ struct HostNetTests {
     }
 
     @Test func usageSincePagesTheLedgerToAFullDevice() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac")
         try rig.allow(mac)
@@ -347,7 +352,7 @@ struct HostUpgradeTests {
     }
 
     @Test func attachProto2EnrollsOnceExpiresTheGrantAndMovesItsChats() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let journal = Journal()
         let grants = GrantStore(rig.rig.paths.grants)
@@ -388,7 +393,7 @@ struct HostUpgradeTests {
     }
 
     @Test func anExpiredGrantCarriesOnlyItsDevicesProofOverAttachProto2() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let grants = GrantStore(rig.rig.paths.grants)
         let grant = try grants.allow("laptop", control: .full, socket: rig.rig.paths.socket)
@@ -422,7 +427,7 @@ struct HostUpgradeTests {
     }
 
     @Test func theFirstTailnetLinkOfAnUpgradedMacTakesItsNodeKey() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let grant = try GrantStore(rig.rig.paths.grants).allow("laptop", control: .full, socket: rig.rig.paths.socket)
         let mac = Device("mac")
@@ -440,7 +445,7 @@ struct HostUpgradeTests {
 
     @Test(arguments: ["claude", "codex"])
     func aCallSentOnTheTailnetThenResentOverAttachIsAnsweredOnce(provider: String) async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let backend = StreamStandIn()
         rig.rig.host.services.backend = { _, _ in backend }

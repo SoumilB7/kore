@@ -38,6 +38,8 @@ class NetFrame(val queue: Queue, val more: Boolean, val stream: Long, val payloa
         const val MAX_MESSAGE = 16 shl 20
         /** Messages being reassembled at once, per connection. */
         const val MAX_PARTIAL_STREAMS = 64
+        /** Bytes of unfinished messages held at once, per connection, all streams together. */
+        const val MAX_PARTIAL_BYTES = 64 shl 20
         /** Before the hello is verified: one frame, header included, no fragments. */
         const val PRE_AUTH_MAX_FRAME = 4 shl 10
         /** Stream 0 is the session's own (challenge, hello, welcome, credit, bye), interactive only. */
@@ -69,6 +71,7 @@ class NetFrameDecoder(var preAuth: Boolean) {
     private var held = 0
     private class Partial(val queue: NetFrame.Queue, val bytes: ByteArrayOutputStream)
     private val partial = HashMap<Long, Partial>()
+    private var partialBytes = 0L
     private var preAuthFrames = 0
     private var streamBytes = 0L
 
@@ -127,13 +130,21 @@ class NetFrameDecoder(var preAuth: Boolean) {
         if (held != null) {
             if (held.queue != queue) throw NetFrameError("queueChanged", "stream $stream changed queue mid-message")
             if (held.bytes.size() + payload.size > NetFrame.MAX_MESSAGE) throw NetFrameError("messageTooLong", "message too long")
+            if (!more) {
+                partial.remove(stream)
+                partialBytes -= held.bytes.size()
+                held.bytes.write(payload)
+                return NetMessage(queue, stream, held.bytes.toByteArray())
+            }
+            if (partialBytes + payload.size > NetFrame.MAX_PARTIAL_BYTES) throw NetFrameError("tooMuchHeld", "too many bytes of partial messages")
+            partialBytes += payload.size
             held.bytes.write(payload)
-            if (more) return null
-            partial.remove(stream)
-            return NetMessage(queue, stream, held.bytes.toByteArray())
+            return null
         }
         if (more) {
             if (partial.size >= NetFrame.MAX_PARTIAL_STREAMS) throw NetFrameError("tooManyStreams", "too many partial messages")
+            if (partialBytes + payload.size > NetFrame.MAX_PARTIAL_BYTES) throw NetFrameError("tooMuchHeld", "too many bytes of partial messages")
+            partialBytes += payload.size
             partial[stream] = Partial(queue, ByteArrayOutputStream().apply { write(payload) })
             return null
         }

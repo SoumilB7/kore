@@ -96,6 +96,17 @@ struct LocalAPITests {
         #expect(script.discoveries.withLock { $0 } == 2)
     }
 
+    /// kore-host started before tailscaled (boot): missing at the first look, found at the next
+    /// ask, never cached as missing for good.
+    @Test func missingAtFirstIsLookedForAgain() throws {
+        let script = Script(answers: [FakeHTTPServer.ok(statusJSON)], endpoints: [.unavailable(.absent), .unix("/run/tailscaled.sock")])
+        let api = script.client
+        #expect(api.current == .unavailable(.absent))
+        #expect(try TailnetLocal(api: api).status().backendState == .running)
+        #expect(api.current == .unix("/run/tailscaled.sock"))
+        #expect(script.discoveries.withLock { $0 } == 2)
+    }
+
     @Test func otherStatusesAndUnavailable() throws {
         let script = Script(answers: ["HTTP/1.1 500 Oops\r\nContent-Length: 0\r\n\r\n"])
         #expect(throws: TailnetError.http(500)) { try TailnetLocal(api: script.client).status() }

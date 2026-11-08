@@ -97,6 +97,10 @@ package enum HostStatus {
             } catch {
                 row("tailnet", "not reachable (\(error))")
             }
+            // The running daemon's own word: listening, or why not.
+            if let said = try? String(contentsOf: paths.netState, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !said.isEmpty {
+                row("listen", said)
+            }
         }
         let store = DeviceStore(paths: paths)
         let devices = store.all()

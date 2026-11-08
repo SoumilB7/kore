@@ -110,17 +110,31 @@ package struct HostUpdate {
         return folder.appendingPathComponent(asset)
     }
 
-    /// The running daemon onto the new binary, as it was started. The line to print.
-    package static func restart(paths: HostPaths, home: URL, run: HostRunner = HostService.system) -> String {
-        guard HostLock.held(paths.lock) else { return "kore-host isn't running: it starts on the new one" }
+    /// The running daemon onto the new binary, as it was installed: a systemd unit or LaunchAgent
+    /// is written again as this release writes it (`Restart=always` and the rest: a unit from an
+    /// older release keeps its old rules otherwise) and restarted; an on-demand daemon stops and
+    /// starts on the new one when Kore connects. The lines to print.
+    package static func restart(
+        paths: HostPaths, home: URL, executable: String = HostService.executable(), user: String = HostService.user(), run: HostRunner = HostService.system
+    ) -> String {
         switch HostService.installed(paths) {
         case nil, .systemd?:
+            if FileManager.default.fileExists(atPath: HostService.unitFile(home: home).path) {
+                do {
+                    return try HostService.install(executable: executable, home: home, user: user, run: run).joined(separator: "\n")
+                } catch {
+                    return "restart it: kore-host install-service (\(error))"
+                }
+            }
+            guard HostLock.held(paths.lock) else { return "kore-host isn't running: it starts on the new one" }
             return run(["systemctl", "--user", "restart", HostService.unitName]).ok
                 ? "kore-host restarted" : "restart it: systemctl --user restart kore-host"
         case .launchd?:
-            let domain = HostService.domain(run: run)
-            return run(["launchctl", "kickstart", "-k", "\(domain)/\(HostService.agentLabel)"]).ok
-                ? "kore-host restarted" : "restart it: launchctl kickstart -k \(domain)/\(HostService.agentLabel)"
+            do {
+                return try HostService.install(.launchd, executable: executable, home: home, user: user, paths: paths, run: run).joined(separator: "\n")
+            } catch {
+                return "restart it: kore-host install-service (\(error))"
+            }
         case .onDemand?:
             HostService.stopOnDemand(paths)
             return "kore-host stopped: it starts on the new one when Kore connects"

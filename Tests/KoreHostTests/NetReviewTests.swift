@@ -14,7 +14,7 @@ import Testing
 struct NetReviewTests {
     // 1. A claimant's device id is only the claimant's.
     @Test func anImpostorWithTheClaimantsIdNeverClaimsNorAltersItsEntry() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac")
         let first = try rig.dial(mac, enroll: .init(name: "MacBook", kind: .mac, identityKey: mac.key.publicKey))
@@ -33,8 +33,8 @@ struct NetReviewTests {
         #expect(!rig.store.claimed && rig.store.pending() == [before])
     }
 
-    @Test func pendingIsKeyedByNodeKeyAndNeverRewritten() throws {
-        let rig = try NetRig()
+    @Test func pendingIsKeyedByNodeKeyAndNeverRewritten() async throws {
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let id = UUID(), key = SoftwareIdentity().publicKey
         let entry = PendingDevice(nodeKey: "nk:a", device: id, name: "Pixel", kind: .phone, identityKey: key, userId: 7, tags: [], fqdn: "", login: "me", at: rig.clock.now)
@@ -54,7 +54,7 @@ struct NetReviewTests {
 
     // 2. The claim window.
     @Test func noClaimantIsKeptOutsideTheWindow() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         rig.clock.advance(NetJoin.window + 1)
         let mac = Device("mac")
@@ -67,19 +67,22 @@ struct NetReviewTests {
     }
 
     // 3. A tailscaled restart (a new tailscale0) rebinds.
-    @Test func aNewInterfaceIndexRebinds() throws {
-        let rig = try NetRig()
+    @Test func aNewInterfaceIndexRebinds() async throws {
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         var index: Int32 = 5
         rig.net.interfaceIndex = { index }
         rig.net.port = 0
         rig.tailnet.state.withLock { $0.status = FakeTailnet.status(.running, ips: ["127.0.0.1"]) }
         rig.net.rebind()
+        await rig.net.settled()
         #expect(rig.net.binds == 1)
         rig.net.rebind()
+        await rig.net.settled()
         #expect(rig.net.binds == 1)
         index = 6
         rig.net.rebind()
+        await rig.net.settled()
         #expect(rig.net.binds == 2 && rig.net.listening)
         #expect(!HostNet.keeps(want: ["a"], bound: ["a"], listening: true, boundIndex: 5, index: 6))
         #expect(HostNet.keeps(want: ["a"], bound: ["a"], listening: true, boundIndex: 6, index: 6))
@@ -87,7 +90,7 @@ struct NetReviewTests {
 
     // 4. A tagged box: an upgraded Mac's first node key comes with Kore's app capability.
     @Test func onATaggedBoxTheAppCapLetsAnUpgradedMacIn() async throws {
-        let rig = try NetRig(status: FakeTailnet.status(user: 99, tags: ["tag:box"]))
+        let rig = try await NetRig.make(status: FakeTailnet.status(user: 99, tags: ["tag:box"]))
         defer { rig.finish() }
         let grant = try GrantStore(rig.rig.paths.grants).allow("laptop", control: .full, socket: rig.rig.paths.socket)
         let mac = Device("mac")
@@ -107,8 +110,8 @@ struct NetReviewTests {
         #expect(record.userId == 7 && record.nodeKeys == [mac.nodeKey])
     }
 
-    @Test func aTaggedPeerTakesItsTagsWhenTheCapAllowsItsRecord() throws {
-        let rig = try NetRig()
+    @Test func aTaggedPeerTakesItsTagsWhenTheCapAllowsItsRecord() async throws {
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let key = SoftwareIdentity()
         let record = DeviceRecord(
@@ -129,7 +132,7 @@ struct NetReviewTests {
 
     // 5. devices.set: abilities by kind, and an owner Mac stays.
     @Test func devicesSetIsCappedByKindAndKeepsAnOwnerMac() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac"), phone = Device("pixel", kind: .phone)
         try rig.allow(mac)
@@ -149,7 +152,7 @@ struct NetReviewTests {
 
     // 6. No oracle before the proof.
     @Test func unknownBadProofAndPausedLookAlikeUnproven() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac"), paused = Device("ipad", kind: .phone)
         try rig.allow(mac)
@@ -180,7 +183,7 @@ struct NetReviewTests {
 
     // 7. Capacity before the limiter; SSH has its own room.
     @Test func aFullHouseSpendsNoLimitAndSSHStillGetsIn() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         rig.net.port = 0
         rig.tailnet.state.withLock {
@@ -188,6 +191,7 @@ struct NetReviewTests {
             $0.whois["127.0.0.1"] = FakeTailnet.who(key: "nodekey:lo")
         }
         rig.net.rebind()
+        await rig.net.settled()
         let port = try #require(rig.net.listenerPort)
         var held: [Int32] = []
         for _ in 0..<HostNet.maxHandshakes {
@@ -243,11 +247,12 @@ struct NetReviewTests {
 
     // 9. Descriptors close once their sources are cancelled.
     @Test func leavingClosesTheListenerAfterItsSourceIsCancelled() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         rig.net.port = 0
         rig.tailnet.state.withLock { $0.status = FakeTailnet.status(.running, ips: ["127.0.0.1"]) }
         rig.net.rebind()
+        await rig.net.settled()
         let fd = try #require(rig.net.firstListener)
         let port = try #require(rig.net.listenerPort)
         rig.net.leave()

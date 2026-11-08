@@ -54,7 +54,7 @@ package final class HostNet {
     package private(set) var bound: [String] = []
     private var listeners: [(fd: Int32, source: DispatchSourceRead)] = []
     /// The first listening socket (tests read the port the kernel picked).
-    var firstListener: Int32? { listeners.first?.fd }
+    package var firstListener: Int32? { listeners.first?.fd }
     private var boundIndex: Int32 = 0
     /// `tailscale0`'s index now (0 off Linux; tests set their own).
     package var interfaceIndex: () -> Int32 = {
@@ -74,20 +74,51 @@ package final class HostNet {
     private var busWatch: Task<Void, Never>?
     private var ssh: (fd: Int32, source: DispatchSourceRead)?
     private var handshakes: [ObjectIdentifier: Handshake] = [:]
+    /// WhoIs lookups under way (each a LocalAPI round trip off the main thread), counted with the
+    /// tailnet handshakes against `maxHandshakes`.
+    package private(set) var whoising = 0
+    /// A status read under way (off the main thread), whether another was asked for meanwhile,
+    /// and who waits for it to settle (tests).
+    private var reading = false
+    private var readAgain = false
+    private var readWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Bumped by `leave`: a read or WhoIs from before it is dropped.
+    private var joins = 0
 
     /// One session before its proof: its socket's read source and its 2 s deadline.
     private final class Handshake {
         let session: NetSession
         let route: Binding.Route
         let facts: NetPeerFacts
+        /// The tailnet address the limiter admitted it as.
+        let remote: String?
         var read: DispatchSourceRead?
         var deadline: DispatchSourceTimer?
-        init(session: NetSession, route: Binding.Route, facts: NetPeerFacts) {
+        /// Bytes came from the peer; or it closed before any did (a probe: refunded).
+        var heard = false
+        var quietEnd = false
+        /// The source's own descriptor for the socket (open until the source is cancelled).
+        var watched: Int32 = -1
+
+        /// Before the session reads: did the peer say anything, or only go (a close, a reset)?
+        func look() {
+            guard !heard, !quietEnd, watched >= 0 else { return }
+            var byte: UInt8 = 0
+            let peeked = recv(watched, &byte, 1, Int32(MSG_PEEK | MSG_DONTWAIT))
+            if peeked > 0 {
+                heard = true
+            } else if peeked == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                quietEnd = true
+            }
+        }
+        init(session: NetSession, route: Binding.Route, facts: NetPeerFacts, remote: String?) {
             self.session = session
             self.route = route
             self.facts = facts
+            self.remote = remote
         }
         func cancel() {
+            watched = -1
             read?.cancel()
             read = nil
             deadline?.cancel()
@@ -108,6 +139,7 @@ package final class HostNet {
     /// On KoreNet: watch the interface, bind the port.
     package func join(_ tailnet: any Tailnet) {
         guard self.tailnet == nil else { return }
+        joins += 1
         self.tailnet = tailnet
         watchInterfaces()
         rebind()
@@ -115,7 +147,10 @@ package final class HostNet {
 
     /// Off KoreNet: the port and every watcher go (links already up are the daemon's to end).
     package func leave() {
+        joins += 1
         closeListeners()
+        bindProblem = nil
+        try? FileManager.default.removeItem(at: host.paths.netState)
         netlink?.source.cancel()
         netlink = nil
         busWatch?.cancel()
@@ -162,38 +197,73 @@ package final class HostNet {
         listening && want == bound && boundIndex == index
     }
 
-    /// Looks at Tailscale again and binds what it says (or closes, when it's stopped).
+    /// Looks at Tailscale again and binds what it says (or closes, when it's stopped). The status
+    /// read (a LocalAPI round trip, up to its 5 s timeout) runs off the main thread; what it says
+    /// is applied back on it. A look asked for while one runs takes another after it.
     package func rebind() {
         guard let tailnet else { return closeListeners() }
+        guard !reading else { return readAgain = true }
+        reading = true
+        let mine = joins
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let read = Result { try tailnet.status() }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.reading = false
+                    if mine == self.joins, self.tailnet != nil { self.apply(read) }
+                    if self.readAgain {
+                        self.readAgain = false
+                        if self.tailnet != nil { return self.rebind() }
+                    }
+                    let waiting = self.readWaiters
+                    self.readWaiters = []
+                    for waiter in waiting { waiter.resume() }
+                }
+            }
+        }
+    }
+
+    /// Returns once no status read is under way (tests: what `join`, `rebind` or a reload set
+    /// going has been applied).
+    package func settled() async {
+        guard reading else { return }
+        await withCheckedContinuation { readWaiters.append($0) }
+    }
+
+    private func apply(_ read: Result<TailnetStatus, any Error>) {
         let status: TailnetStatus
-        do {
-            status = try tailnet.status()
-        } catch {
+        switch read {
+        case .success(let got):
+            status = got
+        case .failure(let error):
             if !bound.isEmpty { HostJournal.note("korenet closed", ["reason": "\(error)"]) }
             closeListeners()
             selfNode = nil
+            noteProblem("Tailscale isn't answering (\(error))")
             return
         }
+        let before = selfNode?.publicKey
         selfNode = status.selfNode
+        // Macs linked now hear this box's node key as soon as it's known (or changed).
+        if selfNode?.publicKey != before, selfNode?.publicKey != nil { host.netNodeChanged() }
         let want: [String]
         do {
             want = try Self.addresses(status)
         } catch {
             HostJournal.note("korenet refused", ["reason": "\(error)"])
             closeListeners()
+            noteProblem("\(error)")
             return
         }
         let index = interfaceIndex()
         if Self.keeps(want: want, bound: bound, listening: !listeners.isEmpty, boundIndex: boundIndex, index: index) { return }
         closeListeners()
-        guard !want.isEmpty else { return }
+        guard !want.isEmpty else { return noteProblem("Tailscale is \(status.backendState.rawValue)") }
         #if os(Linux)
         let device: String? = index > 0 ? Self.interface : nil
         // Userspace Tailscale has no interface: its addresses aren't this kernel's to bind.
-        guard device != nil else {
-            bindProblem = "no \(Self.interface) interface"
-            return
-        }
+        guard device != nil else { return noteProblem("no \(Self.interface) interface") }
         #else
         let device: String? = nil
         #endif
@@ -210,13 +280,14 @@ package final class HostNet {
             guard fd >= 0 else {
                 let code = errno
                 for open in fds { close(open) }
-                bindProblem = code == EADDRINUSE ? "port \(port) in use" : String(cString: strerror(code))
-                HostJournal.note("korenet bind failed", ["address": address, "port": "\(port)", "reason": bindProblem])
-                return
+                let why = code == EADDRINUSE ? "port \(port) in use" : String(cString: strerror(code))
+                HostJournal.note("korenet bind failed", ["address": address, "port": "\(port)", "reason": why])
+                return noteProblem(why)
             }
             fds.append(fd)
         }
         bindProblem = nil
+        writeState("listening " + want.joined(separator: ",") + " port \(fds.first.flatMap(Sockets.localPort) ?? port)")
         bound = want
         binds += 1
         for fd in fds {
@@ -229,6 +300,16 @@ package final class HostNet {
         busWatch?.cancel()
         busWatch = nil
         HostJournal.note("korenet listening", ["addresses": want.joined(separator: ","), "port": "\(port)"])
+    }
+
+    /// Why the port isn't bound, kept for `status` (another process: a file in the runtime folder).
+    private func noteProblem(_ why: String) {
+        bindProblem = why
+        writeState("not listening: " + why)
+    }
+
+    private func writeState(_ line: String) {
+        try? HostPaths.privateFile(Data((line + "\n").utf8), to: host.paths.netState)
     }
 
     private func closeListeners() {
@@ -263,8 +344,8 @@ package final class HostNet {
             for await event in events {
                 guard case .state = event else { continue }
                 guard let self else { return }
+                // Bound, the read drops the bus (and ends this loop's stream).
                 self.rebind()
-                if !self.bound.isEmpty { return }
             }
         }
         #endif
@@ -274,15 +355,12 @@ package final class HostNet {
 
     private func acceptAll(_ listener: Int32) {
         while true {
-            var storage = sockaddr_storage()
-            var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
-            let fd = withUnsafeMutablePointer(to: &storage) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(listener, $0, &length) }
-            }
+            // Close-on-exec at once: never inherited by the `gh`, `git` or CLI children it starts.
+            let fd = Sockets.accept(listener)
             guard fd >= 0 else { return }
-            Self.noSigPipe(fd)
-            // Room first: a connection turned away for capacity doesn't spend its source's limit.
-            guard handshaking(.tailnet) < Self.maxHandshakes, let remote = Sockets.peerAddress(fd)?.description, limiter.admit(remote) else {
+            // Room first (handshakes and WhoIs lookups under way): a connection turned away for
+            // capacity doesn't spend its source's limit.
+            guard handshaking(.tailnet) + whoising < Self.maxHandshakes, let remote = Sockets.peerAddress(fd)?.description, limiter.admit(remote) else {
                 close(fd)
                 continue
             }
@@ -294,15 +372,19 @@ package final class HostNet {
     /// closes the connection: no node key is ever taken from the peer's own word.
     private func whoisThenGreet(_ fd: Int32, remote: String) {
         guard let tailnet else { return Sockets.closeFD(fd) }
+        whoising += 1
+        let mine = joins
         DispatchQueue.global(qos: .userInitiated).async {
             let who = try? tailnet.whois(remote)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
+                    self.whoising -= 1
+                    guard mine == self.joins, self.tailnet != nil else { return Sockets.closeFD(fd) }
                     guard let who else {
                         HostJournal.note("korenet refused", ["from": remote, "reason": "whois"])
                         return Sockets.closeFD(fd)
                     }
-                    self.greet(fd, route: .tailnet, facts: Self.facts(who), whois: who)
+                    self.greet(fd, route: .tailnet, facts: Self.facts(who), whois: who, remote: remote)
                 }
             }
         }
@@ -315,7 +397,7 @@ package final class HostNet {
     }
 
     /// A connected socket's session, server side: the challenge goes now, the proof has 2 s.
-    package func greet(_ fd: Int32, route: Binding.Route, facts: NetPeerFacts, whois: TailnetWhoIs?) {
+    package func greet(_ fd: Int32, route: Binding.Route, facts: NetPeerFacts, whois: TailnetWhoIs?, remote: String? = nil) {
         let nodeKey = route == .ssh ? Binding.Route.sshNodeKey : (selfNode?.publicKey ?? "")
         guard !nodeKey.isEmpty else { return Sockets.closeFD(fd) }
         let local = NetLocal(device: identity.device, kind: .box, nodeKey: nodeKey, signer: identity.signer)
@@ -325,18 +407,23 @@ package final class HostNet {
             MainActor.assumeIsolated { self?.stranger(hello, route: route, facts: facts, whois: whois) ?? .refuse(NetControl.Reason.unknown) }
         }
         let session = NetSession(fd: fd, role: .server(setup), clock: host.now)
-        let shake = Handshake(session: session, route: route, facts: facts)
+        let shake = Handshake(session: session, route: route, facts: facts, remote: remote)
         let key = ObjectIdentifier(shake)
         handshakes[key] = shake
         // The session owns `fd` and closes it; the source watches its own duplicate, closed when
         // the source is cancelled.
-        let watched = dup(fd)
-        guard watched >= 0 else {
+        guard let watched = Sockets.duplicate(fd) else {
             handshakes[key] = nil
             return session.close(NetControl.Reason.limit)
         }
         let read = DispatchSource.makeReadSource(fileDescriptor: watched, queue: .main)
-        read.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.advance(key) } }
+        shake.watched = watched
+        read.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                self?.handshakes[key]?.look()
+                self?.advance(key)
+            }
+        }
         read.setCancelHandler { close(watched) }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + NetSession.preAuthWindow + 0.05)
@@ -346,6 +433,8 @@ package final class HostNet {
         session.start()
         read.resume()
         timer.resume()
+        // Its challenge couldn't go (the peer left already): let it go now, not at its deadline.
+        if case .closed = session.state { advance(key) }
     }
 
     /// Pumps a handshake: established goes to the daemon, closed is let go.
@@ -356,8 +445,13 @@ package final class HostNet {
         case .handshaking:
             return
         case .closed(let reason):
+            // Closed on its first write (the peer gone already): looked at before the source goes.
+            shake.look()
             shake.cancel()
             handshakes[key] = nil
+            // A connect that closed without a word (Kore's "is kore-host there?" probe) costs no
+            // pre-auth slot; a silent one held to its deadline still does.
+            if shake.quietEnd, !shake.heard, let remote = shake.remote { limiter.refund(remote) }
             if reason == NetControl.Reason.timeout || reason == NetControl.Reason.limit {
                 HostJournal.note("korenet refused", ["route": shake.route.rawValue, "reason": reason])
             }
@@ -545,6 +639,7 @@ package final class HostNet {
         unlink(path)
         let fd = socket(AF_UNIX, Self.streamType, 0)
         guard fd >= 0 else { return }
+        Sockets.closeOnExec(fd)
         guard HostListener.bind(fd, path) == 0, chmod(path, 0o600) == 0, listen(fd, 8) == 0 else {
             close(fd)
             return
@@ -554,7 +649,7 @@ package final class HostNet {
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 while true {
-                    let client = accept(fd, nil, nil)
+                    let client = Sockets.accept(fd)
                     guard client >= 0 else { return }
                     guard let self, self.handshaking(.ssh) < Self.maxSSHHandshakes, HostListener.peerIsUser(client) else {
                         close(client)
@@ -689,10 +784,7 @@ final class NetLinkWire: LinkWire {
 
     /// A duplicate of the session's descriptor for one source (the session closes the
     /// original); the source closes it in its cancel handler.
-    private static func watched(_ fd: Int32) -> Int32? {
-        let copy = dup(fd)
-        return copy >= 0 ? copy : nil
-    }
+    private static func watched(_ fd: Int32) -> Int32? { Sockets.duplicate(fd) }
 
     private func stopSources() {
         reader?.cancel()

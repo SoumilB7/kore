@@ -30,17 +30,27 @@ package final class TailnetSidecar: Tailnet {
     package static let maxMessage = 16 << 20
 
     package let path: String
+    /// How long a question (status, whois, dial, listen, stop) waits for its answer, in
+    /// milliseconds: a wedged helper is an error, never a caller held for good.
+    package let answerWait: Int
 
-    package init(path: String) { self.path = path }
+    package init(path: String, answerWait: Int = 5000) {
+        self.path = path
+        self.answerWait = answerWait
+    }
 
     /// Brings the node up with its state key. The returned connection keeps it up: closing it
     /// ends the program.
     package func start(key: Data) throws -> Int32 {
         let fd = try Self.open(path)
+        // The node's state opens and its first contact starts: longer than a question takes.
+        Sockets.setReadTimeout(fd, milliseconds: Self.startWait)
         do {
             try SidecarWire.send(fd, Self.request(["op": .string("start"), "key": .string(key.base64EncodedString())]))
             let reply = try Self.reply(fd).0
             guard reply.ok == true else { throw TailnetError.sidecar(reply.error ?? "start refused") }
+            // The owner connection then stays quiet until the program ends.
+            Sockets.setReadTimeout(fd, seconds: 0)
             return fd
         } catch {
             Sockets.closeFD(fd)
@@ -94,10 +104,13 @@ package final class TailnetSidecar: Tailnet {
 
     package func listen(port: UInt16) throws -> [TailnetListenSocket] {
         let fd = try Self.open(path)
+        Sockets.setReadTimeout(fd, milliseconds: answerWait)
         do {
             try SidecarWire.send(fd, Self.request(["op": .string("listen"), "port": .int(Int64(port))]))
             let reply = try Self.reply(fd).0
             guard reply.ok == true else { throw TailnetError.sidecar(reply.error ?? "listen refused") }
+            // Handed-off connections come whenever a peer dials: no deadline from here.
+            Sockets.setReadTimeout(fd, seconds: 0)
             return [.handoff(fd)]
         } catch {
             Sockets.closeFD(fd)
@@ -116,6 +129,7 @@ package final class TailnetSidecar: Tailnet {
     private func ask(_ fields: [String: JSONValue]) throws -> (SidecarWire.Reply, Int32?) {
         let fd = try Self.open(path)
         defer { Sockets.closeFD(fd) }
+        Sockets.setReadTimeout(fd, milliseconds: answerWait)
         try SidecarWire.send(fd, Self.request(fields))
         let (reply, passed) = try Self.reply(fd)
         guard reply.ok == true else {
@@ -131,8 +145,16 @@ package final class TailnetSidecar: Tailnet {
             if let passed { Sockets.closeFD(passed) }
             throw TailnetError.sidecar("closed")
         }
-        return (try SidecarWire.decode(data), passed)
+        do {
+            return (try SidecarWire.decode(data), passed)
+        } catch {
+            if let passed { Sockets.closeFD(passed) }
+            throw error
+        }
     }
+
+    /// How long `start` waits for the node, in milliseconds.
+    package static let startWait = 30_000
 
     fileprivate static func request(_ fields: [String: JSONValue]) throws -> Data {
         var all = fields
@@ -196,8 +218,11 @@ package enum SidecarWire {
                 if passed == nil { passed = incoming } else { Sockets.closeFD(incoming) }
             }
             if n < 0 {
+                let code = errno
                 if let passed { Sockets.closeFD(passed) }
-                throw SocketError.failed("recvmsg", errno)
+                // A read timeout (SO_RCVTIMEO) ran out.
+                if code == EAGAIN || code == EWOULDBLOCK { throw SocketError.timedOut }
+                throw SocketError.failed("recvmsg", code)
             }
             if n == 0 {
                 if let passed { Sockets.closeFD(passed) }
@@ -213,7 +238,13 @@ package enum SidecarWire {
         }
         var body = Data(capacity: length)
         while body.count < length {
-            let more = try Sockets.read(fd, max: min(64 << 10, length - body.count))
+            let more: [UInt8]
+            do {
+                more = try Sockets.read(fd, max: min(64 << 10, length - body.count))
+            } catch {
+                if let passed { Sockets.closeFD(passed) }
+                throw error
+            }
             guard !more.isEmpty else {
                 if let passed { Sockets.closeFD(passed) }
                 throw SocketError.closed
@@ -237,7 +268,13 @@ extension TailnetListenSocket {
             while true {
                 let (data, passed) = try SidecarWire.receive(socket)
                 guard let data else { throw SocketError.closed }
-                let reply = try SidecarWire.decode(data)
+                let reply: SidecarWire.Reply
+                do {
+                    reply = try SidecarWire.decode(data)
+                } catch {
+                    if let passed { Sockets.closeFD(passed) }
+                    throw error
+                }
                 guard let passed else { continue }
                 // The server holds its copy until this ack.
                 try? SidecarWire.send(socket, TailnetSidecar.request(["op": .string("ack")]))

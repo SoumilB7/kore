@@ -115,7 +115,7 @@ struct MacNetTests {
 
     @Test(arguments: ["claude", "codex"])
     func sentOnTheTailnetDroppedAndResentOverSSHTheBoxAnswersOnce(provider: String) async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let backend = StreamStandIn()
         rig.rig.host.services.backend = { _, _ in backend }

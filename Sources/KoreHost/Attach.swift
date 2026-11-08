@@ -55,7 +55,11 @@ package final class Attach {
 
     private func fromHost(_ data: Data) {
         if nonce == nil, case .challenge(let n)? = try? LinkMessage.decode(data) { nonce = n }
-        Self.write(LinkFrame.frame(data))
+        // stdout gone (the SSH session ended): nothing more can reach the client.
+        guard NetAttach.write(1, LinkFrame.frame(data)) else {
+            socket.close()
+            return done(AttachExit.ended.rawValue)
+        }
     }
 
     private func fromClient(_ data: Data) {
@@ -75,19 +79,6 @@ package final class Attach {
         socket.send(hello)
     }
 
-    private static func write(_ data: Data) {
-        data.withUnsafeBytes { raw in
-            var offset = 0
-            while offset < raw.count {
-                let written = Glue3.write(1, raw.baseAddress! + offset, raw.count - offset)
-                if written < 0 {
-                    if errno == EINTR { continue }
-                    return
-                }
-                offset += written
-            }
-        }
-    }
 }
 
 private enum Glue3 {
@@ -111,14 +102,20 @@ private enum Glue3 {
 package final class NetAttach {
     private let grant: Grant
     private let fd: Int32
+    /// The client's side: stdin and stdout under SSH (tests: a socket).
+    private let input: Int32
+    private let output: Int32
     private var helloSeen = false
     private var held = Data()
     private var sources: [DispatchSourceRead] = []
+    private var ended = false
     private let done: (Int32) -> Void
 
-    package init(grant: Grant, socket path: URL, done: @escaping (Int32) -> Void) throws {
+    package init(grant: Grant, socket path: URL, input: Int32 = 0, output: Int32 = 1, done: @escaping (Int32) -> Void) throws {
         self.grant = grant
         self.done = done
+        self.input = input
+        self.output = output
         fd = try Sockets.connectUnix(path.path)
     }
 
@@ -133,22 +130,24 @@ package final class NetAttach {
         let fromHost = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         fromHost.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                guard let bytes = try? Sockets.read(self.fd, max: 64 << 10), !bytes.isEmpty else { return self.done(AttachExit.ended.rawValue) }
-                Self.write(1, Data(bytes))
+                guard let self, !self.ended else { return }
+                guard let bytes = try? Sockets.read(self.fd, max: 64 << 10), !bytes.isEmpty else { return self.end(AttachExit.ended.rawValue) }
+                // A byte lost would leave the session's framing broken for good: the attach ends.
+                guard Self.write(self.output, Data(bytes)) else { return self.end(AttachExit.ended.rawValue) }
             }
         }
-        let fromClient = DispatchSource.makeReadSource(fileDescriptor: 0, queue: .main)
+        let fromClient = DispatchSource.makeReadSource(fileDescriptor: input, queue: .main)
         fromClient.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, !self.ended else { return }
                 var chunk = [UInt8](repeating: 0, count: 64 << 10)
-                let count = read(0, &chunk, chunk.count)
+                let count = read(self.input, &chunk, chunk.count)
                 guard count > 0 else {
+                    if count < 0, errno == EINTR || errno == EAGAIN { return }
                     Sockets.shutdownBoth(self.fd)
-                    return self.done(AttachExit.ended.rawValue)
+                    return self.end(AttachExit.ended.rawValue)
                 }
-                self.fromClient(Data(chunk[0..<count]))
+                guard self.fromClient(Data(chunk[0..<count])) else { return self.end(AttachExit.ended.rawValue) }
             }
         }
         sources = [fromHost, fromClient]
@@ -156,13 +155,22 @@ package final class NetAttach {
         fromClient.resume()
     }
 
-    private func fromClient(_ bytes: Data) {
+    /// Once: the sources stop and `done` hears the code.
+    private func end(_ code: Int32) {
+        guard !ended else { return }
+        ended = true
+        for source in sources { source.cancel() }
+        sources = []
+        done(code)
+    }
+
+    private func fromClient(_ bytes: Data) -> Bool {
         guard !helloSeen else { return Self.write(fd, bytes) }
         held.append(bytes)
-        guard let out = Self.inject(held, grant: grant) else { return }
+        guard let out = Self.inject(held, grant: grant) else { return true }
         helloSeen = true
         held = Data()
-        Self.write(fd, out)
+        return Self.write(fd, out)
     }
 
     /// The client's bytes with its first frame (the hello) given the grant when it enrolls; nil
@@ -184,17 +192,24 @@ package final class NetAttach {
         return NetFrame(queue: .interactive, stream: NetFrame.controlStream, payload: encoded).encoded + rest
     }
 
-    private static func write(_ fd: Int32, _ data: Data) {
+    /// Every byte, or false: a descriptor that can't take them (the peer gone, an error) ends the
+    /// attach instead of dropping bytes mid-frame. One that would block is waited on.
+    nonisolated static func write(_ fd: Int32, _ data: Data) -> Bool {
         data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
                 let written = Glue3.write(fd, raw.baseAddress! + offset, raw.count - offset)
                 if written < 0 {
                     if errno == EINTR { continue }
-                    return
+                    if errno == EAGAIN || errno == EWOULDBLOCK {
+                        guard Sockets.wait(fd, write: true, timeoutMs: -1) else { return false }
+                        continue
+                    }
+                    return false
                 }
                 offset += written
             }
+            return true
         }
     }
 }

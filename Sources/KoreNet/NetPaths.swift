@@ -103,4 +103,14 @@ package final class PreAuthLimiter: Sendable {
             return true
         }
     }
+
+    /// Gives back the last admission of `source`: a connection that closed without sending a
+    /// byte (a reachability probe) costs none of its three a minute.
+    package func refund(_ source: String) {
+        seen.withLock { all in
+            guard var times = all[source], !times.isEmpty else { return }
+            times.removeLast()
+            all[source] = times.isEmpty ? nil : times
+        }
+    }
 }

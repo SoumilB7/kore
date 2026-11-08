@@ -20,7 +20,7 @@ struct NetSwitchTests {
         let tailnet = FakeTailnet(status: FakeTailnet.status(.running, ips: ["127.0.0.1"]))
     }
 
-    func rig(on: Bool) throws -> (HostRig, Made) {
+    func rig(on: Bool) async throws -> (HostRig, Made) {
         let rig = try HostRig()
         if on { try HostConfig(folders: [rig.folder.path], net: true).save(rig.paths.config) }
         rig.restart()
@@ -28,11 +28,12 @@ struct NetSwitchTests {
         rig.host.makeTailnet = { made.count += 1; return made.tailnet }
         rig.host.netPort = 0
         try rig.host.start()
+        await rig.host.net?.settled()
         return (rig, made)
     }
 
-    @Test func offByDefaultHoldsNoPortAndWatchesNothing() throws {
-        let (rig, made) = try rig(on: false)
+    @Test func offByDefaultHoldsNoPortAndWatchesNothing() async throws {
+        let (rig, made) = try await rig(on: false)
         defer { rig.finish() }
         let net = try #require(rig.host.net)
         #expect(net.tailnet == nil && !net.listening && !net.watching && net.bound.isEmpty)
@@ -45,11 +46,12 @@ struct NetSwitchTests {
     }
 
     @Test func onBindsThenOffLetsEverythingGo() async throws {
-        let (rig, made) = try rig(on: true)
+        let (rig, made) = try await rig(on: true)
         defer { rig.finish() }
         let net = try #require(rig.host.net)
         #expect(made.count == 1 && net.listening && net.bound == ["127.0.0.1"])
         try rig.host.setNet(false)
+        await rig.host.net?.settled()
         #expect(!net.listening && !net.watching && net.tailnet == nil && net.bound.isEmpty)
         // The bus reader lets go once its task ends.
         let end = ContinuousClock.now + .seconds(5)
@@ -57,13 +59,15 @@ struct NetSwitchTests {
         #expect(made.tailnet.buses.withLock { $0 } == 0)
         #expect(HostConfig.load(rig.paths.config).net == false)
         try rig.host.setNet(true)
+        await rig.host.net?.settled()
         #expect(made.count == 2 && net.listening)
     }
 
     @Test func anOwnerMacSwitchesItOffAndOnlySSHTurnsItOn() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         try rig.rig.host.setNet(true)
+        await rig.net.settled()
         let mac = Device("mac"), phone = Device("pixel", kind: .phone), desk = Device("imac")
         try rig.allow(mac)
         try rig.allow(phone)
@@ -94,7 +98,7 @@ struct NetSwitchTests {
     }
 
     @Test func aPausedDeviceIsRefusedAndKept() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac"), phone = Device("pixel", kind: .phone)
         try rig.allow(mac)
@@ -114,8 +118,8 @@ struct NetSwitchTests {
         #expect(try rig.store.book.record(phone.id)?.isPaused == true)
     }
 
-    @Test func statusSaysNetTailnetPortHolderDevicesAndPending() throws {
-        let (rig, made) = try rig(on: true)
+    @Test func statusSaysNetTailnetPortHolderDevicesAndPending() async throws {
+        let (rig, made) = try await rig(on: true)
         defer { rig.finish() }
         let store = rig.host.devices
         let mac = Device("mac")

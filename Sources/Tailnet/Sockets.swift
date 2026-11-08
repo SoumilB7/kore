@@ -81,13 +81,17 @@ package enum Sockets {
     package static func pair() throws -> (Int32, Int32) {
         var fds: [Int32] = [-1, -1]
         guard socketpair(AF_UNIX, streamType, 0, &fds) == 0 else { throw SocketError.failed("socketpair", errno) }
-        for fd in fds { noSigPipe(fd) }
+        for fd in fds {
+            closeOnExec(fd)
+            noSigPipe(fd)
+        }
         return (fds[0], fds[1])
     }
 
     package static func connectUnix(_ path: String) throws -> Int32 {
         let fd = socket(AF_UNIX, streamType, 0)
         guard fd >= 0 else { throw SocketError.failed("socket", errno) }
+        closeOnExec(fd)
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(path.utf8)
@@ -111,16 +115,36 @@ package enum Sockets {
         return fd
     }
 
-    /// A blocking TCP connection.
-    package static func connectTCP(_ host: IPAddress, port: UInt16) throws -> Int32 {
+    /// How long a TCP connect waits before giving up (a peer the tailnet calls online whose port
+    /// is filtered would otherwise hold the caller for the kernel's ~75 s).
+    package static let connectTimeoutMs: Int32 = 5000
+
+    /// A blocking TCP connection, given up after `timeoutMs`.
+    package static func connectTCP(_ host: IPAddress, port: UInt16, timeoutMs: Int32 = connectTimeoutMs) throws -> Int32 {
         let fd = socket(host.isV4 ? AF_INET : AF_INET6, streamType, 0)
         guard fd >= 0 else { throw SocketError.failed("socket", errno) }
-        let done = withSockaddr(host, port) { Glue.connect(fd, $0, $1) }
-        guard done == 0 else {
+        closeOnExec(fd)
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        let started = withSockaddr(host, port) { Glue.connect(fd, $0, $1) }
+        if started != 0 {
             let code = errno
-            close(fd)
-            throw SocketError.failed("connect \(host):\(port)", code)
+            guard code == EINPROGRESS || code == EINTR else {
+                close(fd)
+                throw SocketError.failed("connect \(host):\(port)", code)
+            }
+            guard wait(fd, write: true, timeoutMs: timeoutMs) else {
+                close(fd)
+                throw SocketError.timedOut
+            }
+            var failure: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &failure, &length) == 0, failure == 0 else {
+                close(fd)
+                throw SocketError.failed("connect \(host):\(port)", failure == 0 ? errno : failure)
+            }
         }
+        _ = fcntl(fd, F_SETFL, flags & ~O_NONBLOCK)
         noSigPipe(fd)
         return fd
     }
@@ -223,8 +247,11 @@ package enum Sockets {
     }
 
     /// A blocking read's give-up time.
-    package static func setReadTimeout(_ fd: Int32, seconds: Int) {
-        var tv = timeval(tv_sec: seconds, tv_usec: 0)
+    package static func setReadTimeout(_ fd: Int32, seconds: Int) { setReadTimeout(fd, milliseconds: seconds * 1000) }
+
+    /// A blocking read's give-up time in milliseconds; 0 waits without end.
+    package static func setReadTimeout(_ fd: Int32, milliseconds: Int) {
+        var tv = timeval(tv_sec: milliseconds / 1000, tv_usec: .init((milliseconds % 1000) * 1000))
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
     }
 
@@ -286,6 +313,19 @@ package enum Sockets {
     }
 
     package static func shutdownBoth(_ fd: Int32) { _ = shutdown(fd, Int32(SHUT_RDWR)) }
+
+    /// Never inherited by a child process (`gh`, `git`, a CLI): the descriptor closes at exec.
+    package static func closeOnExec(_ fd: Int32) { _ = fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC) }
+
+    /// Whether `fd` closes at exec.
+    package static func closesOnExec(_ fd: Int32) -> Bool { fcntl(fd, F_GETFD) & FD_CLOEXEC != 0 }
+
+    /// A second descriptor for the same socket (a dispatch source's own), close-on-exec like the
+    /// first; nil when none is left.
+    package static func duplicate(_ fd: Int32) -> Int32? {
+        let copy = fcntl(fd, F_DUPFD_CLOEXEC, 0)
+        return copy >= 0 ? copy : nil
+    }
 
     package static func closeFD(_ fd: Int32) { _ = close(fd) }
 

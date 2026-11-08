@@ -35,13 +35,17 @@ extension HostDaemon {
     }
 
     /// `net.set{on}`: an owner Mac switches the box's KoreNet off (on any route), or on again
-    /// over SSH only. The answer goes before the switch (off ends the tailnet links).
+    /// over SSH only. A full grant's SSH link (`attach --as`, before or just after its Mac
+    /// enrolled) may switch it on too: that grant has a shell here already. The answer goes before
+    /// the switch (off ends the tailnet links).
     func netSet(_ data: Data, from client: LinkClient) {
         guard let ask = DevicesWire.decode(NetSwitchWire.Set.self, data) else { return }
         func answer(_ ok: Bool, _ message: String? = nil) {
             client.sendRaw(DevicesWire.encode(NetSwitchWire.Result(id: ask.id, ok: ok, on: config.netOn, message: message)))
         }
-        guard client.ownerMac, client.current() != nil else {
+        let control = client.current()
+        let fullSSH = ask.on && client.route == .ssh && client.peer == nil && control == .full
+        guard client.ownerMac || fullSSH, control != nil else {
             client.denied(NetSwitchWire.set)
             return answer(false, "Only an owner Mac switches this box's KoreNet.")
         }
@@ -55,8 +59,18 @@ extension HostDaemon {
             return answer(false, "\(error)")
         }
         HostJournal.audit("net", ["on": ask.on ? "1" : "0", "device": client.deviceId.map { $0.uuidString.lowercased() }])
-        client.sendRaw(DevicesWire.encode(NetSwitchWire.Result(id: ask.id, ok: true, on: ask.on)))
+        let done = DevicesWire.encode(NetSwitchWire.Result(id: ask.id, ok: true, on: ask.on))
+        guard ask.on else {
+            client.sendRaw(done)
+            return reloadNet()
+        }
+        // On: answered once the first look at Tailscale is applied, so the Mac's relink that
+        // follows hears this box's node key in its `net.node`.
         reloadNet()
+        Task { @MainActor [weak self] in
+            await self?.net?.settled()
+            client.sendRaw(done)
+        }
     }
 
     /// Every link whose device (or whose grant's device) has gone from the book ends now.
@@ -104,6 +118,13 @@ extension HostDaemon {
             return client.sendRaw(StreamWire.encode(UsageWire.Page(id: ask.id, lines: [], cursor: ask.cursor ?? 0, more: false)))
         }
         client.sendRaw(StreamWire.encode(usage.since(ask.cursor, id: ask.id)))
+    }
+
+    /// This box's node key became known or changed: every full link hears `net.node` again.
+    func netNodeChanged() {
+        for connection in fullClients {
+            if let node = netNode(enrolled: connection.deviceId) { connection.sendRaw(StreamWire.encode(node)) }
+        }
     }
 
     /// Who this box is on KoreNet (`net.node`), for a full link after its welcome: an owner Mac

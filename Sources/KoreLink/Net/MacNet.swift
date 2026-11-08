@@ -102,12 +102,17 @@ package final class MacNet {
     private var generation = 0
     private let acceptQueue = DispatchQueue(label: "dev.kore.net.accept")
     package private(set) var phones: [UUID: PhoneLink] = [:]
-    /// What changed, for tests awaiting it: `listening`, `closed`, `up <id>`, `gone <id>`, `kept <id>`.
+    /// What changed, for tests awaiting it: `listening`, `closed`, `kept` (a rebind failed, the
+    /// working listener stayed), `up <id>`, `gone <id>`, `kept <id>`.
     package var changed: (@MainActor (String) -> Void)?
     /// Handshakes held for an Allow, by connection.
     private var held: [ObjectIdentifier: (connection: PhoneConnection, ask: DeviceAsks.Ask)] = [:]
     /// Connections whose handshake is under way.
     private var shaking: [ObjectIdentifier: PhoneConnection] = [:]
+    /// WhoIs lookups under way (counted against `maxHandshakes` with the handshakes).
+    package private(set) var whoising = 0
+    /// Times `stop` ran: a lookup from before the last one isn't counted down twice.
+    private var stops = 0
     private var kept: [UUID: (projector: LinkProjector, at: Date)] = [:]
     /// Node keys first seen, for the card's line.
     private var firstSeen: [String: Date] = [:]
@@ -214,6 +219,7 @@ package final class MacNet {
             let want = status.flatMap { try? MacNet.addresses($0) } ?? []
             var made: [TailnetListenSocket]?
             var problem: String?
+            var clash = false
             if !want.isEmpty, !(listening && want == had) {
                 do {
                     let sockets = try tailnet.listen(port: MacNet.port)
@@ -221,24 +227,25 @@ package final class MacNet {
                     made = sockets
                 } catch {
                     problem = "\(error)"
+                    clash = MacNet.addressInUse(error)
                 }
             }
             let identity = try? reader?()
-            let found = (status, want, made, problem, identity)
+            let found = (status, want, made, problem, identity, clash)
             _ = self
             foreground { [weak self] in
                 guard let self else {
                     for socket in made ?? [] { Sockets.closeFD(socket.fd) }
                     return
                 }
-                self.settle(mine, status: found.0, want: found.1, made: found.2, problem: found.3, identity: found.4)
+                self.settle(mine, status: found.0, want: found.1, made: found.2, problem: found.3, identity: found.4, clash: found.5)
             }
         }
     }
 
     private func settle(
         _ mine: Int, status: TailnetStatus?, want: [String], made: [TailnetListenSocket]?, problem: String?,
-        identity: (device: UUID, signer: any IdentitySigner)?
+        identity: (device: UUID, signer: any IdentitySigner)?, clash: Bool = false
     ) {
         guard mine == generation else {
             for socket in made ?? [] { Sockets.closeFD(socket.fd) }
@@ -253,7 +260,16 @@ package final class MacNet {
         guard !want.isEmpty else { return close() }
         if let problem { HostLog.note("korenet", "listen failed", problem) }
         guard let made else {
-            if problem != nil { close() }
+            guard problem != nil else { return }
+            if listener == nil { return close() }
+            // The new addresses overlap the ones held (Tailscale added an address): our own
+            // sockets hold the port. Let them go, then bind afresh with nothing held.
+            if clash {
+                close()
+                return refresh()
+            }
+            // Any other failure: the working listener stays.
+            changed?("kept")
             return
         }
         close()
@@ -313,6 +329,10 @@ package final class MacNet {
         for connection in shaking.values { connection.end(NetControl.Reason.refused) }
         held = [:]
         shaking = [:]
+        whoising = 0
+        stops += 1
+        // Their `closed` events find nothing left to count down: the count starts again here.
+        shared.withLock { $0.handshakes = 0 }
     }
 
     private func watch(_ socket: TailnetListenSocket, _ listener: NetListener) {
@@ -323,9 +343,24 @@ package final class MacNet {
         }
         // Runs on `acceptQueue`, not the main actor: `@Sendable` keeps it out of MacNet's isolation
         // (an inferred @MainActor handler traps there, Swift's runtime isolation check).
-        source.setEventHandler { @Sendable in
+        let broke: @Sendable (String) -> Void = { [weak self] why in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.listenerBroke(why) } }
+        }
+        source.setEventHandler { @Sendable [weak source] in
             while true {
-                guard let next = try? listener.accept(on: socket) else { return }
+                let next: (fd: Int32, remote: String)?
+                do {
+                    next = try listener.accept(on: socket)
+                } catch {
+                    // Nothing more now: the source fires again when there is.
+                    if MacNet.transient(error) { return }
+                    // The sidecar's handoff socket at its end (the helper died), or the listener
+                    // itself failing: a source left readable would fire forever.
+                    source?.cancel()
+                    return broke("\(error)")
+                }
+                // The limiter turned it away (closed): the next one may be waiting.
+                guard let next else { continue }
                 accepted(next.fd, next.remote)
                 // The sidecar's handoff socket gives one connection per message.
                 if case .handoff = socket { return }
@@ -336,18 +371,42 @@ package final class MacNet {
         source.resume()
     }
 
+    /// A bind refused because the port is held (by our own listener, when addresses overlap).
+    nonisolated static func addressInUse(_ error: any Error) -> Bool {
+        if case SocketError.failed(_, let code) = error { return code == EADDRINUSE }
+        return false
+    }
+
+    /// An accept error that only means "not now".
+    nonisolated static func transient(_ error: any Error) -> Bool {
+        guard case SocketError.failed(_, let code) = error else { return false }
+        return code == EAGAIN || code == EWOULDBLOCK || code == EINTR || code == ECONNABORTED
+    }
+
+    /// A listening socket stopped working: the port closes, and opens again at the next look
+    /// (Tailscale's state, the switch, the Devices popup).
+    private func listenerBroke(_ why: String) {
+        guard listener != nil else { return }
+        HostLog.note("korenet", "listener broke", why)
+        close()
+    }
+
     // MARK: Connections
 
     /// WhoIs off the main actor, then the session. A WhoIs that fails closes the connection: no
     /// node key is ever taken from the peer's own word.
     private func whois(_ fd: Int32, remote: String) {
         guard let tailnet = host.tailnet else { return Sockets.closeFD(fd) }
-        guard shared.withLock({ $0.handshakes }) < Self.maxHandshakes else { return Sockets.closeFD(fd) }
+        // WhoIs lookups under way count too: each holds a LocalAPI round trip off the main actor.
+        guard shared.withLock({ $0.handshakes }) + whoising < Self.maxHandshakes else { return Sockets.closeFD(fd) }
+        whoising += 1
+        let mine = stops
         let foreground = foreground
         background { [weak self] in
             let who = try? tailnet.whois(remote)
             _ = self
             foreground { [weak self] in
+                if let self, self.stops == mine { self.whoising = max(0, self.whoising - 1) }
                 guard let self, let who else {
                     HostLog.note("korenet", "refused", "whois")
                     return Sockets.closeFD(fd)

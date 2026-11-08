@@ -48,7 +48,7 @@ struct NetPhoneHostTests {
     }
 
     @Test func aPhonesRaiseIsVerifiedOnceWithTheSharedGate() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let journal = Journal()
         let phone = Device("pixel", kind: .phone)
@@ -70,7 +70,7 @@ struct NetPhoneHostTests {
     }
 
     @Test func aPingIsAnsweredOnTheBox() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac")
         try rig.allow(mac)
@@ -81,7 +81,7 @@ struct NetPhoneHostTests {
     }
 
     @Test func aResumesCursorsComeBeforeItsWelcome() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac")
         try rig.allow(mac)
@@ -96,7 +96,7 @@ struct NetPhoneHostTests {
     }
 
     @Test func anOwnerMacMergesItsPhonesAndLeavesTheRest() async throws {
-        let rig = try NetRig()
+        let rig = try await NetRig.make()
         defer { rig.finish() }
         let mac = Device("mac"), other = Device("mac-2")
         try rig.allow(mac)

@@ -219,6 +219,8 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
     private let net: KoreNetSwitch
     private let directory: NodeDirectory
     private var watching = false
+    /// The link retained and the bus held (from `start` until it ends, however it ends).
+    private var holding = false
     private var cancelled = false
 
     package init(connection: HostConnection, net: KoreNetSwitch, directory: NodeDirectory = .shared) {
@@ -233,15 +235,18 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
         guard connection.boxMinor >= 12, connection.control == .full else {
             return join.failed("kore-host on \(join.name) needs an update first.")
         }
-        connection.retain()
-        net.hold("join." + join.key, true)
+        if !holding {
+            holding = true
+            connection.retain()
+            net.hold("join." + join.key, true)
+        }
         Task {
             if !net.on { net.set(true) }
             await Observed.until { self.net.state != .choosing }
             guard !cancelled else { return }
-            guard net.state.reaches else { return join.failed("Tailscale is off on this Mac.") }
+            guard net.state.reaches else { return failed(join, "Tailscale is off on this Mac.") }
             guard let answer = await connection.setBoxNet(true), answer.ok else {
-                return join.failed("\(join.name) didn't turn KoreNet on.")
+                return failed(join, "\(join.name) didn't turn KoreNet on.")
             }
             watch(join)
             connection.relink("korenet on")
@@ -292,12 +297,21 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
         return net.status?.peers.first { $0.publicKey == key }?.relayed ?? false
     }
 
+    /// Ended without joining: what `start` held goes, so "Try again" starts clean.
+    private func failed(_ join: BoxNetJoin, _ why: String) {
+        join.failed(why)
+        finish(join)
+    }
+
     private func finish(_ join: BoxNetJoin) {
-        guard watching else { return }
-        watching = false
-        net.watchNode(connection.alias, nil)
-        net.watchEnroll(connection.alias, nil)
-        connection.onLink("netjoin", nil)
+        if watching {
+            watching = false
+            net.watchNode(connection.alias, nil)
+            net.watchEnroll(connection.alias, nil)
+            connection.onLink("netjoin", nil)
+        }
+        guard holding else { return }
+        holding = false
         net.hold("join." + join.key, false)
         connection.release()
     }

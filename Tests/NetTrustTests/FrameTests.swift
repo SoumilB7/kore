@@ -54,6 +54,30 @@ struct FrameTests {
         #expect(throws: NetFrameError.messageTooLong) { try big.feed(NetFrame(queue: .stream, stream: 1, payload: Data([0])).encoded) }
     }
 
+    /// A peer can't make the receiver hold more than 64 MiB of unfinished messages, however it
+    /// spreads them over streams; a finished message gives its share back.
+    @Test func partialBytesAcrossStreamsAreBounded() throws {
+        var decoder = NetFrameDecoder(preAuth: false)
+        let perStream = NetFrame.maxMessage / NetFrame.maxPayload - 1
+        let fill = Data(count: NetFrame.maxPayload)
+        let streams = UInt32(NetFrame.maxPartialBytes / (perStream * NetFrame.maxPayload))
+        for stream in 1...streams {
+            for _ in 0..<perStream { _ = try decoder.feed(NetFrame(queue: .stream, flags: .more, stream: stream, payload: fill).encoded) }
+        }
+        let held = decoder.partialBytes
+        #expect(held == Int(streams) * perStream * NetFrame.maxPayload)
+        // Finishing one frees its bytes.
+        #expect(try decoder.feed(NetFrame(queue: .stream, stream: 1, payload: Data([0])).encoded).count == 1)
+        #expect(decoder.partialBytes == held - perStream * NetFrame.maxPayload)
+        // Over the room left, spread over fresh streams (none of them too long alone).
+        let frames = (NetFrame.maxPartialBytes - decoder.partialBytes) / NetFrame.maxPayload + 1
+        #expect(throws: NetFrameError.tooMuchHeld) {
+            for i in 0..<frames {
+                _ = try decoder.feed(NetFrame(queue: .stream, flags: .more, stream: 100 + UInt32(i / 128), payload: fill).encoded)
+            }
+        }
+    }
+
     @Test func preAuthTakesOneSmallControlFrame() throws {
         var decoder = NetFrameDecoder(preAuth: true)
         let hello = NetFrame(queue: .interactive, stream: 0, payload: Data(count: NetFrame.preAuthMaxFrame - NetFrame.headerSize))

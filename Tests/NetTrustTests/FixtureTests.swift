@@ -116,6 +116,7 @@ struct FixtureTests {
             case .queueChanged: "queueChanged"
             case .messageTooLong: "messageTooLong"
             case .tooManyStreams: "tooManyStreams"
+            case .tooMuchHeld: "tooMuchHeld"
             case nil: nil
             }
             #expect(kind == item["error"] as? String, "\(name)")

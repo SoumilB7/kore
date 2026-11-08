@@ -835,7 +835,10 @@ package final class HostConnection {
         case .unknown(let type) where type == NetNodeWire.type:
             if let node = NetNodeWire.decode(raw) { activeRouter?.said(node, on: self) }
         case .unknown(let type) where type == NetSwitchWire.result:
-            if let result = DevicesWire.decode(NetSwitchWire.Result.self, raw) { netSwitchWaits.removeValue(forKey: result.id)?.resume(returning: result) }
+            if let result = DevicesWire.decode(NetSwitchWire.Result.self, raw) {
+                netSwitchWaits.removeValue(forKey: result.id)?.resume(returning: result)
+                if wantsNet { preferNet() }
+            }
         case .unknown(let type) where type == DevicesWire.pending:
             if let list = DevicesWire.decode(DevicesWire.Pending.self, raw), list.pending != pendingDevices { pendingDevices = list.pending }
         default:
@@ -966,7 +969,9 @@ package final class HostConnection {
     /// at once.
     package func preferNet() {
         guard users > 0, ready, case .ssh? = route, activeRouter != nil else { return }
-        guard inFlight.isEmpty, outbox.isEmpty, uploadWaits.isEmpty else {
+        // A `net.set` waiting on its answer counts as in flight: the box's node key can come just
+        // ahead of it (Join), and dropping the link would lose the answer.
+        guard inFlight.isEmpty, outbox.isEmpty, uploadWaits.isEmpty, netSwitchWaits.isEmpty else {
             wantsNet = true
             return
         }

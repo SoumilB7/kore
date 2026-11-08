@@ -62,13 +62,7 @@ package struct NetEnvironment: @unchecked Sendable {
     package static func standard(defaults: UserDefaults = .standard) -> NetEnvironment {
         let support = NodeMigration.standardRoot()
         return NetEnvironment(
-            installed: {
-                let api = LocalAPIClient()
-                if case .unavailable(let why) = api.current { return (.missing(why), nil) }
-                let local = TailnetLocal(api: api)
-                guard let status = try? local.status() else { return (.missing(.unreadable), nil) }
-                return (.state(status.backendState), local)
-            },
+            installed: { installedTailscale(LocalAPIClient()) },
             sidecar: { key in
                 guard let helper = NetSidecar.helper() else { throw TailnetError.sidecar("Kore's tailnet helper isn't here") }
                 let sidecar = try NetSidecar.start(helper: helper, folder: support.appendingPathComponent("net/tailnet", isDirectory: true), key: key)
@@ -95,6 +89,18 @@ package struct NetEnvironment: @unchecked Sendable {
                 return (mine, { if process.isRunning { process.terminate() } })
             },
             macName: { String(ProcessInfo.processInfo.hostName.split(separator: ".").first ?? "Mac") })
+    }
+}
+
+extension NetEnvironment {
+    /// Installed Tailscale as its LocalAPI says. Installed but not answering (Kore at login before
+    /// tailscaled listens, Tailscale quitting) is stopped, never "unreadable": that would start a
+    /// second node of Kore's own for this Mac. The bus and the next read see it come up.
+    package static func installedTailscale(_ api: LocalAPIClient) -> (TailnetChooser.Installed, (any Tailnet)?) {
+        if case .unavailable(let why) = api.current { return (.missing(why), nil) }
+        let local = TailnetLocal(api: api)
+        guard let status = try? local.status() else { return (.state(.stopped), local) }
+        return (.state(status.backendState), local)
     }
 }
 
@@ -286,6 +292,8 @@ package final class KoreNetSwitch: NetRouter {
                 guard let self, !Task.isCancelled else { return }
                 self.heard(event)
             }
+            // A cancelled bus's tail runs after a newer one may be held: that one's handle stays.
+            guard !Task.isCancelled else { return }
             self?.bus = nil
         }
     }
@@ -473,7 +481,13 @@ package final class KoreNetSwitch: NetRouter {
         if outcome == .enrolled || outcome == .already {
             directory.update { $0[device.uuidString.lowercased()]?.enrolled = true }
             if outcome == .enrolled { connection.ownRouteCameUp() }
-            if directory.all[device.uuidString.lowercased()]?.nodeKey != nil { connection.preferNet() }
+            if directory.all[device.uuidString.lowercased()]?.nodeKey != nil {
+                connection.preferNet()
+            } else if outcome == .enrolled {
+                // The box's KoreNet is off: the link still dials again, over `attach --proto 2`,
+                // so it's this Mac's proven device there (an owner Mac may switch it on).
+                connection.relink("enrolled")
+            }
         }
         settled?("enroll \(outcome)")
         enrollWatchers[key]?(outcome == .enrolled || outcome == .already)

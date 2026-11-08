@@ -12,6 +12,9 @@ package struct NetFrame: Equatable, Sendable {
     package static let maxMessage = 16 << 20
     /// Messages being reassembled at once, per connection.
     package static let maxPartialStreams = 64
+    /// Bytes of unfinished messages held at once, per connection (64 streams of 16 MiB each would
+    /// otherwise be a gigabyte a peer could make the receiver hold).
+    package static let maxPartialBytes = 64 << 20
     /// Before the hello is verified: one frame, header included, no fragments.
     package static let preAuthMaxFrame = 4 << 10
     /// Stream 0 is the session's own (challenge, hello, welcome, credit, bye), interactive only.
@@ -60,6 +63,7 @@ package enum NetFrameError: Error, Equatable, CustomStringConvertible {
     case badFlags(UInt8)
     case messageTooLong
     case tooManyStreams
+    case tooMuchHeld
     case queueChanged(UInt32)
     case control(String)
     case preAuth(String)
@@ -71,6 +75,7 @@ package enum NetFrameError: Error, Equatable, CustomStringConvertible {
         case .badFlags(let f): "unknown flags \(f)"
         case .messageTooLong: "message too long"
         case .tooManyStreams: "too many partial messages"
+        case .tooMuchHeld: "too many bytes of partial messages"
         case .queueChanged(let s): "stream \(s) changed queue mid-message"
         case .control(let why): "control stream: \(why)"
         case .preAuth(let why): "before hello: \(why)"
@@ -98,6 +103,8 @@ package struct NetFrameDecoder: Sendable {
     package var preAuth: Bool
     private var buffer = Data()
     private var partial: [UInt32: (queue: NetFrame.Queue, bytes: Data)] = [:]
+    /// Bytes held in `partial`, all streams together.
+    package private(set) var partialBytes = 0
     /// Frames taken while `preAuth`.
     package private(set) var preAuthFrames = 0
     /// Stream-queue payload bytes taken off the wire since the last `takeStreamBytes()`: what the
@@ -152,19 +159,23 @@ package struct NetFrameDecoder: Sendable {
     }
 
     private mutating func take(queue: NetFrame.Queue, flags: NetFrame.Flags, stream: UInt32, payload: Data) throws -> NetMessage? {
-        if var held = partial[stream] {
+        if var held = partial.removeValue(forKey: stream) {
+            partialBytes -= held.bytes.count
             guard held.queue == queue else { throw NetFrameError.queueChanged(stream) }
             guard held.bytes.count + payload.count <= NetFrame.maxMessage else { throw NetFrameError.messageTooLong }
             held.bytes.append(payload)
             if flags.contains(.more) {
+                guard partialBytes + held.bytes.count <= NetFrame.maxPartialBytes else { throw NetFrameError.tooMuchHeld }
+                partialBytes += held.bytes.count
                 partial[stream] = held
                 return nil
             }
-            partial[stream] = nil
             return NetMessage(queue: queue, stream: stream, payload: held.bytes)
         }
         if flags.contains(.more) {
             guard partial.count < NetFrame.maxPartialStreams else { throw NetFrameError.tooManyStreams }
+            guard partialBytes + payload.count <= NetFrame.maxPartialBytes else { throw NetFrameError.tooMuchHeld }
+            partialBytes += payload.count
             partial[stream] = (queue, payload)
             return nil
         }

@@ -84,6 +84,13 @@ final class NetRig {
         net.join(tailnet)
     }
 
+    /// A rig whose first look at the tailnet (off the main thread) has been applied.
+    static func make(status: TailnetStatus = FakeTailnet.status()) async throws -> NetRig {
+        let made = try NetRig(status: status)
+        await made.net.settled()
+        return made
+    }
+
     func finish() { rig.finish() }
 
     /// The box as a device's own book holds it.

@@ -65,7 +65,8 @@ package struct LocalAPIDiscovery: Sendable {
 }
 
 /// Hand-written HTTP/1.1 GETs to the LocalAPI over POSIX sockets. The endpoint is found once and
-/// found again when it stops answering or refuses the token (tailscaled restarted on a new port).
+/// found again when it stops answering, refuses the token (tailscaled restarted on a new port) or
+/// was missing when last looked.
 package final class LocalAPIClient: Sendable {
     private let discover: @Sendable () -> LocalAPIEndpoint
     private let connect: @Sendable (LocalAPIEndpoint) throws -> Int32
@@ -106,6 +107,9 @@ package final class LocalAPIClient: Sendable {
     /// discovery when the connect fails or the token is refused.
     func open(_ path: String, readTimeout: Int?) throws -> (Int32, HTTP1.Reader) {
         var target = current
+        // Missing when last looked (kore-host up before tailscaled at boot, Tailscale installed or
+        // started since): looked for again, never kept missing for good.
+        if case .unavailable = target { target = rediscover() }
         for attempt in 0..<2 {
             let last = attempt == 1
             if case .unavailable(let why) = target { throw TailnetError.unavailable(why) }
