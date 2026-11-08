@@ -138,6 +138,9 @@ private struct CopyBelow<Block: View>: View {
     @ViewBuilder let block: Block
     @StateObject private var hovered = Local(false)
     @StateObject private var copied = Local(false)
+    /// How far the block's right edge runs past the visible page (pinched in and panned left):
+    /// the button comes in by that much, so it's where the eye is, not off to the right.
+    @StateObject private var past = Local(CGFloat(0))
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 0) {
@@ -148,10 +151,13 @@ private struct CopyBelow<Block: View>: View {
                         copy(NSApp.currentEvent?.modifierFlags.contains(.option) == true ? option ?? text : text)
                     }
                     .storyID(id.part(.copy))
+                    .padding(.trailing, past.value)
                 }
             }
             .frame(height: Size.MessageActions.row)
         }
+        // Read only while the button shows: nothing per scroll or frame otherwise.
+        .background(VisibleRightEdge(active: hovered.value, keep: Size.MessageActions.row * 2) { if past.value != $0 { past.value = $0 } })
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .storyID(id)
@@ -172,6 +178,81 @@ private struct CopyBelow<Block: View>: View {
             try? await Task.sleep(for: .seconds(Motion.copied))
             copied.value = false
         }
+    }
+}
+
+/// How far a view's right edge runs past its scroll view's visible right edge, in the page's
+/// points: 0 at the natural size or when it's in view. While `active` it follows the clip's
+/// moves and the magnification (a pan or a pinch); otherwise it watches nothing. `keep`: the
+/// width at the view's right that never comes in (the button's own room inside the view).
+private struct VisibleRightEdge: NSViewRepresentable {
+    let active: Bool
+    let keep: CGFloat
+    let past: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) {
+        view.keep = keep
+        view.report = past
+        view.active = active
+    }
+
+    final class Probe: NSView {
+        var keep: CGFloat = 0
+        var report: (CGFloat) -> Void = { _ in }
+        var active = false {
+            didSet {
+                guard active != oldValue else { return }
+                watch()
+                measure()
+            }
+        }
+        private var observers: [NSObjectProtocol] = []
+        /// The clip posted no bounds changes until this turned them on: off again after.
+        private weak var postingFor: NSClipView?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        // Out of the window (the row unloaded), its watching ends with it.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            watch()
+            measure()
+        }
+
+        private func watch() {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            postingFor?.postsBoundsChangedNotifications = false
+            postingFor = nil
+            guard active, window != nil, let scroll = enclosingScrollView else { return }
+            let clip = scroll.contentView
+            if !clip.postsBoundsChangedNotifications {
+                clip.postsBoundsChangedNotifications = true
+                postingFor = clip
+            }
+            for name in [NSView.boundsDidChangeNotification, NSView.frameDidChangeNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: clip, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.measure() }
+                })
+            }
+            observers.append(NotificationCenter.default.addObserver(forName: NSScrollView.didEndLiveMagnifyNotification, object: scroll, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.measure() }
+            })
+        }
+
+        private func measure() {
+            guard active, let scroll = enclosingScrollView, let document = scroll.documentView else {
+                report(0)
+                return
+            }
+            let edge = convert(bounds, to: document).maxX
+            // The message rail sits over the view's right edge at its own size (window points,
+            // not the page's): the button stops short of it.
+            let rail = (Size.railWidth + Size.railInset) / max(scroll.magnification, 1)
+            let visible = scroll.documentVisibleRect.maxX - (edge > scroll.documentVisibleRect.maxX - rail ? rail : 0)
+            report(max(0, min(edge - visible, bounds.width - keep)).rounded())
+        }
+
     }
 }
 
