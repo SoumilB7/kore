@@ -4,8 +4,10 @@ import LinkProtocol
 import Observation
 
 // Two-way sync of a box folder with a Mac folder the user picked for it, while that folder's box
-// window is open. The Mac's side is watched with FSEvents, the box's by kore-host (`sync.watch`);
-// files move with rsync over the same SSH alias. What both sides last agreed on (each file's size
+// window is open, and with no window too for a pair that keeps syncing (`SyncPairList.keep`, the
+// default). The Mac's side is watched with FSEvents, the box's by kore-host (`sync.watch`), each
+// gathering changes for 0.3 s when quiet and wider while they keep coming (`SyncGather`); files
+// move with rsync over the same SSH alias, every round through one held connection (`SyncChannel`). What both sides last agreed on (each file's size
 // and whole-second mtime) is kept on disk, sorted, one line a file, and read as a stream: a change
 // that brings a side to it is the sync's own write coming back, and is let go. A file changed on
 // both sides since is kept twice: the Mac's in place, the box's beside it as `<name> (<box>).<ext>`.
@@ -21,13 +23,22 @@ package struct SyncPair: Codable, Equatable, Hashable, Sendable {
     /// A box copy made for this pair just now (pairs from before box folders were picked): the
     /// first sync makes it the Mac's exactly.
     package var fresh: Bool?
+    /// Keeps syncing with no window open (`SyncPairList.keep`); nil is on.
+    package var background: Bool?
 
-    package init(mac: String, alias: String, box: String, fresh: Bool? = nil) {
+    package init(mac: String, alias: String, box: String, fresh: Bool? = nil, background: Bool? = nil) {
         self.mac = mac
         self.alias = alias
         self.box = box
         self.fresh = fresh
+        self.background = background
     }
+
+    /// Syncs while no window is open.
+    package var keepsSyncing: Bool { background != false }
+
+    /// The same two folders (whatever else changed: `fresh` settled, `background` turned).
+    package func sameFolders(_ other: SyncPair) -> Bool { mac == other.mac && alias == other.alias && box == other.box }
 }
 
 /// The pairs, in the `syncPairs` default.
@@ -167,7 +178,25 @@ package struct SyncBox: Sendable {
     /// Mac's openrsync never passes its own `--timeout` on to the box's).
     func rsyncOptions(_ low: Bool, remoteTimeout: Int? = nil) -> [String] {
         let path = (low ? "nice -n 10 " : "") + "rsync" + (remoteTimeout.map { " --timeout=\($0)" } ?? "")
-        return ["-e", (ssh + ["--"]).joined(separator: " ")] + (low || remoteTimeout != nil ? ["--rsync-path=" + path] : [])
+        return ["-e", sshCommand] + (low || remoteTimeout != nil ? ["--rsync-path=" + path] : [])
+    }
+
+    /// `-e`'s command: rsync splits it at spaces, so a word with one (a socket path under
+    /// Application Support) is quoted, as both openrsync and rsync 3 read it.
+    var sshCommand: String {
+        (ssh + ["--"]).map { $0.contains(where: { " '\"\\".contains($0) }) ? ShellQuote.single($0) : $0 }.joined(separator: " ")
+    }
+
+    /// Through a master connection's socket (`SyncChannel`): each ssh this box runs rides it, no
+    /// key exchange of its own. With no master there (not up yet, or gone), ssh connects itself.
+    func through(socket: String) -> SyncBox {
+        SyncBox(alias: alias, base: base, ssh: ssh + ["-o", "ControlMaster=no", "-o", "ControlPath=" + socket])
+    }
+
+    /// The master connection's command: `ssh -M` on `socket`, its one session a remote `cat` that
+    /// ends when Kore closes its stdin (or Kore ends), the master with it.
+    func masterArgv(socket: String) -> [String] {
+        ssh + ["-M", "-o", "ControlPath=" + socket, "-o", "ControlPersist=no", "--", host, "cat >/dev/null"]
     }
 
     /// Runs `script` under sh on the box, `args` as `$1`…, `input` on its stdin.
@@ -461,7 +490,8 @@ package final class SyncManifest: @unchecked Sendable {
 
 // MARK: - A pair's sync
 
-/// One pair's sync while its box window is open: nothing of it runs otherwise. Rounds are decided
+/// One pair's sync while something holds it (its box window, or `SyncPairList.keep`): nothing of
+/// it runs otherwise. Rounds are decided
 /// off the main thread; only their outcome comes back to it.
 ///
 /// It never deletes in bulk on its own: a side that's missing or empty, or a round that would
@@ -488,6 +518,17 @@ package final class HostSync {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let caseless: Bool
     @ObservationIgnored private var watcher: FolderWatcher?
+    /// The box's held connection while the sync runs (nil: each round connects on its own).
+    @ObservationIgnored package private(set) var channel: SyncChannel?
+    @ObservationIgnored private let channelFolder: URL
+    /// Rounds share one held connection (tests and the measurement: off, each round its own).
+    @ObservationIgnored package var heldConnection = true
+    /// The Mac's changes gather 0.3 s when quiet (the watch's latency), wider while they keep coming.
+    @ObservationIgnored package private(set) var gather = SyncGather()
+    /// The wait past the watch's latency, while a gather is wider than it.
+    @ObservationIgnored private var gathering: Task<Void, Never>?
+    /// The clock the gather reads (tests: their own).
+    @ObservationIgnored package var now: () -> TimeInterval = SyncClock.now
     @ObservationIgnored private var macPending: Set<String> = []
     /// The box's changes: a file's stat, or nil once it's gone.
     @ObservationIgnored private var boxPending: [String: SyncStat?] = [:]
@@ -529,6 +570,7 @@ package final class HostSync {
         self.connection = connection
         self.box = box
         self.defaults = defaults
+        channelFolder = SyncChannel.folder(root: root)
         tree = SyncTree(root: URL(fileURLWithPath: pair.mac))
         caseless = tree.caseless
         let files = Self.files(pair, root: root)
@@ -566,21 +608,33 @@ package final class HostSync {
                 self.tree.forget(relative)
                 self.macPending.insert(relative)
             }
-            self.kick()
+            self.gathered()
         }
+        if heldConnection { channel = SyncChannel.open(box, folder: channelFolder) }
         connection.onSync(pair.box) { [weak self] raw in self?.received(raw) }
-        connection.onSnapshot(key) { [weak self] in self?.watch() }
+        connection.onSnapshot(key) { [weak self] in
+            // The link came (back): a held connection from before a drop may be dead.
+            self?.channel?.renew()
+            self?.watch()
+        }
         if connection.isOnline { watch() }
     }
 
     /// Everything stops: the Mac's watch, the box's, and what was waiting. A round under way
     /// finishes its copy but changes nothing after.
+    /// Started and not stopped since.
+    package var isRunning: Bool { started }
+
     package func stop() {
         guard started else { return }
         started = false
         if Self.live[pair.mac] === self { Self.live[pair.mac] = nil }
         watcher?.stop()
         watcher = nil
+        gathering?.cancel()
+        gathering = nil
+        channel?.close()
+        channel = nil
         connection.onSync(pair.box, nil)
         connection.onSnapshot(key, nil)
         if connection.isOnline {
@@ -599,6 +653,29 @@ package final class HostSync {
     package var unsettled: Int {
         guard started else { return 0 }
         return macPending.count + boxPending.count + (running ? 1 : 0) + (listing != nil || listed != nil ? 1 : 0)
+    }
+
+    /// The Mac's changes came (after the watch's latency): they go now when quiet, or after the
+    /// rest of a wider gather while they keep coming.
+    private func gathered() {
+        guard started, gathering == nil else { return }
+        // The watch held them its latency already: the change came about then.
+        let wait = gather.delay(at: now() - gather.quiet) - gather.quiet
+        guard wait > 0 else { return kick() }
+        gathering = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled, let self else { return }
+            self.gathering = nil
+            self.kick()
+        }
+    }
+
+    /// What's gathered goes now (a move waits on it: `ChatMoves.flush`).
+    package func hurry() {
+        guard gathering != nil else { return }
+        gathering?.cancel()
+        gathering = nil
+        kick()
     }
 
     /// The box can't watch its copy: it lists it again now (the window came forward, a turn ended).
@@ -693,7 +770,8 @@ package final class HostSync {
                 self.compared = true
                 self.finished()
             }
-        } else if compared, !macPending.isEmpty || !boxPending.isEmpty {
+        } else if compared, gathering == nil, !macPending.isEmpty || !boxPending.isEmpty {
+            if !macPending.isEmpty { gather.sent(at: now()) }
             let mac = macPending, boxSide = boxPending
             macPending = []
             boxPending = [:]
@@ -805,6 +883,9 @@ package final class HostSync {
             try? FileManager.default.removeItem(at: plan.pushList)
             try? FileManager.default.removeItem(at: plan.pullList)
         }
+        // Each rsync and shell of the round through the box's held connection.
+        var box = self.box
+        if let channel { box = await channel.box() }
         let mac = tree.root.path + "/", remote = box.spec(pair.box + "/")
         let rsync = Self.rsyncArguments(box, low: low)
         // rename(2): a case-only rename on a volume that ignores case.
@@ -892,7 +973,7 @@ package final class HostSync {
 
     /// A round's rsync options: a stalled link ends on both sides (`--timeout` here, and on the
     /// box through `--rsync-path`) rather than hanging the sync for good.
-    static func rsyncArguments(_ box: SyncBox, low: Bool) -> [String] {
+    package static func rsyncArguments(_ box: SyncBox, low: Bool) -> [String] {
         ["-a", "--timeout=\(rsyncTimeout)"] + box.rsyncOptions(low, remoteTimeout: boxRsyncTimeout)
     }
 
@@ -1129,6 +1210,8 @@ package struct SyncRound: Sendable {
             plan.pushes += 1
             return [(path, mac)]
         case .pull:
+            // A file this Mac's rules leave out (an older box lists noisy files) never comes here.
+            if tree.ignored(path) { return [] }
             plan.pull.raw(path + "\n")
             plan.pulls += 1
             return [(path, box)]
@@ -1329,6 +1412,79 @@ package final class SyncPairList {
     package func reload() {
         let now = SyncPairs.all(defaults)
         if now != pairs { pairs = now }
+        if keeping { keep() }
+    }
+
+    // MARK: Syncs, shared and kept
+
+    /// How many holders each running sync has: its windows, and the keeper.
+    @ObservationIgnored private var holders: [ObjectIdentifier: Int] = [:]
+    /// The pairs kept syncing with no window, their syncs and the link held for each, by Mac folder.
+    @ObservationIgnored private var kept: [String: (pair: SyncPair, sync: HostSync, connection: HostConnection)] = [:]
+    @ObservationIgnored private var keeping = false
+    /// The pairs kept syncing now, by Mac folder (tests).
+    package var keptPairs: Set<String> { Set(kept.keys) }
+    /// A pair's sync on its box's link (tests: their own box and link).
+    @ObservationIgnored package var makeSync: @MainActor (SyncPair, HostConnection) -> HostSync? = { pair, connection in
+        HostSync(pair: pair, connection: connection)
+    }
+    /// The link a kept pair holds (tests: their own).
+    @ObservationIgnored package var link: @MainActor (String) -> HostConnection = { HostConnection.named($0) }
+
+    /// The pair's sync, held once more: the one running (a window and the keeper share it), else
+    /// a new one started. `relinquish` once per call.
+    package func acquire(_ pair: SyncPair, connection: HostConnection) -> HostSync? {
+        if let running = HostSync.live[pair.mac], running.pair.sameFolders(pair), running.isRunning {
+            holders[ObjectIdentifier(running), default: 0] += 1
+            return running
+        }
+        guard let sync = makeSync(pair, connection) else { return nil }
+        sync.start()
+        holders[ObjectIdentifier(sync)] = 1
+        return sync
+    }
+
+    /// Held once less: with its last holder the sync stops.
+    package func relinquish(_ sync: HostSync) {
+        let id = ObjectIdentifier(sync)
+        let left = max(0, (holders[id] ?? 0) - 1)
+        holders[id] = left == 0 ? nil : left
+        if left == 0 { sync.stop() }
+    }
+
+    /// From launch on: pairs that keep syncing run with no window, each holding its box's link;
+    /// a pair unpaired, forgotten or turned off stops (`keep` after each change).
+    package func startKeeping() {
+        keeping = true
+        keep()
+    }
+
+    /// The kept syncs follow the pairs.
+    package func keep() {
+        let wanted = keeping ? Dictionary(pairs.filter(\.keepsSyncing).map { ($0.mac, $0) }, uniquingKeysWith: { _, b in b }) : [:]
+        for (mac, held) in kept where !(wanted[mac]?.sameFolders(held.pair) ?? false) || !held.sync.isRunning {
+            kept[mac] = nil
+            relinquish(held.sync)
+            held.connection.release()
+        }
+        for (mac, pair) in wanted where kept[mac] == nil {
+            let connection = link(pair.alias)
+            guard !connection.forgotten else { continue }
+            connection.retain()
+            guard let sync = acquire(pair, connection: connection) else {
+                connection.release()
+                continue
+            }
+            kept[mac] = (pair, sync, connection)
+        }
+    }
+
+    /// Turns a pair's syncing with no window on or off.
+    package func setKeepsSyncing(_ on: Bool, mac: String) {
+        guard var pair = pairs.first(where: { $0.mac == mac }) else { return }
+        pair.background = on ? nil : false
+        SyncPairs.save(pair, defaults)
+        reload()
     }
 
     package func pair(alias: String, box: String) -> SyncPair? { pairs.first { SyncPairs.sameBox($0.alias, alias) && $0.box == box } }

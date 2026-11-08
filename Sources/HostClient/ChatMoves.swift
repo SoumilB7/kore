@@ -184,6 +184,8 @@ package struct ChatMoves {
     /// after `wait` seconds, or when the folder isn't syncing (`sync` nil: the box window is closed).
     package func flush(folder: String, sync: HostSync?, wait: TimeInterval = 30, progress: (@MainActor (Int) -> Void)? = nil) async -> Bool {
         guard let sync else { return false }
+        // This Mac's gathered changes go now, not after a wide gather.
+        sync.hurry()
         let end = Date().addingTimeInterval(wait)
         let box = await connection.move(.syncFlush, ControlArgs(folder: folder))
         if box.watching == false { return false }

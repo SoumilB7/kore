@@ -277,7 +277,8 @@ enum ChatMoving {
             return sheet.fail("\(SyncPairs.shown(mac: moved.macFolder)) no longer syncs with \(NodeNames.name(moved.alias))")
         }
         sheet.folder = moved.boxFolder
-        let running = Workspace.all.allObjects.first { !$0.isClosed && $0.box?.alias == moved.alias && $0.box?.sync?.pair == pair }?.box?.sync
+        let running = SyncPairList.shared.live[pair.mac].flatMap { $0.isRunning && $0.pair.sameFolders(pair) ? $0 : nil }
+            ?? Workspace.all.allObjects.first { !$0.isClosed && $0.box?.alias == moved.alias && $0.box?.sync?.pair == pair }?.box?.sync
         sheet.checks = Task {
             // Up first: a box that can't be reached keeps the chat here.
             guard await online(connection) else { return sheet.fail("Can't reach \(NodeNames.name(moved.alias)) · the chat stays here") }

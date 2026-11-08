@@ -7,8 +7,9 @@ import Musl
 #endif
 
 /// `sync.watch`: one client's watch on one served folder, for the Mac's two-way sync. First the
-/// folder's whole list goes (`sync.changed` with `all`, in pieces), then what changes, gathered for
-/// `settle` and sent as one `sync.changed {folder, paths}`. Linux watches with inotify (a watch per
+/// folder's whole list goes (`sync.changed` with `all`, in pieces), then what changes, gathered
+/// (`SyncGather`: `settle` when quiet, wider while changes keep coming) and sent as one
+/// `sync.changed {folder, paths}`. Linux watches with inotify (a watch per
 /// carried folder, added as folders appear), macOS with FSEvents (for tests). Nothing polls; it all
 /// ends with `sync.unwatch` or the client's link. Reading the tree, its ignore rules and the
 /// messages' JSON all happen off the main thread, one batch at a time: a flood of files (a clone
@@ -22,7 +23,10 @@ final class SyncWatch {
     /// The whole list is due again (inotify dropped events).
     private var everything = false
     private var flush: DispatchWorkItem?
-    private let settle: TimeInterval
+    /// How long changes gather: `settle` when quiet, 2 s then 5 s while they keep coming.
+    private(set) var gather: SyncGather
+    /// The clock the gather reads (tests: their own).
+    var now: () -> TimeInterval = SyncClock.now
     /// A batch is being read off the main thread: the next waits for it.
     private var working = false
     #if canImport(Darwin)
@@ -36,7 +40,7 @@ final class SyncWatch {
 
     init(folder: String, settle: TimeInterval = 0.3, push: @escaping (Data) -> Void) {
         self.folder = folder
-        self.settle = settle
+        gather = SyncGather(steps: [settle] + SyncGather.steps.dropFirst())
         self.push = push
         tree = SyncTree(root: URL(fileURLWithPath: folder))
     }
@@ -125,9 +129,13 @@ final class SyncWatch {
         if relative.isEmpty { everything = true } else { pending.insert(relative) }
         tree.forget(relative)
         guard flush == nil, !working else { return }
+        schedule(gather.delay(at: now()))
+    }
+
+    private func schedule(_ delay: TimeInterval) {
         let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.send() } }
         flush = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + settle, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// What changed since the last batch, read and encoded off the main thread; one batch at a
@@ -135,6 +143,7 @@ final class SyncWatch {
     private func send() {
         flush = nil
         guard !working, !stopped else { return }
+        gather.sent(at: now())
         let tree = tree, folder = folder, watching = watching
         if everything {
             everything = false
@@ -181,9 +190,8 @@ final class SyncWatch {
         if missing { self.missing() }
         messages.forEach(push)
         guard everything || !pending.isEmpty, flush == nil else { return }
-        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.send() } }
-        flush = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + settle, execute: work)
+        // Changes came while the batch was read: they keep coming.
+        schedule(gather.delay(at: now()))
     }
 
     /// The whole list as it first goes, built off the main thread.

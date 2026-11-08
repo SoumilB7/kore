@@ -112,7 +112,8 @@ final class BoxBinding {
         return connection.windows.first { $0.id == window }?.path ?? folder
     }
 
-    /// The folder's two-way sync with a Mac folder, while this window is open.
+    /// The folder's two-way sync with a Mac folder, while this window is open (shared with the
+    /// one that keeps syncing with no window, `SyncPairList.keep`).
     private(set) var sync: HostSync?
     private var focus: NSObjectProtocol?
 
@@ -146,11 +147,10 @@ final class BoxBinding {
     /// The sync follows the folder's pair: started once it's made, stopped once it's gone.
     func followPair() {
         let pair = SyncPairList.shared.pair(alias: alias, box: folder)
-        guard pair?.mac != sync?.pair.mac || pair?.box != sync?.pair.box else { return }
+        guard pair?.mac != sync?.pair.mac || pair?.box != sync?.pair.box || sync?.isRunning == false else { return }
         stopSync()
-        guard let pair, let sync = HostSync(pair: pair, connection: connection) else { return }
+        guard let pair, let sync = SyncPairList.shared.acquire(pair, connection: connection) else { return }
         self.sync = sync
-        sync.start()
         // A box that can't watch its copy lists it again as the window comes forward.
         focus = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] note in
             let window = ObjectIdentifier(note.object as AnyObject)
@@ -162,7 +162,7 @@ final class BoxBinding {
     }
 
     private func stopSync() {
-        sync?.stop()
+        if let sync { SyncPairList.shared.relinquish(sync) }
         sync = nil
         if let focus { NotificationCenter.default.removeObserver(focus) }
         focus = nil
@@ -170,6 +170,7 @@ final class BoxBinding {
 
     /// Every open box window's sync follows the pairs (one was made or stopped).
     static func pairsChanged() {
+        SyncPairList.shared.keep()
         for workspace in Workspace.all.allObjects where !workspace.isClosed {
             workspace.box?.followPair()
             workspace.followPairedBox()

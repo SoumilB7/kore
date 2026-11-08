@@ -536,14 +536,20 @@ private func scratch(_ prefix: String) -> URL {
 }
 
 /// "The box" on this Mac through a stand-in ssh: everything after `--` and the alias is run by
-/// `sh -c`, as sshd hands a command to the login shell.
+/// `sh -c`, as sshd hands a command to the login shell. A master (`-M`) holds its `ControlPath`
+/// while its command runs, as ssh's does.
 private func fakeBox(_ root: URL, base: URL) throws -> SyncBox {
     let ssh = root.appendingPathComponent("fake-ssh")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     try Data("""
         #!/bin/sh
-        while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+        master=0; path=
+        while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+          case "$1" in -M) master=1 ;; ControlPath=*) path="${1#ControlPath=}" ;; esac
+          shift
+        done
         shift; shift
+        if [ $master = 1 ]; then : > "$path"; /bin/sh -c "$*"; rm -f "$path"; exit 0; fi
         exec /bin/sh -c "$*"
         """.utf8).write(to: ssh)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)

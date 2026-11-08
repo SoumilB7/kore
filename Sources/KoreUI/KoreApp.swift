@@ -183,6 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Self.pruneStaleWindowFrames() }
         // Transfers a quit, a crash or a restart stopped go on from their checkpoints.
         FileCarries.shared.restore()
+        // Synced folders that keep syncing run from now on, windows or not.
+        SyncPairList.shared.startKeeping()
     }
 
     /// SwiftUI saves each window's frame under a key naming the window's whole view type,

@@ -50,10 +50,13 @@ package enum SyncPath {
 }
 
 /// The files a folder's two-way sync carries, and the ones it leaves alone: `.git/`, `.build/`,
-/// `node_modules/`, `.DS_Store`, a carry's landing (`SyncPath.isLanding`), and what each folder's `.gitignore` names (patterns with `*`, `?`,
-/// `[…]`, `**`, a leading `/` or a `/` inside anchoring to that folder, a trailing `/` for folders
-/// only, `!` taking a name back; the last match wins). Both ends of a sync read the same rules, so
-/// what one end lists is what the other expects. Only regular files are carried.
+/// `node_modules/`, `.DS_Store`, a carry's landing (`SyncPath.isLanding`), the noisy files
+/// (`noisy`: logs, temp files, build output, common caches), and what each folder's `.gitignore`
+/// names (patterns with `*`, `?`, `[…]`, `**`, a leading `/` or a `/` inside anchoring to that
+/// folder, a trailing `/` for folders only, `!` taking a name back; the last match wins). The
+/// root's `.koresync`, in the same form, is read last: `!build/` there syncs a noisy name after
+/// all, for that folder. Both ends of a sync read the same rules, so what one end lists is what
+/// the other expects. Only regular files are carried.
 package final class SyncTree: @unchecked Sendable {
     package let root: URL
     private let lock = NSLock()
@@ -66,6 +69,24 @@ package final class SyncTree: @unchecked Sendable {
     private static let verdictsMax = 200_000
 
     package static let skipped: Set<String> = [".git", ".build", "node_modules", ".DS_Store"]
+
+    /// The file at the root whose rules come last: what a folder takes back from (or adds to) the
+    /// default skips.
+    package static let overrides = ".koresync"
+
+    /// Folders left out by default: build output and common caches.
+    package static let noisyFolders: Set<String> = [
+        "build", "dist", "DerivedData", ".next", ".nuxt", ".turbo", ".parcel-cache", ".gradle", ".cache", ".sass-cache",
+        "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".venv",
+    ]
+    /// Files left out by default: logs, temp and swap files, compiled Python.
+    package static let noisySuffixes = [".log", ".tmp", ".temp", ".swp", ".swo", ".pyc", "~"]
+
+    /// Left out unless a rule takes it back: a noisy folder, or a log, temp or editor's swap file.
+    package static func noisy(_ name: String, isDirectory dir: Bool) -> Bool {
+        if dir { return noisyFolders.contains(name) }
+        return name == "Thumbs.db" || name.hasPrefix(".#") || noisySuffixes.contains { name.hasSuffix($0) }
+    }
 
     /// The root's volume finds `Foo` for `foo` (APFS by default): a name is there only when it is,
     /// exactly, in its folder's list.
@@ -254,6 +275,13 @@ package final class SyncTree: @unchecked Sendable {
 
     /// A `.gitignore` changed: its rules are read again on next use.
     package func forget(_ relative: String) {
+        if relative == Self.overrides {
+            lock.withLock {
+                rules.removeValue(forKey: Self.overridesKey)
+                folderVerdicts = [:]
+            }
+            return
+        }
         guard relative == ".gitignore" || relative.hasSuffix("/.gitignore") else { return }
         let folder = relative == ".gitignore" ? "" : String(relative.dropLast("/.gitignore".count))
         lock.withLock {
@@ -274,7 +302,7 @@ package final class SyncTree: @unchecked Sendable {
     private func ignoredHere(_ relative: String, isDirectory dir: Bool) -> Bool {
         let name = relative.split(separator: "/").last.map(String.init) ?? relative
         if Self.skipped.contains(name) || SyncPath.isLanding(name) { return true }
-        var verdict = false
+        var verdict = Self.noisy(name, isDirectory: dir)
         // From the root down: a deeper folder's rule comes later, so it wins.
         var folders = [""]
         var walked = ""
@@ -288,14 +316,19 @@ package final class SyncTree: @unchecked Sendable {
             let inside = folder.isEmpty ? relative : String(relative.dropFirst(folder.count + 1))
             if let said = set.verdict(inside, name: name, isDirectory: dir) { verdict = said }
         }
+        if let said = rules(in: "", file: Self.overrides).verdict(relative, name: name, isDirectory: dir) { verdict = said }
         return verdict
     }
 
-    private func rules(in folder: String) -> RuleSet {
-        if let known = lock.withLock({ rules[folder] }) { return known }
-        let text = (try? String(contentsOf: url(folder).appendingPathComponent(".gitignore"), encoding: .utf8)) ?? ""
+    /// The cache key of the root's `.koresync` (no folder's path has a NUL).
+    private static let overridesKey = "\u{0}" + overrides
+
+    private func rules(in folder: String, file: String = ".gitignore") -> RuleSet {
+        let key = file == Self.overrides ? Self.overridesKey : folder
+        if let known = lock.withLock({ rules[key] }) { return known }
+        let text = (try? String(contentsOf: url(folder).appendingPathComponent(file), encoding: .utf8)) ?? ""
         let read = RuleSet(Self.parse(text))
-        lock.withLock { rules[folder] = read }
+        lock.withLock { rules[key] = read }
         return read
     }
 
