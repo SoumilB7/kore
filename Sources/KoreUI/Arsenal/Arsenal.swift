@@ -1,20 +1,21 @@
 import Foundation
 import Observation
 
-/// A chat's Arsenal tier (`z-docs/design/kore-access.html`). Each adds to the one before; Watch and
-/// Own have commands behind them, so the others are named in its popup but can't be chosen.
+/// A chat's Arsenal tier (`z-docs/design/kore-access.html`). Each adds to the one before; Full has no
+/// commands behind it yet, so it's named in the popup but can't be chosen.
 package enum ArsenalTier: String, CaseIterable, Sendable {
     case watch, own, drive, full
 
     var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
-    var built: Bool { self == .watch || self == .own }
+    var built: Bool { self != .full }
 
     /// What it lets the chat's agent do, in a line.
     var reach: String {
         switch self {
         case .watch: "reads this folder's chats"
         case .own: "also sets this chat's name, model, effort, and lowers its mode"
-        case .drive, .full: "not built yet"
+        case .drive: "also opens chats, sends and answers questions, in chats at its mode or lower"
+        case .full: "not built yet"
         }
     }
 }
@@ -143,7 +144,7 @@ package final class Arsenal {
         items += ArsenalTier.allCases.filter { !$0.built }.map { OptionItem("\($0.title): not built yet", enabled: false) }
         items += [
             .rule,
-            OptionItem("Later tiers reach chats at \(chat.controls.activeMode.label) or lower", enabled: false),
+            OptionItem("Drive reaches chats at \(chat.controls.activeMode.label) or lower", enabled: false),
             OptionItem("Approvals stay yours", enabled: false),
         ]
         return items

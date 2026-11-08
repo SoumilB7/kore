@@ -15,6 +15,7 @@ enum Reads {
             return fail(name == "show" ? "kore show <chat>" : "kore log <chat> [-n N] [-f]", code: 2)
         }
         if let wanted = Own.usage[name], !Own.fits(name, options.positional) { return fail("kore \(name) \(wanted)", code: 2) }
+        if let wanted = Drive.usage[name], !Drive.fits(name, options) { return fail("kore \(name) \(wanted)", code: 2) }
         do {
             let client = try AgentClient()
             switch name {
@@ -27,6 +28,7 @@ enum Reads {
             case "history": try history(client, options)
             case "options": try Own.options(client, options)
             case "fast", "compact", "rename", "model", "effort", "mode": try Own.set(name, client, options)
+            case "new", "send", "stop", "tab", "answer": try Drive.run(name, client, options)
             default: return fail(usage, code: 2)
             }
             return 0
@@ -53,6 +55,11 @@ enum Reads {
         var last: Int?
         var folder: String?
         var search: String?
+        /// Drive's `new`: the CLI, model and mode; `answer --deny`.
+        var provider: String?
+        var model: String?
+        var mode: String?
+        var deny = false
         var positional: [String] = []
         var problem: String?
 
@@ -72,6 +79,14 @@ enum Reads {
                 case "--search":
                     guard let q = rest.popFirst() else { problem = "--search takes words"; return }
                     search = q
+                case "--claude", "--codex": provider = String(arg.dropFirst(2))
+                case "--model":
+                    guard let m = rest.popFirst() else { problem = "--model takes a model"; return }
+                    model = m
+                case "--mode":
+                    guard let m = rest.popFirst() else { problem = "--mode takes a mode"; return }
+                    mode = m
+                case "--deny": deny = true
                 default:
                     if arg.hasPrefix("-"), arg.count > 1 { problem = "unknown option \(arg)"; return }
                     positional.append(arg)
@@ -185,7 +200,7 @@ enum Reads {
         let cards = data["cards"] as? [Object] ?? []
         guard !cards.isEmpty else { return say("Nothing is waiting.") }
         for card in cards {
-            say("\(str(card["chatShort"]))  \(str(card["chatTitle"]))  · \(str(card["kind"])): \(str(card["title"]))")
+            say("\(str(card["chatShort"]))  \(str(card["chatTitle"]))  · \(str(card["kind"])): \(str(card["title"]))  · card \(str(card["id"]))")
             if let detail = card["detail"] as? String, !detail.isEmpty { say("    \(oneLine(detail))") }
             for question in card["questions"] as? [Object] ?? [] {
                 let options = (question["options"] as? [String] ?? []).joined(separator: " / ")

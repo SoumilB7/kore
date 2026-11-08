@@ -192,7 +192,7 @@ final class ArsenalButton: ChatStoryline {
             key,
             tier("a", .watch, "back on at its last tier"),
             OpenTiers(role: "a"),
-            PressRow(title: "Drive: not built yet"),
+            PressRow(title: "Full: not built yet"),
             tier("a", .watch, "a tier not built does nothing"),
             Key(.escape),
             OpenTiers(role: "a"),

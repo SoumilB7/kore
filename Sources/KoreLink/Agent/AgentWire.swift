@@ -44,8 +44,16 @@ package struct AgentCommand: Sendable, Equatable {
     package static let mode = Self(name: "chat.mode", tier: .own)
     package static let compact = Self(name: "chat.compact", tier: .own)
 
+    // Drive: the caller's window, at or below its own mode. Own's changes reach those chats too.
+    package static let new = Self(name: "chat.new", tier: .drive)
+    package static let send = Self(name: "chat.send", tier: .drive)
+    package static let stop = Self(name: "chat.stop", tier: .drive)
+    package static let showTab = Self(name: "tab.show", tier: .drive)
+    package static let answer = Self(name: "cards.answer", tier: .drive)
+
     package static let all: [Self] = [
         whoami, caps, chats, show, read, follow, unfollow, cards, history, options, rename, model, effort, fast, mode, compact,
+        new, send, stop, showTab, answer,
     ]
 
     /// Why `tier` may not run `name`; nil when it may.
@@ -77,8 +85,10 @@ package enum AgentCode: String, Codable, Sendable {
     case noWindow = "no_window"
     /// Agent control was stopped, or this chat's access turned off.
     case stopped
-    /// Own reaches only the caller's own chat.
+    /// Own reaches only the caller's own chat; Drive, chats at or below its mode in its window.
     case notOwn = "not_own"
+    /// Over Drive's limits: sends a minute, new chats an hour, chats it made open at once.
+    case limit
     /// The chat can't take that now, or only the user may do it (raising a mode).
     case refused
 }
@@ -111,11 +121,27 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     /// `chat.mode`'s mode), and `chat.fast` on or off.
     package var to: String?
     package var on: Bool?
+    /// Drive's: `chat.new`'s CLI (`claude`, `codex`), model and mode; a message (`chat.new`'s first,
+    /// `chat.send`'s); `cards.answer`'s card, an answer per question, or deny.
+    package var provider: String?
+    package var model: String?
+    package var mode: String?
+    package var text: String?
+    package var card: String?
+    package var answers: [String]?
+    package var deny: Bool?
 
     package init(
         chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, query: String? = nil,
         archived: Bool? = nil, offset: Int? = nil, to: String? = nil, on: Bool? = nil
     ) {
+        self.provider = nil
+        self.model = nil
+        self.mode = nil
+        self.text = nil
+        self.card = nil
+        self.answers = nil
+        self.deny = nil
         self.chat = chat
         self.last = last
         self.before = before
@@ -324,4 +350,6 @@ package struct AgentOptions: Encodable, Sendable {
 package struct AgentDone: Encodable, Sendable {
     package var chat: String
     package var message: String
+    /// `chat.new`: the new chat's short id, for the next command.
+    package var short: String? = nil
 }

@@ -114,7 +114,8 @@ struct AgentCallerTests {
 struct AgentGrantTests {
     @Test func tiersAddUpAndOffHasNothing() {
         #expect(AgentCommand.allowed(.off).isEmpty)
-        #expect(AgentCommand.allowed(.own).map(\.name) == AgentCommand.all.map(\.name))
+        #expect(AgentCommand.allowed(.drive).map(\.name) == AgentCommand.all.map(\.name))
+        #expect(AgentCommand.allowed(.own).allSatisfy { $0.tier <= .own } && AgentCommand.allowed(.own).count == 16)
         // Watch reads; every change is Own's.
         #expect(AgentCommand.allowed(.watch).allSatisfy { !$0.name.hasPrefix("chat.") || $0.name == "chat.show" })
         #expect(AgentCommand.allowed(.watch).count == 9)
@@ -393,7 +394,7 @@ struct AgentChannelTests {
         #expect((welcome?["caller"] as? [String: Any])?["class"] as? String == "external")
         #expect(welcome?["tier"] as? String == "watch")
         #expect((caps?["data"] as? [String: Any])?["commands"] as? [String] == AgentCommand.allowed(.watch).map(\.name))
-        #expect(raise?["ok"] as? Bool == false && raise?["code"] as? String == "unknown_command")
+        #expect(raise?["ok"] as? Bool == false && raise?["code"] as? String == "tier")
     }
 
     @Test func aPassMustMatchTheTreeItRunsIn() async throws {

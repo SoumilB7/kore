@@ -12,7 +12,7 @@ package enum AgentGrants {
 
     package static var enabled: Bool { defaults.bool(forKey: switchKey) }
 
-    /// Connects Arsenal to this, at launch. Watch and Own have commands; a tier not built yet is
+    /// Connects Arsenal to this, at launch. Watch, Own and Drive have commands; a tier not built yet is
     /// Off here, and external callers stay Off.
     package static func install() {
         AgentTaps.setAllowed = { setEnabled($0) }
@@ -20,7 +20,8 @@ package enum AgentGrants {
             let granted: AgentTier = switch tier {
             case .watch: .watch
             case .own: .own
-            case .drive, .full, nil: .off
+            case .drive: .drive
+            case .full, nil: .off
             }
             set(granted, chat: chat)
         }

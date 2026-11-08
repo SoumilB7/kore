@@ -24,18 +24,27 @@ let usage = """
            kore fast on|off      its fast mode
            kore mode <mode>      lower its mode (only you raise one)
            kore compact          compact it, once this turn ends
+           kore new [--claude|--codex] [--model M] [--mode X] ["message"]
+                                 a new chat in this window, in front (Drive)
+           kore send <chat> "message"
+                                 send to another chat, queued while it works
+           kore stop <chat>      stop its turn
+           kore tab <chat>       bring its tab to the front
+           kore answer <chat> <card> <answer>... | --deny
+                                 answer a question card, one answer per question
            kore whoami           who Kore sees calling, and its access
            kore caps             what that access allows
            kore mcp              the same reads as an MCP server, on stdio
            kore help             show this
 
-    Own's commands change only the chat they run in, and need its Arsenal at Own.
+    Own's commands change the chat they run in (at Own), or with Drive a chat named first:
+    kore model <chat> <model>. Drive reaches the chats it can read at or below this chat's mode.
     A chat is its title (any part only it has), its short id, or . for the chat this runs in.
     Every read takes --json. A folder named like a command opens with a slash: kore ./ls
     """
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-let reads: Set = ["ls", "show", "log", "pending", "history", "whoami", "caps", "mcp", "options", "rename", "model", "effort", "fast", "mode", "compact"]
+let reads: Set = ["ls", "show", "log", "pending", "history", "whoami", "caps", "mcp", "options", "rename", "model", "effort", "fast", "mode", "compact", "new", "send", "stop", "tab", "answer"]
 
 switch arguments.first {
 case "help", "-h", "--help":

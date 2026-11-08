@@ -362,7 +362,7 @@ struct AllowIn: Step {
 }
 
 /// Waits a while (a rate limit's minute), with nothing else going on.
-private struct MinuteWait: Step {
+struct MinuteWait: Step {
     let seconds: Int
     var label: String { "wait \(seconds) s" }
     var timeout: Duration? { .seconds(seconds + 10) }
@@ -701,7 +701,7 @@ final class AgentChannelAll: ChatStoryline {
                 guard lines.count == 4 else { return false }
                 return try lines[0] == ["caller": "chat", "chat": cast.id("a"), "cmd": "agent.whoami", "result": "ok"]
                     && lines[1] == ["caller": "chat", "chat": cast.id("a"), "cmd": "chat.show", "result": "no_chat"]
-                    && lines[2] == ["caller": "chat", "chat": cast.id("c"), "cmd": "unknown", "result": "unknown_command"]
+                    && lines[2] == ["caller": "chat", "chat": cast.id("c"), "cmd": "chat.send", "result": "tier"]
                     && lines[3] == ["caller": "chat", "chat": cast.id("c"), "cmd": "tx.read", "target": cast.id("a"), "result": "ok"]
             },
             Expect("7. every agent line holds ids and codes only, never text") { _ in
@@ -881,6 +881,57 @@ final class AgentOwnLive: Storyline {
             },
             shown(["whoami", "--json"]), shown(["caps", "--json"]), shown(["options", "--json"]), shown(["options"]),
             shown(["mcp"], input: mcp),
+            Do("off again") { story in
+                unsetenv("KORE_AGENT_SOCKET")
+                AgentCast.of(story).finish()
+            },
+        ]
+    }
+}
+
+/// A live model at Drive opens a chat with `kore new`: its tab comes up in front, on the cheap
+/// model it asked for, its message sent and answered, its Arsenal off.
+final class AgentDriveLive: Storyline {
+    override class var tags: Set<Tag> { [.live] }
+    override class var variants: [Variant] { [.claude, .codex] }
+
+    override func steps() -> [any Step] {
+        let given = ProcessInfo.processInfo.environment["KORE_AGENT_SOCKET"].map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+        let directory = given ?? URL(fileURLWithPath: "/tmp/kdl-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        var link: String { directory.appendingPathComponent("kore").path }
+        let codex = variant == .codex
+        let model = codex ? "gpt-6-luna" : "haiku"
+        let ask = "Reply with only the word pong"
+        return [
+            Do("agent control on, at a socket the chat's CLI is told of") { story in
+                let cast = AgentCast.of(story)
+                cast.directory = directory
+                AgentChannel.directory = directory
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                try? FileManager.default.removeItem(atPath: link)
+                try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: KoreRun.binary.path)
+                setenv("KORE_AGENT_SOCKET", AgentWatchReads.socketPath, 1)
+                AgentGrants.stopAll()
+            },
+            OpenFolder(), StartChat(),
+        ] + (codex ? [SetMode("fullAccess")] : []) + [
+            Do("Arsenal on, at Drive, as the tiers popup picks it") { story in
+                let chat = try story.activeChat()
+                AgentCast.of(story).chats["a"] = chat
+                Arsenal.shared.setAllowed(true)
+                Arsenal.shared.choose(.drive, chat)
+            },
+            Expect("Drive, and the socket") { story in try story.activeChat().arsenal == .drive && AgentChannel.current != nil },
+            Send("Run this exact shell command and reply with only its output, nothing else: export KORE_AGENT_SOCKET=\(directory.appendingPathComponent(AgentChannel.socketName).path); \(link) new --model \(model) '\(ask)'"),
+            AllowUntilDone(),
+            Expect("a new tab in front, Arsenal off, on \(model)", found: { story in try? story.activeChat().storyTitle }) { story in
+                let chat = try story.activeChat()
+                return chat !== (try AgentCast.of(story).chat("a")) && chat.arsenal == nil && (chat.storyModel ?? model) == model
+            },
+            Expect("its message sent and answered", timeout: .seconds(120), found: { story in (story.app.chat?.rows ?? []).last?.text }) { story in
+                let rows = story.app.chat?.rows ?? []
+                return rows.contains { $0.kind == "user" && $0.text == ask } && rows.contains { $0.kind == "assistant" && $0.text.lowercased().contains("pong") }
+            },
             Do("off again") { story in
                 unsetenv("KORE_AGENT_SOCKET")
                 AgentCast.of(story).finish()

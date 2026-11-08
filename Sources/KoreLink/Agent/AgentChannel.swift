@@ -38,6 +38,14 @@ package final class AgentChannel {
     private var strikesLeft: [String: RateLimiter] = [:]
     private var logBudgets: [String: RateLimiter] = [:]
     private var throttleLogged: [String: Date] = [:]
+    /// Drive's limits per caller: messages a minute, new chats an hour, and the chats it made
+    /// that are open now.
+    static let sendsPerMinute = 10
+    static let newPerHour = 3
+    static let madeOpen = 4
+    private var sendBudgets: [String: RateLimiter] = [:]
+    private var newBudgets: [String: RateLimiter] = [:]
+    private var made: [String: NSHashTable<Chat>] = [:]
     private var dirty = Set<String>()
     private var flushDue = false
     private var quitObserver: NSObjectProtocol?
@@ -403,7 +411,7 @@ package final class AgentChannel {
             let data = AgentReads.history(workspace, query: args.query, archived: args.archived ?? false, offset: args.offset ?? 0)
             send(client, AgentResult(id: id, ok: true, data: data))
         case AgentCommand.options.name:
-            guard let chat = ownChat(args, client, id) else { return nil }
+            guard let chat = changeable(args, client, id) else { return nil }
             let o = chat.arsenalOptions
             send(client, AgentResult(id: id, ok: true, data: AgentOptions(
                 chat: chat.id.uuidString,
@@ -411,7 +419,7 @@ package final class AgentChannel {
                 modes: o.modes.map { .init(id: $0.id, label: $0.label, allowed: $0.allowed) }, mode: o.mode, fast: o.fast)))
             return chat.id.uuidString
         case AgentCommand.rename.name, AgentCommand.model.name, AgentCommand.effort.name, AgentCommand.mode.name:
-            guard let chat = ownChat(args, client, id) else { return nil }
+            guard let chat = changeable(args, client, id) else { return nil }
             guard let value = args.to, !value.isEmpty, value.utf8.count <= 1024 else {
                 fail(client, id, .invalid, "Say what to set it to.")
                 return chat.id.uuidString
@@ -425,7 +433,7 @@ package final class AgentChannel {
             done(outcome, chat, client, id)
             return chat.id.uuidString
         case AgentCommand.fast.name:
-            guard let chat = ownChat(args, client, id) else { return nil }
+            guard let chat = changeable(args, client, id) else { return nil }
             guard let on = args.on else {
                 fail(client, id, .invalid, "Say on or off.")
                 return chat.id.uuidString
@@ -433,8 +441,44 @@ package final class AgentChannel {
             done(chat.arsenalFast(on), chat, client, id)
             return chat.id.uuidString
         case AgentCommand.compact.name:
-            guard let chat = ownChat(args, client, id) else { return nil }
+            guard let chat = changeable(args, client, id) else { return nil }
             done(chat.arsenalCompact(), chat, client, id)
+            return chat.id.uuidString
+        case AgentCommand.new.name:
+            return newChat(args, client, id)
+        case AgentCommand.send.name:
+            guard let chat = other(args, client, id) else { return nil }
+            guard let text = args.text, text.utf8.count <= Self.textMax else {
+                fail(client, id, .invalid, "Say the message, \(Self.textMax / 1024) KiB at most.")
+                return chat.id.uuidString
+            }
+            guard sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].take() else {
+                fail(client, id, .limit, "\(Self.sendsPerMinute) messages a minute at most.")
+                return chat.id.uuidString
+            }
+            done(chat.arsenalSend(text, from: callerName(client)), chat, client, id)
+            return chat.id.uuidString
+        case AgentCommand.stop.name:
+            guard let chat = other(args, client, id) else { return nil }
+            let running = chat.isBusy
+            chat.stop()
+            send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chat.id.uuidString, message: running ? "Stopped." : "Nothing was running.")))
+            return chat.id.uuidString
+        case AgentCommand.showTab.name:
+            guard let chat = changeable(args, client, id) else { return nil }
+            guard let workspace = AgentReads.workspace(of: chat), workspace.arsenalShow(chat) else {
+                fail(client, id, .noChat, "That chat has no tab of its own (it's on a board).")
+                return chat.id.uuidString
+            }
+            send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chat.id.uuidString, message: "In front.")))
+            return chat.id.uuidString
+        case AgentCommand.answer.name:
+            guard let chat = other(args, client, id) else { return nil }
+            guard let card = args.card, card.utf8.count <= 256, (args.answers ?? []).allSatisfy({ $0.utf8.count <= 4096 }), (args.answers ?? []).count <= 16 else {
+                fail(client, id, .invalid, "Name the card, and give an answer per question or deny.")
+                return chat.id.uuidString
+            }
+            done(chat.arsenalAnswer(card, args.answers ?? [], deny: args.deny ?? false), chat, client, id)
             return chat.id.uuidString
         default:
             fail(client, id, .unknownCommand, Self.message(.unknownCommand))
@@ -442,14 +486,90 @@ package final class AgentChannel {
         return nil
     }
 
-    /// The chat an Own command names (`.` when none is named), which has to be the caller's own.
-    private func ownChat(_ args: AgentArgs, _ client: Client, _ id: String) -> Chat? {
+    /// The longest message a caller may send.
+    static let textMax = 64 * 1024
+
+    /// The chat a change names (`.` when none is named): the caller's own, or with Drive one it may drive.
+    private func changeable(_ args: AgentArgs, _ client: Client, _ id: String) -> Chat? {
         guard let chat = resolve(args.chat ?? ".", client, id) else { return nil }
-        guard chat.id.uuidString == client.chat else {
+        if chat.id.uuidString == client.chat { return chat }
+        return drivable(chat, client, id)
+    }
+
+    /// A chat other than the caller's own, that it may drive: a message, a stop or an answer to
+    /// itself would come from inside its own turn.
+    private func other(_ args: AgentArgs, _ client: Client, _ id: String) -> Chat? {
+        guard let chat = resolve(args.chat, client, id) else { return nil }
+        guard chat.id.uuidString != client.chat else {
+            fail(client, id, .refused, "Not this chat: it's the one asking.")
+            return nil
+        }
+        return drivable(chat, client, id)
+    }
+
+    /// Drive reaches any chat it can read whose mode is at or below its own (the owner's rule,
+    /// 2026-11-08: "any chat at its level"). What it can read is Watch's limit.
+    private func drivable(_ chat: Chat, _ client: Client, _ id: String) -> Chat? {
+        guard tier(client) >= .drive, let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }) else {
             fail(client, id, .notOwn, "Own changes only this chat.")
             return nil
         }
+        guard chat.noFreer(than: own) else {
+            fail(client, id, .notOwn, "That chat's mode is above this one's: only you drive it.")
+            return nil
+        }
         return chat
+    }
+
+    /// The caller as the receiving chat names it: its title in quotes, and its short id, which
+    /// no title can be or fake ("sent by you" can't be made).
+    private func callerName(_ client: Client) -> String {
+        guard let chat = client.chat, let own = AgentReads.chatsByID()[chat] else { return "an agent" }
+        let title = AgentReads.title(own.title).filter { !"“”\"\n\r".contains($0) }.prefix(60)
+        return "“\(title)” · \(AgentReads.short(chat))"
+    }
+
+    /// A new chat in the caller's window, in front, at or below its mode; its first message, if given.
+    private func newChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let window = AgentReads.workspace(of: own) else {
+            fail(client, id, .noWindow, "Only a chat in Kore opens chats, in its own window.")
+            return nil
+        }
+        let mine = made[client.key, default: .weakObjects()]
+        made[client.key] = mine
+        let open = AgentReads.chatsByID()
+        guard mine.allObjects.filter({ open[$0.id.uuidString] != nil }).count < Self.madeOpen else {
+            fail(client, id, .limit, "\(Self.madeOpen) chats this one opened are open: close one first.")
+            return nil
+        }
+        if let text = args.text, text.utf8.count > Self.textMax {
+            fail(client, id, .invalid, "A message can be \(Self.textMax / 1024) KiB at most.")
+            return nil
+        }
+        // Spent only by a chat that opens: a mode refused costs nothing.
+        var budget = newBudgets[client.key, default: RateLimiter(limit: Self.newPerHour, per: 3600)]
+        guard budget.take() else {
+            fail(client, id, .limit, "\(Self.newPerHour) new chats an hour at most.")
+            return nil
+        }
+        switch window.arsenalNewChat(provider: args.provider ?? own.provider.id, model: args.model, mode: args.mode, under: own) {
+        case .failure(let refusal):
+            fail(client, id, .refused, refusal.message)
+            return nil
+        case .success(let chat):
+            newBudgets[client.key] = budget
+            mine.add(chat)
+            var message = "Opened a \(chat.provider.name) chat."
+            if let text = args.text, !text.isEmpty {
+                switch chat.arsenalSend(text, from: callerName(client)) {
+                case .success: message += " Sent."
+                case .failure(let refusal): message += " " + refusal.message
+                }
+            }
+            let chatId = chat.id.uuidString
+            send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
+            return chatId
+        }
     }
 
     private func done(_ outcome: Result<String, ArsenalRefusal>, _ chat: Chat, _ client: Client, _ id: String) {

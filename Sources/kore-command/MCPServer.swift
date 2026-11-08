@@ -61,6 +61,25 @@ enum MCPServer {
             description: "Lower this chat's mode, to one kore_options marks allowed. Only the user raises a mode (Own access).",
             args: [("to", "string", "The mode's id or label.")], required: ["to"]),
         Tool(name: "kore_compact", command: "chat.compact", description: "Compact this chat once the current turn ends (Own access).", args: [], required: []),
+        Tool(
+            name: "kore_new_chat", command: "chat.new",
+            description: "Open a new chat in this window, in front, at or below this chat's mode, with a first message if given (Drive access).",
+            args: [
+                ("provider", "string", "claude or codex (default: this chat's)."), ("model", "string", "A model id."),
+                ("mode", "string", "A mode at or below this chat's."), ("text", "string", "The first message."),
+            ], required: []),
+        Tool(
+            name: "kore_send", command: "chat.send", description: "Send a message to another chat at or below this chat's mode; queued while it works (Drive access).",
+            args: [chatArg, ("text", "string", "The message.")], required: ["chat", "text"]),
+        Tool(name: "kore_stop", command: "chat.stop", description: "Stop another chat's turn (Drive access).", args: [chatArg], required: ["chat"]),
+        Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Drive access).", args: [chatArg], required: ["chat"]),
+        Tool(
+            name: "kore_answer", command: "cards.answer",
+            description: "Answer another chat's question card (kore_pending lists them), one answer per question, or deny any card. Only the user approves (Drive access).",
+            args: [
+                chatArg, ("card", "string", "The card's id."), ("answers", "array", "One option label (or typed text) per question, in order."),
+                ("deny", "boolean", "Deny the card instead."),
+            ], required: ["chat", "card"]),
     ]
 
     static func run() -> Int32 {
@@ -98,7 +117,9 @@ enum MCPServer {
 
     static func describe(_ tool: Tool) -> Object {
         var properties: Object = [:]
-        for (name, type, description) in tool.args { properties[name] = ["type": type, "description": description] }
+        for (name, type, description) in tool.args {
+            properties[name] = type == "array" ? ["type": type, "items": ["type": "string"], "description": description] : ["type": type, "description": description]
+        }
         return [
             "name": tool.name, "description": tool.description,
             "inputSchema": ["type": "object", "properties": properties, "required": tool.required],
@@ -109,7 +130,9 @@ enum MCPServer {
         guard let tool = tools.first(where: { $0.name == name }) else { return failure("No such tool: \(name).") }
         var args = arguments.filter { key, _ in tool.args.contains { $0.0 == key } }
         // Own's tools act on the chat this runs in.
-        if tool.command.hasPrefix("chat."), tool.command != "chat.show" { args["chat"] = "." }
+        if ["chat.options", "chat.rename", "chat.model", "chat.effort", "chat.fast", "chat.mode", "chat.compact"].contains(tool.command) {
+            args["chat"] = args["chat"] ?? "."
+        }
         do {
             let client = try AgentClient()
             let data = try client.run(tool.command, args)

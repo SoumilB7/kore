@@ -106,6 +106,9 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var lastTurnCompleted = false
     /// Arsenal's Own asked for a compaction during a turn (its agent asks from inside one).
     @ObservationIgnored var compactAfterTurn = false
+    /// The user said Always allow in this chat since Kore opened it: the CLI keeps a rule Arsenal
+    /// can't see, so a chat without one doesn't drive it (`noFreer(than:)`).
+    @ObservationIgnored package var alwaysAllowed = false
     @ObservationIgnored private var compactedInTurn = false
     /// Stop came while a compaction ran: however it ends short of done is said as stopped, not
     /// failed. Both CLIs report the cancel as a failure (`compactionFailed`).
@@ -1790,6 +1793,7 @@ package final class Chat: Identifiable {
     }
 
     package func answer(_ approval: Approval, _ decision: Decision) {
+        if case .allowAlways = decision { alwaysAllowed = true }
         approvals.remove(approval.id)
         transcript.approvalSettled(approval.id)
         if case .deny = decision { transcript.actionDenied() }

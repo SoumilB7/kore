@@ -34,28 +34,55 @@ package struct ArsenalOptions: Sendable {
 }
 
 extension Chat {
-    /// How far a mode lets the CLI go without asking, lowest first: planning, asking, editing,
-    /// approving by itself, everything.
+    /// How far a mode lets the CLI go without asking, lowest first: planning; asking for each
+    /// command (Claude's Manual, and Don't ask, which refuses what Manual would ask); editing; Codex's
+    /// Ask for approval, which runs commands in the workspace without asking; approving by itself;
+    /// everything. Codex's modes sit on rungs of their own, so none is a step down from another.
     static func modeLevel(_ id: String) -> Int {
         switch id {
         case "plan": 0
-        case "default", "askForApproval": 1
+        case "default", "dontAsk": 1
         case "acceptEdits": 2
-        case "auto", "approveForMe": 3
-        default: 4
+        case "askForApproval": 3
+        case "auto", "approveForMe": 4
+        default: top
         }
+    }
+
+    /// Bypass permissions, Full access, and any mode Kore doesn't know.
+    static let top = 5
+
+    /// The mode that says what the CLI may do on its own. Codex's Plan switch changes how it works
+    /// but restricts nothing (its sandbox and approvals stay the permissions'), so a Codex chat
+    /// ranks by its permissions; Claude's Plan is a mode of its own. `unreviewed`: planning with
+    /// "Allow commands in Plan" on, where Kore allows each permission itself.
+    var arsenalRank: (id: String, unreviewed: Bool) {
+        let id = provider.planToggle == nil ? controls.activeMode.id : controls.permissionsMode.id
+        return (id, controls.planning && controls.planAllow)
     }
 
     /// Whether Arsenal may move this chat to `id`: a mode at or below the one it's in, unless the
     /// move would let the CLI do without the user what it couldn't before. Plan with "Allow commands
     /// in Plan" on approves commands itself; Edit automatically from Auto drops Auto's review of
-    /// edits. Those stay the user's.
+    /// edits. Those stay the user's. A Codex chat compares its permissions (`arsenalRank`).
     func arsenalMayMove(to id: String) -> Bool {
-        let now = controls.activeMode.id
+        if id == "plan" { return !controls.planAllow || controls.planning }
+        let now = arsenalRank.id
         guard Self.modeLevel(id) <= Self.modeLevel(now) else { return false }
-        if id == "plan", controls.planAllow, now != "plan" { return false }
         if id == "acceptEdits", now == "auto" { return false }
         return true
+    }
+
+    /// A chat at `id` can do on its own no more than one at `other` can: lower on the ladder, with
+    /// an unreviewed Plan above all but the top (and under only Plan or another unreviewed one no
+    /// higher), and Edit automatically not under Auto (it accepts edits Auto would review). Ids as
+    /// `arsenalRank` gives them.
+    package static func noFreer(_ id: String, unreviewed: Bool, than other: String, unreviewed otherUnreviewed: Bool) -> Bool {
+        if modeLevel(other) >= top { return true }
+        if otherUnreviewed { return modeLevel(id) == 0 && !unreviewed || unreviewed && modeLevel(id) <= modeLevel(other) }
+        if unreviewed { return false }
+        if id == "acceptEdits", other == "auto" { return false }
+        return modeLevel(id) <= modeLevel(other)
     }
 
     package var arsenalOptions: ArsenalOptions {
