@@ -1,4 +1,5 @@
 import Foundation
+import KoreTrust
 
 // KoreNet's devices (phase 18): this Mac, a box, a phone. Each is a node with a stable id; a box
 // set up over SSH before KoreNet keeps an id made from its alias (`ssh-<alias>`) until its first
@@ -28,20 +29,6 @@ package struct NodeID: Codable, Hashable, Sendable, Comparable, CustomStringConv
     }
 
     package static func < (a: NodeID, b: NodeID) -> Bool { a.raw < b.raw }
-}
-
-package enum NodeKind: String, Codable, Sendable {
-    case mac, box, phone
-}
-
-/// What a node may do on this one.
-package struct Ability: OptionSet, Codable, Hashable, Sendable {
-    package let rawValue: Int
-    package init(rawValue: Int) { self.rawValue = rawValue }
-
-    package static let read = Ability(rawValue: 1 << 0)
-    package static let ask = Ability(rawValue: 1 << 1)
-    package static let run = Ability(rawValue: 1 << 2)
 }
 
 package struct Node: Codable, Hashable, Sendable, Identifiable {
