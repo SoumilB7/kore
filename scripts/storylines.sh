@@ -9,7 +9,8 @@
 #                         [--real-input | --real-input-dry [--real-keys]]
 #
 # Each run gets a folder of its own ($TMPDIR/kore-storylines/<time>, or --out) for its scratch
-# folders, report.json / report.txt, event logs, dumps and failure snapshots. The app's settings
+# folders, report.json / report.txt, event logs, dumps and failure snapshots; an --out inside a
+# git work tree is refused (quick open would list only what git shows there). The app's settings
 # live in the `kore-storylines` defaults domain, emptied first, and its Application Support, Logs
 # and Caches in <out>/kore-data (`KoreFolders`), so the owner's Kore settings and folders are never
 # read or written. Chats talk to the scripted CLI unless --cli process (recorded cassettes,
@@ -38,6 +39,16 @@ while (( $# )); do
   esac
   shift
 done
+# An --out inside a git work tree breaks quick open: its folders are listed by `git ls-files
+# --exclude-standard`, which hides whatever that repo ignores (a clone's runs/, say).
+if [[ -n $out ]]; then
+  probe=$out
+  while [[ ! -d $probe ]]; do probe=${probe:h}; done
+  if [[ $(git -C "$probe" rev-parse --is-inside-work-tree 2>/dev/null) == true ]]; then
+    echo "storylines.sh: --out $out is inside a git work tree, where quick open lists only what git shows; use a folder outside any repo (the default is under \$TMPDIR)" >&2
+    exit 2
+  fi
+fi
 # kore-command: the `kore` binary the agent channel's storylines run.
 products=(kore-storylines kore-command)
 (( process )) && products+=(kore-fake-cli)
