@@ -111,6 +111,8 @@ package final class HostDaemon {
         idleStops.removeValue(forKey: hc.id)?.cancel()
         hc.sleep()
         broadcast(chats: [hc])
+        // The CLI's pipes and the chat's state go with it: their memory goes back once they have.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { MainActor.assumeIsolated { HostMemory.releaseSoon() } }
     }
 
     /// After an event or a command: a chat with nothing to do stops its CLI after `idleAfter`; one
@@ -145,6 +147,7 @@ package final class HostDaemon {
 
     func ended(_ connection: LinkClient) {
         connections.removeAll { $0 === connection }
+        HostMemory.releaseSoon()
     }
 
     /// One connection per grant: a newer one for a grant already connected is turned away.
@@ -349,6 +352,12 @@ package final class HostDaemon {
     /// the CLI has.
     private func account(_ kind: ControlKind, _ args: ControlArgs, id: String, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
         guard let provider = args.provider.flatMap(Registry.provider) else { return .init(id: id, ok: false, code: .invalid, message: "No such CLI.") }
+        // Each call runs the CLI for a moment: its memory goes back once it has answered.
+        let answer = reply
+        let reply: @MainActor (LinkMessage.Result) -> Void = { result in
+            answer(result)
+            HostMemory.releaseSoon()
+        }
         let ops = provider.account
         let cli = provider.id
         switch kind {

@@ -110,6 +110,8 @@ package enum HostService {
 
         [Service]
         Type=notify
+        # The allocator hands freed pages back at once, so an idle box stays small.
+        Environment=MIMALLOC_PURGE_DELAY=0
         ExecStart=\(executable) run
         Restart=on-failure
         RestartSec=2
