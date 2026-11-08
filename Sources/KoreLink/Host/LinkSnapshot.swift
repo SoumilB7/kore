@@ -230,10 +230,13 @@ enum LinkSnapshot {
 
     static func meta(_ chat: Chat) -> ChatMeta { meta(chat, full: false) }
 
-    /// `full`: with the run's full control, the chat's controls, rescue, wider `can` and Arsenal too.
-    static func meta(_ chat: Chat, full: Bool) -> ChatMeta {
-        var made = baseMeta(chat, full: full)
-        guard full else { return made }
+    static func meta(_ chat: Chat, full: Bool) -> ChatMeta { meta(chat, view: full ? .full : .standard) }
+
+    /// With full control or a phone's ask: the chat's controls, rescue, wider `can` and Arsenal
+    /// too. Full control's modes go up to Auto; ask's stay as standard's (a raise is signed).
+    static func meta(_ chat: Chat, view: LinkFeed.View) -> ChatMeta {
+        var made = baseMeta(chat, full: view == .full)
+        guard view != .standard else { return made }
         let c = chat.linkControlState
         made.controls = ChatControls(
             modelId: c.modelId, effort: c.effort, fast: c.fast, fastOffered: c.fastOffered, planAllow: c.planAllow, contextPct: c.contextPct,

@@ -53,6 +53,8 @@ object Control {
         if (blobs.isNotEmpty()) put("blobs", JsonArray(blobs.map(::JsonPrimitive)))
     }
     fun cancelContinue(chatId: String) = cmd("chat.cancelContinue") { put("chatId", chatId) }
+    /** The chat's draft as typed here: the device's composer shows it ("" clears it). */
+    fun setDraft(chatId: String, text: String) = cmd("chat.setDraft") { put("chatId", chatId); put("text", text) }
     // The basics (link 1.0).
 
     fun send(chatId: String, text: String, blobs: List<String> = emptyList()) = cmd("chat.send") {

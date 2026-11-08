@@ -337,7 +337,7 @@ struct HostTests {
         #expect(standard?.refused == true)
     }
 
-    @Test func aFullGrantGetsTheControlsAndTheBoxsModels() async throws {
+    @Test func fullAndAskGrantsGetTheControlsAndTheBoxsModels() async throws {
         let rig = try HostRig()
         defer { rig.finish() }
         try rig.host.start()
@@ -346,7 +346,8 @@ struct HostTests {
         let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: "claude", modelId: "haiku"))
         // Before the CLI runs: the model it will start on, and no list.
         #expect(HostMeta.meta(hc, raise: true).controls?.modelId == "haiku")
-        #expect(HostMeta.meta(hc).controls == nil)
+        // A phone (ask) is sent them too: it changes model, effort and the draft.
+        #expect(HostMeta.meta(hc).controls?.modelId == "haiku")
         _ = rig.host.apply(.send(chatId: hc.id, text: "hi"), id: "1", control: .act) { _ in }
         try await until { hc.entries.contains { $0.kind == .answer } }
         let models = [
@@ -370,10 +371,12 @@ struct HostTests {
         #expect(hc.record.effort == "high")
         #expect(rig.host.apply(.control(.chatSetEffort, ControlArgs(chatId: hc.id, level: "max")), id: "3", control: .act) { _ in }?.code == .invalid)
 
-        // A full grant's snapshot carries the controls and the list; an act grant's neither.
+        // A full grant's snapshot carries the controls and the list; an act grant's (a phone) too;
+        // a watch grant's the controls only.
         let store = GrantStore(rig.paths.grants)
         let full = try store.allow("laptop", control: .full, socket: rig.paths.socket)
         let act = try store.allow("second", control: .act, socket: rig.paths.socket)
+        let watch = try store.allow("third", control: .watch, socket: rig.paths.socket)
         func snapshot(_ grant: Grant) async throws -> ([ChatMeta], LinkExtras?) {
             let client = try Client(rig.paths.socket)
             try await until { !client.got.isEmpty }
@@ -388,8 +391,10 @@ struct HostTests {
         #expect(fullExtras?.clis?.first?.models.map(\.id) == ["haiku", "other"])
         #expect(fullExtras?.clis?.first?.models.last?.fast == true)
         let (actChats, actExtras) = try await snapshot(act)
-        #expect(actChats.first?.controls == nil)
-        #expect(actExtras?.clis == nil)
+        #expect(actChats.first?.controls?.effort == "high")
+        #expect(actExtras?.clis?.first?.models.map(\.id) == ["haiku", "other"])
+        let (_, watchExtras) = try await snapshot(watch)
+        #expect(watchExtras?.clis == nil)
 
         // The list and the chat's last controls outlive a restart: a fresh connection has them at once.
         rig.restart()

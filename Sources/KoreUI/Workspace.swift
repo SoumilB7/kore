@@ -1338,6 +1338,7 @@ package final class Workspace {
             guard tab.agent == nil, let chat = tab.chat else { continue }
             chat.onDraftChanged = { [weak self, weak chat] in
                 guard let self, let chat else { return }
+                if LinkTaps.on { LinkTaps.draft?(chat) }
                 // A box keeps its chats' drafts (1.9).
                 if let services = chat.services as? BoxChatServices { return services.draftChanged(chat) }
                 rememberDraft(chat)

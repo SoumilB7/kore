@@ -154,9 +154,12 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
     fun show(build: Sheet.() -> Unit): Sheet {
         builder = build
         refresh()
-        if (!a.isFinishing) dialog.show()
+        // A builder that dismissed (its state was gone) leaves nothing to show: never an empty sheet.
+        if (!dismissed && !a.isFinishing) dialog.show()
         return this
     }
+
+    private var dismissed = false
 
     /** Draws the content again (the Mac's state changed under it). */
     fun refresh() {
@@ -165,7 +168,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
         builder?.invoke(this)
     }
 
-    fun dismiss() = runCatching { dialog.dismiss() }.let { }
+    fun dismiss() { dismissed = true; runCatching { dialog.dismiss() } }
     fun onDismiss(go: () -> Unit) = dialog.setOnDismissListener { go() }
 
     /** The one quiet line: a refusal or what just happened. Empty hides it. */

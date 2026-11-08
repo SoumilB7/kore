@@ -154,6 +154,7 @@ class ChatActivity : NodeActivity() {
     }
 
     override fun onStop() {
+        actions.leave()
         openTimeout?.cancel()
         follow?.cancel()
         results?.cancel()

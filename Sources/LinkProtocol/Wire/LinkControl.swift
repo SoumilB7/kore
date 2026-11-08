@@ -318,6 +318,9 @@ package struct ChatControls: Codable, Sendable, Equatable {
     /// 1.9 (a box): how many times the chat's kept draft changed (`setDraft`); absent before the
     /// first. The draft itself is read with the `draft` call, only when this moves.
     package var draftRev: Int?
+    /// The kept draft itself, for a client that can't `call` for it (a phone): sent with
+    /// `draftRev` ("" when there is none); absent when longer than `LinkPolicy.maxText`.
+    package var draft: String?
 
     package init(
         modelId: String?, effort: String?, fast: Bool?, fastOffered: Bool, planAllow: Bool, contextPct: Int?, autoCompactAt: Int?,

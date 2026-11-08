@@ -124,9 +124,17 @@ extension Chat {
 
     package func linkCancelContinue() { cancelContinue() }
 
-    /// The Mac's draft for this chat.
-    package var linkDraft: String { draft }
-    package func linkSetDraft(_ text: String) { draft = text }
+    /// The Mac's draft for this chat as one line of text: its command chip, then the draft.
+    package var linkDraft: String {
+        guard let command else { return draft }
+        return "/" + command.name + (draft.isEmpty ? "" : " " + draft)
+    }
+
+    /// Another device's draft: the composer shows it at once, a leading command in the chip.
+    package func linkSetDraft(_ text: String) {
+        guard text != linkDraft else { return }
+        restoreDraft(text, commands: controls.commands)
+    }
 
     /// The conversation before a compaction, ten turns at a time.
     package func linkLoadEarlier() { loadEarlierConversation() }

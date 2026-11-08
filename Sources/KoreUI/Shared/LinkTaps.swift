@@ -15,6 +15,8 @@ package enum LinkTaps {
     package static var dirty: (() -> Void)?
     /// A window opened or closed (its tabs are observed), while `on`.
     package static var layout: (() -> Void)?
+    /// A chat's composer changed (its draft or command), while `on`: the link keeps it soon.
+    package static var draft: ((Chat) -> Void)?
     /// The doorbell: the app sets it at launch; `AppDelegate`'s Apple Event handler calls it on
     /// a ring. Nothing runs until then.
     package static var doorbell: ((_ event: NSAppleEventDescriptor, _ reply: NSAppleEventDescriptor) -> Void)?

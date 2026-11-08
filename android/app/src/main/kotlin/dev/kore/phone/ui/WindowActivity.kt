@@ -97,7 +97,7 @@ class WindowActivity : NodeActivity() {
 
     private fun chatRow(chat: JsonObject?, fallback: String?, board: Array<String>? = null): View? {
         if (chat == null) return null
-        val (dot, word) = stateLook(chat.str("state"))
+        val (dot, word) = rowLook(chat.str("state"))
         val v = row(chat.str("title") ?: fallback ?: "Chat", word, dot, providerMark(chat.str("provider"))) {
             startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", chat.str("id")).apply { if (board != null) putExtra("board", board) })
         }

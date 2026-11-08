@@ -8,8 +8,8 @@ import src
 @MainActor
 package protocol LinkFeedSource: AnyObject {
     func chats() -> [String: Chat]
-    func windows(full: Bool) -> [LinkWindow]
-    func meta(_ chat: Chat, full: Bool) -> ChatMeta
+    func windows(view: LinkFeed.View) -> [LinkWindow]
+    func meta(_ chat: Chat, view: LinkFeed.View) -> ChatMeta
     func extras(_ chats: [Chat]) -> LinkExtras
 }
 
@@ -18,8 +18,8 @@ package protocol LinkFeedSource: AnyObject {
 package final class LinkSnapshotSource: LinkFeedSource {
     package init() {}
     package func chats() -> [String: Chat] { LinkSnapshot.chatsByID() }
-    package func windows(full: Bool) -> [LinkWindow] { LinkSnapshot.workspaces().map { LinkSnapshot.window($0, full: full) } }
-    package func meta(_ chat: Chat, full: Bool) -> ChatMeta { LinkSnapshot.meta(chat, full: full) }
+    package func windows(view: LinkFeed.View) -> [LinkWindow] { LinkSnapshot.workspaces().map { LinkSnapshot.window($0, full: view != .standard) } }
+    package func meta(_ chat: Chat, view: LinkFeed.View) -> ChatMeta { LinkSnapshot.meta(chat, view: view) }
     package func extras(_ chats: [Chat]) -> LinkExtras { LinkExtras(mac: LinkSnapshot.mac(), clis: LinkSnapshot.clis(chats)) }
 }
 
@@ -94,6 +94,11 @@ package final class LinkFeed {
     /// After the last phone goes, attention is kept this long for its resume.
     package static var keepAfterPhones: TimeInterval = 120
 
+    /// What a client is sent: the doorbell's standard grant (1.1's state), a phone's ask (the
+    /// controls it may change, the Mac's recents and Arsenal tiers, the CLIs' models without their
+    /// accounts; its modes as ask allows them, a raise still signed), or full control.
+    package enum View: CaseIterable, Sendable { case standard, ask, full }
+
     /// One client as the feed sees it.
     @MainActor
     package final class Client {
@@ -124,6 +129,8 @@ package final class LinkFeed {
             var known = Set<String>()
         }
 
+        package var view: View { full ? .full : phone ? .ask : .standard }
+
         package init(sink: LinkSink, full: Bool, phone: Bool, sweeps: Bool = false) {
             self.sweeps = sweeps
             self.sink = sink
@@ -140,10 +147,10 @@ package final class LinkFeed {
     /// Wire entries already made, per chat, by entry id: re-made only from the first changed one.
     private var cache: [String: (epoch: String, entries: [String: LinkEntry])] = [:]
     private var dirtyChats = Set<String>()
-    /// Chats whose meta is observed now, per flavour (full or not).
-    private var observed: [Bool: Set<String>] = [true: [], false: []]
+    /// Chats whose meta is observed now, per view.
+    private var observed: [View: Set<String>] = [.standard: [], .ask: [], .full: []]
     private var layoutDirty = true
-    private var layoutObserved: [Bool: Bool] = [true: false, false: false]
+    private var layoutObserved: [View: Bool] = [:]
     private var extrasDirty = true
     private var extrasObserved = false
     private var attentionObserved = Set<String>()
@@ -168,10 +175,22 @@ package final class LinkFeed {
     /// hand, so they never take the running app's.
     private let taps: Bool
 
+    /// The Mac's drafts as phones see them (kept once typing rests).
+    let drafts = LinkDrafts()
+
     package init(source: any LinkFeedSource, taps: Bool = true) {
         self.source = source
         self.taps = taps
+        drafts.changed = { [weak self] id in
+            self?.dirtyChats.insert(id)
+            self?.schedule(now: false)
+        }
     }
+
+    /// A chat's composer changed (`LinkTaps.draft`; tests call it by hand).
+    package func draftTyped(_ chat: Chat) { drafts.typed(chat) }
+    /// Keeps the drafts typed so far now, without waiting for typing to rest (tests).
+    package func keepDrafts() { drafts.keep() }
 
     // MARK: Clients
 
@@ -234,6 +253,7 @@ package final class LinkFeed {
         LinkTaps.event = { [weak self] chat, event in self?.noted(chat, event) }
         LinkTaps.dirty = { [weak self] in self?.transcriptMarked() }
         LinkTaps.layout = { [weak self] in self?.markLayout() }
+        LinkTaps.draft = { [weak self] chat in self?.draftTyped(chat) }
         LinkTaps.on = true
     }
 
@@ -247,10 +267,12 @@ package final class LinkFeed {
             LinkTaps.event = nil
             LinkTaps.dirty = nil
             LinkTaps.layout = nil
+            LinkTaps.draft = nil
         }
+        drafts.reset()
         cache = [:]
-        observed = [true: [], false: []]
-        layoutObserved = [true: false, false: false]
+        observed = [.standard: [], .ask: [], .full: []]
+        layoutObserved = [:]
         extrasObserved = false
         attentionObserved = []
         dirtyChats = []
@@ -341,18 +363,18 @@ package final class LinkFeed {
     }
 
     /// A chat's meta may have changed (Observation, on whatever thread changed it).
-    private nonisolated func observedChange(_ id: String, full: Bool) {
+    private nonisolated func observedChange(_ id: String, view: View) {
         Self.onMain { [weak self] in
             guard let self else { return }
-            self.observed[full]?.remove(id)
+            self.observed[view]?.remove(id)
             self.dirtyChats.insert(id)
             self.schedule(now: false)
         }
     }
 
-    private nonisolated func observedLayout(full: Bool) {
+    private nonisolated func observedLayout(view: View) {
         Self.onMain { [weak self] in
-            self?.layoutObserved[full] = false
+            self?.layoutObserved[view] = false
             self?.markLayout()
         }
     }
@@ -444,21 +466,21 @@ package final class LinkFeed {
         let watching = serving.filter(\.onScreen)
         guard !watching.isEmpty else { return }
 
-        for id in chats.keys where observed[false]?.contains(id) != true && observed[true]?.contains(id) != true { dirtyChats.insert(id) }
+        for id in chats.keys where !View.allCases.contains(where: { observed[$0]?.contains(id) == true }) { dirtyChats.insert(id) }
         let chatIds = Set(chats.keys)
-        var windows: [Bool: [LinkWindow]] = [:]
-        var metas: [Bool: [ChatMeta]] = [:]
+        var windows: [View: [LinkWindow]] = [:]
+        var metas: [View: [ChatMeta]] = [:]
         var extras: LinkExtras?
         /// Whether a client gets every chat this tick: it has nothing yet, or it's the companion's second.
         func wantsAll(_ client: Client) -> Bool { client.needsAll || (sweeping && client.sweeps) }
-        for full in [false, true] {
-            let group = watching.filter { $0.full == full }
+        for view in View.allCases {
+            let group = watching.filter { $0.view == view }
             guard !group.isEmpty else { continue }
             let all = group.contains(where: wantsAll)
-            if layoutDirty || all { windows[full] = observedWindows(full: full) }
+            if layoutDirty || all { windows[view] = observedWindows(view: view) }
             let ids = all ? chatIds : dirtyChats.intersection(chatIds)
-            metas[full] = ids.sorted().compactMap { id in chats[id].map { observedMeta($0, id: id, full: full) } }
-            if full, extrasDirty || all { extras = observedExtras(Array(chats.values)) }
+            metas[view] = ids.sorted().compactMap { id in chats[id].map { observedMeta($0, id: id, view: view) } }
+            if view != .standard, extrasDirty || all { extras = extras ?? observedExtras(Array(chats.values)) }
         }
         // Followed transcripts: from the first entry changed since the last look.
         let followed = watching.reduce(into: Set<String>()) { $0.formUnion($1.follows) }
@@ -478,9 +500,15 @@ package final class LinkFeed {
                 tx.append(slice)
             }
             // A phone takes the chats that changed; the companion's second (or a first batch) takes them all.
-            var chatsFor = metas[client.full] ?? []
+            var chatsFor = metas[client.view] ?? []
             if !wantsAll(client) { chatsFor = chatsFor.filter { dirtyChats.contains($0.id) } }
-            let batch = LinkBatch(windows: windows[client.full], chats: chatsFor, chatIds: chatIds, tx: tx, extras: client.full ? extras : nil)
+            let sent: LinkExtras? =
+                switch client.view {
+                case .standard: nil
+                case .ask: extras.map(Self.asked)
+                case .full: extras
+                }
+            let batch = LinkBatch(windows: windows[client.view], chats: chatsFor, chatIds: chatIds, tx: tx, extras: sent)
             client.needsAll = false
             client.batches += 1
             client.sink.apply(batch)
@@ -491,18 +519,34 @@ package final class LinkFeed {
         cache = cache.filter { followed.contains($0.key) }
     }
 
-    private func observedMeta(_ chat: Chat, id: String, full: Bool) -> ChatMeta {
-        guard observed[full]?.contains(id) != true else { return source.meta(chat, full: full) }
-        observed[full]?.insert(id)
-        let source = source
-        return withObservationTracking { source.meta(chat, full: full) } onChange: { [weak self] in self?.observedChange(id, full: full) }
+    private func observedMeta(_ chat: Chat, id: String, view: View) -> ChatMeta {
+        var made: ChatMeta
+        if observed[view]?.contains(id) == true {
+            made = source.meta(chat, view: view)
+        } else {
+            observed[view]?.insert(id)
+            let source = source
+            made = withObservationTracking { source.meta(chat, view: view) } onChange: { [weak self] in self?.observedChange(id, view: view) }
+        }
+        // The draft as last kept, read outside Observation: typing on the Mac doesn't redo the meta.
+        if made.controls != nil {
+            let kept = drafts.kept(chat, id: id)
+            made.controls?.draftRev = kept.rev
+            made.controls?.draft = kept.text.utf8.count <= LinkPolicy.maxText ? kept.text : nil
+        }
+        return made
     }
 
-    private func observedWindows(full: Bool) -> [LinkWindow] {
-        guard layoutObserved[full] != true else { return source.windows(full: full) }
-        layoutObserved[full] = true
+    private func observedWindows(view: View) -> [LinkWindow] {
+        guard layoutObserved[view] != true else { return source.windows(view: view) }
+        layoutObserved[view] = true
         let source = source
-        return withObservationTracking { source.windows(full: full) } onChange: { [weak self] in self?.observedLayout(full: full) }
+        return withObservationTracking { source.windows(view: view) } onChange: { [weak self] in self?.observedLayout(view: view) }
+    }
+
+    /// A phone's extras: the CLIs' models without their accounts (accounts stay on the Mac).
+    static func asked(_ extras: LinkExtras) -> LinkExtras {
+        LinkExtras(mac: extras.mac, clis: extras.clis?.map { var cli = $0; cli.account = nil; return cli })
     }
 
     private func observedExtras(_ chats: [Chat]) -> LinkExtras {

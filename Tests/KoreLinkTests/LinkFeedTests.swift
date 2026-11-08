@@ -17,7 +17,7 @@ final class CountingSource: LinkFeedSource {
     private(set) var windowReads = 0
 
     func chats() -> [String: Chat] { all }
-    func windows(full: Bool) -> [LinkWindow] {
+    func windows(view: LinkFeed.View) -> [LinkWindow] {
         windowReads += 1
         return windowsList
     }
@@ -25,13 +25,15 @@ final class CountingSource: LinkFeedSource {
     /// context % do): the meta's title, by chat id.
     var unobserved: [String: String] = [:]
 
-    func meta(_ chat: Chat, full: Bool) -> ChatMeta {
+    func meta(_ chat: Chat, view: LinkFeed.View) -> ChatMeta {
         metaReads += 1
-        var made = LinkSnapshot.meta(chat, full: full)
+        var made = LinkSnapshot.meta(chat, view: view)
         if let title = unobserved[chat.id.uuidString] { made.title = title }
         return made
     }
-    func extras(_ chats: [Chat]) -> LinkExtras { LinkExtras(mac: nil, clis: nil) }
+    /// What the Mac adds for full control and a phone's ask (its recents, the CLIs).
+    var extrasMade = LinkExtras(mac: nil, clis: nil)
+    func extras(_ chats: [Chat]) -> LinkExtras { extrasMade }
 
     func add(_ provider: String = "claude") throws -> Chat {
         let chat = Chat(provider: try #require(Registry.provider(provider)), folder: URL(fileURLWithPath: "/tmp/korefeed-tests"))
@@ -244,5 +246,106 @@ struct LinkFeedTests {
         print("link feed: main-thread tick median, 1 phone \(String(format: "%.0f", one.median)) µs, 2 phones \(String(format: "%.0f", two.median)) µs")
         #expect(one.reads == two.reads)
         #expect(one.offMain && two.offMain)
+    }
+
+    /// A phone over KoreNet asks: it gets the controls it may change (model, effort, the draft,
+    /// Arsenal), the Mac's recents and the CLIs' models without their accounts, and its modes as
+    /// ask allows them. The doorbell's standard grant gets none of it.
+    @Test func aPhoneGetsTheControlsItMayChangeAndTheMacsRecents() throws {
+        let source = CountingSource()
+        let feed = LinkFeed(source: source, taps: false)
+        let chat = try source.add()
+        let account = LinkAccountState(
+            status: "signedIn", email: "owner@example.com", plan: nil, workspace: nil, method: nil, privacy: false, logins: [], methods: [],
+            workingChats: 0, flow: nil)
+        source.extrasMade = LinkExtras(
+            mac: MacState(recents: [.init(id: "r_1", name: "kore", path: "~/Code/Projects/kore")], canReopenWindow: true, stayAwake: nil, arsenalTiers: ["watch"]),
+            clis: [CLIState(provider: "claude", models: [.init(id: "haiku", name: "Haiku", efforts: [], fast: false, auto: false)], effortScale: [], account: account)])
+        let phone = KeptClient(), doorbell = KeptClient(), full = KeptClient()
+        let cp = phone.make(), cd = doorbell.make(phone: false), cf = full.make(full: true, phone: false)
+        for c in [cp, cd, cf] { feed.attach(c) }
+        feed.tick()
+        guard case .snapshot(_, _, let asked, let askedExtras)? = phone.messages.first,
+              case .snapshot(_, _, let standard, let standardExtras)? = doorbell.messages.first,
+              case .snapshot(_, _, let fully, let fullExtras)? = full.messages.first
+        else { Issue.record("no snapshots"); return }
+        let a = try #require(asked.first), d = try #require(standard.first), f = try #require(fully.first)
+        #expect(a.controls != nil && a.arsenal == "off" && a.can.rename == true)
+        #expect(d.controls == nil && d.arsenal == nil)
+        // Modes: a phone's as ask allows (a raise is signed), not full control's.
+        #expect(a.allowedModeIds == d.allowedModeIds)
+        #expect(f.controls != nil)
+        #expect(askedExtras?.mac?.recents.map(\.id) == ["r_1"] && askedExtras?.mac?.canReopenWindow == true)
+        #expect(askedExtras?.clis?.first?.models.map(\.id) == ["haiku"] && askedExtras?.clis?.first?.account == nil)
+        #expect(fullExtras?.clis?.first?.account?.email == "owner@example.com")
+        #expect(standardExtras == nil)
+        _ = chat
+        for c in [cp, cd, cf] { feed.detach(c) }
+    }
+
+    /// The Mac's draft reaches a phone once typing rests, with a count that moves per kept change;
+    /// typing alone sends nothing, and a draft past the link's cap isn't sent at all.
+    @Test func theMacsDraftReachesAPhoneOnceTypingRests() async throws {
+        let source = CountingSource()
+        let feed = LinkFeed(source: source, taps: false)
+        let chat = try source.add()
+        let phone = KeptClient()
+        let client = phone.make()
+        feed.attach(client)
+        feed.tick()
+        func draft(_ message: LinkMessage?) -> (String?, Int?) {
+            switch message {
+            case .snapshot(_, _, let chats, _)?, .delta(_, _, let chats?, _, _)?: (chats.first?.controls?.draft, chats.first?.controls?.draftRev)
+            default: (nil, nil)
+            }
+        }
+        // Opening: the composer as it is, before any count.
+        #expect(draft(phone.messages.first) == ("", nil))
+        // Typed on the Mac and kept: one delta, the text and count 1.
+        chat.draft = "half a thou"
+        feed.draftTyped(chat)
+        chat.draft = "half a thought"
+        feed.draftTyped(chat)
+        feed.keepDrafts()
+        feed.tick()
+        #expect(draft(phone.messages.last) == ("half a thought", 1))
+        let sent = phone.messages.count
+        // Kept again with nothing new: nothing goes.
+        feed.draftTyped(chat)
+        feed.keepDrafts()
+        feed.tick()
+        #expect(phone.messages.count == sent)
+        // Sent on the Mac: the draft clears there, and on the phone.
+        chat.draft = ""
+        feed.draftTyped(chat)
+        feed.keepDrafts()
+        feed.tick()
+        #expect(draft(phone.messages.last) == ("", 2))
+        // Past the cap: the count moves, the text stays off the link.
+        chat.draft = String(repeating: "x", count: LinkPolicy.maxText + 1)
+        feed.draftTyped(chat)
+        feed.keepDrafts()
+        feed.tick()
+        #expect(draft(phone.messages.last) == (nil, 3))
+        feed.detach(client)
+    }
+
+    /// A phone's `chat.setDraft` shows in the Mac's composer at once (its command in the chip), and
+    /// says the change as typing would, so the window keeps it and the link sends it on.
+    @Test func aPhonesDraftShowsInTheMacsComposer() throws {
+        let source = CountingSource()
+        let chat = try source.add()
+        var changes = 0
+        chat.onDraftChanged = { changes += 1 }
+        chat.linkSetDraft("left half typed on the phone")
+        #expect(chat.draft == "left half typed on the phone" && chat.linkDraft == "left half typed on the phone")
+        #expect(changes > 0)
+        // The same text again changes nothing.
+        let before = changes
+        chat.linkSetDraft("left half typed on the phone")
+        #expect(changes == before)
+        // Cleared from the phone (it sent the message).
+        chat.linkSetDraft("")
+        #expect(chat.draft.isEmpty && chat.command == nil)
     }
 }

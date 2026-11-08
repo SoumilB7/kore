@@ -62,7 +62,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         visibility = View.GONE
         setOnClickListener { sendAtReset() }
     }
-    private val field = EditText(activity).apply {
+    private val field: EditText = EditText(activity).apply {
         hint = "Message"
         setHintTextColor(K.faint)
         setTextColor(K.text)
@@ -82,7 +82,14 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
-            override fun afterTextChanged(s: Editable?) { refreshAction(); showSlash() }
+            override fun afterTextChanged(s: Editable?) {
+                refreshAction()
+                // The device's draft shown here isn't typing: no "/" menu, nothing said back.
+                if (showingDraft) return
+                showSlash()
+                drafts.edited(s?.toString() ?: "", clock())
+                scheduleDraft()
+            }
         })
     }
     private val action = activity.label("↑", 18f, K.bg, bold = true).apply {
@@ -138,6 +145,30 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 
     private var chat: JsonObject? = null
     private var snapshot: JsonObject? = null
+
+    // The draft, kept in step with the device's (typing here said once it rests; theirs shown here).
+    private var showingDraft = false
+    private val drafts: DraftSync = DraftSync(
+        send = { text -> link()?.command(dev.kore.link.node.Control.setDraft(chatId, text)) },
+        show = { text ->
+            showingDraft = true
+            field.setText(text)
+            field.setSelection(text.length)
+            showingDraft = false
+        },
+    )
+    private val draftTick = Runnable { drafts.tick(clock()); scheduleDraft() }
+    private fun clock() = android.os.SystemClock.uptimeMillis()
+    private fun scheduleDraft() {
+        field.removeCallbacks(draftTick)
+        drafts.due?.let { field.postDelayed(draftTick, maxOf(0L, it - clock())) }
+    }
+
+    /** Leaving the chat or going to the background: what's typed is said now. */
+    fun leave() {
+        field.removeCallbacks(draftTick)
+        drafts.flush(clock())
+    }
     /** Sheets drawn from the chat's state, redrawn as it changes. */
     private val live = ArrayList<Sheet>()
     /** Choices sent and not yet in the Mac's state: model, effort, fast, autoCompact. */
@@ -161,6 +192,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             if (want["fast"] == c.bool("fast").toString()) want.remove("fast")
             if (want["autoCompact"] == (c["autoCompactAt"].int()?.toString() ?: "off")) want.remove("autoCompact")
         }
+        chat?.obj("controls")?.let { c -> drafts.remote(c.str("draft"), c["draftRev"].int(), clock()); scheduleDraft() }
         canSend = chat?.obj("can")?.bool("send") ?: false
         running = chat?.bool("running") == true
         // The field is always there and always takes a tap; only Send waits for the chat.
@@ -269,10 +301,15 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val l = link() ?: return quiet("Not connected")
         if (attachments.any { it.blobId == null && !it.failed }) return quiet("Waiting for the attachments to upload…")
         val blobs = attachments.mapNotNull { it.blobId }
+        showingDraft = true
         field.setText("")
+        showingDraft = false
         attachments.clear()
         showChips()
         val id = l.send(chatId, text, blobs)
+        // Sent: the draft goes everywhere (after the message, so it never goes first).
+        drafts.sent(clock())
+        scheduleDraft()
         pending[id] = "send"
         sentText[id] = text
         quiet(if (id in l.queued.value) "⟳ Waiting for the connection, sends when it's back" else "Sending…")
@@ -673,10 +710,14 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         if (text.isEmpty()) return quiet("Write the message that goes at the reset.")
         if (attachments.any { it.blobId == null && !it.failed }) return quiet("Waiting for the attachments to upload…")
         val blobs = attachments.mapNotNull { it.blobId }
+        showingDraft = true
         field.setText("")
+        showingDraft = false
         attachments.clear()
         showChips()
         run("sendAtReset", dev.kore.link.node.Control.sendAtReset(chatId, text, blobs))
+        drafts.sent(clock())
+        scheduleDraft()
     }
 
     /** From the transcript: rescue actions, fork. */

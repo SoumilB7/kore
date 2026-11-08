@@ -68,7 +68,7 @@ fun Context.row(title: String, detail: String, dot: Int?, mark: CharSequence? = 
         if (dot != null) addView(View(context).apply { background = rounded(dot, 4) }, LinearLayout.LayoutParams(dp(8), dp(8)).apply { rightMargin = dp(12) })
         if (mark != null) addView(label(mark, 15f).apply { setPadding(0, 0, dp(8), 0) })
         addView(label(title, 15f).apply { maxLines = 2 }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(label(detail, 12f, K.faint))
+        if (detail.isNotEmpty()) addView(label(detail, 12f, K.faint))
         if (onClick != null) setOnClickListener { onClick() } else alpha = 0.55f
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
     }
@@ -81,6 +81,10 @@ fun stateLook(state: String?): Pair<Int, String> = when (state) {
     "working" -> K.accent to "working"
     else -> K.faint to "idle"
 }
+
+/** A list row's state: idle is the default and says nothing (its dot's place stays, empty). */
+fun rowLook(state: String?): Pair<Int, String> =
+    if (state == null || state == "idle") android.graphics.Color.TRANSPARENT to "" else stateLook(state)
 
 /** A CLI's mark: Claude's spark in its orange, Codex's ring in the dim text colour. */
 fun providerMark(provider: String?): CharSequence {

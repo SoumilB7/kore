@@ -262,8 +262,8 @@ final class DaemonTransport: HostTransport, @unchecked Sendable {
 @MainActor
 final class EmptySource: LinkFeedSource {
     func chats() -> [String: Chat] { [:] }
-    func windows(full: Bool) -> [LinkWindow] { [] }
-    func meta(_ chat: Chat, full: Bool) -> ChatMeta { LinkSnapshot.meta(chat, full: full) }
+    func windows(view: LinkFeed.View) -> [LinkWindow] { [] }
+    func meta(_ chat: Chat, view: LinkFeed.View) -> ChatMeta { LinkSnapshot.meta(chat, view: view) }
     func extras(_ chats: [Chat]) -> LinkExtras { LinkExtras(mac: nil, clis: nil) }
 }
 

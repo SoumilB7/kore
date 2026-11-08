@@ -44,6 +44,9 @@ enum HostMeta {
         // 1.9: the draft's count (the draft itself is read when it moves) and the chat's own
         // auto-compact point, kept with it.
         made.draftRev = hc.record.draftRev
+        // The text too, for a phone (it can't `call`); a box's draft changes only on `setDraft`.
+        let draft = hc.record.draft ?? ""
+        made.draft = draft.utf8.count <= LinkPolicy.maxText ? draft : nil
         if hc.chat == nil, let point = hc.record.autoCompact { made.autoCompactAt = point == 0 ? nil : point }
         return made
     }
@@ -82,8 +85,7 @@ enum HostMeta {
             effortScale: EffortScale.levels(models))
     }
 
-    /// `raise`: the grant may raise the mode (a full grant), so every mode is allowed, and the
-    /// chat's controls go too.
+    /// `raise`: the grant may raise the mode (a full grant), so every mode is allowed.
     static func meta(_ hc: HostChat, raise: Bool = false) -> ChatMeta {
         let facts = facts(hc, raise: raise)
         let allowed = LinkPolicy.allowedModes(facts, control: raise ? .full : .standard)
@@ -110,11 +112,11 @@ enum HostMeta {
         }
         if hc.isFrozen { made.moving = true }
         if !hc.ownedHere { made.can.send = false }
-        if raise {
-            made.controls = controls(hc)
-            // 1.9: the tier the driving client last said (1.6), or a client set (`chat.setArsenal`).
-            made.arsenal = hc.arsenal ?? "off"
-        }
+        // The composer's controls and Arsenal tier go to every client: an ask grant (a phone)
+        // changes model, effort, draft and tier too (raises signed); `raise` widens modes and cards.
+        made.controls = controls(hc)
+        // 1.9: the tier the driving client last said (1.6), or a client set (`chat.setArsenal`).
+        made.arsenal = hc.arsenal ?? "off"
         return made
     }
 

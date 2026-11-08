@@ -87,6 +87,9 @@ struct ChatOpsTests {
         #expect(hc.record.autoCompact == 60)
         #expect(try await apply(rig, .chatSetDraft, ControlArgs(chatId: hc.id, text: "half done"), .act).ok)
         #expect(hc.record.draft == "half done")
+        // A phone (an act grant) is sent the draft itself with its count, and the controls it may change.
+        let seen = HostMeta.meta(hc)
+        #expect(seen.controls?.draft == "half done" && seen.controls?.draftRev == 1 && seen.controls?.autoCompactAt == 60 && seen.arsenal == "off")
         // A tier on raises: a full grant's. Off, and Stop agent control, an act grant's too.
         #expect(try await apply(rig, .chatSetArsenal, ControlArgs(chatId: hc.id, tier: "drive"), .act).code == .deniedControl)
         #expect(try await apply(rig, .chatSetArsenal, ControlArgs(chatId: hc.id, tier: "drive"), .full).ok)

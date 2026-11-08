@@ -59,8 +59,8 @@ class DeviceActivity : NodeActivity() {
                     "board" -> {
                         val ids = tab.obj("board")?.objs("sections").orEmpty().flatMap { it.strs("chatIds") }
                         val states = ids.mapNotNull { chats[it]?.str("state") }
-                        val (dot, word) = stateLook(states.firstOrNull { it == "needsYou" } ?: states.firstOrNull { it == "working" } ?: "idle")
-                        content.addView(row("▦  ${tab.str("title") ?: "Board"}", "${ids.size} chats · $word", dot) {
+                        val (dot, word) = rowLook(states.firstOrNull { it == "needsYou" } ?: states.firstOrNull { it == "working" } ?: "idle")
+                        content.addView(row("▦  ${tab.str("title") ?: "Board"}", listOf("${ids.size} chats", word).filter { it.isNotEmpty() }.joinToString(" · "), dot) {
                             startActivity(Intent(this, WindowActivity::class.java).putExtra("window", w.str("id")))
                         })
                         any = true
@@ -166,8 +166,11 @@ class DeviceActivity : NodeActivity() {
     private fun openFolder() {
         lateinit var s: Sheet
         s = Sheet(this).show {
-            val mac = last?.obj("mac") ?: return@show dismiss()
-            title("Open a folder", "Folders Kore opened before.")
+            title("Open a folder on $macName", "Folders Kore opened before.")
+            // A Mac that doesn't send its recents (before this phone's ask view): say so, not an empty sheet.
+            val mac = last?.obj("mac")
+            say(if (mac == null) "Update Kore on $macName to open its folders from here." else "")
+            if (mac == null) return@show
             for (r in mac.objs("recents")) {
                 val id = r.str("id") ?: continue
                 item(r.str("name") ?: "Folder", glyph = "□", detail = ControlModel.parentOf(r.str("path")), tag = "Open ${r.str("name")}") {
@@ -203,7 +206,7 @@ class DeviceActivity : NodeActivity() {
     }
 
     private fun chatRow(chat: JsonObject, fallback: String?) {
-        val (dot, word) = stateLook(chat.str("state"))
+        val (dot, word) = rowLook(chat.str("state"))
         content.addView(row(chat.str("title") ?: fallback ?: "Chat", word, dot, providerMark(chat.str("provider"))) {
             startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", chat.str("id")))
         })

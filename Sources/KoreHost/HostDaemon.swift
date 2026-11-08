@@ -322,7 +322,7 @@ package final class HostDaemon {
     }
 
     /// A CLI listed its models (it was running anyway: a session's start, or a turn's end at
-    /// most every 10 minutes). A new list is kept and goes to the full grants.
+    /// most every 10 minutes). A new list is kept and goes to the act and full grants.
     private func listed(_ cli: String, _ models: [ModelOption]) {
         guard !models.isEmpty else { return }
         let made = HostMeta.cli(cli, models)
@@ -333,7 +333,7 @@ package final class HostDaemon {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(clis) { try? HostPaths.privateFile(data, to: paths.models) }
-        for connection in connections where connection.proven && connection.control == .full && connection.takesPushes() {
+        for connection in connections where connection.proven && (connection.control ?? .watch) >= .act && connection.takesPushes() {
             connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: clis)))
         }
     }
