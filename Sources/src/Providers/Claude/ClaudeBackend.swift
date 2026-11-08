@@ -980,7 +980,7 @@ package final class ClaudeBackend: ChatBackend {
         await translator.files.ready()
         // Kore's note goes as a text block before the user's: Kore reads a message's last text
         // block as what the user said (`ClaudeTranslator.sentText`).
-        let note = turnNote.map { JSONValue.object(["type": "text", "text": .string($0)]) }
+        let note = turnNote.map(Self.noteBlock)
         turnNote = nil
         do {
             if let note, files.isEmpty {
@@ -1020,6 +1020,12 @@ package final class ClaudeBackend: ChatBackend {
 
     /// Arsenal's change, for the next message (`send`).
     private var turnNote: String?
+
+    /// Kore's note as the text block before the user's, ending in a blank line: text blocks read as
+    /// one text run together, and the note mustn't run into what the user typed.
+    package static func noteBlock(_ note: String) -> JSONValue {
+        .object(["type": "text", "text": .string(note.hasSuffix("\n") ? note : note + "\n\n")])
+    }
 
     package func noteNextTurn(_ note: String) { turnNote = note }
 

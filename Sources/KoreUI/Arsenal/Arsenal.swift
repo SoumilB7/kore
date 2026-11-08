@@ -4,7 +4,8 @@ import src
 
 /// Arsenal: one chat's agent may use Kore itself through `kore` (`z-docs/design/arsenal-button.html`).
 /// This is what the tab's right-click, ⌥⌘K, the titlebar's icon and the Account popup act on; `AgentGrants`
-/// (KoreLink, through `AgentTaps`) opens the socket to match. Grants live for this run only.
+/// (KoreLink, through `AgentTaps`) opens the socket to match. Each chat's tier is kept across closing
+/// it and Kore's restarts (`ArsenalMemory`) until the user turns it off.
 @MainActor @Observable
 package final class Arsenal {
     package static let shared = Arsenal()
@@ -33,7 +34,9 @@ package final class Arsenal {
     }
 
     private func clearChats() {
+        ArsenalMemory.clear()
         for chat in chats.allObjects {
+            chat.arsenalKept = nil
             chat.arsenal = nil
             chat.compactAfterTurn = false
             Self.told(chat)
@@ -65,6 +68,7 @@ package final class Arsenal {
         anyOn = true
         AgentTaps.setTier?(chat.id.uuidString, chat.arsenalLast)
         Self.told(chat)
+        Self.keep(chat)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": chat.arsenalLast.rawValue])
         if chat.arsenalLast == .drive, !chat.services.onBox { ArsenalModels.fetch("codex", folder: chat.folder) }
     }
@@ -80,6 +84,7 @@ package final class Arsenal {
         chat.arsenal = tier
         AgentTaps.setTier?(chat.id.uuidString, tier)
         Self.told(chat)
+        Self.keep(chat)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": tier.rawValue])
         // Drive opens chats on a model the CLI lists: Codex's, when no chat of it has said them yet.
         if tier == .drive, !chat.services.onBox { ArsenalModels.fetch("codex", folder: chat.folder) }
@@ -111,7 +116,32 @@ package final class Arsenal {
         anyOn = chats.anyObject != nil
         AgentTaps.setTier?(chat.id.uuidString, nil)
         Self.told(chat)
+        Self.keep(chat)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": "off"])
+    }
+
+    /// A chat back in a window (its tab reopened, Kore restarted): on at the tier it had, when the
+    /// switch is on and it can have it now. A Codex chat whose mode isn't Full access yet waits for it.
+    package func restore(_ chat: Chat) {
+        chat.arsenalWaiting = false
+        guard !chat.services.onBox, chat.arsenal == nil, let tier = ArsenalMemory.tier(chat), tier.built, allowed else { return }
+        chat.arsenalKept = ArsenalMemory.key(chat)
+        guard Self.unavailable(chat) == nil else {
+            chat.arsenalWaiting = true
+            return
+        }
+        chat.arsenalLast = tier
+        turnOn(chat)
+    }
+
+    /// The CLI named the chat's session: a tier on now is kept under it, or one kept is brought back.
+    package func identified(_ chat: Chat) {
+        if chat.arsenal != nil { Self.keep(chat) } else { restore(chat) }
+    }
+
+    /// Kept for the next time the chat comes back; a box's chat is its box's.
+    private static func keep(_ chat: Chat) {
+        if !chat.services.onBox { ArsenalMemory.save(chat) }
     }
 
     func closed(_ chat: Chat) {

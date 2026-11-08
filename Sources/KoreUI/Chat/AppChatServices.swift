@@ -31,6 +31,10 @@ final class AppChatServices: ChatServices {
         AccountStore.shared.register(chat)
         StayAwake.register(chat)
         chat.ownPopups()
+        // Once it's in its window and its mode is restored: its Arsenal tier from before, if kept.
+        Task { @MainActor [weak chat] in
+            if let chat { Arsenal.shared.restore(chat) }
+        }
     }
 
     func closed(_ chat: Chat) {
@@ -45,10 +49,15 @@ final class AppChatServices: ChatServices {
     func modelsListed(_ cli: String, _ models: [ModelOption]) { ArsenalModels.record(cli, models) }
 
     func arsenalFollowMode(_ chat: Chat) {
-        if Arsenal.unavailable(chat) != nil { Arsenal.shared.turnOff(chat) }
+        if chat.arsenal == nil {
+            if chat.arsenalWaiting { Arsenal.shared.restore(chat) }
+        } else if Arsenal.unavailable(chat) != nil {
+            Arsenal.shared.turnOff(chat)
+        }
     }
 
     func tap(_ chat: Chat, _ event: ChatEvent) {
+        if case .sessionIdentified = event { Arsenal.shared.identified(chat) }
         StorylineSeams.events?(chat, event)
         if LinkTaps.on { LinkTaps.event?(chat, event) }
         if AgentTaps.on { AgentTaps.event?(chat, event) }

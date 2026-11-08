@@ -210,6 +210,10 @@ package final class Chat: Identifiable {
     package var arsenalLast = ArsenalTier.watch
     /// The tier the agent was last told of (nil: off, as its launch instructions say until told).
     @ObservationIgnored package var arsenalTold: ArsenalTier?
+    /// What Kore keeps its tier under across restarts (`ArsenalMemory`), and whether a kept tier
+    /// waits for the chat to be able to have it (a Codex chat's mode, not known yet).
+    @ObservationIgnored package var arsenalKept: String?
+    @ObservationIgnored package var arsenalWaiting = false
 
     package var sessionId: String? { status.sessionId }
     /// The id the folder's history lists it under: its session's, or a fork's own before its
@@ -1620,9 +1624,9 @@ package final class Chat: Identifiable {
     /// A quiet line of Kore's own in the transcript.
     package func note(_ text: String) { dispatch(.notice(text)) }
 
-    /// A mode that can't reach Kore ends its Arsenal.
+    /// A mode that can't reach Kore ends its Arsenal; one that can brings back a kept tier waiting for it.
     private func arsenalFollowMode() {
-        if arsenal != nil { services.arsenalFollowMode(self) }
+        if arsenal != nil || arsenalWaiting { services.arsenalFollowMode(self) }
     }
 
     package func setPlanMode(_ on: Bool) {
