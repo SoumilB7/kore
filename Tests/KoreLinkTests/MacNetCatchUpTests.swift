@@ -47,6 +47,38 @@ struct MacNetCatchUpTests {
         rig.net.took(DevicesWire.Result(id: link.posted.last!.id, ok: true, rev: rev))
     }
 
+    /// A box held open for a push is let go by its own timer only: the 30 s end of an earlier
+    /// hold (answered and released already) never ends a newer one while its link still dials
+    /// (the change would be lost until the next link-up; S15's "box still has it paused").
+    @Test func anEarlierHoldsTimerNeverEndsANewerHold() throws {
+        let (rig, box) = try rig()
+        defer { rig.finish() }
+        rig.host.directory.update { $0[box.id.uuidString.lowercased()]?.on = true }
+        var holds: [String] = []
+        rig.net.reachBox = { _ in
+            holds.append("held")
+            return { holds.append("released") }
+        }
+        rig.net.boxLinks = { [] }
+        try rig.allow(Phone())
+        rig.net.phonesChanged()
+        #expect(holds == ["held"])
+        // The box links and takes the push: the first hold ends.
+        let link = FakeBoxLink(box: box, rev: 2)
+        rig.net.catchUp(link)
+        ok(link, rev: 3, rig)
+        #expect(holds == ["held", "released"])
+        // 20 s on, another change: a second hold, its link still dialling when the first one's
+        // 30 s are up.
+        rig.timers.advance(20)
+        try rig.allow(Phone(nodeKey: "nodekey:p2"))
+        rig.net.phonesChanged()
+        rig.timers.advance(10)
+        #expect(holds == ["held", "released", "held"], "the first hold's timer let go of the second")
+        rig.timers.advance(20)
+        #expect(holds == ["held", "released", "held", "released"])
+    }
+
     @Test func aBoxThatLinksAfterThePhoneWasAllowedGetsItsRecord() throws {
         let (rig, box) = try rig()
         defer { rig.finish() }

@@ -364,7 +364,7 @@ package final class MacNet {
     /// KoreNet went off: the port, every phone and every handshake go.
     package func stop() {
         generation += 1
-        for release in reaching.values { release() }
+        for held in reaching.values { held.release() }
         reaching = [:]
         host.hold(Self.busKey, false)
         close()
@@ -687,7 +687,8 @@ package final class MacNet {
 
     /// Boxes held open for a push no window's link could carry, by box: released once the box
     /// answered it, or after `reachFor`.
-    private var reaching: [UUID: () -> Void] = [:]
+    private var reaching: [UUID: (hold: Int, release: () -> Void)] = [:]
+    private var holds = 0
     package static var reachFor: TimeInterval = 30
     /// Holds a box's link until released (Kore: its connection, retained; its link-up catches it up).
     package var reachBox: @MainActor (String) -> (() -> Void)? = { key in
@@ -706,12 +707,20 @@ package final class MacNet {
             let key = entry.rekeyed ? entry.id.raw : (entry.ssh ?? entry.id.raw)
             guard !NetPauses.shared.contains(key), let release = reachBox(key) else { continue }
             let box = entry.device
-            reaching[box] = release
-            _ = schedule(Self.reachFor) { [weak self] in self?.reached(box) }
+            holds += 1
+            let hold = holds
+            reaching[box] = (hold, release)
+            // Its own end only: an earlier hold's timer never lets go of this one mid-dial.
+            _ = schedule(Self.reachFor) { [weak self] in self?.reached(box, hold: hold) }
         }
     }
 
-    private func reached(_ box: UUID) { reaching.removeValue(forKey: box)?() }
+    /// The box answered (any hold), or a hold's time is up (that hold only).
+    private func reached(_ box: UUID, hold: Int? = nil) {
+        guard let held = reaching[box], hold == nil || held.hold == hold else { return }
+        reaching[box] = nil
+        held.release()
+    }
 
     private func phoneUp(_ peer: NetPeer, connection: PhoneConnection, binding: Data) {
         // One link per phone: a newer one takes over.
