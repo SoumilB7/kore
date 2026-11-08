@@ -1,5 +1,4 @@
 import Foundation
-import src
 
 /// When a CLI's model list is read again: a session's start reads it anyway (free), and a turn's
 /// end may ask the running CLI, at most once per `interval` per CLI, one read at a time.
@@ -32,6 +31,13 @@ package struct ModelListThrottle {
     }
 }
 
+/// A chat as the model lists reach it: its CLI, and its picker's rows.
+@MainActor
+package protocol ModelListHolder: AnyObject {
+    var modelCLI: String { get }
+    func listModels(_ models: [ModelOption])
+}
+
 /// Each CLI's model list, shared by its open chats: a new list reaches every picker as data,
 /// never moving a chat off its model.
 @MainActor
@@ -41,10 +47,10 @@ package final class ModelCatalog {
     package var throttle = ModelListThrottle()
     /// The clock the throttle reads (a storyline moves it on).
     package var now: () -> Date = Date.init
-    private(set) var lists: [String: [ModelOption]] = [:]
-    private var chats: [WeakChat] = []
+    package private(set) var lists: [String: [ModelOption]] = [:]
+    private var chats: [WeakHolder] = []
 
-    private struct WeakChat { weak var chat: Chat? }
+    private struct WeakHolder { weak var chat: (any ModelListHolder)? }
 
     /// Nothing listed or read yet, on the real clock (a storyline's start).
     package func reset() {
@@ -55,15 +61,15 @@ package final class ModelCatalog {
     }
 
     /// The list a chat's CLI gave as its session started: every chat of that CLI takes it.
-    func started(_ chat: Chat, cli: String, models: [ModelOption]) {
+    package func started(_ chat: any ModelListHolder, cli: String, models: [ModelOption]) {
         chats.removeAll { $0.chat == nil || $0.chat === chat }
-        chats.append(WeakChat(chat: chat))
+        chats.append(WeakHolder(chat: chat))
         throttle.listed(cli, at: now())
         publish(cli, models, except: chat)
     }
 
     /// A turn ended in `chat`: its CLI's list is read again when it's due, off the main thread.
-    func turnEnded(_ chat: Chat, cli: String, read: @escaping () async -> [ModelOption]?) {
+    package func turnEnded(_ chat: any ModelListHolder, cli: String, read: @escaping () async -> [ModelOption]?) {
         guard throttle.turnEnded(cli, at: now()) else { return }
         Task { @MainActor in
             guard let models = await read(), !models.isEmpty else { return self.throttle.failed(cli) }
@@ -72,12 +78,12 @@ package final class ModelCatalog {
         }
     }
 
-    private func publish(_ cli: String, _ models: [ModelOption], except: Chat?) {
+    private func publish(_ cli: String, _ models: [ModelOption], except: (any ModelListHolder)?) {
         guard !models.isEmpty, lists[cli] != models else { return }
         lists[cli] = models
         chats.removeAll { $0.chat == nil }
-        for case let chat? in chats.map(\.chat) where chat !== except && chat.provider.id == cli {
-            chat.controls.listModels(models)
+        for case let chat? in chats.map(\.chat) where chat !== except && chat.modelCLI == cli {
+            chat.listModels(models)
         }
     }
 

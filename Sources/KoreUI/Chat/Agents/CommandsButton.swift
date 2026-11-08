@@ -1,3 +1,4 @@
+import src
 import SwiftUI
 
 /// The title row's ">_ 2" (agents-commands-cue.html, B): the chat's live background commands

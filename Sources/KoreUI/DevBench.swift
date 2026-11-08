@@ -1,5 +1,6 @@
 import AppKit
 import OSLog
+import src
 
 /// The navigation bench (phase 11 research-harness.md): runs a plan of steps through hooks, not
 /// input events, measuring each to its settled frame, and writes one NDJSON record per step.

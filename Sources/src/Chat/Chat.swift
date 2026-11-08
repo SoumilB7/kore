@@ -1,8 +1,6 @@
-import AppKit
 import Foundation
 import KoreCore
 import Observation
-import src
 
 /// One conversation with a CLI. Its engine (`ChatEngine`) runs the backend; it hands each
 /// `ChatEvent` to the stores, one per feature: the transcript, approvals, controls (mode, model, commands), status and
@@ -14,20 +12,22 @@ import src
 package final class Chat: Identifiable {
     package let id = UUID()
     package let provider: ProviderDescriptor
-    package internal(set) var folder: URL
+    package var folder: URL
     /// Replaced only when a replayed history is corrected (`.historyReplaced`).
-    package private(set) var transcript = TranscriptStore()
+    package private(set) var transcriptView: any ChatTranscript
+    /// The chat's view state (popups, the agent map), as the app keeps it.
+    package let ui: AnyObject
+    /// What the app supplies: account, stay awake, network, logs and taps.
+    @ObservationIgnored package let services: any ChatServices
     package let approvals = ApprovalsStore()
     package let controls: ControlsStore
-    let status: ChatStatus
-    let context = ContextStore()
-    /// The agent map's own UI state (open, selection); not fed by events.
-    let agentMap = AgentMapState()
+    package let status: ChatStatus
+    package let context = ContextStore()
     /// What it runs apart from its turns: background shells, monitors, scheduled jobs.
-    let commands = CommandsStore()
+    package let commands = CommandsStore()
 
     /// Waiting in the composer, sent with the next message.
-    package internal(set) var attachments: [Attachment] = [] {
+    package var attachments: [Attachment] = [] {
         didSet { if attachments.map(\.id) != oldValue.map(\.id) { composerDraftChanged() } }
     }
     package var draft = "" {
@@ -39,27 +39,27 @@ package final class Chat: Identifiable {
         didSet { if command != oldValue { composerDraftChanged() } }
     }
     /// The window schedules its own debounced persistence, independently of SwiftUI bodies.
-    @ObservationIgnored var onDraftChanged: (() -> Void)?
-    @ObservationIgnored private var restoringComposerDraft = false
+    @ObservationIgnored package var onDraftChanged: (() -> Void)?
+    @ObservationIgnored package var restoringComposerDraft = false
     /// The / menu was closed (Esc, a click away, another popup) for the "/word" at the caret;
     /// the next one opens it again.
-    var slashClosed = false
+    package var slashClosed = false
     /// Launch with this model and effort instead of the CLI's defaults (a fork, the dev hook).
-    @ObservationIgnored var launchModel: String?
-    @ObservationIgnored var launchEffort: String?
-    @ObservationIgnored var launchFastMode: Bool?
+    @ObservationIgnored package var launchModel: String?
+    @ObservationIgnored package var launchEffort: String?
+    @ObservationIgnored package var launchFastMode: Bool?
 
     /// The backend, its events' pump and the send chain.
     @ObservationIgnored private let engine: ChatEngine
     private var backend: (any ChatBackend)? { engine.backend }
     @ObservationIgnored private let resume: SessionSummary?
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude).
-    @ObservationIgnored let fork: ForkPoint?
+    @ObservationIgnored package let fork: ForkPoint?
     /// The chat this one was forked from, for the line after its history.
     @ObservationIgnored private var forkedFrom: String?
     /// An imported chat's carried part (`ImportedHistory`), shown above its own history, and
     /// its events once read.
-    @ObservationIgnored let imported: ImportedHistory?
+    @ObservationIgnored package let imported: ImportedHistory?
     @ObservationIgnored private var importedEvents: [ChatEvent]?
     /// A past session's history hasn't been shown yet; messages sent meanwhile wait in `held`,
     /// so they come after it rather than above it.
@@ -71,7 +71,7 @@ package final class Chat: Identifiable {
     /// A message sent with no network waits for it (Stop gives it up); a running turn's spinner
     /// says when the network goes.
     @ObservationIgnored private var waitingForNetwork = false
-    var isWaitingForNetwork: Bool { waitingForNetwork }
+    package var isWaitingForNetwork: Bool { waitingForNetwork }
     @ObservationIgnored private var networkObserver: (any NSObjectProtocol)?
     /// The running turn's connection, as its spinner and tab show it (`Connection.stuck`: ⚠).
     package private(set) var connection = Connection.ok
@@ -86,9 +86,9 @@ package final class Chat: Identifiable {
     /// sets it shorter.
     package static let stallAfter = HostSetting<TimeInterval>(90)
     /// That chat, while it's open (its "Forked from" line switches to it).
-    @ObservationIgnored weak var original: Chat?
+    @ObservationIgnored package weak var original: Chat?
     /// The chat has been shown, so its CLI was started once (`startOnce`).
-    @ObservationIgnored private(set) var shown = false
+    @ObservationIgnored package private(set) var shown = false
     @ObservationIgnored private let compactMemory: AutoCompactMemory
     /// The auto-compact point is the chat's own (picked in it, kept for its session, or its
     /// original's when it's a fork), not the provider's: kept under its session id once known.
@@ -104,7 +104,7 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var continueAfterCompaction = false
     @ObservationIgnored private var lastTurnCompleted = false
     /// Arsenal's Own asked for a compaction during a turn (its agent asks from inside one).
-    @ObservationIgnored var compactAfterTurn = false
+    @ObservationIgnored package var compactAfterTurn = false
     /// The user said Always allow in this chat since Kore opened it: the CLI keeps a rule Arsenal
     /// can't see, so a chat without one doesn't drive it (`noFreer(than:)`).
     @ObservationIgnored package var alwaysAllowed = false
@@ -116,16 +116,6 @@ package final class Chat: Identifiable {
     /// as the user's, so it neither compacts at the point nor continues again (no loop).
     @ObservationIgnored private var continueSent = false
     @ObservationIgnored private var inContinueTurn = false
-    /// The context card's presence: the wheel and the card share it.
-    let contextCard = ContextCardPresence()
-    /// The usage popup over the composer (the / menu's Usage).
-    let usage = UsageState()
-    /// The Account popup, in the same place (the / menu's Account).
-    let account = AccountState()
-    /// The import picker, in the same place, while the chat is empty.
-    let importer = ImportState()
-    /// The model and mode pickers, over the composer from their chips.
-    let picker = PickerState()
     /// The CLI's account changed since its CLI started: it starts again (with resume) at the
     /// next turn boundary, so it runs as the new account.
     @ObservationIgnored private var relaunchDue = false
@@ -133,7 +123,7 @@ package final class Chat: Identifiable {
     private var workEpoch: UInt64 { engine.workEpoch }
     package private(set) var accountRestartPending = false
     /// An account switch or sign-out stopped its work: its tab shows ⚠ until the next send.
-    private(set) var interruptedByAccount = false
+    package private(set) var interruptedByAccount = false
 
     private func currentWork(_ epoch: UInt64) -> Bool { engine.currentWork(epoch) }
     /// The turn running now, and when it began: a failure is the sleep's when the Mac slept since.
@@ -141,12 +131,12 @@ package final class Chat: Identifiable {
     /// Stay awake's continuation after the plan's limit (`LimitContinuation`).
     @ObservationIgnored private lazy var continuation = makeContinuation()
     /// When the chat continues after its plan's limit resets; nil when it won't.
-    private(set) var continuesAt: Date?
+    package private(set) var continuesAt: Date?
     /// The last turn ended on the plan's limit, which resets `at`: a message can wait for it.
-    private(set) var limitReset: (turn: TurnID, at: Date)?
+    package private(set) var limitReset: (turn: TurnID, at: Date)?
     /// A message set to go when the limit resets (`sendAtReset`), out of the composer, and when
     /// it was set (the wait the composer's ring counts down).
-    private(set) var sendsAtReset: (command: SlashCommand?, draft: String, attachments: [Attachment], since: Date)?
+    package private(set) var sendsAtReset: (command: SlashCommand?, draft: String, attachments: [Attachment], since: Date)?
     /// Stay awake was turned on for that message; it goes off again once it's sent or cancelled.
     @ObservationIgnored private var awakeForReset = false
     /// Its tab closed: nothing of it counts as running any more.
@@ -154,13 +144,16 @@ package final class Chat: Identifiable {
 
     /// `fork` makes this chat a fork of `session` that its CLI creates; it has no session of its
     /// own until then. `forkedFrom` names the original chat.
-    init(
+    package init(
         provider: ProviderDescriptor, folder: URL, resume session: SessionSummary? = nil, fork: ForkPoint? = nil,
-        forkedFrom: String? = nil, imported: ImportedHistory? = nil, modeMemory: ModeMemory = .shared,
-        compactMemory: AutoCompactMemory = .shared, services: any ChatServices = AppChatServices.shared
+        forkedFrom: String? = nil, imported: ImportedHistory? = nil, modeMemory: ModeMemory,
+        compactMemory: AutoCompactMemory, services: any ChatServices
     ) {
         self.provider = provider
+        self.services = services
         engine = ChatEngine(provider: provider, services: services)
+        transcriptView = services.makeTranscript()
+        ui = services.makeViewState()
         self.folder = folder
         resume = session
         self.fork = fork
@@ -169,7 +162,7 @@ package final class Chat: Identifiable {
         // session is the original's until its own comes, when the record is kept for that too).
         self.imported = imported ?? session.flatMap { ImportedHistory.of(session: $0.id) }
         awaitingHistory = session != nil
-        controls = ControlsStore(provider: provider, memory: modeMemory)
+        controls = ControlsStore(provider: provider, memory: modeMemory) { [services] in services.modelsListed($0, $1) }
         self.compactMemory = compactMemory
         // A reopened chat (a restored tab, or from history) has its own point back; a fork's
         // session is its original's until its own comes (`inheritAutoCompact`). Any other starts
@@ -181,12 +174,10 @@ package final class Chat: Identifiable {
         if fork == nil, let id = session?.id { controls.restorePlanAllow(chat: id) }
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
-        transcript.providerName = provider.name
-        transcript.chatID = { [weak self] in self?.sessionId }
-        transcript.provider = provider
-        AccountStore.shared.register(self)
-        StayAwake.register(self)
-        ownPopups()
+        transcriptView.providerName = provider.name
+        transcriptView.chatID = { [weak self] in self?.sessionId }
+        transcriptView.provider = provider
+        services.register(self)
         if let imported = self.imported {
             // An imported chat's carried part is read before its own history shows.
             engine.beforeHistory = { [weak self] in
@@ -202,31 +193,31 @@ package final class Chat: Identifiable {
     /// What its CLI, and what runs under it, names this chat by on Kore's agent channel.
     package let agentPass = AgentPasses.make()
     /// Its Arsenal tier while on, and the one turning it on goes back to. Set through `Arsenal`.
-    package internal(set) var arsenal: ArsenalTier?
-    package internal(set) var arsenalLast = ArsenalTier.watch
+    package var arsenal: ArsenalTier?
+    package var arsenalLast = ArsenalTier.watch
     /// The tier the agent was last told of (nil: off, as its launch instructions say until told).
-    @ObservationIgnored var arsenalTold: ArsenalTier?
+    @ObservationIgnored package var arsenalTold: ArsenalTier?
 
     package var sessionId: String? { status.sessionId }
     /// The id the folder's history lists it under: its session's, or a fork's own before its
     /// CLI names one (`KoreForks`).
     package var listedId: String? { sessionId ?? fork?.id }
-    var resumed: Bool { status.resumed }
-    var hasConversation: Bool { status.hasConversation }
+    package var resumed: Bool { status.resumed }
+    package var hasConversation: Bool { status.hasConversation }
     package var title: String { status.title(fallback: provider.name) }
     /// Its CLI's id ("claude", "codex"), for storylines.
     package var providerID: String { provider.id }
 
     /// The CLI's current name for a past session (it may have been renamed elsewhere).
-    func adoptName(_ newName: String) { status.name = newName }
+    package func adoptName(_ newName: String) { status.name = newName }
 
     /// A user rename, saved by the CLI (Claude: custom title, Codex: thread name).
-    func rename(_ newName: String) {
+    package func rename(_ newName: String) {
         Task { await applyRename(newName) }
     }
 
     /// Renames and waits until the CLI has it (starting the CLI if needed).
-    func applyRename(_ newName: String) async {
+    package func applyRename(_ newName: String) async {
         let newName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !newName.isEmpty else { return }
         status.name = newName
@@ -241,21 +232,19 @@ package final class Chat: Identifiable {
         let event = stoppedCompaction(sleptOutcome(event))
         if case .historyReplaced(let events) = event {
             replaceHistory(events)
-            StorylineSeams.events?(self, event)
-            if LinkTaps.on { LinkTaps.event?(self, event) }
-            if AgentTaps.on { AgentTaps.event?(self, event) }
+            services.tap(self, event)
             return
         }
-        let start = DevSnapshot.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
+        let start = services.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
         noteHeard(event)
-        if case .replayed = event { showImported(in: transcript) }
-        transcript.apply(event, preserving: backend?.observedAgents ?? [])
+        if case .replayed = event { showImported(in: transcriptView) }
+        transcriptView.apply(event, preserving: backend?.observedAgents ?? [])
         commands.apply(event)
         noteSinceReplay(event)
         if case .replayed = event, let original = forkedFrom {
             // A fork's history ends with where it came from.
             forkedFrom = nil
-            transcript.forkedFrom(original)
+            transcriptView.forkedFrom(original)
         }
         if case .approvalRequested(let ask) = event, controls.autoAllows(ask) {
             // Allow commands in Plan: answered at once, no card; the tool's row still shows what ran.
@@ -292,11 +281,9 @@ package final class Chat: Identifiable {
         afterAccountEvent(event)
         continueAfterLimit(event)
         showBeforeCompaction(event)
-        if let start { DevSnapshot.logReplay(ContinuousClock.now - start) }
+        if let start { services.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
-        StorylineSeams.events?(self, event)
-        if LinkTaps.on { LinkTaps.event?(self, event) }
-        if AgentTaps.on { AgentTaps.event?(self, event) }
+        services.tap(self, event)
         // A stopped turn took the compaction in it along, whether or not the CLI said so.
         if case .turnFinished = event, stoppingCompaction, context.compacting { dispatch(.compactionStopped) }
         noteModelList(event)
@@ -338,15 +325,15 @@ package final class Chat: Identifiable {
     /// with what came after the replay. The other stores take the history again too (each keeps
     /// what its latest events say).
     private func replaceHistory(_ events: [ChatEvent]) {
-        let store = TranscriptStore()
-        store.providerName = transcript.providerName
-        store.chatID = transcript.chatID
-        store.provider = transcript.provider
+        let store = services.makeTranscript()
+        store.providerName = transcriptView.providerName
+        store.chatID = transcriptView.chatID
+        store.provider = transcriptView.provider
         showImported(in: store)
         store.apply(.replayed(events))
         for event in sinceReplay ?? [] { store.apply(event) }
-        if let since = transcript.pendingSendSince { store.sending(true, at: since) }
-        transcript = store
+        if let since = transcriptView.pendingSendSince { store.sending(true, at: since) }
+        transcriptView = store
         let replay = ChatEvent.replayed(events)
         approvals.apply(replay)
         controls.apply(replay)
@@ -366,7 +353,7 @@ package final class Chat: Identifiable {
     }
 
     /// An imported chat's carried part and its divider, before its own history.
-    private func showImported(in store: TranscriptStore) {
+    private func showImported(in store: any ChatTranscript) {
         guard let imported, let events = importedEvents else { return }
         let product = provider.usage.product
         if let cut = imported.cutMark(product: product) { store.carriedFrom(cut.text, help: cut.help) }
@@ -383,11 +370,11 @@ package final class Chat: Identifiable {
         let waiting = held
         held = []
         waiting.forEach(dispatch)
-        SessionLog.shared.shown(provider.id, chat: sessionId, rows: transcript.entries.count, held: waiting.count, late: late)
+        SessionLog.shared.shown(provider.id, chat: sessionId, rows: transcriptView.entries.count, held: waiting.count, late: late)
     }
 
     /// How long a message sent before the history came waits for it.
-    static let heldPatience: Duration = .seconds(8)
+    package static let heldPatience: Duration = .seconds(8)
 
     /// A message held for the history: shown after `heldPatience` if the history hasn't come.
     private func hold(_ message: ChatEvent) {
@@ -412,13 +399,13 @@ package final class Chat: Identifiable {
     /// Starts the CLI the first time the chat shows. Showing it again (switching back to its
     /// tab) leaves the CLI be: one that failed to start, or has exited, starts again with the
     /// next send, not with a tab switch.
-    func startOnce() async {
+    package func startOnce() async {
         guard !shown else { return }
         shown = true
         await start()
     }
 
-    func start() async {
+    package func start() async {
         guard !closed, !Task.isCancelled else { return }
         let epoch = workEpoch
         if let error = await launchCLI() {
@@ -439,7 +426,7 @@ package final class Chat: Identifiable {
     }
 
     /// The backend, made on first use with the chat's current settings.
-    private func connect() -> any ChatBackend {
+    package func connect() -> any ChatBackend {
         engine.connect({
             var options = BackendOptions(
                 folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
@@ -454,65 +441,24 @@ package final class Chat: Identifiable {
         }) { [self] event in self.dispatch(event) }
     }
 
-    /// Opens the usage popup and reads the account's limits once, through this chat's CLI.
-    func openUsage() {
-        closePopups(keeping: .usage)
-        usage.open(
-            provider: provider.id,
-            read: { [weak self] in
-                guard let self else { throw UsageUnavailable() }
-                return try await self.connect().usage()
-            },
-            useReset: { [weak self] credit, attempt in
-                guard let self else { throw UsageUnavailable() }
-                return try await self.connect().useReset(credit: credit, attempt: attempt)
-            },
-            shares: { [weak self] reading in
-                guard let self else { return nil }
-                return await self.connect().koreShares(for: reading)
-            })
-    }
-
-    /// Opens the Account popup for this chat's CLI.
-    func openAccount() {
-        closePopups(keeping: .account)
-        account.open(provider: provider.id, folder: folder)
-    }
-
-    /// The model chip or the mode pill: its picker opens in the popups' place, or closes when
-    /// it's the one open.
-    func togglePicker(_ kind: PickerState.Kind) {
-        if picker.open != kind { closePopups(keeping: kind.popup) }
-        picker.toggle(kind)
-    }
-
-    /// The auth-failure notice's Sign in: Account opens, and the sign-in starts with the last
-    /// method (the login lapsed), unless one is already under way.
-    func signInAgain() {
-        openAccount()
-        let store = AccountStore.shared
-        if case .signedIn(let identity) = store.status(provider.id), !identity.changeable { return }
-        account.signIn()
-    }
-
     // MARK: Account
 
     /// A turn or a background agent is running.
-    package var isWorking: Bool { !closed && (isBusy || !transcript.agentSummary.running.isEmpty) }
+    package var isWorking: Bool { !closed && (isBusy || !transcriptView.runningAgents.isEmpty) }
 
     /// A turn, a background agent or a command Stop applies to is running: what a sign-out or
     /// a switch of its login stops.
-    var hasWork: Bool { !closed && (isWorking || waitingForNetwork || commands.summary.total > 0) }
+    package var hasWork: Bool { !closed && (isWorking || waitingForNetwork || commands.summary.total > 0) }
 
     /// Its login is going (a sign-out) or moving (a switch): the turn, the background agents
     /// and the commands stop, and the CLI starts again as the new login once they have.
-    func stopAllWork() {
+    package func stopAllWork() {
         cancelContinue()
         if hasWork { interruptedByAccount = true }
         stoppedForAccount = true
         if isBusy || waitingForNetwork { stop() }
         let observed = backend?.observedAgents ?? []
-        for agent in transcript.agentSummary.running where !observed.contains(agent.id) { stopAgent(agent.id) }
+        for agent in transcriptView.runningAgents where !observed.contains(agent) { stopAgent(agent) }
         for command in commands.stoppable where command.owner.sub.map(observed.contains) != true { stopCommand(command.id) }
     }
 
@@ -526,7 +472,7 @@ package final class Chat: Identifiable {
 
     /// An explicit account switch closes old work even when a scheduled job or dead CLI
     /// cannot acknowledge Stop. Other credential refreshes wait for the next safe boundary.
-    func accountChanged() {
+    package func accountChanged() {
         cancelContinue()
         guard let backend else { return }
         backend.endRemoteForAccountChange()
@@ -549,7 +495,7 @@ package final class Chat: Identifiable {
         let epoch = engine.newWork()
         let previous = engine.sending
         previous?.cancel()
-        transcript.sending(false)
+        transcriptView.sending(false)
         for id in waitingOrder.reversed() { dispatch(.queuedMessage(id: id, .dropped)) }
         engine.chain(after: previous, epoch) { [self] in
             await backend.relaunch(reason: "account changed")
@@ -563,7 +509,7 @@ package final class Chat: Identifiable {
 
     /// Runs `reload` now if nothing live would die with the CLI, else once the last thing ends.
     /// Asked again while it waits, it runs at once: a chat stuck at work comes back too.
-    func whenFree(_ reload: @escaping @MainActor () -> Void) {
+    package func whenFree(_ reload: @escaping @MainActor () -> Void) {
         if holdsCLI, reloadWhenFree == nil {
             reloadWhenFree = reload
         } else {
@@ -577,11 +523,11 @@ package final class Chat: Identifiable {
         case .turnFinished(_, .authFailed, _):
             // The notice says "expired" or "isn't signed in": the status tells which.
             let provider = provider.id
-            Task { await AccountStore.shared.refresh(provider) }
+            services.refreshAccount(provider)
             relaunchIfDue()
         case .turnFinished, .agentFinished, .commandEnded:
             // An agent's end reaches the summary at the next draw: at once, when a start waits.
-            if case .agentFinished = event, relaunchDue || reloadWhenFree != nil { transcript.drawNow() }
+            if case .agentFinished = event, relaunchDue || reloadWhenFree != nil { transcriptView.drawNow() }
             relaunchIfDue()
             if !holdsCLI, let reload = reloadWhenFree {
                 reloadWhenFree = nil
@@ -623,7 +569,7 @@ package final class Chat: Identifiable {
             if connection == .stalled {
                 // It spoke again: the connection was fine after all.
                 connection = .ok
-                transcript.connected(.ok)
+                transcriptView.connected(.ok)
                 SessionLog.shared.connection(provider.id, chat: sessionId, state: "ok")
             }
         }
@@ -657,18 +603,18 @@ package final class Chat: Identifiable {
 
     private func checkStall() {
         let quiet = Date().timeIntervalSince(lastHeard)
-        guard quiet > Self.stallAfter.value, NetworkWatch.shared.isOnline, !waitingForNetwork,
+        guard quiet > Self.stallAfter.value, services.isOnline, !waitingForNetwork,
             approvals.pending.isEmpty, !context.compacting, connection != .stalled else { return }
         // A command or agent still running is busy, not stalled, however long it stays quiet.
-        guard !transcript.workRunning else { return }
+        guard !transcriptView.workRunning else { return }
         connection = .stalled
-        transcript.connected(.stalled)
+        transcriptView.connected(.stalled)
         SessionLog.shared.connection(provider.id, chat: sessionId, state: Self.name(.stalled), quiet: Int(quiet))
     }
 
     /// A stalled turn's Retry: its CLI ends and starts again on the same chat, which is asked
     /// to carry on.
-    func retryStalled() {
+    package func retryStalled() {
         guard !closed, !accountRestartPending, status.isRunning,
               connection == .stalled,
               approvals.pending.isEmpty, !context.compacting else { return }
@@ -680,9 +626,9 @@ package final class Chat: Identifiable {
 
     /// Resumes only the latest unfinished attempt, not a historical turn or the command's
     /// raw input. `deliver` leaves the user's unsent composer and attachments intact.
-    func retryTurn(_ id: String) {
+    package func retryTurn(_ id: String) {
         guard !closed, !accountRestartPending, !isBusy, approvals.pending.isEmpty,
-              transcript.retryableTurn == id else { return }
+              transcriptView.retryableTurn == id else { return }
         SessionLog.shared.rescue(provider.id, chat: sessionId, action: "retry-ended")
         restartCLI(reason: "retry ended")
         continueTurn()
@@ -690,9 +636,9 @@ package final class Chat: Identifiable {
 
     /// A refused turn's "Retry on …": the chat takes the fallback model, then goes on. The CLI is
     /// fine (a refusal isn't a hang), so it stays; the message waits for the switch.
-    func retryOn(_ id: String, model option: ModelOption) {
+    package func retryOn(_ id: String, model option: ModelOption) {
         guard !closed, !accountRestartPending, !isBusy, approvals.pending.isEmpty,
-              transcript.retryableTurn == id, let backend else { return }
+              transcriptView.retryableTurn == id, let backend else { return }
         SessionLog.shared.rescue(provider.id, chat: sessionId, action: "retry-on")
         controls.modelId = option.id
         let level = EffortScale.fallback(controls.effort, offered: option.efforts, scale: controls.effortScale)
@@ -703,7 +649,7 @@ package final class Chat: Identifiable {
             } catch {
                 return fail("Couldn't switch model: \(error)")
             }
-            guard transcript.retryableTurn == id, !isBusy else { return }
+            guard transcriptView.retryableTurn == id, !isBusy else { return }
             continueTurn()
         }
     }
@@ -711,8 +657,8 @@ package final class Chat: Identifiable {
     /// A refused turn's "Add context": its message back in the composer, a line saying what the
     /// work is before it, for the owner to read, change and send. A draft already there stays,
     /// after it.
-    func addContext(_ id: String) {
-        let message = transcript.prompt(of: id) ?? ""
+    package func addContext(_ id: String) {
+        let message = transcriptView.prompt(of: id) ?? ""
         draft = [Refusal.context, message, draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
@@ -725,7 +671,7 @@ package final class Chat: Identifiable {
         let epoch = engine.newWork()
         relaunchDue = false
         engine.cancelSending()
-        transcript.sending(false)
+        transcriptView.sending(false)
         waitingForNetwork = false
         // Messages queued in the old process die with it, unseen: back to the composer, at
         // once, as another account switch can cancel this task before it runs.
@@ -748,13 +694,13 @@ package final class Chat: Identifiable {
                 for command in commands.all where command.isLive && command.owner.sub.map(observed.contains) != true {
                     dispatch(.commandEnded(id: command.id, .stopped(by: .user), at: .now))
                 }
-                transcript.drawNow()
-                for agent in transcript.agentSummary.running where !observed.contains(agent.id) {
-                    dispatch(.agentFinished(id: agent.id, .stopped, result: nil))
+                transcriptView.drawNow()
+                for agent in transcriptView.runningAgents where !observed.contains(agent) {
+                    dispatch(.agentFinished(id: agent, .stopped, result: nil))
                 }
                 context.end()
                 dispatch(.exited(status: 0))
-                transcript.drawNow()
+                transcriptView.drawNow()
                 accountRestartPending = false
             }
             guard currentWork(epoch), !Task.isCancelled else { return }
@@ -784,28 +730,27 @@ package final class Chat: Identifiable {
 
     /// While a turn runs, the network going or coming back is said on its spinner.
     private func watchNetwork() {
-        networkObserver = NotificationCenter.default.addObserver(forName: NetworkWatch.changed, object: nil, queue: .main) { [weak self] _ in
+        networkObserver = NotificationCenter.default.addObserver(forName: services.networkChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.status.isRunning, !self.waitingForNetwork else { return }
-                self.dispatch(.connection(NetworkWatch.shared.isOnline ? .ok : .offline))
+                self.dispatch(.connection(self.services.isOnline ? .ok : .offline))
             }
         }
     }
 
-    func close(reason: String = "tab closed") {
+    package func close(reason: String = "tab closed") {
         onDraftChanged = nil
         if !closed, backend != nil { SessionLog.shared.closing(provider.id, chat: sessionId, reason: reason) }
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil
         closed = true
         engine.close()
-        transcript.sending(false)
+        transcriptView.sending(false)
         waitingForNetwork = false
         endWatch()
         cancelContinue()
         engine.shutDown()
-        Arsenal.shared.closed(self)
-        AgentTaps.closed?(self)
+        services.closed(self)
     }
 
     // MARK: Composer
@@ -816,58 +761,18 @@ package final class Chat: Identifiable {
                   attachmentURLs: attachments.compactMap(\.url))
     }
 
-    /// A closed tab may retain its attachments in memory to reuse their IDs and thumbnails;
-    /// after relaunch, file URLs rebuild the chips. Metadata is sufficient before controls load.
-    @discardableResult
-    package func restoreComposerDraft(_ saved: ChatDraft, keeping files: [Attachment] = []) -> Bool {
-        guard saved.provider == provider.id, saved.folder.isFileURL,
-              saved.folder.standardizedFileURL == folder.standardizedFileURL else { return false }
-        let before = composerDraft
-        var available = files
-        let restored: [Attachment] = saved.attachmentURLs.filter { $0.isFileURL && $0.path.hasPrefix("/") }.map { url in
-            if let index = available.firstIndex(where: { $0.url == url }) { return available.remove(at: index) }
-            return Attachment(url: url)
-        }
-        restoringComposerDraft = true
-        draft = saved.text
-        command = saved.command?.slashCommand
-        attachments = restored
-        restoringComposerDraft = false
-        if composerDraft != before { composerDraftChanged() }
-        return true
-    }
-
-    private func composerDraftChanged() {
+    package func composerDraftChanged() {
         if !restoringComposerDraft { onDraftChanged?() }
     }
 
     /// Something to send, and no compaction under way (sending waits until it's done).
-    var canSend: Bool {
+    package var canSend: Bool {
         !accountRestartPending && !context.compacting
             && (command != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
 
-    func attach(_ urls: [URL]) {
-        attachments += urls.map(Attachment.init(url:))
-    }
-
-    func removeAttachment(_ id: Attachment.ID) {
-        attachments.removeAll { $0.id == id }
-    }
-
-    /// All of them at once: a whole draft cleared or pasted, or that undone.
-    func setAttachments(_ list: [Attachment]) {
-        attachments = list
-    }
-
-    /// Swaps in an edited copy (a marked-up image), keeping its place.
-    func replaceAttachment(_ id: Attachment.ID, with url: URL) {
-        guard let index = attachments.firstIndex(where: { $0.id == id }) else { return }
-        attachments[index] = Attachment(url: url)
-    }
-
     /// What goes to the CLI: the command first, then the draft.
-    nonisolated static func message(command: SlashCommand?, draft: String) -> String {
+    package nonisolated static func message(command: SlashCommand?, draft: String) -> String {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let command else { return text }
         return text.isEmpty ? "/\(command.name)" : "/\(command.name) \(text)"
@@ -875,7 +780,7 @@ package final class Chat: Identifiable {
 
     /// A sent message as the composer holds it: a leading command among `commands` goes back to
     /// the chip, the rest to the draft.
-    nonisolated static func split(_ text: String, commands: [SlashCommand]) -> (command: SlashCommand?, draft: String) {
+    package nonisolated static func split(_ text: String, commands: [SlashCommand]) -> (command: SlashCommand?, draft: String) {
         guard text.hasPrefix("/") else { return (nil, text) }
         let name = text.dropFirst().prefix { !$0.isWhitespace }
         guard let command = commands.first(where: { $0.kind == .command && $0.name == name }) else { return (nil, text) }
@@ -883,11 +788,11 @@ package final class Chat: Identifiable {
     }
 
     /// Puts a message back in the composer (a fork's), its command in the chip.
-    func restoreDraft(_ text: String, commands: [SlashCommand]) {
+    package func restoreDraft(_ text: String, commands: [SlashCommand]) {
         (command, draft) = Self.split(text, commands: commands)
     }
 
-    func send() {
+    package func send() {
         guard !closed, !accountRestartPending else { return }
         let text = Self.message(command: command, draft: draft)
         let sent = attachments
@@ -918,7 +823,7 @@ package final class Chat: Identifiable {
     @discardableResult
     package func sendFromLink(_ text: String, files: [URL] = []) -> Bool {
         guard !closed, !accountRestartPending, !context.compacting else { return false }
-        let sent = files.map(Attachment.init(url:))
+        let sent = services.attachments(files)
         if sent.isEmpty, let instructions = Self.compactCommand(text) {
             guard canCompact else { return false }
             let message = ChatEvent.userMessage(text: text, attachments: [])
@@ -941,7 +846,7 @@ package final class Chat: Identifiable {
         // replaced. It goes once the rollback is done (`endRollback`).
         if rollingBack {
             heldForRollback.append((text, sent))
-            transcript.sending(true)
+            transcriptView.sending(true)
             return
         }
         interruptedByAccount = false
@@ -969,7 +874,7 @@ package final class Chat: Identifiable {
         }
         if awaitingHistory { hold(message) } else { dispatch(message) }
         status.setRunning(true)
-        if queued == nil { transcript.sending(true) }
+        if queued == nil { transcriptView.sending(true) }
         startWatchdog()
         let backend = connect()
         engine.chain(after: engine.sending, epoch) { [self] in
@@ -980,7 +885,7 @@ package final class Chat: Identifiable {
                     if let queued {
                         dispatch(.queuedMessage(id: queued, .dropped))
                     } else {
-                        transcript.sending(false)
+                        transcriptView.sending(false)
                         status.setRunning(false)
                         giveBackToComposer(text, sent)
                     }
@@ -988,10 +893,10 @@ package final class Chat: Identifiable {
                     return
                 }
                 guard currentWork(epoch), !Task.isCancelled else { return }
-                if queued == nil, !NetworkWatch.shared.isOnline {
+                if queued == nil, !services.isOnline {
                     dispatch(.notice("Offline: this sends when the network is back"))
                     waitingForNetwork = true
-                    await NetworkWatch.shared.online()
+                    await services.online()
                     guard currentWork(epoch) else { return }
                     waitingForNetwork = false
                     if Task.isCancelled {
@@ -1011,7 +916,7 @@ package final class Chat: Identifiable {
                 if let key = fork?.id { KoreForks.shared.sent(cli: provider.id, key: key) }
                 guard currentWork(epoch), !Task.isCancelled else { return }
                 if !turn, queued == nil {
-                    transcript.sending(false)
+                    transcriptView.sending(false)
                     status.setRunning(false)
                 }
             } catch {
@@ -1020,7 +925,7 @@ package final class Chat: Identifiable {
                 if let queued {
                     dispatch(.queuedMessage(id: queued, .dropped))
                 } else {
-                    transcript.sending(false)
+                    transcriptView.sending(false)
                     status.setRunning(false)
                 }
                 fail(Self.reason(error))
@@ -1031,20 +936,20 @@ package final class Chat: Identifiable {
     // MARK: Stay awake
 
     /// What this chat keeps awake for: its turn, and its running agents and Codex child threads.
-    var awakeWork: Int {
+    package var awakeWork: Int {
         guard !closed else { return 0 }
-        return (isBusy ? 1 : 0) + transcript.agentSummary.running.count
+        return (isBusy ? 1 : 0) + transcriptView.runningAgents.count
     }
 
     /// Sends "Continue": a slept turn's Continue, and the continuation at a limit's reset.
-    func continueTurn() {
+    package func continueTurn() {
         cancelContinue()
         deliver("Continue", [])
     }
 
     /// The × after "Continues at …", Stay awake turned off, or the owner sending. A message set
     /// to go at the reset comes back to the composer when it's empty.
-    func cancelContinue() {
+    package func cancelContinue() {
         if let waiting = sendsAtReset {
             sendsAtReset = nil
             if draft.isEmpty, attachments.isEmpty, command == nil {
@@ -1057,21 +962,18 @@ package final class Chat: Identifiable {
     }
 
     /// At the plan's limit, with something typed and nothing set to go yet: it can go at the reset.
-    var canSendAtReset: Bool {
+    package var canSendAtReset: Bool {
         limitReset != nil && sendsAtReset == nil && !status.isRunning && canSend
     }
 
     /// The composer's ring: the draft goes when the limit resets, Stay awake on until then.
-    func sendAtReset() {
+    package func sendAtReset() {
         guard canSendAtReset, let reset = limitReset else { return }
         sendsAtReset = (command, draft, attachments, Date())
         draft = ""
         command = nil
         attachments = []
-        if let awake = StayAwake.current, !awake.isOn {
-            awake.choose(.whileAgentsWork)
-            awakeForReset = true
-        }
+        if services.stayAwakeForReset() { awakeForReset = true }
         continuation.schedule(turn: reset.turn, at: reset.at)
         // Already waiting there to send Continue: the row says the message now.
         showContinuation(continuation.pending)
@@ -1082,12 +984,11 @@ package final class Chat: Identifiable {
     private func releaseAwakeForReset() {
         guard awakeForReset else { return }
         awakeForReset = false
-        guard let awake = StayAwake.current, awake.isOn, !awake.othersContinue(besides: self) else { return }
-        awake.turnOff()
+        services.releaseAwake(besides: self)
     }
 
     private func makeContinuation() -> LimitContinuation {
-        let continuation = LimitContinuation(clock: StayAwake.current?.clock ?? SystemClock())
+        let continuation = LimitContinuation(clock: services.awakeClock ?? SystemClock())
         continuation.read = { [weak self] in
             guard let self, !closed, !accountRestartPending else { return nil }
             return try? await self.connect().usage()
@@ -1109,14 +1010,14 @@ package final class Chat: Identifiable {
     private func showContinuation(_ pending: LimitContinuation.Pending?) {
         continuesAt = pending?.at
         let message = sendsAtReset.map { Self.message(command: $0.command, draft: $0.draft) }
-        transcript.continues(turn: pending?.turn, at: pending?.at, sends: pending == nil ? nil : message)
+        transcriptView.continues(turn: pending?.turn, at: pending?.at, sends: pending == nil ? nil : message)
     }
 
     /// A turn that ended on the plan's limit continues at the reset, while Stay awake is on.
     private func continueAfterLimit(_ event: ChatEvent) {
         noteLimitReset(event)
         guard case .turnFinished(let id, .limited(_, let resetsAt), _) = event,
-            StayAwake.current?.isOn == true, let turn = id ?? turnBegan?.id
+            services.stayingAwake, let turn = id ?? turnBegan?.id
         else { return }
         continuation.schedule(turn: turn, at: resetsAt)
     }
@@ -1157,7 +1058,7 @@ package final class Chat: Identifiable {
         case .turnFinished(let id, .failed(let said), let duration):
             let began = turnBegan
             turnBegan = nil
-            if let began, id == nil || id == began.id, StayAwake.current?.sleptThrough(since: began.at) == true {
+            if let began, id == nil || id == began.id, services.sleptThrough(since: began.at) {
                 return .turnFinished(id, .slept(said), duration: duration)
             }
         case .turnFinished, .exited:
@@ -1193,11 +1094,11 @@ package final class Chat: Identifiable {
     /// ends it "interrupted" before its history is replaced. With nothing at work (the
     /// compaction finished as Stop was pressed) it does nothing.
     package func stop() {
-        guard isBusy || waitingForNetwork || transcript.pendingSendSince != nil else { return }
+        guard isBusy || waitingForNetwork || transcriptView.pendingSendSince != nil else { return }
         if context.compacting { stoppingCompaction = true }
-        if transcript.pendingSendSince != nil {
+        if transcriptView.pendingSendSince != nil {
             engine.cancelSending()
-            transcript.sending(false)
+            transcriptView.sending(false)
         }
         // Not sent yet: there's no turn to interrupt, only the wait.
         if waitingForNetwork {
@@ -1226,19 +1127,19 @@ package final class Chat: Identifiable {
     }
 
     /// The context wheel's click (look §9): compacts at once, between turns only.
-    var canCompact: Bool { status.sessionId != nil && !status.isRunning && !context.compacting && !rollingBack }
+    package var canCompact: Bool { status.sessionId != nil && !status.isRunning && !context.compacting && !rollingBack }
 
     /// `instructions`: what the summary should keep (`/compact <instructions>`); empty for none.
     /// The transcript's live row shows from here, before the CLI says it started. `point`: Kore
     /// compacts by itself, at the chat's auto-compact point.
-    func compact(instructions: String = "", at point: Int? = nil) {
+    package func compact(instructions: String = "", at point: Int? = nil) {
         guard canCompact else { return }
         autoCompactDue = false
         stoppingCompaction = false
         // Kore's own, after a turn that ran to its end: the work goes on after it.
         continueAfterCompaction = point != nil && lastTurnCompleted
         context.begin()
-        transcript.compacting(true, at: point)
+        transcriptView.compacting(true, at: point)
         let backend = connect()
         Task {
             do {
@@ -1246,7 +1147,7 @@ package final class Chat: Identifiable {
             } catch {
                 // The CLI didn't start: no compaction was asked of it, so it's said as any start's.
                 context.end()
-                transcript.compacting(false)
+                transcriptView.compacting(false)
                 stoppingCompaction = false
                 fail(Self.reason(error))
                 return
@@ -1266,7 +1167,7 @@ package final class Chat: Identifiable {
 
     /// The card's auto-compact point: this chat's, kept for when it's reopened, and the
     /// provider's for new chats. Off is a point too.
-    func setAutoCompact(_ point: Int?) {
+    package func setAutoCompact(_ point: Int?) {
         guard context.autoCompactAt != point || !ownAutoCompact else { return }
         context.autoCompactAt = point
         ownAutoCompact = true
@@ -1274,7 +1175,7 @@ package final class Chat: Identifiable {
     }
 
     /// A fork starts at its original's point, and keeps it as its own when the original had one.
-    func inheritAutoCompact(from original: Chat) {
+    package func inheritAutoCompact(from original: Chat) {
         context.autoCompactAt = original.context.autoCompactAt
         ownAutoCompact = original.ownAutoCompact
     }
@@ -1344,7 +1245,7 @@ package final class Chat: Identifiable {
     }
 
     /// The instructions of a typed `/compact` (empty when it has none); nil for anything else.
-    static func compactCommand(_ text: String) -> String? {
+    package static func compactCommand(_ text: String) -> String? {
         let command = "/compact"
         guard text.hasPrefix(command), text.dropFirst(command.count).first.map(\.isWhitespace) ?? true else { return nil }
         return text.dropFirst(command.count).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1352,7 +1253,7 @@ package final class Chat: Identifiable {
 
     /// An error as the chat says it: its own readable text (Codex's message, parsed), else its
     /// description. Never Foundation's "The operation couldn't be completed".
-    static func reason(_ error: Error) -> String {
+    package static func reason(_ error: Error) -> String {
         if let text = (error as? LocalizedError)?.errorDescription { return text }
         // Foundation's own errors have their sentence; Kore's and the CLIs' say themselves.
         return type(of: error) is NSError.Type ? error.localizedDescription : String(describing: error)
@@ -1360,20 +1261,20 @@ package final class Chat: Identifiable {
 
     /// Loads a sub-agent's own transcript the first time it's opened, when the chat doesn't have
     /// it (a replayed chat's agents, Codex children).
-    func loadAgentIfNeeded(_ id: String) {
-        transcript.keepLane(of: id)
-        guard transcript.needsHistory(id) else { return }
+    package func loadAgentIfNeeded(_ id: String) {
+        transcriptView.keepLane(of: id)
+        guard transcriptView.needsHistory(id) else { return }
         let backend = connect()
         Task {
             try? await backend.start()
             let events = await backend.agentHistory(id)
-            if !events.isEmpty { transcript.replaceLane(of: id, with: events) }
+            if !events.isEmpty { transcriptView.replaceLane(of: id, with: events) }
         }
     }
 
     /// Where a fork from this user message starts (`ChatBackend.fork`); nil after a failure,
     /// which shows as "Couldn't fork: …" in this chat.
-    func forkStart(_ entry: TranscriptStore.Entry) async -> ForkStart? {
+    package func forkStart(_ entry: TranscriptLog.Entry) async -> ForkStart? {
         do {
             return try await connect().fork(message: entry.source, text: entry.text)
         } catch {
@@ -1383,8 +1284,8 @@ package final class Chat: Identifiable {
     }
 
     /// The user message that starts the turn after this answer.
-    private func nextMessage(after answer: TranscriptStore.Entry) -> TranscriptStore.Entry? {
-        let entries = transcript.entries
+    private func nextMessage(after answer: TranscriptLog.Entry) -> TranscriptLog.Entry? {
+        let entries = transcriptView.entries
         return entries.firstIndex { $0.id == answer.id }.flatMap { index in
             // A message taken into a running turn isn't a new turn: cutting there would cut it in half.
             entries[(index + 1)...].first { ($0.kind == .user || $0.kind == .peer) && !$0.inTurn }
@@ -1399,21 +1300,21 @@ package final class Chat: Identifiable {
     /// Takes this chat back to before a user message: it and everything after it go, and it
     /// returns to the composer, with its files. A peer's message goes the same way, but its words
     /// aren't the owner's to send again. Files on disk stay as they are.
-    package func rollBack(_ entry: TranscriptStore.Entry) { rollBack(to: entry, giveBack: entry.kind == .user) }
+    package func rollBack(_ entry: TranscriptLog.Entry) { rollBack(to: entry, giveBack: entry.kind == .user) }
 
     /// Takes this chat back to this answer: what came after its turn goes.
-    package func rollBack(after answer: TranscriptStore.Entry) {
+    package func rollBack(after answer: TranscriptLog.Entry) {
         if let next = nextMessage(after: answer) { rollBack(to: next, giveBack: false) }
     }
 
-    private func rollBack(to entry: TranscriptStore.Entry, giveBack: Bool) {
+    private func rollBack(to entry: TranscriptLog.Entry, giveBack: Bool) {
         // One at a time: a second one started meanwhile would cut the CLI at its own message while
         // the first one's rows replaced the transcript, so the two would disagree.
         guard !rollingBack, !closed else { return }
         // A message taken into a running turn isn't a turn's start: cutting there would cut the
         // turn in half (Claude), or take the whole turn (Codex).
         guard entry.kind == .peer || (entry.kind == .user && !entry.inTurn) else { return }
-        let files = transcript.chips(entry)
+        let files = transcriptView.chips(entry)
         rollingBack = true
         Task {
             // A running turn ends first, as Stop ends it (at most 5 s: `stopFallback`).
@@ -1430,7 +1331,7 @@ package final class Chat: Identifiable {
                 replaceHistory(left.events)
                 dispatch(.earlierHistory(left.more))
                 dispatch(.notice("Rolled back. Files not changed."))
-                if giveBack { giveBackToComposer(entry.text, Self.reattach(files)) }
+                if giveBack { giveBackToComposer(entry.text, services.reattach(files)) }
             } catch {
                 fail("Couldn't roll back: \(Self.reason(error))")
             }
@@ -1443,23 +1344,13 @@ package final class Chat: Identifiable {
         rollingBack = false
         let held = heldForRollback
         heldForRollback = []
-        if !held.isEmpty, transcript.pendingSendSince != nil { transcript.sending(false) }
+        if !held.isEmpty, transcriptView.pendingSendSince != nil { transcriptView.sending(false) }
         for message in held { deliver(message.text, message.files) }
-    }
-
-    /// A sent message's files, to attach again: those still on disk, and pictures known only as
-    /// they were sent (a past message's), saved again. Others can't be sent again.
-    private static func reattach(_ sent: [Attachment]) -> [Attachment] {
-        sent.compactMap { file in
-            if let url = file.url, FileManager.default.fileExists(atPath: url.path) { return Attachment(url: url) }
-            if file.kind == .image, let data = file.imageData, let url = Attachments.saveImage(data) { return Attachment(url: url) }
-            return nil
-        }
     }
 
     /// Where a fork from an answer starts: through that answer's turn. That's the history before
     /// the next user message, or the whole conversation when the answer is in the last turn.
-    func forkStart(after answer: TranscriptStore.Entry) async -> ForkStart? {
+    package func forkStart(after answer: TranscriptLog.Entry) async -> ForkStart? {
         let next = nextMessage(after: answer)
         do {
             let backend = connect()
@@ -1474,7 +1365,7 @@ package final class Chat: Identifiable {
     /// A history that starts at a compaction with little after it: the conversation before it
     /// shows too (a page), not just the summary under a "Load earlier" row.
     private func showBeforeCompaction(_ event: ChatEvent) {
-        guard case .earlierHistory(true) = event, transcript.userTurns < 10 else { return }
+        guard case .earlierHistory(true) = event, transcriptView.userTurns < 10 else { return }
         loadEarlierConversation()
     }
 
@@ -1484,16 +1375,16 @@ package final class Chat: Identifiable {
     /// said it can give them back: when the chat goes out of sight or a turn ends out of sight, and
     /// as it opens (`opening`), the rows it hasn't built. An imported chat's carried rows are in
     /// no history.
-    func unloadOld(opening: Bool = false) {
+    package func unloadOld(opening: Bool = false) {
         guard !unloading, !closed, !rollingBack, !isBusy, !awaitingHistory, sinceReplay == nil, imported == nil, waitingOrder.isEmpty,
-            let backend, let first = transcript.unloadPoint(opening: opening)
+            let backend, let first = transcriptView.unloadPoint(opening: opening)
         else { return }
         unloading = true
-        let store = transcript
+        let store = transcriptView
         Task {
             defer { unloading = false }
             // Things may have moved on while the history was read.
-            guard let point = await backend.unloadPoint(message: first.source, text: first.text), backend === self.backend, store === transcript,
+            guard let point = await backend.unloadPoint(message: first.source, text: first.text), backend === self.backend, store === transcriptView,
                 !closed, !rollingBack, !isBusy, store.unloadPoint(opening: opening)?.id == first.id
             else { return }
             backend.unloaded(to: point.earlier)
@@ -1502,38 +1393,38 @@ package final class Chat: Identifiable {
     }
 
     /// The conversation before a compaction, ten turns at a time.
-    func loadEarlierConversation() {
-        guard transcript.earlierAvailable, !transcript.loadingEarlier else { return }
-        transcript.startLoadingEarlier()
+    package func loadEarlierConversation() {
+        guard transcriptView.earlierAvailable, !transcriptView.loadingEarlier else { return }
+        transcriptView.startLoadingEarlier()
         let backend = connect()
         Task {
             let page = await backend.earlier()
             // Not read (its CLI didn't start): what left memory is still there to ask for.
-            transcript.prepend(page?.events ?? [], more: page?.more ?? transcript.mayHaveLeft)
+            transcriptView.prepend(page?.events ?? [], more: page?.more ?? transcriptView.mayHaveLeft)
         }
     }
 
     /// The message scroller's jump: as far back as `turns` turns, in one page.
-    func loadEarlier(turns: Int) async {
-        guard transcript.earlierAvailable, !transcript.loadingEarlier else { return }
-        transcript.startLoadingEarlier()
+    package func loadEarlier(turns: Int) async {
+        guard transcriptView.earlierAvailable, !transcriptView.loadingEarlier else { return }
+        transcriptView.startLoadingEarlier()
         let page = await connect().earlier(turns: turns)
-        transcript.prepend(page?.events ?? [], more: page?.more ?? transcript.mayHaveLeft)
+        transcriptView.prepend(page?.events ?? [], more: page?.more ?? transcriptView.mayHaveLeft)
     }
 
     /// The user's messages not loaded yet, for the message scroller.
-    func readEarlierMessages() async {
-        guard transcript.earlierAvailable else {
-            transcript.earlierMessages([])
+    package func readEarlierMessages() async {
+        guard transcriptView.earlierAvailable else {
+            transcriptView.earlierMessages([])
             return
         }
-        transcript.earlierMessages(await connect().earlierMessages())
+        transcriptView.earlierMessages(await connect().earlierMessages())
     }
 
     /// Dev hook (`KORE_QUEUE`): sends `text` the way a message sent mid-turn goes, with an id
     /// for `.queuedMessage`, until the composer queues (look.md §10).
     /// KORE_QUEUE: sends as the composer does (queued, since a turn runs).
-    func devQueue(_ text: String) {
+    package func devQueue(_ text: String) {
         draft = text
         send()
     }
@@ -1561,7 +1452,7 @@ package final class Chat: Identifiable {
     // MARK: Commands
 
     /// Stop on a command's row, confirmed: the row says "stopped" when the CLI does.
-    func stopCommand(_ id: String) {
+    package func stopCommand(_ id: String) {
         guard let command = commands.command(id), command.canStop, !command.stopping, let backend else { return }
         dispatch(.commandChanged(id: id, .stopping))
         Task {
@@ -1574,12 +1465,12 @@ package final class Chat: Identifiable {
     }
 
     /// Stop all: every live command but the armed jobs.
-    func stopAllCommands() {
+    package func stopAllCommands() {
         for command in commands.stoppable { stopCommand(command.id) }
     }
 
     /// A long foreground command's Run in background: the same row runs on.
-    func runInBackground(_ id: String) {
+    package func runInBackground(_ id: String) {
         guard let command = commands.command(id), command.canBackground, let backend else { return }
         Task {
             do {
@@ -1593,7 +1484,7 @@ package final class Chat: Identifiable {
     /// The end of a command's output, for its opened row: its file read from the end off the
     /// main thread, or what streamed, or the CLI's own tail when Kore can't read the file. Read
     /// only while the row is open.
-    func commandTail(_ id: String, lines: Int = 40) async -> OutputTail? {
+    package func commandTail(_ id: String, lines: Int = 40) async -> OutputTail? {
         guard let command = commands.command(id) else { return nil }
         switch command.output {
         case .stream:
@@ -1609,12 +1500,12 @@ package final class Chat: Identifiable {
     }
 
     /// A pane listing commands is showing (or not): the CLI is asked about them more often.
-    func watchCommands(_ closely: Bool) {
+    package func watchCommands(_ closely: Bool) {
         let backend = backend
         Task { await backend?.watchCommands(closely) }
     }
 
-    func stopAgent(_ id: String) {
+    package func stopAgent(_ id: String) {
         let backend = backend
         Task { await backend?.stopAgent(id) }
     }
@@ -1628,7 +1519,7 @@ package final class Chat: Identifiable {
         default: return
         }
         guard case .agent(_, let agent) = source else { return }
-        controls.changedBy = agent.sub.flatMap { transcript.agent($0)?.name } ?? provider.name
+        controls.changedBy = agent.sub.flatMap { transcriptView.agent($0)?.name } ?? provider.name
         controls.agentChangeSeq &+= 1
     }
 
@@ -1652,11 +1543,11 @@ package final class Chat: Identifiable {
     }
 
     /// A quiet line of Kore's own in the transcript.
-    func note(_ text: String) { dispatch(.notice(text)) }
+    package func note(_ text: String) { dispatch(.notice(text)) }
 
     /// A mode that can't reach Kore ends its Arsenal.
     private func arsenalFollowMode() {
-        if arsenal != nil, Arsenal.unavailable(self) != nil { Arsenal.shared.turnOff(self) }
+        if arsenal != nil { services.arsenalFollowMode(self) }
     }
 
     package func setPlanMode(_ on: Bool) {
@@ -1668,10 +1559,10 @@ package final class Chat: Identifiable {
     }
 
     /// "Allow commands in Plan", kept for this chat.
-    func setPlanAllow(_ on: Bool) {
+    package func setPlanAllow(_ on: Bool) {
         controls.planAllow = on
         if let id = status.sessionId { controls.keepPlanAllow(chat: id) }
-        UILog.event("plan-allow", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
+        services.log("plan-allow", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
         allowWaitingInPlan()
     }
 
@@ -1700,7 +1591,7 @@ package final class Chat: Identifiable {
     }
 
     /// Shift+Tab, as in each CLI.
-    func cycleMode() {
+    package func cycleMode() {
         switch provider.nextMode(controls.mode, controls.planMode, controls.availableModes) {
         case .mode(let next): setMode(next)
         case .togglePlan: setPlanMode(!controls.planMode)
@@ -1708,7 +1599,7 @@ package final class Chat: Identifiable {
     }
 
     /// Codex CLI's "Yes, implement this plan": switch plan off and start coding.
-    func implementPlan() {
+    package func implementPlan() {
         setPlanMode(false)
         draft = "Implement the plan."
         send()
@@ -1720,7 +1611,7 @@ package final class Chat: Identifiable {
 
     /// A model without the current effort takes its nearest level below (the picker's thumb
     /// slides down to it).
-    func setModel(_ option: ModelOption) {
+    package func setModel(_ option: ModelOption) {
         controls.modelId = option.id
         let level = EffortScale.fallback(controls.effort, offered: option.efforts, scale: controls.effortScale)
         if let level, level != controls.effort { setEffort(level) }
@@ -1734,19 +1625,19 @@ package final class Chat: Identifiable {
         }
     }
 
-    func setEffort(_ level: String) {
+    package func setEffort(_ level: String) {
         controls.effort = level
         let backend = backend
         Task { await backend?.setEffort(level) }
     }
 
     /// The CLI's report follows and has the last word; one it refused puts the switch back.
-    func setFastMode(_ on: Bool) {
+    package func setFastMode(_ on: Bool) {
         guard controls.fastModeEnabled, let backend else { return }
         let previous = controls.fastMode
         controls.fastChanging = true
         controls.fastMode = on
-        UILog.event("fast-mode", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
+        services.log("fast-mode", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
         Task {
             defer { controls.fastChanging = false }
             do {
@@ -1760,10 +1651,10 @@ package final class Chat: Identifiable {
     }
 
     /// `/` → Remote control, or the mark's click: the CLI's own remote control of this chat.
-    func setRemoteControl(_ on: Bool) {
+    package func setRemoteControl(_ on: Bool) {
         guard !controls.remoteChanging, !on || controls.remoteUnavailable == nil else { return }
         controls.remoteChanging = true
-        UILog.event("remote-control", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
+        services.log("remote-control", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
         let backend = connect()
         Task {
             defer { controls.remoteChanging = false }
@@ -1778,8 +1669,8 @@ package final class Chat: Identifiable {
     package func answer(_ approval: Approval, _ decision: Decision) {
         if case .allowAlways = decision { alwaysAllowed = true }
         approvals.remove(approval.id)
-        transcript.approvalSettled(approval.id)
-        if case .deny = decision { transcript.actionDenied() }
+        transcriptView.approvalSettled(approval.id)
+        if case .deny = decision { transcriptView.actionDenied() }
         let backend = backend
         Task { await backend?.respond(to: approval.id, decision) }
     }
@@ -1787,22 +1678,13 @@ package final class Chat: Identifiable {
 
 extension SentAttachment {
     /// A composer attachment as the transcript shows it; the transcript reads it from `url`.
-    init(_ attachment: Attachment) {
+    package init(_ attachment: Attachment) {
         let image: Data? = nil
         self.init(name: attachment.name, kind: attachment.kind, url: attachment.url, image: image)
     }
 }
 
-extension Chat {
-    /// The transcript's entries as text, one per line: what `KORE_DUMP` and storyline
-    /// `DumpRows` write, so replays compare across builds.
-    package func dumpLines() -> [String] {
-        transcript.entries.map { e in
-            let files = transcript.chips(e).map { "\($0.name):\($0.kind):\($0.thumbnail != nil)" }.joined(separator: ",")
-            // Kinds keep their earlier names, so dumps compare across builds.
-            let kind = e.kind == .answer ? "assistant" : "\(e.kind)"
-            return [kind, e.toolName ?? "", e.text, e.result ?? "", "\(e.done)", "\(e.isError)", files, e.from ?? ""]
-                .joined(separator: " | ").replacingOccurrences(of: "\n", with: "⏎")
-        }
-    }
+extension Chat: ModelListHolder {
+    package var modelCLI: String { provider.id }
+    package func listModels(_ models: [ModelOption]) { controls.listModels(models) }
 }

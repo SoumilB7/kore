@@ -3,6 +3,7 @@ import KoreCore
 import Testing
 
 @testable import KoreUI
+@testable import src
 
 @Suite("An imported chat as its model got it")
 struct ImportedViewTests {

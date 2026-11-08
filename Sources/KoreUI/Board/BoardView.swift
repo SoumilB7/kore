@@ -1,4 +1,5 @@
 import AppKit
+import src
 import SwiftUI
 
 /// A board tab: its sections and tiles at the frames `Board.solve` gives for the tab's size, in

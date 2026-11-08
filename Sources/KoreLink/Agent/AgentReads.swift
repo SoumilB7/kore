@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// Kore's state as the agent channel's values: Watch's reads, built from what the local link
 /// already reads (`LinkSnapshot`), plain text instead of render trees.

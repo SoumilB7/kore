@@ -1,4 +1,5 @@
 import Foundation
+import src
 
 /// What can be open over the composer: one at a time. Whatever opens closes the rest
 /// (`Chat.closePopups(keeping:)`); Account's sign-in methods menu is Account's own and opens

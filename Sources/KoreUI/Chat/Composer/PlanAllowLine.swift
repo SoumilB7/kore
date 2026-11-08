@@ -1,3 +1,4 @@
+import src
 import SwiftUI
 
 /// While planning, above the composer: one quiet line that lets the agent's commands run without

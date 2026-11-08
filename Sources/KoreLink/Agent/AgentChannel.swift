@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// Kore's agent channel (`z-docs/agent-protocol.md`): the socket the `kore` command and agents in
 /// Kore's chats read Kore through, apart from the local link. It exists only while the master

@@ -1,3 +1,4 @@
+import src
 import SwiftUI
 
 /// The title row's Agents button (look.md §10, §11): the chat's agents as a stack of avatars, or

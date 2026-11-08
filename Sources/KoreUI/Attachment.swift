@@ -5,27 +5,22 @@ import KoreCore
 import UniformTypeIdentifiers
 import src
 
-/// A file attached to a message: picked with +, pasted, or dropped.
-package struct Attachment: Identifiable {
-    package typealias Kind = AttachmentKind
-
-    package let id = UUID()
-    package let name: String
-    let kind: Kind
-    /// Where it lives on disk (pasted images are saved to a temp file); nil when only known
-    /// from a transcript.
-    let url: URL?
-    /// A picture known only from a transcript, as it was sent: decoded only when opened or copied.
-    let imageData: Data?
-    private let preview: Thumbnail?
-    /// A video's or an SVG's chip picture (ImageIO reads neither), made off the main actor.
+/// An attachment's pictures as the app draws them: a chip's thumbnail, or a video's or an SVG's
+/// poster (ImageIO reads neither), made off the main actor.
+final class AttachmentLook {
+    let preview: Thumbnail?
     let poster: Poster?
 
+    init(preview: Thumbnail?, poster: Poster?) {
+        self.preview = preview
+        self.poster = poster
+    }
+}
+
+extension Attachment {
     init(url: URL) {
-        self.url = url
-        name = url.lastPathComponent
-        kind = Attachments.kind(of: url)
-        imageData = nil
+        let kind = Attachments.kind(of: url)
+        let preview: Thumbnail?, poster: Poster?
         if AttachedMedia.kind(of: url).video {
             preview = nil
             poster = Poster(url: url, video: true)
@@ -36,20 +31,22 @@ package struct Attachment: Identifiable {
             preview = kind == .image ? Thumbnail { CGImageSourceCreateWithURL(url as CFURL, nil) } : nil
             poster = nil
         }
+        self.init(name: url.lastPathComponent, kind: kind, url: url, imageData: nil, look: AttachmentLook(preview: preview, poster: poster))
     }
 
     init(name: String, kind: Kind, imageData: Data? = nil) {
-        url = nil
-        self.name = name
-        self.kind = kind
-        self.imageData = imageData
-        preview = imageData.map { data in Thumbnail { CGImageSourceCreateWithData(data as CFData, nil) } }
-        poster = nil
+        let preview = imageData.map { data in Thumbnail { CGImageSourceCreateWithData(data as CFData, nil) } }
+        self.init(name: name, kind: kind, url: nil, imageData: imageData, look: AttachmentLook(preview: preview, poster: nil))
     }
+
+    private var pictures: AttachmentLook? { look.map { unsafeDowncast($0, to: AttachmentLook.self) } }
+
+    /// A video's or an SVG's chip picture (ImageIO reads neither), made off the main actor.
+    var poster: Poster? { pictures?.poster }
 
     /// The chip's picture, decoded at the chip's size (a screenshot's full bitmap is many MB,
     /// kept for as long as its chat is open); made on first use.
-    var thumbnail: NSImage? { preview?.image }
+    var thumbnail: NSImage? { pictures?.preview?.image }
 
     /// The chip shows a picture (a thumbnail, or a poster once made), for storylines.
     @MainActor package var showsPicture: Bool { thumbnail != nil || poster?.image != nil }
@@ -214,9 +211,6 @@ extension Attachments {
         return (try? png.write(to: url)) != nil ? url : nil
     }
 
-    static func files(_ attachments: [Attachment]) -> [File] {
-        attachments.compactMap { a in a.url.map { File(url: $0, name: a.name, kind: a.kind) } }
-    }
 
     // MARK: Transcripts
 

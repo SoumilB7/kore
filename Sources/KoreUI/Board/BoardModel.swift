@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import src
 
 /// The board's sizes storylines check against.
 package enum BoardMetrics {

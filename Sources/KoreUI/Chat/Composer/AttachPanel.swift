@@ -1,4 +1,5 @@
 import AppKit
+import src
 
 /// The + button's file picker. Each new open panel connects to the system's panel service
 /// before it returns, holding the main thread: about 0.1 s, and over a second the first time in

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import src
 
 /// Whether the chat's agent map is showing, which agent it has selected, and whether a failure
 /// has been seen there (the Agents button's red point lasts until then).

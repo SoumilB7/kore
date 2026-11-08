@@ -1,6 +1,7 @@
 import Foundation
 import KoreLink
 import KoreUI
+import src
 
 /// Brings `role`'s tab to the front and clicks Arsenal's icon in the titlebar: the tiers open.
 struct OpenArsenalTiers: Step {

@@ -28,7 +28,7 @@ package final class TranscriptStore {
         get { log.sentAt }
         _modify { yield &log.sentAt }
     }
-    private(set) var pendingSendSince: Date? {
+    package private(set) var pendingSendSince: Date? {
         get { log.pendingSendSince }
         _modify { yield &log.pendingSendSince }
     }
@@ -129,7 +129,7 @@ package final class TranscriptStore {
         get { log.batching }
         _modify { yield &log.batching }
     }
-    var providerName: String {
+    package var providerName: String {
         get { log.providerName }
         _modify { yield &log.providerName }
     }
@@ -155,17 +155,17 @@ package final class TranscriptStore {
     }
     var turnIsOpen: Bool { log.turnIsOpen }
     private func endUnfinishedAgents(from first: Int = 0) { log.endUnfinishedAgents(from: first) }
-    func compacting(_ on: Bool, at point: Int? = nil) { log.compacting(on, at: point) }
+    package func compacting(_ on: Bool, at point: Int? = nil) { log.compacting(on, at: point) }
     var connectionWord: String? { log.connectionWord }
-    var workRunning: Bool { log.workRunning }
-    func connected(_ state: Connection) { log.connected(state) }
+    package var workRunning: Bool { log.workRunning }
+    package func connected(_ state: Connection) { log.connected(state) }
     private var turnShowsSpinner: Bool { log.turnShowsSpinner }
     func compacted(at date: Date, auto: Bool? = nil) { log.compacted(at: date, auto: auto) }
     func compactionFailed(_ reason: String) { log.compactionFailed(reason) }
-    func compactionSummary(_ text: String, title: String? = nil) { log.compactionSummary(text, title: title) }
-    func forkedFrom(_ title: String) { log.forkedFrom(title) }
-    func continued(_ text: String, help: String) { log.continued(text, help: help) }
-    func carriedFrom(_ text: String, help: String) { log.carriedFrom(text, help: help) }
+    package func compactionSummary(_ text: String, title: String? = nil) { log.compactionSummary(text, title: title) }
+    package func forkedFrom(_ title: String) { log.forkedFrom(title) }
+    package func continued(_ text: String, help: String) { log.continued(text, help: help) }
+    package func carriedFrom(_ text: String, help: String) { log.carriedFrom(text, help: help) }
     static let forkSource = TranscriptLog.forkSource
     static let compactionRow = TranscriptLog.compactionRow
     private static let time = TranscriptLog.time
@@ -177,11 +177,11 @@ package final class TranscriptStore {
     var latestTurnSlept: Bool { log.latestTurnSlept }
     func agentAsked(_ approval: String, agent: String) { log.agentAsked(approval, agent: agent) }
     func approvalAsked(_ approval: String, question: Bool) { log.approvalAsked(approval, question: question) }
-    func approvalSettled(_ approval: String) { log.approvalSettled(approval) }
+    package func approvalSettled(_ approval: String) { log.approvalSettled(approval) }
     var workedFor: TimeInterval { log.workedFor }
     func agentID(forCard key: String) -> String? { log.agentID(forCard: key) }
-    func keepLane(of id: String) { log.keepLane(of: id) }
-    func needsHistory(_ id: String) -> Bool { log.needsHistory(id) }
+    package func keepLane(of id: String) { log.keepLane(of: id) }
+    package func needsHistory(_ id: String) -> Bool { log.needsHistory(id) }
     func lane(_ id: String) -> [Entry] { log.lane(id) }
     package func agent(_ id: String) -> AgentInfo? { log.agent(id) }
     func user(_ text: String, attachments: [SentAttachment], source: String? = nil) { log.user(text, attachments: attachments, source: source) }
@@ -199,7 +199,7 @@ package final class TranscriptStore {
     }
     func messageQueued(id: String, text: String, attachments: [SentAttachment]) { log.messageQueued(id: id, text: text, attachments: attachments) }
     func queuedMessage(id: String, _ delivery: QueuedDelivery) { log.queuedMessage(id: id, delivery) }
-    var provider: ProviderDescriptor? {
+    package var provider: ProviderDescriptor? {
         get { log.provider }
         _modify { yield &log.provider }
     }
@@ -222,17 +222,17 @@ package final class TranscriptStore {
     func agentFinished(id: String, status: AgentInfo.Status, result: String?, at date: Date = Date()) { log.agentFinished(id: id, status: status, result: result, at: date) }
     func agentResumed(id: String, at date: Date = Date()) { log.agentResumed(id: id, at: date) }
     func agentBackgrounded(id: String) { log.agentBackgrounded(id: id) }
-    func actionDenied() { log.actionDenied() }
+    package func actionDenied() { log.actionDenied() }
     func refused(_ id: String, _ refusal: Refusal) { log.refused(id, refusal) }
-    func prompt(of turn: String) -> String? { log.prompt(of: turn) }
-    var retryableTurn: String? { log.retryableTurn }
+    package func prompt(of turn: String) -> String? { log.prompt(of: turn) }
+    package var retryableTurn: String? { log.retryableTurn }
     private func changed(turn id: String?) { log.changed(turn: id) }
     private func turnIndex(_ id: String?) -> Int? { log.turnIndex(id) }
     private func cardIndex(_ agent: String) -> Int? { log.cardIndex(agent) }
     private func update(tool id: String, files: Bool = true, _ change: (inout Entry) -> Void) { log.update(tool: id, files: files, change) }
 
-    func apply(_ event: ChatEvent) { log.apply(event) }
-    func apply(_ event: ChatEvent, preserving observed: Set<String>) { log.apply(event, preserving: observed) }
+    package func apply(_ event: ChatEvent) { log.apply(event) }
+    package func apply(_ event: ChatEvent, preserving observed: Set<String>) { log.apply(event, preserving: observed) }
 
     // MARK: Chips
 
@@ -240,7 +240,7 @@ package final class TranscriptStore {
     /// keeps its identity (and its decoded picture) for as long as its row.
     @ObservationIgnored private var chipsByEntry: [UUID: [Attachment]] = [:]
 
-    func chips(_ entry: Entry) -> [Attachment] { chipsByEntry[entry.id] ?? [] }
+    package func chips(_ entry: Entry) -> [Attachment] { chipsByEntry[entry.id] ?? [] }
 
     package func chips(_ files: [SentAttachment], for entry: UUID, from earlier: UUID?) {
         if let earlier, let made = chipsByEntry.removeValue(forKey: earlier) {
@@ -508,9 +508,9 @@ package final class TranscriptStore {
 
     /// Conversation before what the CLI's history shows (before a compaction): once the shown
     /// turns are all in view, the top row loads it.
-    private(set) var earlierAvailable = false
+    package private(set) var earlierAvailable = false
 
-    private(set) var loadingEarlier = false
+    package private(set) var loadingEarlier = false
 
     /// The files the latest turn changed, by path (`turnChanges()`).
     private(set) var fileTouches: [String: FileTouch] = [:]
@@ -552,7 +552,7 @@ package final class TranscriptStore {
     /// Turns of this chat left memory and haven't all come back.
     @ObservationIgnored private var hasUnloaded = false
 
-    var mayHaveLeft: Bool { hasUnloaded }
+    package var mayHaveLeft: Bool { hasUnloaded }
 
     /// Whether the reader is at the end, nothing moving the view: set by the timeline while it's
     /// up. Gone, `savedScroll` says.
@@ -656,7 +656,7 @@ package final class TranscriptStore {
     @ObservationIgnored private var foldSeq = 0
 
     /// The chat's id for the logs, once it has one.
-    @ObservationIgnored var chatID: (() -> String?)?
+    @ObservationIgnored package var chatID: (() -> String?)?
 
     /// Applies many changes as one update (a replayed session). Replayed turns start folded.
     func batch(_ changes: () -> Void) {
@@ -700,7 +700,7 @@ package final class TranscriptStore {
     private var windowStartIndex: Int { windowStart.flatMap { position[$0] } ?? 0 }
 
     /// The user turns the store holds, shown or not.
-    var userTurns: Int { entries.count { $0.kind == .user } }
+    package var userTurns: Int { entries.count { $0.kind == .user } }
 
     package func countHidden() {
         let hidden = entries[..<windowStartIndex].count { $0.kind == .user }
@@ -708,13 +708,13 @@ package final class TranscriptStore {
     }
 
     /// The conversation before a compaction is being read.
-    func startLoadingEarlier() {
+    package func startLoadingEarlier() {
         loadingEarlier = true
     }
 
     /// A page of earlier conversation goes above everything, shown; `more` says if there's
     /// more before it. A turn that's running stays the running one.
-    func prepend(_ events: [ChatEvent], more: Bool) {
+    package func prepend(_ events: [ChatEvent], more: Bool) {
         let later = entries
         staysUntil = Date().addingTimeInterval(Self.readInStays)
         let (running, latest, answered, dismissed) = (current, latestTurn, lastAnswerTurn, retryDismissed)
@@ -765,7 +765,7 @@ package final class TranscriptStore {
     /// nil when nothing can: something's under way, the reader isn't at the end or has text
     /// selected, or no row before it would come back as it was. On screen, none of it can but what
     /// isn't built, `opening` the chat.
-    func unloadPoint(opening: Bool = false) -> Entry? {
+    package func unloadPoint(opening: Bool = false) -> Entry? {
         guard !isOnScreen || opening else { return nil }
         guard !turnIsOpen, queued.isEmpty, pendingSendSince == nil, compactingSince == nil, !loadingEarlier, pendingMessage == nil,
             Date() >= staysUntil,
@@ -818,7 +818,7 @@ package final class TranscriptStore {
     /// What's before this message leaves memory, with all that's built from it. `marks`: the
     /// messages that are in the history before it now. It can be read back by the way earlier
     /// conversation always is.
-    func unload(before id: UUID, earlier marks: [EarlierMessage]) {
+    package func unload(before id: UUID, earlier marks: [EarlierMessage]) {
         guard let cut = position[id], cut > 0 else { return }
         let gone = entries[..<cut]
         let goneIDs = Set(gone.map(\.id))
@@ -937,7 +937,7 @@ package final class TranscriptStore {
     }
 
     /// The list of what's not loaded arrived.
-    func earlierMessages(_ messages: [EarlierMessage]) {
+    package func earlierMessages(_ messages: [EarlierMessage]) {
         guard messages != earlierMarks else { return }
         earlierMarks = messages
         updateMarks()
@@ -1014,7 +1014,7 @@ package final class TranscriptStore {
     /// to go then, if one is); shown after its notice until it continues or is cancelled.
     private(set) var continuation: (turn: String, at: Date, sends: String?)?
 
-    func continues(turn: String?, at: Date?, sends: String? = nil) {
+    package func continues(turn: String?, at: Date?, sends: String? = nil) {
         let old = continuation?.turn
         continuation = turn.flatMap { turn in at.map { (turn, $0, sends) } }
         if let old { changed(turn: old) }
@@ -1186,7 +1186,7 @@ package final class TranscriptStore {
     }
 
     /// Replaces an agent's own work with its whole history (`ChatBackend.agentHistory`).
-    func replaceLane(of id: String, with events: [ChatEvent]) {
+    package func replaceLane(of id: String, with events: [ChatEvent]) {
         loadedAgents.insert(id)
         lanes[id] = []
         for (tool, ref) in laneTools where ref.agent == id { laneTools[tool] = nil }
@@ -1373,7 +1373,7 @@ package final class TranscriptStore {
     }
 
     /// Runs a rebuild that's waiting for the next draw now, so a test doesn't wait on the clock.
-    func drawNow() { rebuild() }
+    package func drawNow() { rebuild() }
 
     /// Everything is built again on the next rebuild (the window moved, or entries shifted).
     package func invalidateAll() {

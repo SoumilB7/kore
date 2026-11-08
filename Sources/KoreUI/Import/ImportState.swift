@@ -257,18 +257,9 @@ final class ImportState {
         if preview.turns == nil {
             parts.append("earlier turns not carried")
         } else if preview.notCarried > 0 {
-            parts.append("\(preview.notCarried) earlier not carried" + span(preview.notCarriedFrom, preview.notCarriedTo))
+            parts.append("\(preview.notCarried) earlier not carried" + ImportedHistory.span(preview.notCarriedFrom, preview.notCarriedTo))
         }
         return parts.joined(separator: " · ")
-    }
-
-    /// " (2–19 Oct)", or nothing without dates.
-    static func span(_ from: Date?, _ to: Date?) -> String {
-        guard let from, let to else { return "" }
-        let day = DateFormatter()
-        day.setLocalizedDateFormatFromTemplate("d MMM")
-        let first = day.string(from: from), last = day.string(from: to)
-        return first == last ? " (\(first))" : " (\(first)–\(last))"
     }
 
     /// Whose model the history goes to, when it leaves the source's company.

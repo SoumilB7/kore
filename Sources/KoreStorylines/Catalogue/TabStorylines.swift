@@ -1,5 +1,6 @@
 import AppKit
 import KoreUI
+import src
 
 /// Three chats, each with its own rows, draft and place in its transcript, switched between by
 /// their tabs: each comes back exactly as it was left, with the composer holding its draft and

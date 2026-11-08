@@ -1,4 +1,5 @@
 import Foundation
+@testable import src
 import Testing
 
 /// A CLI moves to another login only when the owner picks it: the switch takes a `LoginPick`,

@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import KoreUI
+import src
 
 /// Native trackpad samples magnify only the active page, without changing its text layout.
 /// Keep geometry, selection and tab-isolation evidence beside the timing measurements.

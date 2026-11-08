@@ -1,15 +1,111 @@
 import Foundation
 import KoreCore
 
-/// What the app around a chat supplies to its engine. The Mac app's: a backend from the real
-/// CLI (or a storyline's or the dev feed's stand-in), and a turn's plan windows for its usage
-/// mark. A headless host supplies its own.
+/// What the app around a chat supplies to it: the backend (the real CLI, or a storyline's or
+/// the dev feed's stand-in), the transcript's view side and the chat's view state, the account,
+/// stay awake, the network, logs and taps. A headless host supplies its own.
 @MainActor
 package protocol ChatServices: AnyObject {
     /// The chat's backend, made as it first needs one.
     func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend
     /// The plan's windows a turn reported (`BackendOptions.planWindows`).
     func planWindows(_ cli: String, _ snapshot: PlanSnapshot?)
+    /// A transcript as the app shows it, over its own `TranscriptLog`.
+    func makeTranscript() -> any ChatTranscript
+    /// A chat's view state (its popups, the agent map), kept by the chat for the app.
+    func makeViewState() -> AnyObject
+    /// A new chat: the account and stay awake follow it; its view state takes it.
+    func register(_ chat: Chat)
+    /// Its tab closed.
+    func closed(_ chat: Chat)
+    /// The CLI's login was refused: its status is read again.
+    func refreshAccount(_ cli: String)
+    /// A CLI's model list came (Arsenal keeps one per CLI).
+    func modelsListed(_ cli: String, _ models: [ModelOption])
+    /// The chat's mode changed: an Arsenal it can't keep goes off.
+    func arsenalFollowMode(_ chat: Chat)
+    /// Every event, after the chat took it: storylines, the local link, the agent channel.
+    func tap(_ chat: Chat, _ event: ChatEvent)
+    /// One line in the app's interface log.
+    func log(_ name: String, _ fields: KeyValuePairs<String, String?>)
+    /// Replays are timed (a dev hook).
+    var timeReplay: Bool { get }
+    func logReplay(_ took: Duration)
+
+    // MARK: Network
+    var isOnline: Bool { get }
+    /// Posted as the network goes or comes back.
+    var networkChanged: Notification.Name { get }
+    /// Returns once the network is back.
+    func online() async
+
+    // MARK: Stay awake
+    /// Stay awake's clock, while it's set up.
+    var awakeClock: (any AwakeClock)? { get }
+    /// Stay awake is on.
+    var stayingAwake: Bool { get }
+    /// Stay awake goes on for a message set to go at a limit's reset; false when it was on already.
+    func stayAwakeForReset() -> Bool
+    /// That message went or was cancelled: Stay awake goes off, unless another chat waits on it.
+    func releaseAwake(besides chat: Chat)
+    /// The Mac slept since `date`.
+    func sleptThrough(since date: Date) -> Bool
+
+    // MARK: Files
+    /// Composer attachments for files on disk.
+    func attachments(_ urls: [URL]) -> [Attachment]
+    /// A sent message's files, to attach again: those still on disk, and pictures known only as
+    /// they were sent, saved again.
+    func reattach(_ sent: [Attachment]) -> [Attachment]
+}
+
+/// What a chat asks of its transcript beyond the log: the rows' side of sending, drawing,
+/// paging and unloading. The app's transcript store is one.
+@MainActor
+package protocol ChatTranscript: AnyObject {
+    var log: TranscriptLog { get }
+    var entries: [TranscriptLog.Entry] { get }
+    var providerName: String { get set }
+    var chatID: (() -> String?)? { get set }
+    var provider: ProviderDescriptor? { get set }
+    var pendingSendSince: Date? { get }
+    var retryableTurn: String? { get }
+    var workRunning: Bool { get }
+    var earlierAvailable: Bool { get }
+    var loadingEarlier: Bool { get }
+    var mayHaveLeft: Bool { get }
+    var userTurns: Int { get }
+    /// The running sub-agents' ids, as the Agents button last drew them.
+    var runningAgents: [String] { get }
+    func apply(_ event: ChatEvent)
+    func apply(_ event: ChatEvent, preserving observed: Set<String>)
+    func sending(_ on: Bool, at date: Date)
+    func drawNow()
+    func compacting(_ on: Bool, at point: Int?)
+    func connected(_ state: Connection)
+    func forkedFrom(_ title: String)
+    func continued(_ text: String, help: String)
+    func carriedFrom(_ text: String, help: String)
+    func compactionSummary(_ text: String, title: String?)
+    func continues(turn: String?, at: Date?, sends: String?)
+    func actionDenied()
+    func approvalSettled(_ approval: String)
+    func agent(_ id: String) -> TranscriptLog.AgentInfo?
+    func keepLane(of id: String)
+    func needsHistory(_ id: String) -> Bool
+    func replaceLane(of id: String, with events: [ChatEvent])
+    func prompt(of turn: String) -> String?
+    func chips(_ entry: TranscriptLog.Entry) -> [Attachment]
+    func startLoadingEarlier()
+    func prepend(_ events: [ChatEvent], more: Bool)
+    func earlierMessages(_ messages: [EarlierMessage])
+    func unloadPoint(opening: Bool) -> TranscriptLog.Entry?
+    func unload(before id: UUID, earlier marks: [EarlierMessage])
+}
+
+extension ChatTranscript {
+    func sending(_ on: Bool) { sending(on, at: Date()) }
+    func compacting(_ on: Bool) { compacting(on, at: nil) }
 }
 
 /// One chat's line to its CLI: the backend, made on first use; the pump that hands each of its

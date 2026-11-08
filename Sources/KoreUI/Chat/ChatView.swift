@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import src
 import SwiftUI
 
 /// The chat tabs: the transcripts of the last chats shown, kept as they were, under one set of

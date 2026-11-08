@@ -1,4 +1,5 @@
 import AppKit
+import src
 import SwiftUI
 
 /// An image file in the chat's image viewer: fitted, zoom and pan, and the pen. Markup never

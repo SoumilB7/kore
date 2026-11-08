@@ -1,5 +1,6 @@
 import AppKit
 import ImageIO
+@testable import src
 import SwiftUI
 import Testing
 import UniformTypeIdentifiers

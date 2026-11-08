@@ -1,4 +1,5 @@
 import AppKit
+import src
 import SwiftUI
 
 /// A popup over the composer (the / menu's Usage and Account, the model and mode pickers), in
