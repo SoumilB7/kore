@@ -9,18 +9,20 @@ import dev.kore.link.node.JoinFlow
 import dev.kore.link.node.NodeClient
 import dev.kore.link.node.NodeMachine
 import dev.kore.link.node.SingleFlight
+import dev.kore.link.node.TailnetKeeper
+import dev.kore.link.node.TailnetSwitch
 import dev.kore.link.trust.Device
 import dev.kore.link.trust.DeviceBook
 import dev.kore.link.trust.NodeKind
 import dev.kore.phone.background.MeshService
 import dev.kore.phone.background.Notifier
+import dev.kore.phone.background.SignInService
 import dev.kore.phone.link.IdentityKey
 import dev.kore.phone.link.RaiseKey
 import dev.kore.tailnet.EmbeddedTailnet
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,8 +35,9 @@ import kotlinx.serialization.json.JsonObject
 /**
  * The phone on KoreNet (phase 18 §5): its embedded tailnet, its identity, the devices it knows
  * (a [DeviceBook] in no-backup storage) and one [NodeClient] per device. The tailnet and the node
- * clients run only while the app is on screen — or, with the background setting on (off by
- * default), under [MeshService]'s foreground notification. KoreNet off: nothing runs at all.
+ * clients run only while the app is on screen, mid sign-in (under [SignInService]), or, with the
+ * background setting on (off by default), under [MeshService]'s foreground notification. KoreNet
+ * off: nothing runs at all. When is [TailnetKeeper]'s; every start and stop goes through its switch.
  */
 class Mesh(private val app: KoreApp) {
     private val prefs = app.getSharedPreferences("kore", android.content.Context.MODE_PRIVATE)
@@ -53,7 +56,29 @@ class Mesh(private val app: KoreApp) {
     private val bookFile = File(app.noBackupFilesDir, "devices.json")
     val book = DeviceBook(load(), ::save)
     val dialer by lazy { NetDialer(tailnet, ::identity, app.scope) }
-    val join by lazy { JoinFlow(tailnet, dialer::enroll, app.scope, ::joined) }
+    private val switch by lazy { TailnetSwitch(tailnet) }
+    val join by lazy {
+        JoinFlow(tailnet, dialer::enroll, app.scope, ::joined, start = {
+            // Join pressed with KoreNet off (turned off, then Leave): Join turns it on.
+            if (!networkOn) prefs.edit().putBoolean("network", true).apply()
+            keeper.up()
+        })
+    }
+    private val keeper: TailnetKeeper by lazy {
+        TailnetKeeper(tailnet, switch, join, app.scope, { TailnetKeeper.Settings(networkOn, joined, background) },
+            onUp = { signedIn ->
+                troubled = false
+                nodesFlow.value.forEach { it.start(); it.post(if (signedIn) NodeMachine.Event.SignedIn else NodeMachine.Event.SignedOut) }
+            },
+            onDown = { nodesFlow.value.forEach(NodeClient::stop) },
+            onTrouble = { e ->
+                android.util.Log.w("kore", "tailnet: start failed (${e::class.simpleName}), trying again")
+                // Once per spell of failures; it keeps trying by itself.
+                if (!troubled && joined) say("Tailscale didn't start · trying again")
+                troubled = true
+            })
+    }
+    @Volatile private var troubled = false
 
     private val nodesFlow = MutableStateFlow<List<NodeClient>>(emptyList())
     /** One client per known device, Macs first. */
@@ -80,11 +105,12 @@ class Mesh(private val app: KoreApp) {
         }
 
     private var onScreen = false
-    private var running = false
-    private var settle: Job? = null
 
     init {
         syncNodes()
+        keeper.running // made now: it follows the join's steps from the first one
+        // A sign-in that ended (signed in, cancelled, given up): its foreground service goes.
+        app.scope.launch { join.step.collect { if (!JoinFlow.signingIn(it)) SignInService.stop(app) } }
     }
 
     fun node(id: UUID?): NodeClient? = nodesFlow.value.firstOrNull { it.id == id } ?: if (id == null) nodesFlow.value.firstOrNull() else null
@@ -95,33 +121,25 @@ class Mesh(private val app: KoreApp) {
     /** The app came on screen or went off it. */
     fun onScreen(on: Boolean) {
         onScreen = on
-        apply()
+        keeper.onScreen(on)
+        if (on) apply()
         nodesFlow.value.forEach { if (on) it.reconnectNow() else it.setPresence(false) }
     }
 
+    /**
+     * "Join KoreNet": a short foreground service first, while the app is still in front (Android
+     * 12+ refuses one started from the background), so the process lives through the browser.
+     */
+    fun beginJoin() {
+        SignInService.start(app)
+        join.begin()
+    }
+
     /** Runs or stops the tailnet and the node clients as the screen and the settings say. */
-    @Synchronized fun apply() {
-        val want = networkOn && joined && (onScreen || background)
-        if (background && networkOn && joined) MeshService.start(app) else MeshService.stop(app)
-        if (want == running) return
-        running = want
-        settle?.cancel()
-        if (want) {
-            settle = app.scope.launch {
-                tailnet.start()
-                // Until it runs (a few seconds from cold): then the node clients dial.
-                var waited = 0
-                while (running && tailnet.state() != Tailnet.RUNNING && waited < 30_000) {
-                    if (tailnet.state() == Tailnet.NEEDS_LOGIN) return@launch nodesFlow.value.forEach { it.start(); it.post(NodeMachine.Event.SignedOut) }
-                    delay(250)
-                    waited += 250
-                }
-                nodesFlow.value.forEach { it.start(); it.post(NodeMachine.Event.SignedIn) }
-            }
-        } else {
-            nodesFlow.value.forEach(NodeClient::stop)
-            settle = app.scope.launch { tailnet.stop() }
-        }
+    fun apply() {
+        // Background mode's service starts only from the front (Android 12+); stopping is always allowed.
+        if (background && networkOn && joined) { if (onScreen) MeshService.start(app) } else MeshService.stop(app)
+        keeper.apply()
     }
 
     /** The Mac answered the Join flow with its welcome: pin it, take its directory, follow it. */
@@ -145,7 +163,7 @@ class Mesh(private val app: KoreApp) {
                 onRecord = { book.put(it) },
                 onDirectory = { records -> book.applyDirectory(d.id, deviceId, records); syncNodes() },
             ).also { client ->
-                if (running) client.start()
+                if (keeper.running) client.start()
                 val notifier = Notifier(app, d.id.toString()) { if (many) client.name else null }
                 notifiers[d.id] = notifier to app.scope.launch { client.attention.collect { notifier.handle(it, client.chatOnScreen) } }
             }
@@ -188,9 +206,8 @@ class Mesh(private val app: KoreApp) {
         notifiers.clear()
         nodesFlow.value = emptyList()
         book.clear()
-        running = false
         MeshService.stop(app)
-        app.scope.launch { tailnet.logout() }
+        keeper.leave()
         IdentityKey.forget()
         raiseKey.forget()
         prefs.edit().remove("device").apply()

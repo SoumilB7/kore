@@ -48,7 +48,14 @@ class MeshService : Service() {
             app.mesh.background = false
             return START_NOT_STICKY
         }
-        startForeground(ID, ongoing("Kore · connecting"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        // connectedDevice (the manifest says why): a refusal (a phone's own rule) ends the service, never the app.
+        try {
+            startForeground(ID, ongoing("Kore · connecting"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } catch (e: Exception) {
+            android.util.Log.w("kore", "background: no foreground service (${e::class.simpleName})")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         watch?.cancel()
         watch = app.scope.launch {
             app.mesh.nodes.flatMapLatest { nodes ->

@@ -104,14 +104,49 @@ func TestSealedStoreKeepsStateSealed(t *testing.T) {
 	}
 }
 
-type refuse struct{ xor }
+type refuse struct {
+	xor
+	why string
+}
 
-func (refuse) Open([]byte) ([]byte, error) { return nil, errors.New("key gone") }
+func (r refuse) Open([]byte) ([]byte, error) { return nil, errors.New(r.why) }
 
-func TestALostKeyStartsSignedOut(t *testing.T) {
+// A Keystore that fails for a moment (busy, first boot still locked) must never sign the phone out.
+func TestSealedStoreOpenErrorKeepsTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sealed")
+	os.WriteFile(path, []byte("sealed state"), 0o600)
+	for _, why := range []string{"java.security.ProviderException: Keystore operation failed", "short", ""} {
+		s, err := openSealedStore(path, refuse{why: why})
+		if err == nil || s != nil {
+			t.Fatalf("%q: store %v, err %v", why, s, err)
+		}
+		if got, _ := os.ReadFile(path); string(got) != "sealed state" {
+			t.Fatalf("%q: file now %q", why, got)
+		}
+	}
+	// The same file opens once the Keystore answers again.
+	os.WriteFile(path, flip([]byte(`{"k":"dg=="}`)), 0o600)
+	s, err := openSealedStore(path, xor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ReadState("k"); err != nil || string(got) != "v" {
+		t.Fatalf("after: %q %v", got, err)
+	}
+}
+
+func TestSealedStoreUnreadableFileIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := openSealedStore(dir, xor{}); err == nil {
+		t.Fatal("a directory read as state")
+	}
+}
+
+// A key that's gone can't ever open the state: start signed out, the old file set aside.
+func TestALostKeyStartsSignedOutAndSetsTheFileAside(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.sealed")
 	os.WriteFile(path, []byte("sealed by a key that's gone"), 0o600)
-	s, err := openSealedStore(path, refuse{})
+	s, err := openSealedStore(path, refuse{why: "java.lang.IllegalStateException: " + Lost + " (no key)"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +154,43 @@ func TestALostKeyStartsSignedOut(t *testing.T) {
 		t.Fatal("state from a lost key")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("unreadable state kept")
+		t.Fatal("unreadable state still in place")
+	}
+	if got, _ := os.ReadFile(path + ".lost"); string(got) != "sealed by a key that's gone" {
+		t.Fatalf("set aside: %q", got)
+	}
+}
+
+func TestSealedStoreGarbledStateStartsSignedOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sealed")
+	os.WriteFile(path, flip([]byte("not json")), 0o600)
+	s, err := openSealedStore(path, xor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReadState("k"); err != ipn.ErrStateNotExist {
+		t.Fatal("state from garble")
+	}
+	if _, err := os.Stat(path + ".lost"); err != nil {
+		t.Fatal("garbled state not set aside")
+	}
+}
+
+type sealFails struct{ xor }
+
+func (sealFails) Seal([]byte) ([]byte, error) { return nil, errors.New("keystore busy") }
+
+func TestSealedStoreSealErrorLeavesTheFileAsItWas(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sealed")
+	s, _ := openSealedStore(path, xor{})
+	s.WriteState("k", []byte("v1"))
+	before, _ := os.ReadFile(path)
+	s.sealer = sealFails{}
+	if err := s.WriteState("k", []byte("v2")); err == nil {
+		t.Fatal("seal error swallowed")
+	}
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+		t.Fatal("file changed by a failed seal")
 	}
 }
 

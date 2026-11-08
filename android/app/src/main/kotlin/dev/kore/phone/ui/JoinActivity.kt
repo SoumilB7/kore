@@ -15,6 +15,7 @@ import dev.kore.link.node.JoinFlow.Step
 import dev.kore.phone.R
 import dev.kore.phone.kore
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
@@ -25,7 +26,8 @@ import kotlinx.coroutines.launch
 class JoinActivity : Activity() {
     private lateinit var root: LinearLayout
     private var watch: Job? = null
-    private var opened: String? = null
+    /** The sign-in URL no browser here could open: the screen offers it to copy. */
+    private var unopened: String? = null
     private val flow get() = kore.mesh.join
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,7 +42,7 @@ class JoinActivity : Activity() {
         if (isFinishing) return
         if (kore.mesh.joined && intent?.getBooleanExtra("signIn", false) != true) return home()
         flow.visible(true)
-        watch = kore.scope.launch { flow.step.collect { s -> runOnUiThread { render(s) } } }
+        watch = kore.scope.launch { flow.step.combine(flow.offline) { s, off -> s to off }.collect { (s, off) -> runOnUiThread { render(s, off) } } }
     }
 
     override fun onStop() {
@@ -49,21 +51,23 @@ class JoinActivity : Activity() {
         super.onStop()
     }
 
-    private fun render(s: Step) {
+    private fun render(s: Step, offline: Boolean) {
         root.removeAllViews()
+        if (s !is Step.SigningIn) unopened = null
+        flow.tab.toOpen(s)?.let { if (!signIn(it)) unopened = it }
+        // Mid sign-in with no network: one quiet line; it goes on by itself once back.
+        val noNet = if (offline) "\nNo internet on this phone; Kore goes on once it's back." else ""
         when (s) {
-            Step.Join -> screen(logo(), "Kore", "Your Mac's chats, from here.") {
-                primary("Join KoreNet") { flow.begin() }
+            is Step.Join -> screen(logo(), "Kore", if (s.failed) "Tailscale didn't start on this phone. Try again." else "Your Mac's chats, from here.") {
+                primary(if (s.failed) "Try again" else "Join KoreNet") { kore.mesh.beginJoin() }
                 addView(label("Signs in with Tailscale", 12f, K.faint).apply { gravity = Gravity.CENTER })
             }
-            Step.Starting -> screen(halo(R.drawable.ic_mac, pulse = true), "Starting…", "Kore's own Tailscale is coming up.") { quiet("Cancel") { flow.cancel() } }
+            Step.Starting -> screen(halo(R.drawable.ic_mac, pulse = true), "Starting…", "Kore's own Tailscale is coming up.$noNet") { quiet("Cancel") { flow.cancel() } }
             is Step.SigningIn -> {
-                if (opened != s.url) {
-                    opened = s.url
-                    signIn(s.url)
-                }
-                screen(halo(R.drawable.ic_mac, pulse = true), "Sign in to Tailscale", "Finish in the browser tab; Kore goes on from there.") {
-                    secondary("Open sign-in again") { signIn(s.url) }
+                val small = if (unopened == s.url) "No browser here opened the sign-in page. Copy its link into one." else "Finish in the browser tab; Kore goes on from there."
+                screen(halo(R.drawable.ic_mac, pulse = true), "Sign in to Tailscale", small + noNet) {
+                    if (unopened == s.url) secondary("Copy sign-in link") { copy("sign-in link", s.url) }
+                    else secondary("Open sign-in again") { if (!signIn(s.url)) { unopened = s.url; render(s, offline) } }
                     quiet("Cancel") { flow.cancel() }
                 }
             }
@@ -103,9 +107,7 @@ class JoinActivity : Activity() {
                 "Your tailnet has to approve or sign this phone first (Tailnet Lock or device approval).") {
                 s.nodeKey?.let { key ->
                     addView(facts(listOf("Node key" to key.take(16) + "…" + key.takeLast(4))))
-                    secondary("Copy node key") {
-                        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("node key", key))
-                    }
+                    secondary("Copy node key") { copy("node key", key) }
                 }
                 quiet("Cancel") { flow.cancel() }
             }
@@ -113,19 +115,32 @@ class JoinActivity : Activity() {
         }
     }
 
-    /** Tailscale's own page in a Custom Tab over the app (no library: the session extra is enough). */
-    private fun signIn(url: String) {
-        val tab = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+    /**
+     * Tailscale's own page in a Custom Tab over the app (no library: the session extra is enough;
+     * a browser without Custom Tabs opens it as a plain tab). No browser at all: a plain VIEW in a
+     * new task, then the link to copy.
+     */
+    private fun signIn(url: String): Boolean {
+        val uri = Uri.parse(url)
+        val tab = Intent(Intent.ACTION_VIEW, uri).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
             putExtras(Bundle().apply { putBinder("android.support.customtabs.extra.SESSION", null) })
             putExtra("android.support.customtabs.extra.TOOLBAR_COLOR", K.bg)
             putExtra("androidx.browser.customtabs.extra.SHARE_STATE", 2)
         }
-        runCatching { startActivity(tab) }
+        val plain = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (runCatching { startActivity(tab) }.isSuccess || runCatching { startActivity(plain) }.isSuccess) return true
+        android.util.Log.w("kore", "sign-in: no browser opened the page")
+        return false
+    }
+
+    private fun copy(what: String, text: String) {
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(what, text))
+        Quiet.say(this, "Copied")
     }
 
     private fun leave() {
         kore.mesh.leave()
-        opened = null
     }
 
     private fun home() {

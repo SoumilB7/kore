@@ -68,26 +68,46 @@ fun mac(id: UUID = UUID.fromString("B3D9E1F0-7A2C-4E6B-8D41-5C0F9A3E2B02")) =
 fun node(name: String, os: String = "macOS", online: Boolean = true, user: Long? = 7, tags: List<String> = emptyList(), key: String = "nodekey:$name") =
     TailnetNode("$name.tail.ts.net.", name, os, online, user, "me@example.com", key, listOf("100.64.0.${name.length}"), tags)
 
-/** A tailnet in memory: its state, its peers, and who answers a dial. */
+/**
+ * A tailnet in memory: its state, its peers, and who answers a dial. Like tsnet, a stop mid
+ * sign-in loses the pending node key: the next start shows a new sign-in URL.
+ */
 class FakeTailnet(var state: String = Tailnet.NEEDS_LOGIN) : Tailnet {
     var url: String? = "https://login.tailscale.com/a/x"
     var me: TailnetNode? = null
     var others: List<TailnetNode> = emptyList()
     val dials = mutableListOf<String>()
     var started = 0
+    var stops = 0
+    var online = true
+    /** What the next start throws (once). */
+    var startFails: Exception? = null
     var listening: (String) -> Boolean = { false }
+    private var before: String? = null
 
     override fun state() = state
     override fun authUrl() = url.takeIf { state == Tailnet.NEEDS_LOGIN }
     override fun self() = me.takeIf { state == Tailnet.RUNNING }
     override fun peers() = others
     override fun whois(ip: String) = others.firstOrNull { ip in it.ips }
+    override fun online() = online
     override fun dial(address: String, port: Int, timeoutMs: Long): ByteConn {
         dials += address
         if (!listening(address)) throw java.io.IOException("connection refused")
         error("the tests enroll through a fake")
     }
-    override fun start() { started++ }
-    override fun stop() { state = "Stopped" }
+    override fun start() {
+        startFails?.let { startFails = null; throw it }
+        started++
+        before?.let { state = it }
+        before = null
+    }
+    override fun stop() {
+        stops++
+        if (state == "Stopped") return
+        if (state == Tailnet.NEEDS_LOGIN) url = "https://login.tailscale.com/a/new-key-$stops"
+        before = state
+        state = "Stopped"
+    }
     override fun logout() { state = Tailnet.NEEDS_LOGIN }
 }

@@ -68,8 +68,11 @@ interface Tailnet {
     fun whois(ip: String): TailnetNode?
     /** TCP to [address]:[port] over the tailnet (blocks until connected; throws when it can't). */
     fun dial(address: String, port: Int, timeoutMs: Long): ByteConn
+    /** Brings the node up (non-blocking past its own setup); throws when it can't start at all. */
     fun start()
     fun stop()
+    /** The phone has a network to reach control on (not airplane mode, not out of signal). */
+    fun online(): Boolean = true
     /** Leave KoreNet: drop the node key on the control plane and locally. */
     fun logout()
 

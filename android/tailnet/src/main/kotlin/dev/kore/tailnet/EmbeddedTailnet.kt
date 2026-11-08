@@ -9,6 +9,8 @@ import android.os.ParcelFileDescriptor
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import dev.kore.link.net.ByteConn
+import dev.kore.link.net.NetRow
+import dev.kore.link.net.NetRows
 import dev.kore.link.net.Tailnet
 import dev.kore.link.net.TailnetNode
 import dev.kore.tailnet.bind.tailnet.Binder
@@ -57,28 +59,41 @@ class EmbeddedTailnet(private val context: Context, private val hostname: String
         return FdConn(ParcelFileDescriptor.adoptFd(fd))
     }
 
+    /** Throws when the node can't start (its state didn't open, the shim refused): nothing is left registered. */
     @Synchronized
     override fun start() {
         if (running) return
         watchNetwork()
-        Go.setBinder(object : Binder {
-            override fun bindSocket(fd: Long) {
-                val network = current ?: return
-                // A dup of the socket: binding it binds the socket; the dup goes, the socket stays.
-                ParcelFileDescriptor.fromFd(fd.toInt()).use { network.bindSocket(it.fileDescriptor) }
-            }
-        })
-        val dir = File(context.noBackupFilesDir, "tailnet").apply { mkdirs() }
-        Go.start(dir.path, hostname, KeystoreSealer)
+        try {
+            Go.setBinder(object : Binder {
+                override fun bindSocket(fd: Long) {
+                    val network = current ?: return
+                    // A dup of the socket: binding it binds the socket; the dup goes, the socket stays.
+                    ParcelFileDescriptor.fromFd(fd.toInt()).use { network.bindSocket(it.fileDescriptor) }
+                }
+            })
+            val dir = File(context.noBackupFilesDir, "tailnet").apply { mkdirs() }
+            Go.start(dir.path, hostname, KeystoreSealer)
+        } catch (e: Exception) {
+            unwatchNetwork()
+            runCatching { Go.setBinder(null) }
+            android.util.Log.w("kore", "tailnet: didn't start (${e::class.simpleName})")
+            throw e
+        }
         running = true
     }
+
+    /** A network to reach control on right now: the phone isn't offline (airplane mode, no signal). */
+    override fun online(): Boolean = runCatching {
+        val n = connectivity.activeNetwork ?: return false
+        connectivity.getNetworkCapabilities(n)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    }.getOrDefault(true)
 
     @Synchronized
     override fun stop() {
         if (!running) return
         running = false
-        callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
-        callback = null
+        unwatchNetwork()
         runCatching { Go.stop() }
         Go.setBinder(null)
     }
@@ -105,41 +120,81 @@ class EmbeddedTailnet(private val context: Context, private val hostname: String
         callback = cb
     }
 
+    private fun unwatchNetwork() {
+        callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
+        callback = null
+    }
+
     private fun changed() {
         feed()
         if (running) Go.networkChanged()
         onNetworkChanged()
     }
 
+    private var saidEmpty = false
+
     private fun feed() {
-        runCatching { Go.setInterfaces(interfaces().toString()) }
+        val rows = runCatching { interfaces() }.getOrDefault(emptyList())
+        if (rows.isEmpty() && !saidEmpty) android.util.Log.w("kore", "tailnet: no network interfaces (offline?); control waits for one")
+        saidEmpty = rows.isEmpty()
+        runCatching { Go.setInterfaces(JSONArray(rows.map { it.json() }).toString()) }
     }
 
-    /** Every network ConnectivityManager knows, as the shim's rows; the default one marked, with its IPv4 gateway. */
+    /**
+     * Every network ConnectivityManager knows, the default one marked with its IPv4 gateway. Some
+     * phones list none (or none with an interface name) for a moment: then the active network
+     * alone, then java.net's own list, so tsnet always has a way to control ([NetRows.pick]).
+     */
     @Suppress("DEPRECATION") // allNetworks: the one list of every network without a callback per network.
-    private fun interfaces(): JSONArray {
-        val rows = JSONArray()
-        val active = current
-        for (network in connectivity.allNetworks) {
-            val lp = connectivity.getLinkProperties(network) ?: continue
-            val name = lp.interfaceName ?: continue
-            val ni = runCatching { NetworkInterface.getByName(name) }.getOrNull()
-            val gateway = lp.routes.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }?.gateway?.hostAddress
-            rows.put(JSONObject().apply {
-                put("name", name)
-                put("index", ni?.index ?: 0)
-                put("mtu", ni?.mtu?.takeIf { it > 0 } ?: lp.mtu.takeIf { it > 0 } ?: 1500)
-                put("up", ni?.isUp ?: true)
-                put("broadcast", false)
-                put("loopback", ni?.isLoopback ?: false)
-                put("pointToPoint", ni?.isPointToPoint ?: false)
-                put("multicast", ni?.supportsMulticast() ?: false)
-                put("addrs", JSONArray(lp.linkAddresses.map { "${it.address.hostAddress?.substringBefore('%')}/${it.prefixLength}" }))
-                put("default", network == active)
-                put("gateway", gateway ?: "")
-            })
+    private fun interfaces(): List<NetRow> {
+        val active = current ?: connectivity.activeNetwork
+        val all = runCatching { connectivity.allNetworks.toList() }.getOrDefault(emptyList()).mapNotNull { row(it, it == active) }
+        return NetRows.pick(all, { active?.let { row(it, true) } }, ::javaRows)
+    }
+
+    private fun row(network: Network, default: Boolean): NetRow? {
+        val lp = runCatching { connectivity.getLinkProperties(network) }.getOrNull() ?: return null
+        val name = lp.interfaceName ?: return null
+        val ni = runCatching { NetworkInterface.getByName(name) }.getOrNull()
+        val gateway = lp.routes.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }?.gateway?.hostAddress
+        return NetRow(
+            name = name,
+            index = ni?.index ?: 0,
+            mtu = ni?.mtu?.takeIf { it > 0 } ?: lp.mtu.takeIf { it > 0 } ?: 1500,
+            up = ni?.isUp ?: true,
+            loopback = ni?.isLoopback ?: false,
+            pointToPoint = ni?.isPointToPoint ?: false,
+            multicast = ni?.supportsMulticast() ?: false,
+            addrs = lp.linkAddresses.map { "${it.address.hostAddress?.substringBefore('%')}/${it.prefixLength}" },
+            default = default,
+            gateway = gateway ?: "",
+        )
+    }
+
+    /** java.net's interfaces, up and with an address, loopback left out. */
+    private fun javaRows(): List<NetRow> = runCatching {
+        NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }.map { ni ->
+            NetRow(
+                name = ni.name, index = ni.index, mtu = ni.mtu.takeIf { it > 0 } ?: 1500, up = true, loopback = false,
+                pointToPoint = ni.isPointToPoint, multicast = ni.supportsMulticast(),
+                addrs = ni.interfaceAddresses.map { "${it.address.hostAddress?.substringBefore('%')}/${it.networkPrefixLength}" },
+                default = false, gateway = "",
+            )
         }
-        return rows
+    }.getOrDefault(emptyList())
+
+    private fun NetRow.json() = JSONObject().apply {
+        put("name", name)
+        put("index", index)
+        put("mtu", mtu)
+        put("up", up)
+        put("broadcast", false)
+        put("loopback", loopback)
+        put("pointToPoint", pointToPoint)
+        put("multicast", multicast)
+        put("addrs", JSONArray(addrs))
+        put("default", default)
+        put("gateway", gateway)
     }
 
     private class FdConn(private val pfd: ParcelFileDescriptor) : ByteConn {
@@ -161,10 +216,18 @@ class EmbeddedTailnet(private val context: Context, private val hostname: String
 object KeystoreSealer : Sealer {
     private const val ALIAS = "kore_tailnet_state"
     private const val IV = 12
+    /** The shim's `Lost` (store.go): this state can never open again, so it starts signed out. */
+    private const val LOST = "sealer: lost"
 
-    private fun key(): SecretKey {
+    /**
+     * The key, made only when the Keystore says for sure there's none ([create], sealing). A lookup
+     * that throws is the Keystore failing for a moment: it propagates, never a new key that would
+     * orphan the state sealed under the old one.
+     */
+    private fun key(create: Boolean): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (ks.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+        if (ks.containsAlias(ALIAS)) return ks.getKey(ALIAS, null) as? SecretKey ?: throw java.security.KeyStoreException("sealer: key unreadable")
+        if (!create) throw IllegalStateException("$LOST (no key)")
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
             init(KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
@@ -175,14 +238,19 @@ object KeystoreSealer : Sealer {
     }
 
     override fun seal(plain: ByteArray): ByteArray {
-        val c = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
+        val c = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key(create = true)) }
         return c.iv + c.doFinal(plain)
     }
 
     override fun open(sealed: ByteArray): ByteArray {
-        require(sealed.size > IV) { "short" }
-        val c = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, sealed, 0, IV)) }
-        return c.doFinal(sealed, IV, sealed.size - IV)
+        if (sealed.size <= IV) throw IllegalStateException("$LOST (short)")
+        val c = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(create = false), GCMParameterSpec(128, sealed, 0, IV)) }
+        return try {
+            c.doFinal(sealed, IV, sealed.size - IV)
+        } catch (e: javax.crypto.AEADBadTagException) {
+            // Sealed under another key: no retry ever opens it.
+            throw IllegalStateException("$LOST (other key)")
+        }
     }
 
     fun forget() {

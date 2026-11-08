@@ -36,6 +36,10 @@ object MacProbe {
  * in a Custom Tab → Finding your Mac… (knocking on the Macs [MacProbe] picks, only while the screen
  * is visible, stopping after 2 min) → Allow on the Mac → Home. A pure flow over a [Tailnet]: the
  * tests run it on a fake one in virtual time.
+ *
+ * Mid sign-in ([signingIn]) the browser is in front and this screen isn't: the tailnet's state is
+ * still read (the app keeps the tailnet up and a short foreground service holds the process), so a
+ * sign-in finished in the browser shows as signed in at once, and the knocking starts on return.
  */
 class JoinFlow(
     private val tailnet: Tailnet,
@@ -46,10 +50,12 @@ class JoinFlow(
     private val joined: (LinkSession) -> Unit,
     private val clock: () -> Long = System::currentTimeMillis,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** Brings the tailnet up for Join (the app's [TailnetSwitch]); throws when it can't. */
+    private val start: suspend () -> Unit = { withContext(io) { tailnet.start() } },
 ) {
     sealed class Step {
-        /** Signed out: one button. */
-        data object Join : Step()
+        /** Signed out: one button. [failed]: the last Join couldn't start the tailnet; the button tries again. */
+        data class Join(val failed: Boolean = false) : Step()
         /** The tailnet is coming up, or the sign-in page is about to open. */
         data object Starting : Step()
         /** [url] opens in a Custom Tab; never logged. */
@@ -68,67 +74,120 @@ class JoinFlow(
         data class Joined(val mac: Device) : Step()
     }
 
-    private val stepFlow = MutableStateFlow<Step>(Step.Join)
+    private val stepFlow = MutableStateFlow<Step>(Step.Join())
     val step: StateFlow<Step> = stepFlow.asStateFlow()
-    private var visible = false
+    private val offlineFlow = MutableStateFlow(false)
+    /** Mid sign-in with no network (airplane mode, no signal): the screen says so; it goes on when back. */
+    val offline: StateFlow<Boolean> = offlineFlow.asStateFlow()
+    /** The sign-in URL to open in the browser, once each. */
+    val tab = SignInTab()
+    @Volatile private var visible = false
     private var job: Job? = null
 
-    /** The Join screen is (or isn't) showing: the knocking runs only while it is. */
-    fun visible(on: Boolean) {
+    /** The Join screen is (or isn't) showing: the knocking runs only while it is; a sign-in goes on. */
+    @Synchronized fun visible(on: Boolean) {
         visible = on
-        if (!on) {
-            job?.cancel()
-            job = null
-        } else if (stepFlow.value !is Step.Join && stepFlow.value !is Step.Joined && stepFlow.value !is Step.Denied && job == null) {
-            job = scope.launch { run() }
-        }
+        if (on) follow() else if (!signingIn(stepFlow.value)) halt()
     }
 
     /** "Join KoreNet": starts the tailnet and follows it to signed in, then knocks. */
-    fun begin() {
+    @Synchronized fun begin() {
+        halt()
+        tab.reset()
+        offlineFlow.value = false
         stepFlow.value = Step.Starting
-        job?.cancel()
         job = scope.launch {
-            withContext(io) { tailnet.start() }
+            try {
+                start()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                stepFlow.value = Step.Join(failed = true)
+                return@launch
+            }
             run()
         }
     }
 
     /** "Try again" (Denied, or Finding stopped): knock for another 2 minutes. */
-    fun again() {
+    @Synchronized fun again() {
+        halt()
         stepFlow.value = Step.Finding(emptyList())
-        job?.cancel()
-        job = if (visible) scope.launch { run() } else null
+        if (visible) follow()
     }
 
-    /** Back to Join, the tailnet left as it is. */
-    fun cancel() {
+    /** Back to Join. */
+    @Synchronized fun cancel() {
+        halt()
+        tab.reset()
+        offlineFlow.value = false
+        stepFlow.value = Step.Join()
+    }
+
+    private fun follow() {
+        val s = stepFlow.value
+        if (job?.isActive != true && s !is Step.Join && s !is Step.Joined && s !is Step.Denied) job = scope.launch { run() }
+    }
+
+    private fun halt() {
         job?.cancel()
         job = null
-        stepFlow.value = Step.Join
     }
 
     private suspend fun run() {
-        // Until signed in: the tailnet's own state, read while the screen shows.
-        while (visible || stepFlow.value == Step.Starting) {
+        while (true) {
+            if (!signedIn()) return
+            if (!visible) {
+                // Signed in from the browser while away: say so; the knocking waits for the screen.
+                if (signingIn(stepFlow.value)) stepFlow.value = Step.Finding(emptyList())
+                return
+            }
+            // false: the tailnet went away mid-knock (stopped, signed out): wait for it again.
+            if (knock()) return
+        }
+    }
+
+    /**
+     * Until signed in: the tailnet's own state, read while the screen shows and, mid sign-in, while
+     * it doesn't (at most [AWAY_MS] away, then back to Join). False when it stops waiting.
+     */
+    private suspend fun signedIn(): Boolean {
+        var away: Long? = null
+        while (true) {
+            if (!visible) {
+                if (!signingIn(stepFlow.value)) return false
+                val now = clock()
+                val since = away ?: now.also { away = it }
+                if (now - since >= AWAY_MS) {
+                    tab.reset()
+                    offlineFlow.value = false
+                    stepFlow.value = Step.Join()
+                    return false
+                }
+            } else {
+                away = null
+            }
             when (withContext(io) { tailnet.state() }) {
-                Tailnet.RUNNING -> break
+                Tailnet.RUNNING -> {
+                    offlineFlow.value = false
+                    return true
+                }
                 Tailnet.NEEDS_LOGIN -> withContext(io) { tailnet.authUrl() }?.takeIf { it.isNotEmpty() }?.let { url ->
                     if ((stepFlow.value as? Step.SigningIn)?.url != url) stepFlow.value = Step.SigningIn(url)
                 }
                 Tailnet.NEEDS_MACHINE_AUTH -> stepFlow.value = Step.NeedsApproval(withContext(io) { tailnet.self() }?.nodeKey)
             }
+            offlineFlow.value = !withContext(io) { tailnet.online() }
             delay(STATE_EVERY_MS)
         }
-        if (!visible) return
-        knock()
     }
 
-    private suspend fun knock() {
+    /** Knocks for [MacProbe.FOR_MS]; false when the tailnet went away under it. */
+    private suspend fun knock(): Boolean {
         val started = clock()
         stepFlow.value = Step.Finding(emptyList())
         while (visible && clock() - started < MacProbe.FOR_MS) {
-            val self = withContext(io) { tailnet.self() } ?: return run { stepFlow.value = Step.Join }
+            val self = withContext(io) { tailnet.self() } ?: return false
             val macs = MacProbe.candidates(self, withContext(io) { tailnet.peers() })
             (stepFlow.value as? Step.Finding)?.let { stepFlow.value = it.copy(macs = macs.map { m -> m.shortName }) }
             for (mac in macs) {
@@ -142,7 +201,7 @@ class JoinFlow(
                     } else if (stepFlow.value is Step.Allowing || e.reason.startsWith("bye ")) {
                         // Heard, and said no, or its card went unanswered: either ends the knocking.
                         stepFlow.value = Step.Denied(mac.shortName, timedOut = e.reason == "bye ${reason.TIMEOUT}")
-                        return
+                        return true
                     }
                     null
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -154,19 +213,47 @@ class JoinFlow(
                 if (link != null) {
                     joined(link)
                     stepFlow.value = Step.Joined(link.peer.record)
-                    return
+                    return true
                 }
             }
             delay(MacProbe.EVERY_MS)
         }
-        if (!visible) return
+        if (!visible) return true
         val self = withContext(io) { tailnet.self() }
         val any = self != null && MacProbe.candidates(self, withContext(io) { tailnet.peers() }).isNotEmpty()
         stepFlow.value = if (any) ((stepFlow.value as? Step.Finding) ?: Step.Finding(emptyList())).copy(stopped = true) else Step.NoMac(self?.login)
+        return true
     }
 
     companion object {
-        /** How often the tailnet's state is read while signing in (on screen only). */
+        /** How often the tailnet's state is read while signing in. */
         const val STATE_EVERY_MS = 1_000L
+        /** Away from the Join screen this long mid sign-in: given up, back to Join. */
+        const val AWAY_MS = 10 * 60_000L
+
+        /** Mid sign-in: the tailnet holds a node key only in memory; stopping it now loses that sign-in. */
+        fun signingIn(s: Step): Boolean = s is Step.Starting || s is Step.SigningIn || s is Step.NeedsApproval
+    }
+}
+
+/**
+ * Which sign-in URL the Join screen opens in the browser: each new one once. A new Join, a
+ * Cancel, or any step but SigningIn lets the same URL open again. Kept with the flow, not the
+ * screen, so a screen rebuilt under the browser doesn't open it a second time.
+ */
+class SignInTab {
+    private var opened: String? = null
+
+    /** The URL to open now for [s], or null. */
+    @Synchronized fun toOpen(s: JoinFlow.Step): String? = when (s) {
+        is JoinFlow.Step.SigningIn -> if (opened == s.url) null else s.url.also { opened = it }
+        else -> {
+            opened = null
+            null
+        }
+    }
+
+    @Synchronized fun reset() {
+        opened = null
     }
 }
