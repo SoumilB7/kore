@@ -41,6 +41,16 @@ struct KoreLogTests {
         #expect(KoreLog.value("tab\there") == #""tab here""#)
     }
 
+    /// Read back, a line is its time and body, past the level; a line from before levels too.
+    @Test func aLineSplitsIntoTimeAndBodyInEitherShape() {
+        let now = KoreLog.split("2027-01-15T08:00:00.000Z info started cli=claude chat=a")
+        #expect(now.map { [String($0.stamp), String($0.body)] } == ["2027-01-15T08:00:00.000Z", "started cli=claude chat=a"])
+        let before = KoreLog.split("2026-10-23T18:46:00.000Z\tstarted cli=claude chat=a")
+        #expect(before.map { [String($0.stamp), String($0.body)] } == ["2026-10-23T18:46:00.000Z", "started cli=claude chat=a"])
+        #expect(KoreLog.split("2027-01-15T08:00:00.000Z started cli=claude") == nil)
+        #expect(KoreLog.split("nothing") == nil)
+    }
+
     // MARK: Levels
 
     @Test func levelsBelowTheLogsAreLeftOut() throws {

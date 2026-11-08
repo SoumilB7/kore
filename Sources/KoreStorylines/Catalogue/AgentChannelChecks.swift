@@ -385,9 +385,8 @@ enum AgentAudit {
 
     /// An agent line's event and fields.
     static func parse(_ line: String) -> (event: String, fields: [String: String])? {
-        let parts = line.split(separator: "\t", maxSplits: 1)
-        guard parts.count == 2 else { return nil }
-        let words = parts[1].split(separator: " ")
+        guard let body = KoreLog.split(Substring(line))?.body else { return nil }
+        let words = body.split(separator: " ")
         guard let event = words.first, event.hasPrefix("agent-") else { return nil }
         var fields: [String: String] = [:]
         for word in words.dropFirst() {
@@ -725,7 +724,7 @@ final class AgentChannelAll: ChatStoryline {
             Followed("f1", "8. ended cleanly", timeout: .seconds(3)) { _, status, _ in status == 0 },
             Followed("f2", "8. ended cleanly", timeout: .seconds(3)) { _, status, _ in status == 0 },
             KoreAs(["ls"], a, "8. refused after stop all", status: 5, says: "agent control is off, so Arsenal is off for this chat"),
-            Expect("8. stop all in the log") { _ in try AgentAudit.lines().contains { $0.contains("\tagent-stop-all") } },
+            Expect("8. stop all in the log") { _ in try AgentAudit.lines().contains { KoreLog.split(Substring($0))?.body.hasPrefix("agent-stop-all") == true } },
 
             Do("grant a again") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("a")) },
             Expect("the socket back") { _ in AgentChannel.current != nil && exists() },

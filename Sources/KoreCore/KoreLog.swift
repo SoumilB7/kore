@@ -225,6 +225,16 @@ public final class KoreLog: @unchecked Sendable {
         stamp.string(from: date) + " " + level.name + " " + body
     }
 
+    /// A line read back: its timestamp and its body (`event key=value…`), past the level. The
+    /// older shape, a tab after the timestamp and no level, reads the same.
+    public static func split(_ line: Substring) -> (stamp: Substring, body: Substring)? {
+        guard let cut = line.firstIndex(where: { $0 == " " || $0 == "\t" }) else { return nil }
+        let rest = line[line.index(after: cut)...]
+        guard line[cut] == " " else { return (line[..<cut], rest) }
+        guard let space = rest.firstIndex(of: " "), Level(name: String(rest[..<space])) != nil else { return nil }
+        return (line[..<cut], rest[rest.index(after: space)...])
+    }
+
     /// UTC to the millisecond, as every line starts.
     public static func stamper() -> ISO8601DateFormatter {
         let stamp = ISO8601DateFormatter()

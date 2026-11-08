@@ -149,10 +149,9 @@ public final class KoreSessions: @unchecked Sendable {
         for name in ["sessions.log.1", "sessions.log"] {
             guard let text = try? String(contentsOf: folder.appendingPathComponent(name), encoding: .utf8) else { continue }
             for row in text.split(separator: "\n") {
-                let parts = row.split(separator: "\t", maxSplits: 1)
-                guard parts.count == 2, parts[1].hasPrefix("started "), let at = stamp.date(from: String(parts[0])) else { continue }
+                guard let (time, body) = KoreLog.split(row), body.hasPrefix("started "), let at = stamp.date(from: String(time)) else { continue }
                 var fields: [Substring: Substring] = [:]
-                for pair in parts[1].split(separator: " ") {
+                for pair in body.split(separator: " ") {
                     guard let equals = pair.firstIndex(of: "=") else { continue }
                     fields[pair[..<equals]] = pair[pair.index(after: equals)...]
                 }
