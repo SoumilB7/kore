@@ -190,6 +190,50 @@ struct FileCarryTests {
         #expect(CarryCount.mac(source)?.files == 4 && names(b.work).isEmpty)
     }
 
+    /// rsync that prints nothing: the bytes at the hidden copy on the box drive the progress,
+    /// measured by the box (`fs.count`) every poll while it runs, and no more once it ends.
+    @Test func bytesLandedOnTheBoxDriveTheProgressWhileRsyncIsSilent() async throws {
+        let b = try await box("one")
+        let mac = try macFolder()
+        defer {
+            finish(b)
+            try? FileManager.default.removeItem(atPath: mac)
+        }
+        let source = try tree(mac)
+        // The box measures what's there (the real `fs.count`).
+        try FileManager.default.createDirectory(atPath: b.work + "/.proj.kore-0000abcd", withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 1234).write(to: URL(fileURLWithPath: b.work + "/.proj.kore-0000abcd/x"))
+        let probe = FileCarry(items: [], into: .box(alias: "one", path: b.work), move: false, boxes: ["one": b.carry])
+        #expect(await probe.landedBytes(.box(alias: "one", path: b.work + "/.proj.kore-0000abcd")) == 1234)
+        #expect(await probe.landedBytes(.box(alias: "one", path: b.work + "/.gone.kore-0000abcd")) == nil)
+        #expect(await probe.landedBytes(.mac(source)) == 300_011)
+        try FileManager.default.removeItem(atPath: b.work + "/.proj.kore-0000abcd")
+
+        // A slow ssh: rsync says nothing for a while; the measures still move the bar.
+        let carry = FileCarry(items: [CarryItem(source: .mac(source))], into: .box(alias: "one", path: b.work), move: false,
+            boxes: ["one": CarryBox(alias: "one", files: b.connection, ssh: try fakeSlowSSH(b.rig.root))])
+        carry.pollEvery = .milliseconds(50)
+        carry.tick = .milliseconds(20)
+        var measured: [FilePlace] = []
+        carry.measure = { place in
+            measured.append(place)
+            return Int64(measured.count) * 10_000
+        }
+        var told: [Int64] = []
+        carry.onProgress = { told.append(carry.bytes) }
+        let running = Task { await carry.run() }
+        #expect(await until(5) { carry.bytes >= 30_000 })
+        #expect(told.contains { $0 > 0 && $0 < 300_011 })
+        // What it measured: the hidden copy in the box folder.
+        let place = try #require(measured.first)
+        #expect(place.alias == "one" && place.parent.path == b.work && FileCarry.isStaging(place.name) && place.name.hasPrefix(".proj."))
+        carry.cancel()
+        _ = await running.value
+        let polls = carry.polls
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(carry.polls == polls)
+    }
+
     @Test func onOneBoxAMoveRenamesAndACopyIsTheBoxs() async throws {
         let b = try await box("one")
         defer { finish(b) }

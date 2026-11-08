@@ -139,6 +139,9 @@ package struct ChatMoves {
     package var progress: (@MainActor (_ bytes: Int64, _ total: Int64?) -> Void)?
     /// Stops a running rsync (the bar's Cancel): the move fails before its commit, nothing changes.
     package var stopper: Spawn?
+    /// How often a pull's staged bytes are measured while rsync runs (it prints no progress
+    /// into a pipe on macOS).
+    package var pollEvery: Duration = .seconds(2)
 
     package init(connection: HostConnection, box: SyncBox, staging: URL? = nil, name: String? = nil, store: MovedChats? = nil) {
         self.connection = connection
@@ -236,7 +239,7 @@ package struct ChatMoves {
         if !before.files.isEmpty, let boxWords = info.folders.first {
             _ = try? FolderRewrite(from: Self.spellings(mac), to: boxWords).files(before.files, from: before.root, to: stage)
         }
-        let pulled = await rsync(files: files, from: box.spec(info.root + "/"), to: stage.path + "/")
+        let pulled = await rsync(files: files, from: box.spec(info.root + "/"), to: stage.path + "/", landing: Self.bytes(stage))
         cost.rsyncSent += pulled.sent
         cost.rsyncReceived += pulled.received
         guard pulled.ok else { return await abort("Couldn't copy the session: \(pulled.said)") }
@@ -322,6 +325,12 @@ package struct ChatMoves {
 
     // MARK: rsync
 
+    /// The bytes under a folder on this Mac, measured off the main thread.
+    static func bytes(_ folder: URL) -> @MainActor () async -> Int64? {
+        let path = folder.path
+        return { await Task.detached(priority: .utility) { CarryCount.mac(path)?.bytes }.value }
+    }
+
     struct Copied {
         var ok: Bool
         var said: String
@@ -331,7 +340,8 @@ package struct ChatMoves {
 
     /// `files` (paths from `from`) to `to`, compressed, with rsync's own delta against what's
     /// there already; what it put on the wire, from `--stats`.
-    func rsync(files: [String], from: String, to: String) async -> Copied {
+    /// `landing`: measures the bytes at `to` while it runs (a pull's stage on this Mac).
+    func rsync(files: [String], from: String, to: String, landing: (@MainActor () async -> Int64?)? = nil) async -> Copied {
         let list = staging.appendingPathComponent("list-\(UUID().uuidString).txt")
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: list.path, contents: Data(files.map { $0 + "\n" }.joined().utf8))
@@ -354,6 +364,7 @@ package struct ChatMoves {
                     }
                 }
             }
+            let poll = landing.map { LandedPoll.start(every: pollEvery, into: meter, measure: $0) }
             let said = await spawn.run(
                 [["/usr/bin/rsync", "--progress"] + arguments],
                 output: {
@@ -361,6 +372,7 @@ package struct ChatMoves {
                     tail.append($0)
                 })
             ticker.cancel()
+            poll?.cancel()
             progress?(meter.value, nil)
             copied = Copied(ok: said == nil, said: said ?? "")
             out = tail.text

@@ -214,6 +214,7 @@ enum ChatPasting {
         let verb = clip.cut ? "Moving" : "Copying"
         let transfer = TransferProgress.shared.begin(
             "\(verb) chat to \(target.destination)", done: "\(clip.cut ? "Moved" : "Copied") chat to \(target.destination)", window: workspace.transferKey,
+            peer: Self.measuredPeer(from: clip.spot, to: target),
             cancel: { stopper.stop() },
             retry: { [weak workspace] in
                 guard let workspace else { return }
@@ -221,6 +222,13 @@ enum ChatPasting {
                 paste(into: workspace)
             })
         Task { await run(plan, clip, to: target, in: workspace, transfer: transfer, stopper: stopper) }
+    }
+
+    /// The box a paste waits on when its bytes are measured as they land: a box's chat pulled to
+    /// this Mac (a push to a box says no bytes until it ends, so it never reads as stalled).
+    static func measuredPeer(from spot: ChatSpot, to target: ChatSpot) -> String? {
+        if case .box(let alias, _) = spot, case .mac = target { return alias }
+        return nil
     }
 
     /// The chat at work now: its tab here, or the box's meta.

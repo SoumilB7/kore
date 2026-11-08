@@ -208,6 +208,13 @@ package final class FileCarry {
     package private(set) var steps: [String] = []
     /// How often the bytes said so far are read for the progress.
     package var tick: Duration = .milliseconds(250)
+    /// How often the bytes landed at an rsync's destination are measured while it runs (macOS's
+    /// rsync prints no progress into a pipe): `fs.count` on a box, a walk on this Mac.
+    package var pollEvery: Duration = .seconds(2)
+    /// Measures the bytes at a place in place of `landedBytes` (tests).
+    package var measure: (@MainActor (FilePlace) async -> Int64?)?
+    /// Measures taken so far (tests).
+    package private(set) var polls = 0
     package private(set) var cancelled = false
     /// Each item's count, once all are checked (a rename's: none).
     package private(set) var counts: [CarryCount?] = []
@@ -432,11 +439,11 @@ package final class FileCarry {
         case .macToBox:
             guard let alias = staged.alias, let ssh = boxes[alias]?.ssh else { return "\(staged.device) isn't an SSH alias Kore can use." }
             let from = source.path + (count.dir ? "/" : "")
-            return await rsync(["/usr/bin/rsync", "-a", "--progress"] + ssh.rsyncOptions(false) + [from, ssh.spec(staged.path)])
+            return await rsync(["/usr/bin/rsync", "-a", "--progress"] + ssh.rsyncOptions(false) + [from, ssh.spec(staged.path)], landing: staged)
         case .boxToMac:
             guard let alias = source.alias, let ssh = boxes[alias]?.ssh else { return "\(source.device) isn't an SSH alias Kore can use." }
             let from = ssh.spec(source.path + (count.dir ? "/" : ""))
-            return await rsync(["/usr/bin/rsync", "-a", "--progress"] + ssh.rsyncOptions(false) + [from, staged.path])
+            return await rsync(["/usr/bin/rsync", "-a", "--progress"] + ssh.rsyncOptions(false) + [from, staged.path], landing: staged)
         case .boxToBox:
             guard let a = source.alias, let b = staged.alias, let from = boxes[a]?.ssh, let to = boxes[b]?.ssh, let into = boxes[b], let scratch else {
                 return "\(source.device) or \(staged.device) isn't an SSH alias Kore can use."
@@ -452,17 +459,38 @@ package final class FileCarry {
         }
     }
 
-    /// rsync, its progress lines read as they come (`RsyncProgress`).
-    private func rsync(_ command: [String]) async -> String? {
+    /// rsync into `landing`: the bytes there measured as it runs, its progress lines read too
+    /// when it prints any (`RsyncProgress`); the higher goes.
+    private func rsync(_ command: [String], landing: FilePlace) async -> String? {
         let meter = meter
         let parser = RsyncReader()
-        return await metering { await self.spawn.run([command], output: { meter.set(parser.feed($0)) }) }
+        return await metering(landing: landing) { await self.spawn.run([command], output: { meter.set(parser.feed($0)) }) }
+    }
+
+    /// The bytes at a place now (a folder's files', a file's), nil when it isn't there yet.
+    package func landedBytes(_ place: FilePlace) async -> Int64? {
+        switch place {
+        case .mac(let path):
+            return await Task.detached(priority: .utility) { CarryCount.mac(path)?.bytes }.value
+        case .box(let alias, let path):
+            guard let box = boxes[alias] else { return nil }
+            return try? await box.files.count(path).get().bytes
+        }
     }
 
     /// Runs `work`, reading the meter every `tick` for the progress: one number read, no matter
-    /// how fast the bytes go.
-    private func metering<T>(_ work: @escaping @MainActor () async -> T) async -> T {
-        meter.set(0)
+    /// how fast the bytes go. `landing`: measured every `pollEvery` meanwhile, into the meter.
+    private func metering<T>(landing: FilePlace? = nil, _ work: @escaping @MainActor () async -> T) async -> T {
+        meter.reset()
+        let poll = landing.map { place in
+            LandedPoll.start(every: pollEvery, into: meter) { [weak self] in
+                guard let self else { return nil }
+                self.polls += 1
+                if let measure = self.measure { return await measure(place) }
+                return await self.landedBytes(place)
+            }
+        }
+        defer { poll?.cancel() }
         let ticker = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -534,14 +562,39 @@ package final class FileCarry {
     private static func hidden(_ name: String) -> String { "." + name + ".kore-" + String(UUID().uuidString.prefix(8)).lowercased() }
 }
 
-/// Bytes said so far by a copy's reader on another thread; read every tick.
+/// Bytes so far: said by a copy's reader on another thread, or measured where they land
+/// (`land`); the higher of the two, read every tick.
 package final class CarryMeter: @unchecked Sendable {
     private let lock = NSLock()
     private var bytes: Int64 = 0
+    private var landed: Int64 = 0
     package init() {}
-    package var value: Int64 { lock.withLock { bytes } }
+    package var value: Int64 { lock.withLock { max(bytes, landed) } }
     package func set(_ value: Int64) { lock.withLock { bytes = value } }
     package func add(_ count: Int64) { lock.withLock { bytes += count } }
+    /// Measured at the destination: never lower than before.
+    package func land(_ value: Int64) { lock.withLock { landed = max(landed, value) } }
+    package func reset() {
+        lock.withLock {
+            bytes = 0
+            landed = 0
+        }
+    }
+}
+
+/// The bytes landed at a copy's destination, measured every `every` while it runs: one measure
+/// at a time, into `meter`, until the task is cancelled (when the copy ends).
+package enum LandedPoll {
+    @MainActor
+    package static func start(every: Duration, into meter: CarryMeter, measure: @escaping @MainActor () async -> Int64?) -> Task<Void, Never> {
+        Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: every)
+                guard !Task.isCancelled else { return }
+                if let bytes = await measure(), !Task.isCancelled { meter.land(bytes) }
+            }
+        }
+    }
 }
 
 /// rsync's `--progress` lines, as openrsync and rsync print them: per file, "<bytes> <n>% <rate>

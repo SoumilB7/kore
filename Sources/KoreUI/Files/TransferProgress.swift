@@ -33,12 +33,18 @@ final class TransferProgress {
         var rate: Double = 0
         var sampled: Date
         var sampledBytes: Int64 = 0
+        /// The far device it waits on ("mybox"): said when no bytes come for `stallAfter`.
+        var peer: String?
+        /// When its bytes last rose.
+        var moved = Date()
+        var stalled = false
 
         var fraction: Double? { total > 0 ? min(1, Double(bytes) / Double(total)) : nil }
         var running: Bool { state == .running }
 
         static func == (a: Item, b: Item) -> Bool {
             a.id == b.id && a.title == b.title && a.bytes == b.bytes && a.total == b.total && a.state == b.state && a.shown == b.shown
+                && a.rate == b.rate && a.stalled == b.stalled
         }
     }
 
@@ -51,17 +57,24 @@ final class TransferProgress {
     @ObservationIgnored var doneHold: Duration = .seconds(2)
     /// The clock (tests set their own).
     @ObservationIgnored var now: () -> Date = Date.init
+    /// No bytes for this long: "waiting for mybox".
+    @ObservationIgnored var stallAfter: TimeInterval = 30
+    /// How often running ones are checked for that: only while one runs.
+    @ObservationIgnored var stallCheck: Duration = .seconds(5)
+    @ObservationIgnored private var watching = false
 
     /// A new transfer: shown if it's still going after `showAfter`.
     @discardableResult
     func begin(
-        _ title: String, done: String, place: FilePlace? = nil, window: String? = nil, total: Int64 = 0,
+        _ title: String, done: String, place: FilePlace? = nil, window: String? = nil, total: Int64 = 0, peer: String? = nil,
         cancel: (@MainActor () -> Void)? = nil, retry: (@MainActor () -> Void)? = nil
     ) -> UUID {
         let id = UUID()
-        items.append(Item(id: id, title: title, doneTitle: done, place: place, window: window, total: total, sampled: now()))
+        let started = now()
+        items.append(Item(id: id, title: title, doneTitle: done, place: place, window: window, total: total, sampled: started, peer: peer, moved: started))
         cancels[id] = cancel
         retries[id] = retry
+        if peer != nil { watchStalls() }
         Task { [weak self] in
             guard let delay = self?.showAfter else { return }
             try? await Task.sleep(for: delay)
@@ -82,6 +95,10 @@ final class TransferProgress {
                 item.rate = item.rate == 0 ? instant : item.rate * 0.7 + instant * 0.3
                 item.sampled = time
                 item.sampledBytes = bytes
+            }
+            if bytes > item.bytes {
+                item.moved = time
+                item.stalled = false
             }
             item.bytes = bytes
         }
@@ -114,6 +131,28 @@ final class TransferProgress {
 
     func cancel(_ id: UUID) { cancels[id]?() }
 
+    /// Running ones that said nothing for `stallAfter` marked so (their line says what they wait on).
+    func checkStalls() {
+        let time = now()
+        for item in items where item.running && item.peer != nil {
+            let stalled = time.timeIntervalSince(item.moved) >= stallAfter
+            if stalled != item.stalled { edit(item.id) { $0.stalled = stalled } }
+        }
+    }
+
+    /// One check every `stallCheck` while any with a peer runs; it ends with the last.
+    private func watchStalls() {
+        guard !watching else { return }
+        watching = true
+        Task { [weak self] in
+            while let every = self?.stallCheck, self?.items.contains(where: { $0.running && $0.peer != nil }) == true {
+                try? await Task.sleep(for: every)
+                self?.checkStalls()
+            }
+            self?.watching = false
+        }
+    }
+
     func retry(_ id: UUID) {
         let again = retries[id]
         remove(id)
@@ -144,7 +183,11 @@ final class TransferProgress {
 
     // MARK: Words
 
-    static func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+    /// "458.2 MB"; nothing yet is "0 KB" (never "Zero KB").
+    static func size(_ bytes: Int64) -> String { bytes <= 0 ? "0 KB" : ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+
+    /// "210 KB/s".
+    static func speed(_ rate: Double) -> String { size(Int64(rate.rounded())) + "/s" }
 
     /// "about 2 min left": nil while there's no rate to go by.
     static func left(remaining: Int64, rate: Double) -> String? {
@@ -157,16 +200,22 @@ final class TransferProgress {
         return "about \(hours < 10 ? String(format: "%.1f", hours) : String(Int(hours.rounded()))) h left"
     }
 
-    /// One transfer's line: "Copying 3 items to mybox · 1.2 GB of 3.4 GB · about 2 min left";
-    /// "Copied to mybox · 3.4 GB"; or why it failed.
+    /// One transfer's line: "Copying 3 items to mybox · 1.2 GB of 3.4 GB · 210 KB/s · about 2 min
+    /// left"; stalled, "… · waiting for mybox"; "Copied to mybox · 3.4 GB"; or why it failed.
     static func line(_ item: Item) -> String {
         switch item.state {
         case .failed(let why): return why
         case .done: return item.doneTitle + (item.total > 0 ? " · " + size(item.total) : "")
         case .running:
-            guard item.total > 0 else { return item.title + "…" }
+            let waiting = item.stalled ? item.peer.map { "waiting for \($0)" } : nil
+            guard item.total > 0 else { return waiting.map { item.title + " · " + $0 } ?? item.title + "…" }
             var parts = [item.title, "\(size(item.bytes)) of \(size(item.total))"]
-            if let left = left(remaining: item.total - item.bytes, rate: item.rate) { parts.append(left) }
+            if let waiting {
+                parts.append(waiting)
+            } else if item.rate > 0, item.bytes > 0, item.bytes < item.total {
+                parts.append(speed(item.rate))
+                if let left = left(remaining: item.total - item.bytes, rate: item.rate) { parts.append(left) }
+            }
             return parts.joined(separator: " · ")
         }
     }

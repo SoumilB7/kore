@@ -26,7 +26,7 @@ struct TransferProgressTests {
         item.bytes = 1_200_000_000
         item.rate = 10_000_000
         let line = TransferProgress.line(item)
-        #expect(line.hasPrefix("Copying 3 items to mybox · 1.2 GB of 3.4 GB · about "), "\(line)")
+        #expect(line.hasPrefix("Copying 3 items to mybox · 1.2 GB of 3.4 GB · 10 MB/s · about "), "\(line)")
         #expect(line.hasSuffix("min left"))
         item.state = .done
         item.bytes = item.total
@@ -42,6 +42,60 @@ struct TransferProgressTests {
         item.total = 3_400_000_000
         // 1.52 of 4.0 GB.
         #expect(TransferProgress.stacked([item, other]) == "2 transfers · 38%")
+    }
+
+    @Test func nothingYetIsZeroKBAndTheSpeedIsSaid() {
+        #expect(TransferProgress.size(0) == "0 KB")
+        #expect(TransferProgress.size(458_200_000) == "458.2 MB")
+        #expect(TransferProgress.speed(210_000) == "210 KB/s")
+        var item = TransferProgress.Item(
+            id: UUID(), title: "Copying Saarthi to mybox", doneTitle: "Copied to mybox", place: nil, window: nil, sampled: Date())
+        item.total = 458_200_000
+        #expect(TransferProgress.line(item) == "Copying Saarthi to mybox · 0 KB of 458.2 MB")
+        item.bytes = 42_000_000
+        item.rate = 210_000
+        #expect(TransferProgress.line(item) == "Copying Saarthi to mybox · 42 MB of 458.2 MB · 210 KB/s · about 33 min left")
+    }
+
+    /// Bytes measured where they land drive the bar: its rate smoothed, its time left from it;
+    /// no bytes for 30 s says what it waits on, and the next bytes clear that.
+    @Test func measuredBytesDriveTheRateAndAStallSaysWhatItWaitsOn() async throws {
+        let progress = TransferProgress()
+        var clock = Date(timeIntervalSince1970: 1_000)
+        progress.now = { clock }
+        progress.stallCheck = .seconds(3600)
+        let id = progress.begin("Copying Saarthi to mybox", done: "Copied to mybox", total: 458_200_000, peer: "mybox")
+        func item() -> TransferProgress.Item { progress.items.first { $0.id == id }! }
+        // A poll every 2 s: 400 KB, then 420 KB more.
+        clock += 2
+        progress.update(id, bytes: 400_000)
+        #expect(item().bytes == 400_000 && abs(item().rate - 200_000) < 1)
+        clock += 2
+        progress.update(id, bytes: 820_000)
+        // Smoothed: 0.7 × 200 + 0.3 × 210 KB/s.
+        #expect(abs(item().rate - 203_000) < 1)
+        #expect(TransferProgress.line(item()).hasPrefix("Copying Saarthi to mybox · 820 KB of 458.2 MB · 203 KB/s · about "))
+        // Nothing for 29 s: still going; 30 s: waiting.
+        clock += 29
+        progress.checkStalls()
+        #expect(!item().stalled)
+        clock += 1
+        progress.checkStalls()
+        #expect(item().stalled)
+        #expect(TransferProgress.line(item()) == "Copying Saarthi to mybox · 820 KB of 458.2 MB · waiting for mybox")
+        // The same bytes again don't clear it; more do.
+        progress.update(id, bytes: 820_000)
+        #expect(item().stalled)
+        clock += 2
+        progress.update(id, bytes: 1_000_000)
+        #expect(!item().stalled && !TransferProgress.line(item()).contains("waiting"))
+        // One without a peer never says it waits.
+        let local = progress.begin("Copying a", done: "Copied", total: 10)
+        clock += 100
+        progress.checkStalls()
+        #expect(progress.items.first { $0.id == local }?.stalled == false)
+        progress.finish(id)
+        progress.finish(local)
     }
 
     @Test func itShowsLateSaysDoneThenFadesAndAFailureStays() async throws {

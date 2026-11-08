@@ -140,7 +140,8 @@ package struct ChatCopies {
             let size = info.bytes ?? 0
             let total: Int64 = if case .box = target { size * 2 } else { size }
             progress?(0, total)
-            let pulled = await metered(moves, base: 0, total: total).rsync(files: files, from: moves.box.spec(info.root + "/"), to: stage.path + "/")
+            let pulled = await metered(moves, base: 0, total: total).rsync(
+                files: files, from: moves.box.spec(info.root + "/"), to: stage.path + "/", landing: ChatMoves.bytes(stage))
             cost.rsyncReceived += pulled.received
             cost.rsyncSent += pulled.sent
             guard pulled.ok else { return .failure(MoveFailure("Couldn't copy the session: \(pulled.said)")) }

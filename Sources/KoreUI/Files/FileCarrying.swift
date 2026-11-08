@@ -106,6 +106,7 @@ final class FileCarries {
         let transfers = TransferProgress.shared
         let id = transfers.begin(
             Self.text(items, into: folder, move: move), done: Self.doneText(items, into: folder, move: move), place: folder,
+            peer: folder.alias ?? items.lazy.compactMap(\.source.alias).first,
             cancel: { [weak carry] in carry?.cancel() },
             retry: { [weak self] in self?.start(Array(items.dropFirst(landed)), into: folder, move: move, done: done) })
         setPending {

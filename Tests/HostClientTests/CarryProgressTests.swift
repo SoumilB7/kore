@@ -22,6 +22,37 @@ struct CarryProgressTests {
         #expect(progress.bytes == 20_001_234)
     }
 
+    /// What rsync says and what's measured where the bytes land: the higher goes.
+    @Test func theMeterTakesTheHigherOfSaidAndLanded() {
+        let meter = CarryMeter()
+        meter.set(5)
+        meter.land(10)
+        #expect(meter.value == 10)
+        meter.land(7)
+        #expect(meter.value == 10)
+        meter.set(20)
+        #expect(meter.value == 20)
+        meter.reset()
+        #expect(meter.value == 0)
+    }
+
+    /// The poll measures one at a time while it runs, and stops when cancelled.
+    @MainActor @Test func theLandedPollStopsWithItsCopy() async throws {
+        let meter = CarryMeter()
+        var calls = 0
+        let poll = LandedPoll.start(every: .milliseconds(20), into: meter) {
+            calls += 1
+            return Int64(calls) * 1000
+        }
+        for _ in 0..<300 where calls < 3 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(calls >= 3 && meter.value >= 3000)
+        poll.cancel()
+        try await Task.sleep(for: .milliseconds(30))
+        let after = calls
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(calls == after)
+    }
+
     @Test func aPipeBetweenTwoStagesIsCountedAsItPasses() async {
         final class Count: @unchecked Sendable {
             let lock = NSLock()
