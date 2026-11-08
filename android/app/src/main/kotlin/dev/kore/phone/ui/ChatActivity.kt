@@ -288,8 +288,8 @@ class ChatActivity : NodeActivity() {
         /** A rescue row under the turn: Retry, Continue, "Continues at …" ×. */
         data class Rescue(val line: ControlModel.RescueLine) : Item()
         data class Work(val key: String, val steps: List<JsonObject>, val open: Boolean) : Item()
-        /** A step of the running turn, one line (`LiveWork`); [spin]: the spinner marks it. */
-        data class Live(val e: JsonObject, val spin: Boolean) : Item()
+        /** The running turn's current step, one line by the spinner (`LiveWork`). */
+        data class Live(val e: JsonObject) : Item()
         /** The turn runs with nothing of it on screen yet: the spinner and "Working…". */
         object Pending : Item()
         /** Messages waiting behind the running turn or a compaction (the Mac's queued rows), counted. */
@@ -327,7 +327,7 @@ class ChatActivity : NodeActivity() {
             for (f in LiveWork.fold(entries, open, running)) out.add(when (f) {
                 is LiveWork.Fold.One -> Item.One(f.e)
                 is LiveWork.Fold.Work -> Item.Work(f.key, f.steps, f.open)
-                is LiveWork.Fold.Live -> Item.Live(f.e, f.spin)
+                is LiveWork.Fold.Live -> Item.Live(f.e)
                 LiveWork.Fold.Pending -> Item.Pending
             })
             if (queued > 0) out.add(Item.Queued(queued))
@@ -357,7 +357,7 @@ class ChatActivity : NodeActivity() {
         private fun sameContent(a: Item, b: Item): Boolean = when {
             a is Item.One && b is Item.One -> a.e === b.e || a.e == b.e
             a is Item.Work && b is Item.Work -> a.steps.size == b.steps.size && a.open == b.open
-            a is Item.Live && b is Item.Live -> a.spin == b.spin && (a.e === b.e || a.e == b.e)
+            a is Item.Live && b is Item.Live -> a.e === b.e || a.e == b.e
             a is Item.Pending && b is Item.Pending -> true
             a is Item.Rescue && b is Item.Rescue -> a == b
             else -> false
@@ -383,11 +383,9 @@ class ChatActivity : NodeActivity() {
                     android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                         topMargin = dp(6); bottomMargin = dp(6)
                     })
-                // A live step's mark, in the glyph column: the spinner (it ticks only while shown), or a done step's dot.
+                // The running step's spinner (it ticks only while shown).
                 addView(Spinner(this@ChatActivity, Tone.spinClaude).apply { visibility = View.GONE },
                     android.widget.FrameLayout.LayoutParams(dp(13), dp(13), Gravity.START or Gravity.CENTER_VERTICAL).apply { leftMargin = dp(16) })
-                addView(View(this@ChatActivity).apply { visibility = View.GONE; background = shape(Tone.faint, 3) },
-                    android.widget.FrameLayout.LayoutParams(dp(5), dp(5), Gravity.START or Gravity.CENTER_VERTICAL).apply { leftMargin = dp(20) })
             },
         ) {}
 
@@ -397,11 +395,9 @@ class ChatActivity : NodeActivity() {
             val v = frame.getChildAt(1) as TextView
             val docBox = frame.getChildAt(2) as LinearLayout
             val spin = frame.getChildAt(3) as Spinner
-            val dot = frame.getChildAt(4)
             rule.visibility = View.GONE
             docBox.visibility = View.GONE
             spin.visibility = View.GONE
-            dot.visibility = View.GONE
             v.visibility = View.VISIBLE
             v.maxWidth = Int.MAX_VALUE
             v.background = null
@@ -425,10 +421,10 @@ class ChatActivity : NodeActivity() {
                 is Item.Work -> {
                     // "Worked · N steps" (spec §5): Callout, faint, a 15 chevron before it that turns 90° in 120 ms when open.
                     val expanded = item.key in open
-                    v.text = "Worked · ${item.steps.size} steps"
+                    v.text = "Worked · ${item.steps.size} ${if (item.steps.size == 1) "step" else "steps"}"
                     v.setTextColor(Tone.faint)
                     v.type(Type.Callout)
-                    v.contentDescription = "Worked, ${item.steps.size} steps, ${if (expanded) "open" else "closed"}"
+                    v.contentDescription = "Worked, ${item.steps.size} ${if (item.steps.size == 1) "step" else "steps"}, ${if (expanded) "open" else "closed"}"
                     val chevron = android.graphics.drawable.RotateDrawable().apply {
                         drawable = getDrawable(dev.kore.phone.R.drawable.i_chevron)?.mutate()?.apply { setTint(Tone.faint) }
                         fromDegrees = 0f; toDegrees = 90f
@@ -470,7 +466,7 @@ class ChatActivity : NodeActivity() {
                     if (!askedEarlier) v.setOnClickListener { loadEarlier() }
                     return
                 }
-                is Item.Live -> bindLive(v, spin, dot, item)
+                is Item.Live -> bindLive(v, spin, item)
                 Item.Pending -> {
                     v.text = "Working…"
                     v.setTextColor(Tone.faint); v.type(Type.Callout)
@@ -491,16 +487,12 @@ class ChatActivity : NodeActivity() {
         }
 
         /**
-         * One live step (the Mac's working row, minimal): a thought as its newest line, quiet and
-         * italic; a tool or sub-agent as its short name · its target. The spinner marks the newest
-         * (or one still running), a dot the ones done, red when one failed.
+         * The running turn's current step, one quiet line by the spinner: the newest line of a
+         * thought, or a tool or sub-agent as its short name · its target.
          */
-        private fun bindLive(v: TextView, spin: Spinner, dot: View, item: Item.Live) {
+        private fun bindLive(v: TextView, spin: Spinner, item: Item.Live) {
             val line = LiveWork.line(item.e)
-            v.text = if (line.thought) line.what else android.text.SpannableStringBuilder().apply {
-                append(line.what, android.text.style.ForegroundColorSpan(Tone.dim), 0)
-                line.on?.let { append(" · ", android.text.style.ForegroundColorSpan(Tone.faint), 0).append(it, android.text.style.ForegroundColorSpan(Tone.faint), 0) }
-            }
+            v.text = if (line.thought) line.what else listOfNotNull(line.what, line.on).joinToString(" · ")
             v.type(Type.Callout)
             v.setTextColor(Tone.faint)
             if (line.thought) v.setTypeface(v.typeface, android.graphics.Typeface.ITALIC)
@@ -508,14 +500,9 @@ class ChatActivity : NodeActivity() {
             v.ellipsize = android.text.TextUtils.TruncateAt.END
             v.setPadding(dp(26), dp(5), dp(4), dp(5))
             (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply { leftMargin = dp(10); topMargin = dp(1); bottomMargin = dp(1) }
-            v.contentDescription = listOfNotNull(if (item.spin) "Working" else null, line.what, line.on).joinToString(", ")
-            if (item.spin) {
-                spin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
-                spin.visibility = View.VISIBLE
-            } else if (!line.thought) {
-                dot.background = shape(if (line.failed) Tone.err else Tone.faint, 3)
-                dot.visibility = View.VISIBLE
-            }
+            v.contentDescription = listOfNotNull("Working", line.what, line.on).joinToString(", ")
+            spin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
+            spin.visibility = View.VISIBLE
         }
 
         /** Every view of a rendered answer takes the long-press (its text views would swallow it). */

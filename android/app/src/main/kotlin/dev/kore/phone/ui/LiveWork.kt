@@ -4,20 +4,19 @@ import kotlinx.serialization.json.JsonObject
 
 /**
  * A chat's work as the transcript shows it (the Mac's working rows, minimal): runs of tool,
- * thinking and sub-agent entries fold into "Worked · N steps". While a turn runs, its last
- * [LINES] steps stay out as one line each (the latest thought, quiet; a tool's short name and
- * target), the newest marked by the spinner; the steps before them fold. When the turn ends the
- * whole run folds. Built from the entries the link already sent: nothing is polled or timed.
+ * thinking and sub-agent entries fold into "Worked · N steps". While a turn runs, only its
+ * current step stays out, one quiet line by the spinner (the latest thought, or a tool's short
+ * name · target); the steps before it fold. When the turn ends the whole run folds. Built from
+ * the entries the link already sent: nothing is polled or timed.
  */
 object LiveWork {
-    const val LINES = 3
     private val WORK = setOf("tool", "thinking", "agent")
 
     sealed class Fold {
         data class One(val e: JsonObject) : Fold()
         data class Work(val key: String, val steps: List<JsonObject>, val open: Boolean) : Fold()
-        /** A step of the running turn, one line; [spin]: the spinner marks it (the newest, or one still running). */
-        data class Live(val e: JsonObject, val spin: Boolean) : Fold()
+        /** The running turn's current step: one line, by the spinner. */
+        data class Live(val e: JsonObject) : Fold()
         /** The turn runs and nothing of it shows yet: the spinner on its own line. */
         object Pending : Fold()
     }
@@ -31,13 +30,12 @@ object LiveWork {
             val key = run.first().str("id") ?: ""
             when {
                 last && running -> {
-                    val tail = run.takeLast(LINES)
-                    val head = run.dropLast(LINES)
+                    val head = run.dropLast(1)
                     if (head.isNotEmpty()) {
                         out.add(Fold.Work(key, head, key in open))
                         if (key in open) head.forEach { out.add(Fold.One(it)) }
                     }
-                    tail.forEachIndexed { i, e -> out.add(Fold.Live(e, i == tail.lastIndex || !e.bool("done"))) }
+                    out.add(Fold.Live(run.last()))
                 }
                 run.size < 2 -> run.forEach { out.add(Fold.One(it)) }
                 key in open -> { out.add(Fold.Work(key, run.toList(), true)); run.forEach { out.add(Fold.One(it)) } }
@@ -58,14 +56,14 @@ object LiveWork {
     }
 
     /** A live step's words: what it is, and what it's on (null for a thought, which is all words). */
-    data class Line(val what: String, val on: String?, val thought: Boolean = false, val failed: Boolean = false)
+    data class Line(val what: String, val on: String?, val thought: Boolean = false)
 
     fun line(e: JsonObject): Line = when (e.str("kind")) {
         "thinking" -> Line(latestThought(e.str("text")) ?: "Thinking…", null, thought = true)
         "agent" -> Line("Agent", e.obj("agent")?.str("name")?.takeIf { it.isNotBlank() })
         else -> {
             val tool = e.obj("tool")
-            Line(tool?.str("name")?.takeIf { it.isNotBlank() } ?: "Tool", target(tool?.str("summary") ?: tool?.str("path")), failed = e.bool("isError"))
+            Line(tool?.str("name")?.takeIf { it.isNotBlank() } ?: "Tool", target(tool?.str("summary") ?: tool?.str("path")))
         }
     }
 

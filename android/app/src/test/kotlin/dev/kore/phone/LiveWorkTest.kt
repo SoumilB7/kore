@@ -9,7 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** A running turn as live lines (at most 3, the newest spinning), folding into "Worked · N steps" when it ends. */
+/** A running turn as one live line (its current step), the rest folding into "Worked · N steps"; all of it when it ends. */
 class LiveWorkTest {
     private fun o(s: String): JsonObject = Json.parseToJsonElement(s).jsonObject
     private fun user(id: String) = o("""{"id":"$id","kind":"user","text":"go","done":true}""")
@@ -18,30 +18,26 @@ class LiveWorkTest {
         o("""{"id":"$id","kind":"tool","done":$done,"tool":{"name":"$name","summary":"$summary"}}""")
     private fun thought(id: String, text: String, done: Boolean = true) = o("""{"id":"$id","kind":"thinking","text":${Json.encodeToString(kotlinx.serialization.json.JsonPrimitive.serializer(), kotlinx.serialization.json.JsonPrimitive(text))},"done":$done}""")
 
-    /** The folds, as short marks: U/A one entry, W(n) a fold of n, L/L* a live line (spinning), P pending. */
+    /** The folds, as short marks: U/A one entry, W(n) a fold of n, L the live line, P pending. */
     private fun shape(f: List<Fold>) = f.joinToString(" ") {
         when (it) {
             is Fold.One -> it.e.toString().let { s -> if ("\"user\"" in s) "U" else if ("\"answer\"" in s) "A" else "1" }
             is Fold.Work -> "W${it.steps.size}" + if (it.open) "+" else ""
-            is Fold.Live -> if (it.spin) "L*" else "L"
+            is Fold.Live -> "L"
             Fold.Pending -> "P"
         }
     }
 
-    @Test fun aRunningTurnShowsItsLastThreeStepsTheNewestSpinning() {
+    @Test fun aRunningTurnShowsOnlyItsCurrentStep() {
         val e = listOf(user("u"), thought("t1", "a"), tool("r1"), tool("r2"), thought("t2", "b"), tool("b1", "Bash", "git status", done = false))
-        assertEquals("U W2 L L L*", shape(LiveWork.fold(e, emptySet(), running = true)))
-        // Two steps: both live, no fold.
-        assertEquals("U L L*", shape(LiveWork.fold(e.take(3), emptySet(), running = true)))
-        // The fold of the earlier steps opens here.
-        assertEquals("U W2+ 1 1 L L L*", shape(LiveWork.fold(e, setOf("t1"), running = true)))
-    }
-
-    @Test fun aStepStillRunningSpinsTooAndTheNewestSpinsEvenWhenDone() {
-        val e = listOf(user("u"), tool("a", done = false), tool("b", done = false), tool("c"))
-        assertEquals("U L* L* L*", shape(LiveWork.fold(e, emptySet(), running = true)))
+        assertEquals("U W4 L", shape(LiveWork.fold(e, emptySet(), running = true)))
+        // One step before it: folded too, so the turn is one line while it runs.
+        assertEquals("U W1 L", shape(LiveWork.fold(e.take(3), emptySet(), running = true)))
+        assertEquals("U L", shape(LiveWork.fold(e.take(2), emptySet(), running = true)))
+        // The fold opens here, the current step still its one line.
+        assertEquals("U W4+ 1 1 1 1 L", shape(LiveWork.fold(e, setOf("t1"), running = true)))
         // The owner's case: one finished step and the turn still going.
-        assertEquals("U L*", shape(LiveWork.fold(listOf(user("u"), tool("ts", "ToolSearch")), emptySet(), running = true)))
+        assertEquals("U L", shape(LiveWork.fold(listOf(user("u"), tool("ts", "ToolSearch")), emptySet(), running = true)))
     }
 
     @Test fun theEndedTurnFoldsWhole() {
