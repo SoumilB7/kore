@@ -25,9 +25,9 @@ package struct HostFiles: Sendable {
         self.served = served.map(LinkFiles.normalised)
     }
 
-    private enum Need { case homeOrServed, served }
+    enum Need { case homeOrServed, served }
 
-    private struct Refusal: Error {
+    struct Refusal: Error {
         let code: ResultCode
         let message: String
     }
@@ -87,13 +87,15 @@ package struct HostFiles: Sendable {
             guard !cut, let bytes = FileManager.default.contents(atPath: place.real) else {
                 return FilesResult(id: id, ok: true, path: place.path, kind: .image, size: size, truncated: true)
             }
-            return FilesResult(id: id, ok: true, path: place.path, kind: .image, size: size, data: bytes.base64EncodedString())
+            return FilesResult(id: id, ok: true, path: place.path, kind: .image, size: size, data: bytes.base64EncodedString(), mtime: found.mtime)
         }
         guard let handle = FileHandle(forReadingAtPath: place.real) else { return .refused(id, .deniedPath, "Can't read that file on this box.") }
         defer { try? handle.close() }
         let bytes = (try? handle.read(upToCount: limit)) ?? Data()
         if bytes.prefix(8192).contains(0) { return FilesResult(id: id, ok: true, path: place.path, kind: .binary, size: size) }
-        return FilesResult(id: id, ok: true, path: place.path, kind: .text, size: size, text: Self.text(bytes, cut: cut), truncated: cut ? true : nil)
+        return FilesResult(
+            id: id, ok: true, path: place.path, kind: .text, size: size, text: Self.text(bytes, cut: cut), truncated: cut ? true : nil,
+            mtime: found.mtime)
     }
 
     package func mkdir(id: String, path: String) -> FilesResult {
@@ -119,14 +121,14 @@ package struct HostFiles: Sendable {
     // MARK: Where a path may lead
 
     /// The roots `path` is under, deepest first: served folders, then the home where allowed.
-    private func roots(_ path: String, _ need: Need) -> [String] {
+    func roots(_ path: String, _ need: Need) -> [String] {
         var roots = served.filter { LinkFiles.inside(path, $0) }.sorted { $0.count > $1.count }
         if need == .homeOrServed, LinkFiles.inside(path, home) { roots.append(home) }
         return roots
     }
 
     /// The path, normalised, and where it really is, when that stays inside a root it's under.
-    private func place(_ path: String, _ need: Need) -> Result<(path: String, real: String), Refusal> {
+    func place(_ path: String, _ need: Need) -> Result<(path: String, real: String), Refusal> {
         guard LinkFiles.plainPath(path) else { return .failure(Refusal(code: .invalid, message: "An absolute path.")) }
         let path = LinkFiles.normalised(path)
         let roots = roots(path, need)
@@ -147,35 +149,37 @@ package struct HostFiles: Sendable {
     /// Past this many names a folder's listing is cut before each is looked at.
     static let statMax = 50_000
 
-    private struct Found {
+    struct Found {
         let kind: FileEntry.Kind
         let size: Int64?
+        /// Its modification time in whole milliseconds: with the size, what a write checks.
+        var mtime: Int64 = 0
     }
 
     /// The entry itself (a link isn't followed).
-    private static func look(_ path: String) -> Found? {
+    static func look(_ path: String) -> Found? {
         guard let info = linkInfo(path) else { return nil }
         switch info.st_mode & mode_t(S_IFMT) {
         case mode_t(S_IFDIR): return Found(kind: .dir, size: nil)
         case mode_t(S_IFLNK): return Found(kind: .link, size: nil)
-        case mode_t(S_IFREG): return Found(kind: .file, size: Int64(info.st_size))
+        case mode_t(S_IFREG): return Found(kind: .file, size: Int64(info.st_size), mtime: millis(info))
         default: return Found(kind: .unknown, size: nil)
         }
     }
 
     /// What a link leads to is a folder.
-    private static func isFolder(_ path: String) -> Bool {
+    static func isFolder(_ path: String) -> Bool {
         guard let info = targetInfo(path) else { return false }
         return info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR)
     }
 
-    private static func real(_ path: String) -> String? {
+    static func real(_ path: String) -> String? {
         guard let resolved = realpath(path, nil) else { return nil }
         defer { free(resolved) }
         return String(cString: resolved)
     }
 
-    private static func byName(_ a: String, _ b: String) -> Bool {
+    static func byName(_ a: String, _ b: String) -> Bool {
         let (x, y) = (a.lowercased(), b.lowercased())
         return x == y ? a < b : x < y
     }
@@ -196,12 +200,22 @@ package struct HostFiles: Sendable {
     }
 }
 
-private func linkInfo(_ path: String) -> stat? {
+/// A stat's modification time in whole milliseconds.
+func millis(_ info: stat) -> Int64 {
+    #if canImport(Darwin)
+    let time = info.st_mtimespec
+    #else
+    let time = info.st_mtim
+    #endif
+    return Int64(time.tv_sec) * 1000 + Int64(time.tv_nsec) / 1_000_000
+}
+
+func linkInfo(_ path: String) -> stat? {
     var info = stat()
     return lstat(path, &info) == 0 ? info : nil
 }
 
-private func targetInfo(_ path: String) -> stat? {
+func targetInfo(_ path: String) -> stat? {
     var info = stat()
     return stat(path, &info) == 0 ? info : nil
 }

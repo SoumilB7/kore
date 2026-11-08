@@ -1,4 +1,4 @@
-# Link 1.4 to 1.7: the box (`kore-host`)
+# Link 1.4 to 1.8: the box (`kore-host`)
 
 A box is a headless machine running `kore-host`: the Mac reaches it with
 `ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Everything in link 1.0–1.3 holds unless this page says
@@ -35,7 +35,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 - `attach` exits 3 when no daemon listens, 4 when there's no such grant, 5 when there's no
   runtime folder, 2 on bad arguments; over ssh, 255 is ssh's own failure and 126/127 the shell's
   (kore-host can't run there, or isn't there).
-- `welcome`: `proto {1,7}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
+- `welcome`: `proto {1,8}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
   `policy {sendMaxLevel: 4, control: "full"|"standard"}` (`full` for a full grant),
   `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5). For a
   full grant each of `providers[]` carries `calls`: the `chat.call` types the box takes for that
@@ -318,3 +318,27 @@ watches nothing for it and nothing polls.
 Also 1.7: `account.refresh`'s result and a sign-in's `<id>:done`, when `signedIn: true`, carry
 `account: {email?, plan?, organization?, method, changeable, methodID?, platform?}` (who the
 CLI there is signed in as, never a token), so a box chat's Account popup reads as a local one's.
+
+## Link 1.8: a box's files edited
+
+The Mac's box window edits the box folder's files as its Files explorer edits a Mac folder's.
+Full grants only, each checked by `LinkPolicy.checkBox`, done off the daemon's main thread, and
+answered with a `result` like 1.7's. `fs.read`'s result also carries `mtime` (whole ms) from 1.8.
+
+| `type` | fields | |
+|---|---|---|
+| `fs.write` | `path, text \| data \| blob, base?` | Writes the file whole: a temp file beside it, then a rename, keeping its permissions. `text` (UTF-8, at most 160 KiB inline), `data` (base64) or `blob` (an upload, `blob.put.*`, 12 MB at most). `base {size, mtime}` is what the client last read: when the file isn't that any more (or is gone), `conflict`, with its `size` and `mtime` now, and nothing is written. Result: `size`, `mtime`. |
+| `fs.create` | `path, dir?` | A new empty file, or a folder. `invalid` when the name is taken. |
+| `fs.rename` | `from, to` | Renames or moves within the served folders; nothing is replaced, a folder never goes inside itself, and a served folder itself stays. |
+| `fs.delete` | `path` | Moves the entry to the box's trash: `~/.local/share/Trash/files` with its `info/<name>.trashinfo` (freedesktop; `$XDG_DATA_HOME` moves it), or `~/.Trash` on a Mac box. A taken name gets `.2`, `.3`…. It's never removed: when it can't be moved there (another disk), `denied.path` and nothing changes. |
+| `fs.search` | `root, query, mode?, max?` | `mode: "name"` (the default): files whose path holds the query's letters in order, the name holding it whole first. `"text"`: lines holding it, any case, fixed string, at most 20 a file, files up to 1 MB. Uses `rg` when the box has it, else a walk that skips `.git/`, `.build/`, `node_modules/` and what `.gitignore` names. At most `max` hits (200 by default, 1000 at most) and 3 seconds; `more: true` when it stopped. Result: `hits [{path, line?, text?}]`. |
+| `fs.watch` | `folders` | Watches exactly these folders (at most 64, each by itself, not its tree) for this connection; an empty list ends it. Result: `watching` (false when the box can't watch them all). Then `fs.changed {folders}` comes unasked, gathered for 200 ms, while the connection lasts. |
+
+Where they may lead: inside a served folder only (the home alone isn't enough). The entry's
+folder is resolved and has to stay inside its served folder; the entry itself is never
+followed: a link is renamed or trashed as itself, and written through only when it leads to a
+file inside. A served folder can't be renamed or trashed.
+
+Linux watches with inotify, a Mac box with FSEvents; nothing polls. The Mac sends the folders
+open in a box window's explorer, and sends them again as folders open and close; without a
+watch it lists them again when a turn ends.

@@ -29,6 +29,8 @@ final class LinkClient {
         /// Its start is still being read off the main thread: live items wait behind it.
         var loading = false
     }
+    /// The explorer's open folders, watched for this client (`fs.watch`).
+    private var watches: FolderWatches?
     /// `sync.watch`es, by folder; they end with the link.
     private var syncs: [String: SyncWatch] = [:]
 
@@ -69,6 +71,8 @@ final class LinkClient {
         helloWait?.cancel()
         for watch in syncs.values { watch.stop() }
         syncs = [:]
+        watches?.stop()
+        watches = nil
         syncPieces = []
         host.ended(self)
         for chatId in streaming { host.unfollowed(chatId) }
@@ -280,17 +284,53 @@ final class LinkClient {
         if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, nil, control: control == .full ? .full : .standard) {
             return sendRaw(StreamWire.encode(FilesResult.refused(id, code, message)))
         }
-        let files = HostFiles(home: HostPaths.home().path, served: host.config.folders)
+        let home = HostPaths.home().path
+        let files = HostFiles(home: home, served: host.config.folders)
+        if kind == .fsWatch { return sendRaw(StreamWire.encode(watch(args.folders ?? [], files: files, id: id))) }
+        // An upload's bytes, written in place (`fs.write` with `blob`).
+        let upload: URL? = kind == .fsWrite ? args.blob.flatMap { host.blobs[$0] } : nil
+        if kind == .fsWrite, args.blob != nil, upload == nil {
+            return sendRaw(StreamWire.encode(FilesResult.refused(id, .goneBlob, "That upload isn't on the box any more.")))
+        }
+        let trash = HostFiles.Trash.standard(home: home)
         Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) { () -> FilesResult in
                 switch kind {
-                case .fsList: files.list(id: id, path: args.path, hidden: args.hidden == true)
-                case .fsRead: files.read(id: id, path: args.path ?? "", max: args.max)
-                default: files.mkdir(id: id, path: args.path ?? "")
+                case .fsList: return files.list(id: id, path: args.path, hidden: args.hidden == true)
+                case .fsRead: return files.read(id: id, path: args.path ?? "", max: args.max)
+                case .fsMkdir: return files.mkdir(id: id, path: args.path ?? "")
+                case .fsWrite:
+                    let bytes: Data? =
+                        if let upload { try? Data(contentsOf: upload) } else if let text = args.text { Data(text.utf8) } else { args.data.flatMap { Data(base64Encoded: $0) } }
+                    guard let bytes else { return .refused(id, .invalid, "Nothing to write.") }
+                    return files.write(id: id, path: args.path ?? "", bytes: bytes, base: args.base)
+                case .fsCreate: return files.create(id: id, path: args.path ?? "", dir: args.dir == true)
+                case .fsRename: return files.rename(id: id, from: args.from ?? "", to: args.to ?? "")
+                case .fsDelete: return files.delete(id: id, path: args.path ?? "", trash: trash)
+                case .fsSearch: return files.search(id: id, root: args.root ?? "", query: args.query ?? "", text: args.mode == "text", max: args.max)
+                default: return .refused(id, .invalid, "Not taken here.")
                 }
             }.value
             self?.sendRaw(StreamWire.encode(result))
         }
+    }
+
+    /// `fs.watch`: these folders (inside served folders, links checked) watched for this client
+    /// from now on, the ones before dropped; an empty list ends them.
+    private func watch(_ asked: [String], files: HostFiles, id: String) -> FilesResult {
+        var wanted: [(path: String, real: String)] = []
+        for folder in asked {
+            guard case .success(let place) = files.place(folder, .served), HostFiles.look(place.real)?.kind == .dir else { continue }
+            wanted.append(place)
+        }
+        if wanted.isEmpty {
+            watches?.stop()
+            watches = nil
+            return FilesResult(id: id, ok: true, watching: true)
+        }
+        let watches = self.watches ?? FolderWatches { [weak self] changed in self?.sendRaw(StreamWire.encode(changed)) }
+        self.watches = watches
+        return FilesResult(id: id, ok: true, watching: watches.set(wanted))
     }
 
     // MARK: Sync

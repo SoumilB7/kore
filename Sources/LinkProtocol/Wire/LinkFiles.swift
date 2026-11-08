@@ -25,6 +25,36 @@ package struct FileEntry: Codable, Sendable, Equatable, Hashable {
     package var isFolder: Bool { kind == .dir || (kind == .link && dir == true) }
 }
 
+/// What a client last read of a file: a write over anything else is a `conflict`.
+package struct FileStamp: Codable, Sendable, Equatable, Hashable {
+    package var size: Int64
+    package var mtime: Int64
+    package init(size: Int64, mtime: Int64) {
+        self.size = size
+        self.mtime = mtime
+    }
+}
+
+/// One `fs.search` hit: a file (name mode), or a line in it (text mode, 1-based).
+package struct FileHit: Codable, Sendable, Equatable, Hashable {
+    package var path: String
+    package var line: Int?
+    package var text: String?
+    package init(path: String, line: Int? = nil, text: String? = nil) {
+        self.path = path
+        self.line = line
+        self.text = text
+    }
+}
+
+/// `fs.changed`, box to client: folders it watches whose entries changed.
+package struct FilesChanged: Codable, Sendable, Equatable {
+    package static let type = "fs.changed"
+    package var t = FilesChanged.type
+    package var folders: [String]
+    package init(folders: [String]) { self.folders = folders }
+}
+
 /// What `fs.read` found: text, an image (its bytes), or neither.
 package enum FileReadKind: String, LenientEnum { case text, image, binary, unknown }
 
@@ -47,11 +77,22 @@ package struct FilesResult: Codable, Sendable, Equatable {
     package var text: String?
     package var data: String?
     package var truncated: Bool?
+    /// 1.8: the file's modification time (whole ms) after `fs.read` or `fs.write`: with `size`, the
+    /// `base` a later write checks.
+    package var mtime: Int64?
+    /// 1.8: `fs.search`'s hits, best first (`more`: it stopped at a cap).
+    package var hits: [FileHit]?
+    /// 1.8: `fs.watch`: false when the box can't watch them (the client lists them at a turn's end).
+    package var watching: Bool?
 
     package init(
         id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, path: String? = nil, entries: [FileEntry]? = nil,
-        more: Bool? = nil, kind: FileReadKind? = nil, size: Int64? = nil, text: String? = nil, data: String? = nil, truncated: Bool? = nil
+        more: Bool? = nil, kind: FileReadKind? = nil, size: Int64? = nil, text: String? = nil, data: String? = nil, truncated: Bool? = nil,
+        mtime: Int64? = nil, hits: [FileHit]? = nil, watching: Bool? = nil
     ) {
+        self.mtime = mtime
+        self.hits = hits
+        self.watching = watching
         self.id = id
         self.ok = ok
         self.code = code
@@ -76,6 +117,12 @@ package enum LinkFiles {
     package static let listMax = 5000
     /// `fs.read` reads at most this much.
     package static let readMax = 2 * 1024 * 1024
+    /// `fs.search`: results and seconds at most; `fs.watch`: folders at most per connection.
+    package static let searchMax = 1000
+    package static let searchSeconds: TimeInterval = 3
+    package static let watchMax = 64
+    /// A write's text above this goes as an upload (`blob`): a frame from the client is 256 KiB.
+    package static let inlineMax = 160 * 1024
     /// A path's longest form on the wire.
     package static let pathMax = 4096
 

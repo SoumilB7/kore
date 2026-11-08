@@ -13,9 +13,9 @@ import src
 package enum LinkProto {
     package static let major = 1
     package static let minor = 3
-    /// A box (`kore-host`) speaks 1.7: the Mac's 1.3, the box's additions (1.4), box parity (1.5),
-    /// Arsenal on a box (1.6) and its files read (1.7).
-    package static let boxMinor = 7
+    /// A box (`kore-host`) speaks 1.8: the Mac's 1.3, the box's additions (1.4), box parity (1.5),
+    /// Arsenal on a box (1.6), its files read (1.7) and edited (1.8).
+    package static let boxMinor = 8
     package static var version: LinkVersion { LinkVersion(major: major, minor: minor) }
 }
 
@@ -876,6 +876,8 @@ package enum ResultCode: String, LenientEnum {
     /// 1.7 (a box's files): a path the grant may not read there, and one that isn't there.
     case deniedPath = "denied.path"
     case goneFile = "gone.file"
+    /// 1.8: the file changed on the box since the client read it (`fs.write`'s `base`).
+    case conflict
     /// Accounts (1.2 steps 3–4).
     case deniedMac = "denied.mac"
     case busyAccount = "busy.account"

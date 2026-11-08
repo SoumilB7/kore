@@ -69,9 +69,16 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case fsList = "fs.list"
     case fsRead = "fs.read"
     case fsMkdir = "fs.mkdir"
+    /// 1.8: editing a served folder's files, finding in them, and watching open folders.
+    case fsWrite = "fs.write"
+    case fsCreate = "fs.create"
+    case fsRename = "fs.rename"
+    case fsDelete = "fs.delete"
+    case fsSearch = "fs.search"
+    case fsWatch = "fs.watch"
 
-    /// A 1.7 file command: answered with a `FilesResult`, full grants only.
-    package var onFiles: Bool { self == .fsList || self == .fsRead || self == .fsMkdir }
+    /// A file command (1.7, 1.8): answered with a `FilesResult`, full grants only.
+    package var onFiles: Bool { rawValue.hasPrefix("fs.") }
 
     /// It acts on a CLI's account.
     package var onAccount: Bool { rawValue.hasPrefix("account.") }
@@ -151,6 +158,17 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     /// 1.7: `fs.list` lists dotfiles too; `fs.read` reads at most this many bytes.
     package var hidden: Bool?
     package var max: Int?
+    /// 1.8: `fs.write`'s bytes (base64), or the upload holding them, and what it last read;
+    /// `fs.create`'s kind; `fs.rename`'s ends; `fs.search`'s root and query; `fs.watch`'s folders.
+    package var data: String?
+    package var blob: String?
+    package var base: FileStamp?
+    package var dir: Bool?
+    package var from: String?
+    package var to: String?
+    package var root: String?
+    package var query: String?
+    package var folders: [String]?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -161,8 +179,19 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         sectionId: String? = nil, toTab: Bool? = nil, swatch: String? = nil, mergeInto: String? = nil, remove: Bool? = nil,
         recentId: String? = nil, sessionId: String? = nil, mode: String? = nil, method: String? = nil, aim: String? = nil,
         login: String? = nil, serial: Int? = nil, input: String? = nil, tier: String? = nil,
-        folder: String? = nil, path: String? = nil, hidden: Bool? = nil, max: Int? = nil
+        folder: String? = nil, path: String? = nil, hidden: Bool? = nil, max: Int? = nil, data: String? = nil, blob: String? = nil,
+        base: FileStamp? = nil, dir: Bool? = nil, from: String? = nil, to: String? = nil, root: String? = nil, query: String? = nil,
+        folders: [String]? = nil
     ) {
+        self.data = data
+        self.blob = blob
+        self.base = base
+        self.dir = dir
+        self.from = from
+        self.to = to
+        self.root = root
+        self.query = query
+        self.folders = folders
         self.chatId = chatId
         self.windowId = windowId
         self.title = title

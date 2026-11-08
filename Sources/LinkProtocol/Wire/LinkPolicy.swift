@@ -280,6 +280,31 @@ package enum LinkPolicy {
             guard LinkFiles.plainPath(args.path) else { return .deny(.invalid, "An absolute path.") }
             if kind == .fsRead, let max = args.max, max < 0 { return .deny(.invalid, "A size of 0 or more.") }
             return .allow
+        case .fsWrite, .fsCreate, .fsDelete:
+            // 1.8: inside served folders only (the box checks where the path leads).
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard LinkFiles.plainPath(args.path) else { return .deny(.invalid, "An absolute path.") }
+            if kind == .fsWrite, [args.text != nil, args.data != nil, args.blob != nil].filter({ $0 }).count != 1 {
+                return .deny(.invalid, "One of text, data or blob.")
+            }
+            return .allow
+        case .fsRename:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard LinkFiles.plainPath(args.from), LinkFiles.plainPath(args.to) else { return .deny(.invalid, "Two absolute paths.") }
+            return .allow
+        case .fsSearch:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard LinkFiles.plainPath(args.root) else { return .deny(.invalid, "An absolute root.") }
+            guard let query = args.query, !query.isEmpty, query.count <= 200, !query.contains("\0"), !query.contains(where: \.isNewline) else {
+                return .deny(.invalid, "A query of one line, up to 200 characters.")
+            }
+            guard args.mode == nil || args.mode == "name" || args.mode == "text" else { return .deny(.invalid, "name or text.") }
+            return .allow
+        case .fsWatch:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            let folders = args.folders ?? []
+            guard folders.count <= LinkFiles.watchMax, folders.allSatisfy(LinkFiles.plainPath) else { return .deny(.invalid, "Up to 64 absolute folders.") }
+            return .allow
         case .tabReopen:
             // A closed chat back: named by `sourceId` (it isn't one of the box's chats until then).
             return args.sourceId != nil ? .allow : .deny(.invalid, "Name the chat.")

@@ -57,7 +57,7 @@ package enum HostInbound: Sendable {
 
 package enum HostWire {
     /// The link version the client speaks.
-    package static let proto = LinkVersion(major: 1, minor: 7)
+    package static let proto = LinkVersion(major: 1, minor: 8)
 
     // MARK: Out
 
