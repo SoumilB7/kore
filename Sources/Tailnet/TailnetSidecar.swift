@@ -8,14 +8,23 @@ import KoreTrust
 ///
 /// Wire (version 1), both ways: `u32 big-endian length | JSON`, at most `maxMessage` bytes. A
 /// message carrying a descriptor sends it as SCM_RIGHTS with its 4 length bytes, alone in that
-/// `sendmsg`. Requests, one per connection:
-/// - `{"v":1,"op":"status"}` → `{"ok":true,"status":<LocalAPI status>}`
+/// `sendmsg`. The server keeps its copy of a sent descriptor open until the client has it (macOS
+/// can deliver a dead one otherwise): a dial's until the client closes that connection, a
+/// listen's until the client acks it. Requests, one per connection:
+/// - `{"v":1,"op":"start","key":"<base64, 32 bytes>"}` → `{"ok":true}`: the node comes up with its
+///   state sealed under `key` (never argv or env). That connection is the owner: the program ends
+///   when it closes. A key that doesn't open the saved state is refused and the program ends.
+/// - `{"v":1,"op":"stop"}` → `{"ok":true}` once the node is down, then the program ends.
+/// - `{"v":1,"op":"status"}` → `{"ok":true,"status":<LocalAPI status>}` (`AuthURL` while NeedsLogin)
 /// - `{"v":1,"op":"whois","addr":"<ip>"}` → `{"ok":true,"whois":<LocalAPI whois>}`
 /// - `{"v":1,"op":"watch","mask":49154}` → `{"notify":<IPN bus message>}` until either side closes
 /// - `{"v":1,"op":"listen","port":<n>}` → `{"ok":true}`, then per accepted connection
-///   `{"conn":{"remote":"<ip>:<port>"}}` + its descriptor
+///   `{"conn":{"remote":"<ip>:<port>"}}` + its descriptor, which the client acks with
+///   `{"v":1,"op":"ack"}`
 /// - `{"v":1,"op":"dial","addr":"<ip>","port":<n>}` → `{"ok":true}` + the connection's descriptor
-/// Any refusal: `{"ok":false,"error":"<why>"}`.
+/// Any refusal: `{"ok":false,"error":"<why>"}`; a client of another uid gets "not this user".
+/// Before `start` every other request is refused with "not started". The program prints
+/// `ready` on stdout once its socket listens (`tools/kore-tailnet`).
 package final class TailnetSidecar: Tailnet {
     package static let version = 1
     package static let maxMessage = 16 << 20
@@ -23,6 +32,26 @@ package final class TailnetSidecar: Tailnet {
     package let path: String
 
     package init(path: String) { self.path = path }
+
+    /// Brings the node up with its state key. The returned connection keeps it up: closing it
+    /// ends the program.
+    package func start(key: Data) throws -> Int32 {
+        let fd = try Self.open(path)
+        do {
+            try SidecarWire.send(fd, Self.request(["op": .string("start"), "key": .string(key.base64EncodedString())]))
+            let reply = try Self.reply(fd).0
+            guard reply.ok == true else { throw TailnetError.sidecar(reply.error ?? "start refused") }
+            return fd
+        } catch {
+            Sockets.closeFD(fd)
+            throw error
+        }
+    }
+
+    /// Takes the node down and ends the program.
+    package func stop() throws {
+        _ = try ask(["op": .string("stop")])
+    }
 
     package func status() throws -> TailnetStatus {
         let (reply, _) = try ask(["op": .string("status")])
@@ -105,7 +134,7 @@ package final class TailnetSidecar: Tailnet {
         return (try SidecarWire.decode(data), passed)
     }
 
-    private static func request(_ fields: [String: JSONValue]) throws -> Data {
+    fileprivate static func request(_ fields: [String: JSONValue]) throws -> Data {
         var all = fields
         all["v"] = .int(Int64(version))
         return try JSONEncoder().encode(all)
@@ -210,6 +239,8 @@ extension TailnetListenSocket {
                 guard let data else { throw SocketError.closed }
                 let reply = try SidecarWire.decode(data)
                 guard let passed else { continue }
+                // The server holds its copy until this ack.
+                try? SidecarWire.send(socket, TailnetSidecar.request(["op": .string("ack")]))
                 guard let conn = reply.conn else {
                     Sockets.closeFD(passed)
                     continue

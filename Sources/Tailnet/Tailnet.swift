@@ -76,6 +76,8 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
     package var backendState: BackendState
     package var selfNode: SelfNode?
     package var peers: [Peer]
+    /// The sign-in page while NeedsLogin, for the UI to open; never logged.
+    package var authURL: String?
 
     package struct SelfNode: Decodable, Sendable, Equatable {
         package var publicKey: String
@@ -93,6 +95,15 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
             self.tailscaleIPs = tailscaleIPs
             self.userID = userID
             self.tags = tags
+        }
+
+        /// Signed out, Self has no addresses yet (`null`).
+        package init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            publicKey = try c.decode(String.self, forKey: .publicKey)
+            tailscaleIPs = try c.decodeIfPresent([String].self, forKey: .tailscaleIPs) ?? []
+            userID = try c.decodeIfPresent(Int64.self, forKey: .userID)
+            tags = try c.decodeIfPresent([String].self, forKey: .tags)
         }
 
         /// The person this node belongs to; nil for a tagged node.
@@ -121,13 +132,14 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case backendState = "BackendState", selfNode = "Self", peers = "Peer"
+        case backendState = "BackendState", selfNode = "Self", peers = "Peer", authURL = "AuthURL"
     }
 
-    package init(backendState: BackendState, selfNode: SelfNode?, peers: [Peer] = []) {
+    package init(backendState: BackendState, selfNode: SelfNode?, peers: [Peer] = [], authURL: String? = nil) {
         self.backendState = backendState
         self.selfNode = selfNode
         self.peers = peers
+        self.authURL = authURL
     }
 
     package init(from decoder: any Decoder) throws {
@@ -136,6 +148,7 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
         selfNode = try c.decodeIfPresent(SelfNode.self, forKey: .selfNode)
         let map = try c.decodeIfPresent([String: Peer].self, forKey: .peers) ?? [:]
         peers = map.keys.sorted().compactMap { map[$0] }
+        authURL = try c.decodeIfPresent(String.self, forKey: .authURL).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -208,6 +221,7 @@ package enum TailnetListenSocket: Equatable, Sendable {
 struct BusNotify: Decodable {
     var state: Int?
     var initialStatus: TailnetStatus?
+    /// `PeerChangedPatch`: narrow per-peer patches (Online among them), the peer-patches bit's.
     var peerChanges: [PeerChange]?
     var errMessage: String?
 
@@ -219,7 +233,7 @@ struct BusNotify: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case state = "State", initialStatus = "InitialStatus", peerChanges = "PeerChanges", errMessage = "ErrMessage"
+        case state = "State", initialStatus = "InitialStatus", peerChanges = "PeerChangedPatch", errMessage = "ErrMessage"
     }
 
     /// The bus's watch mask: initial state + initial status + peer patches, never engine updates

@@ -118,7 +118,7 @@ struct LocalAPITests {
     @Test func busDropsEngineMessages() async throws {
         let engine = #"{"Version":"1.104","Engine":{"RBytes":1,"WBytes":2,"NumLive":1,"LiveDERPs":1}}"#
         let initial = #"{"Version":"1.104","SessionID":"s","State":6,"InitialStatus":\#(statusJSON.replacingOccurrences(of: "\n", with: ""))}"#
-        let peer = #"{"Version":"1.104","PeerChanges":[{"NodeID":77,"Online":false,"Key":"nodekey:0b99"}]}"#
+        let peer = #"{"Version":"1.104","PeerChangedPatch":[{"NodeID":77,"Online":false,"Key":"nodekey:0b99"}]}"#
         let body = [initial, engine, engine, peer, engine].map { $0 + "\n" }.joined()
         let parts = stride(from: 0, to: body.utf8.count, by: 97).map { i in
             String(decoding: Array(body.utf8)[i..<min(i + 97, body.utf8.count)], as: UTF8.self)
