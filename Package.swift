@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "KoreCore", targets: ["KoreCore"]),
         .executable(name: "Kore", targets: ["Kore"]),
         .executable(name: "kore-cli", targets: ["kore-cli"]),
+        .executable(name: "kore-host", targets: ["kore-host"]),
         .executable(name: "kore-command", targets: ["kore-command"]),
         .executable(name: "kore-storylines", targets: ["kore-storylines"]),
         .executable(name: "kore-fake-cli", targets: ["kore-fake-cli"]),
@@ -45,6 +46,10 @@ let package = Package(
             dependencies: ["src", "KoreCore", .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))],
             swiftSettings: releaseForSize),
         .target(name: "KoreLink", dependencies: ["KoreUI", "LinkProtocol", "src", "KoreCore"], swiftSettings: releaseForSize),
+        // kore-host: Kore's chats on a headless machine (phase 17), served over the link. It
+        // never links KoreUI or KoreLink, and the Mac app never links it.
+        .target(name: "KoreHost", dependencies: ["src", "LinkProtocol", "KoreCore"], swiftSettings: releaseForSize),
+        .executableTarget(name: "kore-host", dependencies: ["KoreHost"], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         // The `kore` command in Kore.app (Contents/Helpers/kore): the reads over Kore's agent
@@ -63,6 +68,7 @@ let package = Package(
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "src", "KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "LinkProtocol", "KoreUI", "src", "KoreCore"]),
+        .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "LinkProtocol", "src", "KoreCore"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "src", "KoreCore"]),
     ]
 )
