@@ -43,7 +43,7 @@ class ChatActivity : NodeActivity() {
 
     override fun body(): View = column().apply {
         // The chat's one new mark: ⋮ opens its sheet (rename, compact, show on the Mac, close).
-        menuButton = barButton(barTitle, "⋮", "Chat menu") { actions.openMenu() }.apply { visibility = View.GONE }
+        menuButton = barButton(barTitle, "⋮", "More") { actions.openMenu() }.apply { visibility = View.GONE }
         // ＋: a new chat beside this one, on the same device (phase 18 §3).
         barButton(barTitle, "＋", "New chat here") { newHere() }
         // The bar's lead: the CLI's logo, the spinner while a turn runs (spec §5, §6 Chat).
@@ -169,6 +169,12 @@ class ChatActivity : NodeActivity() {
         openingSpinner.visibility = View.GONE
         openingText.text = "Couldn't open this chat on $macName"
         retry.visibility = View.VISIBLE
+    }
+
+    /** A rotation keeps this screen (the manifest's configChanges): the draft, the scroll and an open sheet stay; the field's lines follow (spec §7). */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        actions.oriented(newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE)
     }
 
     @Deprecated("The platform's activity results")

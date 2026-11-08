@@ -25,7 +25,7 @@ class WindowActivity : NodeActivity() {
     private var more: android.view.View? = null
 
     override fun body(): View {
-        more = barButton(barTitle, "⋮", "Window menu") { windowSheet() }.apply { visibility = View.GONE }
+        more = barButton(barTitle, "⋮", "More") { windowSheet() }.apply { visibility = View.GONE }
         plus = barButton(barTitle, "＋", "New") { openNew() }.apply { visibility = View.GONE }
         return super.body()
     }

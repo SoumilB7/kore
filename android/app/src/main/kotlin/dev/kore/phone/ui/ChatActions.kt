@@ -40,7 +40,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     private val cardButtons = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
     private val sheetScroll = MaxHeightScroll(activity) { room ->
         val buttons = if (cardButtons.visibility == View.GONE) 0 else cardButtons.measuredHeight.takeIf { it > 0 } ?: activity.dp(60)
-        maxOf(activity.dp(64), cardMax(room) - buttons - activity.dp(32))
+        // Never more than leaves the composer its whole height (landscape, a keyboard, large text).
+        val left = room - composerHeight() - buttons - activity.dp(32 + 10 + 8)
+        maxOf(0, minOf(maxOf(activity.dp(64), cardMax(room) - buttons - activity.dp(32)), left))
     }.apply {
         addView(sheet)
         // More above or below fades out at the edge, so a cut card says it scrolls.
@@ -287,6 +289,12 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         addView(slashScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = activity.dp(8) })
         addView(status)
         addView(box, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
+    /** The field shows 1–6 lines, 3 in landscape (spec §5, §7). */
+    fun oriented(landscape: Boolean) {
+        field.maxLines = if (landscape) 3 else 6
+        bar.requestLayout()
     }
 
     /** The composer's height as last laid out (before its first layout: a one-line field and the bar). */

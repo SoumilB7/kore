@@ -6,8 +6,11 @@
 #   shots.sh [out dir]      default ~/Library/Application Support/KoreDev/scratch/shots/<time>/
 #
 # Writes <screen>-<width>dp-<scale>x.png for Home, a device, a chat (a wide table, a permission card)
-# and Settings, at 320/360/412 dp and font scale 1.0 and 2.0. Boots the emulator if it isn't up and
-# leaves it running (`adb -s emulator-5580 emu kill` stops it). Input on the emulator only.
+# and Settings, at the sizes the design spec checks (§7, §9): 320/360/412 dp at font scale 1.0 and
+# 2.0, 360 dp at 1.3 and 1.5, landscape 780 × 360, and 360 dp with animations off (still-*.png).
+# Then the device's states from the demo's scenarios (state-<scenario>.png). Boots the emulator if
+# it isn't up and leaves it running (`adb -s emulator-5580 emu kill` stops it). Input on the
+# emulator only.
 set -u
 export KORE_ANDROID="${0:A:h:h}"
 source "$KORE_ANDROID/scripts/env.sh"
@@ -34,7 +37,8 @@ fi
 
 (cd "$KORE_ANDROID" && kore_gradle --offline --quiet :app:assembleDebug) || { print "debug build failed"; exit 1; }
 "$adb" install -r "$KORE_ANDROID/app/build/outputs/apk/debug/app-debug.apk" >/dev/null || { print "install failed"; exit 1; }
-"$adb" shell run-as $pkg touch files/demo
+demo=/data/data/$pkg/files/demo
+"$adb" shell "run-as $pkg sh -c 'echo -n > $demo'"
 
 shot() {
     "$adb" shell am force-stop $pkg
@@ -43,16 +47,34 @@ shot() {
     "$adb" exec-out screencap -p > "$out/$1.png"
 }
 density=$("$adb" shell wm density | awk '/Physical/ {print $3}' | tr -d '\r')
+px() { print $(( $1 * density / 160 )); }
+four() {
+    shot "home-$1" HomeActivity
+    shot "device-$1" DeviceActivity --es node $mac
+    shot "chat-$1" ChatActivity --es node $mac --es chat $chat
+    shot "settings-$1" SettingsActivity --es node $mac
+}
+size() { "$adb" shell wm size $(px $1)x$(px $2); }
+scale() { "$adb" shell settings put system font_scale $1; }
 for dp in 320 360 412; do
-    "$adb" shell wm size $(( dp * density / 160 ))x$(( dp * density / 160 * 20 / 9 ))
-    for scale in 1.0 2.0; do
-        "$adb" shell settings put system font_scale $scale
-        shot "home-${dp}dp-${scale}x" HomeActivity
-        shot "device-${dp}dp-${scale}x" DeviceActivity --es node $mac
-        shot "chat-${dp}dp-${scale}x" ChatActivity --es node $mac --es chat $chat
-        shot "settings-${dp}dp-${scale}x" SettingsActivity --es node $mac
-    done
+    size $dp $(( dp * 20 / 9 ))
+    for s in 1.0 2.0; do scale $s; four "${dp}dp-${s}x"; done
 done
-"$adb" shell wm size reset; "$adb" shell settings put system font_scale 1.0
+size 360 800
+for s in 1.3 1.5; do scale $s; four "360dp-${s}x"; done
+scale 1.0
+# Landscape: the same 560 column (spec §7).
+size 780 360; four "780x360dp"
+# "Remove animations": the spinner, the breathing ring and the shimmer hold still.
+size 360 800
+anim() { for k in animator_duration_scale transition_animation_scale window_animation_scale; do "$adb" shell settings put global $k $1; done; }
+anim 0; four "360dp-still"; anim 1
+# The device's states, one demo scenario each.
+for sc in waiting no-windows asleep; do
+    "$adb" shell "run-as $pkg sh -c 'echo -n $sc > $demo'"
+    shot "state-$sc" DeviceActivity --es node $mac
+done
+"$adb" shell "run-as $pkg sh -c 'echo -n > $demo'"
+"$adb" shell wm size reset; scale 1.0
 "$adb" logcat -d -s AndroidRuntime:E > "$out/crashes.txt"
 print "$(ls "$out"/*.png | wc -l | tr -d ' ') screenshots in $out$( [[ -s "$out/crashes.txt" ]] && print " · CRASHES: see crashes.txt")"

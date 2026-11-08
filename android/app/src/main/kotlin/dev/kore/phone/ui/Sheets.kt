@@ -124,7 +124,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
     init {
         val scroll = object : ScrollView(a) {
             override fun onMeasure(w: Int, h: Int) =
-                super.onMeasure(w, MeasureSpec.makeMeasureSpec((a.resources.displayMetrics.heightPixels * 0.82f).toInt(), MeasureSpec.AT_MOST))
+                super.onMeasure(w, MeasureSpec.makeMeasureSpec((a.resources.displayMetrics.heightPixels * 0.9f).toInt() - a.dp(8 + 4 + 4 + 14 + 26), MeasureSpec.AT_MOST))
         }.apply { addView(body); isVerticalScrollBarEnabled = false }
         val root = a.column().apply {
             background = ground
@@ -135,7 +135,8 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
             addView(scroll)
             addView(note)
         }
-        dialog.setContentView(root)
+        // One 560 column on a wide screen or in landscape (spec §7), at the foot.
+        dialog.setContentView(MaxWidth(a, a.dp(Space.column)).apply { addView(root) })
         dialog.window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             setGravity(Gravity.BOTTOM)
@@ -428,7 +429,7 @@ class PopMenu(private val a: Activity) {
         fill(items, null)
         val oldBg = anchor.foreground
         // The held item gets a 2 dp accent ring at 50 %.
-        anchor.foreground = a.shape(0, 12, null).apply { setStroke(a.dp(2), 0x806AB1E7.toInt()) }
+        anchor.foreground = a.shape(0, 12, null).apply { setStroke(a.dp(2), Tone.held) }
         popup.setOnDismissListener { anchor.foreground = oldBg }
         // Just below the row, so the menu never covers the text it acts on.
         popup.showAsDropDown(anchor, a.dp(56), a.dp(4))

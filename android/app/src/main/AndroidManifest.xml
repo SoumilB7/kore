@@ -21,19 +21,19 @@
         android:theme="@style/Kore"
         android:usesCleartextTraffic="false">
         <!-- The one exported screen; no URL scheme. -->
-        <activity android:name=".ui.JoinActivity" android:exported="true" android:launchMode="singleTop">
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" android:name=".ui.JoinActivity" android:exported="true" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".ui.HomeActivity" android:exported="false" />
-        <activity android:name=".ui.DeviceActivity" android:exported="false" />
-        <activity android:name=".ui.WindowActivity" android:exported="false" />
-        <activity android:name=".ui.ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize|stateHidden" />
-        <activity android:name=".ui.SettingsActivity" android:exported="false" />
-        <activity android:name=".ui.HistoryActivity" android:exported="false" android:windowSoftInputMode="adjustResize|stateHidden" />
-        <activity android:name=".ui.DiffActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" android:name=".ui.HomeActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" android:name=".ui.DeviceActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" android:name=".ui.WindowActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" android:name=".ui.ChatActivity" android:exported="false" android:windowSoftInputMode="adjustResize|stateHidden" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" android:name=".ui.SettingsActivity" android:exported="false" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" android:name=".ui.HistoryActivity" android:exported="false" android:windowSoftInputMode="adjustResize|stateHidden" />
+        <activity android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" android:name=".ui.DiffActivity" android:exported="false" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

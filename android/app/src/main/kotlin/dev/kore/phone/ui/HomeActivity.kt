@@ -178,7 +178,7 @@ class HomeActivity : Activity() {
         setOnClickListener {
             startActivity(Intent(this@HomeActivity, ChatActivity::class.java).putExtra("node", cue.node).putExtra("chat", cue.chat))
         }
-        pressFill(Tone.warnFill, 0x29E1C08D, Radius.row, Tone.warnEdge)
+        pressFill(Tone.warnFill, Tone.warnPressed, Radius.row, Tone.warnEdge)
     }
 
     /** A device in the grouped list: its icon, name, fact, a point in its state's colour, a chevron. */

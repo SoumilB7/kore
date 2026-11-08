@@ -61,6 +61,10 @@ object Tone {
     const val focus = 0x736AB1E7
     /** Pressed on l3 (a secondary button). */
     const val l3Pressed = 0xFF2E3A41.toInt()
+    /** Pressed on warnFill (the need-you cue). */
+    const val warnPressed = 0x29E1C08D
+    /** The ring round a held item: accent at 50 %. */
+    const val held = 0x806AB1E7.toInt()
     /** Pressed on errFill (a destructive button). */
     const val errPressed = 0x33F0736B
     /** A diff's added and removed lines: ok and err at 10 %. */
@@ -482,4 +486,17 @@ fun android.app.Activity.skeleton(rows: Int = 5): View = android.widget.LinearLa
     orientation = android.widget.LinearLayout.VERTICAL
     contentDescription = "Loading"
     repeat(rows) { addView(SkeletonRow(context), android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.MATCH_PARENT, dp(64)).apply { if (it > 0) topMargin = dp(8) }) }
+}
+
+/** Holds one child at most [max] px wide, centred at the foot; the rest stays clear (the 560 column, spec §7). */
+class MaxWidth(context: Context, private val max: Int) : android.widget.FrameLayout(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        getChildAt(0)?.let { child ->
+            val lp = child.layoutParams as LayoutParams
+            lp.gravity = android.view.Gravity.CENTER_HORIZONTAL or android.view.Gravity.BOTTOM
+            lp.width = if (width > max) max else LayoutParams.MATCH_PARENT
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
 }
