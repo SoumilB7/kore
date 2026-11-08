@@ -39,8 +39,8 @@ struct MessageRail: View {
                     rail(marks, Layout(count: marks.count, room: height.value - 2 * Size.railMargin, around: around(marks)))
                 }
             }
-            .onChange(of: store.messageMarks, initial: true) {
-                reading.list(store.messageMarks)
+            .onChange(of: SectionsKey(store), initial: true) {
+                reading.list(store.messageMarks, sections: store.sections.map(\.id))
                 goToPending()
             }
             // The list of what isn't loaded: once there's something, then after each page.
@@ -269,21 +269,48 @@ struct MessageRail: View {
 }
 
 /// Which message is being read, from where the message rows really are: the last whose top has
-/// reached the top of the view, or, with none there yet, the one before the first on screen,
-/// whose turn is what's above it. A long answer with no message on screen leaves it as it was.
-/// Publishes only when it changes.
+/// reached the top of the view, or, with none there yet, the one whose turn is above the first on
+/// screen. Every message row counts, a peer's too: a peer's message reads as the user's last
+/// before it, so a stretch of peers' messages past the user's last still reads as that one. The
+/// message is kept by what it is, not its place, so marks arriving before it (a compacted chat's
+/// earlier messages) keep its tick. Publishes only when it changes.
 @MainActor
 final class MessageReading: ObservableObject {
     @Published private(set) var index: Int?
     private var tops: [String: CGFloat] = [:]
-    /// Each built message's place among the scroller's marks, by its row.
-    private var places: [String: Int] = [:]
+    /// Each message row's place among the scroller's marks once its top reaches the top (the
+    /// user's own, or a peer's: the user's last before it), and its turn's above it.
+    private var at: [String: Int] = [:]
+    private var before: [String: Int] = [:]
+    private var marks: [TranscriptStore.MessageMark] = []
+    /// The message being read, by what it is.
+    private var read: TranscriptStore.MessageMark.Place?
 
-    func list(_ marks: [TranscriptStore.MessageMark]) {
-        places = [:]
+    /// The marks, and the built sections' ids in order (`s-<row>`): a section with no mark of its
+    /// own (a peer's message) reads as the last mark before it.
+    func list(_ marks: [TranscriptStore.MessageMark], sections: [String] = []) {
+        self.marks = marks
+        at = [:]
+        before = [:]
+        var built: [String: Int] = [:]
+        var last: Int?
         for (place, mark) in marks.enumerated() {
-            if case .built(let section) = mark.place { places[String(section.dropFirst(2))] = place }
+            if case .built(let section) = mark.place { built[section] = place } else { last = place }
         }
+        let order = sections.isEmpty ? marks.compactMap { if case .built(let s) = $0.place { s } else { nil } } : sections
+        for section in order where section.hasPrefix("s-") {
+            let row = String(section.dropFirst(2))
+            if let place = built[section] {
+                at[row] = place
+                before[row] = max(place - 1, 0)
+                last = place
+            } else if let last {
+                at[row] = last
+                before[row] = last
+            }
+        }
+        // The one being read stays itself while the list around it changes.
+        if let read, let place = marks.firstIndex(where: { $0.place == read }), place != index { index = place }
         update()
     }
 
@@ -295,15 +322,31 @@ final class MessageReading: ObservableObject {
 
     private func update() {
         var above: Int?
-        var first: Int?
+        var first: (top: CGFloat, row: String)?
         for (row, top) in tops {
-            guard let place = places[row] else { continue }
-            if first.map({ place < $0 }) ?? true { first = place }
+            guard let place = at[row] else { continue }
+            if first.map({ top < $0.top }) ?? true { first = (top, row) }
             if top <= Size.railReadLine, above.map({ place > $0 }) ?? true { above = place }
         }
-        guard let first else { return }
-        let now = above ?? max(first - 1, 0)
+        guard let first, let now = above ?? before[first.row] else { return }
         if now != index { index = now }
+        if marks.indices.contains(now) { read = marks[now].place }
+    }
+}
+
+/// What the reading's list follows: the marks, and the sections' ends and count (a peer's message
+/// adds a section, no mark). Cheap to compare on every pass.
+private struct SectionsKey: Equatable {
+    let marks: [TranscriptStore.MessageMark]
+    let count: Int
+    let first: String?
+    let last: String?
+
+    @MainActor init(_ store: TranscriptStore) {
+        marks = store.messageMarks
+        count = store.sections.count
+        first = store.sections.first?.id
+        last = store.sections.last?.id
     }
 }
 
