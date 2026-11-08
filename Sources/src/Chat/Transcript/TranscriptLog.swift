@@ -1070,3 +1070,8 @@ extension TranscriptLog.Entry {
         self.done = done
     }
 }
+
+extension TranscriptLog.AgentInfo {
+    /// Running, finished, failed or stopped.
+    package var statusName: String { "\(status)" }
+}

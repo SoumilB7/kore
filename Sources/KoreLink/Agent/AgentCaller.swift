@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import KoreCore
+import LinkProtocol
 
 /// Who is on the other end of the agent channel, from the kernel and Kore's own records, never
 /// from what the caller says: its process (`LOCAL_PEERTOKEN`), the processes above it, and

@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+@testable import LinkProtocol
 @testable import src
 import Testing
 

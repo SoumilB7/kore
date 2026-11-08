@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import KoreCore
 import KoreUI
+import LinkProtocol
 import src
 
 /// One connection of an allowed companion (`LinkRun`): from a ring's reply until the client goes.
@@ -605,7 +606,7 @@ package final class LinkHost {
         for (index, entry) in zip(window.indices, window) {
             let key = entry.id.uuidString
             let stale = index >= from || made[key] == nil
-            if stale { made[key] = LinkSnapshot.entry(entry, folder: chat.folder, chips: chat.transcript.linkAttachments(entry)) }
+            if stale { made[key] = LinkSnapshot.entry(entry, folder: chat.folder, reading: ChatLinkReading(chat: chat)) }
             if sub.fresh || stale || !sub.known.contains(key), let wire = made[key] { out.append(wire) }
         }
         cache[id] = (epoch, made)

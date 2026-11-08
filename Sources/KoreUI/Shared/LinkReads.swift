@@ -36,11 +36,6 @@ extension Chat {
     }
 }
 
-extension TranscriptStore.AgentInfo {
-    /// Running, finished, failed or stopped.
-    package var statusName: String { "\(status)" }
-}
-
 extension ControlsStore {
     /// The chat's "/" commands, Kore's own entries included (`kind == .kore`).
     package var linkCommands: [SlashCommand] { commands }

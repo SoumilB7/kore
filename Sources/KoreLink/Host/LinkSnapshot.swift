@@ -1,19 +1,18 @@
 import Foundation
 import KoreCore
 import KoreUI
+import LinkProtocol
 import src
 
 /// Kore's state as the link's wire values: windows, tabs, chats, cards and transcript entries.
 /// Every cap on what goes over the link is here, named.
 @MainActor
 enum LinkSnapshot {
-    /// The most of a message, answer or notice's text sent at once; `entry.more` reads the rest.
-    static let textCap = 64 * 1024
-    /// A tool call's input.
-    static let inputCap = 2 * 1024
-    /// A tool's output: its start and its end.
-    static let resultHead = 1024
-    static let resultTail = 3 * 1024
+    /// The link's caps, as `LinkProjection` sets them.
+    static let textCap = LinkProjection.textCap
+    static let inputCap = LinkProjection.inputCap
+    static let resultHead = LinkProjection.resultHead
+    static let resultTail = LinkProjection.resultTail
     /// A card's content as shown; `card.more` reads the rest.
     static let bodyCap = 4 * 1024
     /// A plan card's plan, as a render tree.
@@ -202,11 +201,6 @@ enum LinkSnapshot {
         return out
     }
 
-    static func homeRelative(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
-    }
-
     // MARK: Chats
 
     static func facts(_ chat: Chat) -> LinkPolicy.ChatFacts {
@@ -354,106 +348,23 @@ enum LinkSnapshot {
 
     // MARK: Transcript
 
-    static func entry(_ e: TranscriptStore.Entry, folder: URL, chips: [Attachment]) -> LinkEntry {
-        let kind: LinkEntry.Kind =
-            switch e.kind {
-            case .user: .user
-            case .answer: .answer
-            case .thinking: .thinking
-            case .plan: .plan
-            case .tool: .tool
-            case .agent: .agent
-            case .notice: .notice
-            case .peer: .peer
-            case .divider: .divider
-            case .mode: .mode
-            case .summary: .summary
-            }
-        let text = capped(e.text, textCap)
-        let formatted = [.answer, .plan, .summary].contains(kind)
-        var tool: LinkEntry.Tool?
-        if e.kind == .tool, let name = e.toolName {
-            let input = e.input.map { capped($0, inputCap) }
-            let result = e.result.map(headAndTail)
-            tool = LinkEntry.Tool(
-                name: name, summary: e.summary, input: input?.text, inputLen: e.input?.unicodeScalars.count ?? 0,
-                path: e.path.map { relative($0, to: folder) }, readOnly: e.readOnly, result: result,
-                resultLen: e.result?.unicodeScalars.count ?? 0)
-        }
-        return LinkEntry(
-            id: e.id.uuidString, kind: kind, turn: e.turn, text: formatted || e.text.isEmpty ? nil : text.text,
-            doc: formatted && !e.text.isEmpty ? doc(text.text) : nil, textLen: text.length, done: e.done, isError: e.isError,
-            stopped: e.stopped, inTurn: e.inTurn, tool: tool,
-            changes: e.changes.isEmpty ? nil : e.changes.map { .init(path: relative($0.path, to: folder), added: $0.added, removed: $0.removed) },
-            agent: e.agent.map { .init(id: $0.id, name: $0.name, status: $0.statusName) },
-            attachments: chips.isEmpty ? nil : chips.enumerated().map { i, a in
-                LinkAttachment(ref: attachmentRef(entryId: e.id.uuidString, index: i), name: a.name, kind: attachmentKind(a.linkKind))
-            })
+    static func entry(_ e: TranscriptStore.Entry, folder: URL, reading: any LinkReading) -> LinkEntry {
+        LinkProjection.entry(e, folder: folder, reading: reading)
     }
 
-    /// An attachment's ref: its message's id and its place there. It names nothing on disk.
-    static func attachmentRef(entryId: String, index: Int) -> String { "\(entryId)/\(index)" }
+    static func turn(_ t: TranscriptStore.Turn) -> LinkTurn { LinkProjection.turn(t) }
 
-    static func attachmentKind(_ kind: Attachment.Kind) -> LinkAttachment.Kind {
-        switch kind {
-        case .image: .image
-        case .text: .text
-        case .pdf: .pdf
-        case .other: .other
-        }
-    }
+    static func capped(_ text: String, _ cap: Int) -> (text: String, length: Int, cut: Bool) { LinkProjection.capped(text, cap) }
 
-    static func turn(_ t: TranscriptStore.Turn) -> LinkTurn {
-        let outcome: LinkTurn.Outcome =
-            switch t.outcome {
-            case .completed: .completed
-            case .interrupted: .interrupted
-            case .failed: .failed
-            case .authFailed: .authFailed
-            case .slept: .slept
-            }
-        return LinkTurn(
-            id: t.id, startedAt: (t.startedAt.timeIntervalSince1970 * 1000).rounded(), duration: t.duration, finished: t.finished,
-            outcome: outcome)
-    }
+    static func piece(_ text: String, from offset: Int) -> (text: String, offset: Int, total: Int) { LinkProjection.piece(text, from: offset) }
 
-    // MARK: Text
+    static func headAndTail(_ text: String) -> String { LinkProjection.headAndTail(text) }
 
-    /// At most `cap` of the text, and its whole length (in Unicode scalars, as `entry.more` counts).
-    static func capped(_ text: String, _ cap: Int) -> (text: String, length: Int, cut: Bool) {
-        let scalars = text.unicodeScalars
-        let length = scalars.count
-        guard length > cap else { return (text, length, false) }
-        var head = String.UnicodeScalarView()
-        head.append(contentsOf: scalars.prefix(cap))
-        return (String(head), length, true)
-    }
+    static func relative(_ path: String, to folder: URL) -> String { LinkProjection.relative(path, to: folder) }
 
-    /// A piece of `text` from `offset`, at most `textCap` scalars: what `entry.chunk` and
-    /// `card.chunk` carry.
-    static func piece(_ text: String, from offset: Int) -> (text: String, offset: Int, total: Int) {
-        let scalars = Array(text.unicodeScalars)
-        let start = min(max(offset, 0), scalars.count)
-        var piece = String.UnicodeScalarView()
-        piece.append(contentsOf: scalars[start..<min(start + textCap, scalars.count)])
-        return (String(piece), start, scalars.count)
-    }
+    static func homeRelative(_ path: String) -> String { LinkProjection.homeRelative(path) }
 
-    /// A tool's output, its start and end when it's long.
-    static func headAndTail(_ text: String) -> String {
-        let scalars = text.unicodeScalars
-        guard scalars.count > resultHead + resultTail else { return text }
-        var head = String.UnicodeScalarView()
-        head.append(contentsOf: scalars.prefix(resultHead))
-        var tail = String.UnicodeScalarView()
-        tail.append(contentsOf: scalars.suffix(resultTail))
-        return String(head) + "\n…\n" + String(tail)
-    }
-
-    static func relative(_ path: String, to folder: URL) -> String {
-        let base = folder.path.hasSuffix("/") ? folder.path : folder.path + "/"
-        return path.hasPrefix(base) ? String(path.dropFirst(base.count)) : homeRelative(path)
-    }
+    static func attachmentKind(_ kind: Attachment.Kind) -> LinkAttachment.Kind { LinkProjection.attachmentKind(kind) }
 
     /// Markdown as the link's render tree, parsed by Kore's own parser.
     static func doc(_ text: String) -> [Block] {
@@ -485,4 +396,14 @@ enum LinkSnapshot {
                 link: run.link?.absoluteString)
         }
     }
+}
+
+/// The projector's reads of one chat: its transcript's chips, and markdown through Kore's parser.
+@MainActor
+struct ChatLinkReading: LinkReading {
+    let chat: Chat
+
+    func chips(_ entry: TranscriptLog.Entry) -> [Attachment] { chat.transcript.linkAttachments(entry) }
+
+    func blocks(_ markdown: String) -> [Block]? { LinkSnapshot.doc(markdown) }
 }

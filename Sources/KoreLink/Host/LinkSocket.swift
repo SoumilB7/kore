@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LinkProtocol
 import Security
 
 /// A requirement to check peers against on the link's queue (a SecRequirement is immutable).

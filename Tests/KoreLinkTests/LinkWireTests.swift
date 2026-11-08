@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+@testable import LinkProtocol
 import Testing
 
 @testable import KoreLink

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import KoreUI
+import LinkProtocol
 
 /// A ring at the doorbell (`z-docs/link-protocol.md` §1). The first ring shows Kore's card; on
 /// Allow the companion is allowed for this run and its first connection wakes. Later rings with a

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LinkProtocol
 
 /// The agent channel's listening socket, in a folder of its own that it checks first: a real
 /// directory of this user, not a link, 0700, with the file 0600. It removes only a socket: nothing

@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+@testable import LinkProtocol
 @testable import src
 import Testing
 

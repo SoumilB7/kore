@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import KoreUI
+import LinkProtocol
 import src
 import UniformTypeIdentifiers
 

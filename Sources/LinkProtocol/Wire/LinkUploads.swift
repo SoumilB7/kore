@@ -19,7 +19,7 @@ package struct LinkUploads: Sendable {
     package struct Failure: Error, Sendable, Equatable {
         package var code: ResultCode
         package var message: String
-        init(_ code: ResultCode, _ message: String) {
+        package init(_ code: ResultCode, _ message: String) {
             self.code = code
             self.message = message
         }

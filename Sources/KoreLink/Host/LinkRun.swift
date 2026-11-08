@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import KoreUI
+import LinkProtocol
 import src
 
 /// A companion allowed for this run of Kore (`z-docs/link-protocol.md` §1): from the user's Allow

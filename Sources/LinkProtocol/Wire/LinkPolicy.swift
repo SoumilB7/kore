@@ -131,7 +131,7 @@ package enum LinkPolicy {
     /// may do without asking: raising a mode, Always allow and `!` lines stay refused. The one
     /// exception, the owner's (1.3): Arsenal, which full control may turn on and raise to a built
     /// tier, as the Mac's tiers popup does.
-    static func check(_ kind: ControlKind, _ args: ControlArgs, _ chat: ChatFacts?, control: LinkControlLevel) -> Verdict {
+    package static func check(_ kind: ControlKind, _ args: ControlArgs, _ chat: ChatFacts?, control: LinkControlLevel) -> Verdict {
         guard control == .full else { return .deny(.deniedControl, "Full control isn't granted in Kore for this run.") }
         if kind.onChat, chat == nil { return .deny(.goneChat, "That chat isn't open in Kore any more.") }
         switch kind {
@@ -189,8 +189,8 @@ package enum LinkPolicy {
 
 /// At most `limit` in any `window`.
 package struct RateLimiter: Sendable {
-    let limit: Int
-    let window: TimeInterval
+    package let limit: Int
+    package let window: TimeInterval
     private var times: [Date] = []
 
     package init(limit: Int, per window: TimeInterval) {
