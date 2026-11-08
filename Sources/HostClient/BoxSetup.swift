@@ -96,30 +96,30 @@ package struct BoxSetup: Sendable {
         guard uname.ok else { throw fail(uname, "Can't reach \(alias)") }
         guard let arch = BoxBinary.arch(uname: uname.lastLine) else { throw Failure(message: "\(alias) isn't a Linux box Kore knows (\(uname.lastLine))") }
         let file: (url: URL, temporary: Bool)
-        do { file = try await binary(arch) } catch { throw Failure(message: "Couldn't get kore-host for \(arch): \(error.localizedDescription)") }
+        do { file = try await binary(arch) } catch { throw Failure(message: "Couldn't get Kore's part for \(alias) (\(arch)): \(error.localizedDescription)") }
         defer { if file.temporary { try? FileManager.default.removeItem(at: file.url) } }
 
-        await step("Copying kore-host…")
+        await step("Copying Kore to \(alias)…")
         let folder = await shell.run(alias, "mkdir -p .local/bin")
         guard folder.ok else { throw fail(folder, "Couldn't make ~/.local/bin on \(alias)") }
         let copied = await shell.copy(file.url, to: alias, path: Self.target + ".new")
-        guard copied.ok else { throw fail(copied, "Couldn't copy kore-host to \(alias)") }
+        guard copied.ok else { throw fail(copied, "Couldn't copy Kore to \(alias)") }
         let moved = await shell.run(alias, "chmod 755 \(Self.target).new && mv -f \(Self.target).new \(Self.target)")
-        guard moved.ok else { throw fail(moved, "Couldn't put kore-host in place on \(alias)") }
+        guard moved.ok else { throw fail(moved, "Couldn't put Kore in place on \(alias)") }
 
         await step("Starting…")
         let installed = await shell.run(alias, "\(Self.target) install-service")
-        guard installed.ok else { throw fail(installed, "kore-host didn't start on \(alias)") }
+        guard installed.ok else { throw fail(installed, "Kore didn't start on \(alias)") }
         if allow {
             let allowed = await shell.run(alias, "\(Self.target) allow '\(grant)' --control full")
-            guard allowed.ok else { throw fail(allowed, "\(alias) didn't take this Mac's grant") }
+            guard allowed.ok else { throw fail(allowed, "\(alias) didn't let this Mac in") }
         }
     }
 
     /// `systemctl --user start kore-host`: a stopped service started again.
     package func start() async throws(Failure) {
         let started = await shell.run(alias, "systemctl --user start kore-host")
-        guard started.ok else { throw fail(started, "kore-host didn't start on \(alias)") }
+        guard started.ok else { throw fail(started, "Kore didn't start on \(alias)") }
     }
 
     /// The box's own last words when it said any, else `fallback`.
@@ -205,14 +205,14 @@ package enum BoxBinary {
     static func download(arch: String, bundle: Bundle) async throws -> URL {
         guard let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
             let expected = (bundle.object(forInfoDictionaryKey: "KoreHostSHA256-\(arch)") as? String)?.lowercased()
-        else { throw BoxBinaryError("This Kore build has no kore-host for \(arch)") }
+        else { throw BoxBinaryError("this Kore has none for \(arch) boxes") }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let kept = support.appendingPathComponent("Kore/kore-host/v\(version)/kore-host-linux-\(arch).xz")
         if let data = try? Data(contentsOf: kept), HostWire.sha256(data) == expected { return kept }
         guard let url = URL(string: "\(releases)/v\(version)/kore-host-linux-\(arch).xz") else { throw BoxBinaryError("No release address") }
         let (data, response) = try await URLSession.shared.data(from: url)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw BoxBinaryError("Release v\(version) has no kore-host for \(arch)") }
-        guard HostWire.sha256(data) == expected else { throw BoxBinaryError("The downloaded kore-host isn't the one this Kore was built with") }
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw BoxBinaryError("release v\(version) has none for \(arch) boxes") }
+        guard HostWire.sha256(data) == expected else { throw BoxBinaryError("the download isn't the one this Kore was built with") }
         try FileManager.default.createDirectory(at: kept.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: kept, options: .atomic)
         return kept

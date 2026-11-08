@@ -112,7 +112,7 @@ final class BoxBinding {
     var line: String {
         switch connection.phase {
         case .online, .idle: return alias
-        case .refused(let why): return why
+        case .refused(let why): return why.line(alias)
         case .connecting where connection.lastHeard == nil: return alias + " · connecting"
         case .connecting, .offline:
             guard let heard = connection.lastHeard else { return alias + " offline" }

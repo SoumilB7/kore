@@ -106,7 +106,7 @@ struct BoxesPanel: View {
         if box.status == .ready { addFolder(box.alias) }
     }
 
-    /// The box's one line, and its action after a dot ("kore-host isn't on mybox · Set up").
+    /// The box's one line, and its action after a dot ("Not set up on mybox · Set up").
     private func noteLine(_ note: BoxList.Note, alias: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
             Text(note.line).foregroundStyle(Theme.tertiary).lineLimit(2)

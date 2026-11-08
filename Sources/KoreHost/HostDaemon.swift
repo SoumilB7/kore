@@ -25,6 +25,8 @@ package final class HostDaemon {
     /// Whether `gh` is signed in, as last read: on a connect and after `auth.gh`.
     package private(set) var ghSignedIn = false
     private var ghRead: Date?
+    /// Which CLIs are installed on the box, as last looked for (at start and on each connect).
+    package private(set) var installed: [String: Bool] = [:]
     /// Each chat's meta as last sent (for act grants, and full ones): a broadcast sends only those
     /// that changed.
     private var sentMeta: [String: (lower: ChatMeta, any: ChatMeta)] = [:]
@@ -58,6 +60,7 @@ package final class HostDaemon {
         try HostPaths.privateFolder(paths.state)
         listener = try HostListener(path: paths.socket) { [weak self] socket in self?.accepted(socket) }
         sweepUploads()
+        findCLIs()
         try? HostPaths.privateFile(Data("\(getpid())\n".utf8), to: paths.pid)
         HostJournal.note("start", ["version": Self.version, "link": HostVersion.link, "pid": "\(getpid())", "chats": "\(chats.count)"])
     }
@@ -243,9 +246,10 @@ package final class HostDaemon {
 
     func welcome(control: GrantControl) -> LinkMessage.Welcome {
         readGitHub()
+        findCLIs()
         return LinkMessage.Welcome(
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
-            host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full),
+            host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box"] + (control == .full ? ["stream"] : []))
     }
@@ -303,7 +307,7 @@ package final class HostDaemon {
         switch command {
         case .send(_, let text, let blobs):
             guard let hc else { return fail(.goneChat, "") }
-            guard blobs.isEmpty else { return fail(.invalid, "Uploads aren't on the box yet.") }
+            guard blobs.isEmpty else { return fail(.invalid, "Attach files from a full grant.") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
             guard chat.sendFromLink(text) else { return fail(.busy, "The chat can't take a message right now.") }
@@ -364,7 +368,7 @@ package final class HostDaemon {
             }
             return self.control(kind, args, id: id, control: control, reply: reply)
         case .unknown:
-            return fail(.invalid, "The box doesn't know that command.")
+            return fail(.invalid, "Unknown command.")
         }
     }
 
@@ -452,7 +456,17 @@ package final class HostDaemon {
             guard control == .full else { return fail(.deniedControl, "Accounts need a grant with full control.") }
             return account(kind, args, id: id, reply: reply)
         default:
-            return fail(.invalid, "The box doesn't take that command.")
+            return fail(.invalid, "Not taken here.")
+        }
+    }
+
+    /// Looks for each CLI off the main thread, for the next welcome (a new tab offers only those
+    /// installed here).
+    func findCLIs() {
+        Task { [weak self] in
+            var found: [String: Bool] = [:]
+            for provider in Registry.all { found[provider.id] = await CLIExecutable.located(provider.id) != nil }
+            self?.installed = found
         }
     }
 
@@ -569,7 +583,7 @@ package final class HostDaemon {
             }
             return nil
         default:
-            return .init(id: id, ok: false, code: .invalid, message: "The box doesn't take that command.")
+            return .init(id: id, ok: false, code: .invalid, message: "Not taken here.")
         }
     }
 

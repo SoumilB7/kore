@@ -59,7 +59,6 @@ struct RealHostTests {
         let connection = connect()
         connection.retain()
         #expect(await until(10) { connection.isOnline })
-        #expect(connection.hostKind == "box")
         let folders = await connection.listFolders()
         #expect(folders.map(\.path) == [project.path])
         let backend = LinkChatBackend(connection: connection, provider: provider, folder: project.path, chatId: nil, model: model)

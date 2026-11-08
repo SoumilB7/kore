@@ -213,6 +213,8 @@ package struct ProviderInfo: Codable, Sendable, Equatable {
     /// 1.5 (a box, to a full grant): the `chat.call`s it takes for this CLI's chats. The client
     /// shows what isn't listed as unavailable rather than offering it to fail.
     package var calls: [String]?
+    /// 1.5 (a box): whether the CLI is installed there; nil when the box can't say yet.
+    package var installed: Bool?
 
     package init(id: String, name: String, modes: [ModeInfo], planToggle: PlanToggleInfo?, features: ProviderFeatures, calls: [String]? = nil) {
         self.id = id
@@ -223,7 +225,7 @@ package struct ProviderInfo: Codable, Sendable, Equatable {
         self.calls = calls
     }
 
-    private enum Key: String, CodingKey { case id, name, modes, planToggle, features, calls }
+    private enum Key: String, CodingKey { case id, name, modes, planToggle, features, calls, installed }
 
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
@@ -233,6 +235,7 @@ package struct ProviderInfo: Codable, Sendable, Equatable {
         planToggle = try c.decodeIfPresent(PlanToggleInfo.self, forKey: .planToggle)
         features = try c.decode(ProviderFeatures.self, forKey: .features)
         calls = try c.decodeIfPresent([String].self, forKey: .calls)
+        installed = try c.decodeIfPresent(Bool.self, forKey: .installed)
     }
 
     /// `planToggle` is null, not omitted, when there's none.
@@ -244,6 +247,7 @@ package struct ProviderInfo: Codable, Sendable, Equatable {
         try c.encode(planToggle, forKey: .planToggle)
         try c.encode(features, forKey: .features)
         try c.encodeIfPresent(calls, forKey: .calls)
+        try c.encodeIfPresent(installed, forKey: .installed)
     }
 }
 

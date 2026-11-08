@@ -192,7 +192,7 @@ package enum LinkPolicy {
     /// refused, and no call carries a key. `card` is the approval's card when it has one.
     package static func check(_ command: ChatCommand, _ chat: ChatFacts?, control: LinkControlLevel) -> Verdict {
         guard control == .full else { return .deny(.deniedControl, "Driving a chat needs a grant with full control.") }
-        if case .unknown(let tag) = command { return .deny(.invalid, "The box doesn't know \(tag.isEmpty ? "that call" : tag).") }
+        if case .unknown(let tag) = command { return .deny(.invalid, "Unknown call: \(tag.isEmpty ? "?" : tag).") }
         guard let chat else { return .deny(.goneChat, "That chat isn't on the box any more.") }
         switch command {
         case .send(let text, let files, _, _):
@@ -227,7 +227,7 @@ package enum LinkPolicy {
             .listModels, .close:
             return .allow
         case .unknown:
-            return .deny(.invalid, "The box doesn't know that call.")
+            return .deny(.invalid, "Unknown call.")
         }
     }
 
@@ -276,13 +276,13 @@ package enum LinkPolicy {
             return full()
         case .accountSignIn:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
-            if let method = args.method, !boxSignIns.contains(method) { return .deny(.invalid, "That sign-in runs only on the box itself.") }
+            if let method = args.method, !boxSignIns.contains(method) { return .deny(.invalid, "That sign-in isn't taken here.") }
             return check(kind, args, chat, control: control)
         case .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             return check(kind, args, chat, control: control)
         default:
-            return .deny(.invalid, "The box doesn't take that command.")
+            return .deny(.invalid, "Not taken here.")
         }
     }
 

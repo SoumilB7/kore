@@ -37,7 +37,6 @@ struct HostClientTests {
         #expect(hello["proof"] as? String == "")
         #expect((hello["proto"] as? [String: Int])?["minor"] == 5)
         #expect(await until { connection.isOnline })
-        #expect(connection.hostKind == "box")
         #expect(connection.chats(in: "~/app").map(\.id) == ["c1"])
         connection.release()
         #expect(await until { host.closed })
@@ -111,7 +110,7 @@ struct HostClientTests {
         #expect(await until { if case .refused = connection.phase { true } else { false } })
         try await Task.sleep(for: .milliseconds(300))
         #expect(dials.hosts.count == 1)
-        let result = await connection.command { HostWire.ping(id: $0) }
+        let result = await connection.command { HostWire.foldersList(id: $0) }
         #expect(!result.ok)
         connection.release()
     }

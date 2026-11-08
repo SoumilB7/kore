@@ -22,8 +22,9 @@ struct BoxOpsTests {
         #expect(status(SSHTransport.ended(status: AttachExit.notRunning.rawValue, line: "kore-host isn't running")) == .stopped)
         #expect(status(SSHTransport.ended(status: AttachExit.noGrant.rawValue, line: "kore-host: no grant named mac")) == .noGrant)
         #expect(status(SSHTransport.ended(status: 0, line: nil)) == .unreachable("Can't reach mybox"))
-        #expect(status(nil, .refused("mybox didn't accept this Mac's grant \"mac\"")) == .noGrant)
-        #expect(status(nil, .refused("mybox runs a link this Kore can't read")) == .stale)
+        #expect(status(nil, .refused(.auth)) == .noGrant)
+        #expect(status(nil, .refused(.version)) == .stale)
+        #expect(status(nil, .refused(.replaced)) == .unreachable("Another Kore here holds mybox"))
         // Without ssh's status (a transport that doesn't say), its words.
         #expect(status("zsh: command not found: kore-host") == .notSetUp)
         #expect(status(nil) == .unreachable("Can't reach mybox"))
@@ -35,18 +36,18 @@ struct BoxOpsTests {
     @Test func eachStateHasOneLineAndAtMostOneAction() {
         var box = BoxList.Box(alias: "mybox")
         box.status = .notSetUp
-        #expect(box.note == .init(line: "kore-host isn't on mybox", action: .setUp))
+        #expect(box.note == .init(line: "Not set up on mybox", action: .setUp))
         box.status = .stopped
-        #expect(box.note == .init(line: "kore-host is stopped on mybox", action: .start))
+        #expect(box.note == .init(line: "Stopped on mybox", action: .start))
         box.status = .noGrant
         #expect(box.note == .init(line: "mybox doesn't know this Mac", action: .setUp))
         box.status = .ready
         box.folders = [BoxFolder(path: "/srv/app")]
         #expect(box.note == nil)
         box.older = true
-        #expect(box.note == .init(line: "mybox runs an older kore-host", action: .update))
-        box.status = .working("Copying kore-host…")
-        #expect(box.note == .init(line: "Copying kore-host…", action: nil))
+        #expect(box.note == .init(line: "mybox needs an update", action: .update))
+        box.status = .working("Copying Kore to mybox…")
+        #expect(box.note == .init(line: "Copying Kore to mybox…", action: nil))
     }
 
     @Test func anOlderBoxIsOneWithALowerLinkOrVersion() {
@@ -124,7 +125,7 @@ struct BoxOpsTests {
             "ssh mybox .local/bin/kore-host install-service", "ssh mybox .local/bin/kore-host allow 'Soumils-Mac' --control full",
         ])
         #expect(try String(contentsOf: fake.box.appendingPathComponent("copied"), encoding: .utf8) == "binary for x86_64")
-        #expect(steps.all == ["Checking mybox…", "Copying kore-host…", "Starting…"])
+        #expect(steps.all == ["Checking mybox…", "Copying Kore to mybox…", "Starting…"])
         // The unpacked binary was a temp file: gone.
         #expect(!FileManager.default.fileExists(atPath: fake.root.appendingPathComponent("kore-host-x86_64").path))
     }

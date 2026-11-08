@@ -57,6 +57,8 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     private var titleSaid: String?
     /// Messages and answers this chat sent in this run: the box's copies of them are shown already.
     private var sentHere: Set<String> = []
+    /// The cards the box asked, as shown: one whose answer the box refuses is asked again.
+    private var asked: [String: Approval] = [:]
 
     /// The box's title for the chat changed (a rename there, or its first title).
     package var onTitle: ((String) -> Void)?
@@ -197,11 +199,20 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// What the box doesn't take from here (its provider's capabilities don't list it) is said as
     /// a CLI says what it can't do, so the control shows it unavailable instead of failing.
     private func boxed(_ event: ChatEvent) -> ChatEvent {
-        if case .remoteControlUnavailable = event, !offers("setRemoteControl") { return .remoteControlUnavailable(Self.remoteOnBox) }
-        return event
+        switch event {
+        case .remoteControlUnavailable where !offers("setRemoteControl"):
+            return .remoteControlUnavailable(Self.remoteOnBox)
+        case .approvalRequested(let approval):
+            // Always allow is set on the box itself: the card doesn't offer it.
+            let shown = approval.withoutAlwaysAllow()
+            asked[approval.id] = shown
+            return .approvalRequested(shown)
+        default:
+            return event
+        }
     }
 
-    static let remoteOnBox = "Remote control of a chat on a box is turned on on the box"
+    static let remoteOnBox = "Not in a chat on a box"
 
     /// A call the box takes for this chat's CLI (its provider's `calls` capabilities).
     package func offers(_ call: String) -> Bool {
@@ -298,8 +309,13 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         sentHere.insert(approvalID)
         do {
             try await call(.respond(approval: approvalID, decision: decision))
+            asked[approvalID] = nil
         } catch {
-            emit([.notice("Couldn't answer: \(error)", isError: true)])
+            // Refused: the card comes back, so the box's CLI still has its answer to wait for.
+            sentHere.remove(approvalID)
+            var out: [ChatEvent] = [.notice("Couldn't answer: \(error)", isError: true)]
+            if let card = asked[approvalID] { out.append(.approvalRequested(card)) }
+            emit(out)
         }
     }
 
@@ -398,29 +414,31 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     }
 }
 
-/// A command the box (or the link) refused, in its words.
+/// A command the box refused, in words that name the box by its alias.
 package struct HostRefusal: LocalizedError, CustomStringConvertible {
     package let message: String
 
     package init(message: String) { self.message = message }
 
+    /// The box's own words only where no code says it better.
     init(_ result: LinkMessage.Result, alias: String) {
-        message = result.message ?? Self.words(result.code, alias: alias)
+        message = Self.words(result.code, alias: alias) ?? result.message ?? "\(alias) refused it"
     }
 
     /// A forwarded call the box refused: its policy's refusals in the box's own words ("mybox
-    /// doesn't allow Bypass from here"), anything else as the box said it.
+    /// doesn't allow Bypass from here").
     init(_ result: ChatCallResult, command: ChatCommand, alias: String, modes: [ModeOption]) {
         switch (result.code, command) {
         case (.raiseMode?, .setMode(let id)):
             message = "\(alias) doesn't allow \(modes.first { $0.id == id }?.label ?? id) from here"
-        case (.raiseMode?, _): message = "\(alias) doesn't allow leaving plan into that mode from here"
-        case (.alwaysAllow?, _): message = "Always allow is set on \(alias) itself"
-        case (.signIn?, _): message = "Sign-ins are answered on \(alias) itself"
-        case (.command?, .setRemoteControl): message = "Remote control is turned on on \(alias) itself"
-        case (.command?, _): message = result.message.map { $0.replacingOccurrences(of: "over the link", with: "to \(alias)").replacingOccurrences(of: "use it in Kore", with: "use it on \(alias)") } ?? "\(alias) doesn't take that here"
-        case (.deniedControl?, _): message = "This Mac's grant on \(alias) needs full control"
-        default: message = result.message ?? Self.words(result.code, alias: alias)
+        case (.command?, .send(let text, _, _, _)):
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = String(trimmed.dropFirst().prefix { !$0.isWhitespace })
+            message =
+                trimmed.hasPrefix("!") ? "\(alias) doesn't run ! lines from here"
+                : trimmed.hasPrefix("/") ? "/\(name) isn't offered in this chat on \(alias)" : "\(alias) doesn't take that here"
+        case (.command?, .setRemoteControl): message = "Not in a chat on a box"
+        default: message = Self.words(result.code, alias: alias) ?? result.message ?? "\(alias) refused it"
         }
     }
 
@@ -428,17 +446,24 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
     /// What "\(error)" says: the message alone, never the type.
     package var description: String { message }
 
-    static func words(_ code: ResultCode?, alias: String) -> String {
+    /// Each refusal the box can give, said with its alias; nil where the box's own words say more
+    /// (an invalid argument).
+    static func words(_ code: ResultCode?, alias: String) -> String? {
         switch code {
         case .busy: "the chat on \(alias) is busy"
         case .goneChat: "the chat is no longer on \(alias)"
-        case .raiseMode: "a box can't be given more freedom from here"
-        case .alwaysAllow: "Always allow can only be set on the box"
-        case .deniedControl: "this Mac's grant on \(alias) doesn't allow it"
+        case .goneCard: "that was answered or withdrawn on \(alias)"
+        case .goneFolder: "that folder isn't on \(alias)"
+        case .goneBlob: "the file didn't reach \(alias)"
+        case .raiseMode: "\(alias) doesn't allow that mode from here"
+        case .alwaysAllow: "Always allow is set on \(alias) itself"
+        case .signIn: "sign-ins are answered on \(alias) itself"
+        case .deniedControl: "\(alias) lets this Mac only watch"
         case .rateLimited: "too many at once; try again in a moment"
         case .staleCard: "the card changed on \(alias)"
         case .command: "\(alias) doesn't take that here"
-        default: "\(alias) refused it"
+        case .tooLarge: "too large for \(alias)"
+        default: nil
         }
     }
 }

@@ -1553,9 +1553,10 @@ private struct EmptyTab: View {
         let installs = CLIInstalls.shared
         let card = installs.card(for: tab.id)
         let providers = Provider.allCases
+        let box = workspace.box
         VStack(spacing: 0) {
             Spacer()
-            if card == nil, providers.allSatisfy({ accounts.isMissing($0.id) }) {
+            if box == nil, card == nil, providers.allSatisfy({ accounts.isMissing($0.id) }) {
                 Text("Pick one to install, either works")
                     .font(TextStyle.body)
                     .foregroundStyle(Theme.secondary)
@@ -1568,9 +1569,9 @@ private struct EmptyTab: View {
                 }
                 HStack(spacing: Space.md) {
                     ForEach(providers) { provider in
-                        let missing = accounts.isMissing(provider.id)
-                        ProviderButton(provider: provider, missing: missing) {
-                            if missing { installs.offer(provider.id, in: tab.id) } else { workspace.start(provider, in: tab) }
+                        let missing = missing(provider, accounts)
+                        ProviderButton(provider: provider, missing: missing, elsewhere: box?.alias) {
+                            if !missing { workspace.start(provider, in: tab) } else if box == nil { installs.offer(provider.id, in: tab.id) }
                         }
                         .storyID(StoryID.NewTab.provider(provider.id))
                     }
@@ -1588,12 +1589,20 @@ private struct EmptyTab: View {
         }
         .frame(maxWidth: .infinity)
     }
+
+    /// A box's window: the box's own CLIs, never this Mac's installs, and nothing to install here.
+    private func missing(_ provider: Provider, _ accounts: AccountStore) -> Bool {
+        guard let box = workspace.box else { return accounts.isMissing(provider.id) }
+        return box.connection.providers.first { $0.id == provider.id }?.installed == false
+    }
 }
 
 private struct ProviderButton: View {
     let provider: Provider
     /// Not on the Mac: the not-installed mark, and a click offers to install it.
     var missing = false
+    /// A box's window: missing there means "Not on <alias>", and there's nothing to install.
+    var elsewhere: String?
     let action: () -> Void
     @StateObject private var hovered = Local(false)
 
@@ -1617,7 +1626,8 @@ private struct ProviderButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(missing ? "Not installed · click to install" : "")
+        .disabled(missing && elsewhere != nil)
+        .help(missing ? elsewhere.map { "Not on \($0)" } ?? "Not installed · click to install" : "")
     }
 }
 

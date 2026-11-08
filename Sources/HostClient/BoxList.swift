@@ -74,13 +74,13 @@ package final class BoxList {
             switch status {
             case .probing where folders.isEmpty: Note(line: "Connecting…")
             case .working(let step): Note(line: step)
-            case .notSetUp: Note(line: "kore-host isn't on \(alias)", action: .setUp)
-            case .stopped: Note(line: "kore-host is stopped on \(alias)", action: .start)
+            case .notSetUp: Note(line: "Not set up on \(alias)", action: .setUp)
+            case .stopped: Note(line: "Stopped on \(alias)", action: .start)
             case .noGrant: Note(line: "\(alias) doesn't know this Mac", action: .setUp)
-            case .stale: Note(line: "\(alias) runs an older kore-host", action: .update)
+            case .stale: Note(line: "\(alias) needs an update", action: .update)
             case .failed(let why, let action): Note(line: why, action: action)
             case .unreachable(let why): Note(line: why)
-            case .ready where older: Note(line: "\(alias) runs an older kore-host", action: .update)
+            case .ready where older: Note(line: "\(alias) needs an update", action: .update)
             case .ready where fresh: Note(line: "Ready")
             case .ready where folders.isEmpty: Note(line: "No folders on \(alias)")
             default: nil
@@ -278,8 +278,12 @@ package final class BoxList {
     /// shell's 126 and 127, ssh's 255) or the box's refusal.
     package static func status(_ alias: String, phase: HostConnection.Phase, reason: String?) -> Status {
         if case .refused(let why) = phase {
-            // `bye version`: a link this Kore can't read. `bye auth`: the grant.
-            return why.contains("can't read") ? .stale : .noGrant
+            switch why {
+            case .version: return .stale
+            case .auth: return .noGrant
+            // Another Kore here took over: nothing to set up, and setting up would log it out.
+            case .replaced: return .unreachable(why.line(alias))
+            }
         }
         let unreachable = Status.unreachable("Can't reach \(alias)")
         guard let ended = SSHTransport.exit(of: reason) else {
@@ -291,7 +295,7 @@ package final class BoxList {
         case AttachExit.cantRun, AttachExit.notFound: return .notSetUp
         case AttachExit.notRunning.rawValue: return .stopped
         case AttachExit.noGrant.rawValue: return .noGrant
-        case AttachExit.noRuntime.rawValue: return .unreachable("\(alias) has no session for kore-host: turn on linger there")
+        case AttachExit.noRuntime.rawValue: return .unreachable("\(alias) stops Kore when you log out · see the setup doc")
         default: return unreachable
         }
     }

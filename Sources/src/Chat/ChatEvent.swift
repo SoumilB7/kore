@@ -625,6 +625,15 @@ package struct Approval: Identifiable, Sendable, Codable {
         self.agent = agent
     }
 
+    /// The same ask without Always allow (a box's chat: Always allow is set on the box itself).
+    package func withoutAlwaysAllow() -> Approval {
+        var copy = Approval(
+            id: id, title: title, detail: detail, body: body, canAlwaysAllow: false, questions: questions, plan: plan, changes: changes,
+            agent: agent)
+        copy.signIn = signIn
+        return copy
+    }
+
     /// A plain permission (a command, tool, file or web access): not a plan, questions or a sign-in.
     package var isPermission: Bool { plan == nil && questions.isEmpty && !signIn }
 }

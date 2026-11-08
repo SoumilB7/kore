@@ -450,7 +450,7 @@ extension HostDaemon {
                 value.models = await backend.listModels()
                 return ok(value)
             case .unknown(let tag):
-                return fail("The box doesn't know \(tag).", .invalid)
+                return fail("Unknown call: \(tag).", .invalid)
             }
             return ok()
         } catch {

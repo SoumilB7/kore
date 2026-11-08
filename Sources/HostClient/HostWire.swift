@@ -22,8 +22,7 @@ import LinkProtocol
 // - GitHub on the box: `auth.gh` answers `{url, authCode}` (a device code to enter on the page); the
 //   box says `ghSignedIn` on its welcome's `host` (or a snapshot's or delta's).
 // - Two-way sync: `sync.watch` / `sync.unwatch {folder}`; the box pushes `sync.changed`.
-// - Liveness: the box has no ping. One is sent as a command of a type the box doesn't know, which
-//   any 1.x host answers with a `result` (`invalid`); every frame counts as a sign of life.
+// - Liveness is SSH's own (`ServerAliveInterval`): nothing is sent to wake the box.
 
 /// One folder the box serves.
 package struct BoxFolder: Codable, Sendable, Equatable, Hashable {
@@ -90,7 +89,6 @@ package enum HostWire {
         return command(id: id, type: "chat.new", fields)
     }
 
-    package static func ping(id: String) -> Data { command(id: id, type: "ping", [:]) }
 
     package static func foldersList(id: String) -> Data { command(id: id, type: "folders.list", [:]) }
 
@@ -239,15 +237,7 @@ package enum HostWire {
         return parts.contains(nil) ? [] : parts.compactMap { $0 }
     }
 
-    /// The welcome's `host.kind` ("box" for kore-host); nil from a host that doesn't say.
-    package static func hostKind(_ data: Data) -> String? {
-        (try? JSONDecoder().decode(KindPeek.self, from: data))?.host?.kind
-    }
 
-    private struct KindPeek: Decodable {
-        struct Host: Decodable { var kind: String? }
-        var host: Host?
-    }
     private struct FoldersPeek: Decodable {
         struct Folder: Decodable {
             var windowId: String?

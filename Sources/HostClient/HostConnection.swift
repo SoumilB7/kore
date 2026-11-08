@@ -31,8 +31,27 @@ package protocol HostFollower: AnyObject {
 package final class HostConnection {
     package enum Phase: Equatable, Sendable {
         case idle, connecting, online, offline
-        /// The box turned the client away (`bye` auth or version): no dialling again until asked.
-        case refused(String)
+        /// The box turned the client away: no dialling again until asked.
+        case refused(Refused)
+    }
+
+    /// Why the box turned this Mac away, as its `bye` said.
+    package enum Refused: Equatable, Sendable {
+        /// It doesn't know this Mac (`bye auth`).
+        case auth
+        /// It and this Kore don't speak the same link (`bye version`).
+        case version
+        /// Another Kore with this Mac's grant took over (`bye replaced`).
+        case replaced
+
+        /// The words a box's window and chats say for it.
+        package func line(_ alias: String) -> String {
+            switch self {
+            case .auth: "\(alias) doesn't know this Mac"
+            case .version: "\(alias) and this Kore don't match · update one"
+            case .replaced: "Another Kore here holds \(alias)"
+            }
+        }
     }
 
     package let alias: String
@@ -44,12 +63,6 @@ package final class HostConnection {
     package private(set) var folders: [BoxFolder] = []
     /// Why the link last ended, in SSH's or the box's last words ("command not found").
     @ObservationIgnored package private(set) var lastReason: String?
-    /// The link ended without a word from kore-host because it isn't there: SSH worked, the
-    /// command didn't.
-    package var hostMissing: Bool {
-        guard let reason = lastReason?.lowercased(), lastHeard == nil else { return false }
-        return reason.contains("not found") || reason.contains("no such file")
-    }
     /// GitHub's CLI on the box is signed in, as the box last said; nil until it says.
     package private(set) var ghSignedIn: Bool?
     /// The box's kore-host is older than this Kore (`HostWire.older`), as its welcome said.
@@ -59,8 +72,6 @@ package final class HostConnection {
     @ObservationIgnored package private(set) var chats: [String: ChatMeta] = [:]
     @ObservationIgnored package private(set) var clis: [CLIState] = []
     @ObservationIgnored package private(set) var providers: [ProviderInfo] = []
-    /// `welcome.host.kind`: "box" for kore-host.
-    @ObservationIgnored package private(set) var hostKind: String?
     /// The welcome's: what the box offers this grant (1.5's "stream" with full control), and the
     /// grant's control.
     @ObservationIgnored package private(set) var caps: [String] = []
@@ -97,6 +108,9 @@ package final class HostConnection {
     @ObservationIgnored private var folderAsks: [String: CheckedContinuation<[BoxFolder], Never>] = [:]
     @ObservationIgnored private var followers: [String: Weak] = [:]
     @ObservationIgnored private var wantRaw: Set<String> = []
+    /// Forwarded calls waiting, and their answers as the box gave them (`ChatCallResult`).
+    @ObservationIgnored private var calls: Set<String> = []
+    @ObservationIgnored private var answers: [String: ChatCallResult] = [:]
     @ObservationIgnored private var uploadWaits: [String: CheckedContinuation<LinkMessage.Result, Never>] = [:]
     @ObservationIgnored private var raws: [String: Data] = [:]
     @ObservationIgnored private var early: [String: LinkMessage.Result] = [:]
@@ -201,10 +215,7 @@ package final class HostConnection {
 
     private func askEvents(_ follower: any HostFollower) {
         guard streams else {
-            return follower.refused(
-                control == .full
-                    ? "kore-host on \(alias) is older than this Kore: update it to open its chats"
-                    : "This Mac's grant on \(alias) needs full control (kore-host allow \(grant) --control full)")
+            return follower.refused(control == .full ? "\(alias) needs an update to open its chats" : "\(alias) lets this Mac only watch: set it up again")
         }
         if let ask = follower.following { transport?.send(StreamWire.encode(ask)) }
     }
@@ -223,7 +234,7 @@ package final class HostConnection {
         serial += 1
         let id = "c\(serial).\(tag)"
         let data = payload(id)
-        if case .refused(let why) = phase { return LinkMessage.Result(id: id, ok: false, code: .unknown, message: why) }
+        if case .refused(let why) = phase { return LinkMessage.Result(id: id, ok: false, code: .unknown, message: why.line(alias)) }
         if resending {
             resend[id] = data
             keepOutbox()
@@ -261,11 +272,17 @@ package final class HostConnection {
         return (result, raws.removeValue(forKey: result.id))
     }
 
-    /// One forwarded backend call on a chat (1.5 `chat.call`): its answer, sent again after a drop.
+    /// One forwarded backend call on a chat (1.5 `chat.call`): its answer, typed, sent again after
+    /// a drop.
     package func call(_ chatId: String, _ command: ChatCommand) async -> ChatCallResult {
-        let (result, raw) = await commandRaw({ StreamWire.encode(ChatCall(id: $0, chatId: chatId, command: command)) }, resending: true)
-        if let raw, let full = try? JSONDecoder().decode(ChatCallResult.self, from: raw) { return full }
-        return ChatCallResult(id: result.id, ok: result.ok, code: result.code, message: result.message)
+        var asked = ""
+        let result = await self.command({ id in
+            asked = id
+            calls.insert(id)
+            return StreamWire.encode(ChatCall(id: id, chatId: chatId, command: command))
+        }, resending: true)
+        calls.remove(asked)
+        return answers.removeValue(forKey: result.id) ?? ChatCallResult(id: result.id, ok: result.ok, code: result.code, message: result.message)
     }
 
     /// Uploads a file to the box (1.1's `blob.put.*`): its blob id, or why not.
@@ -376,7 +393,7 @@ package final class HostConnection {
         pinger = Task { [weak self] in
             try? await Task.sleep(for: limit)
             guard let self, !Task.isCancelled, self.transport === transport, !self.ready else { return }
-            self.drop("no answer from the box")
+            self.drop("no answer")
         }
     }
 
@@ -424,12 +441,12 @@ package final class HostConnection {
         // Sent, never answered: the box may or may not have it. A forwarded call goes again (the box
         // runs it once); anything else says so.
         for id in inFlight.sorted() {
-            if let data = resend[id] { outbox.append((id, data)) } else { finish(id, ok: false, message: "The link to \(alias) dropped before it answered") }
+            if let data = resend[id] { outbox.append((id, data)) } else { finish(id, ok: false, message: "Lost \(alias) before it answered") }
         }
         inFlight = []
-        endUploads("The link to \(alias) dropped")
+        endUploads("Lost \(alias)")
         // A sign-in's end won't come over a link that's gone.
-        for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: "The link to \(alias) dropped") }
+        for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: "Lost \(alias) before it answered") }
         if case .refused = phase { return }
         if phase == .online || lastHeard == nil { lastHeard = heardAt ?? lastHeard }
         phase = .offline
@@ -476,16 +493,15 @@ package final class HostConnection {
             transport?.send(HostWire.hello(build: HostLog.build))
         case .welcome(let welcome):
             hostOlder = HostWire.older(welcome)
-            hostKind = HostWire.hostKind(raw)
             providers = welcome.providers
             caps = welcome.caps
             control = welcome.policy.control
         case .bye(let reason):
             switch reason {
-            case .auth: refuse("\(alias) turned this Mac away")
-            case .version: refuse("\(alias) and this Kore don't match · update one")
-            case .replaced: refuse("Another Kore with this Mac's grant took over \(alias)")
-            default: drop("the box said \(reason.rawValue)")
+            case .auth: refuse(.auth)
+            case .version: refuse(.version)
+            case .replaced: refuse(.replaced)
+            default: drop("\(alias) said \(reason.rawValue)")
             }
         case .snapshot(_, let windows, let chats, let extras):
             self.windows = windows
@@ -523,6 +539,7 @@ package final class HostConnection {
                 wait.resume(returning: result)
             } else if inFlight.remove(result.id) != nil || waiting[result.id] != nil {
                 if wantRaw.remove(result.id) != nil { raws[result.id] = raw }
+                if calls.contains(result.id) { answers[result.id] = try? JSONDecoder().decode(ChatCallResult.self, from: raw) }
                 waiting.removeValue(forKey: result.id)?.resume(returning: result)
             } else if result.id.hasSuffix(HostWire.doneSuffix) {
                 // A sign-in's end, before anyone waits on it.
@@ -570,8 +587,9 @@ package final class HostConnection {
         cache.saveOutbox(kept)
     }
 
-    private func refuse(_ why: String) {
-        phase = .refused(why)
+    private func refuse(_ reason: Refused) {
+        phase = .refused(reason)
+        let why = reason.line(alias)
         let transport = transport
         teardown()
         transport?.close()

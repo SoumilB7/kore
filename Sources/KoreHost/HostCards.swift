@@ -12,13 +12,15 @@ enum HostMeta {
     static func level(_ mode: ModeOption) -> ModeLevel { ModeLevel(rawValue: mode.level) ?? .danger }
 
     /// `calls`: the calls a full grant may make (1.5).
-    static func providers(calls: Bool = false) -> [ProviderInfo] {
+    static func providers(calls: Bool = false, installed: [String: Bool] = [:]) -> [ProviderInfo] {
         Registry.all.map { p in
-            ProviderInfo(
+            var info = ProviderInfo(
                 id: p.id, name: p.name,
                 modes: p.modes.map { ModeInfo(id: $0.id, label: $0.label, level: level($0), listed: $0.listed) },
                 planToggle: p.planToggle.map { PlanToggleInfo(id: $0.id, label: $0.label) },
                 features: ProviderFeatures(effort: true, fastMode: p.id == "claude"), calls: calls ? LinkPolicy.callable : nil)
+            info.installed = installed[p.id]
+            return info
         }
     }
 
