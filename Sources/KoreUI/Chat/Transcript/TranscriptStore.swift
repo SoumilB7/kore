@@ -660,6 +660,11 @@ package final class TranscriptStore {
         rebuild()
     }
 
+    /// How far the composer under the shown chat has grown past its smallest (an attachment, more
+    /// lines, a card): the message rail sits that much lower by half, so it stays put. Read by the
+    /// rail alone, never by the timeline (a change redraws the rail only).
+    var composerGrowth: CGFloat = 0
+
     /// The transcript's one text selection.
     @ObservationIgnored lazy var selection = TranscriptSelection(store: self)
 

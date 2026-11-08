@@ -31,6 +31,8 @@ struct ChatView: View {
     @StateObject private var shown = Held<Chat?>(nil)
     /// The chat's height: a question card takes at most half of it.
     @StateObject private var height = Local<CGFloat>(0)
+    /// The composer's smallest height for the shown chat at this width.
+    @StateObject private var composer = Held(ComposerGrowth())
 
     var body: some View {
         let chats = kept.update(active, tabs: workspace.tabs)
@@ -123,6 +125,11 @@ struct ChatView: View {
             .padding(.horizontal, column.composerPadding)
             .padding(.bottom, Space.xxxl)
             .frame(maxWidth: column.composerMaxWidth)
+            // Its growth keeps the message rail still (`TranscriptStore.composerGrowth`).
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                let grown = composer.value.measured(size, chat: ObjectIdentifier(chat))
+                if chat.transcript.composerGrowth != grown { chat.transcript.composerGrowth = grown }
+            }
             // The composer's cards rise over the transcript from here: read over the composer's
             // views alone, not every transcript row.
             .contextCard(chat)
@@ -370,6 +377,23 @@ private struct MapLayer<Under: View>: View {
                 focused.wrappedValue = terminal?.focusPending != true
             }
         }
+    }
+}
+
+/// The composer's growth past the smallest it's been for the chat shown, at this width: a new
+/// chat or another width (its lines wrap again) starts from what it is then.
+struct ComposerGrowth {
+    private var chat: ObjectIdentifier?
+    private var width: CGFloat = 0
+    private var base: CGFloat = 0
+
+    mutating func measured(_ size: CGSize, chat: ObjectIdentifier) -> CGFloat {
+        if chat != self.chat || abs(size.width - width) > 0.5 || size.height < base {
+            self.chat = chat
+            width = size.width
+            base = size.height
+        }
+        return max(0, size.height - base)
     }
 }
 
