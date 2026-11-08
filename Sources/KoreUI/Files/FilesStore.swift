@@ -582,6 +582,20 @@ final class FilesStore {
         if selection != path { selection = path }
     }
 
+    /// Esc in the tree steps back, as VS Code's: several chosen to the one with the keys, then
+    /// that one to nothing (New File then goes in the folder itself). False when nothing was
+    /// chosen, so Esc goes on to whatever else it does.
+    @discardableResult func stepBack() -> Bool {
+        if !picked.isEmpty {
+            pickOnly(selection)
+        } else if selection != nil {
+            pickOnly(nil)
+        } else {
+            return false
+        }
+        return true
+    }
+
     /// ⌘-click: this row in or out of the choice; the keys go to it.
     func pickToggle(_ path: String) {
         var next = picked.isEmpty ? Set(selection.map { [$0] } ?? []) : picked
@@ -616,6 +630,33 @@ final class FilesStore {
         anchor = all.first
         picked = Set(all)
         if selection.map(picked.contains) != true { selection = all.first }
+    }
+
+    // MARK: - Sticky folders (VS Code's Sticky Scroll)
+
+    /// At most this many folders are pinned over the tree.
+    nonisolated static let stickyLimit = 5
+
+    /// The open folders to pin over the tree while `rows[top]` is its top visible row: the
+    /// folders it sits in, root-most first, whose own rows have scrolled off (the innermost
+    /// `stickyLimit`). Empty at depth 0. Rows are walked back by depth, so the cost is the
+    /// distance to the outermost parent, not the tree's size.
+    nonisolated static func stickyFolders<R: TreeRowShape>(rows: [R], top: Int) -> [R] {
+        guard rows.indices.contains(top) else { return [] }
+        var depth = rows[top].depth
+        var chain: [R] = []
+        var i = top - 1
+        while depth > 0, i >= 0 {
+            let row = rows[i]
+            if row.depth < depth {
+                // Only an open folder holds rows; anything else means the walk lost its way.
+                guard row.isFolder, row.isOpen else { break }
+                chain.append(row)
+                depth = row.depth
+            }
+            i -= 1
+        }
+        return Array(chain.prefix(stickyLimit).reversed())
     }
 
     /// The rows between two (both included), in the tree's order; just `to` when `from` isn't shown.
@@ -930,3 +971,13 @@ final class FilesStore {
         edit = isFolder ? .newFolder(parent: parent) : .newFile(parent: parent)
     }
 }
+
+/// A tree row as sticky folders read it (the Files and box explorers' rows).
+protocol TreeRowShape {
+    var id: String { get }
+    var depth: Int { get }
+    var isFolder: Bool { get }
+    var isOpen: Bool { get }
+}
+
+extension FilesStore.Row: TreeRowShape {}

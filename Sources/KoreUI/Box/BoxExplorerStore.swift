@@ -228,6 +228,18 @@ final class BoxExplorerStore {
         anchor = path
     }
 
+    /// Esc steps back: several chosen to one, then none (`FilesStore.stepBack`).
+    @discardableResult func stepBack() -> Bool {
+        if !picked.isEmpty {
+            pickOnly(selection)
+        } else if selection != nil {
+            pickOnly(nil)
+        } else {
+            return false
+        }
+        return true
+    }
+
     /// ⌘-click: adds or drops the row.
     func pickToggle(_ path: String) {
         var next = picked.isEmpty ? Set(selection.map { [$0] } ?? []) : picked
@@ -594,3 +606,5 @@ final class BoxExplorerStore {
 
 /// A dropped file whose name is taken: replace it, keep both, or stop.
 enum BoxCollision { case replace, keepBoth, cancel }
+
+extension BoxExplorerStore.Row: TreeRowShape {}

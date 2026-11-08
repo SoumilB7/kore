@@ -13,12 +13,27 @@ extension CodeEditorController: @preconcurrency NSLayoutManagerDelegate {
         forGlyphRange glyphRange: NSRange
     ) -> Int {
         let count = glyphRange.length
-        guard count > 0, !folds.isEmpty else { return 0 }
+        guard count > 0, !folds.isEmpty || masksSecrets else { return 0 }
         let span = NSRange(location: characterIndexes[0], length: characterIndexes[count - 1] - characterIndexes[0] + 1)
-        guard folds.contains(where: { NSIntersectionRange($0, span).length > 0 }) else { return 0 }
+        let folded = folds.contains(where: { NSIntersectionRange($0, span).length > 0 })
+        // A `.env` file's values: bullets (`SecretMask`).
+        let secrets = secretRanges(in: span)
+        let bullet = secrets.isEmpty ? nil : Self.bullet(in: font)
+        guard folded || bullet != nil else { return 0 }
         var hidden = Array(UnsafeBufferPointer(start: properties, count: count))
-        for i in 0..<count where fold(containing: characterIndexes[i]) != nil { hidden[i] = .null }
-        layoutManager.setGlyphs(glyphs, properties: hidden, characterIndexes: characterIndexes, font: font, forGlyphRange: glyphRange)
+        if folded {
+            for i in 0..<count where fold(containing: characterIndexes[i]) != nil { hidden[i] = .null }
+        }
+        var shown = Array(UnsafeBufferPointer(start: glyphs, count: count))
+        if let bullet {
+            var next = 0
+            for i in 0..<count where !hidden[i].contains(.null) && !hidden[i].contains(.controlCharacter) {
+                let index = characterIndexes[i]
+                while next < secrets.count, NSMaxRange(secrets[next]) <= index { next += 1 }
+                if next < secrets.count, secrets[next].location <= index { shown[i] = bullet }
+            }
+        }
+        layoutManager.setGlyphs(shown, properties: hidden, characterIndexes: characterIndexes, font: font, forGlyphRange: glyphRange)
         return count
     }
 

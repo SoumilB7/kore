@@ -22,6 +22,8 @@ struct BoxExplorer: View {
     @StateObject private var typed = Local("")
     @StateObject private var typedAt = Held(Date.distantPast)
     @StateObject private var treeHeight = Local<CGFloat>(0)
+    /// The tree's top visible row, for its sticky folders. Held, so a scroll redraws only them.
+    @StateObject private var scrollTop = Held(Local(0))
 
     private var store: BoxExplorerStore { box.files }
 
@@ -49,6 +51,10 @@ struct BoxExplorer: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(searching ? "Search in \(workspace.folder.lastPathComponent)" : box.label)
+                // The folder's name clears the selection: New File then goes in the folder itself.
+                .contentShape(Rectangle())
+                .onTapGesture { if !searching { store.pickOnly(nil) } }
+                .storyID(StoryID.Explorer.title, press: { if !searching { store.pickOnly(nil) } })
             Spacer(minLength: Space.md)
             if searching {
                 Group {
@@ -142,7 +148,11 @@ struct BoxExplorer: View {
                 Color.clear
                     .frame(height: max(treeHeight.value - CGFloat(store.rows.count) * Size.Tree.row - Space.md, 0))
                     .contentShape(Rectangle())
-                    .onTapGesture { focused = true }
+                    // As in VS Code: the keys come to the tree and the selection clears.
+                    .onTapGesture {
+                        focused = true
+                        store.pickOnly(nil)
+                    }
                     .onDrop(of: BoxDrop.types, delegate: BoxDrop(folder: store.root, store: store, workspace: workspace))
             }
             .onAppear {
@@ -157,6 +167,15 @@ struct BoxExplorer: View {
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { treeHeight.value = $0 }
+            .onScrollGeometryChange(for: Int.self) { StickyFolderRows.top($0) } action: { _, top in scrollTop.value.value = top }
+            .overlay(alignment: .top) {
+                BoxSticky(store: store, top: scrollTop.value, floating: floating) { id in
+                    StickyFolderRows.jump(to: id, rows: store.rows, height: treeHeight.value, proxy: proxy) {
+                        focused = true
+                        store.pickOnly(id)
+                    }
+                }
+            }
             .focusable(interactions: .edit)
             .focused($focused)
             .focusEffectDisabled()
@@ -234,10 +253,11 @@ struct BoxExplorer: View {
             store.startNew(folder: press.modifiers.contains(.shift))
         case _ where (press.key == .delete || press.key.character == "\u{7F}") && press.modifiers.contains(.command):
             if index != nil { BoxTreeMenu.trash(store.chosenTops, store: store) }
-        case .escape where !store.picked.isEmpty:
-            store.pickOnly(store.selection)
+        // Esc steps back: what's typed, then several chosen, then the selection itself (VS Code).
         case .escape where !typed.value.isEmpty:
             typed.value = ""
+        case .escape:
+            if !store.stepBack() { return .ignored }
         default:
             return find(press, rows: rows, from: index) ? .handled : .ignored
         }
@@ -258,6 +278,21 @@ struct BoxExplorer: View {
         typed.value = query
         if let match = order.first(where: { $0.name.lowercased().hasPrefix(query.lowercased()) }) { store.pickOnly(match.id) }
         return true
+    }
+}
+
+/// The box tree's sticky folders, from its rows and top row.
+private struct BoxSticky: View {
+    let store: BoxExplorerStore
+    @ObservedObject var top: Local<Int>
+    let floating: Bool
+    let jump: (String) -> Void
+
+    var body: some View {
+        let pinned = FilesStore.stickyFolders(rows: store.rows, top: top.value)
+        StickyFolderRows(
+            rows: pinned.map { StickyFolderRows.Item(id: $0.id, depth: $0.depth, title: $0.name) },
+            floating: floating, relative: store.relative, jump: jump)
     }
 }
 

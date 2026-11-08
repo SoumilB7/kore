@@ -12,7 +12,11 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     let textView: EditorTextView
     private let gutter: GutterView
     let lines = LineIndex()
-    private var colorer: SyntaxColorer
+    private(set) var colorer: SyntaxColorer
+    /// `.env` values show as bullets (`SecretMask`) but on these lines: the caret's while the
+    /// editor has the keys, and the pointer's.
+    var secretCaretLine: Int?
+    var secretHoverLine: Int?
     private var zoom: CGFloat = 0
     private var wraps: Bool?
     private var colored: ClosedRange<Int>?
@@ -138,8 +142,10 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     }
 
     func setLanguage(_ language: Language) {
+        let masked = masksSecrets
         colorer = SyntaxColorer(language: language)
         recolor(force: true)
+        if masked || masksSecrets { remask(NSRange(location: 0, length: document.storage.length)) }
     }
 
     var font: NSFont { TextStyle.editorFont }
@@ -282,6 +288,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         textView.bracketPair = textView.findBracketPair()
         textView.updateDecorations()
         gutter.needsDisplay = true
+        revealSecrets()
     }
 
     @objc private func scrolled() {
@@ -641,6 +648,23 @@ final class SyntaxColorer {
         if states.count > line + 1 { states.removeSubrange((line + 1)...) }
     }
 
+    /// The state line `line` starts in, scanning the lines above it not yet known.
+    func state(at line: Int, string: NSString, lines: LineIndex) -> Language.State {
+        var buffer: [UInt16] = []
+        while states.count <= line {
+            let index = states.count - 1
+            let lineRange = lines.range(of: index, in: string)
+            if lineRange.length > Self.longLine {
+                states.append(.normal)
+                continue
+            }
+            buffer = [UInt16](repeating: 0, count: lineRange.length)
+            string.getCharacters(&buffer, range: lineRange)
+            states.append(language.endState(buffer, from: states[index]))
+        }
+        return states[line]
+    }
+
     func color(_ range: ClosedRange<Int>, storage: NSTextStorage, lines: LineIndex, layout: NSLayoutManager) {
         let string = storage.string as NSString
         guard language.family != .plain else { return }
@@ -653,11 +677,7 @@ final class SyntaxColorer {
             return (lineRange, buffer)
         }
         // States down to the first line, cheaply.
-        while states.count <= range.lowerBound {
-            let line = states.count - 1
-            let (lineRange, chars) = characters(line)
-            states.append(lineRange.length > Self.longLine ? .normal : language.endState(chars, from: states[line]))
-        }
+        _ = state(at: range.lowerBound, string: string, lines: lines)
         var tokens: [Language.Token] = []
         for line in range {
             let (lineRange, chars) = characters(line)
@@ -1252,7 +1272,10 @@ final class EditorTextView: NSTextView {
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
         selectedTextAttributes[.backgroundColor] = NSColor(Theme.Editor.selection)
-        DispatchQueue.main.async { [weak self] in self?.updateDecorations() }
+        DispatchQueue.main.async { [weak self] in
+            self?.updateDecorations()
+            MainActor.assumeIsolated { self?.controller?.revealSecrets() }
+        }
         return became
     }
 
@@ -1260,8 +1283,47 @@ final class EditorTextView: NSTextView {
         let resigned = super.resignFirstResponder()
         selectedTextAttributes[.backgroundColor] = NSColor(Theme.Editor.selectionInactive)
         // The window's first responder changes after this returns.
-        DispatchQueue.main.async { [weak self] in self?.updateDecorations() }
+        DispatchQueue.main.async { [weak self] in
+            self?.updateDecorations()
+            MainActor.assumeIsolated { self?.controller?.revealSecrets() }
+        }
         return resigned
+    }
+
+    // MARK: A `.env` value under the pointer
+
+    private var secretTracking: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        let masks = MainActor.assumeIsolated { controller?.masksSecrets ?? false }
+        if let secretTracking, !masks {
+            removeTrackingArea(secretTracking)
+            self.secretTracking = nil
+        }
+        guard masks, secretTracking == nil else { return }
+        let area = NSTrackingArea(
+            rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        secretTracking = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard secretTracking != nil, let layout = layoutManager, let container = textContainer, (textStorage?.length ?? 0) > 0 else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let inContainer = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        var fraction: CGFloat = 0
+        let glyph = layout.glyphIndex(for: inContainer, in: container, fractionOfDistanceThroughGlyph: &fraction)
+        let fragment = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+        let over = fragment.minY <= inContainer.y && inContainer.y < fragment.maxY
+        let index = layout.characterIndexForGlyph(at: glyph)
+        MainActor.assumeIsolated { controller?.hoverSecrets(line: over ? controller?.lines.line(at: index) : nil) }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        MainActor.assumeIsolated { controller?.hoverSecrets(line: nil) }
     }
 
     // MARK: Editing helpers

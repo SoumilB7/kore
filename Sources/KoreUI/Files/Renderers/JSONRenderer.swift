@@ -165,6 +165,7 @@ private final class TreeCanvas: CanvasView {
     private var font = NSFont.systemFont(ofSize: 12)
     private var colors: [JSONIndex.Kind: NSColor] = [:]
     private var plain = NSColor.white
+    private var key = NSColor.white
     private var punctuation = NSColor.white
     private var hint = NSColor.white
     private var lineNumbers: [NSAttributedString.Key: Any] = [:]
@@ -228,6 +229,7 @@ private final class TreeCanvas: CanvasView {
         rowHeight = (Size.JSONTree.row * zoom).rounded()
         font = TextStyle.editorFont
         plain = NSColor(Theme.Syntax.plain)
+        key = NSColor(Theme.Syntax.key)
         punctuation = NSColor(Theme.Syntax.punctuation)
         hint = NSColor(Theme.tertiary)
         let literal = NSColor(Theme.Syntax.string)
@@ -389,7 +391,7 @@ private final class TreeCanvas: CanvasView {
             text.append(NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color]))
         }
         if node.hasKey {
-            add("\"\(index.key(node))\"", plain)
+            add("\"\(index.key(node))\"", key)
             add(": ", punctuation)
         } else if row.ordinal >= 0 {
             add(String(row.ordinal), plain)

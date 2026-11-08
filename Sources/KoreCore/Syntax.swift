@@ -4,6 +4,9 @@ import Foundation
 public enum TokenKind: UInt8, Sendable, CaseIterable {
     case keyword, string, number, comment, type, function, property, attribute, constant
     case heading, link, emphasis, code, tag, punctuation
+    /// A data key (JSON, YAML, TOML, INI, CSS), a `.env` value (drawn dim, shown as bullets in
+    /// the editor), and a diff's added and removed lines.
+    case key, secret, inserted, removed
 }
 
 /// A language as the editor colours it: a small scanner per family (code, markdown, markup,
@@ -11,7 +14,7 @@ public enum TokenKind: UInt8, Sendable, CaseIterable {
 /// can colour only what's on screen: each line starts from the state the previous one ended
 /// in (inside a block comment, a multi-line string, a code fence, a tag).
 public struct Language: Sendable, Equatable {
-    public enum Family: Sendable { case code, markdown, markup, plain }
+    public enum Family: Sendable { case code, markdown, markup, plain, dotenv, diff }
 
     public let id: String
     public let name: String
@@ -96,7 +99,14 @@ extension Language {
         case .plain: start
         case .markdown: scanMarkdown(line, from: start, into: &tokens)
         case .markup: scanMarkup(line, from: start, into: &tokens)
-        case .code: scanCode(line, from: start, into: &tokens)
+        case .code:
+            switch id {
+            case "yaml": scanYAML(line, into: &tokens)
+            case "toml", "ini": scanTable(line, from: start, into: &tokens)
+            default: scanCode(line, from: start, into: &tokens)
+            }
+        case .dotenv: scanDotenv(line, from: start, into: &tokens)
+        case .diff: scanDiff(line, into: &tokens)
         }
     }
 
@@ -107,9 +117,9 @@ extension Language {
         return scan(line, from: start, into: &ignored)
     }
 
-    private func scanCode(_ s: [UInt16], from start: State, into tokens: inout [Token]) -> State {
+    private func scanCode(_ s: [UInt16], from start: State, at offset: Int = 0, into tokens: inout [Token]) -> State {
         let n = s.count
-        var i = 0
+        var i = offset
         func emit(_ a: Int, _ b: Int, _ kind: TokenKind) { if b > a { tokens.append(Token(range: a..<b, kind: kind)) } }
 
         switch start {
@@ -129,7 +139,7 @@ extension Language {
             break
         }
 
-        var lineStart = true
+        var lineStart = offset == 0
         while i < n {
             let c = s[i]
             if c == .space || c == .tab {
@@ -163,7 +173,7 @@ extension Language {
             if quotes.contains(c) {
                 let triple = tripleQuotes && i + 2 < n && s[i + 1] == c && s[i + 2] == c
                 let (end, closed) = closeString(s, from: i + (triple ? 3 : 1), quote: c, triple: triple)
-                emit(i, end, keys && isKey(s, after: end) ? .property : .string)
+                emit(i, end, keys && isKey(s, after: end) ? .key : .string)
                 if !closed {
                     if triple || multilineQuotes.contains(c) { return .string(quote: c, triple: triple) }
                 }
@@ -223,7 +233,7 @@ extension Language {
     private func wordKind(_ s: [UInt16], _ a: Int, _ b: Int) -> TokenKind? {
         var word = String(utf16CodeUnits: Array(s[a..<b]), count: b - a)
         if caseInsensitive { word = word.lowercased() }
-        if keys && isKey(s, after: b) { return .property }
+        if keys && isKey(s, after: b) { return .key }
         if keywords.contains(word) {
             // `.default`, `x.type`: a member, not the keyword.
             return a > 0 && s[a - 1] == .dot && !(a > 1 && s[a - 2] == .dot) ? .property : .keyword
@@ -233,6 +243,191 @@ extension Language {
         if a > 0, s[a - 1] == .dot { return .property }
         if s[a] >= 0x41 && s[a] <= 0x5A { return b - a > 1 && isAllCaps(s, a, b) ? .constant : .type }
         return nil
+    }
+
+    // MARK: Data (YAML, TOML and INI, .env) and diffs
+
+    /// YAML: `key:` a key, `- ` and `:` punctuation, `&anchor` / `*ref` / `!tag` attributes, and
+    /// an unquoted value a string unless it's a constant or a number. Flow values (`[…]`, `{…}`)
+    /// go through the code scanner.
+    private func scanYAML(_ s: [UInt16], into tokens: inout [Token]) -> State {
+        let n = s.count
+        func emit(_ a: Int, _ b: Int, _ kind: TokenKind) { if b > a { tokens.append(Token(range: a..<b, kind: kind)) } }
+        var i = skipSpaces(s, from: 0)
+        if i < n, s[i] == .hash {
+            emit(i, n, .comment)
+            return .normal
+        }
+        // `---` and `...` start and end documents.
+        if i == 0, starts([.dash, .dash, .dash], s, at: 0) || starts([.dot, .dot, .dot], s, at: 0) {
+            emit(0, 3, .punctuation)
+            i = skipSpaces(s, from: 3)
+        }
+        // Sequence markers.
+        while i < n, s[i] == .dash, i + 1 == n || s[i + 1] == .space || s[i + 1] == .tab {
+            emit(i, i + 1, .punctuation)
+            i = skipSpaces(s, from: i + 1)
+        }
+        guard i < n else { return .normal }
+        // A key: a quoted name, or plain text, followed by `:` and a space or the line's end.
+        if s[i] == .quote || s[i] == .apostrophe {
+            let (end, closed) = closeString(s, from: i + 1, quote: s[i], triple: false)
+            if closed, let colon = nextIndex(s, from: end), s[colon] == .colon, colon + 1 == n || s[colon + 1] == .space {
+                emit(i, end, .key)
+                emit(colon, colon + 1, .punctuation)
+                i = colon + 1
+            }
+        } else if s[i] != .braceOpen, s[i] != .bracketOpen, s[i] != .amp, s[i] != .star, let colon = yamlKeyEnd(s, from: i) {
+            var end = colon
+            while end > i, s[end - 1] == .space || s[end - 1] == .tab { end -= 1 }
+            emit(i, end, .key)
+            emit(colon, colon + 1, .punctuation)
+            i = colon + 1
+        }
+        yamlValue(s, from: i, into: &tokens)
+        return .normal
+    }
+
+    /// Where plain text from `i` ends in a key's `:` (one followed by a space or the line's end).
+    private func yamlKeyEnd(_ s: [UInt16], from i: Int) -> Int? {
+        var j = i
+        while j < s.count {
+            let c = s[j]
+            if c == .hash, j > i, s[j - 1] == .space || s[j - 1] == .tab { return nil }
+            if c == .colon, j + 1 == s.count || s[j + 1] == .space || s[j + 1] == .tab { return j > i ? j : nil }
+            j += 1
+        }
+        return nil
+    }
+
+    private func yamlValue(_ s: [UInt16], from start: Int, into tokens: inout [Token]) {
+        let n = s.count
+        func emit(_ a: Int, _ b: Int, _ kind: TokenKind) { if b > a { tokens.append(Token(range: a..<b, kind: kind)) } }
+        var i = skipSpaces(s, from: start)
+        // Anchors, aliases and tags before the value.
+        while i < n, s[i] == .amp || s[i] == .star || s[i] == .bang {
+            var end = i + 1
+            while end < n, s[end] != .space, s[end] != .tab { end += 1 }
+            emit(i, end, .attribute)
+            i = skipSpaces(s, from: end)
+        }
+        guard i < n else { return }
+        let c = s[i]
+        if c == .hash {
+            emit(i, n, .comment)
+        } else if c == .pipe || c == .greater {
+            // A block scalar's indicator; its lines follow.
+            var end = i + 1
+            while end < n, s[end] == .dash || s[end] == .plus || isDigit(s[end]) { end += 1 }
+            emit(i, end, .punctuation)
+            _ = scanCode(s, from: .normal, at: end, into: &tokens)
+        } else if c == .quote || c == .apostrophe || c == .braceOpen || c == .bracketOpen {
+            _ = scanCode(s, from: .normal, at: i, into: &tokens)
+        } else {
+            // Plain text to the end, or to a ` #` comment.
+            var end = i
+            while end < n, !(s[end] == .hash && (s[end - 1] == .space || s[end - 1] == .tab)) { end += 1 }
+            let comment = end
+            while end > i, s[end - 1] == .space || s[end - 1] == .tab { end -= 1 }
+            let word = String(utf16CodeUnits: Array(s[i..<end]), count: end - i)
+            let digits = word.first == "-" || word.first == "+" ? word.dropFirst() : Substring(word)
+            let number = digits.first.map { $0.isASCII && $0.isNumber } == true && Double(digits) != nil
+            let kind: TokenKind = constants.contains(word) || word == "~" ? .constant : number ? .number : .string
+            emit(i, end, kind)
+            emit(comment, n, .comment)
+        }
+    }
+
+    /// TOML and INI: `[table]`, `[[array]]` and `[section]` lines are headings; `name =` a key.
+    private func scanTable(_ s: [UInt16], from start: State, into tokens: inout [Token]) -> State {
+        let i = skipSpaces(s, from: 0)
+        if start == .normal, i < s.count, s[i] == .bracketOpen, let close = find([.bracketClose], in: s, from: i + 1) {
+            let end = close + 1 < s.count && s[close + 1] == .bracketClose ? close + 2 : close + 1
+            tokens.append(Token(range: i..<end, kind: .heading))
+            return scanCode(s, from: .normal, at: end, into: &tokens)
+        }
+        return scanCode(s, from: start, into: &tokens)
+    }
+
+    /// `.env`: comments, `export`, `KEY` a key, `=` punctuation, and the value a secret (a
+    /// quoted one may run over several lines; a ` #` after an unquoted one is a comment).
+    private func scanDotenv(_ s: [UInt16], from start: State, into tokens: inout [Token]) -> State {
+        let n = s.count
+        func emit(_ a: Int, _ b: Int, _ kind: TokenKind) { if b > a { tokens.append(Token(range: a..<b, kind: kind)) } }
+        if case .string(let quote, _) = start {
+            // Inside a quoted value from a line above.
+            let (end, closed) = closeString(s, from: 0, quote: quote, triple: false)
+            emit(0, closed ? end - 1 : end, .secret)
+            guard closed else { return start }
+            emit(end - 1, end, .punctuation)
+            let rest = skipSpaces(s, from: end)
+            if rest < n, s[rest] == .hash { emit(rest, n, .comment) }
+            return .normal
+        }
+        var i = skipSpaces(s, from: 0)
+        guard i < n else { return .normal }
+        if s[i] == .hash {
+            emit(i, n, .comment)
+            return .normal
+        }
+        let export: [UInt16] = Array("export".utf16)
+        if starts(export, s, at: i), i + 6 < n, s[i + 6] == .space || s[i + 6] == .tab {
+            emit(i, i + 6, .keyword)
+            i = skipSpaces(s, from: i + 6)
+        }
+        let keyEnd = identEnd(s, from: i)
+        emit(i, keyEnd, .key)
+        i = skipSpaces(s, from: keyEnd)
+        guard i < n, s[i] == .equals || s[i] == .colon else { return .normal }
+        emit(i, i + 1, .punctuation)
+        i = skipSpaces(s, from: i + 1)
+        guard i < n else { return .normal }
+        if s[i] == .quote || s[i] == .apostrophe || s[i] == .backtick {
+            let quote = s[i]
+            emit(i, i + 1, .punctuation)
+            let (end, closed) = closeString(s, from: i + 1, quote: quote, triple: false)
+            emit(i + 1, closed ? end - 1 : end, .secret)
+            guard closed else { return .string(quote: quote, triple: false) }
+            emit(end - 1, end, .punctuation)
+            let rest = skipSpaces(s, from: end)
+            if rest < n, s[rest] == .hash { emit(rest, n, .comment) }
+            return .normal
+        }
+        var end = i
+        while end < n, !(s[end] == .hash && (s[end - 1] == .space || s[end - 1] == .tab)) { end += 1 }
+        let comment = end
+        while end > i, s[end - 1] == .space || s[end - 1] == .tab { end -= 1 }
+        emit(i, end, .secret)
+        emit(comment, n, .comment)
+        return .normal
+    }
+
+    /// A unified diff: `+` lines added, `-` lines removed, `@@` hunks headings, and the file
+    /// lines (`diff`, `index`, `---`, `+++`) keywords.
+    private func scanDiff(_ s: [UInt16], into tokens: inout [Token]) -> State {
+        guard let first = s.first else { return .normal }
+        let kind: TokenKind?
+        if starts([.at, .at], s, at: 0) {
+            kind = .heading
+        } else if starts([.plus, .plus, .plus], s, at: 0) || starts([.dash, .dash, .dash], s, at: 0)
+            || starts(Array("diff ".utf16), s, at: 0) || starts(Array("index ".utf16), s, at: 0)
+        {
+            kind = .keyword
+        } else if first == .plus {
+            kind = .inserted
+        } else if first == .dash {
+            kind = .removed
+        } else {
+            kind = nil
+        }
+        if let kind { tokens.append(Token(range: 0..<s.count, kind: kind)) }
+        return .normal
+    }
+
+    private func skipSpaces(_ s: [UInt16], from i: Int) -> Int {
+        var j = i
+        while j < s.count, s[j] == .space || s[j] == .tab { j += 1 }
+        return j
     }
 
     // MARK: Markdown
@@ -398,12 +593,15 @@ extension Language {
         return (s.count, false)
     }
 
-    /// A key: followed by `:` (not `::`) or, for TOML, `=`.
+    /// A key: followed by `:` (not `::`) or, for TOML, INI and `.env`, `=`.
     private func isKey(_ s: [UInt16], after end: Int) -> Bool {
         guard let index = nextIndex(s, from: end) else { return false }
         if s[index] == .colon { return !(index + 1 < s.count && s[index + 1] == .colon) }
-        return id == "toml" && s[index] == .equals && !(index + 1 < s.count && s[index + 1] == .equals)
+        return equalsKeys && s[index] == .equals && !(index + 1 < s.count && s[index + 1] == .equals)
     }
+
+    /// `name = value` languages.
+    private var equalsKeys: Bool { id == "toml" || id == "ini" || family == .dotenv }
 
     private func next(_ s: [UInt16], from i: Int) -> UInt16? { nextIndex(s, from: i).map { s[$0] } }
 
@@ -427,7 +625,8 @@ extension Language {
     }
 
     private func isIdent(_ c: UInt16) -> Bool {
-        isIdentStart(c) || isDigit(c) || (keys && c == .dash && (id == "css" || id == "yaml"))
+        isIdentStart(c) || isDigit(c) || (keys && c == .dash && (id == "css" || id == "yaml" || equalsKeys))
+            || (c == .dot && equalsKeys)
             || (c == .question && id == "ruby")
     }
 
@@ -484,6 +683,7 @@ extension UInt16 {
     public static let braceOpen: UInt16 = 0x7B
     public static let braceClose: UInt16 = 0x7D
     public static let tilde: UInt16 = 0x7E
+    public static let pipe: UInt16 = 0x7C
 }
 
 // MARK: - The languages
@@ -584,11 +784,13 @@ extension Language {
         keywords: "and break do else elseif end for function goto if in local not or repeat return then until while",
         constants: "true false nil")
     static let ini = Language("ini", "Properties", line: ["#", ";"], keys: true)
+    public static let dotenv = Language("dotenv", "Environment", family: .dotenv, line: ["#"], keys: true)
+    static let diff = Language("diff", "Diff", family: .diff)
 
     /// Every language, by name, for the status row's menu.
     public static let all: [Language] = [
-        plain, c, cpp, css, dockerfile, go, html, java, javascript, json, kotlin, lua, makefile, markdown, objc, php,
-        ini, python, ruby, rust, shell, sql, swift, toml, typescript, xml, yaml,
+        plain, c, cpp, css, diff, dockerfile, dotenv, go, html, java, javascript, json, kotlin, lua, makefile, markdown, objc,
+        php, ini, python, ruby, rust, shell, sql, swift, toml, typescript, xml, yaml,
     ].sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
     var keywordList: String { keywords.sorted().joined(separator: " ") }
@@ -601,8 +803,8 @@ extension Language {
             (kotlin, "kt kts"), (ruby, "rb rake gemspec"), (php, "php"), (shell, "sh bash zsh fish command"),
             (sql, "sql"), (json, "json jsonc json5 jsonl code-workspace"), (yaml, "yml yaml"), (toml, "toml"),
             (css, "css scss sass less"), (markdown, "md markdown mdx"), (html, "html htm vue svelte"),
-            (xml, "xml plist svg xib storyboard entitlements csproj"), (lua, "lua"), (ini, "ini cfg conf properties env"),
-            (makefile, "mk"),
+            (xml, "xml plist svg xib storyboard entitlements csproj"), (lua, "lua"), (ini, "ini cfg conf properties"),
+            (makefile, "mk"), (dotenv, "env"), (diff, "diff patch"),
         ]
         for (language, extensions) in table {
             for ext in extensions.split(separator: " ") { map[String(ext)] = language }
@@ -614,7 +816,7 @@ extension Language {
         "Makefile": makefile, "makefile": makefile, "GNUmakefile": makefile, "Dockerfile": dockerfile,
         "Gemfile": ruby, "Rakefile": ruby, "Podfile": ruby, "Brewfile": ruby, ".zshrc": shell, ".bashrc": shell,
         ".bash_profile": shell, ".zprofile": shell, ".profile": shell, ".gitignore": ini, ".gitattributes": ini,
-        ".editorconfig": ini, ".npmrc": ini, ".env": ini, "Package.resolved": json,
+        ".editorconfig": ini, ".npmrc": ini, ".env": dotenv, "Package.resolved": json,
     ]
 
     /// The language for a file, from its name; plain text when unknown.
@@ -622,7 +824,23 @@ extension Language {
         let name = url.lastPathComponent
         if let language = byName[name] { return language }
         if name.hasPrefix("Dockerfile") { return dockerfile }
-        if name.hasPrefix(".env") { return ini }
+        if name.hasPrefix(".env") { return dotenv }
         return byExtension[url.pathExtension.lowercased()] ?? plain
     }
+
+    /// The language a code fence names (```ts, ```bash, ```yml); plain when unknown.
+    public static func named(_ fence: String) -> Language {
+        let word = fence.split(whereSeparator: { $0 == " " || $0 == "{" || $0 == "," }).first.map { $0.lowercased() } ?? ""
+        guard !word.isEmpty else { return plain }
+        if let language = fenceNames[word] ?? byExtension[word] { return language }
+        return all.first { $0.id == word || $0.name.lowercased() == word } ?? plain
+    }
+
+    private static let fenceNames: [String: Language] = [
+        "sh": shell, "bash": shell, "zsh": shell, "shell": shell, "console": shell, "shellscript": shell, "fish": shell,
+        "ts": typescript, "tsx": typescript, "typescript": typescript, "js": javascript, "jsx": javascript, "node": javascript,
+        "py": python, "python3": python, "yml": yaml, "env": dotenv, "dotenv": dotenv, "diff": diff, "patch": diff,
+        "golang": go, "rs": rust, "c++": cpp, "objc": objc, "objective-c": objc, "md": markdown, "make": makefile,
+        "docker": dockerfile, "jsonc": json, "json5": json, "properties": ini, "html": html, "xml": xml, "kt": kotlin,
+    ]
 }

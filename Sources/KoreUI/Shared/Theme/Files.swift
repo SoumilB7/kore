@@ -71,7 +71,8 @@ extension Theme {
     }
 
     /// One fixed set for every language: two blues, amber literals, lighter comments and
-    /// punctuation. Functions and properties stay plain.
+    /// punctuation. Data keys take the type's blue, `.env` values the dim tertiary. Functions
+    /// and properties stay plain.
     enum Syntax {
         static let plain = text
         static let keyword = Blue.b300
@@ -83,6 +84,10 @@ extension Theme {
         static let heading = keyword
         static let link = accent
         static let code = string
+        static let key = type
+        static let secret = tertiary
+        static let inserted = diffAdd
+        static let removed = diffRemove
 
         /// The editor's colour for a token kind; nil leaves it plain.
         @MainActor static func color(_ kind: TokenKind) -> NSColor? { palette[Int(kind.rawValue)] }
@@ -100,10 +105,21 @@ extension Theme {
                 case .code: code
                 case .emphasis: plain
                 case .punctuation: punctuation
+                case .key: key
+                case .secret: secret
+                case .inserted: inserted
+                case .removed: removed
                 case .function, .property: nil
                 }
             return color.map(NSColor.init)
         }
+    }
+
+    /// Per-language file icon tints, under the git colour. Off: the owner's rule is one colour
+    /// per row, so the table is empty; filling it turns tints on.
+    enum FileType {
+        static let tints: [FileGlyph: Color] = [:]
+        static func tint(_ glyph: FileGlyph) -> Color? { tints.isEmpty ? nil : tints[glyph] }
     }
 
     /// A command line in the terminal: the editor's set, plus flags and `$…` parts.
@@ -125,6 +141,8 @@ extension Chrome {
     static let captionDigits = Font.system(size: 11).monospacedDigit()
     static let glyphTreeChevron = Font.system(size: 9, weight: .semibold)
     static let glyphTreeIcon = Font.system(size: 13)
+    /// A language's two letters in the icon box (TS, PY), where no symbol fits.
+    static let glyphFileMonogram = Font.system(size: 7.5, weight: .bold, design: .rounded)
     static let glyphCrumb = Font.system(size: 8, weight: .semibold)
     static let glyphState = Font.system(size: 28)
     /// The Explorer glyph's stroke.

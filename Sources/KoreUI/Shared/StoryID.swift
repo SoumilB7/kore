@@ -326,6 +326,10 @@ extension StoryID {
         package static let refresh = StoryID(.explorer, "refresh")
         package static let collapse = StoryID(.explorer, "collapse")
         package static let namefield = StoryID(.explorer, "namefield")
+        /// The header's folder name (a click clears the selection).
+        package static let title = StoryID(.explorer, "title")
+        /// A folder pinned over the tree while its rows scroll (sticky folders).
+        package static func sticky(_ relativePath: String) -> StoryID { StoryID(.explorer, "sticky", key: relativePath) }
         package static let filesTab = StoryID(.explorer, "tab.files")
         package static let searchTab = StoryID(.explorer, "tab.search")
         /// The sash between the sidebar and the content.

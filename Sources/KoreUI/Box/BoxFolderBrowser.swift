@@ -237,8 +237,7 @@ struct BoxFolderBrowser: View {
             }
         } label: {
             HStack(spacing: Space.sm) {
-                Image(systemName: entry.isFolder ? "folder" : FileIcon.symbol(for: entry.name))
-                    .font(Chrome.caption).foregroundStyle(entry.isFolder ? Theme.secondary : Theme.tertiary).frame(width: Size.Box.lead)
+                FileIconView(name: entry.name, color: entry.isFolder ? Theme.secondary : Theme.tertiary, isFolder: entry.isFolder)
                 Text(entry.name).font(Chrome.label).foregroundStyle(entry.isFolder ? Theme.text : Theme.tertiary).lineLimit(1)
                 if entry.kind == .link { Image(systemName: "arrow.turn.up.right").font(Chrome.caption).foregroundStyle(Theme.tertiary) }
                 Spacer(minLength: 0)

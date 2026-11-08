@@ -55,6 +55,8 @@ struct ExplorerSidebar: View {
     /// The tree's visible height, for the empty area below the rows.
     @StateObject private var treeHeight = Local<CGFloat>(0)
     @StateObject private var typedAt = Held(Date.distantPast)
+    /// The tree's top visible row, for its sticky folders. Held, so a scroll redraws only them.
+    @StateObject private var scrollTop = Held(Local(0))
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,6 +81,10 @@ struct ExplorerSidebar: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(searching ? "Search in \(workspace.folder.lastPathComponent)" : workspace.folder.path)
+                // The folder's name clears the selection: New File then goes in the folder itself.
+                .contentShape(Rectangle())
+                .onTapGesture { if !searching { store.pickOnly(nil) } }
+                .storyID(StoryID.Explorer.title, press: { if !searching { store.pickOnly(nil) } })
             Spacer(minLength: Space.md)
             if searching {
                 let search = workspace.searchStore()
@@ -150,6 +156,16 @@ struct ExplorerSidebar: View {
                 .equatable()
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { treeHeight.value = $0 }
+            .onScrollGeometryChange(for: Int.self) { StickyFolderRows.top($0) } action: { _, top in scrollTop.value.value = top }
+            .overlay(alignment: .top) {
+                FilesSticky(store: store, top: scrollTop.value, floating: floating) { id in
+                    StickyFolderRows.jump(to: id, rows: store.rows, height: treeHeight.value, proxy: proxy) {
+                        focused = true
+                        store.pointed = id
+                        store.pickOnly(id)
+                    }
+                }
+            }
             .focusable(interactions: .edit)
             .focused($focused)
             .focusEffectDisabled()
@@ -214,10 +230,11 @@ struct ExplorerSidebar: View {
         // ⌘⌫: the key sends U+007F, which SwiftUI's `.delete` (U+0008) doesn't match.
         case _ where (press.key == .delete || press.key.character == "\u{7F}") && press.modifiers.contains(.command):
             if index != nil { TreeActions.trash(store.chosenTops, store: store, undo: undoManager) }
-        case .escape where !store.picked.isEmpty:
-            store.pickOnly(store.selection)
+        // Esc steps back: what's typed, then several chosen, then the selection itself (VS Code).
         case .escape where !typed.value.isEmpty:
             typed.value = ""
+        case .escape:
+            if !store.stepBack() { return .ignored }
         default:
             return find(press, rows: rows, from: index) ? .handled : .ignored
         }
@@ -302,6 +319,106 @@ struct ExplorerState: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.top, Layout.Explorer.stateTop)
+    }
+}
+
+// MARK: - Sticky folders
+
+/// The Files tree's sticky folders, from its rows and top row.
+private struct FilesSticky: View {
+    let store: FilesStore
+    @ObservedObject var top: Local<Int>
+    let floating: Bool
+    let jump: (String) -> Void
+
+    var body: some View {
+        let pinned = FilesStore.stickyFolders(rows: store.rows, top: top.value)
+        StickyFolderRows(
+            rows: pinned.map { StickyFolderRows.Item(id: $0.id, depth: $0.depth, title: $0.names.joined(separator: " / ")) },
+            floating: floating, relative: store.relative, jump: jump)
+    }
+}
+
+/// VS Code's Sticky Scroll: while the top row sits in open folders whose rows have scrolled
+/// off, those folders' rows stay pinned at the top, over the tree, a hairline under the last.
+/// A click scrolls to that folder and selects it. Rows are a fixed height, so the top row is
+/// the scroll offset over the row height (`top`), and a scroll redraws only this.
+struct StickyFolderRows: View {
+    struct Item: Identifiable, Equatable {
+        let id: String
+        let depth: Int
+        let title: String
+    }
+
+    let rows: [Item]
+    let floating: Bool
+    let relative: (String) -> String
+    let jump: (String) -> Void
+
+    /// The top visible row's index.
+    static func top(_ geometry: ScrollGeometry) -> Int {
+        max(0, Int((geometry.contentOffset.y + geometry.contentInsets.top) / Size.Tree.row))
+    }
+
+    /// Scrolls `id`'s row to just under the folders that will stay pinned over it, then `select`.
+    @MainActor static func jump<R: TreeRowShape>(
+        to id: String, rows: [R], height: CGFloat, proxy: ScrollViewProxy, select: () -> Void
+    ) {
+        guard let row = rows.first(where: { $0.id == id }) else { return }
+        select()
+        let above = CGFloat(min(row.depth, FilesStore.stickyLimit)) * Size.Tree.row
+        // A unit anchor lines the row's point up with the view's: y = above / (height - row).
+        let y = height > Size.Tree.row ? min(above / (height - Size.Tree.row), 1) : 0
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { proxy.scrollTo(id, anchor: UnitPoint(x: 0, y: y)) }
+    }
+
+    var body: some View {
+        if !rows.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(rows) { row in
+                    StickyFolderRow(row: row, jump: jump)
+                        .storyID(StoryID.Explorer.sticky(relative(row.id)), press: { jump(row.id) })
+                }
+            }
+            .background(floating ? Theme.surface : Theme.background)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Theme.border).frame(height: Stroke.hairline).allowsHitTesting(false)
+            }
+        }
+    }
+}
+
+private struct StickyFolderRow: View {
+    let row: StickyFolderRows.Item
+    let jump: (String) -> Void
+    @StateObject private var hovered = Local(false)
+    @Environment(\.listGround) private var ground
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Spacer().frame(width: Size.Tree.leading + CGFloat(row.depth) * Size.Tree.indent)
+            Image(systemName: "chevron.right")
+                .font(Chrome.glyphTreeChevron)
+                .foregroundStyle(Theme.secondary)
+                .rotationEffect(.degrees(90))
+                .frame(width: Size.Tree.chevronBox, height: Size.Tree.chevronBox)
+            FileIconView(name: "", color: Theme.secondary, isFolder: true)
+            Spacer().frame(width: Size.Tree.iconGap)
+            Text(row.title).font(Chrome.body).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .padding(.trailing, Size.Tree.trailing)
+        .frame(height: Size.Tree.row)
+        .background(hovered.value ? Theme.Row.hoverQuiet(ground) : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
+        .padding(.horizontal, Size.Tree.rowInset)
+        .contentShape(Rectangle())
+        .onHover { hovered.value = $0 }
+        .onTapGesture { jump(row.id) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { jump(row.id) }
     }
 }
 
@@ -392,10 +509,11 @@ private struct TreeList: View, Equatable {
             instant.disablesAnimations = true
             withTransaction(instant) { proxy.scrollTo(store.row(showing: selection)?.id ?? selection) }
         }
-        // The empty part below the rows: a click there puts the keyboard in the tree
-        // without selecting anything, as in VS Code.
+        // The empty part below the rows: a click there puts the keyboard in the tree and clears
+        // the selection, as in VS Code.
         Button {
             focus()
+            store.pickOnly(nil)
         } label: {
             Color.clear
                 .frame(height: max(height - CGFloat(rows.count) * Size.Tree.row - Space.md, 0))

@@ -143,6 +143,31 @@ struct BoxExplorerTests {
         #expect(store.rows.count == 4)
     }
 
+    @Test func escStepsBackToNothingAndNewFilesGoToTheRoot() async throws {
+        let box = Self.fake()
+        let store = BoxExplorerStore(root: "/w", source: box)
+        await store.start()
+        store.pickOnly("/w/src")
+        store.pickToggle("/w/README.md")
+        #expect(store.stepBack())
+        #expect(store.picked.isEmpty && store.selection == "/w/README.md")
+        #expect(store.stepBack())
+        #expect(store.selection == nil)
+        #expect(!store.stepBack())
+        store.startNew(folder: false)
+        #expect(store.edit == .newFile(parent: "/w"))
+    }
+
+    @Test func anOpenBoxFolderPinsOverItsRows() {
+        let rows: [BoxExplorerStore.Row] = [
+            .init(id: "/w/src", name: "src", depth: 0, isFolder: true, isOpen: true),
+            .init(id: "/w/src/a.swift", name: "a.swift", depth: 1, isFolder: false, isOpen: false),
+            .init(id: "/w/README.md", name: "README.md", depth: 0, isFolder: false, isOpen: false),
+        ]
+        #expect(FilesStore.stickyFolders(rows: rows, top: 1).map(\.name) == ["src"])
+        #expect(FilesStore.stickyFolders(rows: rows, top: 2).isEmpty)
+    }
+
     @Test func refreshListsTheOpenFoldersAgainAndDropsOnesThatWent() async throws {
         let box = Self.fake()
         let store = BoxExplorerStore(root: "/w", source: box)

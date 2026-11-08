@@ -217,32 +217,10 @@ private struct CodeWell: View {
         .background(Theme.codeBlock, in: RoundedRectangle(cornerRadius: Radius.chip))
     }
 
-    /// Coloured once: the editor's line scanner over the cell.
+    /// Coloured once: the editor's line scanner over the cell (`SyntaxText`, cached).
     private var attributed: AttributedString {
         if let done = colored.value { return done }
-        var result = AttributedString()
-        var state = Language.State.normal
-        var tokens: [Language.Token] = []
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        for (index, line) in lines.enumerated() {
-            let units = Array(line.utf16)
-            tokens.removeAll(keepingCapacity: true)
-            state = language.scan(units, from: state, into: &tokens)
-            var position = 0
-            func append(_ range: Range<Int>, _ kind: TokenKind?) {
-                guard !range.isEmpty else { return }
-                var piece = AttributedString(String(decoding: units[range], as: UTF16.self))
-                piece.foregroundColor = kind.flatMap { Theme.Syntax.color($0) }.map(Color.init(nsColor:)) ?? Theme.Syntax.plain
-                result.append(piece)
-            }
-            for token in tokens where token.range.lowerBound >= position {
-                append(position..<token.range.lowerBound, nil)
-                append(token.range.clamped(to: 0..<units.count), token.kind)
-                position = min(token.range.upperBound, units.count)
-            }
-            append(position..<units.count, nil)
-            if index < lines.count - 1 { result.append(AttributedString("\n")) }
-        }
+        let result = SyntaxText.attributed(text, language)
         colored.value = result
         return result
     }

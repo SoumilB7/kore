@@ -257,6 +257,71 @@ final class ExplorerFolderClicks: FilesStoryline {
     }
 }
 
+/// Nothing chosen, as VS Code clears it: Esc steps back from a chosen folder to nothing, and
+/// New File then puts its name field in the folder itself, not in the folder that was chosen.
+/// A click on the header's folder name clears a choice too.
+final class ExplorerDeselect: FilesStoryline {
+    override class var tags: Set<Tag> { [.files, .gate] }
+    override class var files: [(path: String, text: String)] { [("docs/a.txt", "a\n"), ("z.txt", "z\n")] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            WaitForElement(.treeRow("docs")),
+            Click(.treeRow("docs")),
+            Expect("docs chosen and open", found: { $0.app.workspace?.storyTreeSelection ?? "none" }) {
+                $0.app.workspace?.storyTreeSelection == "docs" && rows($0).contains("docs/a.txt")
+            },
+            Key(.escape),
+            Expect("Esc chose nothing", found: { $0.app.workspace?.storyTreeSelection ?? "none" }) {
+                $0.app.workspace?.storyTreeSelection == nil
+            },
+            Press(.id(StoryID.Explorer.newfile)),
+            WaitForFocus(.id(StoryID.Explorer.namefield)),
+            Expect("the name field sits in the folder itself", found: { rows($0).joined(separator: ", ") }) {
+                rows($0).contains("\u{0}new") && !rows($0).contains("docs/\u{0}new")
+            },
+            Key(.escape),
+            Expect("the field went", found: { rows($0).joined(separator: ", ") }) { !rows($0).contains { $0.hasSuffix("\u{0}new") } },
+            Click(.treeRow("z.txt")),
+            Press(.id(StoryID.Explorer.title)),
+            Expect("the header's name chose nothing", found: { $0.app.workspace?.storyTreeSelection ?? "none" }) {
+                $0.app.workspace?.storyTreeSelection == nil
+            },
+        ]
+    }
+}
+
+/// Sticky folders: scrolled into an open folder's files, that folder and the one it sits in
+/// stay pinned at the top; a click on a pinned folder selects it and shows its row.
+final class ExplorerStickyFolders: FilesStoryline {
+    override class var tags: Set<Tag> { [.files] }
+    override class var needs: Needs { Needs(window: CGSize(width: 900, height: 480)) }
+    override class var files: [(path: String, text: String)] {
+        [("src/main.ts", "m\n")] + (0..<40).map { (String(format: "src/ui/f%02d.ts", $0), "f\n") }
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            WaitForElement(.treeRow("src")),
+            Click(.treeRow("src")),
+            WaitForElement(.treeRow("src/ui")),
+            Click(.treeRow("src/ui")),
+            WaitForElement(.treeRow("src/ui/f05.ts")),
+            Scroll(.treeRow("src/ui/f05.ts"), to: .by(330)),
+            WaitForElement(.id(StoryID.Explorer.sticky("src/ui"))),
+            WaitForElement(.id(StoryID.Explorer.sticky("src"))),
+            Snapshot("explorer-sticky-folders"),
+            Press(.id(StoryID.Explorer.sticky("src/ui"))),
+            Expect("the pinned folder chosen", found: { $0.app.workspace?.storyTreeSelection ?? "none" }) {
+                $0.app.workspace?.storyTreeSelection == "src/ui"
+            },
+            WaitForElement(.treeRow("src/ui")),
+        ]
+    }
+}
+
 /// A rename shows the new name from the first frame after Return, never the old one: a file's,
 /// and an open folder's with its rows still under it.
 final class ExplorerRenameAtOnce: FilesStoryline {

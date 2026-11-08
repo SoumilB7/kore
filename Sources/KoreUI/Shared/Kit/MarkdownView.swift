@@ -1,4 +1,5 @@
 import AppKit
+import KoreCore
 import SwiftUI
 
 /// An assistant reply's markdown, as blocks (look.md §13). While `streaming`, only settled blocks
@@ -79,8 +80,9 @@ private struct MarkdownBlockView: View {
                 .lineSpacing(TextStyle.leading)
                 .selectableText(path, text, .running)
                 .fixedSize(horizontal: false, vertical: true)
-        case .code(_, let text):
-            MarkdownCodeBlock(text: text, path: path)
+        case .code(let language, let text):
+            // Coloured once its fence closes; plain while it streams.
+            MarkdownCodeBlock(text: text, language: block.isOpen ? .plain : Language.named(language), path: path)
         case .list(let list):
             MarkdownListView(list: list, depth: listDepth, path: path)
         case .quote(let blocks):
@@ -100,8 +102,10 @@ private struct MarkdownBlockView: View {
 
 /// A fenced code block: a well that scrolls sideways (no wrap), with Copy just below it at its
 /// right edge on hover, in a row kept for it as under a message, so it covers none of the code.
+/// A fence that names its language is in the editor's colours (`SyntaxText`).
 private struct MarkdownCodeBlock: View {
     let text: String
+    let language: Language
     let path: [Int]
     @StateObject private var hovered = Local(false)
     @StateObject private var copied = Local(false)
@@ -109,7 +113,7 @@ private struct MarkdownCodeBlock: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 0) {
             SidewaysWhenWide(fade: true) {
-                Text(text)
+                code
                     .font(TextStyle.code)
                     .foregroundStyle(Theme.text)
                     .selectableText(path, text, .code)
@@ -132,6 +136,10 @@ private struct MarkdownCodeBlock: View {
         .storyAction(StoryID.Transcript.code(path).part(.hover)) { hovered.value = true }
         // The copy button is built only on hover.
         .accessibilityAction(named: "Copy") { copy() }
+    }
+
+    private var code: Text {
+        language.family == .plain ? Text(text) : Text(SyntaxText.attributed(text, language))
     }
 
     private func copy() {
