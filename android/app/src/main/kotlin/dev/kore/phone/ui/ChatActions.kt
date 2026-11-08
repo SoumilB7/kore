@@ -1,7 +1,6 @@
 package dev.kore.phone.ui
 
 import android.app.Activity
-import android.app.Dialog
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
@@ -33,39 +32,73 @@ import kotlinx.serialization.json.JsonPrimitive
  * command again; this only offers what the chat says it can take.
  */
 class ChatActions(private val activity: Activity, private val chatId: String, private val link: () -> NodeClient?) {
-    private val sheet = activity.column(14).apply { background = activity.rounded(K.surface, 14, K.line) }
-    private val sheetScroll = MaxHeightScroll(activity, activity.resources.displayMetrics.heightPixels * 2 / 5).apply {
+    /**
+     * The need-you card (spec §5): `l1`, radius 18, a warn edge at 18 %, padding 16, above the
+     * composer. Its words scroll when they must; its buttons stay in view under them.
+     */
+    private val sheet = activity.column()
+    private val cardButtons = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+    private val sheetScroll = MaxHeightScroll(activity) { room ->
+        val buttons = if (cardButtons.visibility == View.GONE) 0 else cardButtons.measuredHeight.takeIf { it > 0 } ?: activity.dp(60)
+        maxOf(activity.dp(64), cardMax(room) - buttons - activity.dp(32))
+    }.apply {
         addView(sheet)
-        visibility = View.GONE
+        // More above or below fades out at the edge, so a cut card says it scrolls.
+        isVerticalFadingEdgeEnabled = true
+        setFadingEdgeLength(activity.dp(24))
+        // Each time its height changes (the keyboard, a rotation), a cut permission card scrolls
+        // so what it would run stays in view; the overline and title give way first.
+        addOnLayoutChangeListener { v, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            val keep = cardKeep ?: return@addOnLayoutChangeListener
+            if (bottom - top == oldBottom - oldTop) return@addOnLayoutChangeListener
+            v.post { scrollTo(0, maxOf(0, minOf(keep.bottom - height, keep.top))) }
+        }
     }
-    private val status = activity.label("", 12f, K.faint).apply {
+    /** What a cut card keeps in view: a permission's command. */
+    private var cardKeep: View? = null
+
+    private val cardBox = activity.column().apply {
+        background = activity.shape(Tone.l1, Radius.card, Tone.warnCard)
+        setPadding(activity.dp(16), activity.dp(16), activity.dp(16), activity.dp(16))
+        visibility = View.GONE
+        addView(sheetScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(cardButtons, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+    private val status = activity.label("").apply {
+        type(Type.Caption)
+        setTextColor(Tone.faint)
         setOnClickListener { retry() }
         maxLines = 2
         ellipsize = android.text.TextUtils.TruncateAt.END
-        setPadding(activity.dp(4), 0, activity.dp(4), activity.dp(6))
+        setPadding(activity.dp(6), 0, activity.dp(6), activity.dp(6))
         visibility = View.GONE
     }
-    private val modePill = activity.label("", 12f, K.dim).apply {
-        background = activity.rounded(K.surface, 16, K.line)
-        setPadding(activity.dp(10), activity.dp(7), activity.dp(10), activity.dp(7))
+    /** The mode pill (spec §5): 30 high, radius 15, `l2`, an 8 dot in the mode's colour, then its name (Label). */
+    private val modePill = activity.label("").apply {
+        type(Type.Label)
+        setTextColor(Tone.text)
+        gravity = Gravity.CENTER_VERTICAL
         maxLines = 1
-        contentDescription = "Mode"
-        // Room for the model chip and Send on a 360 dp phone: the mode ellipsizes past this.
-        maxWidth = activity.dp(120)
         ellipsize = android.text.TextUtils.TruncateAt.END
+        contentDescription = "Mode"
         setOnClickListener { chooseMode() }
-        pressable(16)
+        pressFill(Tone.l2, Tone.l3, 15)
+        // Until the bar measures: the dot alone.
+        setPadding(activity.dp(11), 0, activity.dp(11), 0)
         visibility = View.GONE
     }
-    /** The chat's model and effort, quiet text beside the mode ("Atlas 5.5 · high"); a tap opens the options. */
-    private val modelChip = activity.label("", 12f, K.dim).apply {
-        setPadding(activity.dp(8), activity.dp(7), activity.dp(6), activity.dp(7))
+    /** The chat's model and effort, quiet text beside the mode ("Opus 5.5 · high"); a tap opens the options. */
+    private val modelChip = activity.label("").apply {
+        type(Type.Label)
+        setTextColor(Tone.dim)
+        typeface = android.graphics.Typeface.DEFAULT
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(activity.dp(6), 0, activity.dp(6), 0)
         maxLines = 1
-        maxWidth = activity.dp(104)
         ellipsize = android.text.TextUtils.TruncateAt.END
         contentDescription = "Model"
         setOnClickListener { chooseMode() }
-        pressable(8)
+        pressFill(null, Tone.l2, 15)
         visibility = View.GONE
     }
     /**
@@ -78,31 +111,32 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val pad = activity.dp(4)
         setPadding(pad, activity.dp(8), pad, activity.dp(8))
         setOnClickListener { chooseMode() }
-        pressable(8)
+        pressFill(null, Tone.l2, 14)
         visibility = View.GONE
     }
     /** At a plan limit: the draft goes when the limit resets (C7), as the Mac's ring beside Send. */
     private val ring = activity.label("⟳", 15f, K.warn).apply {
         gravity = Gravity.CENTER
-        background = activity.rounded(android.graphics.Color.TRANSPARENT, 16, K.warn)
+        background = activity.shape(android.graphics.Color.TRANSPARENT, 16, Tone.warn)
         contentDescription = "Send at reset"
         visibility = View.GONE
         setOnClickListener { sendAtReset() }
     }
     private val field: EditText = EditText(activity).apply {
         hint = "Message"
-        setHintTextColor(K.faint)
-        setTextColor(K.text)
-        textSize = 15f
+        type(Type.Body)
+        setHintTextColor(Tone.faint)
+        setTextColor(Tone.text)
         background = null
-        setPadding(activity.dp(14), activity.dp(10), activity.dp(14), activity.dp(4))
+        setPadding(activity.dp(16), activity.dp(11), activity.dp(16), activity.dp(6))
         // A normal text field: the keyboard's suggestions, learning and voice typing all work (an
         // incognito flag turned Gboard's mic off). Nothing typed here is a secret.
         inputType = ComposerKeys.INPUT_TYPE
         imeOptions = ComposerKeys.IME_OPTIONS
         importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         minLines = 1
-        maxLines = 6
+        // 1–6 lines, 3 in landscape (spec §5, §7).
+        maxLines = if (activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) 3 else 6
         isVerticalScrollBarEnabled = true
         isFocusable = true
         isFocusableInTouchMode = true
@@ -134,9 +168,13 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 scheduleDraft()
             }
         })
+        setOnFocusChangeListener { _, has -> ground.focused = has }
     }
-    private val action = activity.label("↑", 18f, K.bg, bold = true).apply {
-        gravity = Gravity.CENTER
+    /** Send (spec §5): 36 round; accent with an arrow when there is something to send, `l2` and dim when not, Stop while a turn runs. */
+    private val action = ImageView(activity).apply {
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        val pad = activity.dp(9)
+        setPadding(pad, pad, pad, pad)
         contentDescription = "Send"
         // While a turn runs (or a compaction): Send with something typed or attached (it queues
         // behind the turn, as on the Mac), Stop with an empty box.
@@ -144,51 +182,121 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     }
 
     private val attach = ImageView(activity).apply {
-        setImageResource(dev.kore.phone.R.drawable.ic_attach)
-        setPadding(activity.dp(7), activity.dp(7), activity.dp(7), activity.dp(7))
+        setImageResource(dev.kore.phone.R.drawable.i_clip)
+        imageTintList = android.content.res.ColorStateList.valueOf(Tone.dim)
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        val pad = activity.dp(8)
+        setPadding(pad, pad, pad, pad)
         contentDescription = "Attach"
+        pressFill(null, Tone.l2, 18)
         setOnClickListener { if (uploadsOn()) chooseAttachment() else quiet("Uploads arrive with Kore's next update.") }
     }
+    /** The attachments, inside the composer above the field: 52 thumbnails, 8 apart. */
     private val chips = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
     private val chipsRow = HorizontalScrollView(activity).apply {
         isHorizontalScrollBarEnabled = false
+        clipToPadding = false
+        setPadding(activity.dp(10), activity.dp(5), activity.dp(10), 0)
         addView(chips)
         visibility = View.GONE
     }
-    private val slashList = activity.column().apply { background = activity.rounded(K.surface, 12, K.line) }
-    private val slashScroll = MaxHeightScroll(activity, activity.dp(220)).apply {
+    private val slashList = activity.column().apply { background = activity.shape(Tone.l1, Radius.menu, Tone.hair2) }
+    private val slashScroll = MaxHeightScroll(activity) { minOf(activity.dp(220), maxOf(activity.dp(96), it - composerHeight())) }.apply {
         addView(slashList)
         visibility = View.GONE
     }
 
+    // What the bar's step-down picks from (spec §5): the mode's name and dot, the model's long and short text.
+    private var modeText = ""
+    private var modelFull: String? = null
+    private var modelShort: String? = null
+
+    /** The bar under the field: Attach, the mode pill, the model text, Arsenal, then Send at the end. */
+    private inner class ComposerRow : LinearLayout(activity) {
+        init {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = activity.dp(44)
+            setPadding(activity.dp(6), activity.dp(2), activity.dp(6), activity.dp(6))
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            if (MeasureSpec.getMode(widthMeasureSpec) != MeasureSpec.UNSPECIFIED) {
+                val fixed = (0 until childCount).map { getChildAt(it) }
+                    .filter { it.visibility != View.GONE && it !== modePill && it !== modelChip }
+                    .sumOf { val lp = it.layoutParams as LayoutParams; maxOf(lp.width, 0) + lp.marginStart + lp.marginEnd }
+                fit(MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight - fixed)
+            }
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
+    }
+
+    /** Takes the first step that fits [room] px (spec §5 step-down); Attach, Arsenal and Send never go. */
+    private fun fit(room: Int) {
+        val gap = activity.dp(6)
+        val pill = if (modePill.visibility == View.GONE) 0 else modePill.paint.measureText(modeText).toInt() + activity.dp(9 + 8 + 7 + 12) + gap
+        val chrome = modelChip.paddingLeft + modelChip.paddingRight
+        val full = modelFull?.let { modelChip.paint.measureText(it).toInt() + chrome } ?: 0
+        val short = modelShort?.let { modelChip.paint.measureText(it).toInt() + chrome } ?: 0
+        val step = ComposerFit.step(room, pill, full, short)
+        val label = if (step == ComposerFit.Step.DotOnly) "" else modeText
+        if (modePill.text.toString() != label) {
+            modePill.text = label
+            if (label.isEmpty()) {
+                modePill.compoundDrawablePadding = 0
+                modePill.setPadding(activity.dp(11), 0, activity.dp(11), 0)
+            } else {
+                modePill.compoundDrawablePadding = activity.dp(7)
+                modePill.setPadding(activity.dp(9), 0, activity.dp(12), 0)
+            }
+        }
+        val model = when (step) {
+            ComposerFit.Step.Full -> modelFull
+            ComposerFit.Step.ShortModel -> modelShort
+            else -> null
+        }
+        if (modelChip.text.toString() != (model ?: "")) modelChip.text = model ?: ""
+        modelChip.visibility = if (model != null) View.VISIBLE else View.GONE
+    }
+
+    private val ground = ComposerGround(activity.resources.displayMetrics.density)
+    private val bar = ComposerRow().apply {
+        addView(attach, LinearLayout.LayoutParams(activity.dp(36), activity.dp(36)))
+        addView(modePill, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(30)).apply { marginStart = activity.dp(6) })
+        addView(modelChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, activity.dp(30)))
+        addView(arsenalMark, LinearLayout.LayoutParams(activity.dp(28), activity.dp(36)))
+        addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
+        addView(ring, LinearLayout.LayoutParams(activity.dp(32), activity.dp(32)).apply { marginEnd = activity.dp(8) })
+        addView(action, LinearLayout.LayoutParams(activity.dp(36), activity.dp(36)))
+    }
+    /** The composer (spec §5): `l1`, radius 22, a hair2 edge (accent while typing) and the lift. */
+    private val box = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        background = ground
+        addView(chipsRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(field, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
     val view: View = activity.column().apply {
-        setPadding(activity.dp(12), activity.dp(6), activity.dp(12), activity.dp(10))
-        addView(sheetScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = activity.dp(8) })
+        setPadding(activity.dp(12), activity.dp(8), activity.dp(12), activity.dp(10))
+        // The composer's lift draws above it, over the transcript's end.
+        clipChildren = false
+        clipToPadding = false
+        addView(cardBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = activity.dp(10) })
         addView(slashScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = activity.dp(8) })
         addView(status)
-        addView(chipsRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = activity.dp(8) })
-        // One container, as Kore's composer on the Mac: the message on top, then a slim bar with
-        // attach and the mode on the left and Send (Stop while running) on the right.
-        addView(LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            background = activity.rounded(K.surface, 14, K.line)
-            addView(field, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(activity.dp(6), 0, activity.dp(6), activity.dp(6))
-                addView(attach, LinearLayout.LayoutParams(activity.dp(36), activity.dp(36)))
-                addView(modePill, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    marginStart = activity.dp(4)
-                })
-                addView(modelChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-                addView(arsenalMark, LinearLayout.LayoutParams(activity.dp(28), activity.dp(36)))
-                addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
-                addView(ring, LinearLayout.LayoutParams(activity.dp(32), activity.dp(32)).apply { marginEnd = activity.dp(8) })
-                addView(action, LinearLayout.LayoutParams(activity.dp(36), activity.dp(36)))
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, activity.dp(42)))
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(box, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
+
+    /** The composer's height as last laid out (before its first layout: a one-line field and the bar). */
+    private fun composerHeight(): Int = box.measuredHeight.takeIf { it > 0 } ?: activity.dp(96)
+
+    /**
+     * The card takes at most half the space above the composer (spec §5, §7), out of [room]: what
+     * the chat's column has below the bar now, so a keyboard shrinks the card, never the composer.
+     */
+    private fun cardMax(room: Int): Int = maxOf(activity.dp(96), (room - composerHeight()) / 2)
 
     private var chat: JsonObject? = null
     private var snapshot: JsonObject? = null
@@ -245,17 +353,27 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         // The field is always there and always takes a tap; only Send waits for the chat.
         field.alpha = if (chat == null || canSend) 1f else 0.6f
         val mode = chat?.let { modeLabel(it, it.obj("mode")?.str("id")) }
-        modePill.text = mode?.let { m ->
-            android.text.SpannableStringBuilder().append("●", android.text.style.ForegroundColorSpan(modeColor(chat.obj("mode")?.get("level").int())), 0).append("  $m")
-        } ?: ""
+        // The pill's words are set by the bar's step-down (fit), which may show only its dot.
+        modeText = mode ?: ""
+        val dot = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(modeColor(chat?.obj("mode")?.get("level").int()))
+            setSize(activity.dp(8), activity.dp(8))
+        }
+        modePill.setCompoundDrawablesRelativeWithIntrinsicBounds(dot, null, null, null)
         modePill.visibility = if (mode != null) View.VISIBLE else View.GONE
         modePill.contentDescription = mode?.let { "Mode: $it" } ?: "Mode"
         val controls = chat?.obj("controls")
         val chip = controls?.let {
             ControlModel.modelChip(ControlModel.models(snapshot, chat.str("provider")), want["model"] ?: it.str("modelId"), chat.str("model"), want["effort"] ?: it.str("effort"))
         }
-        modelChip.text = chip ?: ""
-        modelChip.visibility = if (chip != null) View.VISIBLE else View.GONE
+        if (chip != modelFull) {
+            modelFull = chip
+            modelShort = chip?.substringBefore(" · ")
+            modelChip.text = ""
+        }
+        // The bar measures again and takes the step that fits (spec §5).
+        bar.requestLayout()
         val tier = chat?.str("arsenal")?.takeIf { it != "off" }
         arsenalMark.visibility = if (tier != null) View.VISIBLE else View.GONE
         arsenalMark.imageTintList = android.content.res.ColorStateList.valueOf(arsenalTint(tier))
@@ -318,22 +436,16 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val look = if (running && !hasSomething) 2 else if (ready) 1 else 0
         if (look == actionLook) return
         actionLook = look
-        if (look == 2) {
-            action.text = "■"
-            action.textSize = 11f
-            action.setTextColor(STOP_INK)
-            action.contentDescription = "Stop"
-            action.background = activity.rounded(STOP_GROUND, 12)
-            action.isEnabled = true
-        } else {
-            action.text = "↑"
-            action.textSize = 18f
-            action.contentDescription = "Send"
-            action.setTextColor(if (ready) K.onAccent else K.dim)
-            action.background = activity.rounded(if (ready) K.accent else K.raised, 12)
-            action.isEnabled = ready
+        val (icon, ink, fill, pressed) = when (look) {
+            2 -> listOf(dev.kore.phone.R.drawable.i_stop, Tone.text, Tone.l2, Tone.l3)
+            1 -> listOf(dev.kore.phone.R.drawable.i_up, Tone.onAccent, Tone.accent, Tone.b400)
+            else -> listOf(dev.kore.phone.R.drawable.i_up, Tone.dim, Tone.l2, Tone.l3)
         }
-        action.pressable(12)
+        action.setImageResource(icon)
+        action.imageTintList = android.content.res.ColorStateList.valueOf(ink)
+        action.contentDescription = if (look == 2) "Stop" else "Send"
+        action.isEnabled = look != 0
+        action.pressFill(fill, pressed, 18)
     }
 
     /** One line at most: what just happened, else why sending is off. */
@@ -403,35 +515,54 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         return caps.any { (it as? kotlinx.serialization.json.JsonPrimitive)?.content == name }
     }
 
+    /** The Attach sheet (spec §6): three tiles, Photos, Camera and File, and the size limit under them. */
     private fun chooseAttachment() {
-        val dialog = Dialog(activity)
-        val list = activity.column(16).apply { background = activity.rounded(K.surface, 16, K.line) }
-        fun item(title: String, go: () -> Unit) = list.addView(activity.label(title, 16f, K.text).apply {
-            setPadding(activity.dp(4), activity.dp(13), activity.dp(4), activity.dp(13))
-            setOnClickListener { dialog.dismiss(); go() }
-        })
-        item("Photo library") {
-            activity.startActivityForResult(Intent(MediaStore.ACTION_PICK_IMAGES), PICK)
+        lateinit var s: Sheet
+        fun tile(icon: Int, title: String, go: () -> Unit) = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(activity.dp(12), activity.dp(16), activity.dp(12), activity.dp(16))
+            pressFill(Tone.l2, Tone.l3, Radius.card)
+            contentDescription = title
+            setOnClickListener { s.dismiss(); go() }
+            addView(android.widget.FrameLayout(activity).apply {
+                background = activity.shape(Tone.l3, 16)
+                addView(ImageView(activity).apply {
+                    setImageResource(icon)
+                    imageTintList = android.content.res.ColorStateList.valueOf(Tone.b200)
+                }, android.widget.FrameLayout.LayoutParams(activity.dp(24), activity.dp(24), Gravity.CENTER))
+            }, LinearLayout.LayoutParams(activity.dp(48), activity.dp(48)))
+            addView(activity.label(title).apply { type(Type.Label); setTextColor(Tone.text); gravity = Gravity.CENTER },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = activity.dp(10) })
         }
-        item("Camera") {
-            val dir = java.io.File(activity.cacheDir, "shots").apply { mkdirs() }
-            val file = java.io.File(dir, "shot-${System.currentTimeMillis()}.jpg")
-            val uri = androidx.core.content.FileProvider.getUriForFile(activity, activity.packageName + ".files", file)
-            shot = uri
-            activity.startActivityForResult(
-                Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT, uri)
-                    .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION), CAMERA)
+        val tiles = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(activity.dp(4), 0, activity.dp(4), 0)
+            val go = listOf(
+                tile(dev.kore.phone.R.drawable.i_image, "Photos") { activity.startActivityForResult(Intent(MediaStore.ACTION_PICK_IMAGES), PICK) },
+                tile(dev.kore.phone.R.drawable.i_camera, "Camera") {
+                    val dir = java.io.File(activity.cacheDir, "shots").apply { mkdirs() }
+                    val file = java.io.File(dir, "shot-${System.currentTimeMillis()}.jpg")
+                    val uri = androidx.core.content.FileProvider.getUriForFile(activity, activity.packageName + ".files", file)
+                    shot = uri
+                    activity.startActivityForResult(
+                        Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION), CAMERA)
+                },
+                tile(dev.kore.phone.R.drawable.i_file_doc, "File") {
+                    activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), PICK)
+                },
+            )
+            go.forEachIndexed { i, t -> addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = activity.dp(10) }) }
         }
-        item("File") {
-            activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), PICK)
+        s = Sheet(activity).show {
+            title("Attach")
+            custom(tiles)
+            custom(activity.label("Up to 12 MB each").apply {
+                type(Type.Caption); setTextColor(Tone.faint); gravity = Gravity.CENTER
+                setPadding(0, activity.dp(14), 0, 0)
+            })
         }
-        dialog.setContentView(list)
-        dialog.window?.apply {
-            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
-            setGravity(Gravity.BOTTOM)
-            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-        dialog.show()
     }
 
     /** From the activity: a picked or shot file. */
@@ -470,27 +601,41 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         }
     }
 
+    /** The attachments as 52 thumbnails (radius 12), each with its × as a 20 circle on `l3`; a file shows its icon. */
     private fun showChips() {
         chips.removeAllViews()
         for (a in attachments) {
-            val chip = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = activity.rounded(K.surface, 10, K.line)
-                setPadding(activity.dp(6), activity.dp(6), activity.dp(8), activity.dp(6))
+            val tile = android.widget.FrameLayout(activity).apply {
+                clipChildren = false
                 alpha = if (a.blobId != null) 1f else 0.6f
             }
-            if (a.thumb != null) chip.addView(ImageView(activity).apply {
-                setImageBitmap(a.thumb)
-                scaleType = ImageView.ScaleType.CENTER_CROP
-            }, LinearLayout.LayoutParams(activity.dp(32), activity.dp(32)).apply { marginEnd = activity.dp(6) })
-            chip.addView(activity.label(a.name, 12f, K.dim).apply { maxLines = 1; maxWidth = activity.dp(140); ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
-            chip.addView(activity.label("×", 16f, K.dim).apply {
-                setPadding(activity.dp(8), 0, activity.dp(2), 0)
+            tile.addView(ImageView(activity).apply {
+                background = activity.shape(Tone.l2, 12, Tone.hair2)
+                clipToOutline = true
+                contentDescription = a.name
+                if (a.thumb != null) { setImageBitmap(a.thumb); scaleType = ImageView.ScaleType.CENTER_CROP }
+                else {
+                    setImageResource(dev.kore.phone.R.drawable.i_file_doc)
+                    imageTintList = android.content.res.ColorStateList.valueOf(Tone.b200)
+                    scaleType = ImageView.ScaleType.CENTER_INSIDE
+                    val pad = activity.dp(14)
+                    setPadding(pad, pad, pad, pad)
+                }
+            }, android.widget.FrameLayout.LayoutParams(activity.dp(52), activity.dp(52)).apply { topMargin = activity.dp(5); marginEnd = activity.dp(5) })
+            tile.addView(ImageView(activity).apply {
+                setImageResource(dev.kore.phone.R.drawable.i_x)
+                imageTintList = android.content.res.ColorStateList.valueOf(Tone.text)
+                val pad = activity.dp(4)
+                setPadding(pad, pad, pad, pad)
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.OVAL
+                    setColor(Tone.l3)
+                    setStroke(activity.dp(2), Tone.l1)
+                }
                 contentDescription = "Remove ${a.name}"
                 setOnClickListener { attachments.remove(a); showChips() }
-            })
-            chips.addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = activity.dp(6) })
+            }, android.widget.FrameLayout.LayoutParams(activity.dp(22), activity.dp(22), Gravity.TOP or Gravity.END))
+            chips.addView(tile, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = activity.dp(3) })
         }
         chipsRow.visibility = if (attachments.isEmpty()) View.GONE else View.VISIBLE
         refreshAction()
@@ -509,8 +654,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             slashList.addView(LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(activity.dp(14), activity.dp(10), activity.dp(14), activity.dp(10))
-                addView(activity.label("/$name", 14f, K.text, mono = true))
-                if (description.isNotEmpty()) addView(activity.label(description, 12f, K.faint).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                pressFill(null, Tone.l2, Radius.menuRow)
+                addView(activity.label("/$name").apply { type(Type.Mono); setTextColor(Tone.text) })
+                if (description.isNotEmpty()) addView(activity.label(description).apply { type(Type.Caption); setTextColor(Tone.faint); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
                 setOnClickListener {
                     field.setText("/$name ")
                     field.setSelection(field.text.length)
@@ -841,65 +987,177 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 
     // Cards
 
+    /**
+     * The need-you card (spec §5): "Needs you" over its title (Headline). A permission shows what it
+     * runs in a mono block (the owner never allows without seeing it), then Deny and Allow. A
+     * question lists its options as rows; with one single-choice question a tap answers, else
+     * rows toggle and Submit sends them. "Something else…" opens a field for the CLI's free answer.
+     */
     private fun showCard(card: JsonObject?) {
         sheet.removeAllViews()
-        if (card == null) { sheetScroll.visibility = View.GONE; return }
-        sheetScroll.visibility = View.VISIBLE
+        cardKeep = null
+        cardButtons.removeAllViews()
+        cardButtons.visibility = View.GONE
+        if (card == null) { cardBox.visibility = View.GONE; return }
+        cardBox.visibility = View.VISIBLE
         val cardId = card.str("id") ?: return
-        sheet.addView(activity.label(card.str("title") ?: "Needs you", 15f, K.text, bold = true))
-        // What it asks ("Run a command"), then what exactly (the command itself, mono, in a box):
-        // the owner never allows a permission without seeing what it runs.
-        val detail = card.str("detail")?.takeIf { it.isNotBlank() }
-        val body = card.str("body")?.takeIf { it.isNotBlank() && it != detail }
-        detail?.let { sheet.addView(activity.label(it, 13f, K.dim).apply { setPadding(0, activity.dp(4), 0, activity.dp(2)) }) }
+        val dp = activity::dp
+        fun lp(top: Int = 0) = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(top) }
+        sheet.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(activity.point(Tone.warn, 6))
+            // The tool or ask it comes from ("Bash") follows the overline, quiet.
+            val from = card.str("title")?.takeIf { card.str("detail")?.isNotBlank() == true }
+            addView(activity.label(if (from != null) "Needs you · $from" else "Needs you").apply {
+                type(Type.Caption)
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, 500, false)
+                setTextColor(Tone.warn)
+                setPadding(dp(6), 0, 0, 0)
+            })
+        }, lp())
+        // Its headline is what it asks ("Run a command?"), the Mac's detail, else its title.
+        val title = card.str("detail")?.takeIf { it.isNotBlank() }?.let { if (card.str("kind") == "permission" && !it.endsWith("?")) "$it?" else it }
+            ?: card.str("title") ?: "Needs you"
+        sheet.addView(activity.label(title).apply { type(Type.Headline); setTextColor(Tone.text) }, lp(6))
+        val permission = card.str("kind") == "permission"
+        val body = card.str("body")?.takeIf { it.isNotBlank() && it != title }
         body?.let {
-            val permission = card.str("kind") == "permission"
-            sheet.addView(activity.label(it.take(600), 13f, if (permission) K.text else K.dim, mono = permission).apply {
-                setPadding(activity.dp(if (permission) 10 else 0), activity.dp(8), activity.dp(if (permission) 10 else 0), activity.dp(8))
-                if (permission) background = activity.rounded(K.bg, 10, K.line)
+            val shown = activity.label(it.take(600))
+            if (permission) cardKeep = shown
+            sheet.addView(shown.apply {
+                if (permission) {
+                    type(Type.Mono)
+                    setTextColor(Tone.text)
+                    background = activity.shape(Tone.well, 12, Tone.hair)
+                    setPadding(dp(14), dp(10), dp(14), dp(10))
+                } else { type(Type.Callout); setTextColor(Tone.dim) }
                 setTextIsSelectable(true)
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = activity.dp(4); bottomMargin = activity.dp(4) })
+            }, lp(10))
         }
         if (card.str("kind") == "signIn") {
-            sheet.addView(activity.label("Answer this on the Mac.", 13f, K.faint))
+            sheet.addView(activity.label("Answer this on the Mac.").apply { type(Type.Callout); setTextColor(Tone.faint) }, lp(10))
             return
         }
-        // Questions: choose labels per question, then submit them together.
+        val actions = card.objs("actions").filter { a ->
+            // Only what the phone may do: the Mac refuses the rest anyway.
+            val id = a.str("id")
+            id != null && !a.bool("refused") && id != "allowAlways" && id != "approvePlanAcceptEdits"
+        }
+        val questions = card.objs("questions")
+        val canSubmit = actions.any { it.str("id") == "submitAnswers" }
+        // One single-choice question: a tap on an option is the answer.
+        val tapAnswers = canSubmit && questions.size == 1 && !questions[0].bool("multiple")
         val chosen = LinkedHashMap<String, MutableList<String>>()
-        for (q in card.objs("questions")) {
+        val others = LinkedHashMap<String, EditText>()
+        for (q in questions) {
             val qid = q.str("id") ?: q.str("text") ?: continue
             val multiple = q.bool("multiple")
-            sheet.addView(activity.label(q.str("text") ?: "", 14f, K.text).apply { setPadding(0, activity.dp(8), 0, activity.dp(4)) })
-            val options = activity.column()
+            q.str("text")?.takeIf { it.isNotBlank() && it != title }?.let {
+                sheet.addView(activity.label(it).apply { type(Type.Body); setTextColor(Tone.text) }, lp(if (sheet.childCount > 2) 14 else 8))
+            }
+            val rows = ArrayList<Pair<String, LinearLayout>>()
+            fun mark() = rows.forEach { (label, row) ->
+                val on = chosen[qid]?.contains(label) == true
+                row.pressFill(if (on) Tone.accentFill else Tone.l2, Tone.l3, Radius.row, if (on) Tone.b200 else null)
+                (row.getChildAt(1) as ImageView).visibility = if (on || tapAnswers) View.VISIBLE else View.INVISIBLE
+            }
             for (o in q.objs("options")) {
                 val label = o.str("label") ?: continue
-                options.addView(pill(label, K.bg, K.text) { b ->
+                val row = optionRow(label, o.str("description"), if (tapAnswers) dev.kore.phone.R.drawable.i_chevron else dev.kore.phone.R.drawable.i_check)
+                row.setOnClickListener {
+                    if (tapAnswers) return@setOnClickListener answer(cardId, "submitAnswers", mapOf(qid to listOf(label)))
                     val list = chosen.getOrPut(qid) { mutableListOf() }
-                    if (!multiple) { list.clear(); for (i in 0 until options.childCount) options.getChildAt(i).alpha = 0.55f }
-                    if (list.contains(label)) list.remove(label) else list.add(label)
-                    b.alpha = if (list.contains(label)) 1f else 0.55f
-                }.apply {
-                    alpha = 0.55f
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = activity.dp(6) }
-                })
+                    if (list.contains(label)) list.remove(label) else { if (!multiple) list.clear(); list.add(label) }
+                    mark()
+                }
+                rows += label to row
+                sheet.addView(row, lp(8))
             }
-            sheet.addView(options)
+            mark()
+            if (q.bool("other")) {
+                val secret = q.bool("secret")
+                lateinit var other: View
+                other = activity.label("Something else…").apply {
+                    type(Type.Body)
+                    setTextColor(Tone.faint)
+                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                    pressFill(null, Tone.l2, Radius.row, Tone.hair2)
+                    setOnClickListener {
+                        // The field takes its place; with a single question, Send answers with it.
+                        val at = sheet.indexOfChild(other)
+                        sheet.removeView(other)
+                        val input = EditText(activity).apply {
+                            type(Type.Body)
+                            setTextColor(Tone.text)
+                            setHintTextColor(Tone.faint)
+                            hint = "Your answer"
+                            inputType = if (secret) android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD else ComposerKeys.INPUT_TYPE
+                            background = activity.shape(Tone.bg, Radius.row, Tone.focus)
+                            setPadding(dp(14), dp(12), dp(14), dp(12))
+                            minLines = 1
+                            maxLines = 4
+                        }
+                        others[qid] = input
+                        sheet.addView(input, at, lp(8))
+                        // Send joins the card's pinned buttons, beside Skip, so the keyboard never hides it.
+                        if (tapAnswers) {
+                            cardButtons.visibility = View.VISIBLE
+                            (cardButtons.layoutParams as LinearLayout.LayoutParams).topMargin = dp(12)
+                            cardButtons.addView(activity.button("Send", Btn.Primary) {
+                                val text = input.text.toString().trim()
+                                if (text.isNotEmpty()) answer(cardId, "submitAnswers", mapOf(qid to listOf(text)))
+                            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (cardButtons.childCount > 0) marginStart = dp(10) })
+                        }
+                        input.requestFocus()
+                        activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.showSoftInput(input, 0)
+                    }
+                }
+                sheet.addView(other, lp(8))
+            }
         }
-        val row = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            setPadding(0, activity.dp(10), 0, 0)
+        // The card's buttons, side by side (Deny secondary, Allow primary); a tap-answered question keeps only Skip, quiet.
+        val shown = if (tapAnswers) actions.filter { it.str("id") != "submitAnswers" } else actions
+        if (shown.isEmpty()) return
+        val row = cardButtons
+        // Primary last (at the thumb's side), as the spec's Deny · Allow.
+        shown.sortedBy { if (it.str("style") == "primary") 1 else 0 }.forEachIndexed { i, a ->
+            val id = a.str("id")!!
+            // Spec §5: Deny is secondary beside Allow, even where the Mac calls it destructive.
+            val role = when {
+                a.str("style") == "primary" -> Btn.Primary
+                tapAnswers -> Btn.Quiet
+                else -> Btn.Secondary
+            }
+            row.addView(activity.button(a.str("label") ?: id, role) {
+                val answers = if (id != "submitAnswers") null else LinkedHashMap<String, List<String>>().apply {
+                    chosen.forEach { (k, v) -> put(k, v.toList()) }
+                    others.forEach { (k, f) -> f.text.toString().trim().takeIf { it.isNotEmpty() }?.let { put(k, (get(k) ?: emptyList()) + it) } }
+                }
+                answer(cardId, id, answers)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(10) })
         }
-        for (a in card.objs("actions")) {
-            val id = a.str("id") ?: continue
-            // Only what the phone may do: the Mac refuses the rest anyway.
-            if (a.bool("refused") || id == "allowAlways" || id == "approvePlanAcceptEdits") continue
-            val primary = a.str("style") == "primary"
-            row.addView(pill(a.str("label") ?: id, if (primary) K.accent else K.bg, if (primary) K.bg else K.text) {
-                answer(cardId, id, if (id == "submitAnswers") chosen else null)
-            }.apply { layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = activity.dp(8) } })
-        }
-        sheet.addView(row)
+        row.visibility = View.VISIBLE
+        (row.layoutParams as LinearLayout.LayoutParams).topMargin = dp(if (permission) 14 else 12)
+    }
+
+    /** A question's option (spec §5): `l2`, radius 14, padding 12 × 14; its label (Body medium), one Callout line, then [end]. */
+    private fun optionRow(label: String, description: String?, end: Int) = LinearLayout(activity).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(activity.dp(14), activity.dp(12), activity.dp(14), activity.dp(12))
+        contentDescription = if (description.isNullOrBlank()) label else "$label. $description"
+        addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(activity.label(label).apply { type(Type.BodyMedium); setTextColor(Tone.text) })
+            if (!description.isNullOrBlank()) addView(activity.label(description).apply {
+                type(Type.Callout); setTextColor(Tone.dim); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(ImageView(activity).apply {
+            setImageResource(end)
+            imageTintList = android.content.res.ColorStateList.valueOf(if (end == dev.kore.phone.R.drawable.i_check) Tone.accent else Tone.faint)
+        }, LinearLayout.LayoutParams(activity.dp(18), activity.dp(18)).apply { marginStart = activity.dp(12) })
     }
 
     private fun answer(cardId: String, action: String, answers: Map<String, List<String>>?) {
@@ -919,17 +1177,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         go()
     }
 
-    private fun pill(title: String, fill: Int, ink: Int, onTap: (TextView) -> Unit): TextView =
-        activity.label(title, 14f, ink, bold = true).apply {
-            gravity = Gravity.CENTER
-            background = activity.rounded(fill, 10, if (fill == K.accent) null else K.line)
-            setPadding(activity.dp(16), activity.dp(10), activity.dp(16), activity.dp(10))
-            setOnClickListener { onTap(this) }
-        }
-
     companion object {
-        private val STOP_GROUND = Tone.l2
-        private val STOP_INK = Tone.text
         /** The highest mode level a raise from the phone asks for (Auto); Bypass and Full access never. */
         const val RAISE_CAP = 3
         const val PICK = 41
@@ -942,9 +1190,12 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     }
 
     /** A scroll that grows with its content up to a cap, so a long card never pushes the composer away. */
-    private class MaxHeightScroll(context: android.content.Context, private val max: Int) : ScrollView(context) {
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) =
-            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(max, MeasureSpec.AT_MOST))
+    private class MaxHeightScroll(context: android.content.Context, private val max: (Int) -> Int) : ScrollView(context) {
+        /** [max] gets the height its parent offers (all of it when unbounded). */
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val room = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) Int.MAX_VALUE / 2 else MeasureSpec.getSize(heightMeasureSpec)
+            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(max(room), MeasureSpec.AT_MOST))
+        }
     }
 }
 

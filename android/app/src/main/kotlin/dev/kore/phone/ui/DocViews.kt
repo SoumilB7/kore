@@ -24,8 +24,9 @@ object DocViews {
     private const val BODY = 15f
     /** The least a table column gets in a grid; under it the table stacks (spec §5). */
     private const val COL_MIN = 72
-    /** A stacked card's header column. */
+    /** A stacked card's header column: at least this, at most [STACK_HEADER_CAP] of the card. */
     private const val STACK_HEADER = 52
+    private const val STACK_HEADER_CAP = 0.4f
     private const val CELL_SP = 14f
     private const val LINE = 1.4f
     private val CODE = Tone.code
@@ -68,20 +69,18 @@ object DocViews {
         setTextIsSelectable(true)
     }
 
-    /** A fenced block: its own surface box, monospaced, scrolling sideways so lines never wrap. */
+    /** A fenced block (spec §5): the well, radius 12, a hair edge, Mono, scrolling sideways so lines never wrap. */
     private fun code(ctx: Context, body: String, lang: String?) = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
-        background = ctx.rounded(K.surface, 8, K.line)
-        setPadding(ctx.dp(12), ctx.dp(8), ctx.dp(12), ctx.dp(10))
-        if (!lang.isNullOrBlank()) addView(ctx.label(lang, 11f, K.faint).apply { setPadding(0, 0, 0, ctx.dp(4)) })
+        background = ctx.shape(Tone.well, 12, Tone.hair)
+        setPadding(ctx.dp(14), ctx.dp(10), ctx.dp(14), ctx.dp(10))
+        if (!lang.isNullOrBlank()) addView(ctx.label(lang).apply { type(Type.Caption); setTextColor(Tone.faint); setPadding(0, 0, 0, ctx.dp(4)) })
         addView(HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             addView(TextView(ctx).apply {
                 text = body
-                typeface = Typeface.MONOSPACE
-                textSize = 13f
+                type(Type.Mono)
                 setTextColor(K.text)
-                setLineSpacing(0f, 1.25f)
                 setHorizontallyScrolling(true)
                 setTextIsSelectable(true)
             })
@@ -152,7 +151,7 @@ object DocViews {
             val (natural, words) = measure()
             when (val fit = TableFit.fit(natural, words, width, context.dp(COL_MIN))) {
                 is TableFit.Fit.Grid -> grid(fit.widths)
-                TableFit.Fit.Stacked -> stacked()
+                TableFit.Fit.Stacked -> stacked(width)
             }
         }
 
@@ -165,7 +164,7 @@ object DocViews {
         }
 
         private fun grid(widths: List<Int>) {
-            background = context.rounded(K.surface, 8, K.line)
+            background = context.shape(Tone.l1, 12, Tone.hair)
             val all = listOf(header to true) + rows.map { it to false }
             all.forEachIndexed { i, (cells, bold) ->
                 if (cells.isEmpty()) return@forEachIndexed
@@ -173,39 +172,53 @@ object DocViews {
                     orientation = HORIZONTAL
                     widths.forEachIndexed { c, w -> addView(cell(cells.getOrNull(c) ?: "", bold), LayoutParams(w, LayoutParams.WRAP_CONTENT)) }
                 })
-                if (i < all.lastIndex) addView(View(context).apply { setBackgroundColor(K.line) }, LayoutParams(LayoutParams.MATCH_PARENT, 1))
+                if (i < all.lastIndex) addView(View(context).apply { setBackgroundColor(Tone.hair) }, LayoutParams(LayoutParams.MATCH_PARENT, 1))
             }
         }
 
-        /** One card per row: the first column as its title, then each other column as "Header  value". */
-        private fun stacked() {
+        /**
+         * One card per row (spec §5): `l1`, radius 12, padding 10 × 14, 6 apart; the first column as
+         * its title (Body medium), then "Header  value" lines. The header column fits the widest
+         * header up to 40 % of the card ([TableFit.headers]); a header too long for it goes above.
+         */
+        private fun stacked(width: Int) {
             background = null
+            val inner = width - context.dp(28)
+            val paint = TextView(context).apply { type(Type.Callout) }.paint
+            val heads = (1 until columns()).map { header.getOrNull(it)?.toString().orEmpty() }
+            val fit = TableFit.headers(
+                heads.map { paint.measureText(it).toInt() + 1 },
+                heads.map { h -> (h.split(' ', '\n').maxOfOrNull { paint.measureText(it) } ?: 0f).toInt() + 1 },
+                context.dp(STACK_HEADER), (inner * STACK_HEADER_CAP).toInt(),
+            )
             rows.forEachIndexed { i, row ->
                 addView(LinearLayout(context).apply {
                     orientation = VERTICAL
-                    background = context.rounded(K.surface, 12, K.line)
+                    background = context.shape(Tone.l1, 12, Tone.hair)
                     setPadding(context.dp(14), context.dp(10), context.dp(14), context.dp(10))
                     addView(TextView(context).apply {
                         text = row.firstOrNull() ?: ""
-                        textSize = 15f
-                        setTextColor(K.text)
-                        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                        type(Type.BodyMedium)
+                        setTextColor(Tone.text)
                     })
                     for (c in 1 until columns()) {
                         val value = row.getOrNull(c)?.takeIf { it.isNotEmpty() } ?: continue
+                        val above = fit.above.getOrElse(c - 1) { false }
                         addView(LinearLayout(context).apply {
-                            orientation = HORIZONTAL
+                            orientation = if (above) VERTICAL else HORIZONTAL
                             setPadding(0, context.dp(4), 0, 0)
                             addView(TextView(context).apply {
                                 text = header.getOrNull(c) ?: ""
-                                textSize = 13f
-                                setTextColor(K.faint)
-                            }, LayoutParams(context.dp(STACK_HEADER), LayoutParams.WRAP_CONTENT).apply { marginEnd = context.dp(8) })
+                                type(Type.Callout)
+                                setTextColor(Tone.faint)
+                            }, if (above) LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+                            else LayoutParams(fit.width, LayoutParams.WRAP_CONTENT).apply { marginEnd = context.dp(10) })
                             addView(TextView(context).apply {
                                 text = value
                                 textSize = CELL_SP
-                                setTextColor(K.dim)
-                            }, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+                                setTextColor(Tone.text)
+                            }, if (above) LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+                            else LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
                         })
                     }
                 }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { if (i > 0) topMargin = context.dp(6) })

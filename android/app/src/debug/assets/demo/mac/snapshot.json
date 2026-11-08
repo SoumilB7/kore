@@ -1,1 +1,330 @@
-{"t": "snapshot", "rev": 1, "windows": [{"id": "w_kore", "name": "kore", "path": "~/Code/Projects/kore", "activeTabId": "T1", "tabs": [{"id": "T1", "kind": "chat", "chatId": "6E1F0C2A-0000-4000-8000-000000000001", "title": "Checkout totals are off"}, {"id": "T2", "kind": "chat", "chatId": "6E1F0C2A-0000-4000-8000-000000000002", "title": "Phone logs, a day kept"}, {"id": "T3", "kind": "chat", "chatId": "6E1F0C2A-0000-4000-8000-000000000004", "title": "Tables fit the screen"}]}, {"id": "w_onf", "name": "OnFinance", "path": "~/Code/Onfinance", "activeTabId": "T4", "tabs": [{"id": "T4", "kind": "chat", "chatId": "6E1F0C2A-0000-4000-8000-000000000003", "title": "Release 0.3.1 notes"}, {"id": "T5", "kind": "chat", "chatId": "6E1F0C2A-0000-4000-8000-000000000005", "title": "Box sync stalls on big clones"}]}], "chats": [{"id": "6E1F0C2A-0000-4000-8000-000000000001", "title": "Checkout totals are off", "state": "needsYou", "provider": "claude", "running": true, "queued": 0, "model": "Opus 5.5", "mode": {"id": "default", "level": 1}, "modeIds": ["default", "plan", "acceptEdits", "auto"], "allowedModeIds": ["default", "plan", "acceptEdits", "auto"], "cards": [{"id": "toolu_01", "kind": "permission", "title": "Bash", "detail": "Run a command", "body": "npm test -- checkout --runInBand", "digest": "QDLzMU9MaA9sb6xXpcre3SCt5Cn1bh5/Kbz2ZUwKiyw=", "actions": [{"id": "allow", "label": "Allow", "style": "primary"}, {"id": "deny", "label": "Deny", "style": "destructive"}]}], "last": "Run a command?", "lastAt": 1794869664216, "can": {"send": true, "stop": true, "fork": true, "rename": true, "close": true, "compact": true}, "controls": {"modelId": "opus", "effort": "high", "fast": false, "fastOffered": true, "contextPct": 41}}, {"id": "6E1F0C2A-0000-4000-8000-000000000002", "title": "Phone logs, a day kept", "state": "working", "provider": "claude", "running": true, "queued": 0, "model": "Opus 5.5", "mode": {"id": "default", "level": 1}, "modeIds": ["default", "plan", "acceptEdits", "auto"], "allowedModeIds": ["default", "plan", "acceptEdits", "auto"], "cards": [], "last": "Running the Android gate", "lastAt": 1794869724216, "can": {"send": true, "stop": true, "fork": true, "rename": true, "close": true, "compact": true}, "controls": {"modelId": "opus", "effort": "high", "fast": false, "fastOffered": true, "contextPct": 41}, "arsenal": "own"}, {"id": "6E1F0C2A-0000-4000-8000-000000000003", "title": "Release 0.3.1 notes", "state": "failed", "provider": "claude", "running": false, "queued": 0, "model": "Opus 5.5", "mode": {"id": "default", "level": 1}, "modeIds": ["default", "plan", "acceptEdits", "auto"], "allowedModeIds": ["default", "plan", "acceptEdits", "auto"], "cards": [], "last": "The turn failed: rate limited", "lastAt": 1794867684216, "can": {"send": true, "stop": false, "fork": true, "rename": true, "close": true, "compact": true}, "controls": {"modelId": "opus", "effort": "high", "fast": false, "fastOffered": true, "contextPct": 41}}, {"id": "6E1F0C2A-0000-4000-8000-000000000004", "title": "Tables fit the screen", "state": "idle", "provider": "claude", "running": false, "queued": 0, "model": "Opus 5.5", "mode": {"id": "default", "level": 1}, "modeIds": ["default", "plan", "acceptEdits", "auto"], "allowedModeIds": ["default", "plan", "acceptEdits", "auto"], "cards": [], "last": "Done: grid or stacked cards", "lastAt": 1794858924216, "can": {"send": true, "stop": false, "fork": true, "rename": true, "close": true, "compact": true}, "controls": {"modelId": "opus", "effort": "high", "fast": false, "fastOffered": true, "contextPct": 41}}, {"id": "6E1F0C2A-0000-4000-8000-000000000005", "title": "Box sync stalls on big clones", "state": "idle", "provider": "codex", "running": false, "queued": 0, "model": "GPT-6", "mode": {"id": "default", "level": 1}, "modeIds": ["default", "plan", "acceptEdits", "auto"], "allowedModeIds": ["default", "plan", "acceptEdits", "auto"], "cards": [], "last": "Fixed the ignore cache", "lastAt": 1794776124216, "can": {"send": true, "stop": false, "fork": true, "rename": true, "close": true, "compact": true}, "controls": {"modelId": "gpt-6", "effort": "medium", "fast": false, "fastOffered": true, "contextPct": 41}}]}
+{
+ "t": "snapshot",
+ "rev": 1,
+ "windows": [
+  {
+   "id": "w_kore",
+   "name": "kore",
+   "path": "~/Code/Projects/kore",
+   "activeTabId": "T1",
+   "tabs": [
+    {
+     "id": "T1",
+     "kind": "chat",
+     "chatId": "6E1F0C2A-0000-4000-8000-000000000001",
+     "title": "Checkout totals are off"
+    },
+    {
+     "id": "T2",
+     "kind": "chat",
+     "chatId": "6E1F0C2A-0000-4000-8000-000000000002",
+     "title": "Phone logs, a day kept"
+    },
+    {
+     "id": "T3",
+     "kind": "chat",
+     "chatId": "6E1F0C2A-0000-4000-8000-000000000004",
+     "title": "Tables fit the screen"
+    }
+   ]
+  },
+  {
+   "id": "w_onf",
+   "name": "OnFinance",
+   "path": "~/Code/Onfinance",
+   "activeTabId": "T4",
+   "tabs": [
+    {
+     "id": "T4",
+     "kind": "chat",
+     "chatId": "6E1F0C2A-0000-4000-8000-000000000003",
+     "title": "Release 0.3.1 notes"
+    },
+    {
+     "id": "T5",
+     "kind": "chat",
+     "chatId": "6E1F0C2A-0000-4000-8000-000000000005",
+     "title": "Box sync stalls on big clones"
+    }
+   ]
+  }
+ ],
+ "chats": [
+  {
+   "id": "6E1F0C2A-0000-4000-8000-000000000001",
+   "title": "Checkout totals are off",
+   "state": "needsYou",
+   "provider": "claude",
+   "running": true,
+   "queued": 0,
+   "model": "Opus 5.5",
+   "mode": {
+    "id": "default",
+    "level": 1
+   },
+   "modeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "allowedModeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "cards": [
+    {
+     "id": "toolu_01",
+     "kind": "permission",
+     "title": "Bash",
+     "detail": "Run a command",
+     "body": "npm test -- checkout --runInBand",
+     "digest": "QDLzMU9MaA9sb6xXpcre3SCt5Cn1bh5/Kbz2ZUwKiyw=",
+     "actions": [
+      {
+       "id": "allow",
+       "label": "Allow",
+       "style": "primary"
+      },
+      {
+       "id": "deny",
+       "label": "Deny",
+       "style": "destructive"
+      }
+     ]
+    }
+   ],
+   "last": "Run a command?",
+   "lastAt": 1794869664216,
+   "can": {
+    "send": true,
+    "stop": true,
+    "fork": true,
+    "rename": true,
+    "close": true,
+    "compact": true
+   },
+   "controls": {
+    "modelId": "opus",
+    "effort": "high",
+    "fast": false,
+    "fastOffered": true,
+    "contextPct": 41
+   }
+  },
+  {
+   "id": "6E1F0C2A-0000-4000-8000-000000000002",
+   "title": "Phone logs, a day kept",
+   "state": "working",
+   "provider": "claude",
+   "running": true,
+   "queued": 0,
+   "model": "Opus 5.5",
+   "mode": {
+    "id": "default",
+    "level": 1
+   },
+   "modeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "allowedModeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "cards": [],
+   "last": "Running the Android gate",
+   "lastAt": 1794869724216,
+   "can": {
+    "send": true,
+    "stop": true,
+    "fork": true,
+    "rename": true,
+    "close": true,
+    "compact": true
+   },
+   "controls": {
+    "modelId": "opus",
+    "effort": "high",
+    "fast": false,
+    "fastOffered": true,
+    "contextPct": 41
+   },
+   "arsenal": "own"
+  },
+  {
+   "id": "6E1F0C2A-0000-4000-8000-000000000003",
+   "title": "Release 0.3.1 notes",
+   "state": "needsYou",
+   "provider": "claude",
+   "running": false,
+   "queued": 0,
+   "model": "Opus 5.5",
+   "mode": {
+    "id": "default",
+    "level": 1
+   },
+   "modeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "allowedModeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "cards": [
+    {
+     "id": "ask_01",
+     "kind": "questions",
+     "title": "Which fix should I keep?",
+     "digest": "ZGVtby1xdWVzdGlvbg==",
+     "questions": [
+      {
+       "id": "q1",
+       "text": "Which fix should I keep?",
+       "header": "Fix",
+       "multiple": false,
+       "secret": false,
+       "other": true,
+       "options": [
+        {
+         "label": "Wait for the row",
+         "description": "Keeps the lazy list as it is"
+        },
+        {
+         "label": "Load the rows early",
+         "description": "Simpler, slower to open"
+        }
+       ]
+      }
+     ],
+     "actions": [
+      {
+       "id": "submitAnswers",
+       "label": "Submit",
+       "style": "primary"
+      },
+      {
+       "id": "deny",
+       "label": "Skip",
+       "style": "neutral"
+      }
+     ]
+    }
+   ],
+   "last": "Which fix should I keep?",
+   "lastAt": 1794867684216,
+   "can": {
+    "send": true,
+    "stop": false,
+    "fork": true,
+    "rename": true,
+    "close": true,
+    "compact": true
+   },
+   "controls": {
+    "modelId": "opus",
+    "effort": "high",
+    "fast": false,
+    "fastOffered": true,
+    "contextPct": 41
+   }
+  },
+  {
+   "id": "6E1F0C2A-0000-4000-8000-000000000004",
+   "title": "Tables fit the screen",
+   "state": "idle",
+   "provider": "claude",
+   "running": false,
+   "queued": 0,
+   "model": "Opus 5.5",
+   "mode": {
+    "id": "default",
+    "level": 1
+   },
+   "modeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "allowedModeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "cards": [],
+   "last": "Done: grid or stacked cards",
+   "lastAt": 1794858924216,
+   "can": {
+    "send": true,
+    "stop": false,
+    "fork": true,
+    "rename": true,
+    "close": true,
+    "compact": true
+   },
+   "controls": {
+    "modelId": "opus",
+    "effort": "high",
+    "fast": false,
+    "fastOffered": true,
+    "contextPct": 41
+   }
+  },
+  {
+   "id": "6E1F0C2A-0000-4000-8000-000000000005",
+   "title": "Box sync stalls on big clones",
+   "state": "idle",
+   "provider": "codex",
+   "running": false,
+   "queued": 0,
+   "model": "GPT-6",
+   "mode": {
+    "id": "default",
+    "level": 1
+   },
+   "modeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "allowedModeIds": [
+    "default",
+    "plan",
+    "acceptEdits",
+    "auto"
+   ],
+   "cards": [],
+   "last": "Fixed the ignore cache",
+   "lastAt": 1794776124216,
+   "can": {
+    "send": true,
+    "stop": false,
+    "fork": true,
+    "rename": true,
+    "close": true,
+    "compact": true
+   },
+   "controls": {
+    "modelId": "gpt-6",
+    "effort": "medium",
+    "fast": false,
+    "fastOffered": true,
+    "contextPct": 41
+   }
+  }
+ ]
+}

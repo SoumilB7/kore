@@ -30,6 +30,7 @@ abstract class NodeActivity : Activity() {
     private lateinit var titleColumn: LinearLayout
     /** The top bar's title: the device's, the window's or the chat's name. */
     protected lateinit var barTitle: TextView
+    protected lateinit var barLead: android.widget.FrameLayout
     /** A small state dot at the end of the top bar; screens that have a state show it. */
     protected lateinit var barDot: android.view.View
     protected open val showsBack = true
@@ -62,6 +63,9 @@ abstract class NodeActivity : Activity() {
             setOnClickListener { finish() }
             pressFill(null, Tone.l2, 24)
         }, LinearLayout.LayoutParams(dp(48), dp(48))) else addView(android.view.View(this@NodeActivity), LinearLayout.LayoutParams(dp(12), 1))
+        // The lead (spec §5): a chat's logo, or the spinner while it works; 17, 8 before the title. Hidden elsewhere.
+        barLead = android.widget.FrameLayout(this@NodeActivity).apply { visibility = android.view.View.GONE }
+        addView(barLead, LinearLayout.LayoutParams(dp(17), dp(17)).apply { marginStart = dp(2); marginEnd = dp(8) })
         barTitle = label("").apply { type(Type.Title); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         // The link's state is one quiet line under the title (spec §5: Caption, warn), so the name keeps its width.
         banner = label("").apply {

@@ -4,7 +4,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -27,7 +26,11 @@ class ChatActivity : NodeActivity() {
     private lateinit var actions: ChatActions
     // Until the first page arrives: Kore may be loading this chat on the Mac.
     private lateinit var opening: LinearLayout
-    private lateinit var openingSpinner: ProgressBar
+    private lateinit var openingSpinner: Spinner
+    private lateinit var leadLogo: android.widget.ImageView
+    private lateinit var leadSpin: Spinner
+    /** The transcript showed its end before a resize (the keyboard, the card): it shows it after. */
+    private var atEnd = true
     private lateinit var openingText: TextView
     private lateinit var retry: TextView
     private var openTimeout: Job? = null
@@ -43,20 +46,28 @@ class ChatActivity : NodeActivity() {
         menuButton = barButton(barTitle, "⋮", "Chat menu") { actions.openMenu() }.apply { visibility = View.GONE }
         // ＋: a new chat beside this one, on the same device (phase 18 §3).
         barButton(barTitle, "＋", "New chat here") { newHere() }
-        openingSpinner = ProgressBar(this@ChatActivity, null, android.R.attr.progressBarStyleSmall).apply {
-            indeterminateTintList = android.content.res.ColorStateList.valueOf(K.accent)
-        }
-        openingText = label("Opening on $macName…", 13f, K.faint)
-        retry = label("Retry", 13f, K.accent, bold = true).apply {
-            setPadding(dp(12), dp(6), dp(12), dp(6))
+        // The bar's lead: the CLI's logo, the spinner while a turn runs (spec §5, §6 Chat).
+        leadLogo = android.widget.ImageView(this@ChatActivity)
+        leadSpin = Spinner(this@ChatActivity, Tone.spinClaude).apply { visibility = View.GONE }
+        barLead.addView(leadLogo, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
+        barLead.addView(leadSpin, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
+        // Opening (spec §6): a 28 spinner over "Opening on {device}" (Callout, dim), centred.
+        openingSpinner = Spinner(this@ChatActivity, Tone.accent)
+        openingText = label("Opening on $macName").apply { type(Type.Callout); setTextColor(Tone.dim); gravity = Gravity.CENTER }
+        retry = label("Try again").apply {
+            type(Type.Label)
+            setTextColor(Tone.accent)
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            pressFill(null, Tone.l2, 15)
             visibility = View.GONE
             setOnClickListener { open() }
         }
         opening = LinearLayout(this@ChatActivity).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            addView(openingSpinner)
-            addView(openingText.apply { setPadding(0, dp(10), 0, dp(4)) })
+            setPadding(dp(40), 0, dp(40), 0)
+            addView(openingSpinner, LinearLayout.LayoutParams(dp(28), dp(28)))
+            addView(openingText.apply { setPadding(0, dp(14), 0, dp(6)) })
             addView(retry)
         }
         list = RecyclerView(this@ChatActivity).apply {
@@ -82,15 +93,25 @@ class ChatActivity : NodeActivity() {
                 })
                 setOnTouchListener { _, ev -> swipe.onTouchEvent(ev); false }
             }
-            setPadding(dp(16), 0, dp(16), dp(8))
+            setPadding(dp(16), dp(8), dp(16), dp(4))
             clipToPadding = false
+            // Following the end: a list that showed its last row keeps showing it when it shrinks or grows.
+            addOnScrollListener(object : RecyclerView.OnScrollListener() {
+                override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) { atEnd = !rv.canScrollVertically(1) }
+            })
+            addOnLayoutChangeListener { v, _, top, _, bottom, _, oldTop, _, oldBottom ->
+                if (bottom - top != oldBottom - oldTop && atEnd && this@ChatActivity.adapter.itemCount > 0) {
+                    v.post { list.scrollToPosition(this@ChatActivity.adapter.itemCount - 1) }
+                }
+            }
         }
         // The transcript fills the space; while the chat opens, its state sits in the middle of it.
         addView(android.widget.FrameLayout(this@ChatActivity).apply {
             addView(list, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(opening, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-        addView(View(this@ChatActivity).apply { setBackgroundColor(K.line) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1))
+        // No rule above the composer: its lift sets it apart (spec §3).
+        clipChildren = false
         actions = ChatActions(this@ChatActivity, chatId) { link }
         addView(actions.view)
     }
@@ -133,7 +154,7 @@ class ChatActivity : NodeActivity() {
         if (!loaded) {
             opening.visibility = View.VISIBLE
             openingSpinner.visibility = View.VISIBLE
-            openingText.text = "Opening on $macName…"
+            openingText.text = "Opening on $macName"
             retry.visibility = View.GONE
             openTimeout?.cancel()
             openTimeout = kore.scope.launch {
@@ -170,7 +191,6 @@ class ChatActivity : NodeActivity() {
         // Shown here: read, as of what it last did.
         chat?.let { kore.seen.opened(chatId, (it["lastAt"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()) }
         actions.render(chat, snapshot)
-        adapter.running = chat?.bool("running") == true
         adapter.queued = (chat?.get("queued") as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() ?: 0
         adapter.canFork = chat?.obj("can")?.let { if (it.containsKey("fork")) it.bool("fork") else null }
         adapter.rescue = ControlModel.rescue(chat?.obj("rescue")) { at -> whenText(at) }
@@ -179,11 +199,14 @@ class ChatActivity : NodeActivity() {
         provider = chat?.str("provider") ?: provider
         // A summary row names the CLI: drawn again if it only now became known.
         if (provider != was) adapter.notifyDataSetChanged()
-        val (dot, word) = stateLook(chat?.str("state"))
-        barTitle.text = android.text.SpannableStringBuilder(providerMark(chat?.str("provider"))).append("  ").append(chat?.str("title") ?: "Chat")
-        barDot.background = rounded(dot, 4)
-        barDot.contentDescription = word
-        barDot.visibility = if (chat != null) View.VISIBLE else View.GONE
+        barTitle.text = chat?.str("title") ?: "Chat"
+        // The lead: the logo, or the spinner in the CLI's colour while a turn runs.
+        val working = chat?.bool("running") == true
+        provider?.let { leadLogo.setImageResource(providerLogo(it)) }
+        leadSpin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
+        leadLogo.visibility = if (working) View.INVISIBLE else View.VISIBLE
+        leadSpin.visibility = if (working) View.VISIBLE else View.GONE
+        barLead.visibility = if (provider != null) View.VISIBLE else View.GONE
     }
 
     /** "4:00 PM" today, else "Thu 9:00 AM", in the phone's own clock style. */
@@ -244,8 +267,6 @@ class ChatActivity : NodeActivity() {
         /** A rescue row under the turn: Retry, Continue, "Continues at …" ×. */
         data class Rescue(val line: ControlModel.RescueLine) : Item()
         data class Work(val key: String, val steps: List<JsonObject>, val open: Boolean) : Item()
-        /** The turn still runs: a spinner under the last row. */
-        object Running : Item()
         /** Messages waiting behind the running turn or a compaction (the Mac's queued rows), counted. */
         data class Queued(val count: Int) : Item()
     }
@@ -255,8 +276,8 @@ class ChatActivity : NodeActivity() {
         private var items: List<Item> = emptyList()
         private val open = HashSet<String>()
         private val openTools = HashSet<String>()
-        var running = false
-            set(value) { if (field != value) { field = value; rebuild() } }
+        /** The "Worked" row just opened or closed: its chevron turns on the next bind. */
+        private var turned: String? = null
         var queued = 0
             set(value) { if (field != value) { field = value; rebuild() } }
         var earlier = false
@@ -289,7 +310,6 @@ class ChatActivity : NodeActivity() {
                 if (e.str("kind") in setOf("tool", "thinking", "agent")) run.add(e) else flush(false).also { out.add(Item.One(e)) }
             }
             flush(true)
-            if (running) out.add(Item.Running)
             if (queued > 0) out.add(Item.Queued(queued))
             rescue.forEach { out.add(Item.Rescue(it)) }
             // Only what changed is drawn again: a streaming answer rebinds its own row, not the page.
@@ -308,7 +328,6 @@ class ChatActivity : NodeActivity() {
             is Item.Work -> "w:" + item.key
             is Item.Rescue -> "r:" + item.line.key
             Item.Earlier -> "earlier"
-            Item.Running -> "running"
             is Item.Queued -> "queued"
         }
 
@@ -340,17 +359,6 @@ class ChatActivity : NodeActivity() {
                     android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                         topMargin = dp(6); bottomMargin = dp(6)
                     })
-                // The running turn: a small spinner and one word.
-                addView(LinearLayout(this@ChatActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    visibility = View.GONE
-                    setPadding(dp(4), dp(10), dp(4), dp(10))
-                    addView(android.widget.ProgressBar(this@ChatActivity, null, android.R.attr.progressBarStyleSmall).apply {
-                        indeterminateTintList = android.content.res.ColorStateList.valueOf(K.accent)
-                    }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(10) })
-                    addView(label("Working…", 13f, K.dim))
-                }, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             },
         ) {}
 
@@ -359,10 +367,8 @@ class ChatActivity : NodeActivity() {
             val rule = frame.getChildAt(0)
             val v = frame.getChildAt(1) as TextView
             val docBox = frame.getChildAt(2) as LinearLayout
-            val spinner = frame.getChildAt(3)
             rule.visibility = View.GONE
             docBox.visibility = View.GONE
-            spinner.visibility = View.GONE
             v.visibility = View.VISIBLE
             v.maxWidth = Int.MAX_VALUE
             v.background = null
@@ -375,20 +381,35 @@ class ChatActivity : NodeActivity() {
             frame.setOnLongClickListener(null)
             v.setPadding(dp(4), dp(6), dp(4), dp(6))
             v.setTextColor(K.text)
-            v.textSize = 15f
-            v.typeface = android.graphics.Typeface.DEFAULT
-            v.setLineSpacing(0f, 1f)
+            v.type(Type.Body)
+            v.setCompoundDrawablesRelative(null, null, null, null)
             (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply {
                 width = ViewGroup.LayoutParams.MATCH_PARENT; gravity = Gravity.START
                 topMargin = dp(4); bottomMargin = dp(4); leftMargin = 0; rightMargin = 0
             }
             when (val item = items[position]) {
                 is Item.Work -> {
+                    // "Worked · N steps" (spec §5): Callout, faint, a 15 chevron before it that turns 90° in 120 ms when open.
                     val expanded = item.key in open
-                    v.text = "Worked · ${item.steps.size} steps  ${if (expanded) "⌄" else "›"}"
-                    v.setTextColor(K.faint)
-                    v.textSize = 13f
-                    v.setOnClickListener { if (!open.add(item.key)) open.remove(item.key); rebuild() }
+                    v.text = "Worked · ${item.steps.size} steps"
+                    v.setTextColor(Tone.faint)
+                    v.type(Type.Callout)
+                    v.contentDescription = "Worked, ${item.steps.size} steps, ${if (expanded) "open" else "closed"}"
+                    val chevron = android.graphics.drawable.RotateDrawable().apply {
+                        drawable = getDrawable(dev.kore.phone.R.drawable.i_chevron)?.mutate()?.apply { setTint(Tone.faint) }
+                        fromDegrees = 0f; toDegrees = 90f
+                        isPivotXRelative = true; pivotX = 0.5f; isPivotYRelative = true; pivotY = 0.5f
+                        setBounds(0, 0, dp(15), dp(15))
+                        val to = if (expanded) 10_000 else 0
+                        if (turned == item.key && Motion.scale > 0f) {
+                            level = 10_000 - to
+                            android.animation.ObjectAnimator.ofInt(this, "level", 10_000 - to, to).setDuration(Motion.ms(120)).start()
+                        } else level = to
+                    }
+                    if (turned == item.key) turned = null
+                    v.setCompoundDrawablesRelative(chevron, null, null, null)
+                    v.compoundDrawablePadding = dp(6)
+                    v.setOnClickListener { if (!open.add(item.key)) open.remove(item.key); turned = item.key; rebuild() }
                 }
                 is Item.One -> {
                     val doc = item.e.objs("doc")
@@ -409,18 +430,17 @@ class ChatActivity : NodeActivity() {
                 Item.Earlier -> {
                     v.text = if (askedEarlier) "Loading the earlier conversation…" else "Earlier conversation  ⌃"
                     v.setTextColor(K.faint)
-                    v.textSize = 13f
+                    v.type(Type.Callout)
                     v.gravity = Gravity.CENTER
                     v.contentDescription = "Earlier conversation"
                     if (!askedEarlier) v.setOnClickListener { loadEarlier() }
                     return
                 }
                 is Item.Rescue -> { bindRescue(v, item.line); return }
-                Item.Running -> { v.visibility = View.GONE; spinner.visibility = View.VISIBLE }
                 is Item.Queued -> {
                     v.text = if (item.count == 1) "⟳ 1 message queued · goes when the turn ends" else "⟳ ${item.count} messages queued · go when the turn ends"
                     v.setTextColor(K.faint)
-                    v.textSize = 13f
+                    v.type(Type.Callout)
                     (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
                 }
             }
@@ -434,7 +454,7 @@ class ChatActivity : NodeActivity() {
 
         /** A rescue row: the Mac's words, then its actions as accent words. */
         private fun bindRescue(v: TextView, line: ControlModel.RescueLine) {
-            v.textSize = 13f
+            v.type(Type.Callout)
             v.setTextColor(K.dim)
             v.gravity = Gravity.START
             v.maxLines = Int.MAX_VALUE
@@ -488,15 +508,16 @@ class ChatActivity : NodeActivity() {
             when (e.str("kind")) {
                 "user" -> {
                     v.text = userText(e)
-                    v.background = rounded(K.surface, 14, K.line)
-                    v.setPadding(dp(12), dp(8), dp(12), dp(8))
-                    v.setLineSpacing(0f, 1.3f)
-                    v.maxWidth = (resources.displayMetrics.widthPixels * 0.8f).toInt()
+                    // The user bubble (spec §5): l2, radius 18 18 6 18, padding 9 × 14, at most 82 % of the column.
+                    v.background = corners(Tone.l2, 18, 18, 6, 18)
+                    v.setPadding(dp(14), dp(9), dp(14), dp(9))
+                    val column = (list.width - list.paddingLeft - list.paddingRight).takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+                    v.maxWidth = (column * 0.82f).toInt()
                     (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply {
                         width = ViewGroup.LayoutParams.WRAP_CONTENT; gravity = Gravity.END; topMargin = dp(14); leftMargin = 0
                     }
                 }
-                "answer", "plan" -> { v.text = e.str("text").orEmpty(); v.setLineSpacing(0f, 1.4f) }
+                "answer", "plan" -> v.text = e.str("text").orEmpty()
                 "tool" -> {
                     val tool = e.obj("tool")
                     val id = e.str("id") ?: ""
@@ -529,9 +550,9 @@ class ChatActivity : NodeActivity() {
                     v.maxLines = if (expanded) 40 else 1
                     v.ellipsize = android.text.TextUtils.TruncateAt.END
                     v.setTextColor(if (e.bool("isError")) K.err else K.dim)
-                    v.textSize = 13f
+                    v.type(Type.Callout)
                     if (expanded) {
-                        v.background = rounded(K.surface, 10, K.line)
+                        v.background = shape(Tone.l1, 12, Tone.hair)
                         v.setPadding(dp(10), dp(8), dp(10), dp(8))
                     }
                     if (e.objs("changes").isNotEmpty() && e.str("turn") != null) v.setOnClickListener { openChanges(e) }
@@ -561,7 +582,7 @@ class ChatActivity : NodeActivity() {
                         expanded -> text
                         else -> "Thought · " + text.lineSequence().first { it.isNotBlank() }.trim()
                     }
-                    v.setTextColor(K.faint); v.textSize = 13f
+                    v.setTextColor(K.faint); v.type(Type.Callout)
                     v.setTypeface(v.typeface, android.graphics.Typeface.ITALIC)
                     v.maxLines = if (expanded) Int.MAX_VALUE else 1
                     v.ellipsize = if (expanded) null else android.text.TextUtils.TruncateAt.END
@@ -571,19 +592,19 @@ class ChatActivity : NodeActivity() {
                 }
                 "agent" -> {
                     v.text = "Agent · ${e.obj("agent")?.str("name") ?: ""} · ${e.obj("agent")?.str("status") ?: ""}"
-                    v.setTextColor(K.dim); v.textSize = 13f
+                    v.setTextColor(K.dim); v.type(Type.Callout)
                     (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
                 }
                 "notice" -> {
                     v.text = (if (e.bool("isError")) "⚠  " else "") + e.str("text").orEmpty()
                     v.setTextColor(if (e.bool("isError")) (K.err and 0x00FFFFFF) or (0xCC shl 24) else K.dim)
-                    v.textSize = 13f
+                    v.type(Type.Callout)
                 }
                 "divider" -> {
                     // A thin rule with its words in the middle: "Compacted automatically · 8:19 PM".
                     v.text = e.str("text").orEmpty().ifEmpty { "Compacted" }
                     v.setTextColor(K.faint)
-                    v.textSize = 12f
+                    v.type(Type.Caption)
                     v.setBackgroundColor(K.bg)
                     v.setPadding(dp(10), dp(4), dp(10), dp(4))
                     (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply {
@@ -591,7 +612,7 @@ class ChatActivity : NodeActivity() {
                     }
                     v.gravity = android.view.Gravity.CENTER
                 }
-                else -> { v.text = e.str("text").orEmpty(); v.setTextColor(K.dim); v.textSize = 13f }
+                else -> { v.text = e.str("text").orEmpty(); v.setTextColor(K.dim); v.type(Type.Callout) }
             }
             if (e.str("kind") != "divider") v.gravity = android.view.Gravity.START
             if (e.str("kind") != "tool" && e.str("kind") != "thinking") { v.maxLines = Int.MAX_VALUE; v.ellipsize = null }

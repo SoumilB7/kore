@@ -50,6 +50,21 @@ class TableFitTest {
         assertTrue(fit.widths.zip(listOf(150, 260, 240)).all { (w, word) -> w >= maxOf(189, word) })
     }
 
+    /** Kore-main, slice 2: "Cart of 40" wrapped in 52 dp. The header column fits the widest header, up to 40 % of the card. */
+    @Test fun stackedHeadersFitTheirWidestUpToTheCap() {
+        val min = 156; val cap = 360
+        // Short headers: as wide as the widest, nothing wraps or goes above.
+        val short = TableFit.headers(listOf(120, 210, 90), listOf(60, 90, 90), min, cap)
+        assertEquals(210, short.width)
+        assertEquals(listOf(false, false, false), short.above)
+        // Tiny headers still get the minimum.
+        assertEquals(min, TableFit.headers(listOf(40), listOf(40), min, cap).width)
+        // A long header stops at the cap and wraps between words; one whose word doesn't fit goes above.
+        val long = TableFit.headers(listOf(500, 100), listOf(200, 400), min, cap)
+        assertEquals(cap, long.width)
+        assertEquals(listOf(false, true), long.above)
+    }
+
     /** Design spec §8: the line says what this revert does; files are never said to come back. */
     @Test fun theRevertLineSaysWhatItDoes() {
         assertEquals("The chat goes back to before this message. Its text returns to the field.", revertLine(prompt = true))

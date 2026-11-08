@@ -390,21 +390,9 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
     /** Cancel and the one action, side by side. */
     fun buttons(primary: String, danger: Boolean = false, cancel: String = "Cancel", onPrimary: () -> Unit) {
         val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-        // Spec §5 buttons: 46 high, radius 14, Body at 600. Cancel is secondary (l3); the primary is
-        // accent, or errFill with err text when it destroys something.
-        fun button(text: String, fill: Int, pressed: Int, ink: Int, go: () -> Unit) = a.label(text).apply {
-            type(Type.Body)
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, 600, false)
-            setTextColor(ink)
-            gravity = Gravity.CENTER
-            minHeight = a.dp(46)
-            contentDescription = text
-            setOnClickListener { go() }
-            pressFill(fill, pressed, Radius.row)
-        }
-        row.addView(button(cancel, Tone.l3, 0xFF2E3A41.toInt(), Tone.text) { dismiss() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = a.dp(8) })
-        row.addView(if (danger) button(primary, Tone.errFill, 0x33F0736B, Tone.err) { onPrimary() } else button(primary, Tone.accent, Tone.b400, Tone.onAccent) { onPrimary() },
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        // Spec §5 buttons: Cancel is secondary; the primary is accent, or destructive when it destroys something.
+        row.addView(a.button(cancel, Btn.Secondary) { dismiss() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = a.dp(8) })
+        row.addView(a.button(primary, if (danger) Btn.Destructive else Btn.Primary) { onPrimary() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         add(row, lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             setMargins(a.dp(4), a.dp(12), a.dp(4), 0)
         })

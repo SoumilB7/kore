@@ -53,6 +53,18 @@ object Tone {
     const val grab = 0xFF3A4148.toInt()
     /** Inline code keeps its warm colour. */
     const val code = 0xFFE8C08A.toInt()
+    /** The ground of a code block and a permission's command. */
+    const val well = 0xFF0D0F11.toInt()
+    /** The need-you card's edge: warn at 18 %. */
+    const val warnCard = 0x2EE1C08D
+    /** The composer's edge while the field has focus: accent at 45 %. */
+    const val focus = 0x736AB1E7
+    /** Pressed on l3 (a secondary button). */
+    const val l3Pressed = 0xFF2E3A41.toInt()
+    /** Pressed on errFill (a destructive button). */
+    const val errPressed = 0x33F0736B
+    /** The skeleton's moving band. */
+    const val shimmer = 0xFF1B2227.toInt()
     /** The switch's knob (spec §5): on, off. */
     const val knobOn = 0xFFF4F7FA.toInt()
     const val knobOff = 0xFFAEB7BF.toInt()
@@ -141,6 +153,8 @@ fun View.pressFill(fill: Int?, pressedFill: Int, radius: Int, edge: Int? = null)
         addState(intArrayOf(), rest)
     }
     background = RippleDrawable(ColorStateList.valueOf(0x1A6AB1E7), states, c.shape(0xFFFFFFFF.toInt(), radius))
+    // Set on a view already on screen (a toggled option), the state list would fade in from nothing.
+    background.jumpToCurrentState()
     isClickable = true
 }
 
@@ -330,4 +344,79 @@ fun android.app.Activity.emptyState(
         setOnClickListener { button.second() }
         pressFill(Tone.accent, Tone.b400, Radius.row)
     }, android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(24) })
+}
+
+/** A button's role (spec §5): primary, secondary, destructive or quiet. */
+enum class Btn { Primary, Secondary, Destructive, Quiet }
+
+/** A spec button: 46 high, radius 14, Body at 600, in its role's ground and ink. */
+fun Context.button(text: String, role: Btn, go: () -> Unit): TextView = TextView(this).apply {
+    this.text = text
+    type(Type.Body)
+    typeface = Typeface.create(Typeface.DEFAULT, 600, false)
+    gravity = android.view.Gravity.CENTER
+    minHeight = dp(46)
+    setPadding(dp(16), 0, dp(16), 0)
+    contentDescription = text
+    setOnClickListener { go() }
+    when (role) {
+        Btn.Primary -> { setTextColor(Tone.onAccent); pressFill(Tone.accent, Tone.b400, Radius.row) }
+        Btn.Secondary -> { setTextColor(Tone.text); pressFill(Tone.l3, Tone.l3Pressed, Radius.row) }
+        Btn.Destructive -> { setTextColor(Tone.err); pressFill(Tone.errFill, Tone.errPressed, Radius.row) }
+        Btn.Quiet -> { setTextColor(Tone.dim); pressFill(null, Tone.l2, Radius.row) }
+    }
+}
+
+/** A shape with its own radius per corner (dp, clockwise from top-left): the user bubble's 18 18 6 18. */
+fun Context.corners(fill: Int, tl: Int, tr: Int, br: Int, bl: Int, edge: Int? = null): GradientDrawable = GradientDrawable().apply {
+    setColor(fill)
+    val r = floatArrayOf(dp(tl).toFloat(), dp(tl).toFloat(), dp(tr).toFloat(), dp(tr).toFloat(), dp(br).toFloat(), dp(br).toFloat(), dp(bl).toFloat(), dp(bl).toFloat())
+    cornerRadii = r
+    if (edge != null) setStroke(maxOf(1, dp(1)), edge)
+}
+
+/**
+ * The composer's ground (spec §3/§5): `l1`, radius 22, a hair2 edge (accent at 45 % while the
+ * field has focus), and the lift: a shadow 8 up, 24 soft, black at 25 %. The shadow draws
+ * outside the bounds, so the composer's parents don't clip their children.
+ */
+class ComposerGround(private val density: Float) : android.graphics.drawable.Drawable() {
+    var focused = false
+        set(value) { if (field != value) { field = value; invalidateSelf() } }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Tone.l1; setShadowLayer(12f * density, 0f, -8f * density, 0x40000000) }
+    private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = maxOf(1f, density) }
+    private val rect = android.graphics.RectF()
+
+    override fun draw(c: Canvas) {
+        val r = Radius.composer * density
+        val half = edge.strokeWidth / 2
+        rect.set(bounds.left + half, bounds.top + half, bounds.right - half, bounds.bottom - half)
+        c.drawRoundRect(rect, r, r, fill)
+        edge.color = if (focused) Tone.focus else Tone.hair2
+        c.drawRoundRect(rect, r, r, edge)
+    }
+
+    override fun setAlpha(alpha: Int) = Unit
+    override fun setColorFilter(cf: android.graphics.ColorFilter?) = Unit
+    @Deprecated("Drawable API") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+}
+
+/**
+ * The composer bar's step-down (spec §5), measured: the first step whose mode pill and model
+ * text fit the room left after Attach, Arsenal and Send (which never go). Pure: widths in px.
+ */
+object ComposerFit {
+    enum class Step {
+        /** The pill's label and "Opus 5.5 · high". */ Full,
+        /** The pill's label and "Opus 5.5". */ ShortModel,
+        /** The pill's label, no model text. */ NoModel,
+        /** The pill shows only its dot. */ DotOnly,
+    }
+
+    fun step(room: Int, pill: Int, modelFull: Int, modelShort: Int): Step = when {
+        pill + modelFull <= room -> Step.Full
+        pill + modelShort <= room -> Step.ShortModel
+        pill <= room -> Step.NoModel
+        else -> Step.DotOnly
+    }
 }

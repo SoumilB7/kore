@@ -36,4 +36,18 @@ object TableFit {
         widths[widest] = minOf(maxOf(natural[widest], least[widest]), widths[widest] + left)
         return Fit.Grid(widths)
     }
+
+    /** A stacked card's header column: its [width], and which headers go [above] their value. */
+    data class Headers(val width: Int, val above: List<Boolean>)
+
+    /**
+     * The header column of stacked cards: as wide as the widest header on one line ([natural]),
+     * at least [min] and at most [cap] (40 % of the card), so short labels never wrap. A header
+     * still wider wraps between its words; one whose longest word ([words]) doesn't fit goes
+     * above its value instead of being cut.
+     */
+    fun headers(natural: List<Int>, words: List<Int>, min: Int, cap: Int): Headers {
+        val width = (natural.maxOrNull() ?: 0).coerceIn(min, maxOf(min, cap))
+        return Headers(width, words.map { it > width })
+    }
 }
