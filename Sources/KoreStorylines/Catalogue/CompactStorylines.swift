@@ -185,6 +185,47 @@ final class StopAfterCompaction: ChatStoryline {
     }
 }
 
+/// During a compaction the button is Stop while the composer is empty and Send once something is
+/// typed: that send waits, shown queued, and goes as the compaction ends, as the next turn's
+/// message; the compaction isn't stopped by it.
+final class SendDuringCompaction: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript {
+        CLIScript(turns: [CLIScript.reply("First answer"), CLIScript.reply("Went on")], compact: CLIScript.heldCompaction)
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Say something"), TurnFinished(1),
+            StartCompact(),
+            ExpectElement(.id(StoryID.Composer.stop)),
+            WaitForFocus(.id(StoryID.Composer.field)),
+            TypeText("Then this"),
+            ExpectElement(.id(StoryID.Composer.send)),
+            Snapshot("compacting-send"),
+            Press(.id(StoryID.Composer.send)),
+            Expect("waiting, queued; still compacting; the button Stop again", timeout: .seconds(5)) { story in
+                let chat = try story.activeChat()
+                let queued = story.chatEvents().contains { if case .messageQueued(_, "Then this", _) = $0 { true } else { false } }
+                let sent = try story.scriptedBackend().log.contains(.send("Then this"))
+                return queued && chat.isCompacting && chat.draft.isEmpty && !sent
+            },
+            ExpectElement(.id(StoryID.Composer.stop)),
+            Release(),
+            TurnFinished(2),
+            Expect("compacted, then sent as the next turn", timeout: .seconds(5)) { story in
+                let rows = try story.activeChat().rows
+                let sent = try story.scriptedBackend().log.contains(.send("Then this"))
+                return sent
+                    && !story.chatEvents().contains { if case .compactionStopped = $0 { true } else { false } }
+                    && rows.contains { $0.kind == "divider" }
+                    && rows.contains { $0.kind == "user" && $0.text == "Then this" }
+                    && rows.last?.kind == "assistant" && rows.last?.text == "Went on"
+            },
+        ]
+    }
+}
+
 /// Sets the chat's auto-compact point, as the context card's notch does.
 struct SetAutoCompactPoint: Step {
     let point: Int?

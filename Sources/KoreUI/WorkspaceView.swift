@@ -377,11 +377,13 @@ struct TabBar: View {
         let strip = strip(layout)
         HStack(spacing: Size.tabGap) {
             ExplorerButton(workspace: workspace, size: tabHeight).storyID(StoryID.Titlebar.explorer)
+            // KoreNet's devices, beside the explorer: its pane opens in the explorer's place.
+            NetworkButton(size: tabHeight, pane: (workspace.devicesOpen, { workspace.devicesOpen.toggle() }))
             // A box's window only: a window on this Mac's folder stays one.
             let boxButton = workspace.hasBoxButton
             if boxButton, let box = workspace.box { BoxSyncButton(workspace: workspace, box: box, size: tabHeight) }
             if let explorerDock {
-                let buttons: CGFloat = boxButton ? 2 : 1
+                let buttons: CGFloat = boxButton ? 3 : 2
                 Color.clear.frame(width: max(0, explorerDock + Space.md - leadingInset - buttons * tabHeight - (buttons + 1) * Size.tabGap), height: 0)
             }
             HStack(spacing: Size.tabGap) {
@@ -433,8 +435,6 @@ struct TabBar: View {
                 LinkMarkButton(mark: mark, size: tabHeight)
                     .storyID(StoryID.Link.mark) { LinkPanel.toggleMarkPopup(mark, under: .zero) }
             }
-            // KoreNet's devices, left of the clock (the slot the link mark held).
-            NetworkButton(size: tabHeight, pane: (workspace.devicesOpen, { workspace.devicesOpen.toggle() }))
             HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight).storyID(StoryID.Titlebar.history)
         }
         .padding(.leading, leadingInset)

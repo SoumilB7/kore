@@ -35,7 +35,9 @@ private struct HighlightRow: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onHover { inside in if inside, PointerGate.moved { take() } }
+            // A Kore menu open over the list (a row's right-click): the highlight stays on the row
+            // it was opened on while the pointer moves through the menu.
+            .onHover { inside in if inside, PointerGate.moved, OptionsMenu.shared.items.isEmpty { take() } }
             .accessibilityAddTraits(lit && selects ? .isSelected : [])
             .background(StoryAnchor(id: id?.part(.hover).raw, press: take))
             .background(StoryAnchor(id: lit ? id?.part(.lit).raw : nil, press: nil))

@@ -9,10 +9,8 @@ struct FolderWindow: View {
     @StateObject private var fullScreen = Local(false)
     @StateObject private var historyOpen = Local(false)
     @StateObject private var clockFrame = Local(CGRect.zero)
-    /// The content's width while the sidebar's sash drags: it lays out once, as the drag ends.
+    /// The content's width while a leading pane's sash drags: it lays out once, as the drag ends.
     @StateObject private var heldContent = Local<CGFloat?>(nil)
-    /// The same while Devices' sash drags, on the other side.
-    @StateObject private var heldBesideDevices = Local<CGFloat?>(nil)
 
     init(folder: URL, moved: @escaping (URL) -> Void = { _ in }) {
         self.folder = folder
@@ -35,7 +33,7 @@ struct FolderWindow: View {
             let devicesDocked = workspace.devicesOpen && !floating
             let content = geometry.size.width - (docked ? workspace.explorerWidth + Stroke.hairline : 0)
                 - (devicesDocked ? workspace.devicesWidth + Stroke.hairline : 0)
-            let held = heldContent.value ?? heldBesideDevices.value
+            let held = heldContent.value
             let column = ChatColumn.fitting(held ?? content)
             VStack(spacing: 0) {
                 // Above the chat: its scroll view extends up under the title bar and would
@@ -46,7 +44,7 @@ struct FolderWindow: View {
                         // Full screen has no title bar inset; keep the same 40pt row.
                         height: fullScreen.value ? 40 : max(geometry.safeAreaInsets.top, 28),
                         leadingInset: fullScreen.value ? 10 : 82,
-                        explorerDock: docked ? workspace.explorerWidth : nil,
+                        explorerDock: docked ? workspace.explorerWidth : devicesDocked ? workspace.devicesWidth : nil,
                         historyOpen: $historyOpen.value,
                         clockFrame: $clockFrame.value
                     )
@@ -68,6 +66,15 @@ struct FolderWindow: View {
                         ExplorerSash(width: Binding(get: { workspace.explorerWidth }, set: { workspace.explorerWidth = $0 })) { held in
                             heldContent.value = held ? content : nil
                         }
+                    } else if devicesDocked {
+                        // Devices takes the explorer's place: one leading pane at a time.
+                        DevicesSidebar(holdKey: DevicesSidebar.key(workspace), floating: false)
+                            .frame(width: workspace.devicesWidth)
+                            // Over the held content, which reaches under it as it widens.
+                            .zIndex(heldContent.value == nil ? 0 : 1)
+                        DevicesSash(width: Binding(get: { workspace.devicesWidth }, set: { workspace.devicesWidth = $0 })) { dragging in
+                            heldContent.value = dragging ? content : nil
+                        }
                     }
                     TerminalWorkspace(workspace: workspace)
                         // A box that can't be reached: one card over the window's chats.
@@ -80,7 +87,7 @@ struct FolderWindow: View {
                         .environment(\.chatColumn, column)
                         // Widths follow the drag frame by frame; nothing animates them.
                         .animation(nil, value: column)
-                        .heldBesideSash(held, pane: heldBesideDevices.value == nil ? .leading : .trailing)
+                        .heldBesideSash(held)
                         // History hangs under the clock, inside the window whatever its size. It
                         // sits on the content, below the title bar (a text field in an overlay
                         // reaching into the title bar took no typing).
@@ -93,15 +100,6 @@ struct FolderWindow: View {
                             .padding(.trailing, Space.md)
                             .padding(.bottom, Space.xl)
                         }
-                    if devicesDocked {
-                        DevicesSash(width: Binding(get: { workspace.devicesWidth }, set: { workspace.devicesWidth = $0 })) { dragging in
-                            heldBesideDevices.value = dragging ? content : nil
-                        }
-                        DevicesSidebar(holdKey: DevicesSidebar.key(workspace), floating: false)
-                            .frame(width: workspace.devicesWidth)
-                            // Over the held content, which reaches under it as it widens.
-                            .zIndex(heldBesideDevices.value == nil ? 0 : 1)
-                    }
                 }
                 // Below 700 wide the sidebar floats over the content; a click outside closes it.
                 .overlay(alignment: .leading) {
@@ -134,16 +132,16 @@ struct FolderWindow: View {
                         }
                     }
                 }
-                // Devices, the same from the trailing edge; Esc or a click outside closes it.
-                .overlay(alignment: .trailing) {
+                // Devices, the same from the leading edge; Esc or a click outside closes it.
+                .overlay(alignment: .leading) {
                     if workspace.devicesOpen, floating {
-                        ZStack(alignment: .trailing) {
+                        ZStack(alignment: .leading) {
                             Color.clear.contentShape(Rectangle()).onTapGesture { workspace.devicesOpen = false }
                             DevicesSidebar(holdKey: DevicesSidebar.key(workspace), floating: true)
                                 .frame(width: min(Layout.Devices.width, geometry.size.width - Layout.Explorer.overlayMargin))
-                                .clipShape(UnevenRoundedRectangle(topLeadingRadius: Radius.panel, bottomLeadingRadius: Radius.panel))
+                                .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: Radius.panel, topTrailingRadius: Radius.panel))
                                 .overlay(
-                                    UnevenRoundedRectangle(topLeadingRadius: Radius.panel, bottomLeadingRadius: Radius.panel)
+                                    UnevenRoundedRectangle(bottomTrailingRadius: Radius.panel, topTrailingRadius: Radius.panel)
                                         .strokeBorder(Theme.border, lineWidth: Stroke.hairline)
                                 )
                                 .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)

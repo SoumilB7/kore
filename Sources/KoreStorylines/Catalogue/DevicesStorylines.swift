@@ -351,10 +351,11 @@ final class DevicesAddBoxOnTailnet: ChatStoryline {
     }
 }
 
-/// Devices as the window's trailing pane: the icon opens it beside the chat, lit while it's open,
-/// the explorer left as it was, and closes it; its sash widens it, and after a relaunch it's back
-/// at that width; a waiting device's row brings up its Allow card and the pane stays; in a narrow
-/// window it floats from the trailing edge and Esc closes it.
+/// Devices as the window's leading pane, in the explorer's place: the icon opens it beside the
+/// chat and closes the explorer, opening the explorer closes it, and the icon closes it; its sash
+/// widens it, and after a relaunch it's back at that width; a waiting device's row brings up its
+/// Allow card and the pane stays; in a narrow window it floats from the leading edge and Esc
+/// closes it.
 final class DevicesPane: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
 
@@ -366,31 +367,39 @@ final class DevicesPane: ChatStoryline {
             DevicesSetUp(on: true, box: "mybox", pending: "Pixel 9"),
             Do("open the explorer") { story in try Self.workspace(story).explorerOpen = true },
             WaitForElement(explorer),
-            Do("note where the explorer's edge is") { _ in Self.edge = StoryElement(StoryID.Explorer.sash)?.frame?.minX },
-            // 1 · The icon opens the pane; the explorer is as it was. Again, it closes.
+            // 1 · The icon opens the pane in the explorer's place. The explorer back closes it; the
+            // icon again, then the icon closes it.
             Press(icon),
             WaitForElement(pane),
             WaitForElement(.id(StoryID.Net.sash)),
-            Expect("open beside the chat, the explorer as it was", found: { story in "\(Self.facts(story))" }) { story in
+            ExpectElement(explorer, .absent),
+            Expect("open in the explorer's place", found: { story in "\(Self.facts(story))" }) { story in
                 let workspace = try Self.workspace(story)
-                let edge = StoryElement(StoryID.Explorer.sash)?.frame?.minX
-                return Self.edge != nil && workspace.devicesOpen && workspace.explorerOpen && edge == Self.edge
+                return workspace.devicesOpen && !workspace.explorerOpen
             },
-            Expect("the pane is on the window's trailing side, 290 wide") { story in
+            Expect("the pane is on the window's leading side, 290 wide") { story in
                 guard let frame = StoryElement(StoryID.Net.panel)?.frame, let window = story.window?.contentView?.bounds else { return false }
-                return abs(frame.width - 290) < 1 && abs(frame.maxX - window.maxX) < 1
+                return abs(frame.width - 290) < 1 && abs(frame.minX - window.minX) < 1
             },
             Snapshot("devices-pane"),
-            Press(icon),
+            Do("open the explorer") { story in try Self.workspace(story).explorerOpen = true },
             ExpectElement(pane, .absent),
-            Expect("closed; the explorer still open") { story in
+            Expect("the explorer back, Devices closed") { story in
                 let workspace = try Self.workspace(story)
                 return !workspace.devicesOpen && workspace.explorerOpen
             },
-            // 2 · Its sash dragged 50 pt left widens it to 340; after a relaunch it's open at that width.
             Press(icon),
             WaitForElement(pane),
-            Drag(.id(StoryID.Net.sash), by: CGVector(dx: -50, dy: 0)),
+            Press(icon),
+            ExpectElement(pane, .absent),
+            Expect("closed, neither pane open") { story in
+                let workspace = try Self.workspace(story)
+                return !workspace.devicesOpen && !workspace.explorerOpen
+            },
+            // 2 · Its sash dragged 50 pt right widens it to 340; after a relaunch it's open at that width.
+            Press(icon),
+            WaitForElement(pane),
+            Drag(.id(StoryID.Net.sash), by: CGVector(dx: 50, dy: 0)),
             Expect("widened to 340 by its sash", found: { story in "\(Self.facts(story))" }) { story in
                 guard let frame = StoryElement(StoryID.Net.panel)?.frame else { return false }
                 return try abs(Self.workspace(story).devicesWidth - 340) < 1 && abs(frame.width - 340) < 1
@@ -399,7 +408,7 @@ final class DevicesPane: ChatStoryline {
             WaitForElement(pane),
             Expect("open again at 340", found: { story in "\(Self.facts(story))" }) { story in
                 let workspace = try Self.workspace(story)
-                return workspace.devicesOpen && abs(workspace.devicesWidth - 340) < 1 && workspace.explorerOpen
+                return workspace.devicesOpen && abs(workspace.devicesWidth - 340) < 1 && !workspace.explorerOpen
             },
             // 3 · A waiting device: its card over the window, the pane still there.
             WaitForElement(.id(StoryID.Net.pending(Self.pendingKey))),
@@ -409,12 +418,12 @@ final class DevicesPane: ChatStoryline {
             Expect("the card asks about Pixel 9") { _ in DeviceCardPanel.isOpen && DevicesStory.phones?.log.last == "ask Pixel 9" },
             Press(.id(StoryID.Net.deny)),
             Expect("the card gone, the pane still open") { story in try !DeviceCardPanel.isOpen && Self.workspace(story).devicesOpen },
-            // 4 · Narrow: it floats from the trailing edge, and Esc closes it.
+            // 4 · Narrow: it floats from the leading edge, and Esc closes it.
             SizeWindow(width: 600),
             WaitForElement(pane),
-            Expect("floating at the trailing edge", found: { story in "\(Self.facts(story))" }) { story in
+            Expect("floating at the leading edge", found: { story in "\(Self.facts(story))" }) { story in
                 guard let frame = StoryElement(StoryID.Net.panel)?.frame, let window = story.window?.contentView?.bounds else { return false }
-                return try Self.workspace(story).hasOverlay && abs(frame.maxX - window.maxX) < 1
+                return try Self.workspace(story).hasOverlay && abs(frame.minX - window.minX) < 1
             },
             Snapshot("devices-pane-floating"),
             Key(.escape),
@@ -425,7 +434,6 @@ final class DevicesPane: ChatStoryline {
     }
 
     static let pendingKey = "nodekey:pixel-9"
-    @MainActor static var edge: CGFloat?
 
     static func workspace(_ story: StoryContext) throws -> Workspace {
         guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the workspace") }

@@ -306,6 +306,7 @@ package final class Chat: Identifiable {
         }
         seedImportedContext(event)
         autoCompactIfDue(event)
+        sendHeldAfterCompaction(event)
         afterAccountEvent(event)
         continueAfterLimit(event)
         showBeforeCompaction(event)
@@ -820,9 +821,9 @@ package final class Chat: Identifiable {
         if !restoringComposerDraft { onDraftChanged?() }
     }
 
-    /// Something to send, and no compaction under way (sending waits until it's done).
+    /// Something to send. During a compaction it waits, shown queued, and goes as the compaction ends.
     package var canSend: Bool {
-        !accountRestartPending && !context.compacting
+        !accountRestartPending
             && (command != nil || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
 
@@ -851,7 +852,22 @@ package final class Chat: Identifiable {
         guard !closed, !accountRestartPending else { return }
         let text = Self.message(command: command, draft: draft)
         let sent = attachments
-        guard !text.isEmpty || !sent.isEmpty, !context.compacting else { return }
+        guard !text.isEmpty || !sent.isEmpty else { return }
+        // Sent during a compaction: it waits for it, shown queued (a typed /compact has nothing to add).
+        if context.compacting {
+            guard !sent.isEmpty || Self.compactCommand(text) == nil else { return }
+            draft = ""
+            command = nil
+            attachments = []
+            cancelContinue()
+            // The owner said something: it goes instead of Kore's own "Continue".
+            continueAfterCompaction = false
+            let id = UUID().uuidString.lowercased()
+            heldForCompaction.append((id, text, sent))
+            let message = ChatEvent.messageQueued(id: id, text: text, attachments: sent.map(SentAttachment.init))
+            if awaitingHistory { hold(message) } else { dispatch(message) }
+            return
+        }
         // A typed /compact compacts as the context wheel does, shown as the user's message (the
         // CLI isn't sent it as one). It waits in the composer while it can't (a turn running, no
         // session yet).
@@ -1058,7 +1074,7 @@ package final class Chat: Identifiable {
 
     /// At the plan's limit, with something typed and nothing set to go yet: it can go at the reset.
     package var canSendAtReset: Bool {
-        limitReset != nil && sendsAtReset == nil && !status.isRunning && canSend
+        limitReset != nil && sendsAtReset == nil && !status.isRunning && !context.compacting && canSend
     }
 
     /// The composer's ring: the draft goes when the limit resets, Stay awake on until then.
@@ -1245,6 +1261,7 @@ package final class Chat: Identifiable {
                 transcriptView.compacting(false)
                 stoppingCompaction = false
                 fail(Self.reason(error))
+                sendHeldAfterCompaction()
                 return
             }
             // Stopped while the CLI started: it's never asked.
@@ -1393,6 +1410,32 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var rollingBack = false
     /// Messages sent while it runs, in order: they go once it's done.
     @ObservationIgnored private var heldForRollback: [(text: String, files: [Attachment])] = []
+    /// Sent while a compaction ran, in order: they go as it ends and no turn runs.
+    @ObservationIgnored private var heldForCompaction: [(id: String, text: String, files: [Attachment])] = []
+
+    /// Messages sent during a compaction waiting for it to end.
+    package var heldForCompactionCount: Int { heldForCompaction.count }
+
+    /// The compaction is over (done, failed, stopped, or its CLI ended) and no turn runs: what was
+    /// sent meanwhile goes now, under the ids its queued rows showed. A chat that can't take it
+    /// (closed, an account switch) gives it back to the composer.
+    private func sendHeldAfterCompaction(_ event: ChatEvent? = nil) {
+        guard !heldForCompaction.isEmpty, !context.compacting, !status.isRunning else { return }
+        if let event {
+            switch event {
+            case .compacted, .compactionFailed, .compactionStopped, .exited, .turnFinished: break
+            default: return
+            }
+        }
+        let held = heldForCompaction
+        heldForCompaction = []
+        for message in held { dispatch(.queuedMessage(id: message.id, .dropped)) }
+        if closed || accountRestartPending {
+            for message in held.reversed() { giveBackToComposer(message.text, message.files) }
+            return
+        }
+        for message in held { deliver(message.text, message.files, id: message.id) }
+    }
 
     /// Takes this chat back to before a user message: it and everything after it go, and it
     /// returns to the composer, with its files. A peer's message goes the same way, but its words

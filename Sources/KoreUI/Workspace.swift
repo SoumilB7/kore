@@ -184,6 +184,8 @@ package final class Workspace {
     private(set) var files: FilesStore?
     package var explorerOpen = false {
         didSet {
+            // One leading pane at a time: the explorer or Devices.
+            if explorerOpen, devicesOpen { devicesOpen = false }
             // A box's window never reads this Mac's disk for it.
             if explorerOpen, !oldValue, box == nil {
                 // Opened: the tree shows the active tab's file, as VS Code's auto-reveal does.
@@ -196,10 +198,13 @@ package final class Workspace {
     var explorerWidth = Layout.Explorer.width {
         didSet { saveExplorer() }
     }
-    /// KoreNet's devices as the window's trailing pane (the network icon, Kore ▸ Devices…), kept
-    /// with the explorer's state.
+    /// KoreNet's devices as the window's leading pane (the network icon, Kore ▸ Devices…), in the
+    /// explorer's place: opening one closes the other. Kept with the explorer's state.
     package var devicesOpen = false {
-        didSet { if devicesOpen != oldValue { saveExplorer() } }
+        didSet {
+            if devicesOpen, explorerOpen { explorerOpen = false }
+            if devicesOpen != oldValue { saveExplorer() }
+        }
     }
     package var devicesWidth = Layout.Devices.width {
         didSet { saveExplorer() }
@@ -735,11 +740,9 @@ package final class Workspace {
             closing = nil
         } else if quickOpen != nil {
             quickOpen = nil
-        } else if explorerFloats, devicesOpen {
-            // Over the explorer when both float: it goes first.
-            devicesOpen = false
         } else if explorerFloats {
             explorerOpen = false
+            devicesOpen = false
         }
     }
 

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Devices as a window's trailing pane, as the explorer is its leading one (the network icon and
-/// Kore ▸ Devices… toggle it): the popup's list on the window's ground, under a 34pt header, its
-/// rows scrolling. Docked beside the content from 700pt wide, floating from the trailing edge
-/// below that. Made only while it's open; meanwhile KoreNet's bus is held for the window.
+/// Devices as a window's leading pane, in the explorer's place: one or the other is open (the
+/// network icon and Kore ▸ Devices… toggle it). The popup's list on the window's ground, under a
+/// 34pt header, its rows scrolling. Docked beside the content from 700pt wide, floating from the
+/// leading edge below that. Made only while it's open; meanwhile KoreNet's bus is held for the window.
 struct DevicesSidebar: View {
     /// The bus hold's key: one per window (`key`).
     let holdKey: String
@@ -28,14 +28,14 @@ struct DevicesSidebar: View {
     }
 }
 
-/// The Devices pane's sash, on its leading side: dragging left widens it; a double-click gives it
-/// back its own width.
+/// The Devices pane's sash, on its trailing side as the explorer's is: dragging right widens it; a
+/// double-click gives it back its own width.
 struct DevicesSash: View {
     @Binding var width: CGFloat
     let dragging: (Bool) -> Void
 
     var body: some View {
-        PaneSash(width: $width, range: Layout.Devices.minWidth...Layout.Devices.maxWidth, edge: .trailing, dragging: dragging) {
+        PaneSash(width: $width, range: Layout.Devices.minWidth...Layout.Devices.maxWidth, dragging: dragging) {
             width = Layout.Devices.width
         }
         .storyID(StoryID.Net.sash)
@@ -43,7 +43,7 @@ struct DevicesSash: View {
 }
 
 extension StoryID.Net {
-    /// Devices as the window's trailing pane, and its sash.
+    /// Devices as the window's leading pane (in the explorer's place), and its sash.
     package static let panel = StoryID(.titlebar, "net.panel")
     package static let sash = StoryID(.titlebar, "net.sash")
 }
