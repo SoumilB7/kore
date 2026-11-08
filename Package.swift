@@ -56,8 +56,9 @@ let package = Package(
         .target(
             name: "KoreHost", dependencies: ["src", "LinkProtocol", "KoreCore", "KoreHostSys", "AgentTools"], resources: [.embedInCode("VERSION")],
             swiftSettings: releaseForSize),
-        // kore-host's one Linux call Swift can't make (a variadic one): empty on macOS.
-        .target(name: "KoreHostSys"),
+        // kore-host's calls Swift can't make (variadic ones): huge pages off on Linux,
+        // and its pseudo-terminals (`forkpty`, `TIOCSWINSZ`, `pidfd_open`).
+        .target(name: "KoreHostSys", linkerSettings: [.linkedLibrary("util", .when(platforms: [.linux]))]),
         .executableTarget(name: "kore-host", dependencies: ["KoreHost", "LinkProtocol"], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),

@@ -20,6 +20,8 @@ public struct GitStatus: Sendable, Equatable {
 
     public static let empty = GitStatus()
 
+    public init() {}
+
     /// The state of a file or folder; nil when it's clean (or outside a work tree).
     public func state(of path: String) -> State? {
         if let state = paths[path] ?? wholeFolders[path] ?? folders[path] { return state }
@@ -55,21 +57,35 @@ public struct GitStatus: Sendable, Equatable {
             if code[0] == "R" || code[0] == "C" { _ = fields.next() }
             let isFolder = relative.hasSuffix("/")
             if isFolder { relative.removeLast() }
-            let path = root + "/" + relative
-            let state = Self.state(code[0], code[1])
-            if isFolder { result.wholeFolders[path] = state } else { result.paths[path] = state }
-            guard state != .ignored else { continue }
-            var parent = (path as NSString).deletingLastPathComponent
-            while parent.count >= root.count, parent.count > 1 {
-                if let held = result.folders[parent], held >= state { break }
-                result.folders[parent] = state
-                parent = (parent as NSString).deletingLastPathComponent
-            }
+            result.add(root + "/" + relative, Self.state(code[0], code[1]), folder: isFolder, root: root)
         }
         return result
     }
 
-    private static func state(_ index: Character, _ tree: Character) -> State {
+    /// States by path relative to `root` (a whole folder's ending in `/`), as `states(in:)`
+    /// reads them and a box sends them: the same lookups as a status read here.
+    public init(states: [String: State], root: String) {
+        let root = root.hasSuffix("/") && root.count > 1 ? String(root.dropLast()) : root
+        for (relative, state) in states {
+            let isFolder = relative.hasSuffix("/")
+            let name = isFolder ? String(relative.dropLast()) : relative
+            guard !name.isEmpty else { continue }
+            add(root + "/" + name, state, folder: isFolder, root: root)
+        }
+    }
+
+    private mutating func add(_ path: String, _ state: State, folder isFolder: Bool, root: String) {
+        if isFolder { wholeFolders[path] = state } else { paths[path] = state }
+        guard state != .ignored else { return }
+        var parent = (path as NSString).deletingLastPathComponent
+        while parent.count >= root.count, parent.count > 1 {
+            if let held = folders[parent], held >= state { break }
+            folders[parent] = state
+            parent = (parent as NSString).deletingLastPathComponent
+        }
+    }
+
+    static func state(_ index: Character, _ tree: Character) -> State {
         switch (index, tree) {
         case ("?", "?"): .untracked
         case ("!", "!"): .ignored

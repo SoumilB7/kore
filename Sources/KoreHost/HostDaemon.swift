@@ -46,6 +46,9 @@ package final class HostDaemon {
     /// `kore-host mcp`'s binary: this one (a test runs the built one).
     package var mcpCommand = URL(fileURLWithPath: HostService.executable())
     package static let version = HostVersion.string
+    /// Link 1.8: the grants' terminals, and git for the explorer, editor and diffs.
+    let terminals = HostTerminals()
+    let git = HostGit()
 
     package init(paths: HostPaths) {
         self.paths = paths
@@ -63,6 +66,7 @@ package final class HostDaemon {
         chats = all.filter { $0.record.closed != true }
         closedChats = all.filter { $0.record.closed == true }
         for chat in chats { watch(chat) }
+        terminals.ran = { [weak self] folder in self?.git.touched(folder) }
     }
 
     /// Starts listening; the socket exists when this returns. Throws `HostLockError.held`, and
@@ -81,6 +85,7 @@ package final class HostDaemon {
 
     package func stop() {
         for connection in connections { connection.end(.quit) }
+        terminals.stopAll()
         for chat in chats { chat.sleep() }
         guard let lock else { return }
         listener?.stop()
@@ -247,6 +252,7 @@ package final class HostDaemon {
     private func noted(_ chat: Chat, _ event: ChatEvent) {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return }
         streamRow(hc, event)
+        if case .turnFinished = event { git.touched(hc.record.folder) }
         hc.noted(chat)
         armIdle(hc)
         broadcast(chats: [hc])
@@ -301,7 +307,7 @@ package final class HostDaemon {
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box"] + (control == .full ? ["stream"] : []))
+            caps: ["tx", "attn", "commands", "control", "box"] + (control == .full ? ["stream", "pty", "git"] : []))
     }
 
     var windows: [LinkWindow] {

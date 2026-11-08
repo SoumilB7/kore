@@ -7,7 +7,7 @@ import src
 @MainActor
 final class LinkClient {
     private let socket: HostSocket
-    private unowned let host: HostDaemon
+    unowned let host: HostDaemon
     private let nonce = LinkProof.random(32)
     private(set) var grant: Grant?
     private(set) var proven = false
@@ -46,6 +46,7 @@ final class LinkClient {
         socket.drained = { [weak self] in
             self?.sendCatchUps()
             self?.sendSyncPieces()
+            if let self { self.host.terminals.drained(self) }
         }
         send(.challenge(nonce: nonce))
         // A client that hasn't proven itself in 10 s is closed: the one wait while it connects.
@@ -78,6 +79,7 @@ final class LinkClient {
         searching?.cancel()
         searching = nil
         syncPieces = []
+        boxAsksEnded()
         host.ended(self)
         for chatId in streaming { host.unfollowed(chatId) }
         streaming = []
@@ -93,6 +95,9 @@ final class LinkClient {
     func streams(_ chatId: String) -> Bool { streaming.contains(chatId) }
 
     func sendRaw(_ data: Data) { socket.send(data) }
+
+    /// Bytes waiting for this client: a terminal reads on only below `HostSocket.lowWater`.
+    var backlog: Int { socket.backlog }
 
     /// A chat's items, in frames; this client's own rows are marked `by` it. Live items go at once
     /// (a part at most); a catch-up goes a part at a time, each once the socket has drained, and
@@ -150,7 +155,7 @@ final class LinkClient {
 
     /// The grant as its file says now: a revoked or changed one ends the connection, a lowered one
     /// takes effect at once.
-    private func current() -> Grant? {
+    func current() -> Grant? {
         guard let grant else { return nil }
         guard let now = GrantStore(host.paths.grants).current(grant.name, secret: grant.secret) else {
             HostJournal.note("revoked", ["grant": grant.name])
@@ -217,6 +222,8 @@ final class LinkClient {
             let text = host.chat(chatId)?.chat?.approvals.pending.first { $0.id == cardId }.flatMap(HostMeta.fullContent) ?? ""
             let piece = LinkProjection.piece(text, from: offset)
             send(.cardChunk(id: id, text: piece.text, offset: piece.offset, total: piece.total))
+        case .unknown(let type) where BoxAsk.types.contains(type):
+            boxAsk(type, data)
         case .unknown(let type):
             stream(type, data)
         case .blobPutBegin(let uploadId, let name, let mime, let size, let sha256):
