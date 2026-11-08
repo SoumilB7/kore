@@ -30,8 +30,11 @@ class ChatActivity : NodeActivity() {
     private lateinit var leadLogo: android.widget.ImageView
     private lateinit var leadSpin: Spinner
     private lateinit var leadPrompt: PromptMark
-    /** The transcript showed its end before a resize (the keyboard, the card): it shows it after. */
-    private var atEnd = true
+    /** Follows the transcript's end while the reader is there (FollowEnd); "↓ New" when they read above. */
+    private val ending by lazy { FollowEnd(dp(48)) }
+    private lateinit var jump: TextView
+    private var settleQueued = false
+    private var laidHeight = 0
     private lateinit var openingText: TextView
     private lateinit var retry: TextView
     private var openTimeout: Job? = null
@@ -74,7 +77,13 @@ class ChatActivity : NodeActivity() {
             addView(retry)
         }
         list = RecyclerView(this@ChatActivity).apply {
-            layoutManager = LinearLayoutManager(this@ChatActivity).apply { stackFromEnd = true }
+            // Each finished layout (rows came, a row grew, the keyboard, a rotation) settles the end once.
+            layoutManager = object : LinearLayoutManager(this@ChatActivity) {
+                override fun onLayoutCompleted(state: RecyclerView.State?) {
+                    super.onLayoutCompleted(state)
+                    if (!settleQueued) { settleQueued = true; list.post { settleQueued = false; settle() } }
+                }
+            }.apply { stackFromEnd = true }
             // Rows change in place as text streams in: no fade or slide on each update.
             itemAnimator = null
             adapter = this@ChatActivity.adapter
@@ -98,24 +107,49 @@ class ChatActivity : NodeActivity() {
             }
             setPadding(dp(16), dp(8), dp(16), dp(4))
             clipToPadding = false
-            // Following the end: a list that showed its last row keeps showing it when it shrinks or grows.
+            // Only the reader's own scroll stops following the end; back near the end, it follows again.
             addOnScrollListener(object : RecyclerView.OnScrollListener() {
-                override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) { atEnd = !rv.canScrollVertically(1) }
-            })
-            addOnLayoutChangeListener { v, _, top, _, bottom, _, oldTop, _, oldBottom ->
-                if (bottom - top != oldBottom - oldTop && atEnd && this@ChatActivity.adapter.itemCount > 0) {
-                    v.post { list.scrollToPosition(this@ChatActivity.adapter.itemCount - 1) }
+                override fun onScrollStateChanged(rv: RecyclerView, state: Int) {
+                    if (state == RecyclerView.SCROLL_STATE_DRAGGING) ending.touched()
+                    if (state == RecyclerView.SCROLL_STATE_IDLE && ending.holding) {
+                        if (ending.released(gapToEnd())) toEndNow(smooth = true)
+                        showFollow()
+                    }
                 }
-            }
+                override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                    // (0, 0) is a layout that changed the rows shown, not a scroll: settle() has it.
+                    if (dx == 0 && dy == 0) return
+                    val holding = ending.holding
+                    ending.scrolled(gapToEnd())
+                    if (holding) showFollow()
+                }
+            })
+        }
+        // What came below the rows the reader sees, while they read above: "↓ New".
+        this@ChatActivity.adapter.registerAdapterDataObserver(object : RecyclerView.AdapterDataObserver() {
+            override fun onItemRangeInserted(start: Int, count: Int) = cameAt(start + count - 1)
+            override fun onItemRangeChanged(start: Int, count: Int) = cameAt(start + count - 1)
+        })
+        jump = label("↓  New").apply {
+            type(Type.Label)
+            setTextColor(Tone.accent)
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            pressFill(Tone.l3, Tone.l3Pressed, 16, Tone.hair2)
+            elevation = dp(3).toFloat()
+            contentDescription = "New, to the end"
+            visibility = View.GONE
+            setOnClickListener { toEnd(smooth = true) }
         }
         // The transcript fills the space; while the chat opens, its state sits in the middle of it.
         addView(android.widget.FrameLayout(this@ChatActivity).apply {
             addView(list, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(opening, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+            addView(jump, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(10) })
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         // No rule above the composer: its lift sets it apart (spec §3).
         clipChildren = false
         actions = ChatActions(this@ChatActivity, chatId) { link }
+        actions.sent = { toEnd(smooth = true) }
         addView(actions.view)
     }
 
@@ -129,13 +163,17 @@ class ChatActivity : NodeActivity() {
                 if (transcript.apply(m)) {
                     val entries = transcript.entries
                     runOnUiThread {
+                        val opened = !loaded
                         if (!loaded) { loaded = true; openTimeout?.cancel(); opening.visibility = View.GONE }
-                        val atBottom = !list.canScrollVertically(1)
                         val grewAtTop = entries.isNotEmpty() && adapter.firstId != null && entries.first().str("id") != adapter.firstId
                         if (grewAtTop) askedEarlier = false
+                        // The earlier conversation came above a reader up the page: what they read stays where it was.
+                        val keep = if (grewAtTop && !ending.following) shownTop() else null
                         adapter.earlier = transcript.hasEarlier || entries.firstOrNull()?.str("kind") == "divider"
                         adapter.submit(entries)
-                        if (atBottom) list.scrollToPosition(maxOf(0, entries.size - 1))
+                        keep?.let { (key, top) -> adapter.positionOf(key).takeIf { it >= 0 }?.let { lm.scrollToPositionWithOffset(it, top - list.paddingTop) } }
+                        // Opened: at the end.
+                        if (opened) toEnd(smooth = false)
                     }
                 }
             }
@@ -149,6 +187,78 @@ class ChatActivity : NodeActivity() {
             }
         }
         open()
+    }
+
+    private val lm get() = list.layoutManager as LinearLayoutManager
+
+    /** Px of the transcript below the view: 0 at the end; large when its last row isn't laid out. */
+    private fun gapToEnd(): Int {
+        val n = adapter.itemCount
+        if (n == 0) return 0
+        val last = lm.findViewByPosition(n - 1) ?: return Int.MAX_VALUE / 2
+        return maxOf(0, lm.getDecoratedBottom(last) - (list.height - list.paddingBottom))
+    }
+
+    /** After a layout: following, the end comes back into view (at once after a resize). */
+    private fun settle() {
+        val resized = list.height != laidHeight
+        laidHeight = list.height
+        if (ending.laidOut(gapToEnd(), resized)) toEndNow(smooth = !resized)
+        showFollow()
+    }
+
+    /** To the end and following it: opened, sent, or "↓ New". */
+    private fun toEnd(smooth: Boolean) {
+        ending.toEnd()
+        showFollow()
+        toEndNow(smooth)
+    }
+
+    /** Scrolls to the end: smoothly when it's close and laid out, else at once. */
+    private fun toEndNow(smooth: Boolean) {
+        val n = adapter.itemCount
+        if (n == 0) return
+        val gap = gapToEnd()
+        when {
+            gap <= 0 -> Unit
+            lm.findViewByPosition(n - 1) == null -> list.scrollToPosition(n - 1)
+            smooth && Motion.scale > 0f && gap <= 2 * list.height -> list.smoothScrollBy(0, gap)
+            else -> list.scrollBy(0, gap)
+        }
+    }
+
+    /**
+     * Following, the list grows from its end (a streaming row keeps its bottom); reading above,
+     * from its top, so a row growing at the bottom of the view doesn't move what's read. The
+     * button shows only while something came below.
+     */
+    private fun showFollow() {
+        // Not under the reader's finger: it changes once their scroll comes to rest.
+        if (lm.stackFromEnd != ending.following && !ending.holding && !list.isComputingLayout) {
+            // A flip drops the layout's anchor (it would lay out from the top, or the end): reading
+            // above, the row they see is pinned where it is. Following, the end is where it lands.
+            val pin = if (ending.following) null else lm.findFirstVisibleItemPosition().takeIf { it >= 0 }
+                ?.let { p -> lm.findViewByPosition(p)?.let { p to lm.getDecoratedTop(it) } }
+            lm.stackFromEnd = ending.following
+            pin?.let { (p, top) -> lm.scrollToPositionWithOffset(p, top - list.paddingTop) }
+        }
+        val v = if (ending.jump) View.VISIBLE else View.GONE
+        if (jump.visibility != v) jump.visibility = v
+    }
+
+    private fun cameAt(last: Int) {
+        if (ending.following || last <= lm.findLastVisibleItemPosition()) return
+        ending.cameBelow()
+        showFollow()
+    }
+
+    /** The first row the reader sees (not the Earlier row): its key and its top. */
+    private fun shownTop(): Pair<String, Int>? {
+        var p = lm.findFirstVisibleItemPosition()
+        if (p < 0) return null
+        if (adapter.keyAt(p) == "earlier") p++
+        val v = lm.findViewByPosition(p) ?: return null
+        return (adapter.keyAt(p) ?: return null) to lm.getDecoratedTop(v)
     }
 
     /** Asks the Mac for this chat; it may load it in the background first. */
@@ -317,6 +427,8 @@ class ChatActivity : NodeActivity() {
         var rescue: List<ControlModel.RescueLine> = emptyList()
             set(value) { if (field != value) { field = value; rebuild() } }
         val firstId: String? get() = entries.firstOrNull()?.str("id")
+        fun keyAt(i: Int): String? = items.getOrNull(i)?.let(::keyOf)
+        fun positionOf(key: String): Int = items.indexOfFirst { keyOf(it) == key }
 
         fun submit(list: List<JsonObject>) {
             entries = list

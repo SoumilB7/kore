@@ -18,6 +18,30 @@ class Hooks : BroadcastReceiver() {
                 resultData = "asked"
                 return
             }
+            // A running turn streams into a chat on the demo Mac (`--es chat <id>`).
+            "dev.kore.android.debug.STREAM" -> {
+                val chat = intent.getStringExtra("chat") ?: return run { resultData = "no chat" }
+                (dev.kore.phone.StandIns.current as? Demo)?.links?.get("mac")?.stream(chat, intent.getIntExtra("pieces", 60), intent.getLongExtra("every", 150))
+                    ?: return run { resultData = "no demo" }
+                resultData = "streaming"
+                return
+            }
+            // The front screen's list, by state, not pixels: px of it below the view (gap=0 at the
+            // end, "unlaid" when its last row isn't laid out), its rows, the first row shown and its top,
+            // and whether "↓ New" shows.
+            "dev.kore.android.debug.LIST" -> {
+                val front = (context.applicationContext as KoreApp).frontActivity ?: return run { resultData = "no screen" }
+                val list = findList(front.window.decorView) ?: return run { resultData = "no list" }
+                val lm = list.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager ?: return run { resultData = "no rows" }
+                val n = list.adapter?.itemCount ?: 0
+                val gap = if (n == 0) "0" else lm.findViewByPosition(n - 1)
+                    ?.let { maxOf(0, lm.getDecoratedBottom(it) - (list.height - list.paddingBottom)).toString() } ?: "unlaid"
+                val jump = find(front.window.decorView) { it == "New, to the end" }
+                val first = lm.findFirstVisibleItemPosition()
+                val top = lm.findViewByPosition(first)?.let { lm.getDecoratedTop(it) }
+                resultData = "gap=$gap rows=$n first=$first@$top jump=${jump != null}"
+                return
+            }
             // An image on the clipboard (the app's own content URI), for a real Paste into the composer.
             "dev.kore.android.debug.CLIP_IMAGE" -> {
                 val dir = java.io.File(context.cacheDir, "shots").apply { mkdirs() }
@@ -42,6 +66,12 @@ class Hooks : BroadcastReceiver() {
         val mesh = (context.applicationContext as KoreApp).mesh
         val nodes = mesh.nodes.value.joinToString(",") { "${it.device.value.kind.wire}:${it.state.value::class.simpleName}" }
         resultData = "joined=${mesh.joined} network=${mesh.networkOn} join=${mesh.join.step.value::class.simpleName} nodes=[$nodes] logs=${(dev.kore.phone.StandIns.current as? Demo)?.logsRead}"
+    }
+
+    private fun findList(v: android.view.View): androidx.recyclerview.widget.RecyclerView? {
+        if (v is androidx.recyclerview.widget.RecyclerView && v.isShown) return v
+        if (v is android.view.ViewGroup) for (i in 0 until v.childCount) findList(v.getChildAt(i))?.let { return it }
+        return null
     }
 
     /** The first shown view whose content description [matches] (exact first, then by its start: `Mode` finds "Mode: Manual"). */

@@ -346,6 +346,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     private var note = ""
     private var cardKey: String? = null
     private val pending = HashMap<String, String>()
+    /** A message went: the transcript goes to its end and follows it. */
+    var sent: () -> Unit = {}
+
     /** What a send carried, so one that expired offline can be sent again with a tap. */
     private val sentText = HashMap<String, String>()
     private var retryText: String? = null
@@ -483,6 +486,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val text = retryText ?: return
         val l = link() ?: return quiet("Not connected")
         val id = l.send(chatId, text)
+        sent()
         pending[id] = "send"
         sentText[id] = text
         retryText = null
@@ -502,6 +506,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         attachments.clear()
         showChips()
         val id = l.send(chatId, text, blobs)
+        sent()
         // Sent: the draft goes everywhere (after the message, so it never goes first).
         drafts.sent(clock())
         scheduleDraft()

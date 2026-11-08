@@ -115,6 +115,40 @@ class Demo(private val context: Context, private val scenario: String = "") : St
             asset("$dir/attn.state.json")?.let(::push)
         }
 
+        /**
+         * As a running turn would (`STREAM`): a step, then an answer that streams in [pieces]
+         * deltas, every [every] ms, a paragraph per ten, so the transcript grows past the screen.
+         */
+        fun stream(chat: String, pieces: Int = 60, every: Long = 150) = Thread {
+            val turn = "turn-demo-${System.currentTimeMillis()}"
+            fun delta(e: JsonObject) = push(buildJsonObject {
+                put("t", "tx.delta"); put("chatId", chat)
+                put("upserts", kotlinx.serialization.json.JsonArray(listOf(e)))
+            })
+            delta(buildJsonObject {
+                put("id", "$turn-tool"); put("kind", "tool"); put("done", true); put("turn", turn)
+                put("tool", buildJsonObject { put("name", "Read"); put("summary", "src/total.ts") })
+            })
+            val words = ("Rounding once on the total keeps every cent: the per-line rounding dropped a cent " +
+                "whenever several lines rounded down together, which long carts do often.").split(' ')
+            val paragraphs = ArrayList<String>()
+            for (i in 0 until pieces) {
+                if (i % 10 == 0) paragraphs += "${i / 10 + 1}."
+                paragraphs[paragraphs.size - 1] = paragraphs.last() + " " + words[i % words.size]
+                delta(buildJsonObject {
+                    put("id", "$turn-answer"); put("kind", "answer"); put("done", i == pieces - 1); put("turn", turn)
+                    put("text", paragraphs.joinToString("\n\n"))
+                    put("doc", kotlinx.serialization.json.JsonArray(paragraphs.map { p ->
+                        buildJsonObject {
+                            put("k", "paragraph")
+                            put("spans", kotlinx.serialization.json.JsonArray(listOf(buildJsonObject { put("text", p) })))
+                        }
+                    }))
+                })
+                Thread.sleep(every)
+            }
+        }.start()
+
         /** As a Mac would: ask for the phone's log (`logs.get`), from the start. */
         fun askLogs() = push(buildJsonObject { put("t", "logs.get"); put("id", "demo-logs"); put("offset", 0) })
 
