@@ -102,7 +102,7 @@ extension World {
         let upgraded = await settle(budget: .seconds(120)) { box.netOn && enrolled() && self.mac.link(box)?.route == .net }
         guard !upgraded, !(box.netOn && enrolled()) else { return }
         note("I24", "\(box.alias) wasn't moved onto KoreNet by itself (no upgrade over its SSH link)")
-        try? await step("kore-host net on, on \(box.alias)", .repair("kore-host net on, on \(box.alias)")) { try box.setNet(true) }
+        _ = try? await step("kore-host net on, on \(box.alias)", .repair("kore-host net on, on \(box.alias)")) { try box.setNet(true) }
         await step("\(box.alias)'s window opens", .repair("open \(box.alias)'s window"), until: { self.mac.link(box)?.route == .net }) { mac.openWindow(box) }
         await step("\(box.alias)'s window closes") { mac.closeWindow(box) }
     }

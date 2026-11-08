@@ -32,7 +32,7 @@ struct KoreNetSystemTests {
         if known.isEmpty {
             #expect(failures.isEmpty, "\(world.report)")
         } else {
-            withKnownIssue("\(known.map { "\($0)" }.joined(separator: "; "))") {
+            withKnownIssue("\(known)") {
                 #expect(failures.isEmpty, "\(world.report)")
             }
         }

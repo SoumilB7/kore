@@ -51,14 +51,28 @@ extension HostConnection: BoxDevicesLink {
 /// Audit lines (phase 18 §1 "Audit"): `audit <event>` in hosts.log, ids and kinds only, never content.
 @MainActor
 package enum NetAudit {
-    /// Tests: every line, as `event key=value…`.
-    package static var watch: ((String) -> Void)?
+    /// Tests: each watcher hears every line, as `event key=value…` (suites run side by side, so
+    /// one global slot let one suite's teardown silence another's).
+    private static var watchers: [UUID: (String) -> Void] = [:]
+
+    /// Sends every line to `sink` until `unwatch` with the id it returns.
+    @discardableResult package static func watch(_ sink: @escaping (String) -> Void) -> UUID {
+        let id = UUID()
+        watchers[id] = sink
+        return id
+    }
+
+    package static func unwatch(_ id: UUID?) {
+        guard let id else { return }
+        watchers[id] = nil
+    }
 
     package static func line(_ event: String, _ fields: KeyValuePairs<String, String?>) {
         HostLog.audit(event, fields)
-        if let watch {
-            watch(([event] + fields.compactMap { key, value in value.map { "\(key)=\($0)" } }).joined(separator: " "))
-        }
+        let sinks = Array(watchers.values)
+        guard !sinks.isEmpty else { return }
+        let text = ([event] + fields.compactMap { key, value in value.map { "\(key)=\($0)" } }).joined(separator: " ")
+        for sink in sinks { sink(text) }
     }
 }
 

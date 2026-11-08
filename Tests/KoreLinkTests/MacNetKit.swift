@@ -124,6 +124,7 @@ final class MacRig {
     var shown: [DeviceCardInfo] = []
     var pushed: [[DeviceRecord]] = []
     var audits: [String] = []
+    private var auditWatch: UUID?
     /// Cards as they're shown, cards taken away, audit lines, and the net's changes.
     let cards = Feed<String>()
     let dismissed = Feed<Int>()
@@ -146,7 +147,7 @@ final class MacRig {
         net.background = { $0() }
         net.foreground = { work in MainActor.assumeIsolated { work() } }
         net.pushDevices = { [weak self] in self?.pushed.append($0) }
-        NetAudit.watch = { [weak self] line in
+        auditWatch = NetAudit.watch { [weak self] line in
             self?.audits.append(line)
             self?.audited.send(line)
         }
@@ -156,7 +157,7 @@ final class MacRig {
     func finish() {
         net.stop()
         host.finish()
-        NetAudit.watch = nil
+        NetAudit.unwatch(auditWatch)
         try? FileManager.default.removeItem(at: folder)
     }
 

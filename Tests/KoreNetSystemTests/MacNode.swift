@@ -55,6 +55,7 @@ final class MacNode {
     /// Allow cards shown and not answered.
     private(set) var cards: [DeviceCardInfo] = []
     private(set) var audits: [String] = []
+    private var auditWatch: UUID?
     /// Traced events, audit lines among them, at their virtual times (KNS_DEBUG prints them).
     private(set) var traced: [String] = []
     func trace(_ line: String) { traced.append("\(clock.nowMS / 1000)s \(line)") }
@@ -165,7 +166,7 @@ final class MacNode {
         }
         MacNet.shared = macNet
         macNet.changed = { _ in pulse.beat() }
-        NetAudit.watch = { [weak self] line in
+        auditWatch = NetAudit.watch { [weak self] line in
             self?.audits.append(line)
             self?.trace("audit " + line)
             pulse.beat()
@@ -219,7 +220,7 @@ final class MacNode {
         links = []
         macNet?.stop()
         MacNet.shared = nil
-        NetAudit.watch = nil
+        NetAudit.unwatch(auditWatch)
         if KoreNetSwitch.shared === switcher { KoreNetSwitch.shared = nil }
         if HostConnection.sshNet === switcher { HostConnection.sshNet = nil }
         if HostConnection.net === switcher { HostConnection.net = nil }
