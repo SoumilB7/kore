@@ -254,8 +254,15 @@ package enum DevNavProbe {
         var steps = [step()]
         pacer.beginRecording()
         for width in widths {
+            let ticked = pacer.ticks
             window.setContentSize(NSSize(width: width, height: original.height))
-            if pause > .zero { try? await Task.sleep(for: pause) }
+            if pause > .zero {
+                try? await Task.sleep(for: pause)
+                // At least two frames drawn since the new width (what 33 ms is on a free Mac), one
+                // of them after this wait: a busy one's late frames, or a stall in the middle,
+                // don't read as the view leaving its place.
+                await pacer.frames(max(1, 2 - (pacer.ticks - ticked)))
+            }
             steps.append(step())
         }
         if pause == .zero {

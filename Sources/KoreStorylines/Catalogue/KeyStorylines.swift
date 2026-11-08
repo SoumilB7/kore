@@ -85,9 +85,11 @@ final class TabKeys: ChatStoryline {
             Press(question(.cancel)),
             ExpectElement(question(.allow), .absent),
             Expect("the turn still running") { try $0.activeChat().isRunning },
-            // A second ⌘W at once is a held key's or a double click's, and waits.
-            Key(.cmd("w")), WaitForElement(question(.allow)),
-            Key(.cmd("w")),
+            // A second ⌘W at once is a held key's or a double click's, and waits. Sent back to
+            // back, with nothing waited for between them: a busy Mac stretched a wait for the
+            // question past a double click's time, and the second then closed the tab.
+            Key(.cmd("w")), Key(.cmd("w")),
+            WaitForElement(question(.allow)),
             Self.tabs(2, "the tab still asking"),
             Expect("a double click's time gone by", timeout: .seconds(6)) { $0.app.workspace?.storyCloseConfirmable == true },
             Key(.cmd("w")),

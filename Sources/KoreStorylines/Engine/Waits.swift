@@ -19,9 +19,14 @@ final class Waits {
     /// Main run-loop passes so far; `StoryContext.idle` counts them.
     private(set) var passes = 0
 
+    /// How much longer every wait may run (`KORE_STORY_WAIT_SCALE`, 1 by default): a gate running
+    /// its storylines side by side on a busy Mac gives them more time. A wait ends at its event
+    /// either way; only one that fails takes longer to say so.
+    static let scale: Double = Double(ProcessInfo.processInfo.environment["KORE_STORY_WAIT_SCALE"] ?? "").map { max(1, $0) } ?? 1
+
     func until<T>(_ label: String, timeout: Duration, _ check: @escaping @MainActor () throws -> T?) async throws -> T {
         if let value = try check() { return value }
-        let deadline = ContinuousClock.now + timeout
+        let deadline = ContinuousClock.now + timeout * Self.scale
         return try await withCheckedThrowingContinuation { continuation in
             let id = UUID()
             waiters.append(Waiter(

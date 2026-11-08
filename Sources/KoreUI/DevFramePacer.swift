@@ -132,8 +132,42 @@ final class DevFramePacer: NSObject {
         watchUntil = CACurrentMediaTime() + seconds
     }
 
+    // MARK: Frames
+
+    private var frameWait: (id: Int, left: Int, done: CheckedContinuation<Void, Never>)?
+    private var frameWaits = 0
+    /// Frames ticked so far.
+    private(set) var ticks = 0
+
+    /// Returns once `count` more frames have ticked (or after `timeout` without them: a covered
+    /// window gets none). A step measured this many frames on is measured after the same drawing
+    /// work, however busy the Mac.
+    func frames(_ count: Int, timeout: Duration = .seconds(1)) async {
+        frameWaits += 1
+        let id = frameWaits
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            frameWait = (id, count, done)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard let self, let wait = frameWait, wait.id == id else { return }
+                frameWait = nil
+                wait.done.resume()
+            }
+        }
+    }
+
     @objc private func tick(_ link: CADisplayLink) {
         let now = CACurrentMediaTime()
+        ticks += 1
+        if var wait = frameWait {
+            wait.left -= 1
+            if wait.left <= 0 {
+                frameWait = nil
+                wait.done.resume()
+            } else {
+                frameWait = wait
+            }
+        }
         frameDuration = link.duration > 0 ? link.duration : frameDuration
         if recording, count < times.count {
             times[count] = now
