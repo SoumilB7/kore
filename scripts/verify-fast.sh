@@ -21,12 +21,14 @@
 # release build, launch check and replays always run. The full check (no --radius) stays the one
 # for installs and releases.
 set -u
-zmodload zsh/datetime
-pos=(); radius=0; shards=${KORE_GATE_SHARDS:-5}
+zmodload zsh/datetime zsh/mathfunc
+pos=(); radius=0; plan=0; shards=${KORE_GATE_SHARDS:-}; jobs=${KORE_GATE_JOBS:-}
 while (( $# )); do
   case $1 in
     --radius) radius=1 ;;
+    --plan) plan=1 ;;
     --shards) shards=$2; shift ;;
+    --jobs) jobs=$2; shift ;;
     *) pos+=("$1") ;;
   esac
   shift
@@ -62,7 +64,9 @@ ln -s $cache/src $out/src
 print $sha > $cache/ref
 done_ sync
 tree=$(git -C $clone rev-parse "$sha^{tree}")
-src=$out/src
+# Everything builds and runs in the kept folder by its own path, the same every run: SwiftPM keys
+# what it built by the path it was built in, so a per-run path (verify-<sha>/src) builds cold.
+src=$cache/src
 plugin=(-Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing)
 
 # ---- the head: commits, identity, traces, lint (as verify-landing.sh)
@@ -122,6 +126,42 @@ if (( radius )); then
   done_ radius
 fi
 
+# The storylines to run and their shards (shards.txt: "<i>\t<names>"), from the release build's list.
+plan_shards() {
+  # The gate's storylines, by name, and how long each took last time (both variants together).
+  $rel/kore-storylines --list 2>/dev/null | grep -E '\[[^]]*\bgate\b' | awk '{print $1}' | sort -u > $out/stories-gate.txt
+  if (( ! all_stories )); then
+    print -l ${(s:,:)story_names} | sort -u | comm -12 - $out/stories-gate.txt > $out/stories-run.txt
+  else
+    cp $out/stories-gate.txt $out/stories-run.txt
+  fi
+  # A ref from before its storyline hosts could run side by side runs them in one.
+  grep -q 'hasPrefix("kore-storylines")' $src/Sources/KoreCore/KoreLog.swift 2>/dev/null || shards=1
+  touch $times
+  # Longest first onto the least loaded shard; the replays (one Codex writer at a time) in shard 1.
+  python3 -I - $out/stories-run.txt $times $shards > $out/shards.txt <<'PY'
+import sys
+names = [l.strip() for l in open(sys.argv[1]) if l.strip()]
+took = {}
+for line in open(sys.argv[2]):
+    parts = line.split("\t")
+    if len(parts) == 2:
+        took[parts[0]] = int(parts[1])
+n = max(1, min(int(sys.argv[3]), len(names)))
+load = [0] * n
+shards = [[] for _ in range(n)]
+replays = [s for s in names if s.startswith("ReplayDump")]
+for s in replays:
+    shards[0].append(s); load[0] += took.get(s, 8000)
+for s in sorted((s for s in names if s not in replays), key=lambda s: -took.get(s, 8000)):
+    i = load.index(min(load))
+    shards[i].append(s); load[i] += took.get(s, 8000)
+for i, s in enumerate(shards):
+    if s:
+        print(f"{i + 1}\t{','.join(s)}")
+PY
+}
+
 # ---- the heavy phases (builds, tests, storylines) hold every one-build slot
 # (KoreDev/tools/one-build.sh's locks): no other build or gate runs beside them, so no load from outside
 # skews what they check. A slot held by whoever started this gate (one-build.sh verify-fast.sh …)
@@ -130,7 +170,7 @@ slots=${KORE_BUILD_SLOTS:-2}
 held=()
 mine=($$ $PPID)
 phase wait-slots
-for i in $(seq 1 $slots); do
+for i in $(seq 1 $(( plan ? 0 : slots ))); do
   lock=/tmp/kore-one-build.lock; (( i > 1 )) && lock=$lock$i
   while :; do
     if mkdir $lock 2>/dev/null; then print $$ > $lock/pid; held+=($lock); break; fi
@@ -142,6 +182,32 @@ for i in $(seq 1 $slots); do
 done
 trap "rm -rf '$cache.lock' ${held[*]} 2>/dev/null; pkill -P $$ 2>/dev/null" EXIT
 done_ wait-slots
+
+# ---- how much at once: storyline shards and test targets side by side, from the cores and the
+# load as the heavy phases start (fewer with other builds running), unless given (--shards,
+# --jobs, KORE_GATE_SHARDS, KORE_GATE_JOBS). What runs is the same whatever they are.
+ncpu=$(sysctl -n hw.ncpu); perf=$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || print $ncpu)
+load=$(sysctl -n vm.loadavg | awk '{print $2}')
+others=$(ps -axo %cpu=,command= | awk '$1 > 5 && /swift-build|swift-frontend|GradleDaemon|GradleWorkerMain|kore-storylines/' | wc -l | tr -d ' ')
+free=$(( ncpu - load )); (( free < 1 )) && free=1; (( others )) && free=$(( free / 2 ))
+why="auto"; [[ -n $shards || -n $jobs ]] && why="given"
+[[ -n $shards ]] || shards=$(( int(free / 2 + 1) ))
+[[ -n $jobs ]] || jobs=$(( int(free) ))
+(( shards < 1 )) && shards=1; (( shards > 6 )) && shards=6
+(( jobs < 1 )) && jobs=1; (( jobs > ${#test_targets} && ${#test_targets} > 0 )) && jobs=${#test_targets}
+parallel="shards $shards, jobs $jobs ($why: $ncpu cores, $perf performance, load $load, $( (( others )) && print "$others other builds" || print "no other builds"))"
+
+# --plan: what would run, and on how many shards and jobs, then nothing more (no build: it lists
+# the storylines with the kept release build).
+if (( plan )); then
+  rel=$src/.build/release
+  print "parallel: $parallel"
+  print "== tests (${#test_targets})"; print -l $test_targets
+  plan_shards
+  print "== storylines ($(wc -l < $out/stories-run.txt | tr -d ' ') in $(wc -l < $out/shards.txt | tr -d ' ') shards)"
+  cat $out/shards.txt
+  exit 0
+fi
 
 # ---- the Android check
 if (( android )); then
@@ -164,8 +230,15 @@ if (( ${#test_targets} )); then
       # Each target in its own process under its own name (swiftpm-testing-helper-<target>): its
       # own defaults domain, as when swift test ran them one after another.
       mkdir -p $out/helpers
+      # `jobs` at a time, the longest-running targets first.
+      order=(HostClientTests KoreHostTests KoreNetSystemTests KoreLinkTests KoreUITests KoreCoreTests StorylineTests NetTrustTests)
+      queue=(${order:*test_targets} ${test_targets:|order})
       pids=()
-      for t in $test_targets; do
+      for t in $queue; do
+        while (( ${#pids} >= jobs )); do
+          pids=(${(f)"$(for p in $pids; do kill -0 $p 2>/dev/null && print $p; done)"})
+          (( ${#pids} >= jobs )) && sleep 0.2
+        done
         ln -sf $helper $out/helpers/swiftpm-testing-helper-$t
         b=$bins/$t.xctest/Contents/MacOS/$t
         ( DYLD_FRAMEWORK_PATH=$clt/Library/Developer/Frameworks DYLD_LIBRARY_PATH=$clt/Library/Developer/usr/lib \
@@ -173,7 +246,7 @@ if (( ${#test_targets} )); then
           defaults delete swiftpm-testing-helper-$t >/dev/null 2>&1 ) &
         pids+=($!)
       done
-      wait $pids
+      wait
     else
       # A ref from before its test processes could run side by side: one after another, as swift test does.
       swift test --skip-build --scratch-path .build-test $plugin > $out/swift-test-all.log 2>&1
@@ -188,6 +261,8 @@ fi
 
 # ---- the release build, then the launch check and the storylines together
 phase build
+# Warm: the kept folder has a release build to go on from (only what changed compiles).
+[[ -x $src/.build/release/Kore ]] && warmth="warm, incremental" || warmth="cold"
 {
   print "== release build"
   (cd $src && swift build -c release 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'error:|warning: [^s]|Build complete' | grep -v 'search path' | tail -20)
@@ -197,6 +272,7 @@ phase build
   fi
 } > $out/r-build.txt 2>&1
 done_ build
+print "release build: $warmth, $(printf %.1f $(( ended[build] - began[build] ))) s" >> $out/r-build.txt
 rel=$src/.build/release
 
 if [[ -x $rel/Kore ]]; then
@@ -231,38 +307,7 @@ if [[ -n $fixtures && -x $rel/kore-storylines ]]; then
   phase storylines
   print "== replays" > $out/r-stories.txt
   print "== storylines (gate)" >> $out/r-stories.txt
-  # The gate's storylines, by name, and how long each took last time (both variants together).
-  $rel/kore-storylines --list 2>/dev/null | grep -E '\[[^]]*\bgate\b' | awk '{print $1}' | sort -u > $out/stories-gate.txt
-  if (( ! all_stories )); then
-    print -l ${(s:,:)story_names} | sort -u | comm -12 - $out/stories-gate.txt > $out/stories-run.txt
-  else
-    cp $out/stories-gate.txt $out/stories-run.txt
-  fi
-  # A ref from before its storyline hosts could run side by side runs them in one.
-  grep -q 'hasPrefix("kore-storylines")' $src/Sources/KoreCore/KoreLog.swift 2>/dev/null || shards=1
-  touch $times
-  # Longest first onto the least loaded shard; the replays (one Codex writer at a time) in shard 1.
-  python3 -I - $out/stories-run.txt $times $shards > $out/shards.txt <<'PY'
-import sys
-names = [l.strip() for l in open(sys.argv[1]) if l.strip()]
-took = {}
-for line in open(sys.argv[2]):
-    parts = line.split("\t")
-    if len(parts) == 2:
-        took[parts[0]] = int(parts[1])
-n = max(1, min(int(sys.argv[3]), len(names)))
-load = [0] * n
-shards = [[] for _ in range(n)]
-replays = [s for s in names if s.startswith("ReplayDump")]
-for s in replays:
-    shards[0].append(s); load[0] += took.get(s, 8000)
-for s in sorted((s for s in names if s not in replays), key=lambda s: -took.get(s, 8000)):
-    i = load.index(min(load))
-    shards[i].append(s); load[i] += took.get(s, 8000)
-for i, s in enumerate(shards):
-    if s:
-        print(f"{i + 1}\t{','.join(s)}")
-PY
+  plan_shards
   lock=/private/tmp/kore-verify-replay.lock
   spids=()
   for line in ${(f)"$(<$out/shards.txt)"}; do
@@ -356,6 +401,7 @@ fi
 r=$out/report.txt
 {
   cat $out/r-head.txt
+  print "parallel: $parallel"
   [[ -f $out/r-radius.txt ]] && cat $out/r-radius.txt
   [[ -f $out/r-android.txt ]] && cat $out/r-android.txt
   cat $out/r-build.txt
@@ -367,8 +413,10 @@ r=$out/report.txt
     [[ -n ${began[$p]:-} && -n ${ended[$p]:-} ]] && printf "%-11s %6.1f s  (from %5.1f s)\n" $p $(( ended[$p] - began[$p] )) $(( began[$p] - start ))
   done
   [[ -f $out/t-tests-built ]] && printf "%-11s %6.1f s\n" tests-built $(( $(<$out/t-tests-built) - began[tests] ))
+  printf "release build: %s, %.1f s\n" $warmth $(( ended[build] - began[build] ))
   [[ -f $out/shards.txt ]] && print "storyline shards $(wc -l < $out/shards.txt | tr -d ' '), stories $(wc -l < $out/stories-run.txt | tr -d ' ')"
-  printf "total       %6.1f s\n" $(( EPOCHREALTIME - start ))
+  total=$(( EPOCHREALTIME - start )); queued=$(( ended[wait-slots] - began[wait-slots] ))
+  printf "total       %6.1f s: %.1f s queued for the build slots, %.1f s the gate's own\n" $total $queued $(( total - queued ))
   print "== done $out"
 } > $r 2>&1
 cat $r
