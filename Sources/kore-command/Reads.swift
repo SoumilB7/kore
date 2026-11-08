@@ -61,6 +61,8 @@ enum Reads {
         var model: String?
         var mode: String?
         var deny = false
+        /// `answer --allow`: a permission card allowed once.
+        var allow = false
         /// `fork --at`, `wait --timeout`.
         var at: String?
         var timeout: Int?
@@ -91,6 +93,7 @@ enum Reads {
                     guard let m = rest.popFirst() else { problem = "--mode takes a mode"; return }
                     mode = m
                 case "--deny": deny = true
+                case "--allow": allow = true
                 case "--at":
                     guard let m = rest.popFirst() else { problem = "--at takes a message"; return }
                     at = m

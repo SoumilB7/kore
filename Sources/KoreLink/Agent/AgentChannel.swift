@@ -453,7 +453,7 @@ package final class AgentChannel {
             send(client, AgentResult(id: id, ok: true, data: data))
         case AgentCommand.options.name:
             guard let chat = changeable(args, client, id) else { return nil }
-            let o = chat.arsenalOptions
+            let o = chat.arsenalOptions(under: callerChat(client))
             send(client, AgentResult(id: id, ok: true, data: AgentOptions(
                 chat: chat.id.uuidString,
                 models: o.models.map { .init(id: $0.id, name: $0.name, efforts: $0.efforts) }, model: o.model, effort: o.effort,
@@ -469,7 +469,7 @@ package final class AgentChannel {
             case AgentCommand.rename.name: chat.arsenalRename(value, taken: AgentReads.chatsByID().values.filter { $0 !== chat }.map(\.title))
             case AgentCommand.model.name: chat.arsenalModel(value)
             case AgentCommand.effort.name: chat.arsenalEffort(value)
-            default: chat.arsenalMode(value)
+            default: chat.arsenalMode(value, under: callerChat(client))
             }
             done(outcome, chat, client, id)
             return chat.id.uuidString
@@ -526,13 +526,16 @@ package final class AgentChannel {
                 fail(client, id, .invalid, "Name the card, and give an answer per question or deny.")
                 return chat.id.uuidString
             }
-            done(chat.arsenalAnswer(card, args.answers ?? [], deny: args.deny ?? false), chat, client, id)
+            done(chat.arsenalAnswer(card, args.answers ?? [], deny: args.deny ?? false, allow: args.allow ?? false, by: callerChat(client)), chat, client, id)
             return chat.id.uuidString
         default:
             fail(client, id, .unknownCommand, Self.message(.unknownCommand))
         }
         return nil
     }
+
+    /// The caller's own chat, when it's one of Kore's.
+    private func callerChat(_ client: Client) -> Chat? { client.chat.flatMap { AgentReads.chatsByID()[$0] } }
 
     /// The longest message a caller may send.
     static let textMax = 64 * 1024

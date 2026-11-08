@@ -7,7 +7,7 @@ enum Drive {
     static let usage = [
         "new": "[--claude|--codex] [--model M] [--mode X] [\"message\"]", "send": "<chat> \"message\"", "stop": "<chat>", "tab": "<chat>",
         "fork": "<chat> [--at <message>] [--model M] [\"message\"]", "wait": "<chat> [--timeout s]",
-        "answer": "<chat> <card> <answer>... | <chat> <card> --deny", "open": "<session> [--folder F]",
+        "answer": "<chat> <card> <answer>... | <chat> <card> --deny | <chat> <card> --allow", "open": "<session> [--folder F]",
     ]
 
     static func fits(_ name: String, _ o: Reads.Options) -> Bool {
@@ -18,7 +18,7 @@ enum Drive {
         case "wait": return n == 1
         case "send": return n == 2
         case "stop", "tab", "open": return n == 1
-        default: return o.deny ? n == 2 : n >= 3
+        default: return o.deny || o.allow ? n == 2 : n >= 3
         }
     }
 
@@ -28,7 +28,6 @@ enum Drive {
         switch name {
         case "new":
             var args: Object = [:]
-            if let provider = o.provider { args["provider"] = provider }
             if let model = o.model { args["model"] = model }
             if let mode = o.mode { args["mode"] = mode }
             if let text = p.first { args["text"] = text }
@@ -36,6 +35,7 @@ enum Drive {
         case "fork":
             var args: Object = ["chat": p[0]]
             if let at = o.at { args["at"] = at }
+            if let provider = o.provider { args["provider"] = provider }
             if let model = o.model { args["model"] = model }
             if p.count > 1 { args["text"] = p[1] }
             // The CLI makes the fork: it can take a moment.
@@ -61,7 +61,7 @@ enum Drive {
             data = try client.run("chat.open", args)
         default:
             var args: Object = ["chat": p[0], "card": p[1]]
-            if o.deny { args["deny"] = true } else { args["answers"] = Array(p.dropFirst(2)) }
+            if o.deny { args["deny"] = true } else if o.allow { args["allow"] = true } else { args["answers"] = Array(p.dropFirst(2)) }
             data = try client.run("cards.answer", args)
         }
         if o.json { return Reads.printJSON(data) }

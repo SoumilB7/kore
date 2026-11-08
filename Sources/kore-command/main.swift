@@ -37,7 +37,7 @@ let usage = """
            kore tab <chat>       bring its tab to the front
            kore open <session> [--folder F]
                                  open a past chat (kore history lists them) in front
-           kore answer <chat> <card> <answer>... | --deny
+           kore answer <chat> <card> <answer>... | --deny | --allow
                                  answer a question card, one answer per question
            kore whoami           who Kore sees calling, and its access
            kore caps             what that access allows

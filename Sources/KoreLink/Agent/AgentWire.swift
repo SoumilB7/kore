@@ -137,6 +137,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     package var card: String?
     package var answers: [String]?
     package var deny: Bool?
+    /// `cards.answer`: a permission card allowed once (a caller at Auto or above).
+    package var allow: Bool?
     /// `chat.fork`: the user message to fork from (its row id, or its text or a part only it
     /// has); none forks at the end. `chat.wait`: seconds to wait, 300 at most.
     package var at: String?
@@ -157,6 +159,7 @@ package struct AgentArgs: Codable, Sendable, Equatable {
         self.card = nil
         self.answers = nil
         self.deny = nil
+        self.allow = nil
         self.at = nil
         self.timeout = nil
         self.place = nil

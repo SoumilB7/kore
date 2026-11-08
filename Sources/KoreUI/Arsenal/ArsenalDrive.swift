@@ -8,6 +8,23 @@ import src
 /// (a new tab as ⌘T and a CLI's pick open it, a message as the composer sends it), so it looks
 /// and runs the same; the receiving chat says who it came from. Approving stays the user's.
 extension Chat {
+    /// The lowest mode a caller allows another chat's permission card from, once (the owner's to
+    /// confirm, 2026-11-15): Auto, whose CLI runs commands without asking first, so what it allows
+    /// another to do it could do itself (Codex: Approve for me and up). Nil: no caller does.
+    package static let approvalFloor: String? = "auto"
+
+    /// At or above `approvalFloor`, and not there by "Allow commands in Plan".
+    package static func mayApprove(_ caller: Chat) -> Bool {
+        guard let floor = approvalFloor else { return false }
+        let rank = caller.arsenalRank
+        return !rank.unreviewed && modeLevel(rank.id) >= modeLevel(floor)
+    }
+
+    /// "Auto", for a refusal.
+    static var approvalFloorLabel: String {
+        approvalFloor.map { floor in ClaudeModes.all.first { $0.id == floor }?.label ?? floor } ?? "any level"
+    }
+
     /// What it can do on its own now is no more than `other` can (`noFreer`), and it hasn't been
     /// told Always allow where `other` hasn't: Drive reaches it.
     package func noFreer(than other: Chat) -> Bool {
@@ -32,14 +49,27 @@ extension Chat {
     }
 
     /// A question card's answers, an option's label (or typed text, where the card takes it) per
-    /// question in order; or `deny`, which any card takes. Nothing else: approving stays the user's.
-    package func arsenalAnswer(_ cardId: String, _ choices: [String], deny: Bool) -> Result<String, ArsenalRefusal> {
+    /// question in order; `deny`, which any card takes; or `allow`, a permission card allowed once,
+    /// by a caller at Auto or above (one whose own mode lets its CLI run commands without asking
+    /// first), in a chat it reaches (the owner, 2026-11-15). Never Always allow, a plan, a
+    /// sign-in or a secret question: those stay the user's.
+    package func arsenalAnswer(_ cardId: String, _ choices: [String], deny: Bool, allow: Bool = false, by caller: Chat? = nil) -> Result<String, ArsenalRefusal> {
         guard let card = approvals.pending.first(where: { $0.id == cardId }) else { return .failure(.init("That card was answered or withdrawn.")) }
         guard !card.signIn else { return .failure(.init("Only you answer a sign-in.")) }
         if deny {
             answer(card, .deny)
             note("Arsenal · denied “\(card.title)”")
             return .success("Denied.")
+        }
+        if allow {
+            guard card.isPermission else { return .failure(.init("Only a permission card is allowed this way; plans stay yours to approve.")) }
+            guard let caller, Self.mayApprove(caller) else {
+                guard Self.approvalFloor != nil else { return .failure(.init("Only you allow a chat's commands.")) }
+                return .failure(.init("Only a chat at \(Self.approvalFloorLabel) or above allows another's commands: this one is \(caller?.controls.activeMode.label ?? "outside Kore")."))
+            }
+            answer(card, .allow)
+            note("Arsenal · allowed “\(card.title)” · by \(String(caller.id.uuidString.prefix(8)).lowercased())")
+            return .success("Allowed once.")
         }
         guard !card.questions.isEmpty else { return .failure(.init("Only you approve this. An agent may deny it.")) }
         guard choices.count == card.questions.count else { return .failure(.init("This card asks \(card.questions.count) question(s): give one answer each.")) }

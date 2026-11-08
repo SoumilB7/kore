@@ -101,14 +101,20 @@ final class ArsenalDrive: ChatStoryline {
             TurnsDone("b", 1),
             Do("the user leaves b in \(low)") { story in try AgentCast.of(story).chat("b").storySetMode(low) },
 
-            // Tabs; a message; a change; a mode lowered, never raised.
+            // Tabs; a message; a change; a mode lowered, raised only to a's level.
             KoreAs(["tab", "{a}"], a, "a's tab to the front", expect: ["In front."]),
             shown("a in front") { shown, a in shown === a },
             KoreAs(["send", "{b}", "second"], a, "a message to b", expect: ["Sent."]),
             TurnsDone("b", 2),
             KoreAs(["model", "{b}", "verse"], a, "b's model", expect: ["Model Verse."]),
             role("b", "b on Verse") { $0.storyModel == "verse" },
-            KoreAs(["mode", "{b}", higher], a, "raising b's mode is the user's", status: 1, says: "Only you can raise a chat's mode."),
+        ] + (codex ? [
+            // a in Full access: b up to its level, and down again.
+            KoreAs(["mode", "{b}", higher], a, "b raised, no freer than a", expect: ["Mode Approve for me."]),
+            KoreAs(["mode", "{b}", low], a, "and lowered again", expect: ["Mode Ask for approval."]),
+        ] : [
+            KoreAs(["mode", "{b}", higher], a, "past a's Manual: the user's", status: 1, says: "only you can"),
+        ]) + [
             role("b", "b's mode as it was") { $0.mode == low && !$0.storyPlanning },
             KoreAs(["mode", "{b}", "plan"], a, "b lowered to Plan", expect: ["Mode Plan."]),
             role("b", "b planning") { $0.storyPlanning },

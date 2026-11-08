@@ -69,7 +69,18 @@ extension Chat {
     /// move would let the CLI do without the user what it couldn't before. Plan with "Allow commands
     /// in Plan" on approves commands itself; Edit automatically from Auto drops Auto's review of
     /// edits. Those stay the user's. A Codex chat compares its permissions (`arsenalRank`).
-    func arsenalMayMove(to id: String) -> Bool {
+    ///
+    /// Moved by another chat's agent (`caller`, Act unlimited), up or down: to any mode that leaves
+    /// it no freer than the caller (the owner, 2026-11-15: "only when the chat is on the same
+    /// level"; a chat in Edit automatically can't put another in Auto). Its own chat only lowers.
+    func arsenalMayMove(to id: String, under caller: Chat? = nil) -> Bool {
+        if let caller, caller !== self {
+            let planning = id == "plan" || provider.planToggle?.id == id
+            // A Codex chat ranks by its permissions: its Plan switch leaves them as they are.
+            let rankId = provider.planToggle?.id == id ? controls.permissionsMode.id : id
+            let ceiling = caller.arsenalRank
+            return Self.noFreer(rankId, unreviewed: planning && controls.planAllow, than: ceiling.id, unreviewed: ceiling.unreviewed)
+        }
         if id == "plan" { return !controls.planAllow || controls.planning }
         let now = arsenalRank.id
         guard Self.modeLevel(id) <= Self.modeLevel(now) else { return false }
@@ -89,14 +100,17 @@ extension Chat {
         return modeLevel(id) <= modeLevel(other)
     }
 
-    package var arsenalOptions: ArsenalOptions {
+    package var arsenalOptions: ArsenalOptions { arsenalOptions(under: nil) }
+
+    /// `caller`: another chat's agent asking (its `allowed` modes are those it may move this one to).
+    package func arsenalOptions(under caller: Chat?) -> ArsenalOptions {
         var modes = controls.availableModes.filter(\.listed)
         if let plan = provider.planToggle, !modes.contains(where: { $0.id == plan.id }) { modes.insert(plan, at: 0) }
         return ArsenalOptions(
             models: controls.models.map { .init(id: $0.id, name: $0.name, efforts: $0.efforts) },
             model: controls.currentModel?.id ?? controls.modelId,
             effort: controls.effort,
-            modes: modes.map { .init(id: $0.id, label: $0.label, allowed: arsenalMayMove(to: $0.id)) },
+            modes: modes.map { .init(id: $0.id, label: $0.label, allowed: arsenalMayMove(to: $0.id, under: caller)) },
             mode: controls.activeMode.id,
             fast: controls.fastModeShown ? controls.fastMode : nil)
     }
@@ -152,14 +166,19 @@ extension Chat {
         return .success(on ? "Fast mode on." : "Fast mode off.")
     }
 
-    /// Only to a mode at or below the one it's in: raising one stays the user's.
-    package func arsenalMode(_ id: String) -> Result<String, ArsenalRefusal> {
-        let options = arsenalOptions
+    /// Its own chat: only to a mode at or below the one it's in, raising one stays the user's.
+    /// Another's (`caller`): any mode leaving it no freer than the caller.
+    package func arsenalMode(_ id: String, under caller: Chat? = nil) -> Result<String, ArsenalRefusal> {
+        let caller = caller === self ? nil : caller
+        let options = arsenalOptions(under: caller)
         guard let mode = options.modes.first(where: { $0.id.lowercased() == id.lowercased() || $0.label.lowercased() == id.lowercased() }) else {
             return .failure(.init("This chat's modes: " + options.modes.map(\.id).joined(separator: ", ")))
         }
         guard mode.id != options.mode else { return .success("Already \(mode.label).") }
         guard mode.allowed else {
+            if let caller {
+                return .failure(.init("\(mode.label) would let this chat do more on its own than \(caller.controls.activeMode.label) lets the chat asking: only you can."))
+            }
             if Self.modeLevel(mode.id) > Self.modeLevel(options.mode) {
                 return .failure(.init("Only you can raise a chat's mode. \(mode.label) is above \(controls.activeMode.label)."))
             }
@@ -173,7 +192,7 @@ extension Chat {
         Task { @MainActor [self] in
             // A Codex chat's plan is a switch over its permissions.
             if plan { setPlanMode(true) } else { setMode(mode.id, remember: false) }
-            note("Arsenal · mode \(mode.label)")
+            note("Arsenal · mode \(mode.label)" + (caller.map { " · by \(String($0.id.uuidString.prefix(8)).lowercased())" } ?? ""))
         }
         let ends = provider == .codex && !plan && mode.id != CodexModes.fullAccess && arsenal != nil && !services.onBox
         return .success(ends ? "Mode \(mode.label). Kore access ends with it: Codex's sandbox blocks it there." : "Mode \(mode.label).")
