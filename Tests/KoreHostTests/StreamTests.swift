@@ -367,4 +367,38 @@ struct StreamTests {
         b.send(ChatCall(id: "late", chatId: hc.id, command: .interrupt))
         try await until { b.frames.contains { if case .bye(.auth)? = try? LinkMessage.decode($0) { true } else { false } } }
     }
+
+    @Test func aClosedChatIsKeptToReopen() async throws {
+        let backend = StreamStandIn()
+        let (rig, grant, hc) = try rig(backend)
+        defer { rig.finish() }
+        let client = try await StreamClient(rig, grant: grant)
+        #expect(try await client.call(hc.id, .close).ok)
+        #expect(rig.host.chat(hc.id) == nil)
+        let window = HostDaemon.windowID(rig.folder.path)
+        #expect(rig.host.closedHistory(windowId: window, query: nil).map(\.id) == [hc.id])
+        // Its history over the link, then back.
+        client.socket.send(.historyList(id: "h1", windowId: window, query: nil, archived: false, offset: 0))
+        try await until { client.frames.contains { if case .historyPage(_, _, let sessions, _)? = try? LinkMessage.decode($0) { sessions.first?.id == hc.id } else { false } } }
+        let back = rig.host.apply(.control(.tabReopen, ControlArgs(sourceId: hc.id)), id: "r1", control: .full) { _ in }
+        #expect(back?.ok == true && back?.chatId == hc.id)
+        #expect(rig.host.chat(hc.id) != nil && rig.host.closedChats.isEmpty)
+        // A restart keeps a closed chat closed, and reopenable.
+        _ = try await client.call(hc.id, .close)
+        rig.restart()
+        #expect(rig.host.chat(hc.id) == nil && rig.host.closedChats.map(\.id) == [hc.id])
+    }
+
+    @Test func anAnswerFitsOneFrame() {
+        var value = CallValue()
+        value.text = String(repeating: "x", count: 2_000_000)
+        let text = HostDaemon.fitted(ChatCallResult(id: "1", ok: true, value: value))
+        #expect(StreamWire.encode(text).count <= HostDaemon.answerBudget)
+        #expect(text.value?.text?.hasPrefix("… (the start is cut") == true)
+        var many = CallValue()
+        many.events = (0..<4000).map { .text("b\($0)", .answer, String(repeating: "y", count: 400)) }
+        let events = HostDaemon.fitted(ChatCallResult(id: "2", ok: true, value: many))
+        #expect(StreamWire.encode(events).count <= HostDaemon.answerBudget)
+        #expect(events.value?.more == true && (events.value?.events?.count ?? 0) > 0)
+    }
 }

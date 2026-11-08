@@ -198,7 +198,7 @@ struct HostClientTests {
         host.send(json: ["t": "result", "id": gh["id"] as! String, "ok": true, "url": "https://github.com/login/device", "authCode": "WXYZ-0000"])
         #expect(await until { accounts.line("gh").step == .waiting(.init(url: URL(string: "https://github.com/login/device"), code: "WXYZ-0000")) })
         host.send(json: ["t": "delta", "rev": 2, "host": ["ghSignedIn": true]])
-        #expect(await until { accounts.line("gh") == .init(said: "Signed in", step: .idle) })
+        #expect(await until { accounts.line("gh") == .init(said: "Signed in", signedIn: true, step: .idle) })
         connection.release()
     }
 

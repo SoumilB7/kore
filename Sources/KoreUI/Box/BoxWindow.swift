@@ -232,6 +232,8 @@ final class BoxChatServices: ChatServices {
     let connection: HostConnection
     private let folder: String
     private(set) var chatId: String?
+    /// Its chat, for the box's renames.
+    private weak var chat: Chat?
     /// What a chat new from here is made with on the box (a fork's start).
     private let making: LinkChatBackend.Making?
     /// The CLI runs on the box, which sets its own instructions; nothing of this Mac's reaches it.
@@ -250,11 +252,17 @@ final class BoxChatServices: ChatServices {
         var making = making ?? LinkChatBackend.Making(mode: options.mode, effort: options.effort)
         making.model = making.model ?? options.model
         let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId, making: making)
+        // A rename on the box (from another Mac, or its CLI's own title) shows in this tab.
+        backend.onTitle = { [weak self] title in
+            guard let chat = self?.chat, chat.title != title else { return }
+            chat.adoptName(title)
+        }
         backend.onCreated = { [weak self] in self?.chatId = $0 }
         return backend
     }
 
     func register(_ chat: Chat) {
+        self.chat = chat
         chat.ownPopups()
         // Modes above Auto are set on the box itself: the picker doesn't offer them.
         chat.controls.levelCap = LinkPolicy.raiseCap.rawValue
