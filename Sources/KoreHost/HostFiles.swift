@@ -72,6 +72,21 @@ package struct HostFiles: Sendable {
         return FilesResult(id: id, ok: true, path: place.path, entries: entries, more: more ? true : nil)
     }
 
+    /// A phone's folder browser (an act grant): a folder's subfolders, no dotfiles, no files; a
+    /// link only when it leads to a folder inside the home (going into one is checked again).
+    package func folders(id: String, path: String?) -> FilesResult {
+        var listed = list(id: id, path: path, hidden: false)
+        guard listed.ok, let at = listed.path else { return listed }
+        let root = Self.real(home) ?? home
+        listed.entries = listed.entries?.filter { entry in
+            guard entry.isFolder else { return false }
+            guard entry.kind == .link else { return true }
+            guard let real = Self.real(at + "/" + entry.name) else { return false }
+            return LinkFiles.inside(real, root)
+        }
+        return listed
+    }
+
     /// `base`: what the client holds; when the file is still that, only `unchanged` goes back.
     package func read(id: String, path: String, max: Int?, base: FileStamp? = nil) -> FilesResult {
         let place: (path: String, real: String)

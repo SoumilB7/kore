@@ -140,7 +140,7 @@ class Demo(private val context: Context, private val scenario: String = "") : St
                     // Every command the phone sends, for the emulator's checks (`logcat -s KoreDemo`).
                     android.util.Log.i("KoreDemo", "$dir ${cmd ?: "{}"}")
                     if ((cmd?.get("type") as? JsonPrimitive)?.content == "chat.send") queueIfWorking((cmd["chatId"] as? JsonPrimitive)?.content)
-                    push(buildJsonObject { put("t", "result"); put("id", id); put("ok", true) })
+                    push((if (dir == "box") boxFolders(id, cmd) else null) ?: buildJsonObject { put("t", "result"); put("id", id); put("ok", true) })
                     cmd?.let(::closeIfAsked)
                 }
                 // An upload: taken, as the Mac's would be.
@@ -188,6 +188,60 @@ class Demo(private val context: Context, private val scenario: String = "") : St
                 "logs.chunk" -> logsRead = (m["total"] as? JsonPrimitive)?.content?.toIntOrNull() ?: -1
             }
             return true
+        }
+
+        /** The box's home as a phone browses it (`fs.list`, folders only), with what it serves and what's made here. */
+        private val home = "/home/soumil"
+        private val tree = mutableMapOf(
+            home to mutableListOf("Code", "Documents", "notes", "Onfinance", "Platform", "Test1"),
+            "$home/Code" to mutableListOf("kore", "kore-host", "scratch"),
+            "$home/Documents" to mutableListOf("invoices"),
+        )
+        private val served = linkedMapOf("$home/Onfinance" to "w_onfinance", "$home/Test1" to "w_test1", "$home/Platform" to "w_platform")
+
+        /** kore-host's answers to a phone's folder browser: `fs.list`, `fs.mkdir`, `folders.list`, `folder.add`; else null (a plain ok). */
+        private fun boxFolders(id: String, cmd: JsonObject?): JsonObject? {
+            fun str(k: String) = (cmd?.get(k) as? JsonPrimitive)?.content
+            fun ok(body: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit) = buildJsonObject { put("t", "result"); put("id", id); put("ok", true); body() }
+            return when (str("type")) {
+                "fs.list" -> {
+                    val at = str("path") ?: home
+                    ok {
+                        put("path", at)
+                        put("entries", kotlinx.serialization.json.JsonArray(tree[at].orEmpty().sortedWith(String.CASE_INSENSITIVE_ORDER).map { buildJsonObject { put("name", it); put("kind", "dir") } }))
+                    }
+                }
+                "fs.mkdir" -> {
+                    val at = str("path") ?: return null
+                    val names = tree.getOrPut(at.substringBeforeLast('/')) { mutableListOf() }
+                    val name = at.substringAfterLast('/')
+                    if (name in names) buildJsonObject { put("t", "result"); put("id", id); put("ok", false); put("code", "invalid"); put("message", "$name is already there.") }
+                    else { names += name; tree[at] = mutableListOf(); ok { put("path", at) } }
+                }
+                "folders.list" -> ok { put("folders", kotlinx.serialization.json.JsonArray(served.map { (p, w) -> buildJsonObject { put("path", p); put("windowId", w) } })) }
+                "folder.add" -> {
+                    val at = str("path") ?: return null
+                    val wid = served.getOrPut(at) { "w_" + at.substringAfterLast('/').lowercase().filter { it.isLetterOrDigit() } }
+                    windowFor(at, wid)
+                    ok { put("windowId", wid) }
+                }
+                else -> null
+            }
+        }
+
+        /** A served folder's window, as kore-host shows one: added to the windows, as a delta. */
+        private fun windowFor(path: String, wid: String) {
+            val snap = snapshot ?: return
+            val windows = (snap["windows"] as? kotlinx.serialization.json.JsonArray)?.map { it as JsonObject } ?: return
+            if (windows.any { (it["id"] as? JsonPrimitive)?.content == wid }) return
+            val made = buildJsonObject {
+                put("id", wid); put("name", path.substringAfterLast('/')); put("path", "~" + path.removePrefix(home))
+                put("tabs", kotlinx.serialization.json.JsonArray(emptyList()))
+            }
+            val kept = windows + made
+            val rev = ((snap["rev"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 1) + 1
+            snapshot = JsonObject(snap + mapOf("rev" to JsonPrimitive(rev), "windows" to kotlinx.serialization.json.JsonArray(kept)))
+            push(buildJsonObject { put("t", "delta"); put("rev", rev); put("windows", kotlinx.serialization.json.JsonArray(kept)) })
         }
 
         /** A window or a chat closed, as the Mac or kore-host would: gone from the windows, as a delta. */

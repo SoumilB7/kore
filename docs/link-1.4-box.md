@@ -97,7 +97,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 | `chat.setFast` | `chatId, on` | Also for an `act` grant. Only while the chat's CLI runs and has said fast mode is there for its model; `invalid` otherwise. |
 | `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as in link 1.0 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link under full control (1.2). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
 | `folders.list` | | Result: `folders: [{windowId, path, missing?}]`; `missing: true` for a served folder that isn't there any more. |
-| `folder.add` | `path` | An existing folder, by absolute path or under `~` (the box's home); it's added to `config.json`. Result: `folders`. `gone.folder` otherwise. |
+| `folder.add` | `path` | An existing folder, by absolute path or under `~` (the box's home); it's added to `config.json`. Result: `folders`, and (0.3.5) `windowId`, its window. `gone.folder` otherwise. An act grant (a phone's Open here) adds only an absolute folder inside the home with no hidden name on the way, its links resolved inside the home (`denied.path` otherwise); each add is journalled `audit folder add device=… control=… path=… ok=…`. |
 | `account.refresh` | `provider, chatId?, login?` | Result `message`: "Signed in as …" / "… isn't signed in.". With `chatId` (or `login`), Claude's status in that chat's (or that) account's folder. |
 | `account.list` | `provider, chatId?, folder?` | Claude only. Result `accounts: [{id, email?, organization?, plan?, signedIn?}]`: the default (`id: "main"`, `~/.claude`) and each folder of the box's `~/.config/claude-accounts` by name, each read with `claude auth status` there when asked (a list read in the last 30 s is answered as it is); `signedIn` absent when it couldn't be read. `login`: the account `chatId` runs on; `folderLogin`: the one new chats in `folder` (or the chat's) start on. |
 | `account.switch` | `provider, login, chatId?, folder?` | Claude only. The chat runs on `login` from now on (its work stops, its CLI starts again on its session with `CLAUDE_CONFIG_DIR` at that account's folder), and its folder's new chats start on it; with `folder` alone, only the folder's default. `gone.login` for an account that isn't there. |
@@ -339,6 +339,12 @@ Where a path may lead:
   `denied.path`: the browser starts at the home and goes outside it only through a served folder.
   A path typed in the browser still opens (`folder.add`) without being listed.
 - `fs.read`: inside a served folder only.
+- An act grant (0.3.5, a phone's folder browser in its ＋ sheet) may `fs.list` and `fs.mkdir`
+  too, inside the box user's home only (never a served folder outside it) and never through a
+  hidden name (`.ssh`, `.config`: `denied.path`; `hidden: true` likewise). Its `fs.list` carries
+  subfolders only (no files; a link only when it leads to a folder inside the home). Each folder
+  it makes is journalled `audit mkdir device=… path=… ok=…`. Anything else stays `denied.control`.
+  A Mac never answers these for a phone: a new folder on the Mac is opened on the Mac itself.
 - Links are listed as `link` and never followed out: the path's real place (its links
   resolved) has to stay inside the home or served folder it's under, else `denied.path`. A link
   that stays inside is read as what it leads to.

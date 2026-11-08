@@ -486,9 +486,16 @@ final class LinkClient {
             if signs, let digest = LinkAsk.proofNeeded(command, command.chatId.flatMap(host.chat).map { HostMeta.facts($0) }) {
                 guard approved(id: id, digest: digest, data) else { return }
             }
-            let result = host.apply(command, id: id, control: control) { [weak self] result in self?.send(.result(result)) }
+            let result = host.apply(command, id: id, control: control, phone: device?.kind == .phone) { [weak self] result in self?.send(.result(result)) }
             if let result {
                 if result.code == .deniedControl { denied(command.type) }
+                // A folder served from now on, by whom (a phone's Open here, or the Mac's add).
+                if case .control(.folderAdd, let args) = command {
+                    HostJournal.audit("folder add", [
+                        "device": device?.id.uuidString.lowercased() ?? grant?.name, "control": control.rawValue, "path": args.path,
+                        "ok": result.ok ? "1" : "0",
+                    ])
+                }
                 send(.result(result))
             }
         default:
@@ -642,6 +649,7 @@ final class LinkClient {
     /// done off the main thread; the answer is a `FilesResult`.
     private func files(_ kind: ControlKind, _ args: ControlArgs, id: String) {
         guard let control = current() else { return }
+        if control == .act, kind == .fsList || kind == .fsMkdir { return homeFolders(kind, args, id: id) }
         if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, nil, control: control == .full ? .full : .standard) {
             if code == .deniedControl { denied(kind.rawValue) }
             return sendRaw(StreamWire.encode(FilesResult.refused(id, code, message)))
@@ -720,6 +728,24 @@ final class LinkClient {
                 default: break
                 }
             }
+        }
+    }
+
+    /// A phone's folder browser (an act grant): `fs.list` (subfolders only) and `fs.mkdir`, inside
+    /// the home only, no hidden names (`LinkPolicy.checkHomeFolders`); a folder made is audited.
+    private func homeFolders(_ kind: ControlKind, _ args: ControlArgs, id: String) {
+        let home = HostPaths.home(host.sessionEnv).path
+        if case .deny(let code, let message) = LinkPolicy.checkHomeFolders(kind, args, home: home) {
+            return sendRaw(StreamWire.encode(FilesResult.refused(id, code, message)))
+        }
+        let files = HostFiles(home: home, served: [])
+        let who = device?.id.uuidString.lowercased() ?? grant?.name
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                kind == .fsMkdir ? files.mkdir(id: id, path: args.path ?? "") : files.folders(id: id, path: args.path)
+            }.value
+            if kind == .fsMkdir { HostJournal.audit("mkdir", ["device": who, "path": result.path ?? args.path, "ok": result.ok ? "1" : "0"]) }
+            self?.sendRaw(StreamWire.encode(result))
         }
     }
 

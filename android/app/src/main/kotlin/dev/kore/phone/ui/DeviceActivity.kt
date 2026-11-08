@@ -289,11 +289,18 @@ class DeviceActivity : NodeActivity() {
     private val prefs by lazy { getSharedPreferences("kore", MODE_PRIVATE) }
     /** A box's folders, read when the Window half opens. */
     private var boxFolders: List<JsonObject>? = null
+    /** A box's folder browser: made when the Window half first opens on a box, gone with the sheet. */
+    private var browser: FolderBrowser? = null
+    /** The new folder's name while it's typed (kept across the sheet's redraws). */
+    private var naming: android.widget.EditText? = null
+    /** The Chat half's From History with several windows: the window its past chats come from is picked first. */
+    private var pickingHistory = false
 
     /**
      * ＋ (option B): Chat or Window, then where. Chat: the CLI (it remembers the last), then the
-     * window it goes in. Window: Kore's recent folders not open now and Reopen on a Mac; the
-     * folders a box serves on a box. The one line at the foot says what a tap makes and where.
+     * window it goes in, or a past chat From History. Window: Kore's recent folders not open now
+     * and Reopen on a Mac; on a box, its folders from the home down, a new one, and Open here.
+     * The one line at the foot says what a tap makes and where.
      */
     private fun createSheet() {
         if (last == null) return
@@ -304,15 +311,18 @@ class DeviceActivity : NodeActivity() {
             val snap = last ?: return@show dismiss()
             title("New on $macName")
             val sheet = this
-            segmented(listOf("chat" to "Chat", "window" to "Window"), making) { making = it; if (it == "window" && box) readBoxFolders(sheet); refresh() }
+            segmented(listOf("chat" to "Chat", "window" to "Window"), making) { making = it; pickingHistory = false; refresh() }
+            if (making == "window" && box) startBrowse(sheet)
             if (making == "chat") chatHalf(snap, box) else windowHalf(snap, box)
         }
         folderSheet = s
-        s.onDismiss { folderSheet = null }
+        s.onDismiss { folderSheet = null; browser = null; naming = null; pickingHistory = false }
     }
 
     private fun Sheet.chatHalf(snap: JsonObject, box: Boolean) {
         val s = this
+        val windows = snap.objs("windows")
+        if (pickingHistory) return historyPick(windows)
         val providers = link?.welcome?.value?.objs("providers").orEmpty()
         val chosen = prefs.getString("newProvider", null)?.takeIf { p -> providers.any { it.str("id") == p } } ?: providers.firstOrNull()?.str("id")
         if (providers.size > 1) segmented(providers.map { (it.str("id") ?: "") to (it.str("name") ?: it.str("id") ?: "") }, chosen) {
@@ -321,7 +331,6 @@ class DeviceActivity : NodeActivity() {
         }
         val cli = providers.firstOrNull { it.str("id") == chosen }
         val cliName = cli?.str("name") ?: "new"
-        val windows = snap.objs("windows")
         for (w in windows) {
             val wid = w.str("id") ?: continue
             item(w.str("name") ?: "Window", glyph = "□", detail = ControlModel.parentOf(w.str("path")), tag = "New $cliName chat in ${w.str("name")}") {
@@ -334,31 +343,46 @@ class DeviceActivity : NodeActivity() {
                 }
             }
         }
-        // The picked window's past chats, to open one there.
+        // A past chat back, in the picked window (one window, or the chip picked: straight to its
+        // History; several: the window first).
         val picked = (if (windows.size == 1) windows[0] else windows.firstOrNull { it.str("id") == filter })
-        picked?.str("id")?.let { wid ->
-            item("From History", glyph = "From History", detail = picked.str("name"), chevron = true) { s.dismiss(); history(wid) }
+        if (windows.isNotEmpty()) item("From History", glyph = "From History", detail = picked?.str("name"), chevron = true) {
+            val wid = picked?.str("id")
+            if (wid != null) { s.dismiss(); history(wid) } else { pickingHistory = true; refresh() }
         }
         val where = if (windows.size == 1) windows[0].str("name") ?: "the window" else "the folder you pick"
         say(if (box) "A $cliName chat in $where on $macName." else "A $cliName chat in $where, as a new tab there.")
     }
 
+    /** From History, several windows: which one's past chats (a tap there opens one in it). */
+    private fun Sheet.historyPick(windows: List<JsonObject>) {
+        val s = this
+        custom(navRow("From History", dev.kore.phone.R.drawable.i_back, "Back to new chat") { pickingHistory = false; s.refresh() })
+        for (w in windows) {
+            val wid = w.str("id") ?: continue
+            item(w.str("name") ?: "Window", glyph = "□", detail = ControlModel.parentOf(w.str("path")), chevron = true, tag = "History of ${w.str("name")}") {
+                s.dismiss()
+                history(wid)
+            }
+        }
+        say("A past chat on $macName, opened again in the folder you pick.")
+    }
+
     private fun Sheet.windowHalf(snap: JsonObject, box: Boolean) {
         val s = this
         if (box) {
+            val b = browser
+            if (b != null && !b.unsupported) return browserHalf(b)
             val folders = boxFolders
             if (folders == null) { say("Reading the folders on $macName…"); return }
             for (f in folders) {
                 val wid = f.str("windowId") ?: continue
                 item((f.str("path") ?: "Folder").trimEnd('/').substringAfterLast('/'), glyph = "□", detail = ControlModel.parentOf(f.str("path")), enabled = !f.bool("missing")) {
                     s.dismiss()
-                    val window = Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", wid)
-                    // A closed window comes back first (`window.open` by its id); an open one just opens.
-                    if (snap.objs("windows").any { it.str("id") == wid }) startActivity(window)
-                    else act(dev.kore.link.node.Control.windowShow(wid)) { startActivity(window) }
+                    openBoxWindow(wid)
                 }
             }
-            say("Folders open on $macName. A new folder is added from the Mac.")
+            say("Folders open on $macName. Update kore-host there to open any folder from here.")
             return
         }
         // A Mac that doesn't send its recents (before this phone's ask view): say so, not an empty sheet.
@@ -379,11 +403,167 @@ class DeviceActivity : NodeActivity() {
                 res.str("windowId")?.let { startActivity(Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", it)) }
             }
         }
-        item("Another folder", glyph = " ", detail = "on $macName", enabled = false)
+        // A Mac's new folder stays the Mac's: a phone never browses the Mac's disk.
+        item("Another folder", glyph = " ", detail = "on the Mac itself", enabled = false)
         say("A window on $macName, from a folder Kore opened before.")
     }
 
-    /** A box: the folders it already serves (a new folder is the Mac's to add). */
+    /**
+     * A box's folders from its user's home (FolderBrowser): where it stands (a tap goes up), its
+     * subfolders (a tap goes in; one open on the box says so), New folder named in place, and Open
+     * here. Read one level at a time; the foot line says what Open here makes.
+     */
+    private fun Sheet.browserHalf(b: FolderBrowser) {
+        val s = this
+        val at = b.path
+        val up = b.up()
+        custom(navRow(at?.let { FolderBrowser.shown(it, b.home) } ?: "~", if (up != null) dev.kore.phone.R.drawable.i_up else dev.kore.phone.R.drawable.i_folder,
+            if (up != null) "Up to ${FolderBrowser.shown(up, b.home)}" else null) { if (up != null) browse(s, up) })
+        if (at == null) return say(b.problem ?: "Reading the folders on $macName…")
+        val served = boxFolders.orEmpty().mapNotNull { it.str("path")?.trimEnd('/') }.toSet()
+        for (name in b.folders) {
+            val p = b.into(name) ?: continue
+            item(name, glyph = "□", detail = if (p in served) "open" else null, chevron = true, tag = "Folder $name") { browse(s, p) }
+        }
+        if (b.folders.isEmpty() && b.reading == null) custom(label("No folders in here.").apply {
+            type(Type.Callout); setTextColor(Tone.faint); setPadding(dp(4), dp(10), dp(4), dp(10))
+        })
+        val field = naming
+        if (field == null) item("New folder", glyph = "New folder", tag = "New folder") {
+            naming = nameField()
+            s.refresh()
+            naming?.let { f -> f.requestFocus(); f.post { (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).showSoftInput(f, 0) } }
+        } else {
+            custom(field)
+            custom(LinearLayout(this@DeviceActivity).apply {
+                addView(button("Cancel", Btn.Secondary) { naming = null; hideKeys(field); s.refresh() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
+                addView(button("Make", Btn.Primary) { makeFolder(s) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) }
+            })
+        }
+        if (field == null) custom(button("Open here", Btn.Primary) { openHere(s) }.apply {
+            contentDescription = "Open here"
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), dp(14), dp(4), 0) }
+        })
+        val here = FolderBrowser.shown(at, b.home)
+        say(b.problem ?: if (b.reading != null) "Reading…" else if (field != null) "A new folder in $here on $macName." else "A window on $here on $macName.")
+    }
+
+    /** A sheet's place row: an icon (a tap goes back or up when [go] is said), then where, dim. */
+    private fun navRow(text: String, icon: Int, tapSays: String?, go: () -> Unit): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = dp(44)
+        setPadding(dp(4), dp(6), dp(4), dp(6))
+        addView(android.widget.ImageView(this@DeviceActivity).apply {
+            setImageResource(icon)
+            imageTintList = android.content.res.ColorStateList.valueOf(if (tapSays != null) Tone.accent else Tone.dim)
+        }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(14) })
+        addView(label(text).apply {
+            type(Type.Label); setTextColor(Tone.dim); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.START
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        contentDescription = tapSays ?: text
+        if (tapSays != null) { pressable(); setOnClickListener { go() } }
+    }
+
+    /** The new folder's name: one line, never a secret (suggestions stay on), Done makes it. */
+    private fun nameField(): android.widget.EditText = android.widget.EditText(this).apply {
+        hint = "Folder name"
+        setHintTextColor(K.faint)
+        setTextColor(K.text)
+        textSize = 15f
+        background = rounded(KS.field, 10, K.line)
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        inputType = android.text.InputType.TYPE_CLASS_TEXT
+        imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+        importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        maxLines = 1
+        isSingleLine = true
+        contentDescription = "Folder name"
+        setOnEditorActionListener { _, _, _ -> folderSheet?.let(::makeFolder); true }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), dp(8), dp(4), dp(4)) }
+    }
+
+    private fun hideKeys(v: View) =
+        (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0)
+
+    /** The Window half opened on a box: its served folders (marks, the fallback) and its home, read once a sheet. */
+    private fun startBrowse(s: Sheet) {
+        if (browser != null) return
+        browser = FolderBrowser()
+        readBoxFolders(s)
+        browse(s, null, redraw = false)
+    }
+
+    /** Goes to [to] (null: the home): at once when it was read, else read now and drawn when it answers. */
+    private fun browse(s: Sheet, to: String?, redraw: Boolean = true) {
+        val b = browser ?: return
+        naming = null
+        val needs = b.go(to)
+        if (redraw) s.refresh()
+        if (!needs) return
+        val asked = b.reading?.takeIf { it.isNotEmpty() }
+        ask(dev.kore.link.node.Control.fsList(asked)) { r ->
+            if (browser !== b) return@ask
+            b.listed(asked, r)
+            if (s.isShowing) s.refresh()
+        }
+    }
+
+    /** New folder's Make: the name checked here first, made on the box, then the browser stands in it. */
+    private fun makeFolder(s: Sheet) {
+        val b = browser ?: return
+        val at = b.path ?: return
+        val name = naming?.text?.toString()?.trim().orEmpty()
+        FolderBrowser.nameProblem(name, b.folders)?.let { b.refused(it); return s.refresh() }
+        val path = if (at == "/") "/$name" else "$at/$name"
+        ask(dev.kore.link.node.Control.fsMkdir(path)) { r ->
+            if (browser !== b) return@ask
+            if (r.bool("ok")) {
+                naming?.let(::hideKeys)
+                naming = null
+                b.made(name, at)
+            } else b.refused(boxWords(r))
+            if (s.isShowing) s.refresh()
+        }
+    }
+
+    /** Open here: the box serves the folder (a phone's add is audited there), then its window opens. */
+    private fun openHere(s: Sheet) {
+        val b = browser ?: return
+        val at = b.path ?: return
+        ask(dev.kore.link.node.Control.folderAdd(at)) { r ->
+            if (!r.bool("ok")) { b.refused(boxWords(r)); return@ask s.refresh() }
+            val wid = r.str("windowId") ?: r.objs("folders").firstOrNull { it.str("path")?.trimEnd('/') == at }?.str("windowId")
+            s.dismiss()
+            if (wid != null) openBoxWindow(wid) else Quiet.say(this, "Opened on $macName")
+        }
+    }
+
+    /** A box window by id: a closed one comes back first (`window.open`); an open one just opens. */
+    private fun openBoxWindow(wid: String) {
+        val window = Intent(this, WindowActivity::class.java).putExtra("window", wid)
+        if (last?.objs("windows")?.any { it.str("id") == wid } == true) startActivity(window)
+        else act(dev.kore.link.node.Control.windowShow(wid)) { startActivity(window) }
+    }
+
+    /** A box's refusal in its own words where they say what to change (a path, a name). */
+    private fun boxWords(r: JsonObject): String {
+        val code = r.str("code")
+        val own = code == "denied.path" || code == "invalid" || code?.startsWith("gone") == true
+        return r.str("message")?.takeIf { own && it.isNotBlank() } ?: refusalWords(code)
+    }
+
+    /** One command to this device, answered on the UI thread (a refusal comes back as the result). */
+    private fun ask(cmd: JsonObject, done: (JsonObject) -> Unit) {
+        val node = link ?: return Quiet.say(this, "Not connected")
+        kore.scope.launch {
+            val r = node.call(cmd, 20_000)
+            runOnUiThread { done(r) }
+        }
+    }
+
+    /** A box: the folders it already serves (marked in the browser; listed when it can't browse). */
     private fun readBoxFolders(s: Sheet) {
         val node = link ?: return
         kore.scope.launch {

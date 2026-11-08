@@ -722,7 +722,10 @@ package final class HostDaemon {
 
     /// What a grant may do: `watch` reads, `act` works in chats and folders, `full` also the accounts.
     /// The command's result; nil when it comes later, through `reply` (an account's call).
-    package func apply(_ command: LinkCommand, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+    /// `phone`: the client is a phone (its device's kind), whose folder adds stay in the home.
+    package func apply(
+        _ command: LinkCommand, id: String, control: GrantControl, phone: Bool = false, reply: @escaping @MainActor (LinkMessage.Result) -> Void
+    ) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         guard control != .watch else { return fail(.deniedControl, "This grant only watches.") }
         let hc = command.chatId.flatMap(chat)
@@ -790,7 +793,7 @@ package final class HostDaemon {
             if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, facts, control: control == .full ? .full : .standard, levels: levels) {
                 return fail(code, message)
             }
-            return self.control(kind, args, id: id, control: control, reply: reply)
+            return self.control(kind, args, id: id, control: control, phone: phone, reply: reply)
         case .unknown:
             return fail(.invalid, "Unknown command.")
         }
@@ -824,7 +827,9 @@ package final class HostDaemon {
         }
     }
 
-    private func control(_ kind: ControlKind, _ args: ControlArgs, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+    private func control(
+        _ kind: ControlKind, _ args: ControlArgs, id: String, control: GrantControl, phone: Bool, reply: @escaping @MainActor (LinkMessage.Result) -> Void
+    ) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         switch kind {
         case .chatNew:
@@ -894,8 +899,17 @@ package final class HostDaemon {
         case .foldersList:
             return .init(id: id, ok: true, folders: folders)
         case .folderAdd:
-            guard let path = args.path, addFolder(path) != nil else { return fail(.goneFolder, "An absolute path to a folder on the box.") }
-            return .init(id: id, ok: true, folders: folders)
+            // A phone's Open here (it asks, never runs): a folder in the home only, no hidden name,
+            // and really there (its links resolved inside the home). A Mac's grant adds any.
+            if phone, control < .full {
+                let home = HostPaths.home(sessionEnv).path
+                if case .deny(let code, let message) = LinkPolicy.checkHomeFolders(kind, args, home: home) { return fail(code, message) }
+                if case .failure(let refusal) = HostFiles(home: home, served: []).place(args.path ?? "", .homeOrServed) {
+                    return fail(refusal.code, refusal.message)
+                }
+            }
+            guard let path = args.path, let added = addFolder(path) else { return fail(.goneFolder, "An absolute path to a folder on the box.") }
+            return .init(id: id, ok: true, windowId: Self.windowID(added), folders: folders)
         case .authGh:
             guard control == .full else { return fail(.deniedControl, "GitHub's sign-in needs a grant with full control.") }
             return gitHub(id: id, reply: reply)
