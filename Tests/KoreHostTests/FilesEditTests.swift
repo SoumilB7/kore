@@ -226,6 +226,38 @@ struct FilesEditTests {
         owner.socket.close()
     }
 
+    /// A full grant with two folders watched, then left alone: the process's idle wakeups over
+    /// 10 s, by `top` (set `KORE_IDLE_MEASURE`). Daemon, client and test runner are one process
+    /// here, so this is an upper bound for the box's own.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["KORE_IDLE_MEASURE"] != nil))
+    func anIdleWatchWakesNothing() async throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        try rig.host.start()
+        let folder = rig.folder.path
+        try FileManager.default.createDirectory(atPath: folder + "/src", withIntermediateDirectories: true)
+        let grant = try GrantStore(rig.paths.grants).allow("full", control: .full, socket: rig.paths.socket)
+        let client = try Client(rig.paths.socket)
+        try await until { !client.got.isEmpty }
+        client.hello(grant: grant)
+        try await until { client.got.count >= 3 }
+        client.socket.send(.cmd(id: "v", .control(.fsWatch, ControlArgs(folders: [folder, folder + "/src"]))))
+        try await until { client.raws.compactMap(Self.result).contains { $0.id == "v" } }
+        try await Task.sleep(for: .seconds(1))
+        let frames = client.raws.count
+        let top = Process()
+        top.executableURL = URL(fileURLWithPath: "/usr/bin/top")
+        top.arguments = ["-l", "2", "-s", "10", "-pid", String(getpid()), "-stats", "pid,idlew,cpu"]
+        let out = Pipe()
+        top.standardOutput = out
+        try top.run()
+        await Task.detached { top.waitUntilExit() }.value
+        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let line = text.split(separator: "\n").last { $0.hasPrefix(String(getpid())) } ?? ""
+        print("idle-measure: \(line) · frames while idle: \(client.raws.count - frames)")
+        #expect(client.raws.count == frames)
+    }
+
     private static func result(_ raw: Data) -> FilesResult? {
         guard StreamWire.type(raw) == "result" else { return nil }
         return try? JSONDecoder().decode(FilesResult.self, from: raw)

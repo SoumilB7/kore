@@ -116,11 +116,22 @@ the box's. A box keeps one login per CLI.
 
 ## A box window
 
-A box window's left panel is the box folder's files, as Kore's Files explorer shows a Mac
-folder's, read over the link: folders open and close, and a file opens read-only in a file tab
-(text up to 2 MB, the first 2 MB of a larger one; images). Nothing is created, renamed or deleted
-from there. Reload lists the open folders again; so does a turn's end in that window, and the
-link coming back, so the agent's edits show. The box watches nothing for it.
+A box window's left panel is the box folder's files, with the Files explorer's buttons, keys and
+menus: New File, New Folder, Rename (Return or F2), Move to Trash (⌘⌫, with the same question;
+it goes to the box's trash, `~/.local/share/Trash` or `~/.Trash`, never deleted for good), ⌘X ⌘V
+and drag to move, Copy Path and Copy Relative Path, Find in Folder…, Search (⇧⌘F) and Go to
+File (⌘P) over the box's files (`rg` there when it has it). A drop from Finder copies files of up
+to 12 MB onto the box. Changes show at once; one the box refuses goes back, with a line saying
+why. Files open in Kore's editor and previews (Markdown, HTML, images, CSV, diagrams) and save
+back to the box; a file changed on the box since it was opened isn't overwritten: the editor
+says so (Compare, Reload, Keep Mine). Files over 2 MB open read-only, their first 2 MB.
+
+The box watches only the folders open in a box window's explorer (inotify on Linux), and only
+while it shows them; their changes, and those of open files, show by themselves. Where it can't
+watch, a turn's end lists them again. Nothing polls, and an idle box window sends nothing.
+
+Not on a box from here: Open with Default App, Reveal in Finder, Compress, and Copy, Duplicate or
+Paste of copies (a box file moves; it isn't copied from this Mac).
 
 When the link drops for more than 2 seconds, one card over the window says
 "<box> disconnected · last update 14:32", with Reconnecting… and **Try again**, or the action
