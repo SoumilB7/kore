@@ -1,28 +1,32 @@
 import Foundation
 import LinkProtocol
 
-// What a box adds to the link (1.4): every message shape the client sends or reads beyond 1.3
-// lives here, so the wire can change in one place.
+// What a box adds to the link (1.4, `docs/link-1.4-box.md`): every message shape the client sends
+// or reads beyond 1.3 lives here, so the wire can change in one place.
 //
 // - `hello` goes with an empty `proof`: `kore-host attach` answers the challenge itself and fills
 //   in `grant` and `proof`.
 // - `welcome.host.kind` is `"box"`.
-// - `chat.new` takes `folder` in place of `windowId`.
-// - `folders.list {id}` is answered by a message with the same `id` and `folders: [{path, name?}]`.
-// - Catch-up: `tx.open` carries `since`, the last `seq` the client holds, where a page or delta
-//   carries one. A host without them sends a page, which the client merges with its copy.
-// - Liveness: `ping` is sent as a command; any 1.x host answers a command, known or not, with a
-//   `result`, and every frame counts as a sign of life.
+// - `chat.new` takes `folder` (an absolute path the box serves) in place of `windowId`.
+// - `folders.list` is a command; its `result` carries `folders: [{windowId, path}]`. A folder's
+//   window (its chats) is the one with that `windowId`.
+// - Catch-up: `tx.open` answers from the chat's log with a page, which the client merges with its
+//   copy; a resumed CLI replaces the log (`tx.reset`, then a page with new ids).
+// - Liveness: the box has no ping. One is sent as a command of a type the box doesn't know, which
+//   any 1.x host answers with a `result` (`invalid`); every frame counts as a sign of life.
 
 /// One folder the box serves.
 package struct BoxFolder: Codable, Sendable, Equatable, Hashable {
-    /// As the box names it ("~/Code/app" or an absolute path): what `chat.new` and windows use.
+    /// Absolute, on the box: what `chat.new` takes.
     package var path: String
+    /// Its window in the box's state, whose tabs are its chats.
+    package var windowId: String?
     package var name: String
 
-    package init(path: String, name: String? = nil) {
+    package init(path: String, windowId: String? = nil) {
         self.path = path
-        self.name = name ?? BoxFolder.lastPart(path)
+        self.windowId = windowId
+        name = BoxFolder.lastPart(path)
     }
 
     static func lastPart(_ path: String) -> String {
@@ -33,8 +37,8 @@ package struct BoxFolder: Codable, Sendable, Equatable, Hashable {
 
 /// A message read from the box: a link message, or one of the box's own.
 package enum HostInbound: Sendable {
-    /// `seq`: the position in the box's per-chat log that a `tx.page` or `tx.delta` brings the
-    /// client to, when the box says.
+    /// `seq`: the position in the box's log a page or delta brings the client to; the box doesn't
+    /// say one yet, so it's nil.
     case link(LinkMessage, seq: Int?)
     case folders(id: String, [BoxFolder])
 }
@@ -51,11 +55,7 @@ package enum HostWire {
         encode(.hello(proto: proto, client: .init(name: "Kore", build: build), proof: "", commands: nil))
     }
 
-    package static func txOpen(chatId: String, since seq: Int?) -> Data {
-        var object: [String: Any] = ["t": "tx.open", "chatId": chatId, "last": followLast]
-        if let seq { object["since"] = seq }
-        return json(object)
-    }
+    package static func txOpen(chatId: String) -> Data { encode(.txOpen(chatId: chatId, last: followLast)) }
 
     package static func txClose(chatId: String) -> Data { encode(.txClose(chatId: chatId)) }
 
@@ -68,13 +68,15 @@ package enum HostWire {
         return json(["t": "cmd", "id": id, "cmd": cmd])
     }
 
-    package static func newChat(id: String, folder: String, provider: String) -> Data {
-        command(id: id, type: "chat.new", ["folder": folder, "provider": provider])
+    package static func newChat(id: String, folder: String, provider: String, model: String? = nil) -> Data {
+        var fields: [String: Any] = ["folder": folder, "provider": provider]
+        if let model { fields["modelId"] = model }
+        return command(id: id, type: "chat.new", fields)
     }
 
     package static func ping(id: String) -> Data { command(id: id, type: "ping", [:]) }
 
-    package static func foldersList(id: String) -> Data { json(["t": "folders.list", "id": id]) }
+    package static func foldersList(id: String) -> Data { command(id: id, type: "folders.list", [:]) }
 
     package static func bye() -> Data { encode(.bye(.quit)) }
 
@@ -82,16 +84,10 @@ package enum HostWire {
 
     package static func decode(_ data: Data) throws -> HostInbound {
         let message = try LinkMessage.decode(data)
-        switch message {
-        case .unknown:
-            let peek = try JSONDecoder().decode(FoldersPeek.self, from: data)
-            if let id = peek.id, let folders = peek.folders { return .folders(id: id, folders.map { BoxFolder(path: $0.path, name: $0.name) }) }
-            return .link(message, seq: nil)
-        case .txPage, .txDelta:
-            return .link(message, seq: try? JSONDecoder().decode(SeqPeek.self, from: data).seq)
-        default:
-            return .link(message, seq: nil)
+        if case .result(let result) = message, result.ok, let folders = try? JSONDecoder().decode(FoldersPeek.self, from: data).folders {
+            return .folders(id: result.id, folders.map { BoxFolder(path: $0.path, windowId: $0.windowId) })
         }
+        return .link(message, seq: nil)
     }
 
     /// The welcome's `host.kind` ("box" for kore-host); nil from a host that doesn't say.
@@ -99,17 +95,15 @@ package enum HostWire {
         (try? JSONDecoder().decode(KindPeek.self, from: data))?.host?.kind
     }
 
-    private struct SeqPeek: Decodable { var seq: Int? }
     private struct KindPeek: Decodable {
         struct Host: Decodable { var kind: String? }
         var host: Host?
     }
     private struct FoldersPeek: Decodable {
         struct Folder: Decodable {
+            var windowId: String?
             var path: String
-            var name: String?
         }
-        var id: String?
         var folders: [Folder]?
     }
 

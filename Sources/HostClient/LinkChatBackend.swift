@@ -19,6 +19,8 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     private let provider: ProviderDescriptor
     /// The box's folder, as it names it.
     private let folder: String
+    /// A new chat's model on the box (`chat.new`'s `modelId`); nil for the CLI's default.
+    private let model: String?
 
     private var transcript = LinkTranscript()
     /// The chat has been shown its transcript once (a replay); after that, changes.
@@ -41,16 +43,16 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// A chat made from this Mac has its id on the box.
     package var onCreated: ((String) -> Void)?
 
-    package init(connection: HostConnection, provider: ProviderDescriptor, folder: String, chatId: String?) {
+    package init(connection: HostConnection, provider: ProviderDescriptor, folder: String, chatId: String?, model: String? = nil) {
         self.connection = connection
         self.provider = provider
         self.folder = folder
+        self.model = model
         self.chatId = chatId
         (events, continuation) = AsyncStream.makeStream(of: ChatEvent.self)
     }
 
     package var sessionId: String? { chatId }
-    package var resumeSeq: Int? { transcript.seq }
 
     // MARK: Start
 
@@ -68,7 +70,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     private func begin() async throws {
         if chatId == nil {
-            let result = await connection.command { HostWire.newChat(id: $0, folder: self.folder, provider: self.provider.id) }
+            let result = await connection.command { HostWire.newChat(id: $0, folder: self.folder, provider: self.provider.id, model: self.model) }
             guard result.ok, let id = result.chatId else { throw HostRefusal(result, alias: connection.alias) }
             chatId = id
             onCreated?(id)

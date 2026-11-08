@@ -157,14 +157,13 @@ struct HostClientTests {
             try await backend.start()
             _ = await host.next("tx.open")
             host.send(json: [
-                "t": "tx.page", "chatId": "c1", "txRev": 1, "hasEarlier": false, "seq": 7,
+                "t": "tx.page", "chatId": "c1", "txRev": 1, "hasEarlier": false,
                 "entries": [entryJSON(Fixture.user("u1", "hello"))], "turns": [],
             ])
             host.send(json: [
-                "t": "tx.delta", "chatId": "c1", "txRev": 2, "removed": [], "seq": 8,
+                "t": "tx.delta", "chatId": "c1", "txRev": 2, "removed": [],
                 "upserts": [entryJSON(Fixture.answer("a1", "Hi there", turn: "T1"))], "turns": [turnJSON(Fixture.turn("T1", finished: true))],
             ])
-            #expect(await until { backend.resumeSeq == 8 })
             try await Task.sleep(for: .milliseconds(1300))
             connection.cache.flush()
             connection.release()
@@ -189,8 +188,7 @@ struct HostClientTests {
         #expect(await until(5) { dials.hosts.count > before })
         let host = dials.hosts[dials.hosts.count - 1]
         _ = await host.handshake(windows: [Fixture.window(["c1"])], chats: [Fixture.meta("c1")])
-        let open = try #require(await host.next("tx.open"))
-        #expect(open["since"] as? Int == 8)
+        #expect(await host.next("tx.open") != nil)
         // A page that ends where the copy did, plus one more: only the new entry is shown.
         host.send(.txPage(
             chatId: "c1", txRev: 1, entries: [Fixture.answer("a1", "Hi there", turn: "T1"), Fixture.user("u2", "next")],
@@ -244,8 +242,8 @@ struct HostClientTests {
         _ = await host.handshake(windows: [], chats: [])
         #expect(await until { connection.isOnline })
         Task {
-            let ask = await host.next("folders.list")
-            host.send(json: ["t": "folders", "id": ask?["id"] ?? "", "folders": [["path": "~/app"], ["path": "/srv/api", "name": "api"]]])
+            let ask = await host.next("cmd")
+            host.send(json: ["t": "result", "ok": true, "id": ask?["id"] ?? "", "folders": [["windowId": "w_1", "path": "/home/me/app"], ["windowId": "w_2", "path": "/srv/api"]]])
         }
         let folders = await connection.listFolders()
         #expect(folders.map(\.name) == ["app", "api"])
@@ -275,7 +273,7 @@ struct HostClientTests {
             Match host x
             """
         #expect(SSHHosts.parse(config) == ["mybox", "web1", "web2", "gpu"])
-        #expect(SSHTransport.arguments(alias: "mybox", grant: "laptop") == ["-T", "-o", "BatchMode=yes", "mybox", "kore-host", "attach", "--as", "laptop"])
+        #expect(SSHTransport.arguments(alias: "mybox", grant: "laptop") == ["-T", "-o", "BatchMode=yes", "mybox", "~/.local/bin/kore-host", "attach", "--as", "laptop"])
     }
 
     private func entryJSON(_ entry: LinkEntry) -> Any {

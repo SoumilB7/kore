@@ -27,13 +27,23 @@ final class BoxBinding {
     init(alias: String, folder: String) {
         self.alias = alias
         self.folder = folder
-        connection = HostConnection.named(alias, grant: Self.grant(alias))
+        connection = Self.connection(alias)
+    }
+
+    static func connection(_ alias: String) -> HostConnection {
+        HostConnection.named(alias, grant: grant(alias), command: command(alias))
     }
 
     /// The Mac's grant name on the box: `defaults write <Kore> boxGrant.<alias> <name>`, else
     /// `laptop`.
     static func grant(_ alias: String) -> String {
         UserDefaults.standard.string(forKey: "boxGrant." + alias) ?? HostConnection.defaultGrant
+    }
+
+    /// kore-host's path on the box: `defaults write <Kore> boxKoreHost.<alias> <path>`, else
+    /// `~/.local/bin/kore-host`.
+    static func command(_ alias: String) -> String {
+        UserDefaults.standard.string(forKey: "boxKoreHost." + alias) ?? SSHTransport.defaultCommand
     }
 
     /// The window's key among the open workspaces: never a folder on this Mac's.
@@ -152,7 +162,7 @@ final class BoxChatServices: ChatServices {
     }
 
     func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend {
-        let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId)
+        let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId, model: options.model)
         backend.onCreated = { [weak self] in self?.chatId = $0 }
         return backend
     }
@@ -206,7 +216,7 @@ private struct BoxFolders: View {
     init(alias: String, pick: @escaping (BoxFolder) -> Void) {
         self.alias = alias
         self.pick = pick
-        let connection = HostConnection.named(alias, grant: BoxBinding.grant(alias))
+        let connection = BoxBinding.connection(alias)
         _connection = StateObject(wrappedValue: Local(connection))
         _folders = StateObject(wrappedValue: Local(connection.folders))
     }

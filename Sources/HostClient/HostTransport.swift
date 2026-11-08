@@ -103,8 +103,10 @@ package final class PipeTransport: HostTransport, @unchecked Sendable {
     }
 }
 
-/// `ssh <alias> kore-host attach --as <grant>`: the link over SSH's stdin and stdout. BatchMode
-/// keeps it from asking for anything; the user's own SSH config and agent do the rest.
+/// `ssh <alias> ~/.local/bin/kore-host attach --as <grant>`: the link over SSH's stdin and stdout.
+/// The command runs without a login shell, whose PATH often lacks `~/.local/bin`, so kore-host is
+/// named by its path. BatchMode keeps SSH from asking for anything; the user's own SSH config and
+/// agent do the rest.
 package final class SSHTransport: HostTransport, @unchecked Sendable {
     package static let ssh = "/usr/bin/ssh"
 
@@ -116,15 +118,24 @@ package final class SSHTransport: HostTransport, @unchecked Sendable {
 
     package var events: AsyncStream<TransportEvent> { pipe.events }
 
-    package static func arguments(alias: String, grant: String) -> [String] {
-        ["-T", "-o", "BatchMode=yes", alias, "kore-host", "attach", "--as", grant]
+    /// Where kore-host is on the box, unless the user says otherwise.
+    package static let defaultCommand = "~/.local/bin/kore-host"
+
+    package static func arguments(alias: String, grant: String, command: String = defaultCommand) -> [String] {
+        ["-T", "-o", "BatchMode=yes", alias, command, "attach", "--as", grant]
     }
 
-    package init(alias: String, grant: String) {
+    package convenience init(alias: String, grant: String, command: String = defaultCommand) {
+        self.init(executable: Self.ssh, arguments: Self.arguments(alias: alias, grant: grant, command: command))
+    }
+
+    /// Any command that speaks the link on its stdio (`kore-host attach` run here, in a check).
+    package init(executable: String, arguments: [String], environment: [String: String]? = nil) {
         let stdin = Pipe()
         let stdout = Pipe()
-        process.executableURL = URL(fileURLWithPath: Self.ssh)
-        process.arguments = Self.arguments(alias: alias, grant: grant)
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        if let environment { process.environment = environment }
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = stderr

@@ -8,8 +8,6 @@ import src
 @MainActor
 package protocol HostFollower: AnyObject {
     var chatId: String? { get }
-    /// Where its local copy is in the box's log, for the catch-up.
-    var resumeSeq: Int? { get }
     /// `tx.page`, `tx.delta` and `tx.reset` for its chat, its `tx.open`'s refusal, and the frame's bytes.
     func received(_ message: LinkMessage, raw: Data, seq: Int?)
     /// Its chat's state from a snapshot or delta; nil once the box closed it.
@@ -82,11 +80,14 @@ package final class HostConnection {
     /// The Mac's grant name on the box (`kore-host allow <name>`), unless set otherwise.
     package static let defaultGrant = "laptop"
 
-    package init(alias: String, grant: String = defaultGrant, cache: HostCache? = nil, transport: (@MainActor () -> any HostTransport)? = nil) {
+    package init(
+        alias: String, grant: String = defaultGrant, command: String = SSHTransport.defaultCommand, cache: HostCache? = nil,
+        transport: (@MainActor () -> any HostTransport)? = nil
+    ) {
         self.alias = alias
         self.grant = grant
         self.cache = cache ?? HostCache(alias: alias)
-        makeTransport = transport ?? { SSHTransport(alias: alias, grant: grant) }
+        makeTransport = transport ?? { SSHTransport(alias: alias, grant: grant, command: command) }
         if let state = self.cache.state() {
             windows = state.windows
             chats = Dictionary(state.chats.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
@@ -103,9 +104,9 @@ package final class HostConnection {
     private static var open: [String: HostConnection] = [:]
 
     /// The alias's connection, made on first ask; the same one while any window uses it.
-    package static func named(_ alias: String, grant: String = defaultGrant) -> HostConnection {
+    package static func named(_ alias: String, grant: String = defaultGrant, command: String = SSHTransport.defaultCommand) -> HostConnection {
         if let connection = open[alias] { return connection }
-        let connection = HostConnection(alias: alias, grant: grant)
+        let connection = HostConnection(alias: alias, grant: grant, command: command)
         open[alias] = connection
         return connection
     }
@@ -142,7 +143,7 @@ package final class HostConnection {
     package func follow(_ follower: any HostFollower) {
         guard let id = follower.chatId else { return }
         followers[id] = Weak(follower: follower)
-        if ready { transport?.send(HostWire.txOpen(chatId: id, since: follower.resumeSeq)) }
+        if ready { transport?.send(HostWire.txOpen(chatId: id)) }
     }
 
     package func unfollow(_ follower: any HostFollower) {
@@ -357,7 +358,7 @@ package final class HostConnection {
         attempts = 0
         lastHeard = nil
         for follower in liveFollowers {
-            if let id = follower.chatId { transport?.send(HostWire.txOpen(chatId: id, since: follower.resumeSeq)) }
+            if let id = follower.chatId { transport?.send(HostWire.txOpen(chatId: id)) }
             follower.linked(true)
         }
         let queued = outbox
@@ -431,9 +432,11 @@ package final class HostConnection {
 
     // MARK: Reading the state
 
-    /// The chats the box has open in a folder, in its tab order.
+    /// The chats the box has in a folder, in its tab order: its window's tabs (the window
+    /// `folders.list` named for it).
     package func chats(in folder: String) -> [ChatMeta] {
-        let ids = windows.filter { $0.path == folder }.flatMap { $0.tabs.compactMap(\.chatId) }
+        let window = folders.first { $0.path == folder }?.windowId
+        let ids = windows.filter { $0.id == window || $0.path == folder }.flatMap { $0.tabs.compactMap(\.chatId) }
         return ids.compactMap { chats[$0] }
     }
 
