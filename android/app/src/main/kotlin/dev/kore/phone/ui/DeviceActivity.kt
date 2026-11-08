@@ -201,18 +201,21 @@ class DeviceActivity : NodeActivity() {
     private fun createSheet() {
         if (last == null) return
         val box = link?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
-        lateinit var s: Sheet
-        s = Sheet(this).show {
+        // The builder runs inside show(), before show() returns: the sheet is its receiver, never a
+        // variable assigned from show() (reading that one there throws, the ＋ crash of 0.3.0).
+        val s = Sheet(this).show {
             val snap = last ?: return@show dismiss()
             title("New on $macName")
-            segmented(listOf("chat" to "Chat", "window" to "Window"), making) { making = it; if (it == "window" && box) readBoxFolders(s); refresh() }
-            if (making == "chat") chatHalf(s, snap, box) else windowHalf(s, snap, box)
+            val sheet = this
+            segmented(listOf("chat" to "Chat", "window" to "Window"), making) { making = it; if (it == "window" && box) readBoxFolders(sheet); refresh() }
+            if (making == "chat") chatHalf(snap, box) else windowHalf(snap, box)
         }
         folderSheet = s
         s.onDismiss { folderSheet = null }
     }
 
-    private fun Sheet.chatHalf(s: Sheet, snap: JsonObject, box: Boolean) {
+    private fun Sheet.chatHalf(snap: JsonObject, box: Boolean) {
+        val s = this
         val providers = link?.welcome?.value?.objs("providers").orEmpty()
         val chosen = prefs.getString("newProvider", null)?.takeIf { p -> providers.any { it.str("id") == p } } ?: providers.firstOrNull()?.str("id")
         if (providers.size > 1) segmented(providers.map { (it.str("id") ?: "") to (it.str("name") ?: it.str("id") ?: "") }, chosen) {
@@ -238,7 +241,8 @@ class DeviceActivity : NodeActivity() {
         say(if (box) "A $cliName chat in $where on $macName." else "A $cliName chat in $where, as a new tab there.")
     }
 
-    private fun Sheet.windowHalf(s: Sheet, snap: JsonObject, box: Boolean) {
+    private fun Sheet.windowHalf(snap: JsonObject, box: Boolean) {
+        val s = this
         if (box) {
             val folders = boxFolders
             if (folders == null) { say("Reading the folders on $macName…"); return }
