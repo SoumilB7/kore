@@ -263,7 +263,6 @@ private struct FileCommands: View {
         // ⇧⌘1 is the editor's Replace.
         Button("New Window") { openWindow(id: KoreApp.welcomeID) }
             .keyboardShortcut("1", modifiers: [.command, .option])
-        BoxWindowCommands()
     }
 }
 

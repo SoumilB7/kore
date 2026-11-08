@@ -5,8 +5,7 @@ import LinkProtocol
 import src
 import SwiftUI
 
-// A window whose chats live on a box: File ▸ New Window on <alias>…, a folder picked from the
-// box's list, then the folder window as for this Mac, its chats run through the link. Nothing here
+// A window whose chats live on a box: a folder picked from the box's list, then the folder window as for this Mac, its chats run through the link. Nothing here
 // runs until such a window opens.
 
 /// The scene's value: the alias, and the box's folder once picked.
@@ -55,6 +54,12 @@ final class BoxBinding {
 
     /// The window's workspace, for the chats the box opens in this folder meanwhile.
     weak var workspace: Workspace?
+
+    /// The folder as the box's window names it ("~/Code"), else its path.
+    var shownFolder: String {
+        let window = connection.folders.first { $0.path == folder }?.windowId
+        return connection.windows.first { $0.id == window }?.path ?? folder
+    }
 
     func windowOpened() {
         connection.onSnapshot(key) { [weak self] in self?.adoptChats() }
@@ -193,7 +198,7 @@ final class BoxChatServices: ChatServices {
 
 // MARK: - The window
 
-/// File ▸ New Window on <alias>…: the box's folders first, then that folder's window.
+/// A box's window: its folders first, then that folder's window.
 struct BoxWindow: View {
     @Binding var place: BoxPlace
 
@@ -212,6 +217,11 @@ private struct BoxFolders: View {
     let pick: (BoxFolder) -> Void
     @StateObject private var connection: Local<HostConnection>
     @StateObject private var folders: Local<[BoxFolder]>
+    /// Add folder…'s path while it's a field; nil while it's a row.
+    @StateObject private var adding = Local<String?>(nil)
+    /// Why the last path couldn't be added.
+    @StateObject private var addFailed = Local<String?>(nil)
+    @FocusState private var pathFocused: Bool
 
     init(alias: String, pick: @escaping (BoxFolder) -> Void) {
         self.alias = alias
@@ -227,22 +237,15 @@ private struct BoxFolders: View {
             VStack(spacing: Space.sm) {
                 Text(alias).font(Chrome.display).foregroundStyle(Theme.text)
                 Text(status(connection)).font(Chrome.body).foregroundStyle(Theme.secondary)
+                if unreachable(connection) {
+                    Button("Try again") { connection.retry() }.buttonStyle(SubtleButtonStyle(prominent: true)).padding(.top, Space.sm)
+                }
             }
             VStack(alignment: .leading, spacing: Space.xs) {
                 ForEach(folders.value, id: \.self) { folder in
-                    Button { pick(folder) } label: {
-                        HStack(spacing: Space.lg) {
-                            Image(systemName: "folder").font(Chrome.label).foregroundStyle(Theme.secondary)
-                            Text(folder.name).font(Chrome.bodyMedium).foregroundStyle(Theme.text)
-                            Spacer(minLength: Space.xl)
-                            Text(folder.path).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.middle)
-                        }
-                        .padding(.horizontal, Space.lg)
-                        .padding(.vertical, Space.sm)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(SubtleButtonStyle())
+                    row(icon: "folder", folder.name, detail: folder.path) { pick(folder) }
                 }
+                if connection.isOnline { addRow(connection) }
             }
             .frame(width: Layout.Welcome.contentWidth)
         }
@@ -255,6 +258,69 @@ private struct BoxFolders: View {
         .onDisappear { DispatchQueue.main.asyncAfter(deadline: .now() + 3) { connection.release() } }
         .task(id: connection.phase) {
             if connection.phase == .online { folders.value = await connection.listFolders() }
+        }
+    }
+
+    private func row(icon: String, _ title: String, detail: String? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: Space.lg) {
+                Image(systemName: icon).font(Chrome.label).foregroundStyle(Theme.secondary)
+                Text(title).font(Chrome.bodyMedium).foregroundStyle(Theme.text)
+                Spacer(minLength: Space.xl)
+                if let detail { Text(detail).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.middle) }
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.vertical, Space.sm)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(SubtleButtonStyle())
+    }
+
+    /// Add folder…: a row, and clicked, a path field in its place (there's no Finder for the box),
+    /// with one line under it.
+    @ViewBuilder private func addRow(_ connection: HostConnection) -> some View {
+        if let path = adding.value {
+            VStack(alignment: .leading, spacing: Space.xs) {
+                HStack(spacing: Space.sm) {
+                    TextField("", text: Binding(get: { path }, set: { adding.value = $0; addFailed.value = nil }), prompt: Text("~/Code/project").foregroundStyle(Theme.tertiary))
+                        .textFieldStyle(.plain)
+                        .font(Chrome.body)
+                        .focused($pathFocused)
+                        .fieldWell(focused: pathFocused)
+                        .onSubmit { add(connection) }
+                        .onExitCommand { adding.value = nil }
+                    Button("Open") { add(connection) }.smallButton(prominent: true).disabled(path.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                Text(addFailed.value ?? "A folder already on \(alias)")
+                    .font(Chrome.caption)
+                    .foregroundStyle(addFailed.value == nil ? Theme.tertiary : Theme.danger)
+                    .padding(.leading, Space.sm)
+            }
+            .onAppear { pathFocused = true }
+        } else {
+            row(icon: "plus", "Add folder…") { adding.value = "" }
+        }
+    }
+
+    private func add(_ connection: HostConnection) {
+        guard let path = adding.value, !path.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        Task {
+            switch await connection.addFolder(path) {
+            case .success(let folder):
+                folders.value = connection.folders
+                adding.value = nil
+                pick(folder)
+            case .failure(let refusal):
+                addFailed.value = refusal.message
+            }
+        }
+    }
+
+    /// It can't be reached, or it refused this Mac: Try again shows.
+    private func unreachable(_ connection: HostConnection) -> Bool {
+        switch connection.phase {
+        case .refused, .offline: true
+        case .idle, .connecting, .online: false
         }
     }
 
@@ -284,23 +350,23 @@ struct BoxCue: View {
     }
 }
 
-/// File ▸ New Window on <alias>…, one per host in `~/.ssh/config` (read, never written); more than
-/// a few go in a submenu.
-struct BoxWindowCommands: View {
-    @Environment(\.openWindow) private var openWindow
+/// The left panel in a box's window, where the explorer is on this Mac: the box and the folder,
+/// one quiet line. The box's files come later.
+struct BoxSidebar: View {
+    let box: BoxBinding
 
     var body: some View {
-        let aliases = SSHHosts.aliases()
-        if aliases.count > 3 {
-            Menu("New Window on Host") {
-                ForEach(aliases, id: \.self) { alias in
-                    Button("\(alias)…") { openWindow(value: BoxPlace(alias: alias)) }
-                }
-            }
-        } else {
-            ForEach(aliases, id: \.self) { alias in
-                Button("New Window on \(alias)…") { openWindow(value: BoxPlace(alias: alias)) }
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            Text(box.alias + " · " + box.shownFolder)
+                .font(Chrome.label)
+                .foregroundStyle(Theme.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(box.folder)
+                .padding(.horizontal, Space.lg)
+                .padding(.vertical, Space.md)
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

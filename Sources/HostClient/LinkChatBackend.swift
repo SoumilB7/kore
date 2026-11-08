@@ -372,7 +372,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 }
 
 /// A command the box (or the link) refused, in its words.
-package struct HostRefusal: LocalizedError {
+package struct HostRefusal: LocalizedError, CustomStringConvertible {
     package let message: String
 
     package init(message: String) { self.message = message }
@@ -382,6 +382,8 @@ package struct HostRefusal: LocalizedError {
     }
 
     package var errorDescription: String? { message }
+    /// What "\(error)" says: the message alone, never the type.
+    package var description: String { message }
 
     static func words(_ code: ResultCode?, alias: String) -> String {
         switch code {

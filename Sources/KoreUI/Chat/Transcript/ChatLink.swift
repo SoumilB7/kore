@@ -83,6 +83,11 @@ extension Workspace {
     /// system gets nothing: each link is noted in `TranscriptSelection.opened`, and one Kore
     /// opened itself in `openedInKore` too.
     func openLink(_ url: URL, from chatFolder: URL?) {
+        // A box's paths are on the box: only web links open from its window.
+        if box != nil {
+            if ["http", "https", "mailto"].contains(url.scheme?.lowercased()) { NSWorkspace.shared.open(url) }
+            return
+        }
         let story = StoryHost.installed
         if story { TranscriptSelection.opened.append(url) }
         switch ChatLink(url, folder: chatFolder ?? folder) {

@@ -187,7 +187,9 @@ struct ChatView: View {
 
     /// An empty chat of a CLI Kore can import into, until its first message.
     private static func offersImport(_ chat: Chat) -> Bool {
-        !chat.status.hasConversation && !chat.status.isRunning && HandoffWriters.writer(chat.provider.id) != nil
+        // A chat on a box takes no import from this Mac's files.
+        !(chat.services is BoxChatServices) && !chat.status.hasConversation && !chat.status.isRunning
+            && HandoffWriters.writer(chat.provider.id) != nil
     }
 
     /// The picker over the composer, with `file` picked when one was dropped. With no other

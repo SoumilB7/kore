@@ -43,6 +43,8 @@ private struct BoxAccountLine: View {
                 Text(status(line)).font(TextStyle.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: Space.sm)
                 switch line.step {
+                // Signed in already: nothing to press.
+                case .idle where line.said?.hasPrefix("Signed in") == true: EmptyView()
                 case .idle, .failed: Button("Sign in", action: signIn).smallButton()
                 case .starting: ProgressView().controlSize(.small)
                 case .waiting, .submitting: Button("Cancel") { accounts.cancel(key) }.smallButton()

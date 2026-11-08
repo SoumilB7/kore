@@ -248,6 +248,18 @@ struct HostClientTests {
         let folders = await connection.listFolders()
         #expect(folders.map(\.name) == ["app", "api"])
 
+        // Add folder…: one not on the box says so; one that is comes back in the list.
+        Task {
+            let first = await host.next("cmd")
+            host.send(.result(.init(id: first?["id"] as? String ?? "", ok: false, code: .goneFolder)))
+            let second = await host.next("cmd")
+            #expect((second?["cmd"] as? [String: Any])?["path"] as? String == "/srv/data")
+            host.send(json: ["t": "result", "ok": true, "id": second?["id"] ?? "", "folders": [["windowId": "w_1", "path": "/home/me/app"], ["windowId": "w_3", "path": "/srv/data"]]])
+        }
+        if case .failure(let refusal) = await connection.addFolder("/nope") { #expect(refusal.message == "Not found on mybox") } else { Issue.record("added a missing folder") }
+        if case .success(let added) = await connection.addFolder("/srv/data") { #expect(added.windowId == "w_3") } else { Issue.record("didn't add") }
+        #expect(connection.folders.map(\.path) == ["/home/me/app", "/srv/data"])
+
         let backend = LinkChatBackend(connection: connection, provider: .codex, folder: "~/app", chatId: nil)
         Task {
             let new = await host.next("cmd")
@@ -315,6 +327,7 @@ struct HostClientTests {
             Host *.internal web1 web2 # two
             Host=gpu
             host !nope dev-?
+            Host github.com mybox-login mybox-browser
             Match host x
             """
         #expect(SSHHosts.parse(config) == ["mybox", "web1", "web2", "gpu"])

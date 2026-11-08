@@ -150,7 +150,8 @@ package final class Workspace {
     private(set) var files: FilesStore?
     package var explorerOpen = false {
         didSet {
-            if explorerOpen, !oldValue {
+            // A box's window never reads this Mac's disk for it.
+            if explorerOpen, !oldValue, box == nil {
                 // Opened: the tree shows the active tab's file, as VS Code's auto-reveal does.
                 let files = filesStore()
                 if let path = activeTab.file?.path { Task { await files.reveal(path) } }

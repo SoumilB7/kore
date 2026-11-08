@@ -195,6 +195,34 @@ package final class HostConnection {
         return await withCheckedContinuation { waiting[id] = $0 }
     }
 
+    /// Adds a folder already on the box (a path typed on the Mac): the folder, or why not. A path
+    /// starting with `~` takes the box's home, as its windows show it.
+    package func addFolder(_ typed: String) async -> Result<BoxFolder, HostRefusal> {
+        let path = absolute(typed.trimmingCharacters(in: .whitespacesAndNewlines))
+        let (result, raw) = await commandRaw { HostWire.addFolder(id: $0, path: path) }
+        guard result.ok, let list = HostWire.folders(raw) else {
+            return .failure(HostRefusal(message: result.code == .goneFolder ? "Not found on \(alias)" : result.message ?? "\(alias) refused it"))
+        }
+        folders = list
+        saveSoon()
+        let wanted = path.hasSuffix("/") ? String(path.dropLast()) : path
+        guard let folder = list.first(where: { $0.path == wanted }) ?? list.last else { return .failure(HostRefusal(message: "Not found on \(alias)")) }
+        return .success(folder)
+    }
+
+    /// `~/x` as the box's absolute path, from a folder whose window shows it under `~`.
+    private func absolute(_ path: String) -> String {
+        guard path == "~" || path.hasPrefix("~/") else { return path }
+        for folder in folders {
+            guard let window = windows.first(where: { $0.id == folder.windowId }), window.path.hasPrefix("~"),
+                folder.path.hasSuffix(String(window.path.dropFirst()))
+            else { continue }
+            let home = String(folder.path.dropLast(window.path.count - 1))
+            return home + path.dropFirst()
+        }
+        return path
+    }
+
     /// The folders the box serves: asked again while linked, else as last known.
     package func listFolders() async -> [BoxFolder] {
         guard ready, let transport else { return folders }
@@ -316,7 +344,12 @@ package final class HostConnection {
         }
         switch inbound {
         case .folders(let id, let list):
-            answerFolders(id, list)
+            // `folders.list`'s own answer; any other result with folders (`folder.add`) is a result.
+            if folderAsks[id] != nil {
+                answerFolders(id, list)
+            } else if let message = try? LinkMessage.decode(data) {
+                handle(message, raw: data, seq: nil)
+            }
         case .link(let message, let seq):
             handle(message, raw: data, seq: seq)
         }

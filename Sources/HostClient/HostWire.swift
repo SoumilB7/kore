@@ -84,6 +84,16 @@ package enum HostWire {
 
     package static func foldersList(id: String) -> Data { command(id: id, type: "folders.list", [:]) }
 
+    /// `folder.add {path}`: an absolute path to a folder already on the box; its result lists the
+    /// folders again (`gone.folder` when there's no such folder).
+    package static func addFolder(id: String, path: String) -> Data { command(id: id, type: "folder.add", ["path": path]) }
+
+    /// The `folders` a result carries (`folders.list`, `folder.add`).
+    package static func folders(_ raw: Data?) -> [BoxFolder]? {
+        guard let raw, let peek = try? JSONDecoder().decode(FoldersPeek.self, from: raw), let list = peek.folders else { return nil }
+        return list.map { BoxFolder(path: $0.path, windowId: $0.windowId) }
+    }
+
     package static func bye() -> Data { encode(.bye(.quit)) }
 
     // MARK: Sign-in on the box

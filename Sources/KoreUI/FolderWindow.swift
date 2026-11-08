@@ -48,7 +48,11 @@ struct FolderWindow: View {
                 }
                 .zIndex(1)
                 HStack(spacing: 0) {
-                    if docked, let store = workspace.files {
+                    if docked, let box = workspace.box {
+                        // A box's files aren't read from here: never the Mac's disk.
+                        BoxSidebar(box: box).frame(width: workspace.explorerWidth)
+                        Rectangle().fill(Theme.border).frame(width: Stroke.hairline)
+                    } else if docked, let store = workspace.files {
                         ExplorerSidebar(workspace: workspace, store: store, floating: false)
                             .frame(width: workspace.explorerWidth)
                             // Over the held content, which reaches under it as it widens.
@@ -78,7 +82,14 @@ struct FolderWindow: View {
                 }
                 // Below 700 wide the sidebar floats over the content; a click outside closes it.
                 .overlay(alignment: .leading) {
-                    if workspace.explorerOpen, floating, let store = workspace.files {
+                    if workspace.explorerOpen, floating, let box = workspace.box {
+                        ZStack(alignment: .leading) {
+                            Color.clear.contentShape(Rectangle()).onTapGesture { workspace.explorerOpen = false }
+                            BoxSidebar(box: box)
+                                .frame(width: min(Layout.Explorer.width, geometry.size.width - Layout.Explorer.overlayMargin))
+                                .background(Theme.background)
+                        }
+                    } else if workspace.explorerOpen, floating, let store = workspace.files {
                         ZStack(alignment: .leading) {
                             Color.clear.contentShape(Rectangle()).onTapGesture { workspace.explorerOpen = false }
                             ExplorerSidebar(workspace: workspace, store: store, floating: true)

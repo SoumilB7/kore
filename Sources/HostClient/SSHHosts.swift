@@ -1,7 +1,8 @@
 import Foundation
 
 /// The hosts named in `~/.ssh/config`, read only (never written): each `Host` line's names, without
-/// patterns (`*`, `?`, `!`). Read again only when the file changed.
+/// patterns (`*`, `?`, `!`), Git hosts, and tunnels named `…-login` or `…-browser`, which aren't
+/// boxes. Read again only when the file changed.
 package enum SSHHosts {
     package static var config: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh/config")
@@ -21,6 +22,11 @@ package enum SSHHosts {
         }
     }
 
+    static func skipped(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return ["github.com", "gitlab.com", "bitbucket.org"].contains(lower) || lower.hasSuffix("-login") || lower.hasSuffix("-browser")
+    }
+
     package static func parse(_ text: String) -> [String] {
         var out: [String] = []
         for raw in text.split(whereSeparator: \.isNewline) {
@@ -32,7 +38,7 @@ package enum SSHHosts {
             for name in words.dropFirst() {
                 if name.hasPrefix("#") { break }
                 let name = name.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-                guard !name.isEmpty, !name.contains(where: { "*?!".contains($0) }), !out.contains(name) else { continue }
+                guard !name.isEmpty, !name.contains(where: { "*?!".contains($0) }), !out.contains(name), !skipped(name) else { continue }
                 out.append(name)
             }
         }
