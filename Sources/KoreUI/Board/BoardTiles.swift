@@ -112,8 +112,12 @@ struct TileMark: View {
     var body: some View {
         switch state {
         case .working:
-            ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
-                .colorMultiply(WorkingSpinner.tint(chat.provider))
+            if TabWork.kind(chat) == .background {
+                BackgroundPrompt()
+            } else {
+                ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
+                    .colorMultiply(WorkingSpinner.tint(chat.provider))
+            }
         case .failed:
             Image(systemName: "exclamationmark.circle.fill")
                 .resizable().scaledToFit()

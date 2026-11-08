@@ -1416,6 +1416,23 @@ private struct TabItem: View {
 /// a turn. An agent tab follows that agent alone; sibling work stays on the parent chat.
 @MainActor
 enum TabWork {
+    /// What a chat's mark shows: the model at work (the CLI's spinner), only background commands
+    /// running while the model is idle or waits on an approval (">_", bg-command-cue.html C), or
+    /// nothing. A running sub-agent is the model at work.
+    enum Kind: Equatable { case idle, working, background }
+
+    static func kind(working: Bool, waitingForNetwork: Bool, approvalWaiting: Bool, commands: Bool) -> Kind {
+        if commands, approvalWaiting || (!working && !waitingForNetwork) { return .background }
+        return working || waitingForNetwork || commands ? .working : .idle
+    }
+
+    static func kind(_ chat: Chat) -> Kind {
+        guard chat.hasWork else { return .idle }
+        return kind(
+            working: chat.isWorking, waitingForNetwork: chat.isWaitingForNetwork,
+            approvalWaiting: !chat.approvals.pending.isEmpty, commands: !chat.commands.stoppable.isEmpty)
+    }
+
     static func running(_ chat: Chat, agent: String? = nil) -> Bool {
         guard chat.hasWork else { return false }
         guard let agent else {
@@ -1466,6 +1483,12 @@ private struct TabMark: View {
                 TabWarning()
                     .help(chat.connection.word ?? "")
                     .storyMark(story.part(.stuck))
+            } else if running, tab.agent == nil, TabWork.kind(chat) == .background {
+                // Only background commands run: ">_", the amber point on it while an approval waits.
+                let needsYou = !chat.approvals.pending.isEmpty
+                BackgroundPrompt(needsYou: needsYou)
+                    .storyMark(story.part(.background))
+                    .overlay { if needsYou { Color.clear.storyMark(story.part(.needsYou)) } }
             } else if running {
                 // The system spinner is grey: multiplied, it takes the CLI's colour.
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
@@ -1497,10 +1520,16 @@ private struct BoardMark: View {
         let state = board.urgent
         switch state {
         case .working:
-            let provider = board.orderedChats.first { TabWork.running($0) }?.provider ?? .claude
-            ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
-                .colorMultiply(WorkingSpinner.tint(provider))
-                .storyMark(story.part(.working))
+            let running = board.orderedChats.filter { TabWork.running($0) }
+            if running.allSatisfy({ TabWork.kind($0) == .background }) {
+                // Every running chat only waits on background commands.
+                BackgroundPrompt().storyMark(story.part(.background))
+            } else {
+                let provider = running.first { TabWork.kind($0) == .working }?.provider ?? .claude
+                ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
+                    .colorMultiply(WorkingSpinner.tint(provider))
+                    .storyMark(story.part(.working))
+            }
         case .stuck:
             TabWarning().storyMark(story.part(.stuck))
         default:

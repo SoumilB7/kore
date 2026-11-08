@@ -23,6 +23,7 @@ fun android.app.Activity.chatCard(): LinearLayout = LinearLayout(this).apply {
     addView(android.widget.FrameLayout(context).apply {
         addView(android.widget.ImageView(context), android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
         addView(Spinner(context, Tone.spinClaude).apply { visibility = View.GONE }, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
+        addView(PromptMark(context).apply { visibility = View.GONE }, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
     }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { marginEnd = dp(12) })
     addView(LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -40,6 +41,7 @@ fun android.app.Activity.bindChatCard(v: LinearLayout, row: DeviceList.Row, open
     val lead = v.getChildAt(0) as android.widget.FrameLayout
     val logo = lead.getChildAt(0) as android.widget.ImageView
     val spinner = lead.getChildAt(1) as Spinner
+    val prompt = lead.getChildAt(2) as PromptMark
     val text = v.getChildAt(1) as LinearLayout
     val top = text.getChildAt(0) as LinearLayout
     val title = top.getChildAt(0) as TextView
@@ -53,8 +55,10 @@ fun android.app.Activity.bindChatCard(v: LinearLayout, row: DeviceList.Row, open
         logo.setImageResource(providerLogo(row.provider))
         logo.imageTintList = null
     }
-    logo.visibility = if (working) View.INVISIBLE else View.VISIBLE
-    spinner.visibility = if (working) View.VISIBLE else View.GONE
+    logo.visibility = if (working || row.prompt) View.INVISIBLE else View.VISIBLE
+    spinner.visibility = if (working && !row.prompt) View.VISIBLE else View.GONE
+    prompt.visibility = if (row.prompt) View.VISIBLE else View.GONE
+    prompt.needsYou = row.prompt && row.cue == DeviceList.Cue.NEEDS
     spinner.tint = if (row.provider == "codex") Tone.spinCodex else Tone.spinClaude
     title.text = row.title
     val strong = row.unread || working || row.cue == DeviceList.Cue.NEEDS
@@ -68,7 +72,7 @@ fun android.app.Activity.bindChatCard(v: LinearLayout, row: DeviceList.Row, open
         DeviceList.Cue.FAILED -> Tone.err
         else -> Tone.dim
     })
-    v.contentDescription = listOf(row.title, row.age, if (row.unread) "unread" else "", if (working) "working" else "", row.waiting?.words ?: "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
+    v.contentDescription = listOf(row.title, row.age, if (row.unread) "unread" else "", if (row.prompt) "background commands running" else if (working) "working" else "", row.waiting?.words ?: "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
     v.setOnClickListener {
         if (open != null) open()
         else if (row.chatId != null) startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", row.chatId))

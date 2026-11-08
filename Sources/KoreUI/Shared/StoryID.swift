@@ -43,6 +43,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case working
         /// A tab whose turn is offline or stalled: ⚠ in its spinner's place.
         case stuck
+        /// A chat tab's ">_" mark with an approval waiting: its amber point.
+        case needsYou = "needsyou"
         /// A chat tab whose work an account switch or sign-out stopped: ⚠ until its next send.
         case stoppedForAccount
         /// A list row's stand-in for the pointer entering it; there while it's lit; a popup

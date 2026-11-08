@@ -29,6 +29,7 @@ class ChatActivity : NodeActivity() {
     private lateinit var openingSpinner: Spinner
     private lateinit var leadLogo: android.widget.ImageView
     private lateinit var leadSpin: Spinner
+    private lateinit var leadPrompt: PromptMark
     /** The transcript showed its end before a resize (the keyboard, the card): it shows it after. */
     private var atEnd = true
     private lateinit var openingText: TextView
@@ -51,6 +52,8 @@ class ChatActivity : NodeActivity() {
         leadSpin = Spinner(this@ChatActivity, Tone.spinClaude).apply { visibility = View.GONE }
         barLead.addView(leadLogo, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
         barLead.addView(leadSpin, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
+        leadPrompt = PromptMark(this@ChatActivity).apply { visibility = View.GONE }
+        barLead.addView(leadPrompt, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
         // Opening (spec §6): a 28 spinner over "Opening on {device}" (Callout, dim), centred.
         openingSpinner = Spinner(this@ChatActivity, Tone.accent)
         openingText = label("Opening on $macName").apply { type(Type.Callout); setTextColor(Tone.dim); gravity = Gravity.CENTER }
@@ -210,11 +213,16 @@ class ChatActivity : NodeActivity() {
         // Between turns, a sub-agent or a background command keeps it working (link 1.13).
         val waiting = Waiting.of(chat)
         val working = chat?.bool("running") == true || waiting != null
-        barAfter.showWaiting(waiting)
+        // Only background commands, the model idle or waiting on you: ">_" leads, and the bar's
+        // symbols drop the ">_" it would repeat (bg-command-cue C).
+        val prompt = Waiting.promptOnly(chat)
+        barAfter.showWaiting(if (prompt) waiting?.let { w -> Waiting(w.agents, 0).takeIf { it.agents > 0 } } else waiting)
+        leadPrompt.visibility = if (prompt) View.VISIBLE else View.GONE
+        leadPrompt.needsYou = prompt && chat?.str("state") == "needsYou"
         provider?.let { leadLogo.setImageResource(providerLogo(it)) }
         leadSpin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
-        leadLogo.visibility = if (working) View.INVISIBLE else View.VISIBLE
-        leadSpin.visibility = if (working) View.VISIBLE else View.GONE
+        leadLogo.visibility = if (working || prompt) View.INVISIBLE else View.VISIBLE
+        leadSpin.visibility = if (working && !prompt) View.VISIBLE else View.GONE
         barLead.visibility = if (provider != null) View.VISIBLE else View.GONE
     }
 

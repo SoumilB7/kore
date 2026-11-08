@@ -12,4 +12,6 @@ enum Motion {
     static let drawIn = Animation.easeOut(duration: 0.18)
     /// An install's progress line filling along the bar's top edge.
     static let progress = Animation.easeOut(duration: 0.3)
+    /// A background-only chat's ">_" cursor: one blink.
+    static let promptBlink: TimeInterval = 1.1
 }

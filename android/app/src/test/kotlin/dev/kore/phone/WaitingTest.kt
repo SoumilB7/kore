@@ -45,4 +45,26 @@ class WaitingTest {
         assertEquals(Waiting(1, 0), rows[0].waiting)
         assertNull(rows[1].waiting)
     }
+
+    /** bg-command-cue C: ">_" only while commands alone run and the model is idle or waits on you. */
+    @Test fun promptOnlyWhenCommandsAloneRun() {
+        assert(Waiting.promptOnly(o("""{"state":"working","running":false,"background":{"commands":1}}""")))
+        assert(Waiting.promptOnly(o("""{"state":"needsYou","running":true,"background":{"commands":2}}""")))
+        assert(!Waiting.promptOnly(o("""{"state":"working","running":true,"background":{"commands":1}}""")))
+        assert(!Waiting.promptOnly(o("""{"state":"working","running":false,"background":{"agents":1,"commands":1}}""")))
+        assert(!Waiting.promptOnly(o("""{"state":"idle","running":false}""")))
+        assert(!Waiting.promptOnly(null))
+    }
+
+    /** The row leads with ">_" and doesn't repeat the command symbol on its line. */
+    @Test fun aPromptRowDropsItsCommandSymbol() {
+        val now = 1_800_000_000_000L
+        val snap = o("""{"windows":[{"id":"w","name":"kore","tabs":[{"kind":"chat","chatId":"a"}]}],
+            "chats":[{"id":"a","title":"Build","state":"working","running":false,"lastAt":$now,"background":{"agents":0,"commands":1}}]}""")
+        val none = object : DeviceList.Seen { override fun unread(chatId: String, at: Long?) = false }
+        val row = DeviceList.rows(snap, null, now, none).single()
+        assert(row.prompt)
+        assertNull(row.waiting)
+        assertEquals(Cue.WORKING, row.cue)
+    }
 }

@@ -34,6 +34,75 @@ data class Waiting(val agents: Int, val commands: Int) {
             val commands = maxOf(0, b["commands"].int() ?: 0)
             return if (agents > 0 || commands > 0) Waiting(agents, commands) else null
         }
+
+        /**
+         * bg-command-cue.html C: only background commands run while the model is idle, or waits
+         * on you (a card open beside them). The lead is then ">_", not the spinner; a running
+         * sub-agent is the model at work.
+         */
+        fun promptOnly(chat: JsonObject?): Boolean {
+            val w = of(chat) ?: return false
+            return w.agents == 0 && w.commands > 0 && (chat?.bool("running") != true || chat.str("state") == "needsYou")
+        }
+    }
+}
+
+/**
+ * ">_" in the lead's place (bg-command-cue.html C): `dim`, the cursor blinking (1.1 s, shown 55%),
+ * the amber point on its corner while the chat needs you. Ticks only while attached and while
+ * animations are on; held still otherwise.
+ */
+class PromptMark(context: Context) : View(context) {
+    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE
+        strokeCap = android.graphics.Paint.Cap.ROUND
+        strokeJoin = android.graphics.Paint.Join.ROUND
+    }
+    private val point = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Tone.warn }
+    private var shown = true
+    var needsYou = false
+        set(v) { if (field != v) { field = v; invalidate() } }
+    private val tick = object : Runnable {
+        override fun run() {
+            shown = !shown
+            invalidate()
+            if (isAttachedToWindow && Motion.scale > 0f) postDelayed(this, if (shown) ON_MS else OFF_MS)
+        }
+    }
+
+    init {
+        contentDescription = "Background commands running"
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        shown = true
+        if (Motion.scale > 0f) postDelayed(tick, ON_MS)
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(tick)
+        super.onDetachedFromWindow()
+    }
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        val u = minOf(width, height) / 14f
+        val ox = (width - 14f * u) / 2f
+        val oy = (height - 14f * u) / 2f
+        paint.color = Tone.dim
+        paint.strokeWidth = 1.5f * u
+        val chevron = android.graphics.Path().apply {
+            moveTo(ox + 1.8f * u, oy + 3.6f * u); lineTo(ox + 6f * u, oy + 7f * u); lineTo(ox + 1.8f * u, oy + 10.4f * u)
+        }
+        canvas.drawPath(chevron, paint)
+        if (shown) canvas.drawLine(ox + 7.4f * u, oy + 10.9f * u, ox + 12.4f * u, oy + 10.9f * u, paint)
+        if (needsYou) canvas.drawCircle(ox + 13f * u, oy + 1.6f * u, 3f * u, point)
+    }
+
+    companion object {
+        const val ON_MS = 605L
+        const val OFF_MS = 495L
     }
 }
 
