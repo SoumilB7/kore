@@ -162,6 +162,10 @@ package final class Workspace {
     var explorerWidth = Layout.Explorer.width {
         didSet { saveExplorer() }
     }
+    /// The left panel shows Boxes in place of the files (its header's switch).
+    var showsBoxes = false {
+        didSet { if showsBoxes != oldValue { saveExplorer() } }
+    }
     /// ⌘P: files, or go to line (⌃G).
     var quickOpen: QuickOpenMode?
     /// What the sidebar shows: the tree, or Search (⇧⌘F).
@@ -209,7 +213,10 @@ package final class Workspace {
         if restore, let explorer = Self.savedExplorer(for: folder) {
             explorerWidth = explorer.width
             explorerOpen = explorer.open
+            showsBoxes = explorer.boxes == true
         }
+        // A box's window has no files here: its panel is the boxes.
+        if box != nil { showsBoxes = true }
         bindTabs(previous: [])
         trimDrafts()
         Self.all.add(self)
@@ -860,6 +867,8 @@ package final class Workspace {
     private struct ExplorerState: Codable {
         var open: Bool
         var width: CGFloat
+        /// The left panel showed Boxes, not the files.
+        var boxes: Bool?
     }
 
     private static let explorerKey = "explorer"
@@ -867,7 +876,7 @@ package final class Workspace {
     private func saveExplorer() {
         guard box == nil, Self.persists(folder) else { return }
         UserDefaults.standard.set(
-            try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth)),
+            try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth, boxes: showsBoxes ? true : nil)),
             forKey: Self.key(Self.explorerKey, folder))
     }
 

@@ -38,6 +38,14 @@ package final class HostConnection {
     package private(set) var lastHeard: Date?
     package private(set) var windows: [LinkWindow] = []
     package private(set) var folders: [BoxFolder] = []
+    /// Why the link last ended, in SSH's or the box's last words ("command not found").
+    @ObservationIgnored package private(set) var lastReason: String?
+    /// The link ended without a word from kore-host because it isn't there: SSH worked, the
+    /// command didn't.
+    package var hostMissing: Bool {
+        guard let reason = lastReason?.lowercased(), lastHeard == nil else { return false }
+        return reason.contains("not found") || reason.contains("no such file")
+    }
     /// GitHub's CLI on the box is signed in, as the box last said; nil until it says.
     package private(set) var ghSignedIn: Bool?
     /// The CLIs' logins on the box, and GitHub's (made on first use).
@@ -117,6 +125,9 @@ package final class HostConnection {
         open[alias] = connection
         return connection
     }
+
+    /// The alias's connection while a window holds it; nil otherwise (nothing is made).
+    package static func live(_ alias: String) -> HostConnection? { open[alias] }
 
     /// A window on the box opened: the link starts with the first.
     package func retain() {
@@ -321,6 +332,7 @@ package final class HostConnection {
         if case .refused = phase { return }
         if phase == .online || lastHeard == nil { lastHeard = heardAt ?? lastHeard }
         phase = .offline
+        lastReason = reason
         HostLog.note(alias, "dropped", reason)
         guard users > 0 else { return }
         let wait = backoff[min(attempts, backoff.count - 1)]

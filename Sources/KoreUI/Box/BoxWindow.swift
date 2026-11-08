@@ -349,24 +349,3 @@ struct BoxCue: View {
             .help(box.folder)
     }
 }
-
-/// The left panel in a box's window, where the explorer is on this Mac: the box and the folder,
-/// one quiet line. The box's files come later.
-struct BoxSidebar: View {
-    let box: BoxBinding
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(box.alias + " · " + box.shownFolder)
-                .font(Chrome.label)
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(box.folder)
-                .padding(.horizontal, Space.lg)
-                .padding(.vertical, Space.md)
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}

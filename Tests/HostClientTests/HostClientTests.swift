@@ -320,6 +320,42 @@ struct HostClientTests {
         connection.release()
     }
 
+    @Test func boxListProbesOnAsk() async throws {
+        let up = Dials(), down = Dials()
+        down.refuse = true
+        let root = Fixture.scratch()
+        let defaults = try #require(UserDefaults(suiteName: "hostclient-\(UUID().uuidString)"))
+        let list = BoxList(defaults: defaults, hosts: { ["other", "mybox", "spare"] }) { alias in
+            let connection = makeConnection(root: root.appendingPathComponent(alias), dials: alias == "mybox" ? up : down)
+            connection.backoff = [.seconds(30)]
+            return connection
+        }
+        // mybox has answered on this Mac before; the other hosts are suggestions.
+        #expect(list.boxes.map(\.alias) == ["mybox"])
+        #expect(list.suggestions("sp") == ["spare"])
+        // Nothing dials until asked.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(up.hosts.isEmpty && down.hosts.isEmpty)
+
+        Task {
+            #expect(await until { up.hosts.count == 1 })
+            let host = up.hosts[0]
+            _ = await host.handshake(windows: [], chats: [])
+            let ask = await host.next("cmd")
+            host.send(json: ["t": "result", "ok": true, "id": ask?["id"] ?? "", "folders": [["windowId": "w_1", "path": "/home/me/app"]]])
+        }
+        await list.probe("mybox")
+        #expect(list.box("mybox")?.status == .ready)
+        #expect(list.box("mybox")?.folders.map(\.path) == ["/home/me/app"])
+        #expect(await until { up.hosts[0].closed })
+
+        // Added by hand: listed from now on, answered or not.
+        list.add("other")
+        await list.probe("other")
+        #expect(list.box("other")?.status == .unreachable("Can't reach other"))
+        #expect(BoxList(defaults: defaults, hosts: { [] }).boxes.map(\.alias) == ["mybox", "other"])
+    }
+
     @Test func sshHostsAndArguments() {
         let config = """
             Host mybox

@@ -70,6 +70,7 @@ struct ExplorerSidebar: View {
     private var header: some View {
         let searching = workspace.sidebar == .search
         return HStack(spacing: Space.xs) {
+            BoxesSwitch(workspace: workspace)
             Text(searching ? "Search" : workspace.folder.lastPathComponent)
                 .font(Chrome.bodyMedium)
                 .foregroundStyle(Theme.secondary)
@@ -245,9 +246,11 @@ struct ExplorerSidebar: View {
     }
 }
 
-private struct HeaderButton: View {
+struct HeaderButton: View {
     let symbol: String
     var isOn = false
+    /// Its glyph's colour while on (Boxes' switch).
+    var tint: Color?
     let help: String
     let action: () -> Void
     @StateObject private var hovered = Local(false)
@@ -256,7 +259,7 @@ private struct HeaderButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(Chrome.label)
-                .foregroundStyle(hovered.value || isOn ? Theme.text : Theme.secondary)
+                .foregroundStyle(isOn ? tint ?? Theme.text : hovered.value ? Theme.text : Theme.secondary)
                 .frame(width: Size.Tree.headerButton, height: Size.Tree.headerButton)
                 .hoverFill(hovered.value || isOn, isOn ? Theme.surfaceHover : Theme.toolHover)
                 .contentShape(Rectangle())
