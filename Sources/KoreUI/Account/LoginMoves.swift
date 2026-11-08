@@ -56,6 +56,13 @@ package final class LoginMoves {
     /// The box this login is also on, if one holds the same sign-in.
     func alsoOn(_ cli: String, _ id: String?) -> String? { incompatible[Self.key(cli, id)] }
 
+    /// The boxes (KoreNet ids) holding a login this Mac holds too, for a phone's amber point;
+    /// nil when there's none.
+    package var alsoOnDevices: [String]? {
+        let ids = Set(incompatible.values).compactMap { connection($0)?.netPeer?.record.id.uuidString.lowercased() }
+        return ids.isEmpty ? nil : ids.sorted()
+    }
+
     /// A failure's caption clears the next time the popup opens.
     func clearFailures() { lines = lines.filter { if case .failed = $0.value { false } else { true } } }
 

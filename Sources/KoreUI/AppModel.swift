@@ -1,4 +1,5 @@
 import AppKit
+import HostClient
 import KoreCore
 import Observation
 import src
@@ -57,6 +58,13 @@ package final class AppModel {
         AttachPanel.install()
         accounts.watch()
         NetLiveness.start()
+        // A box that takes logins comes up: what it's owed goes, and one sign-in held on both is found.
+        if !StoryHost.installed {
+            HostConnection.loginsReady = { _ in
+                LoginMoves.shared.settle()
+                LoginMoves.shared.check()
+            }
+        }
     }
 
     /// Opens (or focuses) a folder's window, the way a folder from outside the app is.

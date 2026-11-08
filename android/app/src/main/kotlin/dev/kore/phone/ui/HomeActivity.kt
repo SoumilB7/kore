@@ -38,7 +38,11 @@ class HomeActivity : Activity() {
     /** Everything Home draws; equal looks draw nothing. */
     private data class Look(val cue: Cue?, val devices: List<Device>, val update: Update?, val offline: Boolean = false)
     private data class Cue(val count: Int, val title: String, val node: String, val nodeName: String, val chat: String?)
-    private data class Device(val id: String, val name: String, val fact: String, val up: Boolean, val mac: Boolean, val dot: Int, val action: RowAction? = null)
+    private data class Device(
+        val id: String, val name: String, val fact: String, val up: Boolean, val mac: Boolean, val dot: Int, val action: RowAction? = null,
+        /** A login on it is also on another device (a Mac's snapshot says so): an amber point by its name. */
+        val alsoOn: Boolean = false,
+    )
     /** An update ready: from a Mac (one tap installs it) or from the release page (Settings). */
     private data class Update(val offer: Any, val mac: String?)
 
@@ -137,6 +141,8 @@ class HomeActivity : Activity() {
         val waiting = nodes.filter { (_, s, _) -> s == NodeMachine.State.Up || s == NodeMachine.State.Connecting }
             .flatMap { (n, _, snap) -> snap?.objs("chats").orEmpty().filter { it.str("state") == "needsYou" }.map { n to it } }
         val cue = waiting.firstOrNull()?.let { (n, chat) -> Cue(waiting.size, chat.str("title") ?: "a chat", n.id.toString(), n.name, chat.str("id")) }
+        // Devices holding a login also held on another device, as each Mac says (link 1.14).
+        val doubled = nodes.flatMap { (_, _, snap) -> snap?.obj("mac")?.strs("alsoOn").orEmpty() }.map { it.lowercase() }.toSet()
         val devices = nodes.map { (n, state, snap) ->
             val s = shownState(state, kore.mesh.networkOn)
             val up = s == NodeMachine.State.Up
@@ -150,7 +156,7 @@ class HomeActivity : Activity() {
                 s is NodeMachine.State.Away -> awayFact(s.why, n.name, mac, n.lastSeen)
                 else -> stateWords(s, mac).first.removePrefix("● ").lowercase()
             }
-            Device(n.id.toString(), n.name, fact, up, n.device.value.kind == NodeKind.MAC, nodeLook(s).second, trouble?.action)
+            Device(n.id.toString(), n.name, fact, up, n.device.value.kind == NodeKind.MAC, nodeLook(s).second, trouble?.action, n.id.toString().lowercase() in doubled)
         }
         val update = (Updates.status.value as? Updates.Status.Available)?.let { Update(it.offer, Updates.fromMac(kore, it.offer)) }
         return Look(cue, devices, update, offline = !phoneOnline())
@@ -188,12 +194,12 @@ class HomeActivity : Activity() {
         titleColor = if (d.up) Tone.text else Tone.faint,
         secondColor = if (d.action != null) Tone.accent else Tone.dim,
         iconTint = if (d.up) Tone.dim else Tone.faint,
-        end = point(d.dot), chevron = d.action == null,
+        end = point(d.dot), chevron = d.action == null, titleMark = if (d.alsoOn) Tone.warn else null,
     ) {
         val node = latest.firstOrNull { it.first.id.toString() == d.id }?.first
         if (d.action != null && node != null) rowAction(node, d.action) else startActivity(Intent(this@HomeActivity, DeviceActivity::class.java).putExtra("node", d.id))
     }.apply {
-        contentDescription = "${d.name}: ${d.fact}"
+        contentDescription = "${d.name}: ${d.fact}" + if (d.alsoOn) ". A login on it is also on another device" else ""
         tag = "device ${d.name}"
     }
 

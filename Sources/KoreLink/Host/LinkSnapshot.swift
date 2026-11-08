@@ -99,7 +99,7 @@ enum LinkSnapshot {
         return MacState(
             recents: Array(recents), canReopenWindow: AppModel.shared?.linkCanReopenWindow ?? false,
             stayAwake: LinkAwake.state.map { MacState.StayAwake(mode: $0.mode, on: $0.on) },
-            arsenalTiers: ArsenalTier.allCases.filter(\.built).map(\.rawValue))
+            arsenalTiers: ArsenalTier.allCases.filter(\.built).map(\.rawValue), alsoOn: LoginMoves.shared.alsoOnDevices)
     }
 
     // MARK: Reads (full control)

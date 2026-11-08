@@ -1000,7 +1000,12 @@ package final class HostConnection {
         }
         if boxMinor >= 12, control == .full { pullUsage() }
         if caps.contains(DevicesWire.mergeCap) { Self.devicesCatchUp?(self) }
+        if caps.contains(LinkLogins.cap) { Self.loginsReady?(self) }
     }
+
+    /// A box that takes logins is linked (1.14): what it's owed goes, and its logins are compared
+    /// with this Mac's (one sign-in held on both).
+    package static var loginsReady: (@MainActor (HostConnection) -> Void)?
 
     /// Calls that go again after a drop are kept on disk, so a quit Kore sends them when it's back
     /// (the box runs each id once).

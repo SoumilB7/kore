@@ -965,6 +965,8 @@ package final class AccountStore {
             self.settling[key] = nil
             // A move changes the file itself: it reads its own result.
             guard !self.isMoving(provider, id) else { return }
+            // A login's file changed: one sign-in held on a box too is looked for again.
+            if !self.onBox { LoginMoves.shared.check() }
             guard await self.accountMoved(provider, login: id) else { return }
             if CLIProfiles.active(provider) == id {
                 await self.refresh(provider)

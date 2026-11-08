@@ -245,7 +245,7 @@ fun android.app.Activity.grouped(rows: List<View>, inset: Int = 52): android.wid
  */
 fun android.app.Activity.groupRow(
     icon: Int?, title: String, second: String?, titleColor: Int = Tone.text, secondColor: Int = Tone.dim,
-    iconTint: Int = Tone.dim, end: View? = null, chevron: Boolean = false, go: (() -> Unit)? = null,
+    iconTint: Int = Tone.dim, end: View? = null, chevron: Boolean = false, titleMark: Int? = null, go: (() -> Unit)? = null,
 ): android.widget.LinearLayout = android.widget.LinearLayout(this).apply {
     gravity = android.view.Gravity.CENTER_VERTICAL
     minimumHeight = dp(Space.rowMin)
@@ -256,7 +256,13 @@ fun android.app.Activity.groupRow(
     }, android.widget.LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginStart = dp(3); marginEnd = dp(3 + 14) })
     addView(android.widget.LinearLayout(context).apply {
         orientation = android.widget.LinearLayout.VERTICAL
-        addView(TextView(context).apply { text = title; type(Type.BodyMedium); setTextColor(titleColor) })
+        // A 6 point after the title in [titleMark]'s colour (a device holding a login also held elsewhere).
+        val name = TextView(context).apply { text = title; type(Type.BodyMedium); setTextColor(titleColor) }
+        if (titleMark == null) addView(name) else addView(android.widget.LinearLayout(context).apply {
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(name)
+            addView(point(titleMark, 6), android.widget.LinearLayout.LayoutParams(dp(6), dp(6)).apply { marginStart = dp(8) })
+        })
         if (second != null) addView(TextView(context).apply { text = second; type(Type.Callout); setTextColor(secondColor) })
     }, android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
     // An end view keeps the size it was made with (a 7 dp point would otherwise take the row's width).

@@ -424,7 +424,11 @@ package struct MacState: Codable, Sendable, Equatable {
     package var canReopenWindow: Bool
     package var stayAwake: StayAwake?
     package var arsenalTiers: [String]?
-    package init(recents: [Recent], canReopenWindow: Bool, stayAwake: StayAwake?, arsenalTiers: [String]? = nil) {
+    /// 1.14: the devices (KoreNet ids) holding a login also held on another device: a phone
+    /// shows an amber point beside each one's name. Absent when there's none.
+    package var alsoOn: [String]?
+    package init(recents: [Recent], canReopenWindow: Bool, stayAwake: StayAwake?, arsenalTiers: [String]? = nil, alsoOn: [String]? = nil) {
+        self.alsoOn = alsoOn
         self.recents = recents
         self.canReopenWindow = canReopenWindow
         self.stayAwake = stayAwake
