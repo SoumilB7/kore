@@ -73,7 +73,7 @@ struct BoxesPanel: View {
         } label: {
             Image(systemName: open.value.contains(box.alias) ? "chevron.down" : "chevron.right")
                 .font(Chrome.caption).foregroundStyle(Theme.tertiary).frame(width: Space.md)
-            StatusDot(state: dot(box))
+            StatusDot(state: box.dotState)
             Text(box.alias).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
         }
         .koreContextMenu("box-row") {
@@ -212,18 +212,6 @@ struct BoxesPanel: View {
         list.add(alias)
         addingBox.value = nil
         if !open.value.contains(alias) { toggle(alias) }
-    }
-
-    // MARK: Status
-
-    private func dot(_ box: BoxList.Box) -> StatusDot.State {
-        if HostConnection.live(box.alias)?.isOnline == true { return .connected }
-        switch box.status {
-        case .ready: return .connected
-        case .notSetUp, .noGrant, .stale, .failed: return .notSetUp
-        case .stopped, .unreachable: return .offline
-        case .unknown, .probing, .working: return .unknown
-        }
     }
 }
 

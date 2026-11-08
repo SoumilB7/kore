@@ -381,8 +381,9 @@ struct TabBar: View {
         let strip = strip(layout)
         HStack(spacing: Size.tabGap) {
             ExplorerButton(workspace: workspace, size: tabHeight).storyID(StoryID.Titlebar.explorer)
+            BoxButton(workspace: workspace, size: tabHeight)
             if let explorerDock {
-                Color.clear.frame(width: max(0, explorerDock + Space.md - leadingInset - tabHeight - 2 * Size.tabGap), height: 0)
+                Color.clear.frame(width: max(0, explorerDock + Space.md - leadingInset - 2 * tabHeight - 3 * Size.tabGap), height: 0)
             }
             HStack(spacing: Size.tabGap) {
                 if strip.name > 0 {

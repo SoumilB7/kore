@@ -8,4 +8,12 @@ extension Size {
         /// How long the card's Allow stays disabled after it appears.
         static let allowDelay: Duration = .milliseconds(700)
     }
+
+    /// The box button's popup.
+    enum Box {
+        static let popupWidth: CGFloat = 260
+        /// The new window's button: the title row's size, after the traffic lights.
+        static let welcomeButton: CGFloat = 30
+        static let welcomeInset: CGFloat = 82
+    }
 }

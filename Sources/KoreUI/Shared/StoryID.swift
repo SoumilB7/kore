@@ -81,6 +81,19 @@ extension StoryID {
         package static func hiddenCount(_ n: Int) -> StoryID { StoryID(.titlebar, "overflow.count", key: String(n)) }
         /// The active tab's name before a strip of tabs too narrow for theirs.
         package static let tabName = StoryID(.titlebar, "tabname")
+        /// The box button, beside the panel button.
+        package static let boxes = StoryID(.titlebar, "boxes")
+    }
+
+    /// The box button's popup: a box's row (by alias), a folder's (by path), Add a box… and its field.
+    package enum Boxes {
+        package static let popup = StoryID(.titlebar, "boxes.popup")
+        package static func box(_ alias: String) -> StoryID { StoryID(.titlebar, "boxes.box", key: alias) }
+        package static func folder(_ path: String) -> StoryID { StoryID(.titlebar, "boxes.folder", key: path) }
+        package static let add = StoryID(.titlebar, "boxes.add")
+        package static let field = StoryID(.titlebar, "boxes.field")
+        /// "Open <folder> on <box>": the window's folder, kept in sync with a box's copy.
+        package static let sync = StoryID(.titlebar, "boxes.sync")
     }
 
     package enum Tabs {

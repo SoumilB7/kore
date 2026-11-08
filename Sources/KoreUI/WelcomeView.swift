@@ -79,6 +79,13 @@ struct WelcomeView: View {
         .frame(minHeight: Layout.Welcome.minHeight)
         // The window takes the content's full height (with .contentSize), so nothing is cut off.
         .fixedSize(horizontal: false, vertical: true)
+        // The box button, where a folder window's title row has it: after the traffic lights.
+        .overlay(alignment: .topLeading) {
+            BoxButton(workspace: nil, size: Size.Box.welcomeButton)
+                .padding(.leading, Size.Box.welcomeInset)
+                .padding(.top, Space.xs)
+                .ignoresSafeArea(.container, edges: .top)
+        }
         .background(WindowReader { window.value = $0 })
         .onAppear {
             if monitor.value == nil { monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { key($0) } }
@@ -104,7 +111,7 @@ struct WelcomeView: View {
     /// Return opens the lit one. This window's keys only.
     private func key(_ event: NSEvent) -> NSEvent? {
         let recents = app.recents
-        guard let window = window.value, event.window === window, !recents.isEmpty,
+        guard let window = window.value, event.window === window, !recents.isEmpty, !(window.firstResponder is NSTextView),
             event.modifierFlags.intersection([.command, .control, .option]).isEmpty
         else { return event }
         switch event.keyCode {
