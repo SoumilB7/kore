@@ -52,6 +52,9 @@ package enum ChatCommand: Sendable {
     /// 1.9: the chat's Arsenal tier on the client (`watch`, `own`, `drive`; nil for off), said
     /// when it changes, so the box's state and other clients show it.
     case setArsenal(String?)
+    /// "Allow commands in Plan" for the chat, kept by the box with it: its chat answers each
+    /// permission while planning, and every client shows the switch.
+    case setPlanAllow(Bool)
     /// A tag this side doesn't know.
     case unknown(String)
 
@@ -92,6 +95,7 @@ package enum ChatCommand: Sendable {
         case .setDraft: "setDraft"
         case .draft: "draft"
         case .setArsenal: "setArsenal"
+        case .setPlanAllow: "setPlanAllow"
         case .unknown(let tag): tag
         }
     }
@@ -101,7 +105,7 @@ package enum ChatCommand: Sendable {
         "send", "interrupt", "respond", "setMode", "setPlanMode", "setModel", "setEffort", "setFastMode", "rename", "stopAgent", "stopCommand",
         "backgroundCommand", "commandOutput", "watchCommands", "agentHistory", "fork", "forkAtEnd", "rollback", "earlier", "earlierMessages",
         "unloadPoint", "unloaded", "compact", "usage", "useReset", "setRemoteControl", "relaunch", "listModels", "close", "keepRow",
-        "setAutoCompact", "setDraft", "draft", "setArsenal",
+        "setAutoCompact", "setDraft", "draft", "setArsenal", "setPlanAllow",
     ]
 
     /// Reads a command; one whose tag (or shape) this side doesn't know is `.unknown`, never a

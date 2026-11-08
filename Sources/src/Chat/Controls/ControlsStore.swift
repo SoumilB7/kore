@@ -92,6 +92,10 @@ package final class ControlsStore {
                 fastOffered = offered
                 fastUnavailable = offered ? nil : report.unavailable ?? "Unavailable for this account"
             }
+        case .controlsSet(let set):
+            if let model = set.model { modelId = model }
+            if let effort = set.effort { self.effort = effort }
+            if let on = set.planAllow { planAllow = on }
         case .remoteControl(let state):
             remote = state
         case .remoteControlUnavailable(let reason):

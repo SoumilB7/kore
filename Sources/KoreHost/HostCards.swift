@@ -26,6 +26,9 @@ enum HostMeta {
 
     static func modeID(_ hc: HostChat) -> String { hc.chat?.controls.mode ?? hc.record.mode ?? hc.provider.modes[0].id }
 
+    /// Codex's Plan switch: the live chat's, else as kept for its next start.
+    static func planOn(_ hc: HostChat) -> Bool { hc.provider.planToggle != nil && (hc.chat?.controls.planMode ?? hc.record.planMode ?? false) }
+
     static func facts(_ hc: HostChat, raise: Bool = false) -> LinkPolicy.ChatFacts {
         let provider = hc.provider
         let modes = Dictionary(provider.modes.map { ($0.id, level($0)) }, uniquingKeysWith: { a, _ in a })
@@ -33,7 +36,7 @@ enum HostMeta {
         let cards = Dictionary(self.cards(hc, raise: raise).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest, risk: $0.risk)) }, uniquingKeysWith: { a, _ in a })
         let commands = hc.commands
         return LinkPolicy.ChatFacts(
-            level: current, planOn: provider.planToggle != nil && (hc.chat?.controls.planMode ?? false), modes: modes, cards: cards,
+            level: current, planOn: planOn(hc), modes: modes, cards: cards,
             commands: Set(commands.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(commands.filter { $0.kind == .kore }.map(\.name)))
     }
 
@@ -61,6 +64,9 @@ enum HostMeta {
                 modelId: hc.record.modelId, effort: hc.record.effort, fast: nil, fastOffered: false, planAllow: false, contextPct: nil,
                 autoCompactAt: nil, compacting: false, remote: .off)
         kept.compacting = false
+        // What a client set while the CLI slept, for its next start.
+        if let fast = hc.record.fast { kept.fast = fast }
+        kept.planAllow = hc.record.planAllow ?? false
         return kept
     }
 
@@ -74,7 +80,7 @@ enum HostMeta {
         let remote: LinkProtocol.ChatControls.Remote =
             if c.remoteChanging { .changing } else if c.remote != nil { .on } else if c.remoteUnavailable != nil { .unavailable } else { .off }
         return LinkProtocol.ChatControls(
-            modelId: c.modelId ?? chat.launchModel, effort: c.effort ?? chat.launchEffort, fast: c.fastKnown ? c.fastMode : nil,
+            modelId: c.modelId ?? chat.launchModel, effort: c.effort ?? chat.launchEffort, fast: c.fastKnown ? c.fastMode : chat.launchFastMode,
             fastOffered: c.fastModeShown, planAllow: c.planAllow, contextPct: pct, autoCompactAt: chat.context.autoCompactAt,
             compacting: chat.context.compacting, remote: remote, contextUsed: usage?.used, contextWindow: window)
     }
@@ -102,7 +108,7 @@ enum HostMeta {
             .map { LinkSlash(name: $0.name, description: String($0.description.prefix(100)), kind: $0.kind == .skill ? .skill : .command) }
         var made = ChatMeta(
             id: hc.id, provider: hc.provider.id, title: hc.title, state: state,
-            mode: .init(id: modeID(hc), level: facts.level, planOn: hc.provider.planToggle != nil ? (chat?.controls.planMode ?? false) : nil),
+            mode: .init(id: modeID(hc), level: facts.level, planOn: hc.provider.planToggle != nil ? planOn(hc) : nil),
             modeIds: (chat?.controls.availableModes ?? hc.provider.modes).map(\.id), allowedModeIds: allowed.sorted(),
             model: chat?.controls.currentModel?.name ?? hc.record.modelId, queued: chat?.queuedCount ?? 0, running: chat?.isBusy ?? false,
             cards: cards(hc, raise: raise), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false, close: true),

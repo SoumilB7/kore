@@ -97,6 +97,11 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     private var ownDraftRevs = 0
     private var setting: (autoCompact: Int, draft: Int, arsenal: Int) = (0, 0, 0)
     private var draftSoon: Task<Void, Never>?
+    /// The chat's controls as the box's meta last said them (set there, on another client, or
+    /// while its CLI slept: Claude says no event for a model or an effort), and this Mac's calls
+    /// changing one still under way (the box's word on it waits for theirs).
+    private var boxSaid = BoxControls()
+    private var inFlight: [BoxControls.Field: Int] = [:]
     /// Where the box chat's model requests go: this Mac's usage, so Kore's share of the plan's
     /// limits counts them (tests set their own).
     package var usage: @Sendable (ForwardedRequest) -> Void = { request in Task { await KoreUsage.shared.forwarded(request) } }
@@ -329,7 +334,10 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         if !running, let turn = unfinished(from: openTurn, in: segment) {
             segment.append(.turnFinished(turn, .interrupted, duration: nil))
         }
+        // The controls a past CLI said at its start give way to what the box says now.
+        let said = list.contains { BoxControls.says($0) }
         flush()
+        if said { emit(boxSaid.events(BoxControls.Field.allCases.filter { inFlight[$0, default: 0] == 0 })) }
         show(Array(live))
     }
 
@@ -409,6 +417,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// seen on a link is the box's record of the point and the draft; the tier stays this Mac's
     /// (a box started again forgets it) until another client changes it.
     private func kept(_ meta: ChatMeta) {
+        controlsSaid(meta)
         guard let controls = meta.controls else { return }
         let point = controls.autoCompactAt
         if setting.autoCompact == 0, seen.autoCompact != .some(point) {
@@ -438,6 +447,30 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             } else if tier != boxTier(arsenal()) {
                 sayArsenal(arsenal())
             }
+        }
+    }
+
+    /// The box's model, effort, mode, plan, fast mode and "Allow commands in Plan" go to this chat
+    /// where they changed (the first meta seeds a chat opened here), but not one this Mac is
+    /// changing now.
+    private func controlsSaid(_ meta: ChatMeta) {
+        var now = BoxControls(meta)
+        if !keepsPlanAllow { now.planAllow = nil }
+        let fields = BoxControls.Field.allCases.filter { inFlight[$0, default: 0] == 0 && now.value($0) != nil && now.value($0) != boxSaid.value($0) }
+        for field in fields { boxSaid.take(field, from: now) }
+        emit(boxSaid.events(fields))
+    }
+
+    /// One of this Mac's own changes, said to the box: until it's answered the box's word on that
+    /// control waits; refused, the box's own value comes back here.
+    private func changing(_ field: BoxControls.Field, _ call: () async throws -> Void) async throws {
+        inFlight[field, default: 0] += 1
+        defer { inFlight[field, default: 1] -= 1 }
+        do {
+            try await call()
+        } catch {
+            if inFlight[field] == 1 { emit(boxSaid.events([field])) }
+            throw error
         }
     }
 
@@ -568,19 +601,32 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         }
     }
 
-    package func setMode(_ id: String) async throws { try await call(.setMode(id)) }
-    package func setPlanMode(_ on: Bool) async { _ = try? await call(.setPlanMode(on)) }
-    package func setModel(_ id: String) async throws { try await call(.setModel(id)) }
+    package func setMode(_ id: String) async throws { try await changing(.mode) { try await call(.setMode(id)) } }
+    package func setPlanMode(_ on: Bool) async { try? await changing(.plan) { try await call(.setPlanMode(on)) } }
+    package func setModel(_ id: String) async throws { try await changing(.model) { try await call(.setModel(id)) } }
 
     package func setEffort(_ level: String) async {
         do {
-            try await call(.setEffort(level))
+            try await changing(.effort) { try await call(.setEffort(level)) }
         } catch {
             emit([.notice("Couldn't set the effort: \(error)", isError: true)])
         }
     }
 
-    package func setFastMode(_ on: Bool) async throws { try await call(.setFastMode(on)) }
+    package func setFastMode(_ on: Bool) async throws { try await changing(.fast) { try await call(.setFastMode(on)) } }
+
+    /// A box that keeps "Allow commands in Plan" with the chat (0.3.5) answers there.
+    package var keepsPlanAllow: Bool { offers("setPlanAllow") }
+
+    package func keepPlanAllow(_ on: Bool) {
+        Task {
+            do {
+                try await changing(.planAllow) { try await call(.setPlanAllow(on)) }
+            } catch {
+                emit([.notice("Couldn't set Allow commands in Plan: \(error)", isError: true)])
+            }
+        }
+    }
     package func rename(_ title: String) async throws { try await call(.rename(title)) }
     package func stopAgent(_ id: String) async { _ = try? await call(.stopAgent(id)) }
     package func stopCommand(_ id: String) async throws { try await call(.stopCommand(id)) }
@@ -758,6 +804,78 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
         case .command: "\(NodeNames.name(alias)) doesn't take that here"
         case .tooLarge: "too large for \(NodeNames.name(alias))"
         default: nil
+        }
+    }
+}
+
+/// A box chat's controls as its meta says them, one field each; nil where it says none.
+struct BoxControls: Equatable {
+    enum Field: CaseIterable { case model, effort, mode, plan, fast, planAllow }
+
+    var model: String?
+    var effort: String?
+    var mode: String?
+    var plan: Bool?
+    var fast: Bool?
+    var planAllow: Bool?
+
+    init() {}
+
+    init(_ meta: ChatMeta) {
+        model = meta.controls?.modelId
+        effort = meta.controls?.effort
+        mode = meta.mode.id
+        plan = meta.mode.planOn
+        fast = meta.controls?.fast
+        planAllow = meta.controls?.planAllow
+    }
+
+    func value(_ field: Field) -> String? {
+        switch field {
+        case .model: model
+        case .effort: effort
+        case .mode: mode
+        case .plan: plan.map { "\($0)" }
+        case .fast: fast.map { "\($0)" }
+        case .planAllow: planAllow.map { "\($0)" }
+        }
+    }
+
+    mutating func take(_ field: Field, from other: BoxControls) {
+        switch field {
+        case .model: model = other.model
+        case .effort: effort = other.effort
+        case .mode: mode = other.mode
+        case .plan: plan = other.plan
+        case .fast: fast = other.fast
+        case .planAllow: planAllow = other.planAllow
+        }
+    }
+
+    /// The events a chat takes them by: quiet ones (a mode as a session's, never a divider).
+    func events(_ fields: [Field]) -> [ChatEvent] {
+        var set = ControlsSet()
+        var out: [ChatEvent] = []
+        for field in fields {
+            switch field {
+            case .model: set.model = model
+            case .effort: set.effort = effort
+            case .planAllow: set.planAllow = planAllow
+            case .mode: if let mode { out.append(.modeChanged(ModeChange(mode: mode, previous: nil, source: .session, at: Date()))) }
+            case .plan: if let plan { out.append(.planModeChanged(PlanModeChange(on: plan, source: .session, at: Date()))) }
+            case .fast: if let fast { out.append(.fastModeChanged(FastModeReport(on: fast, offered: nil))) }
+            }
+        }
+        if set != ControlsSet() { out.insert(.controlsSet(set), at: 0) }
+        return out
+    }
+
+    /// An event that sets what these say (a CLI's start, its mode).
+    static func says(_ event: ChatEvent) -> Bool {
+        switch event {
+        case .controlsLoaded, .modeChanged, .planModeChanged, .fastModeChanged: true
+        case .replayed(let events): events.contains(where: says)
+        default: false
         }
     }
 }

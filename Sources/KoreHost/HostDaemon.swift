@@ -189,6 +189,8 @@ package final class HostDaemon {
         chats = all.filter { $0.record.closed != true }
         closedChats = all.filter { $0.record.closed == true }
         for chat in chats { watch(chat) }
+        // A box that stopped without ending its CLIs (a crash, a kill) closes what they left open.
+        for chat in all { chat.settleAfterCrash() }
         terminals.ran = { [weak self] folder in self?.git.touched(folder) }
         sweepStaging()
     }
@@ -227,7 +229,7 @@ package final class HostDaemon {
         tailnetChoices += 1
         stopKoreTailnet(wait: true)
         terminals.stopAll()
-        for chat in chats { chat.sleep() }
+        for chat in chats { chat.sleep(final: true) }
         guard let lock else { return }
         listener?.stop()
         agentListener?.stop()
@@ -304,7 +306,7 @@ package final class HostDaemon {
     /// A tab closed on a client: the chat leaves the box's windows and its CLI ends. Its record
     /// and logs stay on disk, marked closed.
     func close(_ hc: HostChat) {
-        sleep(hc)
+        sleep(hc, final: true)
         hc.markClosed(at: Date())
         hc.stream.close()
         chats.removeAll { $0 === hc }
@@ -382,10 +384,13 @@ package final class HostDaemon {
         return chat
     }
 
-    func sleep(_ hc: HostChat) {
+    /// `final`: the CLI ends for more than a rest (a close, a cut, a move): nothing it offered stands.
+    package func sleep(_ hc: HostChat, final: Bool = false) {
         idleStops.removeValue(forKey: hc.id)?.cancel()
         if hc.cliRunning { HostJournal.note("cli stop", ["chat": hc.id, "cli": hc.record.provider]) }
-        hc.sleep()
+        hc.sleep(final: final)
+        // What its last events armed goes too: there's no CLI to stop.
+        idleStops.removeValue(forKey: hc.id)?.cancel()
         broadcast(chats: [hc])
         // The CLI's pipes and the chat's state go with it: their memory goes back once they have.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { MainActor.assumeIsolated { HostMemory.releaseSoon() } }
@@ -773,15 +778,21 @@ package final class HostDaemon {
         case .setMode(_, let modeId):
             guard let hc else { return fail(.goneChat, "") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
-            hc.live(services: services).setMode(modeId, remember: false)
-            if let chat = hc.chat { hc.noted(chat) }
+            // A sleeping chat keeps it for its next start: no chat is made for it.
+            if let chat = hc.chat {
+                chat.setMode(modeId, remember: false)
+                hc.noted(chat)
+            } else {
+                hc.setMode(modeId)
+            }
             armIdle(hc)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
         case .setPlan(_, let on):
             guard let hc else { return fail(.goneChat, "") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
-            hc.live(services: services).setPlanMode(on)
+            hc.chat?.setPlanMode(on)
+            hc.setPlanMode(on)
             armIdle(hc)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
@@ -873,9 +884,19 @@ package final class HostDaemon {
                 return fail(.invalid, "The chat's CLI doesn't offer that model.")
             }
             if let chat = hc.chat, let option = chat.controls.models.first(where: { $0.id == model }) {
+                // A model without the effort takes its nearest level below, kept with the chat.
                 chat.setModel(option)
-            } else if let chat = hc.chat {
                 chat.launchModel = model
+                if let level = chat.controls.effort, level != hc.record.effort {
+                    chat.launchEffort = level
+                    hc.setEffort(level)
+                }
+            } else {
+                hc.chat?.launchModel = model
+                if let level = fallbackEffort(model, hc) {
+                    hc.chat?.launchEffort = level
+                    hc.setEffort(level)
+                }
             }
             hc.setModel(model)
             broadcast(chats: [hc])
@@ -896,10 +917,22 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .chatSetFast:
             guard let hc = args.chatId.flatMap(chat), let on = args.on else { return fail(.invalid, "Name the chat and on or off.") }
-            guard let chat = hc.chat, chat.controls.fastModeShown, on == false || chat.controls.fastOffered != false else {
+            if let chat = hc.chat {
+                // A running CLI switches now, once it has said fast mode is there (both say it as they start).
+                guard chat.controls.fastModeShown, on == false || chat.controls.fastOffered != false else {
+                    return fail(.invalid, "Fast mode isn't offered for this chat now.")
+                }
+                chat.setFastMode(on)
+            } else if on, !offersFast(hc) {
                 return fail(.invalid, "Fast mode isn't offered for this chat now.")
             }
-            chat.setFastMode(on)
+            // Kept for its next start too, whether or not its CLI runs now.
+            hc.setFast(on)
+            broadcast(chats: [hc])
+            return .init(id: id, ok: true)
+        case .chatSetPlanAllow:
+            guard let hc = args.chatId.flatMap(chat), let on = args.on else { return fail(.invalid, "Name the chat and on or off.") }
+            hc.setPlanAllow(on)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
         case .foldersList:
@@ -1148,10 +1181,29 @@ package final class HostDaemon {
         guard hc.record.account != account else { return }
         hc.setAccount(account)
         HostJournal.note("account switch", ["chat": hc.id, "account": login])
+        // Every client shows the chat's login, its CLI running or not.
+        defer { broadcast(chats: [hc]) }
         guard let chat = hc.chat else { return }
         if chat.hasWork { chat.stopAllWork() }
         chat.accountChanged()
-        broadcast(chats: [hc])
+    }
+
+    /// The effort a chat's model change leaves it on while its CLI sleeps: the nearest the model
+    /// offers below the one it has, from the CLI's list (nil: no change, or no list).
+    func fallbackEffort(_ model: String, _ hc: HostChat) -> String? {
+        guard let cli = clis.first(where: { $0.provider == hc.record.provider }),
+            let option = cli.models.first(where: { $0.id == model }), let current = hc.record.controls?.effort ?? hc.record.effort
+        else { return nil }
+        let level = EffortScale.fallback(current, offered: option.efforts, scale: cli.effortScale)
+        return level == current ? nil : level
+    }
+
+    /// Whether the chat's model has fast mode, as its CLI last listed it (true while unknown).
+    func offersFast(_ hc: HostChat) -> Bool {
+        guard let model = hc.record.controls?.modelId ?? hc.record.modelId,
+            let option = clis.first(where: { $0.provider == hc.record.provider })?.models.first(where: { $0.id == model })
+        else { return true }
+        return option.fast
     }
 
     /// The sign-in a box uses when the client names none.

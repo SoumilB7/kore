@@ -42,7 +42,7 @@ extension HostDaemon {
         case .prepare:
             if let hc, !hc.idle {
                 // A cut stops it first; a copy takes it as far as it has got.
-                if args.stop == true { sleep(hc) }
+                if args.stop == true { sleep(hc, final: true) }
             }
             guard !found.files.isEmpty else { return refused(.goneSession, "Nothing to copy yet: the chat hasn't started.") }
             let provider = hc?.record.provider ?? past!.provider
@@ -58,7 +58,7 @@ extension HostDaemon {
             return answer
         case .commit:
             // A cut's copy is placed elsewhere: the source leaves. Its CLI ends first.
-            if let hc { sleep(hc) }
+            if let hc { sleep(hc, final: true) }
             do {
                 if !found.files.isEmpty {
                     try HostPaths.privateFolder(chatTrash.deletingLastPathComponent())

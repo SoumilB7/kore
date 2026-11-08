@@ -59,6 +59,14 @@ package final class Chat: Identifiable {
         get { engine.rawTap }
         set { engine.rawTap = newValue }
     }
+    /// Each event the chat makes of its own (not its backend's): a message dropped as its CLI
+    /// starts again, a turn it ends, a compaction it stops, a permission it allows itself. A box's
+    /// chat logs them, so the clients following it see them too.
+    @ObservationIgnored package var ownTap: (@MainActor (ChatEvent) -> Void)?
+    /// A message going back to the composer, by its id when it has one: true when it went to
+    /// another one (a box's chat returns it to the client that sent it), so this composer keeps
+    /// what it has.
+    @ObservationIgnored package var returnsToComposer: (@MainActor (_ id: String?, _ text: String) -> Bool)?
     /// It sends Kore's own "Continue" and compacts at its point by itself. Off for a box's chat
     /// while a Mac drives it: that Mac's chat does both, once.
     @ObservationIgnored package var automatic = true
@@ -251,9 +259,10 @@ package final class Chat: Identifiable {
 
     // MARK: Events
 
-    /// Every event goes to every store; each takes what it shows.
-    private func dispatch(_ event: ChatEvent) {
+    /// Every event goes to every store; each takes what it shows. `own`: the chat made it, not its backend.
+    private func dispatch(_ event: ChatEvent, own: Bool = true) {
         let event = stoppedCompaction(sleptOutcome(event))
+        if own { ownTap?(event) }
         if case .historyReplaced(let events) = event {
             replaceHistory(events)
             services.tap(self, event)
@@ -274,9 +283,9 @@ package final class Chat: Identifiable {
             forkedFrom = nil
             transcriptView.forkedFrom(original)
         }
-        if case .approvalRequested(let ask) = event, controls.autoAllows(ask) {
+        if case .approvalRequested(let ask) = event, autoAllows(ask) {
             // Allow commands in Plan: answered at once, no card; the tool's row still shows what ran.
-            answer(ask, .allow)
+            autoAllow(ask)
         } else {
             approvals.apply(event)
         }
@@ -289,7 +298,7 @@ package final class Chat: Identifiable {
         if case .sessionIdentified(let id) = event, ownAutoCompact, id != status.sessionId {
             compactMemory.remember(context.autoCompactAt, chat: id)
         }
-        if case .sessionIdentified(let id) = event, controls.planAllow, id != status.sessionId {
+        if case .sessionIdentified(let id) = event, controls.planAllow, id != status.sessionId, !(backend?.keepsPlanAllow ?? false) {
             controls.keepPlanAllow(chat: id)
         }
         if case .sessionIdentified(let id) = event, let record = imported?.record, record.target.session != id {
@@ -399,7 +408,7 @@ package final class Chat: Identifiable {
         awaitingHistory = false
         let waiting = held
         held = []
-        waiting.forEach(dispatch)
+        waiting.forEach { dispatch($0) }
         SessionLog.shared.shown(provider.id, chat: sessionId, rows: transcriptView.entries.count, held: waiting.count, late: late)
     }
 
@@ -475,7 +484,7 @@ package final class Chat: Identifiable {
             }
             if options.instructions == nil { options.instructions = services.instructions }
             return options
-        }) { [self] event in self.dispatch(event) }
+        }) { [self] event in self.dispatch(event, own: false) }
     }
 
     // MARK: Account
@@ -996,7 +1005,7 @@ package final class Chat: Identifiable {
                     } else {
                         transcriptView.sending(false)
                         status.setRunning(false)
-                        giveBackToComposer(text, sent)
+                        giveBackToComposer(text, sent, id: id)
                     }
                     fail("Not sent: \(provider.name) didn't start (\(Self.reason(error))). The message is back in the composer.")
                     return
@@ -1042,7 +1051,7 @@ package final class Chat: Identifiable {
                 } else {
                     transcriptView.sending(false)
                     status.setRunning(false)
-                    giveBackToComposer(text, sent)
+                    giveBackToComposer(text, sent, id: id)
                     fail("Not sent: \(Self.reason(error)). The message is back in the composer.")
                 }
             }
@@ -1447,7 +1456,7 @@ package final class Chat: Identifiable {
         heldForCompaction = []
         for message in held { dispatch(.queuedMessage(id: message.id, .dropped)) }
         if closed || accountRestartPending {
-            for message in held.reversed() { giveBackToComposer(message.text, message.files) }
+            for message in held.reversed() { giveBackToComposer(message.text, message.files, id: message.id) }
             return
         }
         for message in held { deliver(message.text, message.files, id: message.id) }
@@ -1598,13 +1607,26 @@ package final class Chat: Identifiable {
         guard case .queuedMessage(let id, let delivery) = event, let message = waiting.removeValue(forKey: id) else { return }
         waitingOrder.removeAll { $0 == id }
         guard delivery == .dropped else { return }
-        giveBackToComposer(message.text, message.files)
+        giveBackToComposer(message.text, message.files, id: id)
+    }
+
+    /// Its CLI ends with messages still waiting (a box's chat put to sleep, closed or moved): each
+    /// is dropped, back to its composer, as a CLI starting again drops them.
+    package func dropQueued() {
+        for id in waitingOrder.reversed() { dispatch(.queuedMessage(id: id, .dropped)) }
+        let held = heldForCompaction
+        heldForCompaction = []
+        for message in held.reversed() {
+            dispatch(.queuedMessage(id: message.id, .dropped))
+            giveBackToComposer(message.text, message.files, id: message.id)
+        }
     }
 
     /// A message back in the composer (one Stop dropped, one rolled back): as it was sent when
     /// the composer is empty, its command in the chip; otherwise ahead of what's there, which
     /// stays.
-    private func giveBackToComposer(_ text: String, _ files: [Attachment]) {
+    private func giveBackToComposer(_ text: String, _ files: [Attachment], id: String? = nil) {
+        if let returnsToComposer, returnsToComposer(id, text) { return }
         if command == nil, draft.isEmpty {
             restoreDraft(text, commands: controls.commands)
         } else if !text.isEmpty {
@@ -1722,17 +1744,27 @@ package final class Chat: Identifiable {
         allowWaitingInPlan()
     }
 
-    /// "Allow commands in Plan", kept for this chat.
+    /// "Allow commands in Plan", kept for this chat: where it runs when that's elsewhere (a box).
     package func setPlanAllow(_ on: Bool) {
         controls.planAllow = on
-        if let id = status.sessionId { controls.keepPlanAllow(chat: id) }
         services.log("plan-allow", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
+        if let backend, backend.keepsPlanAllow { return backend.keepPlanAllow(on) }
+        if let id = status.sessionId { controls.keepPlanAllow(chat: id) }
         allowWaitingInPlan()
     }
 
     /// Permissions already waiting when planning with the switch on starts: answered as later ones are.
     private func allowWaitingInPlan() {
-        for ask in approvals.pending where controls.autoAllows(ask) { answer(ask, .allow) }
+        for ask in approvals.pending where autoAllows(ask) { autoAllow(ask) }
+    }
+
+    /// This chat answers it itself (the switch is its own, not a box's).
+    private func autoAllows(_ ask: Approval) -> Bool { controls.autoAllows(ask) && !(backend?.keepsPlanAllow ?? false) }
+
+    /// Allowed with no card; the card's end is the chat's own word.
+    private func autoAllow(_ ask: Approval) {
+        answer(ask, .allow)
+        ownTap?(.approvalWithdrawn(ask.id))
     }
 
     /// The CLI's model list: the one its session started with goes to its other chats, and a

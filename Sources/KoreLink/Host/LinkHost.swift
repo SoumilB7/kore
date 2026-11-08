@@ -296,6 +296,7 @@ package final class LinkHost {
         case .accountRefresh, .accountList, .accountUsage: "Read the account"
         case .accountPrivacy: "Changed email privacy"
         case .chatSetArsenal: "Changed Arsenal"
+        case .chatSetPlanAllow: "Changed Allow commands in Plan"
         case .arsenalStopAll: "Stopped agent control"
         case .foldersList, .folderAdd, .authGh, .syncWatch, .syncUnwatch, .fsList, .fsRead, .fsMkdir, .fsWrite, .fsCreate, .fsRename, .fsDelete, .fsSearch, .fsWatch, .fsCopy, .fsCount, .fsCancel,
             .chatRelease, .chatAdopt, .chatMirror, .syncFlush, .chatCopy, .chatAdoptCopy, .syncApply, .fsStat, .fsFind:

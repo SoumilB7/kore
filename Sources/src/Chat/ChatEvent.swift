@@ -20,6 +20,9 @@ package enum ChatEvent: Sendable {
     case planModeChanged(PlanModeChange)
     /// Fast mode as the CLI reports it: when it starts, after each turn, and after a switch.
     case fastModeChanged(FastModeReport)
+    /// Controls set elsewhere, not reported by a CLI: a box's chat changed from another client
+    /// (its meta says them). What's there is the chat's now; nil keeps what it has.
+    case controlsSet(ControlsSet)
     /// The CLI's own remote control of the chat, as it changes; nil once it's off.
     case remoteControl(RemoteControl?)
     /// Why the CLI can't offer remote control at all (Claude's `remote_control_available`);
@@ -142,6 +145,19 @@ package enum ChatEvent: Sendable {
     /// newest page is read from its end first): the transcript is built again from it, keeping
     /// what came after the replay.
     case historyReplaced([ChatEvent])
+}
+
+/// A box chat's model, effort and "Allow commands in Plan" as its box keeps them (`controlsSet`).
+package struct ControlsSet: Sendable, Equatable, Codable {
+    package var model: String?
+    package var effort: String?
+    package var planAllow: Bool?
+
+    package init(model: String? = nil, effort: String? = nil, planAllow: Bool? = nil) {
+        self.model = model
+        self.effort = effort
+        self.planAllow = planAllow
+    }
 }
 
 /// Who changed a mode.

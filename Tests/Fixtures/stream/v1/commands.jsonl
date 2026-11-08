@@ -35,3 +35,4 @@
 {"type":"draft"}
 {"tier":"own","type":"setArsenal"}
 {"type":"setArsenal"}
+{"on":true,"type":"setPlanAllow"}

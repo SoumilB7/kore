@@ -58,6 +58,14 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
   While a chat's CLI is stopped, its controls are as the live chat last had them (kept in its
   `meta.json`), with `compacting: false`; a chat that never ran has the `modelId` and `effort`
   it will start on. `act` and `watch` grants get no `controls`.
+- 0.3.5: the box keeps a chat's model, effort, mode, Codex's Plan switch, fast mode and Allow
+  commands in Plan with it, set from any client or while its CLI is stopped, and its next CLI
+  starts on them. The chat's meta goes out whenever one changes, so a Mac's tab and a phone show
+  what another client set (the claude CLI says no event for a model or an effort change). A model
+  change that leaves the effort one the model doesn't offer takes the nearest level below, on the
+  box too. A mode or Plan set while the CLI is stopped starts no CLI. A rename while it's stopped
+  reaches the CLI's session once it next starts. An account switch is said whether or not the
+  chat's CLI runs.
 - With a `full` grant, the `snapshot` carries `clis: [{provider, models: [{id, name, efforts,
   fast, auto}], effortScale}]` (no `account`): each CLI's models as the box's own CLI listed
   them, `effortScale` every effort its models offer, lowest first. Only CLIs that have listed
@@ -94,7 +102,8 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 | `chat.close` | `chatId` | The tab closed: the chat leaves the box's windows (`delta` with `removed`) and its CLI ends. Its record and logs stay on disk, marked closed. 1.5 clients close through `chat.call close`. |
 | `chat.setModel` | `chatId, modelId` | Also for an `act` grant. A chat whose CLI isn't running starts on that model. The model must be one the box's CLI listed (or, before any list, a plain id of letters, digits and `._:[]-`, at most 128); `invalid` otherwise. |
 | `chat.setEffort` | `chatId, level` | Also for an `act` grant. A running CLI switches; a stopped one starts on it. `invalid` when the chat's models offer no such level. |
-| `chat.setFast` | `chatId, on` | Also for an `act` grant. Only while the chat's CLI runs and has said fast mode is there for its model; `invalid` otherwise. |
+| `chat.setFast` | `chatId, on` | Also for an `act` grant. A running CLI that has said fast mode switches it, `invalid` when its model has none; a stopped one keeps it and starts on it (`invalid` when the CLI listed its model without fast mode). |
+| `chat.setPlanAllow` | `chatId, on` | Allow commands in Plan, kept by the box with the chat: its chat answers each permission while planning, and `controls.planAllow` says it to every client. Off for an `act` grant; on for `full` only. |
 | `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as in link 1.0 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link under full control (1.2). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
 | `folders.list` | | Result: `folders: [{windowId, path, missing?}]`; `missing: true` for a served folder that isn't there any more. |
 | `folder.add` | `path` | An existing folder, by absolute path or under `~` (the box's home); it's added to `config.json`. Result: `folders`, and (0.3.5) `windowId`, its window. `gone.folder` otherwise. An act grant (a phone's Open here) adds only an absolute folder inside the home with no hidden name on the way, its links resolved inside the home (`denied.path` otherwise); each add is journalled `audit folder add device=… control=… path=… ok=…`. |
@@ -218,6 +227,14 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
   past 16 MiB. A box that stopped mid-turn ends the turn in the log (`turnFinished`,
   `interrupted`) when it next reads it, and a CLI stopped mid-turn does the same; the commands
   still running in either end with it (`commandEnded`, `ended`).
+- 0.3.5: what the box's own chat says, not its CLI, goes in the log too: a queued message dropped
+  as the CLI starts again (an account switch), the turn it ends, a compaction it stops, a
+  permission it answers by Allow commands in Plan (`approvalWithdrawn`). A CLI that ends for more
+  than an idle rest (a close, a cut, a move, the box stopping) and a box that stopped without
+  ending it (read again as it starts) close the rest: each queued message `queuedMessage
+  dropped`, then `exited`, on which a client drops every card and a plan's offer. A message a
+  full grant's call sent comes back to that Mac's composer from the drop; any other (a phone's)
+  goes back in the chat's draft (`setDraft`), ahead of what's there.
 
 ### Calls
 
@@ -231,7 +248,8 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
   `watchCommands {on}`, `agentHistory {id}`, `fork {message?, text}`, `forkAtEnd`, `rollback
   {message?, text}`, `earlier {turns?}`, `earlierMessages`, `unloadPoint {message?, text}`,
   `unloaded {earlier}`, `compact {instructions}`, `usage`, `useReset {credit?, attempt}`,
-  `setRemoteControl {on}`, `relaunch {reason}`, `listModels`, `close` (the tab closed, as
+  `setRemoteControl {on}`, `relaunch {reason}`, `listModels`, `setPlanAllow {on}` (0.3.5,
+  listed in `calls` when the box keeps it), `close` (the tab closed, as
   `chat.close`), and `keepRow {text, id}` (a typed /compact's row, which the CLI isn't sent: the
   box's chat and log keep it; only a /compact row is taken). A type the box doesn't know reads as unknown and is refused `invalid`.
 - The answer is a `result {id, ok, code?, message?, value?}`. `value` holds the call's one return:
@@ -581,6 +599,7 @@ stay refused to every grant.
 | Draft | `setDraft {text}` | `chat.setDraft {chatId, text}` | act |
 | Arsenal tier on | `setArsenal {tier}` | `chat.setArsenal {chatId, tier}` | full |
 | Arsenal off | `setArsenal {}` | `chat.setArsenal {chatId, tier: "off"}` | act |
+| Allow commands in Plan on / off | `setPlanAllow {on}` | `chat.setPlanAllow {chatId, on}` | full on; act off |
 | Stop agent control (every chat) | `setArsenal {}` for each | `arsenal.stopAll` | act |
 | History: list | `history.list` | `history.list` | act |
 | History: open | `history.open` | `history.open {sessionId, windowId?, provider?, title?}` | act |

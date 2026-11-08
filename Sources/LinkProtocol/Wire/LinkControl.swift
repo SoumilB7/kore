@@ -64,6 +64,8 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case accountUsage = "account.usage"
     // 1.3: Arsenal, a chat's agent-control tier, and Stop agent control.
     case chatSetArsenal = "chat.setArsenal"
+    /// A box chat's "Allow commands in Plan" (`on`), kept by the box with the chat.
+    case chatSetPlanAllow = "chat.setPlanAllow"
     case arsenalStopAll = "arsenal.stopAll"
     // 1.4: a box's folders (its windows).
     case foldersList = "folders.list"
@@ -122,7 +124,7 @@ package enum ControlKind: String, Sendable, CaseIterable {
     package var onChat: Bool {
         switch self {
         case .chatRename, .chatClose, .chatSelect, .chatSetModel, .chatSetEffort, .chatSetFast, .chatCompact, .chatSetAutoCompact,
-            .chatFork, .chatRollback, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue, .chatSetDraft, .chatSetArsenal:
+            .chatFork, .chatRollback, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue, .chatSetDraft, .chatSetArsenal, .chatSetPlanAllow:
             true
         default: false
         }

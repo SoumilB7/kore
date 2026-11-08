@@ -506,8 +506,10 @@ struct StreamTests {
         rig.restart()
         let back = try #require(rig.host.chat(hc.id))
         let items = await back.stream.since(nil, log: nil).items
-        #expect(ended("bg2", items) && !ended("bg1", Array(items.suffix(2))))
-        #expect(items.suffix(2).contains { if case .turnFinished(nil, .interrupted, _)? = $0.e { true } else { false } })
+        #expect(ended("bg2", items) && !ended("bg1", Array(items.suffix(3))))
+        #expect(items.suffix(3).contains { if case .turnFinished(nil, .interrupted, _)? = $0.e { true } else { false } })
+        // And the CLI that ran them: no client keeps a card it asked.
+        #expect(items.last.map { if case .exited? = $0.e { true } else { false } } == true)
     }
 
     @Test func anAnswerFitsOneFrame() {

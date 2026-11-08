@@ -61,7 +61,7 @@ extension HostDaemon {
             hc.setMoving(MoveHold(moveId: moveId, grant: grant, at: Date().timeIntervalSince1970))
             moveClients[moveId] = ObjectIdentifier(client)
             // Its CLI ends: the session files hold still while they're copied.
-            sleep(hc)
+            sleep(hc, final: true)
             let found = sessionFiles(hc, session: session)
             guard let first = found.files.first(where: { !$0.contains("/") || hc.record.provider == ProviderDescriptor.codex.id }) else {
                 unfreeze(hc)

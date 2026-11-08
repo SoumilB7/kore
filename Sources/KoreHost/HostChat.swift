@@ -53,6 +53,15 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     package var arsenal: String?
     /// The "/" commands its CLI last listed: offered, and taken, while the CLI is asleep.
     package var commands: [SlashCommand]?
+    /// Fast mode, Codex's Plan switch and "Allow commands in Plan" as last set: its next CLI
+    /// starts on them (nil: never set).
+    package var fast: Bool?
+    package var planMode: Bool?
+    package var planAllow: Bool?
+    /// Renamed while its CLI slept: the title goes to the CLI's session at its next start.
+    package var renamePending: Bool?
+    /// A CLI was started for it and hasn't been seen to end.
+    package var cliStarted: Bool?
 }
 
 /// A chat frozen for a move (`chat.release` prepare): which move, the grant it goes to, and since
@@ -132,6 +141,10 @@ package final class HostChat {
         }
     }
     var serverGiven: Bool?
+    /// The full grant whose call sent each recent message, by the message's id: a message the CLI
+    /// drops goes back to that client's composer (its chat restores it from the log), any other
+    /// to the draft the box keeps.
+    private var rowBy: [(id: String, by: String)] = []
 
     /// `changed`: new or changed entries and turns to send, or a reset.
     package var changed: ((HostChat, _ upserts: [LinkEntry], _ removed: [String], _ order: [String]?, _ turns: [LinkTurn], _ reset: Bool) -> Void)?
@@ -143,6 +156,10 @@ package final class HostChat {
         stream = StreamLog(url: dir.appendingPathComponent("events.jsonl"))
         stream.session = { [weak self] in self?.record.session }
         stream.context = { [weak self] in self?.chat?.context.usage }
+        // The box stopped with messages waiting: those no Mac's chat restores come back in the draft.
+        stream.droppedOnLoad = { [weak self] dropped in
+            for message in dropped.reversed() where message.by == nil { self?.giveBack(message.text) }
+        }
     }
 
     package var id: String { record.id }
@@ -340,12 +357,22 @@ package final class HostChat {
             provider: provider, folder: folderURL, resume: session, fork: fork, modeMemory: ModeMemory(defaults: nil),
             compactMemory: AutoCompactMemory(defaults: nil), services: services)
         if let mode = record.mode { chat.controls.mode = mode }
+        if provider.planToggle != nil, let on = record.planMode { chat.controls.planMode = on }
+        if let on = record.planAllow { chat.controls.planAllow = on }
         chat.copiedFrom = record.copied
         // Its name as kept (a rename, a fork's), before its CLI says one.
         if let title = record.title, !title.isEmpty { chat.adoptName(title) }
-        chat.backendTap = { [weak self] event in self?.stream.raw(event) }
+        chat.backendTap = { [weak self] event in
+            self?.stream.raw(event)
+            if case .controlsLoaded = event { self?.renameIfPending() }
+        }
+        // What the chat says of its own goes in the log as its backend's events do; what it
+        // gives back goes to the client that sent it.
+        chat.ownTap = { [weak self] event in self?.own(event) }
+        chat.returnsToComposer = { [weak self] id, text in self?.returned(id, text) ?? false }
         chat.launchModel = record.modelId
         chat.launchEffort = record.effort
+        chat.launchFastMode = record.fast
         // Its account's folder, read at each start: a switch takes effect at the next.
         if record.provider == "claude" {
             chat.launchEnvironment = { [weak self, weak services] in try services?.accountEnvironment?(self?.record.account) ?? [:] }
@@ -357,7 +384,26 @@ package final class HostChat {
         (wakeKept, wakeBase) = (nil, nil)
         attach(chat)
         self.chat = chat
+        setStarted(true)
         return chat
+    }
+
+    /// Whether a CLI runs for it, kept on disk: one the box never saw end (a crash) is settled as
+    /// the box starts again (`settleAfterCrash`).
+    private func setStarted(_ on: Bool) {
+        guard (record.cliStarted == true) != on else { return }
+        record.cliStarted = on ? true : nil
+        try? saveRecord()
+    }
+
+    /// The box stopped without ending its CLI: its log closes what that CLI left open (a turn,
+    /// commands, queued messages, cards) before any client reads it, and a phone's queued text
+    /// goes back in the draft.
+    func settleAfterCrash() {
+        guard record.cliStarted == true, chat == nil else { return }
+        _ = stream.isEmpty
+        stream.flush()
+        setStarted(false)
     }
 
     /// Follows the chat's transcript: its first, and the one a rollback or a corrected history
@@ -426,17 +472,25 @@ package final class HostChat {
     static let commandsKept = 200
 
     /// Its CLI ends and the chat goes; the record and log stay, and the next send resumes it.
-    func sleep() {
+    /// `final`: it isn't only resting (a close, a cut, a move, the box stopping), so nothing its
+    /// CLI offered stands; an idle CLI's rest keeps a plan's offer, as its session takes it later.
+    func sleep(final: Bool = false) {
         guard let chat else { return }
+        let resting = idle && !final
+        // Messages still waiting die with the CLI: dropped, each back to whoever sent it.
+        chat.dropQueued()
         projectWaiting(chat)
         // A turn its CLI takes along ends here, so no client keeps it running.
         if chat.isBusy { stream.add(.turnFinished(nil, .interrupted, duration: nil), by: nil) }
         // Its background commands end with it, as a CLI's exit ends them: none shows running for
         // ever to a client reading the log later.
         for command in chat.commands.all where command.isLive { stream.add(.commandEnded(id: command.id, .ended, at: Date()), by: nil) }
+        // And what it asked: every client's cards go.
+        if !resting, !stream.isEmpty { stream.add(.exited(status: 0), by: nil) }
         stream.flush()
-        chat.close(reason: "idle")
+        chat.close(reason: final ? "ended" : "idle")
         self.chat = nil
+        setStarted(false)
         serverGiven = nil
         // Nothing of it stays in memory while no one follows its transcript: read again when asked.
         if !txFollowed {
@@ -455,6 +509,9 @@ package final class HostChat {
         if next.session != nil { (next.forkFrom, next.forkAt) = (nil, nil) }
         next.title = chat.status.name ?? next.title
         next.mode = chat.controls.mode
+        if provider.planToggle != nil { next.planMode = chat.controls.planMode }
+        // Fast mode as its CLI last said it (a model without it says off, and keeps it for the next).
+        if chat.controls.fastKnown, chat.controls.currentModel?.supportsFastMode != false { next.fast = chat.controls.fastMode }
         var kept = HostMeta.controls(of: chat)
         kept.compacting = false
         next.controls = kept
@@ -495,8 +552,59 @@ package final class HostChat {
     /// when it does).
     func setTitle(_ title: String) {
         record.title = title
+        // With no CLI to take it now, its session is told at the next start.
+        if chat == nil, !title.isEmpty { record.renamePending = true }
         chat?.adoptName(title)
         try? saveRecord()
+    }
+
+    /// A rename kept while the CLI slept reaches its session, once the CLI has started.
+    private func renameIfPending() {
+        guard record.renamePending == true, let chat, let title = record.title, !title.isEmpty else { return }
+        record.renamePending = nil
+        try? saveRecord()
+        let backend = chat.connect()
+        Task { [weak self] in
+            do {
+                try await backend.rename(title)
+            } catch {
+                guard let self, self.record.title == title else { return }
+                self.record.renamePending = true
+                try? self.saveRecord()
+            }
+        }
+    }
+
+    /// The chat's own word, logged as its backend's are: its messages' rows go there already
+    /// (`streamRow`), and its notices and network are the box's alone.
+    private func own(_ event: ChatEvent) {
+        switch event {
+        case .userMessage, .messageQueued, .notice, .connection, .earlierHistory, .replayed, .historyReplaced: return
+        default: stream.add(event, by: nil)
+        }
+    }
+
+    /// A message's row went in the log, marked with the grant whose call sent it.
+    func noteRow(_ id: String, by: String?) {
+        guard let by else { return }
+        rowBy.removeAll { $0.id == id }
+        rowBy.append((id, by))
+        if rowBy.count > 64 { rowBy.removeFirst(rowBy.count - 64) }
+    }
+
+    /// A message the CLI didn't take: a Mac's chat that sent it has it back from the log (its
+    /// drop, or its call's failure); any other sender's (a phone's) goes in the box's draft.
+    private func returned(_ id: String?, _ text: String) -> Bool {
+        if let id, sentBy[id] != nil || rowBy.contains(where: { $0.id == id }) { return true }
+        giveBack(text)
+        return true
+    }
+
+    /// Back in the draft the box keeps, ahead of what's there.
+    private func giveBack(_ text: String) {
+        guard !text.isEmpty else { return }
+        let draft = record.draft ?? ""
+        setDraft(draft.isEmpty ? text : text + "\n" + draft)
     }
 
     /// A message, or a turn's start or end: the chat's recency moves (`line` nil keeps the last word).
@@ -624,6 +732,33 @@ package final class HostChat {
         record.effort = level
         record.controls?.effort = level
         try? saveRecord()
+    }
+
+    /// Kept for its next start, whether or not its CLI runs now.
+    func setFast(_ on: Bool) {
+        record.fast = on
+        record.controls?.fast = on
+        chat?.launchFastMode = on
+        try? saveRecord()
+    }
+
+    func setMode(_ id: String) {
+        record.mode = id
+        try? saveRecord()
+    }
+
+    func setPlanMode(_ on: Bool) {
+        guard provider.planToggle != nil else { return }
+        record.planMode = on
+        try? saveRecord()
+    }
+
+    /// "Allow commands in Plan": the box's chat answers each permission while planning.
+    func setPlanAllow(_ on: Bool) {
+        record.planAllow = on
+        record.controls?.planAllow = on
+        try? saveRecord()
+        chat?.setPlanAllow(on)
     }
 
     // MARK: Projection

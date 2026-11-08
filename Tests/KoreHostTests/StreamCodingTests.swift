@@ -51,6 +51,7 @@ struct StreamCodingTests {
             .contextUsage(ContextUsage(used: 10, window: 100, autoCompacts: true, at: at)), .earlierHistory(true),
             .requestUsage(RequestUsage(id: "msg1", at: at, model: "small", agent: "ag1", input: 10, output: 5, cacheRead: 100, cacheWrite5m: 20, cacheWrite1h: 0)),
             .replayed([.userMessage(text: "old", attachments: [], id: "m0")]), .historyReplaced([]),
+            .controlsSet(ControlsSet(model: "small", effort: "high", planAllow: true)),
         ]
     }
 
@@ -64,6 +65,7 @@ struct StreamCodingTests {
         .useReset(credit: "c1", attempt: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!), .setRemoteControl(true),
         .relaunch(reason: "stalled"), .listModels, .close, .keepRow(text: "/compact keep it", id: "m9"),
         .setAutoCompact(70), .setAutoCompact(nil), .setDraft("half a thought"), .draft, .setArsenal("own"), .setArsenal(nil),
+        .setPlanAllow(true),
     ]
 
     func lines<T: Encodable>(_ values: [T]) -> String {

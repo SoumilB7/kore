@@ -236,7 +236,7 @@ package enum LinkPolicy {
             return check(.chatSetArsenal, ControlArgs(tier: tier ?? "off"), chat, control: control)
         case .interrupt, .setModel, .setEffort, .setFastMode, .stopAgent, .stopCommand, .backgroundCommand, .commandOutput, .watchCommands,
             .agentHistory, .fork, .forkAtEnd, .rollback, .earlier, .earlierMessages, .unloadPoint, .unloaded, .usage, .useReset, .relaunch,
-            .listModels, .close, .draft:
+            .listModels, .close, .draft, .setPlanAllow:
             return .allow
         case .unknown:
             return .deny(.invalid, "Unknown call.")
@@ -385,6 +385,11 @@ package enum LinkPolicy {
             // Off lowers; a tier on raises what the chat's agent may do: full grants only.
             if (args.tier ?? "off") != "off", case .deny(let code, let message) = full() { return .deny(code, message) }
             return check(kind, args, chat, control: .full)
+        case .chatSetPlanAllow:
+            // Off lowers; on lets the chat allow every command while planning: full grants only.
+            guard let on = args.on else { return .deny(.invalid, "Name the chat and on or off.") }
+            if on, case .deny(let code, let message) = full() { return .deny(code, message) }
+            return .allow
         case .authGh:
             return full()
         case .accountSignIn:

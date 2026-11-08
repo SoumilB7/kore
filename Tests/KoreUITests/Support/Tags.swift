@@ -10,6 +10,7 @@ func tag(_ event: ChatEvent) -> String {
     case .sessionIdentified: "session"
     case .titleChanged: "title"
     case .controlsLoaded: "controls"
+    case .controlsSet: "controlsSet"
     case .modeChanged(let change): "mode \(change.mode)"
     case .planModeChanged(let change): "plan \(change.on)"
     case .fastModeChanged(let report): "fast \(report.on)"
