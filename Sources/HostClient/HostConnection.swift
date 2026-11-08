@@ -55,7 +55,9 @@ package final class HostConnection {
     }
 
     package let alias: String
-    package let grant: String
+    /// The name `attach --as` gives; a change takes effect on the next dial.
+    package private(set) var grant: String
+    @ObservationIgnored private var command: String
     package private(set) var phase = Phase.idle
     /// When the box last said anything, as of the last time it went quiet: what "offline" shows.
     package private(set) var lastHeard: Date?
@@ -91,7 +93,8 @@ package final class HostConnection {
     /// A dial that hasn't had its welcome by then is given up.
     @ObservationIgnored package var handshakeLimit: Duration = .seconds(20)
 
-    @ObservationIgnored private let makeTransport: @MainActor () -> any HostTransport
+    /// A test's transport; nil dials SSH with the grant and command as they are then.
+    @ObservationIgnored private let makeTransport: (@MainActor () -> any HostTransport)?
     @ObservationIgnored private var transport: (any HostTransport)?
     @ObservationIgnored private var pump: Task<Void, Never>?
     @ObservationIgnored private var pinger: Task<Void, Never>?
@@ -154,8 +157,9 @@ package final class HostConnection {
     ) {
         self.alias = alias
         self.grant = grant
+        self.command = command
         self.cache = cache ?? HostCache(alias: alias)
-        makeTransport = transport ?? { SSHTransport(alias: alias, grant: grant, command: command) }
+        makeTransport = transport
         if let state = self.cache.state() {
             windows = state.windows
             chats = Dictionary(state.chats.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
@@ -183,16 +187,28 @@ package final class HostConnection {
 
     // MARK: Shared, per alias
 
+    /// Held now: what `existing` and `live` give.
     private static var open: [String: HostConnection] = [:]
+    /// Every alias's one connection, held or asleep. Kept after the last release, so a holder that
+    /// took it before then (a window made while the Welcome held the box) and retains it after
+    /// links the same one everyone else gets: one `attach` per alias, never a second Kore here
+    /// replacing the first (`bye replaced`).
+    private static var made: [String: HostConnection] = [:]
 
-    /// The alias's connection, made on first ask; the same one while any window uses it.
     /// The box's link while something holds it, else nil: nothing is made or dialed.
     package static func existing(_ alias: String) -> HostConnection? { open[alias] }
 
-    package static func named(_ alias: String, grant: String = defaultGrant, command: String = SSHTransport.defaultCommand) -> HostConnection {
-        if let connection = open[alias] { return connection }
-        let connection = HostConnection(alias: alias, grant: grant, command: command)
+    /// The alias's connection, made on first ask; the same one ever after, held or not. A grant
+    /// or command given is the next dial's.
+    package static func named(_ alias: String, grant: String? = nil, command: String? = nil) -> HostConnection {
+        if let connection = open[alias] ?? made[alias] {
+            if let grant, grant != connection.grant { connection.grant = grant }
+            if let command, command != connection.command { connection.command = command }
+            return connection
+        }
+        let connection = HostConnection(alias: alias, grant: grant ?? defaultGrant, command: command ?? SSHTransport.defaultCommand)
         open[alias] = connection
+        made[alias] = connection
         return connection
     }
 
@@ -211,10 +227,14 @@ package final class HostConnection {
 
     /// Makes `connection` its alias's, as `named` would have made it: a test's, over a transport
     /// and a copy of its own.
-    package static func adopt(_ connection: HostConnection) { open[connection.alias] = connection }
+    package static func adopt(_ connection: HostConnection) {
+        open[connection.alias] = connection
+        made[connection.alias] = connection
+    }
 
     /// A window on the box opened: the link starts with the first.
     package func retain() {
+        if Self.open[alias] == nil { Self.open[alias] = self }
         users += 1
         if users == 1 { dial() }
     }
@@ -466,7 +486,7 @@ package final class HostConnection {
         guard users > 0, transport == nil else { return }
         redial = nil
         if phase != .offline { phase = .connecting }
-        let transport = makeTransport()
+        let transport = makeTransport?() ?? SSHTransport(alias: alias, grant: grant, command: command)
         self.transport = transport
         ready = false
         do {
