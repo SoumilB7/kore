@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-// `kore`, the command inside Kore.app. Opening Kore or a folder and `kore setup` are the zsh
+// `kore`, the command inside Kore.app. Opening Kore or a folder, `kore setup` and `kore update` are the zsh
 // script beside it (Resources/kore.zsh), run as they always were; the reads go to the running
 // Kore over its agent channel, and `kore mcp` serves them to an agent as an MCP server.
 
@@ -10,6 +10,7 @@ let usage = """
            kore <folder>         open a folder in Kore (kore . for this one)
            kore setup [claude|codex] [--verbose]
                                  install the agent CLIs that are missing
+           kore update           update Kore to the latest version
            kore ls               the open chats
            kore show <chat>      one chat: state, model, context, waiting cards
            kore log <chat> [-n N] [-f]
@@ -62,7 +63,7 @@ default:
     openWithScript(arguments)
 }
 
-/// Hands opening Kore, folders and `kore setup` to the script, which has always done them.
+/// Hands opening Kore, folders, `kore setup` and `kore update` to the script.
 func openWithScript(_ arguments: [String]) -> Never {
     let script: String
     if let path = ProcessInfo.processInfo.environment["KORE_SCRIPT"], !path.isEmpty {

@@ -24,42 +24,7 @@ cp -R Resources/ThirdParty "$APP/Contents/Resources/ThirdParty"
 # The package's resource bundles (mermaid.js).
 cp -R "${BIN:h}"/*.bundle "$APP/Contents/Resources/"
 
-# kore-host for Linux boxes, which Set up in the Boxes panel copies over SSH: static (musl) builds
-# for x86_64 and aarch64, packed with xz into build/ (the files a release carries), and their
-# SHA-256 written into Info.plist. The app carries them itself only with KORE_BUNDLE_BOX_HOST=1
-# (the owner's local installs); otherwise Set up downloads its version's from the GitHub release
-# and checks it against that SHA-256. They need a swift.org toolchain with its Static Linux SDK
-# (`swift sdk install …static-linux…`); without one, or with KORE_NO_BOX_HOST=1, there are none.
-LINUX_SWIFT="${KORE_LINUX_SWIFT:-$HOME/Library/Developer/Toolchains/swift-6.4.2-RELEASE.xctoolchain/usr/bin/swift}"
-HOST_SHAS=""
-if [[ -n "${KORE_NO_BOX_HOST:-}" ]]; then
-    echo "kore-host for boxes: skipped (KORE_NO_BOX_HOST)"
-elif [[ ! -x "$LINUX_SWIFT" ]] || ! "$LINUX_SWIFT" sdk list 2>/dev/null | grep -q static-linux || ! command -v xz >/dev/null; then
-    echo "kore-host for boxes: skipped (needs $LINUX_SWIFT with the Static Linux SDK, and xz)" >&2
-else
-    mkdir -p build
-    for arch in x86_64 aarch64; do
-        linux=(--swift-sdk "$arch-swift-linux-musl" -c release --product kore-host --scratch-path .build-linux)
-        "$LINUX_SWIFT" build "${linux[@]}" -Xlinker --strip-all
-        packed="build/kore-host-linux-$arch.xz"
-        xz -9 -T0 -c "$("$LINUX_SWIFT" build "${linux[@]}" --show-bin-path)/kore-host" > "$packed"
-        HOST_SHAS+="    <key>KoreHostSHA256-$arch</key><string>$(shasum -a 256 "$packed" | cut -d' ' -f1)</string>"$'\n'
-        if [[ -n "${KORE_BUNDLE_BOX_HOST:-}" ]]; then cp "$packed" "$APP/Contents/Resources/"; fi
-    done
-fi
-# kore-host for Mac boxes (a LaunchAgent there), for both CPUs: this Mac's own toolchain builds
-# them, packed and recorded the same way (`kore-host-macos-<arch>.xz`).
-if [[ -z "${KORE_NO_BOX_HOST:-}" ]] && command -v xz >/dev/null; then
-    mkdir -p build
-    for arch in arm64 x86_64; do
-        mac=(-c release --product kore-host --triple "$arch-apple-macosx15.0" --scratch-path .build-macos-host)
-        swift build "${mac[@]}" -Xlinker -dead_strip
-        packed="build/kore-host-macos-$arch.xz"
-        xz -9 -T0 -c "$(swift build "${mac[@]}" --show-bin-path)/kore-host" > "$packed"
-        HOST_SHAS+="    <key>KoreHostSHA256-macos-$arch</key><string>$(shasum -a 256 "$packed" | cut -d' ' -f1)</string>"$'\n'
-        if [[ -n "${KORE_BUNDLE_BOX_HOST:-}" ]]; then cp "$packed" "$APP/Contents/Resources/"; fi
-    done
-fi
+# kore-host isn't built here: box Set up builds it on this Mac from the same source, when first needed.
 
 # App icon, rendered from the SVGs in Resources/.
 ICONSET="build/AppIcon.iconset"
@@ -81,7 +46,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>
     <key>KoreBuild</key><string>$BUILD_SHA</string>
-${HOST_SHAS}    <key>LSMinimumSystemVersion</key><string>15.0</string>
+    <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -106,12 +71,13 @@ echo "built $APP ($BUILD_SHA)"
 if [[ "${1:-}" == "--install" ]]; then
     osascript -e 'quit app "Kore"' 2>/dev/null || true
     # Kore asks first while chats work: replace it only once it has really quit, never under a
-    # running app (a cancelled quit would leave it running from a deleted bundle).
+    # running app (a cancelled quit would leave it running from a deleted bundle). -a: started
+    # from Kore (its update, its terminal), Kore is an ancestor, which pgrep otherwise skips.
     for _ in {1..60}; do
-        pgrep -f '^/Applications/Kore.app/Contents/MacOS/Kore' >/dev/null || break
+        pgrep -af '^/Applications/Kore.app/Contents/MacOS/Kore' >/dev/null || break
         sleep 1
     done
-    if pgrep -f '^/Applications/Kore.app/Contents/MacOS/Kore' >/dev/null; then
+    if pgrep -af '^/Applications/Kore.app/Contents/MacOS/Kore' >/dev/null; then
         echo "Kore is still running (quit cancelled?): not installed. $APP is built." >&2
         exit 1
     fi

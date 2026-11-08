@@ -1580,6 +1580,8 @@ private struct EmptyTab: View {
                         }
                         .storyID(StoryID.NewTab.provider(provider.id))
                     }
+                    // This Mac's Kore: not a box's window, whose chats run elsewhere.
+                    if box == nil { UpdateCue() }
                 }
                 .padding(Space.md)
                 .frame(maxWidth: .infinity)

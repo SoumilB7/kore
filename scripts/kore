@@ -1,6 +1,7 @@
 #!/bin/zsh
 # kore - the Kore command. Bare `kore` opens Kore; `kore <folder>` opens that folder (a folder
-# that already has a window gets that window focused); `kore setup` installs the agent CLIs.
+# that already has a window gets that window focused); `kore setup` installs the agent CLIs;
+# `kore update` builds and installs the latest version.
 set -u
 
 usage() {
@@ -8,6 +9,7 @@ usage() {
        kore <folder>         open a folder in Kore (kore . for this one)
        kore setup [claude|codex] [--verbose]
                              install the agent CLIs that are missing
+       kore update           update Kore to the latest version
        kore help             show this"
 }
 
@@ -118,6 +120,11 @@ case "${1-}" in
     setup)
         shift
         setup "$@" ;;
+    update)
+        shift
+        (( $# == 0 )) || { usage >&2; exit 2 }
+        # The same line a first install is: always the latest installer, and the latest Kore.
+        exec /bin/bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/SoumilB7/kore/main/install.sh | bash' ;;
     *)
         if (( $# > 1 )); then
             usage >&2

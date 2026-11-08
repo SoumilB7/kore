@@ -50,5 +50,6 @@ committing a new recording, strip anything account-specific from it.
 ## Releases
 
 1. Bump `VERSION` and add a section to `CHANGELOG.md`.
-2. `./scripts/make-dmg.sh` builds `build/Kore-<version>.dmg` and its checksum.
-3. `./scripts/release.sh` tags `v<version>` and publishes the DMG as a GitHub release.
+2. Commit it, then `./scripts/release.sh` tags `v<version>` and publishes it as the one GitHub
+   release: the install command and the changelog, no downloads. Older releases and their tags
+   are deleted. Installed copies offer it the next time a window opens; `kore update` takes it at once.

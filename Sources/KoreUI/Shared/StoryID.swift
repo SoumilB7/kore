@@ -116,6 +116,8 @@ extension StoryID {
         /// (`.locate`), Cancel, Try again (`.retry`) and Copy command (`.copy`); while it runs,
         /// the progress line (`.working`); once done, "✓ … installed" (`.done`).
         package static let install = StoryID(.newtab, "install")
+        /// The update cue; while it builds, `.working`; failed, `.retry`.
+        package static let update = StoryID(.newtab, "update")
     }
 
     package enum Composer {

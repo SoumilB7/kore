@@ -199,7 +199,10 @@ private struct WindowActions: ViewModifier {
     @Environment(\.dismissWindow) private var dismissWindow
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .top) { QuitNotice() }.onAppear { app.setWindowActions(openWindow: openWindow, dismissWindow: dismissWindow) }
+        content.overlay(alignment: .top) { QuitNotice() }.onAppear {
+            app.setWindowActions(openWindow: openWindow, dismissWindow: dismissWindow)
+            Updater.shared.windowOpened()
+        }
     }
 }
 
