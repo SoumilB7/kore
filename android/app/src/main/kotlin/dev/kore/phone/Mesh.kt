@@ -275,6 +275,9 @@ class Mesh(private val app: KoreApp) {
     fun leave() {
         if (leaving?.isActive == true) return
         val macs = nodesFlow.value.filter { it.device.value.kind == NodeKind.MAC }
+        // The owner left (Settings or Join's Leave): the log says so, so a sign-out and a new
+        // device after it never read as a spontaneous reset.
+        app.log.info("join", "step" to "leave", "n" to macs.size)
         join.cancel()
         leaving = app.scope.launch {
             coroutineScope { macs.forEach { launch { it.leave() } } }
@@ -283,6 +286,7 @@ class Mesh(private val app: KoreApp) {
     }
 
     private fun forgetAll() {
+        val devices = book.all().size
         nodesFlow.value.forEach(NodeClient::close)
         notifiers.values.forEach { (n, job) -> job.cancel(); n.clearAll() }
         notifiers.clear()
@@ -292,6 +296,9 @@ class Mesh(private val app: KoreApp) {
         IdentityKey.forget()
         raiseKey.forget()
         prefs.edit().remove("device").apply()
+        // What Leave cleared: the tailnet's login (logged out on Tailscale's side, the node kept for
+        // a re-join), this phone's Kore identity and fingerprint keys, and its device book.
+        app.log.info("leave", "state" to "cleared", "kind" to "tailnet-logout,identity,raise-key,device-book", "count" to devices)
     }
 
     /** This install's own id: made once, kept through Leave and re-joins (gone only with the app's data). */

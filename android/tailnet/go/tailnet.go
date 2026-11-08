@@ -66,6 +66,10 @@ var (
 	logOnce sync.Once
 )
 
+// controlURL is Tailscale's own control server ("" is the default). Only the shim's state test
+// sets it, to a local test control server.
+var controlURL = ""
+
 // Start brings up the node. dir must be app-private storage (Context.getNoBackupFilesDir()).
 // Non-blocking: read State() until Running (or NeedsLogin and AuthURL()).
 func Start(dir, hostname string, sealer Sealer) error {
@@ -90,10 +94,11 @@ func Start(dir, hostname string, sealer Sealer) error {
 		return err
 	}
 	s := &tsnet.Server{
-		Dir:       dir,
-		Hostname:  hostname,
-		Ephemeral: false,
-		Store:     store,
+		Dir:        dir,
+		Hostname:   hostname,
+		Ephemeral:  false,
+		ControlURL: controlURL,
+		Store:      store,
 		Logf:      quietLogf,
 		UserLogf:  quietLogf,
 	}

@@ -49,6 +49,25 @@ if [[ -x "$GO" ]]; then
     if (cd tailnet/go && GOPROXY=off "$GO" test -tags "$tags,kore_live" -run TestLiveDialAndAccept -count=1 . >"$log.live" 2>&1); then
         say "✔ tsnet dial and accept with the shim's tags ($((SECONDS - t0))s)"
     else bad "tsnet dial and accept with the shim's tags"; tail -8 "$log.live"; fi
+    # An update must keep the phone's tailnet login: a node logs in with the last release's
+    # ts_omit tags, then starts again on the same state with today's, against one control server
+    # (livectl): Running, the same node key, never NeedsLogin.
+    t0=$SECONDS
+    last=$(git tag -l 'v*' --sort=-v:refname | head -1)
+    before=$( [[ -n $last ]] && git show "$last:android/scripts/build-tailnet.sh" 2>/dev/null | grep -o 'tags="[^"]*"' | cut -d'"' -f2 )
+    before=${before:-$tags}
+    state=$(mktemp -d "${TMPDIR:-/tmp}/kore-tsnet-state.XXXX")
+    if (cd tailnet/go && GOPROXY=off "$GO" build -tags kore_live -o "$state/livectl" ./livectl) >"$log.state" 2>&1; then
+        "$state/livectl" >"$state/url" 2>>"$log.state" & ctl=$!
+        for i in {1..50}; do [[ -s "$state/url" ]] && break; sleep 0.1; done
+        url=$(head -1 "$state/url")
+        if (cd tailnet/go && KORE_LIVE_CONTROL=$url KORE_LIVE_DIR="$state/node" KORE_LIVE_PHASE=login GOPROXY=off "$GO" test -tags "$before,kore_live" -run TestLiveStateAcrossBuilds -count=1 . &&
+            KORE_LIVE_CONTROL=$url KORE_LIVE_DIR="$state/node" KORE_LIVE_PHASE=check GOPROXY=off "$GO" test -tags "$tags,kore_live" -run TestLiveStateAcrossBuilds -count=1 .) >>"$log.state" 2>&1; then
+            say "✔ tailnet login kept from ${last:-this build}'s tags to today's ($((SECONDS - t0))s)"
+        else bad "tailnet login kept across an update"; grep -E "lost|new node|FAIL" "$log.state" | head -4; fi
+        kill $ctl 2>/dev/null
+    else bad "tailnet login kept across an update (livectl didn't build)"; tail -5 "$log.state"; fi
+    rm -rf "$state"
 else
     say "· tailnet shim go tests skipped (no go)"
 fi
