@@ -55,6 +55,13 @@ struct PermissionCard: View {
                     Button("Always allow") { decide(.allowAlways) }
                         .buttonStyle(SubtleButtonStyle())
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
+                } else if let note = approval.alwaysAllowNote {
+                    // A box's chat: offered by its CLI, set on the box itself.
+                    Button("Always allow") {}
+                        .buttonStyle(SubtleButtonStyle())
+                        .disabled(true)
+                        .help(note)
+                        .storyID(StoryID.Approval.card(approval.id).part(.always))
                 }
                 Button("Allow") { decide(.allow) }
                     .buttonStyle(SubtleButtonStyle(prominent: true))

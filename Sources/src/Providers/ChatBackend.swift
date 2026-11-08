@@ -114,6 +114,9 @@ package protocol ChatBackend: AnyObject {
     /// A row the chat showed of its own that the CLI isn't sent (a typed /compact): a backend whose
     /// history is kept elsewhere (a box's) keeps it there.
     func keepRow(_ text: String, id: String) async
+    /// The chat's auto-compact point changed (nil: off): a backend that keeps the chat elsewhere
+    /// (a box) keeps it there too.
+    func keepAutoCompact(_ point: Int?)
     func close() async
 }
 
@@ -267,6 +270,9 @@ extension ChatBackend {
 
     /// For a backend whose history is the CLI's own.
     package func keepRow(_ text: String, id: String) async {}
+
+    /// For a backend whose chat's settings are this Mac's.
+    package func keepAutoCompact(_ point: Int?) {}
 
     /// For a backend with no account to read.
     package func usage() async throws -> PlanReading { throw UsageUnavailable() }

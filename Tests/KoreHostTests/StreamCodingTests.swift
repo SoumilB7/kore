@@ -63,6 +63,7 @@ struct StreamCodingTests {
         .earlierMessages, .unloadPoint(message: "m1", text: "hi"), .unloaded(to: "e1"), .compact(instructions: "keep"), .usage,
         .useReset(credit: "c1", attempt: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!), .setRemoteControl(true),
         .relaunch(reason: "stalled"), .listModels, .close, .keepRow(text: "/compact keep it", id: "m9"),
+        .setAutoCompact(70), .setAutoCompact(nil), .setDraft("half a thought"), .draft, .setArsenal("own"), .setArsenal(nil),
     ]
 
     func lines<T: Encodable>(_ values: [T]) -> String {

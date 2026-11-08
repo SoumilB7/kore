@@ -89,6 +89,8 @@ struct ChatView: View {
                 ApprovalsView(chat: chat, maxHeight: height.value > 0 ? height.value / 2 : .infinity) { composerFocused = $0 }
                 if Self.offersImport(chat) {
                     ImportLine(state: chat.importer) { openImport(chat) }
+                } else if let why = Self.importLocked(chat) {
+                    ImportLine(state: chat.importer, open: {}, locked: why)
                 }
                 if chat.controls.planning {
                     PlanAllowLine(chat: chat)
@@ -190,6 +192,15 @@ struct ChatView: View {
         // A chat on a box takes no import from this Mac's files.
         !(chat.services is BoxChatServices) && !chat.status.hasConversation && !chat.status.isRunning
             && HandoffWriters.writer(chat.provider.id) != nil
+    }
+
+    /// An empty box chat: import reads this Mac's chats and writes the session here, so it shows
+    /// dim, saying why.
+    private static func importLocked(_ chat: Chat) -> String? {
+        guard let box = (chat.services as? BoxChatServices)?.connection, !chat.status.hasConversation, !chat.status.isRunning,
+            HandoffWriters.writer(chat.provider.id) != nil
+        else { return nil }
+        return "Imports come from this Mac's chats, not \(box.alias)'s"
     }
 
     /// The picker over the composer, with `file` picked when one was dropped. With no other

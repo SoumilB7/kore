@@ -222,9 +222,16 @@ package enum LinkPolicy {
         case .setRemoteControl:
             // The CLI's own remote hands the chat to another service: only on the box itself.
             return .deny(.command, "Remote control of a box's chat is turned on on the box.")
+        case .setAutoCompact(let at):
+            return at.map { (1...100).contains($0) } ?? true ? .allow : .deny(.invalid, "A percentage from 1 to 100, or off.")
+        case .setDraft(let text):
+            return text.utf8.count <= maxText ? .allow : .deny(.invalid, "Too long.")
+        case .setArsenal(let tier):
+            // The tier the client holds: it answers the agent's calls at it (1.6).
+            return check(.chatSetArsenal, ControlArgs(tier: tier ?? "off"), chat, control: control)
         case .interrupt, .setModel, .setEffort, .setFastMode, .stopAgent, .stopCommand, .backgroundCommand, .commandOutput, .watchCommands,
             .agentHistory, .fork, .forkAtEnd, .rollback, .earlier, .earlierMessages, .unloadPoint, .unloaded, .usage, .useReset, .relaunch,
-            .listModels, .close:
+            .listModels, .close, .draft:
             return .allow
         case .unknown:
             return .deny(.invalid, "Unknown call.")
@@ -308,6 +315,33 @@ package enum LinkPolicy {
         case .tabReopen:
             // A closed chat back: named by `sourceId` (it isn't one of the box's chats until then).
             return args.sourceId != nil ? .allow : .deny(.invalid, "Name the chat.")
+        // 1.9: a chat's own operations, as a Mac window offers them. An act grant does the
+        // ordinary ones; a full grant also what raises (an Arsenal tier on) or acts at a plan's
+        // limit (Continue, a message at the reset). Always allow, `!` lines and keys stay refused.
+        case .chatRename, .historyRename:
+            if kind == .historyRename, args.sessionId == nil { return .deny(.invalid, "Name the chat.") }
+            return check(kind, args, chat, control: .full)
+        case .chatFork:
+            guard args.entryId != nil || args.after == true else { return .deny(.invalid, "Name the message to fork from.") }
+            return .allow
+        case .chatCompact:
+            return (args.instructions ?? "").utf8.count <= maxText ? .allow : .deny(.invalid, "Too long.")
+        case .chatSetAutoCompact, .chatSetDraft:
+            return check(kind, args, chat, control: .full)
+        case .chatRetry, .chatCancelContinue, .arsenalStopAll:
+            return .allow
+        case .chatContinue:
+            return full()
+        case .chatSendAtReset:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard (args.blobs ?? []).isEmpty else { return .deny(.invalid, "A message at the reset carries no files from here.") }
+            return check(kind, args, chat, control: .full)
+        case .historyOpen, .historyArchive:
+            return args.sessionId != nil ? .allow : .deny(.invalid, "Name the chat.")
+        case .chatSetArsenal:
+            // Off lowers; a tier on raises what the chat's agent may do: full grants only.
+            if (args.tier ?? "off") != "off", case .deny(let code, let message) = full() { return .deny(code, message) }
+            return check(kind, args, chat, control: .full)
         case .authGh:
             return full()
         case .accountSignIn:

@@ -42,6 +42,16 @@ package enum ChatCommand: Sendable {
     case close
     /// A row the client's chat showed of its own (a typed /compact): the box's chat and log keep it.
     case keepRow(text: String, id: String)
+    /// 1.9: the chat's auto-compact point (a percentage; nil for off), kept by the box with the
+    /// chat, so its own compaction and every client use it.
+    case setAutoCompact(Int?)
+    /// 1.9: the composer's draft, kept by the box with the chat (empty clears it).
+    case setDraft(String)
+    /// 1.9: the draft the box keeps for the chat (its value's `text`).
+    case draft
+    /// 1.9: the chat's Arsenal tier on the client (`watch`, `own`, `drive`; nil for off), said
+    /// when it changes, so the box's state and other clients show it.
+    case setArsenal(String?)
     /// A tag this side doesn't know.
     case unknown(String)
 
@@ -78,6 +88,10 @@ package enum ChatCommand: Sendable {
         case .listModels: "listModels"
         case .close: "close"
         case .keepRow: "keepRow"
+        case .setAutoCompact: "setAutoCompact"
+        case .setDraft: "setDraft"
+        case .draft: "draft"
+        case .setArsenal: "setArsenal"
         case .unknown(let tag): tag
         }
     }
@@ -87,6 +101,7 @@ package enum ChatCommand: Sendable {
         "send", "interrupt", "respond", "setMode", "setPlanMode", "setModel", "setEffort", "setFastMode", "rename", "stopAgent", "stopCommand",
         "backgroundCommand", "commandOutput", "watchCommands", "agentHistory", "fork", "forkAtEnd", "rollback", "earlier", "earlierMessages",
         "unloadPoint", "unloaded", "compact", "usage", "useReset", "setRemoteControl", "relaunch", "listModels", "close", "keepRow",
+        "setAutoCompact", "setDraft", "draft", "setArsenal",
     ]
 
     /// Reads a command; one whose tag (or shape) this side doesn't know is `.unknown`, never a

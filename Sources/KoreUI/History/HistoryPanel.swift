@@ -93,7 +93,8 @@ struct HistoryPanel: View {
                                 },
                                 toggleArchive: {
                                     Task { chat.archived ? await workspace.unarchive(chat) : await workspace.archive(chat) }
-                                })
+                                },
+                                locked: workspace.box?.historyLocked)
                             .highlightRow(StoryID.History.row(chat.id), lit: (lit.value ?? 0) == index) { lit.value = index }
                         }
                     }
@@ -267,6 +268,9 @@ private struct HistoryRow: View {
     /// The new name, or nil when cancelled.
     let finishRename: (String?) -> Void
     let toggleArchive: () -> Void
+    /// Why Rename and Archive can't be done here (a box too old to keep its history); nil when
+    /// they can. They show dim, saying so.
+    var locked: String? = nil
     @StateObject private var draft = Local("")
     /// Return and the focus loss that follows it both end a rename; only the first counts.
     @StateObject private var finished = Local(false)
@@ -276,19 +280,16 @@ private struct HistoryRow: View {
         HStack(spacing: 0) {
             if isRenaming { renameField } else { title.storyID(StoryID.History.row(session.id)) }
             if showsActions && !isRenaming {
-                iconButton("pencil", help: "Rename", action: startRename)
-                iconButton(session.archived ? "tray.and.arrow.up" : "archivebox", help: session.archived ? "Unarchive" : "Archive", action: toggleArchive)
+                iconButton("pencil", help: locked ?? "Rename", action: startRename)
+                iconButton(session.archived ? "tray.and.arrow.up" : "archivebox", help: locked ?? (session.archived ? "Unarchive" : "Archive"), action: toggleArchive)
                     .storyID(StoryID.History.row(session.id).part(.archive))
                     .padding(.trailing, Space.xs)
             }
         }
         // Archive is built only on hover: pressed through its action meanwhile.
-        .storyAction(StoryID.History.row(session.id).part(.archive)) { toggleArchive() }
+        .storyAction(StoryID.History.row(session.id).part(.archive)) { if locked == nil { toggleArchive() } }
         .hoverFill(lit || isRenaming, Theme.Row.selected(.surface))
-        .koreContextMenu("history") {
-            [OptionItem("Open", action: open), OptionItem("Rename…", action: startRename),
-             OptionItem(session.archived ? "Unarchive" : "Archive", action: toggleArchive)]
-        }
+        .koreContextMenu("history") { HistoryMenu.items(session, locked: locked, open: open, rename: startRename, archive: toggleArchive) }
         // Built only on the lit row: VoiceOver and the keyboard reach them on any row.
         .accessibilityAction(named: "Rename", startRename)
         .accessibilityAction(named: session.archived ? "Unarchive" : "Archive", toggleArchive)
@@ -382,11 +383,12 @@ private struct HistoryRow: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(Chrome.label)
-                .foregroundStyle(Theme.secondary)
+                .foregroundStyle(locked == nil ? Theme.secondary : Theme.tertiary)
                 .frame(width: Size.iconButtonSmall, height: Size.iconButtonSmall)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(locked != nil)
         .help(help)
     }
 }
@@ -402,5 +404,18 @@ extension Date {
         case ..<(7 * 86400): return "\(Int(seconds / 86400))d"
         default: return formatted(.dateTime.month(.abbreviated).day())
         }
+    }
+}
+
+@MainActor
+enum HistoryMenu {
+    /// The row's right-click: Open, Rename, Archive; dim with why when they can't be done here.
+    static func items(_ session: SessionSummary, locked: String?, open: @escaping () -> Void, rename: @escaping () -> Void, archive: @escaping () -> Void) -> [OptionItem] {
+        var items = [
+            OptionItem("Open", action: open), OptionItem("Rename…", enabled: locked == nil, action: rename),
+            OptionItem(session.archived ? "Unarchive" : "Archive", enabled: locked == nil, action: archive),
+        ]
+        if let locked { items += [.rule, OptionItem(locked, enabled: false)] }
+        return items
     }
 }

@@ -43,6 +43,12 @@ package final class HostDaemon {
     var askers: [ObjectIdentifier: (socket: HostSocket, asked: Bool)] = [:]
     var toolCalls: [String: HostToolCall] = [:]
     var toolSerial = 0
+    /// 1.9: the folder's past sessions as each CLI on the box lists them (tests set their own),
+    /// and the box's own titles and archive for them (`history.json`, read on first use).
+    package var pastSessions: @Sendable (_ provider: ProviderDescriptor, _ folder: URL) async -> [SessionSummary]? = { provider, folder in
+        await provider.sessions(folder)
+    }
+    var historyKept: HostHistoryKept?
     /// `kore-host mcp`'s binary: this one (a test runs the built one).
     package var mcpCommand = URL(fileURLWithPath: HostService.executable())
     package static let version = HostVersion.string
@@ -103,7 +109,7 @@ package final class HostDaemon {
         config.folders.map { .init(windowId: Self.windowID($0), path: $0, missing: HostConfig.missing($0) ? true : nil) }
     }
 
-    static func windowID(_ folder: String) -> String { StableID.of(folder, prefix: "w_") }
+    package static func windowID(_ folder: String) -> String { StableID.of(folder, prefix: "w_") }
 
     func folder(windowId: String) -> String? { config.folders.first { Self.windowID($0) == windowId } }
 
@@ -129,11 +135,12 @@ package final class HostDaemon {
 
     package func newChat(
         folder: String, provider: String, modelId: String?, fork: (from: String, at: String)? = nil, title: String? = nil, mode: String? = nil,
-        effort: String? = nil
+        effort: String? = nil, session: String? = nil
     ) -> HostChat? {
         guard config.folders.contains(folder), !HostConfig.missing(folder), Registry.provider(provider) != nil,
             let chat = try? HostChat.create(
-                provider: provider, folder: folder, modelId: modelId, in: paths.chats, fork: fork, title: title, mode: mode, effort: effort)
+                provider: provider, folder: folder, modelId: modelId, in: paths.chats, fork: fork, title: title, mode: mode, effort: effort,
+                session: session)
         else { return nil }
         chats.append(chat)
         watch(chat)
@@ -307,7 +314,7 @@ package final class HostDaemon {
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box"] + (control == .full ? ["stream", "pty", "git"] : []))
+            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : []) + (control == .full ? ["stream", "pty", "git"] : []))
     }
 
     var windows: [LinkWindow] {
@@ -514,6 +521,11 @@ package final class HostDaemon {
         case .accountSignIn, .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh:
             guard control == .full else { return fail(.deniedControl, "Accounts need a grant with full control.") }
             return account(kind, args, id: id, reply: reply)
+        case .chatRename, .chatFork, .chatCompact, .chatSetAutoCompact, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue,
+            .chatSetDraft, .chatSetArsenal, .arsenalStopAll:
+            return chatOp(kind, args, id: id, reply: reply)
+        case .historyOpen, .historyRename, .historyArchive:
+            return historyOp(kind, args, id: id, reply: reply)
         default:
             return fail(.invalid, "Not taken here.")
         }

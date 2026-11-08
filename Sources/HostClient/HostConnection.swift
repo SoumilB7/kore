@@ -399,20 +399,31 @@ package final class HostConnection {
         return listed
     }
 
-    /// A folder's closed chats on the box, newest closed first, to reopen; empty while it can't be
-    /// reached.
-    package func closedChats(windowId: String) async -> [HistorySession] {
+    /// A folder's closed chats on the box, newest closed first, to reopen; from 1.9 also the past
+    /// sessions its CLIs keep for the folder, and with `archived` the archived ones only. Empty
+    /// while it can't be reached. (Its first page: 50, which a History popup shows.)
+    package func closedChats(windowId: String, archived: Bool = false) async -> [HistorySession] {
         guard ready, let transport else { return [] }
         serial += 1
         let id = "h\(serial).\(tag)"
-        transport.send(HostWire.encode(.historyList(id: id, windowId: windowId, query: nil, archived: false, offset: 0)))
+        transport.send(HostWire.encode(.historyList(id: id, windowId: windowId, query: nil, archived: archived, offset: 0)))
         let timeout = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(10))
+            // Codex lists its sessions through its app-server on the box: a moment longer.
+            try? await Task.sleep(for: .seconds(20))
             self?.historyAsks.removeValue(forKey: id)?.resume(returning: [])
         }
         let listed = await withCheckedContinuation { historyAsks[id] = $0 }
         timeout.cancel()
         return listed
+    }
+
+    /// The box keeps a folder's history itself (1.9): opened, renamed and archived from here.
+    package var keepsHistory: Bool { caps.contains("history") }
+
+    /// `history.open`, `history.rename` or `history.archive` on the box: the result, or why not.
+    package func history(_ kind: ControlKind, _ args: ControlArgs) async -> Result<LinkMessage.Result, HostRefusal> {
+        let result = await command { HostWire.command(id: $0, .control(kind, args)) }
+        return result.ok ? .success(result) : .failure(HostRefusal(result, alias: alias))
     }
 
     /// A closed chat back among the box's chats: its id, or why not.

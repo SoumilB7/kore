@@ -243,16 +243,47 @@ final class BoxBinding {
         return chat(provider, id: chatId, title: title)
     }
 
-    /// The folder's closed chats on the box, for the History popup: its sessions, by box chat id.
+    private var windowId: String? {
+        connection.folders.first { $0.path == folder }?.windowId ?? connection.windows.first { $0.path == folder }?.id
+    }
+
+    /// The folder's history on the box, for the History popup: its closed chats (by box chat id)
+    /// and, from 1.9, the past sessions its CLIs keep there, archived ones too.
     func closedHistory() async -> [SessionSummary] {
-        let window = connection.folders.first { $0.path == folder }?.windowId ?? connection.windows.first { $0.path == folder }?.id
-        guard let window else { return [] }
-        return await connection.closedChats(windowId: window).compactMap { session in
+        guard let window = windowId else { return [] }
+        let keeps = connection.keepsHistory
+        async let open = connection.closedChats(windowId: window)
+        async let archived = keeps ? connection.closedChats(windowId: window, archived: true) : []
+        return (await open + archived).compactMap { session in
             guard let provider = Registry.provider(session.provider) else { return nil }
             return SessionSummary(
                 id: session.id, agent: provider.historyAgent, title: session.title,
-                updated: Date(timeIntervalSince1970: Double(session.updatedAt) / 1000))
+                updated: Date(timeIntervalSince1970: Double(session.updatedAt) / 1000), archived: session.archived)
         }
+    }
+
+    /// Why the History popup can't rename or archive here: a box older than 1.9. Nil when it can.
+    var historyLocked: String? { connection.keepsHistory ? nil : "Update kore-host on \(alias) to rename or archive here" }
+
+    /// A past chat back as a box chat (a closed one, or a session its CLI keeps), for a tab here.
+    func openSession(_ session: SessionSummary) async -> Chat? {
+        let provider = Registry.provider(for: session.agent)
+        guard connection.keepsHistory else { return await reopen(session.id, provider: provider, title: session.title) }
+        let args = ControlArgs(windowId: windowId, title: session.title, provider: provider.id, sessionId: session.id)
+        guard case .success(let result) = await connection.history(.historyOpen, args), let chatId = result.chatId else { return nil }
+        closedIds.remove(chatId)
+        return chat(provider, id: chatId, title: session.title)
+    }
+
+    /// Renames or archives a past chat on the box; false when the box refused.
+    func renameSession(_ id: String, to title: String) async -> Bool {
+        if case .success = await connection.history(.historyRename, ControlArgs(windowId: windowId, title: title, sessionId: id)) { return true }
+        return false
+    }
+
+    func archiveSession(_ id: String, _ on: Bool) async -> Bool {
+        if case .success = await connection.history(.historyArchive, ControlArgs(windowId: windowId, on: on, sessionId: id)) { return true }
+        return false
     }
 
     func tabClosed(_ chat: Chat) {
@@ -280,6 +311,9 @@ final class BoxChatServices: ChatServices {
     private weak var chat: Chat?
     /// What a chat new from here is made with on the box (a fork's start).
     private let making: LinkChatBackend.Making?
+    /// Its backend, for what the box keeps with the chat (1.9), and the draft the box last had.
+    private weak var backend: LinkChatBackend?
+    private var boxDraft = ""
     /// The CLI runs on the box, which sets its own instructions and gives it the `kore_app` server
     /// while Arsenal is on; the tier and Arsenal's notes go with each message (`LinkChatBackend`).
     var agentTools: Bool { true }
@@ -302,7 +336,32 @@ final class BoxChatServices: ChatServices {
             guard let chat = self?.chat, chat.title != title else { return }
             chat.adoptName(title)
         }
-        backend.onCreated = { [weak self] in self?.chatId = $0 }
+        backend.onCreated = { [weak self, weak backend] id in
+            self?.chatId = id
+            // A chat made here (a fork) keeps the point it started with on the box.
+            if let chat = self?.chat, chat.context.autoCompactAt != nil { backend?.keepAutoCompact(chat.context.autoCompactAt) }
+        }
+        // 1.9: what the box keeps with the chat, changed by another client (or kept from before).
+        backend.onAutoCompact = { [weak self] point in
+            guard let chat = self?.chat, chat.context.autoCompactAt != point else { return }
+            chat.setAutoCompact(point)
+        }
+        backend.onDraft = { [weak self, weak backend] text in
+            guard let self, let chat else { return }
+            let mine = Self.draftText(chat)
+            defer { boxDraft = text }
+            // What's typed here and not yet said to the box stays; an empty composer takes the box's.
+            if mine.isEmpty || mine == boxDraft {
+                if mine != text { chat.restoreDraft(text, commands: chat.controls.commands) }
+            } else if text.isEmpty {
+                backend?.keepDraft(mine)
+            }
+        }
+        backend.onArsenal = { [weak self] tier in
+            guard let chat = self?.chat, chat.arsenal?.rawValue != tier else { return }
+            _ = Arsenal.shared.linkSet(tier.flatMap(ArsenalTier.init(rawValue:)), chat)
+        }
+        self.backend = backend
         // A turn's changed files under the folder, named as this window's file tabs name them.
         if let binding {
             let folder = binding.folder
@@ -312,11 +371,29 @@ final class BoxChatServices: ChatServices {
         return backend
     }
 
+    /// The composer as one line of text: its command, then the draft (files stay on this Mac).
+    static func draftText(_ chat: Chat) -> String {
+        guard let command = chat.command else { return chat.draft }
+        return "/" + command.name + (chat.draft.isEmpty ? "" : " " + chat.draft)
+    }
+
+    /// The composer changed: the box keeps it (half a second after typing stops).
+    func draftChanged(_ chat: Chat) {
+        let text = Self.draftText(chat)
+        guard text != boxDraft else { return }
+        boxDraft = text
+        backend?.keepDraft(text)
+    }
+
+    /// The chat's Arsenal tier changed here: the box says it to its other clients.
+    func arsenalChanged(_ chat: Chat) { backend?.sayArsenal(chat.arsenal?.rawValue) }
+
     func register(_ chat: Chat) {
         self.chat = chat
         chat.ownPopups()
         // Modes above Auto are set on the box itself: the picker doesn't offer them.
         chat.controls.levelCap = LinkPolicy.raiseCap.rawValue
+        chat.controls.levelCapNote = "Set on \(connection.alias) itself"
     }
     func closed(_ chat: Chat) { app.closed(chat) }
     func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}

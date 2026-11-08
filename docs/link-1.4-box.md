@@ -1,4 +1,4 @@
-# Link 1.4 to 1.8: the box (`kore-host`)
+# Link 1.4 to 1.9: the box (`kore-host`)
 
 A box is a headless machine running `kore-host`: the Mac reaches it with
 `ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Everything in link 1.0–1.3 holds unless this page says
@@ -35,9 +35,10 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 - `attach` exits 3 when no daemon listens, 4 when there's no such grant, 5 when there's no
   runtime folder, 2 on bad arguments; over ssh, 255 is ssh's own failure and 126/127 the shell's
   (kore-host can't run there, or isn't there).
-- `welcome`: `proto {1,8}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
+- `welcome`: `proto {1,9}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
   `policy {sendMaxLevel: 4, control: "full"|"standard"}` (`full` for a full grant),
-  `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5). For a
+  `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5) and
+  `"history"` for an act or full grant (1.9). For a
   full grant each of `providers[]` carries `calls`: the `chat.call` types the box takes for that
   CLI. Then `snapshot` and an empty `attn.state`.
 - There is no link ping: the Mac's `ssh` notices a dead link itself (`-o ServerAliveInterval=15
@@ -81,7 +82,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
   on reading. A page's frame stays under 900 KiB: fewer of the newest entries when they don't fit.
 - `entry.more` reads from the live chat only; for a chat whose CLI is stopped it answers
   `result {id, ok: false, code: "gone.chat"}`.
-- No `tx.earlier`, `history.*`, `diff.get` or `blob.get` on the box. A `tx` client's `chat.send`
+- No `tx.earlier`, `diff.get` or `blob.get` on the box; `history.*` from 1.9 (below). A `tx` client's `chat.send`
   with `blobs` is `invalid`; a 1.5 full grant uploads with `blob.put.*` (see Calls below).
 
 ## Commands (1.4 additions)
@@ -450,3 +451,121 @@ The Mac asks for status only while a box window's explorer is on screen in a vis
 with `watch: true`, and unwatches when it hides; a link that comes back asks once more (and gets
 the whole map). A file's HEAD text is asked when its editor opens or the file's state changes,
 and kept until then.
+
+## Link 1.9: a chat's own operations
+
+Every chat operation a Mac window offers works on a box's chat: from a Mac's box window through
+`chat.call`, and from other clients through the 1.2 control kinds, each checked by
+`LinkPolicy.checkBox` (control kinds) or `LinkPolicy.check(ChatCommand)` (calls). All of it is
+additive: a 1.8 client sends none of it, and a 1.8 box answers it `invalid` (the Mac then says
+the box needs an update, and shows what it can't do dim).
+
+### What the box keeps with a chat
+
+Its `meta.json` keeps, besides 1.4's fields:
+
+- `title`: a rename (`chat.call rename`, `chat.rename`, `history.rename`) is kept before the CLI
+  is told, whether or not its CLI runs, so the chat list, Welcome and every client show it. A
+  running CLI takes it as its own title too; a stopped one isn't started for it.
+- A fork (`chat.call fork`/`forkAtEnd`, then `chat.new` with `sessionId` and `entryId`, or
+  `chat.fork`) is a new chat with its own record, titled "<title> (fork)".
+- `draft`: the composer's draft as text (a `/` command first; files stay on the client), at
+  most 64 KiB, and `draftRev`, how many times it changed. Full grants get only the count, as
+  `controls.draftRev`; a client reads the draft with the `draft` call when the count moves (not
+  for its own change), so a meta never carries it.
+- `autoCompact`: the chat's own auto-compact point (0 for off), the one its own compaction uses
+  while no full grant follows it. Full grants get it as `controls.autoCompactAt`.
+- `archived`: a closed chat archived from a history.
+
+`ChatMeta.arsenal` (full grants): the chat's Arsenal tier as the client driving it last said it
+(`send`'s `arsenal`, or `setArsenal`), or as a client set it (`chat.setArsenal`); `off` when
+none. A box started again knows none until a client says it. The Mac answers the agent's calls at
+its own tier (1.6); it takes a tier another client set, and says its own again when its link
+comes back.
+
+### Calls
+
+New `chat.call` types, in `providers[].calls` for a full grant:
+
+| `type` | fields | |
+|---|---|---|
+| `setAutoCompact` | `at?` | The chat's point, 1 to 100; absent for off. |
+| `setDraft` | `text` | The composer's draft; empty clears it. The Mac sends it half a second after typing stops. Result `value.bool`: it changed (the count moved). |
+| `draft` | | Result `value.text`: the draft kept, empty for none. |
+| `setArsenal` | `tier?` | `watch`, `own` or `drive`; absent for off. Said when the tier changes. |
+
+### What it costs
+
+Each operation is one `chat.call` or `cmd` and one `result` of a few hundred bytes (a fork's
+`chatId`, a draft's text when asked). What changes goes to other clients as that one chat's
+`ChatMeta` in a `delta` (as any 1.4 change does), never a snapshot or the chat's events again; a
+draft adds only its count to it. Nothing keeps a further copy of a transcript: a fork finds its
+message in the box chat's live history, and in its log only when a watching client has it read
+in already. Opening a past session or a closed chat sends the windows once, as a new chat does.
+A history list is paged (50 a page); the box lists each CLI's sessions for that page's ask and
+keeps none of it after.
+
+### History
+
+`history.list {id, windowId, query?, archived, offset}` answers act and full grants (1.8: full
+only), with `history.page`: the folder's closed chats, and the past sessions each CLI on the box
+keeps for the folder (Claude's from its files, Codex's through its app-server, which starts only
+for the list) that aren't a box chat's own; `archived: true` lists only the archived ones, else
+only the others. Newest first, 50 a page. A past session's `id` is its CLI's session id, a closed
+chat's its box chat id.
+
+| `type` | fields | |
+|---|---|---|
+| `history.open` | `sessionId, windowId?, provider?, title?` | A closed chat back among the box's chats (as `tab.reopen`, and no longer archived), or a past session as a new box chat resuming it (`windowId` names its folder; `provider` its CLI, else each CLI's list is looked through, Claude's first; one no list has is `gone.session`). Result: `chatId`, `windowId`. |
+| `history.rename` | `sessionId, title` | A box chat's title; a past session's title in the box's own `history.json` (0600), which the list shows and an open takes. The CLI's own list isn't changed. |
+| `history.archive` | `sessionId, on?` | `on` true (the default) or false. A closed chat's `archived`; an open one closes first. A past session's in `history.json`. |
+
+### Control kinds
+
+Each is checked by `LinkPolicy.checkBox`, then done on the box's own chat as the Mac's menus do.
+Raises (an Arsenal tier on) and what acts at a plan's limit (Continue, a message at the reset)
+need a full grant; the rest an act grant; a watch grant none. Always allow, `!` lines and keys
+stay refused to every grant.
+
+| Operation | Mac box window (`chat.call`) | Control kind | Minimum grant |
+|---|---|---|---|
+| Rename | `rename {title}` | `chat.rename {chatId, title}` | act |
+| Fork from a message / after an answer / at the end | `fork {message, text}`, `forkAtEnd`, then `chat.new` | `chat.fork {chatId, entryId?, after?}` | act |
+| Compact (with instructions) | `compact {instructions}` | `chat.compact {chatId, instructions?}` | act |
+| Auto-compact point | `setAutoCompact {at?}` | `chat.setAutoCompact {chatId, at?}` | act |
+| Retry an ended or stalled turn | `relaunch`, then `send` | `chat.retry {chatId, turnId?}` | act |
+| Continue | `send` ("Continue") | `chat.continue {chatId}` | full |
+| Send at the limit's reset | `send` when it resets | `chat.sendAtReset {chatId, text}` | full |
+| Cancel the continuation | (the client's own) | `chat.cancelContinue {chatId}` | act |
+| Draft | `setDraft {text}` | `chat.setDraft {chatId, text}` | act |
+| Arsenal tier on | `setArsenal {tier}` | `chat.setArsenal {chatId, tier}` | full |
+| Arsenal off | `setArsenal {}` | `chat.setArsenal {chatId, tier: "off"}` | act |
+| Stop agent control (every chat) | `setArsenal {}` for each | `arsenal.stopAll` | act |
+| History: list | `history.list` | `history.list` | act |
+| History: open | `history.open` | `history.open {sessionId, windowId?, provider?, title?}` | act |
+| History: rename | `history.rename` | `history.rename {sessionId, title}` | act |
+| History: archive, unarchive | `history.archive` | `history.archive {sessionId, on?}` | act |
+| Model, effort, fast | `setModel`, `setEffort`, `setFastMode` | `chat.setModel`, `chat.setEffort`, `chat.setFast` (1.4) | act |
+| Mode, plan | `setMode`, `setPlanMode` | `chat.setMode`, `chat.setPlan` (1.0) | act lowers; full raises up to Auto |
+| Close | `close` | `chat.close` | act |
+
+The rules each takes: a title is one line of at most 200 characters; a draft or instructions at
+most 64 KiB; a point 1 to 100 or off; a tier `watch`, `own`, `drive` or `off` (`full` isn't
+built); `chat.sendAtReset`'s text is checked as `chat.send`'s (no `!` lines, the chat's own `/`
+commands only) and carries no files; `chat.fork` names a message (`entryId`) unless `after` asks
+for the end. A fork finds its message in the box chat's live history by id, else the message with
+the same words (a CLI started again names its history anew); a message's fork has that message
+as its draft. `chat.retry` with a `turnId` retries that ended turn while it's the one to retry,
+without one a stalled turn; `chat.sendAtReset` needs the chat at its limit with nothing set to go
+yet; each answers `busy` otherwise.
+
+### What a box chat can't do
+
+The Mac shows these dim, with a line saying why:
+
+- Modes above Auto in the picker (Codex's Full access; Claude's Bypass is in no picker): "Set on <box> itself".
+- Always allow on a card: "Always allow is set on <box> itself".
+- Import into an empty chat: "Imports come from this Mac's chats, not <box>'s".
+- Remote control: "Not in a chat on a box" (1.5).
+- Rename and archive in History on a 1.8 box: "Update kore-host on <box> to rename or archive here".
+

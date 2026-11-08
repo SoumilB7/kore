@@ -112,6 +112,15 @@ package final class ControlsStore {
     /// The most permissive level the picker offers: a box's chat stops at Auto (3), the most a
     /// box takes from a Mac. Nil: every mode.
     @ObservationIgnored package var levelCap: Int?
+    /// Why the modes past `levelCap` can't be picked here ("Set on mybox itself"): the picker
+    /// shows them dim, saying so.
+    @ObservationIgnored package var levelCapNote: String?
+
+    /// The modes this model offers past `levelCap`: shown dim, not picked.
+    package var cappedModes: [ModeOption] {
+        guard let levelCap else { return [] }
+        return provider.availableModes(currentModel).filter { $0.level > levelCap && $0.listed }
+    }
 
     /// The mode is one this model offers (a model without Auto doesn't).
     package var modeOffered: Bool { availableModes.contains { $0.id == mode } }

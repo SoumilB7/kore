@@ -1222,44 +1222,7 @@ private struct TabItem: View {
         }
         .onHover { hovered.value = $0 }
         .help(workspace.asking(tab) ? "Closing the tab stops its turn" : help)
-        .koreContextMenu("tab") {
-            var items: [OptionItem] = []
-            if tab.isPreview { items.append(OptionItem("Keep Open") { workspace.keep(tab) }) }
-            items += [OptionItem("Rename…", enabled: tab.chat != nil && tab.agent == nil) { startRename() }]
-            if let chat = tab.chat, tab.agent == nil { items.append(Arsenal.shared.row(chat)) }
-            // A chat moves onto a board: into one of its sections, or a new one.
-            if tab.chat != nil, tab.agent == nil {
-                for boardTab in workspace.boardTabs {
-                    guard let board = boardTab.board else { continue }
-                    let size = board.size
-                    let sections = board.board.sections.map { section in
-                        OptionItem(section.name) { workspace.attach(tab, to: boardTab, section: section.id) }
-                    }
-                    let new = OptionItem("New Section") {
-                        workspace.attach(tab, to: boardTab, drop: .newSection(size.width >= size.height ? .right : .bottom))
-                    }
-                    items.append(OptionItem("Attach to \(board.name)", children: sections + [.rule, new]))
-                }
-            }
-            items.append(.rule)
-            let groups = workspace.tabGroups
-            if groups.member[tab.id] != nil {
-                items.append(OptionItem("Remove from Group") { workspace.removeFromGroup(tab) })
-            } else {
-                items.append(OptionItem("Add to New Group") { workspace.editGroup(workspace.newGroup(with: tab)) })
-                if !groups.groups.isEmpty {
-                    let into = groups.groups.map { group in
-                        OptionItem(group.name.isEmpty ? group.color.rawValue.capitalized : group.name, tint: Theme.TabGroups.color(group.color)) {
-                            workspace.add(tab, to: group.id)
-                        }
-                    }
-                    items.append(OptionItem("Add to Group", children: into))
-                }
-            }
-            items.append(.rule)
-            items.append(OptionItem("Close Tab") { workspace.requestClose(tab) })
-            return items
-        }
+        .koreContextMenu("tab") { TabMenu.items(tab, in: workspace) { startRename() } }
         .alert("Rename chat", isPresented: $renaming.value) {
             TextField("Name", text: $newName.value)
             Button("Rename") { tab.chat?.rename(newName.value) }
@@ -1753,5 +1716,49 @@ package enum TitleBarReach {
             .intersection(host.frame).intersection(window.frame)
         guard !shown.isNull, shown.height >= 0.5 else { return 0 }
         return (window.frame.maxY - shown.minY).rounded()
+    }
+}
+
+@MainActor
+enum TabMenu {
+    /// The tab's right-click: the same for a box's chat as for a Mac's (its operations go to the
+    /// box through the chat).
+    static func items(_ tab: ChatTab, in workspace: Workspace, rename startRename: @escaping () -> Void) -> [OptionItem] {
+        var items: [OptionItem] = []
+        if tab.isPreview { items.append(OptionItem("Keep Open") { workspace.keep(tab) }) }
+        items += [OptionItem("Rename…", enabled: tab.chat != nil && tab.agent == nil) { startRename() }]
+        if let chat = tab.chat, tab.agent == nil { items.append(Arsenal.shared.row(chat)) }
+        // A chat moves onto a board: into one of its sections, or a new one.
+        if tab.chat != nil, tab.agent == nil {
+            for boardTab in workspace.boardTabs {
+                guard let board = boardTab.board else { continue }
+                let size = board.size
+                let sections = board.board.sections.map { section in
+                    OptionItem(section.name) { workspace.attach(tab, to: boardTab, section: section.id) }
+                }
+                let new = OptionItem("New Section") {
+                    workspace.attach(tab, to: boardTab, drop: .newSection(size.width >= size.height ? .right : .bottom))
+                }
+                items.append(OptionItem("Attach to \(board.name)", children: sections + [.rule, new]))
+            }
+        }
+        items.append(.rule)
+        let groups = workspace.tabGroups
+        if groups.member[tab.id] != nil {
+            items.append(OptionItem("Remove from Group") { workspace.removeFromGroup(tab) })
+        } else {
+            items.append(OptionItem("Add to New Group") { workspace.editGroup(workspace.newGroup(with: tab)) })
+            if !groups.groups.isEmpty {
+                let into = groups.groups.map { group in
+                    OptionItem(group.name.isEmpty ? group.color.rawValue.capitalized : group.name, tint: Theme.TabGroups.color(group.color)) {
+                        workspace.add(tab, to: group.id)
+                    }
+                }
+                items.append(OptionItem("Add to Group", children: into))
+            }
+        }
+        items.append(.rule)
+        items.append(OptionItem("Close Tab") { workspace.requestClose(tab) })
+        return items
     }
 }

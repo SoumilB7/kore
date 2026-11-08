@@ -257,6 +257,9 @@ package struct ChatControls: Codable, Sendable, Equatable {
     /// last said; absent until it says.
     package var contextUsed: Int?
     package var contextWindow: Int?
+    /// 1.9 (a box): how many times the chat's kept draft changed (`setDraft`); absent before the
+    /// first. The draft itself is read with the `draft` call, only when this moves.
+    package var draftRev: Int?
 
     package init(
         modelId: String?, effort: String?, fast: Bool?, fastOffered: Bool, planAllow: Bool, contextPct: Int?, autoCompactAt: Int?,

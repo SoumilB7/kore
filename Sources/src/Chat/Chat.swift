@@ -1228,6 +1228,7 @@ package final class Chat: Identifiable {
         context.autoCompactAt = point
         ownAutoCompact = true
         if let id = sessionId { compactMemory.remember(point, chat: id) }
+        backend?.keepAutoCompact(point)
     }
 
     /// A fork starts at its original's point, and keeps it as its own when the original had one.

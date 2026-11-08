@@ -612,6 +612,9 @@ package struct Approval: Identifiable, Sendable, Codable {
     package var agent: AgentID = .main
     /// A sign-in or an MCP server's own request: Kore never answers it for the user.
     package var signIn = false
+    /// Why Always allow is offered but can't be picked here (a box's chat sets it on the box
+    /// itself): the card shows it dim, saying so. Nil where it can, or isn't offered.
+    package var alwaysAllowNote: String? = nil
 
     package init(id: String, title: String, detail: String?, body: String?, canAlwaysAllow: Bool, questions: [Question], plan: String? = nil, changes: [FileChange] = [], agent: AgentID = .main) {
         self.id = id
@@ -626,11 +629,13 @@ package struct Approval: Identifiable, Sendable, Codable {
     }
 
     /// The same ask without Always allow (a box's chat: Always allow is set on the box itself).
-    package func withoutAlwaysAllow() -> Approval {
+    /// `note`: why, shown on the dim button where the CLI offered it.
+    package func withoutAlwaysAllow(note: String? = nil) -> Approval {
         var copy = Approval(
             id: id, title: title, detail: detail, body: body, canAlwaysAllow: false, questions: questions, plan: plan, changes: changes,
             agent: agent)
         copy.signIn = signIn
+        if canAlwaysAllow { copy.alwaysAllowNote = note }
         return copy
     }
 

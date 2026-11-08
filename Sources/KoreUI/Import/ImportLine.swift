@@ -10,6 +10,8 @@ import UniformTypeIdentifiers
 struct ImportLine: View {
     let state: ImportState
     let open: @MainActor @Sendable () -> Void
+    /// Why it can't import here (a box's chat); it shows dim, saying so.
+    var locked: String? = nil
     @StateObject private var hovered = Local(false)
 
     var body: some View {
@@ -32,6 +34,9 @@ struct ImportLine: View {
             .contentShape(RoundedRectangle(cornerRadius: Radius.chip))
         }
         .buttonStyle(.plain)
+        .disabled(locked != nil)
+        .opacity(locked == nil ? 1 : Theme.missingLogo)
+        .help(locked ?? "")
         .onHover { hovered.value = $0 }
         .storyID(StoryID.Composer.importLine, press: open)
         .opacity(state.isOpen ? 0 : 1)

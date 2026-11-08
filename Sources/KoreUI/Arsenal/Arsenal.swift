@@ -36,6 +36,7 @@ package final class Arsenal {
         for chat in chats.allObjects {
             chat.arsenal = nil
             chat.compactAfterTurn = false
+            Self.told(chat)
         }
         chats.removeAllObjects()
         anyOn = false
@@ -63,6 +64,7 @@ package final class Arsenal {
         chats.add(chat)
         anyOn = true
         AgentTaps.setTier?(chat.id.uuidString, chat.arsenalLast)
+        Self.told(chat)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": chat.arsenalLast.rawValue])
         if chat.arsenalLast == .drive, !chat.services.onBox { ArsenalModels.fetch("codex", folder: chat.folder) }
     }
@@ -77,6 +79,7 @@ package final class Arsenal {
         if tier == .watch { chat.compactAfterTurn = false }
         chat.arsenal = tier
         AgentTaps.setTier?(chat.id.uuidString, tier)
+        Self.told(chat)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": tier.rawValue])
         // Drive opens chats on a model the CLI lists: Codex's, when no chat of it has said them yet.
         if tier == .drive, !chat.services.onBox { ArsenalModels.fetch("codex", folder: chat.folder) }
@@ -107,6 +110,7 @@ package final class Arsenal {
         chats.remove(chat)
         anyOn = chats.anyObject != nil
         AgentTaps.setTier?(chat.id.uuidString, nil)
+        Self.told(chat)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": "off"])
     }
 
@@ -114,6 +118,9 @@ package final class Arsenal {
         chats.remove(chat)
         anyOn = chats.anyObject != nil
     }
+
+    /// A box's chat: the box shows its new tier to its other clients (1.9).
+    private static func told(_ chat: Chat) { (chat.services as? BoxChatServices)?.arsenalChanged(chat) }
 
     /// Why this chat can't have it now. Codex's default sandbox refuses the socket, and Kore doesn't
     /// open a hole in it: only Full access reaches Kore. A chat on a box reaches Kore through its

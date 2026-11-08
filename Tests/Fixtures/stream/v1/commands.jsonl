@@ -29,3 +29,9 @@
 {"type":"listModels"}
 {"type":"close"}
 {"id":"m9","text":"/compact keep it","type":"keepRow"}
+{"at":70,"type":"setAutoCompact"}
+{"type":"setAutoCompact"}
+{"text":"half a thought","type":"setDraft"}
+{"type":"draft"}
+{"tier":"own","type":"setArsenal"}
+{"type":"setArsenal"}

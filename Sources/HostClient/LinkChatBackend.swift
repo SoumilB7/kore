@@ -71,6 +71,20 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     package var arsenal: () -> String? = { nil }
     /// A `KoreReach.note` for the next message (the tier changed since the agent was told).
     private var note: String?
+    /// 1.9: what the box keeps with the chat changed from another client (its controls'
+    /// auto-compact point and draft, its meta's Arsenal tier): this chat takes it. Each is the
+    /// box's value; changes this Mac made itself, or that crossed with one, aren't said back.
+    package var onAutoCompact: ((Int?) -> Void)?
+    package var onDraft: ((String) -> Void)?
+    package var onArsenal: ((String?) -> Void)?
+    /// The box's values as last seen (nil: none seen on this link yet), and this Mac's calls
+    /// setting them still under way.
+    private var seen: (autoCompact: Int??, draft: String?, arsenal: String??) = (nil, nil, nil)
+    /// The box's count of draft changes as last seen, and one of them this Mac's own.
+    private var draftRev: Int??
+    private var ownDraftRevs = 0
+    private var setting: (autoCompact: Int, draft: Int, arsenal: Int) = (0, 0, 0)
+    private var draftSoon: Task<Void, Never>?
     /// Where the box chat's model requests go: this Mac's usage, so Kore's share of the plan's
     /// limits counts them (tests set their own).
     package var usage: @Sendable (ForwardedRequest) -> Void = { request in Task { await KoreUsage.shared.forwarded(request) } }
@@ -211,7 +225,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             return .remoteControlUnavailable(Self.remoteOnBox)
         case .approvalRequested(let approval):
             // Always allow is set on the box itself: the card doesn't offer it.
-            let shown = approval.withoutAlwaysAllow()
+            let shown = approval.withoutAlwaysAllow(note: "Always allow is set on \(connection.alias) itself")
             asked[approval.id] = shown
             return .approvalRequested(shown)
         case .turnChanges(let turn, let changes) where localPath != nil:
@@ -231,14 +245,63 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     }
 
     package func meta(_ meta: ChatMeta?) {
-        guard let meta, !closed, !meta.title.isEmpty, meta.title != titleSaid else { return }
+        guard let meta, !closed else { return }
+        kept(meta)
+        guard !meta.title.isEmpty, meta.title != titleSaid else { return }
         titleSaid = meta.title
         onTitle?(meta.title)
     }
 
+    /// 1.9: the box's own copy of the chat's auto-compact point, draft and Arsenal tier. The first
+    /// seen on a link is the box's record of the point and the draft; the tier stays this Mac's
+    /// (a box started again forgets it) until another client changes it.
+    private func kept(_ meta: ChatMeta) {
+        guard let controls = meta.controls else { return }
+        let point = controls.autoCompactAt
+        if setting.autoCompact == 0, seen.autoCompact != .some(point) {
+            seen.autoCompact = .some(point)
+            onAutoCompact?(point)
+        }
+        // The draft itself is read only when its count moves, and not for this Mac's own change.
+        let rev = controls.draftRev
+        if setting.draft == 0, draftSoon == nil, draftRev != .some(rev) {
+            let first = draftRev == nil
+            draftRev = .some(rev)
+            if !first, ownDraftRevs > 0 {
+                ownDraftRevs -= 1
+            } else if rev != nil {
+                readDraft()
+            } else if first {
+                seen.draft = ""
+                onDraft?("")
+            }
+        }
+        let tier = meta.arsenal.flatMap { $0 == "off" ? nil : $0 }
+        if setting.arsenal == 0, seen.arsenal != .some(tier) {
+            let first = seen.arsenal == nil
+            seen.arsenal = .some(tier)
+            if !first {
+                onArsenal?(tier)
+            } else if tier != arsenal() {
+                sayArsenal(arsenal())
+            }
+        }
+    }
+
+    private func readDraft() {
+        Task {
+            guard let text = (try? await call(.draft))?.text, setting.draft == 0, draftSoon == nil else { return }
+            seen.draft = text
+            onDraft?(text)
+        }
+    }
+
     /// The link came or went. The window says so, once, over all its chats (`BoxOfflineDialog`);
-    /// the chat itself shows nothing, and a send meanwhile waits for the box.
-    package func linked(_ up: Bool) {}
+    /// the chat itself shows nothing, and a send meanwhile waits for the box. Back: the box may have
+    /// started again, so the tier is said to it again rather than taken from it.
+    package func linked(_ up: Bool) {
+        if up { seen.arsenal = nil }
+    }
 
     private func emit(_ list: [ChatEvent]) {
         for event in list { continuation.yield(event) }
@@ -397,6 +460,47 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     }
 
     package func compact(instructions: String) async throws { try await call(.compact(instructions: instructions)) }
+
+    /// 1.9: the box keeps the chat's point, so its own compaction (no Mac following) and every
+    /// client use it.
+    package func keepAutoCompact(_ point: Int?) {
+        guard offers("setAutoCompact"), seen.autoCompact != .some(point) else { return }
+        seen.autoCompact = .some(point)
+        setting.autoCompact += 1
+        Task {
+            _ = try? await call(.setAutoCompact(point))
+            setting.autoCompact -= 1
+        }
+    }
+
+    /// 1.9: the composer's draft, kept by the box half a second after typing stops (as a Mac
+    /// window saves its tabs), so it's there when the window opens again, here or on another Mac.
+    package func keepDraft(_ text: String) {
+        guard offers("setDraft"), chatId != nil else { return }
+        draftSoon?.cancel()
+        draftSoon = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, !Task.isCancelled else { return }
+            draftSoon = nil
+            guard seen.draft != text else { return }
+            seen.draft = text
+            setting.draft += 1
+            // The box's count moves for a change only; this Mac's isn't read back.
+            if (try? await call(.setDraft(text)))?.bool == true, draftRev != nil { ownDraftRevs += 1 }
+            setting.draft -= 1
+        }
+    }
+
+    /// 1.9: the chat's Arsenal tier changed here: the box shows it, and says it to other clients.
+    package func sayArsenal(_ tier: String?) {
+        guard offers("setArsenal"), chatId != nil else { return }
+        seen.arsenal = .some(tier)
+        setting.arsenal += 1
+        Task {
+            _ = try? await call(.setArsenal(tier))
+            setting.arsenal -= 1
+        }
+    }
 
     package func keepRow(_ text: String, id: String) async {
         sentHere.insert(id)

@@ -27,6 +27,12 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     /// since 1970).
     package var closed: Bool?
     package var closedAt: Double?
+    /// 1.9: the composer's draft a client keeps here, its auto-compact point as the chat's own
+    /// (0 for off; nil: none of its own), and a closed chat archived from a client's history.
+    package var draft: String?
+    package var draftRev: Int?
+    package var autoCompact: Int?
+    package var archived: Bool?
 }
 
 /// One line of a chat's log (`log.jsonl`): an entry as it went on the wire, a turn, or the start
@@ -108,11 +114,11 @@ package final class HostChat {
 
     static func create(
         provider: String, folder: String, modelId: String?, in chats: URL, fork: (from: String, at: String)? = nil, title: String? = nil,
-        mode: String? = nil, effort: String? = nil
+        mode: String? = nil, effort: String? = nil, session: String? = nil
     ) throws -> HostChat {
         let id = UUID().uuidString.lowercased()
         var record = ChatRecord(
-            id: id, provider: provider, folder: folder, title: title, session: nil, mode: mode, modelId: modelId,
+            id: id, provider: provider, folder: folder, title: title, session: session, mode: mode, modelId: modelId,
             created: Int(Date().timeIntervalSince1970), effort: effort)
         record.forkFrom = fork?.from
         record.forkAt = fork?.at
@@ -209,9 +215,12 @@ package final class HostChat {
             provider: provider, folder: folderURL, resume: session, fork: fork, modeMemory: ModeMemory(defaults: nil),
             compactMemory: AutoCompactMemory(defaults: nil), services: services)
         if let mode = record.mode { chat.controls.mode = mode }
+        // Its name as kept (a rename, a fork's), before its CLI says one.
+        if let title = record.title, !title.isEmpty { chat.adoptName(title) }
         chat.backendTap = { [weak self] event in self?.stream.raw(event) }
         chat.launchModel = record.modelId
         chat.launchEffort = record.effort
+        if let point = record.autoCompact { chat.setAutoCompact(point == 0 ? nil : point) }
         expectingWake = session != nil && !entries.isEmpty
         (wakeKept, wakeBase) = (nil, nil)
         attach(chat)
@@ -328,6 +337,37 @@ package final class HostChat {
     func setModel(_ id: String) {
         record.modelId = id
         record.controls?.modelId = id
+        try? saveRecord()
+    }
+
+    /// 1.9: a rename kept with the chat whether or not its CLI runs (the CLI's own title follows
+    /// when it does).
+    func setTitle(_ title: String) {
+        record.title = title
+        chat?.adoptName(title)
+        try? saveRecord()
+    }
+
+    /// True when it changed.
+    @discardableResult
+    func setDraft(_ text: String) -> Bool {
+        guard record.draft != (text.isEmpty ? nil : text) else { return false }
+        record.draft = text.isEmpty ? nil : text
+        record.draftRev = (record.draftRev ?? 0) + 1
+        try? saveRecord()
+        return true
+    }
+
+    /// The chat's own auto-compact point (nil: off).
+    func setAutoCompact(_ point: Int?) {
+        record.autoCompact = point ?? 0
+        record.controls?.autoCompactAt = point
+        chat?.setAutoCompact(point)
+        try? saveRecord()
+    }
+
+    func setArchived(_ on: Bool) {
+        record.archived = on ? true : nil
         try? saveRecord()
     }
 

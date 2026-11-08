@@ -239,12 +239,17 @@ final class LinkClient {
                 guard let blob = host.keep(file) else { return uploadFailed(uploadId, .init(.busy, "The box couldn't keep the file.")) }
                 send(.result(.init(id: "blob.put:" + uploadId, ok: true, blobId: blob)))
             }
-        case .historyList(let id, let windowId, let query, _, let offset):
-            // A folder's closed chats, to reopen (full grants).
-            guard current()?.control == .full else { return }
-            let all = host.closedHistory(windowId: windowId, query: query)
-            let page = Array(all.dropFirst(max(offset, 0)).prefix(50))
-            send(.historyPage(id: id, windowId: windowId, sessions: page, more: all.count > max(offset, 0) + page.count))
+        case .historyList(let id, let windowId, let query, let archived, let offset):
+            // A folder's closed chats and its CLIs' past sessions (1.9: act and full grants).
+            guard let control = current()?.control, control != .watch else {
+                return send(.result(.init(id: "history.list:" + id, ok: false, code: .deniedControl, message: "This grant only watches.")))
+            }
+            Task { [weak self] in
+                guard let self else { return }
+                let all = await host.history(windowId: windowId, query: query, archived: archived)
+                let page = Array(all.dropFirst(max(offset, 0)).prefix(50))
+                send(.historyPage(id: id, windowId: windowId, sessions: page, more: all.count > max(offset, 0) + page.count))
+            }
         case .cmd(let id, .control(let kind, let args)) where kind == .syncWatch || kind == .syncUnwatch:
             guard current() != nil else { return }
             send(.result(sync(kind, folder: args.folder, id: id)))

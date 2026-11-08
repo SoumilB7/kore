@@ -127,6 +127,8 @@ final class BoxRig {
     let grant: Grant
     let folder: URL
     var made: [BoxCLI] = []
+    /// The past sessions each CLI on the box lists for a folder (no real CLI is asked).
+    var sessions: [String: [SessionSummary]] = [:]
     /// Where the Mac's chats count the box's requests; nil keeps them out.
     var usage: KoreUsage?
     var cli: BoxCLI { made.last! }
@@ -142,6 +144,7 @@ final class BoxRig {
         host = HostDaemon(paths: paths)
         try host.start()
         grant = try GrantStore(paths.grants).allow("laptop", control: control, socket: paths.socket)
+        host.pastSessions = { [weak self] provider, _ in await MainActor.run { self?.sessions[provider.id] } ?? [] }
         host.services.backend = { [unowned self] _, _ in
             let cli = BoxCLI()
             self.made.append(cli)
@@ -311,6 +314,78 @@ struct BoxParityTests {
         #expect(!rig.cli.calls.contains { $0.hasPrefix("send") || $0.hasPrefix("respond") || $0 == "mode bypassPermissions" })
         // Remote control shows unavailable here, as the box's capabilities say.
         #expect(!link.offers("setRemoteControl") && link.offers("rollback"))
+        chat.close()
+        connection.release()
+    }
+
+    @Test func aBoxChatsOwnOperationsGoThroughTheLinkAndStayOnTheBox() async throws {
+        let rig = try BoxRig()
+        defer { rig.finish() }
+        let connection = rig.connection()
+        connection.retain()
+        #expect(await until(5) { connection.isOnline })
+        #expect(connection.keepsHistory)
+        let (chat, backend) = rig.chat(connection, id: nil)
+        await chat.startOnce()
+        #expect(chat.sendFromLink("one"))
+        #expect(await until(5) { rows(chat, .answer) == ["Hi: one"] && !chat.isBusy })
+        let link = try #require(backend())
+        let hc = try #require(link.chatId.flatMap(rig.host.chat))
+
+        // Always allow: offered by the box's CLI, dim here with where it's set.
+        rig.cli.sink.yield(.approvalRequested(Approval(id: "ap9", title: "Run ls", detail: nil, body: nil, canAlwaysAllow: true, questions: [])))
+        #expect(await until { chat.approvals.pending.first?.id == "ap9" })
+        #expect(chat.approvals.pending.first?.canAlwaysAllow == false)
+        #expect(chat.approvals.pending.first?.alwaysAllowNote == "Always allow is set on local itself")
+
+        // Rename: through `chat.call`, kept on the box (its list and other Macs read it there).
+        chat.rename("Release plan")
+        #expect(await until(5) { hc.record.title == "Release plan" })
+        // Fork: its start from the box, then a new chat there from that point, titled.
+        let message = try #require(chat.transcriptView.entries.first { $0.kind == .user })
+        guard case .pending(let point)? = await chat.forkStart(message) else { Issue.record("no fork point"); return }
+        let fork = LinkChatBackend(
+            connection: connection, provider: .claude, folder: rig.folder.path, chatId: nil,
+            making: .init(forkFrom: point.from, forkAt: point.at, title: "Release plan (fork)"))
+        try await fork.start()
+        let forked = try #require(fork.chatId.flatMap(rig.host.chat))
+        #expect(forked.record.forkFrom == "s1" && forked.record.forkAt == message.source && forked.record.title == "Release plan (fork)")
+        await fork.close()
+
+        // The point and the draft: kept on the box.
+        chat.setAutoCompact(70)
+        #expect(await until(5) { hc.record.autoCompact == 70 })
+        link.keepDraft("/review half a thought")
+        #expect(await until(5) { hc.record.draft == "/review half a thought" })
+
+        // Another client's changes reach this chat.
+        var point2: Int?? = nil
+        var draft: String?
+        var tier: String?? = nil
+        link.onAutoCompact = { point2 = .some($0) }
+        link.onDraft = { draft = $0 }
+        link.onArsenal = { tier = .some($0) }
+        let args = { (a: ControlArgs) -> ControlArgs in var a = a; a.chatId = hc.id; return a }
+        _ = rig.host.apply(.control(.chatSetAutoCompact, args(ControlArgs(at: 50))), id: "p1", control: .act) { _ in }
+        _ = rig.host.apply(.control(.chatSetDraft, args(ControlArgs(text: "from elsewhere"))), id: "p2", control: .act) { _ in }
+        _ = rig.host.apply(.control(.chatSetArsenal, args(ControlArgs(tier: "drive"))), id: "p3", control: .full) { _ in }
+        #expect(await until(5) { point2 == .some(50) && draft == "from elsewhere" && tier == .some("drive") })
+
+        // History: the box's past sessions, opened as a box chat; renamed and archived there.
+        rig.sessions["claude"] = [SessionSummary(id: "past1", agent: .claude, title: "Old work", updated: Date(timeIntervalSince1970: 1_700_000_000))]
+        let window = HostDaemon.windowID(rig.folder.path)
+        #expect(await connection.closedChats(windowId: window).map(\.id) == ["past1"])
+        guard case .success = await connection.history(.historyRename, ControlArgs(title: "Older work", sessionId: "past1")) else {
+            Issue.record("not renamed"); return
+        }
+        #expect(await connection.closedChats(windowId: window).map(\.title) == ["Older work"])
+        guard case .success(let opened) = await connection.history(.historyOpen, ControlArgs(windowId: window, provider: "claude", sessionId: "past1"))
+        else { Issue.record("not opened"); return }
+        #expect(opened.chatId.flatMap(rig.host.chat)?.record.session == "past1")
+        guard case .failure(let refusal) = await connection.history(.historyOpen, ControlArgs(windowId: window, provider: "claude", sessionId: "nope"))
+        else { Issue.record("an unknown session opened"); return }
+        #expect(refusal.message.contains("history"))
+
         chat.close()
         connection.release()
     }

@@ -426,6 +426,27 @@ extension HostDaemon {
             }
             return ok()
         }
+        // 1.9: what the box keeps with the chat, whether or not its CLI runs.
+        switch command {
+        case .rename(let title) where hc.chat == nil:
+            hc.setTitle(title.trimmingCharacters(in: .whitespacesAndNewlines))
+            return ok()
+        case .setAutoCompact(let point):
+            hc.setAutoCompact(point)
+            return ok()
+        case .setDraft(let text):
+            var value = CallValue()
+            value.bool = hc.setDraft(text)
+            return ok(value)
+        case .draft:
+            var value = CallValue()
+            value.text = hc.record.draft ?? ""
+            return ok(value)
+        case .setArsenal(let tier):
+            arsenalSaid(tier, hc)
+            return ok()
+        default: break
+        }
         switch command {
         case .setModel(let model) where !offers(model: model, hc.record.provider):
             return fail("The chat's CLI doesn't offer that model.", .invalid)
@@ -490,8 +511,10 @@ extension HostDaemon {
                 try await backend.setFastMode(on)
                 chat.launchFastMode = on
             case .rename(let title):
+                // Kept first: the chat's list shows it even when its CLI can't take it now.
+                let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                hc.setTitle(title)
                 try await backend.rename(title)
-                chat.adoptName(title)
                 hc.noted(chat)
             case .stopAgent(let id):
                 await backend.stopAgent(id)
@@ -559,7 +582,7 @@ extension HostDaemon {
                 return fail("Remote control of a box's chat is turned on on the box.", .command)
             case .relaunch(let reason):
                 await backend.relaunch(reason: reason)
-            case .close, .keepRow:
+            case .close, .keepRow, .setAutoCompact, .setDraft, .draft, .setArsenal:
                 break
             case .listModels:
                 var value = CallValue()

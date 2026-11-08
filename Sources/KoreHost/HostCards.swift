@@ -40,6 +40,15 @@ enum HostMeta {
     /// The composer's controls (sent with full control): the live chat's, else as it last had
     /// them, else the model and effort it will start on.
     static func controls(_ hc: HostChat) -> LinkProtocol.ChatControls {
+        var made = kept(hc)
+        // 1.9: the draft's count (the draft itself is read when it moves) and the chat's own
+        // auto-compact point, kept with it.
+        made.draftRev = hc.record.draftRev
+        if hc.chat == nil, let point = hc.record.autoCompact { made.autoCompactAt = point == 0 ? nil : point }
+        return made
+    }
+
+    private static func kept(_ hc: HostChat) -> LinkProtocol.ChatControls {
         if let chat = hc.chat { return controls(of: chat) }
         var kept =
             hc.record.controls
@@ -93,7 +102,11 @@ enum HostMeta {
             modeIds: (chat?.controls.availableModes ?? hc.provider.modes).map(\.id), allowedModeIds: allowed.sorted(),
             model: chat?.controls.currentModel?.name ?? hc.record.modelId, queued: chat?.queuedCount ?? 0, running: chat?.isBusy ?? false,
             cards: cards(hc, raise: raise), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false), commands: Array(commands))
-        if raise { made.controls = controls(hc) }
+        if raise {
+            made.controls = controls(hc)
+            // 1.9: the tier the driving client last said (1.6), or a client set (`chat.setArsenal`).
+            made.arsenal = hc.arsenal ?? "off"
+        }
         return made
     }
 

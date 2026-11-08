@@ -25,11 +25,20 @@ final class HostRig {
         ])
         try HostConfig(folders: [folder.path]).save(paths.config)
         host = HostDaemon(paths: paths)
+        stubSessions()
+    }
+
+    /// The past sessions each CLI lists for a folder (no real CLI is asked).
+    var sessions: [String: [SessionSummary]] = [:]
+
+    private func stubSessions() {
+        host.pastSessions = { [weak self] provider, _ in await MainActor.run { self?.sessions[provider.id] } ?? [] }
     }
 
     func restart() {
         host.stop()
         host = HostDaemon(paths: paths)
+        stubSessions()
     }
 
     func finish() {

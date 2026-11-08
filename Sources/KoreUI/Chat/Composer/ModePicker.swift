@@ -29,6 +29,14 @@ struct ModePicker: View {
                     .storyID(StoryID.Composer.modeRow(mode.id))
                     .tabStop(StoryID.Composer.modeRow(mode.id)) { pick(index) }
                 }
+                // A box's chat: the modes past Auto, dim, with where they're set.
+                ForEach(chat.controls.cappedModes, id: \.id) { mode in
+                    ModeRow(mode: mode, current: false, lit: false, pick: {}, hover: { _ in })
+                        .disabled(true)
+                        .opacity(Theme.missingLogo)
+                        .help(chat.controls.levelCapNote ?? "")
+                        .storyID(StoryID.Composer.modeRow(mode.id))
+                }
                 if let plan = chat.provider.planToggle {
                     Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
                     PlanRow(mode: plan, on: chat.controls.planMode, lit: state.lit == .row(modes.count)) {

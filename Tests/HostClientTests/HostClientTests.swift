@@ -35,7 +35,7 @@ struct HostClientTests {
         let hello = try #require(await host.handshake(windows: [Fixture.window(["c1"])], chats: [Fixture.meta("c1")]))
         // attach fills in the proof: the Mac sends it empty, at link 1.5.
         #expect(hello["proof"] as? String == "")
-        #expect((hello["proto"] as? [String: Int])?["minor"] == 8)
+        #expect((hello["proto"] as? [String: Int])?["minor"] == 9)
         #expect(await until { connection.isOnline })
         #expect(connection.chats(in: "~/app").map(\.id) == ["c1"])
         connection.release()

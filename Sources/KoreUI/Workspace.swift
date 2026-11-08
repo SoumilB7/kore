@@ -299,9 +299,9 @@ package final class Workspace {
                 select(tab)
                 return
             }
-            let provider = Registry.provider(for: session.agent)
             Task {
-                guard let chat = await box.reopen(session.id, provider: provider, title: session.title) else { return }
+                // A closed chat back on the box, or a past session its CLI keeps, as a box chat (1.9).
+                guard let chat = await box.openSession(session) else { return }
                 place(chat, at: tabs.count)
                 chats.removeAll { $0.id == session.id }
             }
@@ -1019,8 +1019,14 @@ package final class Workspace {
     /// Archives a chat in its CLI (Codex: `thread/archive`; Claude has no archive of its own, so
     /// Kore keeps a hidden list, as the Claude Code extension does) and closes its tab.
     func archive(_ session: SessionSummary) async {
-        // A box's closed chats are reopened, not renamed or archived from here.
-        guard box == nil else { return }
+        // A box keeps its folder's history (1.9): archived there; an open tab of it closes.
+        if let box {
+            guard await box.archiveSession(session.id, true) else { return }
+            if let tab = tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == session.id && $0.agent == nil }) {
+                close(tab, remember: false)
+            }
+            return setArchived(session.id, true)
+        }
         let provider = Registry.provider(for: session.agent).id
         discardRecovery(provider: provider, session: session.id)
         if let tab = tab(for: session.id, provider: provider) { close(tab, remember: false) }
@@ -1037,13 +1043,16 @@ package final class Workspace {
     /// Renames a chat through its CLI. An open tab's chat does it directly; a chat that isn't
     /// open is resumed just long enough to rename it.
     func rename(_ session: SessionSummary, to name: String) async {
-        // A box's closed chats are reopened, not renamed or archived from here.
-        guard box == nil else { return }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         if let index = chats.firstIndex(where: { $0.id == session.id }) {
             let old = chats[index]
             chats[index] = SessionSummary(id: old.id, agent: old.agent, title: name, updated: old.updated, archived: old.archived)
+        }
+        // A box keeps its folder's history (1.9): renamed there.
+        if let box {
+            if !(await box.renameSession(session.id, to: name)) { await refresh() }
+            return
         }
         let provider = Registry.provider(for: session.agent).id
         KoreForks.shared.rename(cli: provider, id: session.id, to: name)
@@ -1060,8 +1069,11 @@ package final class Workspace {
 
     /// Brings an archived chat back and opens it.
     func unarchive(_ session: SessionSummary) async {
-        // A box's closed chats are reopened, not renamed or archived from here.
-        guard box == nil else { return }
+        if let box {
+            guard await box.archiveSession(session.id, false) else { return }
+            setArchived(session.id, false)
+            return open(session)
+        }
         await Registry.provider(for: session.agent).setArchived(session.id, false, folder)
         setArchived(session.id, false)
         open(session)
@@ -1198,6 +1210,8 @@ package final class Workspace {
             guard tab.agent == nil, let chat = tab.chat else { continue }
             chat.onDraftChanged = { [weak self, weak chat] in
                 guard let self, let chat else { return }
+                // A box keeps its chats' drafts (1.9).
+                if let services = chat.services as? BoxChatServices { return services.draftChanged(chat) }
                 rememberDraft(chat)
                 save()
             }

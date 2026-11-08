@@ -327,7 +327,10 @@ extension ChatCommand: Codable {
         case .keepRow(let text, let id):
             try t.put("text", text)
             try t.put("id", id)
-        case .interrupt, .forkAtEnd, .earlierMessages, .usage, .listModels, .close, .unknown: break
+        case .setAutoCompact(let at): try t.put("at", at)
+        case .setDraft(let text): try t.put("text", text)
+        case .setArsenal(let tier): try t.put("tier", tier)
+        case .interrupt, .forkAtEnd, .earlierMessages, .usage, .listModels, .close, .draft, .unknown: break
         }
     }
 
@@ -364,6 +367,10 @@ extension ChatCommand: Codable {
         case "listModels": self = .listModels
         case "close": self = .close
         case "keepRow": self = .keepRow(text: try u.get("text"), id: try u.get("id"))
+        case "setAutoCompact": self = .setAutoCompact(try u.opt("at"))
+        case "setDraft": self = .setDraft(try u.get("text"))
+        case "draft": self = .draft
+        case "setArsenal": self = .setArsenal(try u.opt("tier"))
         default: self = .unknown(u.type)
         }
     }
