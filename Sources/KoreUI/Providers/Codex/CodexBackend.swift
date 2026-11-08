@@ -379,9 +379,14 @@ final class CodexBackend: ChatBackend {
 
     /// Models (falling back to the account's default when the configured one isn't offered),
     /// effort, and the `/` menu: Codex's own commands plus its skills.
-    private func controls(_ session: CodexSession) async -> ChatControls {
-        let list = (try? await session.models()) ?? []
-        let models = list.compactMap { json -> ModelOption? in
+    func listModels() async -> [ModelOption]? {
+        guard let session, let list = try? await session.models() else { return nil }
+        return options(list)
+    }
+
+    /// The listed models Codex doesn't hide, each fast tier noted.
+    private func options(_ list: [JSONValue]) -> [ModelOption] {
+        list.compactMap { json -> ModelOption? in
             guard let id = json["id"]?.string, json["hidden"]?.bool != true else { return nil }
             let efforts = json["supportedReasoningEfforts"]?.array?.compactMap { $0["reasoningEffort"]?.string ?? $0.string }
             let tier = CodexSession.fastTier(json)
@@ -390,6 +395,11 @@ final class CodexBackend: ChatBackend {
                 id: id, name: json["displayName"]?.string ?? id, resolved: json["model"]?.string ?? id,
                 efforts: efforts ?? [], supportsFastMode: tier != nil)
         }
+    }
+
+    private func controls(_ session: CodexSession) async -> ChatControls {
+        let list = (try? await session.models()) ?? []
+        let models = options(list)
         var current = await session.model
         titleModel = models.first { $0.id.contains("luna") || $0.id.contains("mini") || $0.id.contains("nano") }?.id
         if current == nil || !models.contains(where: { $0.id == current }) {

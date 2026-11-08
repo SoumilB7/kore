@@ -80,6 +80,8 @@ extension Chat {
     /// The chat's model (its id) and effort, and the pill as it reads ("Lyra 3 · High").
     package var storyModel: String? { controls.modelId }
     package var storyEffort: String? { controls.effort }
+    /// The models its picker offers, by id.
+    package var storyModelIds: [String] { controls.models.map(\.id) }
     package var storyModelPill: String { [controls.modelLabel, controls.effortLabel].compactMap { $0 }.joined(separator: " · ") }
     /// The picker's rows as they read: "Lyra: [3] 2.5 *2", the current chip in brackets and the
     /// lit one (pointer or keys) starred; a family without versions is its own chip ("[Nova]").

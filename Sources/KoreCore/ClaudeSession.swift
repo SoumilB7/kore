@@ -247,6 +247,11 @@ public actor ClaudeSession {
         try await control("get_context_usage", ["detail": "summary"])
     }
 
+    /// The models the CLI offers now, as `initialize` lists them (`list_models`: no turn).
+    public func listModels() async throws -> [JSONValue] {
+        try await control("list_models")["models"]?.array ?? []
+    }
+
     public func settings() async throws -> JSONValue {
         try await control("get_settings")
     }

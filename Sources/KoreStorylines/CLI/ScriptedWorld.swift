@@ -16,6 +16,8 @@ package final class ScriptedWorld {
     /// Text deltas a second for new chats (`CLIScript.feed`); nil: one a run-loop pass.
     package var rate: Double?
 
+    /// What each CLI's model list reads as now (`listModels`), by provider id; nil: it can't say.
+    package var modelLists: [String: [ModelOption]] = [:]
     /// Every backend made, oldest first.
     package private(set) var backends: [ScriptedBackend] = []
     /// What each session played, by session id.
@@ -74,6 +76,8 @@ package final class ScriptedWorld {
         scripts = [:]
         script = .echo
         rate = nil
+        modelLists = [:]
+        ModelCatalog.shared.reset()
     }
 
     func newSession(_ provider: String) -> String {

@@ -291,6 +291,7 @@ package final class Chat: Identifiable {
         if AgentTaps.on { AgentTaps.event?(self, event) }
         // A stopped turn took the compaction in it along, whether or not the CLI said so.
         if case .turnFinished = event, stoppingCompaction, context.compacting { dispatch(.compactionStopped) }
+        noteModelList(event)
         switch event {
         case .earlierHistory: unloadOld(opening: true)
         case .turnFinished: unloadOld()
@@ -1743,6 +1744,19 @@ package final class Chat: Identifiable {
     /// Permissions already waiting when planning with the switch on starts: answered as later ones are.
     private func allowWaitingInPlan() {
         for ask in approvals.pending where controls.autoAllows(ask) { answer(ask, .allow) }
+    }
+
+    /// The CLI's model list: the one its session started with goes to its other chats, and a
+    /// turn's end may read it again (`ModelCatalog`, throttled per CLI).
+    private func noteModelList(_ event: ChatEvent) {
+        switch event {
+        case .controlsLoaded(let loaded):
+            ModelCatalog.shared.started(self, cli: provider.id, models: loaded.models)
+        case .turnFinished:
+            guard let backend else { return }
+            ModelCatalog.shared.turnEnded(self, cli: provider.id) { [weak backend] in await backend?.listModels() }
+        default: break
+        }
     }
 
     /// A new chat's mode (the one last picked) that its model doesn't offer gives way to the first.

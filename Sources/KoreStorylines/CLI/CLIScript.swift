@@ -152,6 +152,8 @@ package enum Call: Sendable, Equatable {
     case compact
     /// The usage popup read the account's limits.
     case usage
+    /// The model list was read again (a turn's end, `ModelCatalog`).
+    case listModels
     /// The usage popup used a full reset: the credit it named.
     case useReset(credit: String?)
     case fork(message: String?)

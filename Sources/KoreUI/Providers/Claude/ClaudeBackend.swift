@@ -284,8 +284,8 @@ final class ClaudeBackend: ChatBackend {
         await Task.detached(priority: .utility) { await KoreUsage.shared.shares(for: reading, cli: "claude") }.value
     }
 
-    private func controls(_ session: ClaudeSession) async -> ChatControls {
-        let listed = (await session.capabilities["models"]?.array ?? []).compactMap { json -> ModelOption? in
+    nonisolated static func options(_ list: [JSONValue]) -> [ModelOption] {
+        list.compactMap { json -> ModelOption? in
             guard let value = json["value"]?.string, value != "default" else { return nil }
             let resolved = json["resolvedModel"]?.string ?? value
             return ModelOption(
@@ -294,6 +294,15 @@ final class ClaudeBackend: ChatBackend {
                 efforts: json["supportedEffortLevels"]?.array?.compactMap(\.string) ?? [],
                 supportsAutoMode: json["supportsAutoMode"]?.bool ?? false, supportsFastMode: json["supportsFastMode"]?.bool ?? false)
         }
+    }
+
+    func listModels() async -> [ModelOption]? {
+        guard let session, let list = try? await session.listModels() else { return nil }
+        return Self.withLongContext(Self.options(list), applied: nil)
+    }
+
+    private func controls(_ session: ClaudeSession) async -> ChatControls {
+        let listed = Self.options(await session.capabilities["models"]?.array ?? [])
         let applied = try? await session.settings()["applied"]
         let models = Self.withLongContext(listed, applied: applied?["model"]?.string)
         let commands = (await session.capabilities["commands"]?.array ?? []).compactMap { json -> SlashCommand? in

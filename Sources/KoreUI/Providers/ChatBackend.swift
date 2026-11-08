@@ -109,6 +109,8 @@ package protocol ChatBackend: AnyObject {
     /// same session: after the account changed, it runs as the new one; after a turn stalled or
     /// ignored a Stop, it's a fresh process. `reason` is logged.
     func relaunch(reason: String) async
+    /// The CLI's model list, read again from the running CLI; nil when it isn't running or can't.
+    func listModels() async -> [ModelOption]?
     func close() async
 }
 
@@ -251,6 +253,9 @@ extension ChatBackend {
 
     /// For a backend that can't compact.
     package func compact(instructions: String) async throws { throw CompactUnavailable() }
+
+    /// For a backend that can't list its models again.
+    package func listModels() async -> [ModelOption]? { nil }
 
     /// For a backend with no account to read.
     package func usage() async throws -> PlanReading { throw UsageUnavailable() }

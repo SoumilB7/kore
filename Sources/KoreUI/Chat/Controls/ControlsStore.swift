@@ -52,6 +52,14 @@ package final class ControlsStore {
         memory.remember(id, for: provider)
     }
 
+    /// The CLI's list read again (`ModelCatalog`): the picker's rows only, the model as it was.
+    func listModels(_ fresh: [ModelOption]) {
+        let merged = ModelCatalog.merged(fresh, into: models, current: modelId)
+        guard merged != models else { return }
+        models = merged
+        ArsenalModels.record(provider.id, merged)
+    }
+
     func apply(_ event: ChatEvent) {
         switch event {
         case .controlsLoaded(let controls):

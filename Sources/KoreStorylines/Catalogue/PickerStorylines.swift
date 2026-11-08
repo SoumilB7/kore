@@ -477,3 +477,55 @@ private struct FadesEnd: Step {
         try await story.until("the slide to end") { ContinuousClock.now >= end }
     }
 }
+
+/// The CLI's model list, read again as chats run: a model the CLI adds reaches every open chat of
+/// it after a turn ends, no relaunch, each chat still on its model. Another turn within the ten
+/// minutes asks nothing.
+final class ModelListRefresh: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    static func model(_ id: String) -> ModelOption {
+        ModelOption(id: id, name: id.capitalized, resolved: id, efforts: ["low", "medium", "high"])
+    }
+
+    override class var script: CLIScript {
+        CLIScript(
+            start: [.event(.controlsLoaded(ChatControls(models: [model("lyra-2"), model("lyra-3")], model: "lyra-2", effort: "low", commands: [])))],
+            turns: [CLIScript.reply("OK")])
+    }
+
+    override func steps() -> [any Step] {
+        let cli = variant == .codex ? "codex" : "claude"
+        let chats = { (story: StoryContext) in (story.app.workspace?.tabs.compactMap(\.chat) ?? []).filter { $0.provider.id == cli } }
+        let lists = { (story: StoryContext) in chats(story).map { $0.storyModelIds.joined(separator: " ") + " @" + ($0.storyModel ?? "none") } }
+        let reads = { (story: StoryContext) in ScriptedWorld.shared.backends.flatMap(\.log).filter { $0 == .listModels }.count }
+        let every = { (what: String, want: String) in
+            Expect(what, found: { lists($0).joined(separator: " | ") }) { story in
+                let all = lists(story)
+                return all.count == 2 && all.allSatisfy { $0 == want }
+            }
+        }
+        let focus = WaitForFocus(.id(StoryID.Composer.field))
+        return super.steps() + [
+            focus, Expect("the first chat's controls") { $0.app.chat?.storyModel == "lyra-2" },
+            StartChat(), focus,
+            every("both chats list what the CLI started with", "lyra-2 lyra-3 @lyra-2"),
+            // The CLI gains a model; ten minutes pass.
+            Do("the CLI lists a new model") { _ in
+                ScriptedWorld.shared.modelLists[cli] = [Self.model("lyra-2"), Self.model("lyra-3"), Self.model("lyra-4")]
+                let later = Date().addingTimeInterval(11 * 60)
+                ModelCatalog.shared.now = { later }
+            },
+            Send("hi"), TurnFinished(1),
+            every("every chat lists it, each still on its model", "lyra-2 lyra-3 lyra-4 @lyra-2"),
+            Expect("one read", found: { "\(reads($0))" }) { reads($0) == 1 },
+            // Within the ten minutes: no read.
+            Do("the CLI lists another") { _ in
+                ScriptedWorld.shared.modelLists[cli] = [Self.model("lyra-2"), Self.model("lyra-5")]
+            },
+            Send("again"), TurnFinished(2), WaitIdle(),
+            Expect("still one read", found: { "\(reads($0))" }) { reads($0) == 1 },
+            every("the lists as they were", "lyra-2 lyra-3 lyra-4 @lyra-2"),
+        ]
+    }
+}

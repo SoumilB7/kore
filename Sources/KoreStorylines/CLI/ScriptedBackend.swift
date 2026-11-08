@@ -309,6 +309,11 @@ package final class ScriptedBackend: ChatBackend {
         heldFrom = index
     }
 
+    package func listModels() async -> [ModelOption]? {
+        log.append(.listModels)
+        return world.modelLists[provider]
+    }
+
     package func usage() async throws -> PlanReading {
         log.append(.usage)
         switch script.usage {
