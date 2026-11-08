@@ -96,7 +96,12 @@ struct BoxUpgradeTests {
         let root = netScratch()
         let defaults = suite()
         let directory = NodeDirectory(defaults: defaults)
-        let local = FakeTailnet(state == .state(.running) ? .running : .stopped)
+        // The fake's own read says what the test's state does (a read now moves KoreNet's state).
+        let backend: BackendState = switch state {
+        case .state(let backend): backend
+        default: .stopped
+        }
+        let local = FakeTailnet(backend)
         let (switcher, settled) = netSwitch(defaults, root: root, directory: directory) {
             fakeEnv(state, local: local, root: root, defaults: defaults, calls: EnvCalls())
         }
