@@ -261,9 +261,9 @@ private struct MarkdownListView: View {
 }
 
 /// A table: 1pt rules around every cell (the grid's spacing over a rule-coloured ground), bold
-/// centred header, and sideways scrolling when wider than the column. Copy below it at its right
-/// edge on hover, as under a code block, takes the whole table as a selection of it copies
-/// (its cells split by tabs, a row a line); ⌥-click takes it as Markdown.
+/// centred header, and sideways scrolling when wider than the column. A drag across it copies it
+/// whole (its cells split by tabs, a row a line). No Copy row under it for now: the room kept
+/// for one moved the reader to the end of a chat resized quickly (TranscriptHoldsOnResize).
 private struct MarkdownTableView: View {
     let table: MarkdownTable
     let path: [Int]
@@ -271,8 +271,7 @@ private struct MarkdownTableView: View {
     private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0) }
 
     var body: some View {
-        CopyBelow(id: StoryID.Transcript.table(path), text: { [table] in table.copyText(markdown: false) },
-            option: { [table] in table.copyText(markdown: true) }) { grid }
+        grid
             // Rows as tall as their text: cells fill their row, not the height on offer.
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
