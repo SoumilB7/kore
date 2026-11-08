@@ -338,6 +338,8 @@ struct BusNotify: Decodable {
     /// `PeerChangedPatch`: narrow per-peer patches (Online among them), the peer-patches bit's.
     var peerChanges: [PeerChange]?
     var errMessage: String?
+    /// The interactive sign-in page is ready (`BrowseToURL`): never kept here, only its news.
+    var browseToURL: String?
 
     struct PeerChange: Decodable {
         var nodeID: Int64
@@ -347,7 +349,8 @@ struct BusNotify: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case state = "State", initialStatus = "InitialStatus", peerChanges = "PeerChangedPatch", errMessage = "ErrMessage"
+        case state = "State", initialStatus = "InitialStatus", peerChanges = "PeerChangedPatch", errMessage = "ErrMessage",
+            browseToURL = "BrowseToURL"
     }
 
     /// The bus's watch mask: initial state + initial status + peer patches, never engine updates
@@ -380,9 +383,23 @@ struct BusNotify: Decodable {
     var events: [TailnetEvent] {
         var out: [TailnetEvent] = []
         if let state { out.append(.state(BackendState(bus: state))) }
+        // The sign-in page came: the node waits for its login (the page itself comes with the
+        // next status read, never through here or a log).
+        if state == nil, let browseToURL, !browseToURL.isEmpty { out.append(.state(.needsLogin)) }
         if let initialStatus { out.append(.status(initialStatus)) }
         for change in peerChanges ?? [] { out.append(.peer(nodeID: change.nodeID, key: change.key, online: change.online)) }
         if let errMessage, !errMessage.isEmpty { out.append(.error(errMessage)) }
         return out
     }
+}
+
+/// A status as text (a log line, an error, a test's message) never carries the sign-in page:
+/// whoever holds that link can add a machine to the owner's tailnet.
+extension TailnetStatus: CustomStringConvertible, CustomDebugStringConvertible {
+    package var description: String {
+        let me = selfNode.map { " self=\($0.publicKey) \($0.tailscaleIPs.joined(separator: ","))" } ?? ""
+        return "TailnetStatus(\(backendState.rawValue)\(me) peers=\(peers.count)\(authURL == nil ? "" : " authURL=<hidden>"))"
+    }
+
+    package var debugDescription: String { description }
 }

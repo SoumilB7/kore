@@ -5,8 +5,9 @@ import Foundation
 /// user's Tailscale stays theirs, Kore never starts a second node for the same machine, the SSH
 /// route is offered and the UI says "Sign in to Tailscale" when signed out. Kore's own
 /// `kore-tailnet` only when there's no installed Tailscale, or its LocalAPI can't be read (App
-/// Store build, non-admin user). Re-evaluated only when installed Tailscale's state changes,
-/// never on a timer.
+/// Store build, non-admin user). Installed means the app bundle (or tailscaled) is there now:
+/// what an uninstall leaves behind counts as absent (`LocalAPIDiscovery`). Re-evaluated only when
+/// installed Tailscale's state changes or its app goes, never on a timer.
 package enum TailnetChooser {
     package enum Installed: Equatable, Sendable {
         case missing(LocalAPIEndpoint.Missing)
@@ -26,6 +27,8 @@ package enum TailnetChooser {
 
     package static func choose(_ installed: Installed) -> Choice {
         switch installed {
+        // Installed but not running: the user's own node, so never a second one of Kore's.
+        case .missing(.notRunning): .stopped
         case .missing: .sidecar
         case .state(let state):
             switch state {
@@ -36,6 +39,26 @@ package enum TailnetChooser {
             case .needsLogin, .noState, .inUseOtherUser: .signedOut
             }
         }
+    }
+
+    /// Installed Tailscale as found now and as its LocalAPI says, with its client when there is
+    /// one. Installed but not answering (Kore at login before tailscaled listens, the app quit) is
+    /// stopped, never "unreadable": that would start a second node of Kore's own for this Mac;
+    /// the bus and the next read see it come up. Not answering because it was uninstalled since
+    /// it was found (the failed read looks again) is absent.
+    package static func installed(_ api: LocalAPIClient) -> (Installed, (any Tailnet)?) {
+        switch api.current {
+        // The app is there but not running: stopped, with a client that finds it when it starts.
+        case .unavailable(.notRunning): return (.state(.stopped), TailnetLocal(api: api))
+        case .unavailable(let why): return (.missing(why), nil)
+        default: break
+        }
+        let local = TailnetLocal(api: api)
+        guard let status = try? local.status() else {
+            if case .unavailable(let why) = api.current, why != .notRunning { return (.missing(why), nil) }
+            return (.state(.stopped), local)
+        }
+        return (.state(status.backendState), local)
     }
 
     /// The choice now, then each change the installed tailnet's bus brings; repeats are dropped.

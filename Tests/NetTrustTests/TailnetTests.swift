@@ -192,16 +192,17 @@ struct DiscoveryTests {
         #expect(linux.find() == .unix(root.path + LocalAPIDiscovery.linuxSocket))
     }
 
-    @Test func macStandaloneAppStoreAndUnreadable() throws {
+    /// The standalone app's port link and token (every other layout: `TailscaleInstallTests`).
+    @Test func macStandaloneAndUnreadable() throws {
         let root = try TestKit.scratch("disc")
         defer { try? FileManager.default.removeItem(at: root) }
-        let mac = LocalAPIDiscovery(platform: .mac, root: root.path)
+        let mac = LocalAPIDiscovery(platform: .mac, root: root.path, answers: { _ in false })
         #expect(mac.find() == .unavailable(.absent))
         try FileManager.default.createDirectory(atPath: root.path + "/Applications/Tailscale.app", withIntermediateDirectories: true)
-        #expect(mac.find() == .unavailable(.appStore))
+        #expect(mac.find() == .unavailable(.notRunning))
         try FileManager.default.createDirectory(atPath: root.path + "/Library/Tailscale", withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: root.path + LocalAPIDiscovery.macPortLink, withDestinationPath: "41112")
-        #expect(mac.find() == .unavailable(.unreadable))
+        #expect(mac.find() == .unavailable(.notRunning))
         try "tok-xyz\n".write(toFile: root.path + LocalAPIDiscovery.macTokenPrefix + "41112", atomically: true, encoding: .utf8)
         #expect(mac.find() == .tcp(port: 41112, token: "tok-xyz"))
         chmod(root.path + LocalAPIDiscovery.macTokenPrefix + "41112", 0)
@@ -219,12 +220,13 @@ struct DiscoveryTests {
         (.missing(.absent), .sidecar),
         (.missing(.appStore), .sidecar),
         (.missing(.unreadable), .sidecar),
+        (.missing(.notRunning), .stopped),
     ])
     func choice(_ installed: TailnetChooser.Installed, _ want: TailnetChooser.Choice) {
         let got = TailnetChooser.choose(installed)
         #expect(got == want)
         // The sidecar only when installed Tailscale is absent or unreadable.
-        if case .missing = installed { #expect(got.startsSidecar) } else { #expect(!got.startsSidecar) }
+        if case .missing(let why) = installed, why != .notRunning { #expect(got.startsSidecar) } else { #expect(!got.startsSidecar) }
     }
 
     @Test func choiceFollowsBusEventsOnly() async {

@@ -16,20 +16,32 @@ package enum LocalAPIEndpoint: Equatable, Sendable {
         case appStore
         /// The standalone token is root:admin 0640: a non-admin user can't read it.
         case unreadable
+        /// Installed (its app bundle, or tailscaled's launch daemon, is there) but not running
+        /// now: quit, or never started. The user's own node, so never a second one of Kore's.
+        case notRunning
     }
 }
 
 /// Finds the LocalAPI without lsof or scanning other apps' folders. `root` prefixes every path
 /// (tests).
+///
+/// On a Mac, installed means installed now: the Tailscale app bundle (standalone or App Store, by
+/// its bundle id) or open-source tailscaled (its socket answering, or its launch daemon). What an
+/// uninstalled Tailscale leaves behind (`/Library/Tailscale/ipnport`, `sameuserproof-*`, a dead
+/// socket file) counts as absent, so Kore's own tailnet takes over; with the app there, a stale
+/// port link is the app not running (stopped), never "absent".
 package struct LocalAPIDiscovery: Sendable {
     package enum Platform: Sendable { case mac, linux }
 
     package var platform: Platform
     package var root: String
+    /// Whether a Unix socket at the path answers a connect (tests: a fake).
+    package var answers: @Sendable (String) -> Bool
 
-    package init(platform: Platform = Self.here, root: String = "") {
+    package init(platform: Platform = Self.here, root: String = "", answers: @escaping @Sendable (String) -> Bool = Self.socketAnswers) {
         self.platform = platform
         self.root = root
+        self.answers = answers
     }
 
     #if os(macOS)
@@ -43,6 +55,30 @@ package struct LocalAPIDiscovery: Sendable {
     package static let macPortLink = "/Library/Tailscale/ipnport"
     package static let macTokenPrefix = "/Library/Tailscale/sameuserproof-"
     package static let macApp = "/Applications/Tailscale.app"
+    /// Open-source tailscaled installed as a system daemon (`tailscaled install-system-daemon`).
+    package static let macDaemon = "/Library/LaunchDaemons/com.tailscale.tailscaled.plist"
+    /// The two builds of the Mac app, by bundle id.
+    package static let standaloneID = "io.tailscale.ipn.macsys"
+    package static let appStoreID = "io.tailscale.ipn.macos"
+
+    /// The Mac app as found in /Applications.
+    package enum MacApp: Equatable, Sendable {
+        case none
+        /// The standalone build (or one whose id can't be read: its LocalAPI is looked for).
+        case standalone
+        case appStore
+    }
+
+    package func app() -> MacApp {
+        let bundle = root + Self.macApp
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: bundle, isDirectory: &isDir), isDir.boolValue else { return .none }
+        guard let data = FileManager.default.contents(atPath: bundle + "/Contents/Info.plist"),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let id = plist["CFBundleIdentifier"] as? String
+        else { return .standalone }
+        return id == Self.appStoreID ? .appStore : .standalone
+    }
 
     package func find() -> LocalAPIEndpoint {
         let fm = FileManager.default
@@ -50,17 +86,40 @@ package struct LocalAPIDiscovery: Sendable {
         case .linux:
             return fm.fileExists(atPath: root + Self.linuxSocket) ? .unix(root + Self.linuxSocket) : .unavailable(.absent)
         case .mac:
-            if let target = try? fm.destinationOfSymbolicLink(atPath: root + Self.macPortLink), let port = UInt16(target) {
-                guard let token = try? String(contentsOfFile: root + Self.macTokenPrefix + target, encoding: .utf8) else {
-                    return .unavailable(.unreadable)
+            switch app() {
+            case .appStore:
+                return .unavailable(.appStore)
+            case .none:
+                // No app: open-source tailscaled, or nothing. Leftovers of an uninstalled app
+                // (port link, token, a socket file nobody serves) are nothing.
+                if answers(root + Self.macSocket) { return .unix(root + Self.macSocket) }
+                if fm.fileExists(atPath: root + Self.macDaemon) { return .unavailable(.notRunning) }
+                return .unavailable(.absent)
+            case .standalone:
+                if let target = try? fm.destinationOfSymbolicLink(atPath: root + Self.macPortLink), let port = UInt16(target) {
+                    let token = root + Self.macTokenPrefix + target
+                    // The link outlived its token: the app isn't running now.
+                    guard fm.fileExists(atPath: token) else { return .unavailable(.notRunning) }
+                    guard let text = try? String(contentsOfFile: token, encoding: .utf8) else { return .unavailable(.unreadable) }
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? .unavailable(.unreadable) : .tcp(port: port, token: trimmed)
                 }
-                let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? .unavailable(.unreadable) : .tcp(port: port, token: trimmed)
+                if answers(root + Self.macSocket) { return .unix(root + Self.macSocket) }
+                return .unavailable(.notRunning)
             }
-            if fm.fileExists(atPath: root + Self.macSocket) { return .unix(root + Self.macSocket) }
-            if fm.fileExists(atPath: root + Self.macApp) { return .unavailable(.appStore) }
-            return .unavailable(.absent)
         }
+    }
+
+    /// A connect to the Unix socket at `path` succeeds (closed at once).
+    @Sendable package static func socketAnswers(_ path: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: path), let fd = try? Sockets.connectUnix(path) else { return false }
+        Sockets.closeFD(fd)
+        return true
+    }
+
+    /// The Mac app's bundle path, when the app is installed (what `watchApp` watches).
+    package var appPath: String? {
+        platform == .mac && app() != .none ? root + Self.macApp : nil
     }
 }
 
