@@ -111,6 +111,10 @@ struct ChatOpsTests {
         try await until { hc.chat?.transcriptView.entries.contains { $0.kind == .answer } == true && hc.chat?.isBusy == false }
         let chat = try #require(hc.chat)
         let message = try #require(chat.transcriptView.entries.first { $0.kind == .user })
+        // The turn ended: the chat's time and last word moved with it, kept with the record.
+        let recent = HostMeta.meta(hc)
+        #expect(recent.lastAt != nil && hc.record.lastAt == recent.lastAt)
+        #expect(recent.last != nil && recent.last != "You: plan it")
         // Nothing stalled or failed: nothing to retry.
         #expect(try await apply(rig, .chatRetry, ControlArgs(chatId: hc.id), .act).code == .busy)
         #expect(try await apply(rig, .chatRetry, ControlArgs(chatId: hc.id, turnId: "t9"), .act).code == .busy)

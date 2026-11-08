@@ -61,6 +61,8 @@ package final class Chat: Identifiable {
     @ObservationIgnored package var automatic = true
     private var backend: (any ChatBackend)? { engine.backend }
     @ObservationIgnored private let resume: SessionSummary?
+    /// When the session it resumed was last written (nil for a new chat).
+    package var resumedUpdated: Date? { resume?.updated }
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude).
     @ObservationIgnored package let fork: ForkPoint?
     /// The chat this one was forked from, for the line after its history.

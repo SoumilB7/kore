@@ -6,23 +6,130 @@ import kotlinx.serialization.json.longOrNull
 
 /** What the full-control screens draw, worked out from the Mac's state without any views. */
 object ControlModel {
-    /** A model family ("Atlas") and its versions ("4.8", "4.7"), in the Mac's order. */
+    /**
+     * One row of the model picker: a family ("Atlas") and its versions as chips, newest first
+     * ("5.5", "5.5 · 1M", "5", "4.8"), each with the model id it picks. A name with no number is a
+     * family of one whose only chip is its name (`versionless`).
+     */
     data class Family(val name: String, val versions: List<Pair<String, String>>) {
         val ids get() = versions.map { it.first }
+        val versionless get() = versions.size == 1 && versions[0].second.isEmpty()
     }
 
-    /** "Atlas 4.8", "Atlas 4.7", "Brook 4.6" → Atlas [4.8, 4.7], Brook [4.6]; a name without a version is its own family. */
+    /**
+     * The CLI's models as the Mac's picker groups them (`ModelFamily.group`): a display name's
+     * first number is its version ("Atlas 5.5" → Atlas · 5.5, "Brook-6 Luna" → Brook Luna · 6); a
+     * " · 1M"-style tail stays with the version's chip. Families in the order of their first
+     * model; versions newest first. Nothing is hard-coded.
+     */
     fun families(models: List<JsonObject>): List<Family> {
-        val out = LinkedHashMap<String, MutableList<Pair<String, String>>>()
-        for (m in models) {
-            val id = m.str("id") ?: continue
+        data class Member(val id: String, val version: String, val label: String, val index: Int)
+        val order = ArrayList<String>()
+        val members = HashMap<String, MutableList<Member>>()
+        val names = HashMap<String, String>()
+        models.forEachIndexed { i, m ->
+            val id = m.str("id") ?: return@forEachIndexed
             val name = m.str("name") ?: id
-            val cut = name.lastIndexOf(' ')
-            val (family, version) = if (cut > 0 && name.substring(cut + 1).firstOrNull()?.isDigit() == true)
-                name.substring(0, cut) to name.substring(cut + 1) else name to ""
-            out.getOrPut(family) { mutableListOf() }.add(id to version)
+            val (whole, version) = split(name)
+            val cut = whole.indexOf(" · ")
+            val family = if (version != null && cut > 0) whole.substring(0, cut) else whole
+            val tail = if (version != null && cut > 0) whole.substring(cut) else ""
+            val key = if (version == null) "\u0000$id" else family
+            if (key !in members) { order += key; names[key] = if (version == null) name else family }
+            members.getOrPut(key) { mutableListOf() } += Member(id, version ?: "", if (version == null) "" else version + tail, i)
         }
-        return out.map { (name, v) -> Family(name, v) }
+        return order.map { key ->
+            val sorted = members.getValue(key).sortedWith { a, b ->
+                when {
+                    newer(a.version, b.version) -> -1
+                    newer(b.version, a.version) -> 1
+                    else -> a.index - b.index
+                }
+            }
+            Family(names.getValue(key), sorted.map { it.id to it.label })
+        }
+    }
+
+    /** The family and chip the picker lights for [modelId] (the chat's model), if it's listed. */
+    fun current(families: List<Family>, modelId: String?): Pair<String, String>? {
+        for (f in families) f.versions.firstOrNull { it.first == modelId }?.let { return f.name to it.second }
+        return null
+    }
+
+    /** A display name's family and version (the first word that is a number), as the Mac's `ModelFamily.split`. */
+    fun split(name: String): Pair<String, String?> {
+        fun sep(c: Char) = c == ' ' || c == '-' || c == '_'
+        val pieces = ArrayList<Pair<String, String>>()
+        var i = 0
+        while (i < name.length) {
+            var w = i
+            while (w < name.length && sep(name[w])) w++
+            var e = w
+            while (e < name.length && !sep(name[e])) e++
+            pieces += name.substring(i, w) to name.substring(w, e)
+            i = e
+        }
+        val at = pieces.indexOfFirst { (_, word) ->
+            word.isNotEmpty() && word.split('.').all { it.isNotEmpty() && it.length <= 6 && it.all { c -> c in '0'..'9' } }
+        }
+        if (at < 0) return name to null
+        val version = pieces[at].second
+        pieces.removeAt(at)
+        if (at == 0 && pieces.isNotEmpty()) pieces[0] = "" to pieces[0].second
+        val family = pieces.joinToString("") { it.first + it.second }.trim()
+        return if (family.isEmpty()) name to null else family to version
+    }
+
+    /** Whether version [a] is newer than [b], number by number ("5.5" > "5" > "4.10" > "4.9"). */
+    fun newer(a: String, b: String): Boolean {
+        val x = a.split('.').map { it.toIntOrNull() ?: 0 }
+        val y = b.split('.').map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(x.size, y.size)) {
+            val p = x.getOrElse(i) { 0 }
+            val q = y.getOrElse(i) { 0 }
+            if (p != q) return p > q
+        }
+        return false
+    }
+
+    /** One effort level in the picker's segment: whether the picked model offers it. */
+    data class Effort(val level: String, val offered: Boolean)
+
+    /** The levels both CLIs name, lowest first (the Mac's `EffortScale`). */
+    private val KNOWN_EFFORTS = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+    /**
+     * The effort segment under the model rows: the CLI's whole scale (its `effortScale`, else
+     * every level its models list, lowest first), each struck when [model] doesn't offer it.
+     * Empty when the model takes no effort at all.
+     */
+    fun efforts(snapshot: JsonObject?, provider: String?, model: JsonObject?): List<Effort> {
+        val offered = model?.strs("efforts").orEmpty()
+        if (offered.isEmpty()) return emptyList()
+        val cli = snapshot?.objs("clis")?.firstOrNull { it.str("provider") == provider }
+        val listed = cli?.strs("effortScale").orEmpty().ifEmpty {
+            val all = cli?.objs("models").orEmpty().flatMap { it.strs("efforts") }.distinct()
+            if (all.all { it in KNOWN_EFFORTS }) all.sortedBy { KNOWN_EFFORTS.indexOf(it) } else all
+        }
+        val scale = listed.ifEmpty { offered }
+        return scale.map { Effort(it, it in offered) }
+    }
+
+    /** The level a newly picked model takes: the current one if offered, else the nearest below, else its lowest. */
+    fun effortFallback(current: String?, offered: List<String>, scale: List<String>): String? {
+        if (current == null || offered.isEmpty()) return null
+        if (current in offered) return current
+        fun rank(l: String) = scale.indexOf(l).let { if (it < 0) Int.MAX_VALUE else it }
+        val sorted = offered.sortedBy(::rank)
+        val at = scale.indexOf(current)
+        if (at < 0) return sorted[0]
+        return sorted.lastOrNull { rank(it) < at } ?: sorted[0]
+    }
+
+    /** The composer's model chip: the model's name and its effort ("Atlas 5.5 · high"). */
+    fun modelChip(models: List<JsonObject>, modelId: String?, fallbackName: String?, effort: String?): String? {
+        val name = models.firstOrNull { it.str("id") == modelId }?.str("name") ?: fallbackName ?: return null
+        return if (effort.isNullOrEmpty()) name else "$name · $effort"
     }
 
     /** The CLI's models for a provider, from the snapshot's `clis`. */

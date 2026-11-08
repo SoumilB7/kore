@@ -51,6 +51,26 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         setPadding(activity.dp(10), activity.dp(7), activity.dp(10), activity.dp(7))
         maxLines = 1
         contentDescription = "Mode"
+        // Room for the model chip and Send on a 360 dp phone: the mode ellipsizes past this.
+        maxWidth = activity.dp(120)
+        ellipsize = android.text.TextUtils.TruncateAt.END
+        setOnClickListener { chooseMode() }
+        visibility = View.GONE
+    }
+    /** The chat's model and effort, quiet text beside the mode ("Atlas 5.5 · high"); a tap opens the options. */
+    private val modelChip = activity.label("", 12f, K.dim).apply {
+        setPadding(activity.dp(8), activity.dp(7), activity.dp(6), activity.dp(7))
+        maxLines = 1
+        maxWidth = activity.dp(104)
+        ellipsize = android.text.TextUtils.TruncateAt.END
+        contentDescription = "Model"
+        setOnClickListener { chooseMode() }
+        visibility = View.GONE
+    }
+    /** Arsenal, only while it's on: one glyph in the tier's colour. */
+    private val arsenalMark = activity.label("ϟ", 14f, K.accent).apply {
+        gravity = Gravity.CENTER
+        setPadding(activity.dp(4), activity.dp(7), activity.dp(4), activity.dp(7))
         setOnClickListener { chooseMode() }
         visibility = View.GONE
     }
@@ -136,6 +156,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 addView(modePill, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     marginStart = activity.dp(4)
                 })
+                addView(modelChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                addView(arsenalMark, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
                 addView(ring, LinearLayout.LayoutParams(activity.dp(32), activity.dp(32)).apply { marginEnd = activity.dp(8) })
                 addView(action, LinearLayout.LayoutParams(activity.dp(36), activity.dp(36)))
@@ -202,6 +224,16 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             android.text.SpannableStringBuilder().append("●", android.text.style.ForegroundColorSpan(modeColor(chat.obj("mode")?.get("level").int())), 0).append("  $m")
         } ?: ""
         modePill.visibility = if (mode != null) View.VISIBLE else View.GONE
+        val controls = chat?.obj("controls")
+        val chip = controls?.let {
+            ControlModel.modelChip(ControlModel.models(snapshot, chat.str("provider")), want["model"] ?: it.str("modelId"), chat.str("model"), want["effort"] ?: it.str("effort"))
+        }
+        modelChip.text = chip ?: ""
+        modelChip.visibility = if (chip != null) View.VISIBLE else View.GONE
+        val tier = chat?.str("arsenal")?.takeIf { it != "off" }
+        arsenalMark.visibility = if (tier != null) View.VISIBLE else View.GONE
+        arsenalMark.setTextColor(arsenalColor(tier))
+        arsenalMark.contentDescription = "Arsenal ${dev.kore.link.node.Control.arsenalName(tier)}"
         refreshAction()
         showStatus()
         live.forEach { if (it.isShowing) it.refresh() }
@@ -481,10 +513,12 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         s.show(build)
     }
 
+    /** The chat's options, one sheet (option B): model and effort, mode, Arsenal. */
     private fun Sheet.modeSheet() {
         val chat = chat ?: return
         val current = chat.obj("mode")
         corner = modeColor(current?.get("level").int())
+        modelPart(chat)
         val allowed = chat.strs("allowedModeIds")
         val offered = chat.strs("modeIds")
         val modes = modes(chat).filter { it.str("id") in offered || it.str("id") == current?.str("id") }.sortedBy { it["level"].int() ?: 1 }
@@ -505,35 +539,73 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 if (raise) { dismiss(); raisePrompt(m.str("label") ?: id, id) } else { run("mode", modeCmd(id)); say("Switching mode…") }
             }
         }
+        arsenalPart(chat)
+    }
+
+    /**
+     * Model and effort, at the top of the options sheet (the picker, take 1): one row per family
+     * with its versions as chips, the chat's own lit, then one effort segment for that model with
+     * the levels it doesn't offer struck. The lists are the CLI's own (`clis`).
+     */
+    private fun Sheet.modelPart(chat: JsonObject) {
         val controls = chat.obj("controls") ?: return
-        val models = ControlModel.models(snapshot, chat.str("provider"))
+        val provider = chat.str("provider")
+        val models = ControlModel.models(snapshot, provider)
         val modelId = want["model"] ?: controls.str("modelId")
         if (models.isNotEmpty()) {
             section("Model")
-            for (f in ControlModel.families(models)) {
-                val here = modelId in f.ids
-                val single = f.versions.size == 1 && f.versions[0].second.isEmpty()
-                if (single) {
-                    item(f.name, checked = here, tag = "model ${f.name}") { pick("model", f.ids[0]) }
-                } else {
-                    val open = here || openFamily == f.name
-                    item(f.name, chevron = !open, tag = "model ${f.name}") { openFamily = if (openFamily == f.name && !here) null else f.name; refresh() }
-                    if (open) chips(f.versions, modelId) { pick("model", it) }
-                }
+            for (f in ControlModel.families(models)) family(f.name, f.versions, modelId) { id ->
+                pick("model", id)
+                // The effort the Mac will settle on for it, shown at once.
+                val scale = ControlModel.efforts(snapshot, provider, models.firstOrNull { it.str("id") == id }).map { it.level }
+                val offered = models.firstOrNull { it.str("id") == id }?.strs("efforts").orEmpty()
+                ControlModel.effortFallback(want["effort"] ?: controls.str("effort"), offered, scale)?.let { want["effort"] = it }
+                live.forEach { if (it.isShowing) it.refresh() }
             }
         }
         val model = models.firstOrNull { it.str("id") == modelId }
-        val efforts = model?.strs("efforts").orEmpty()
+        val efforts = ControlModel.efforts(snapshot, provider, model)
         if (efforts.isNotEmpty()) {
             section("Effort")
-            segmented(efforts.map { it to ControlModel.word(it) }, want["effort"] ?: controls.str("effort")) { pick("effort", it) }
+            segmented(efforts.map { it.level to ControlModel.word(it.level) }, want["effort"] ?: controls.str("effort"),
+                off = efforts.filter { !it.offered }.map { it.level }.toSet()) { pick("effort", it) }
         }
         if (model?.bool("fast") == true || controls.bool("fastOffered")) {
             val on = want["fast"]?.toBoolean() ?: controls.bool("fast")
             toggle("Fast mode", on) { pick("fast", it.toString()) }
         }
     }
-    private var openFamily: String? = null
+
+    /** Arsenal at the foot of the options sheet: its tiers in one segment, a raise marked; the reason when it can't. */
+    private fun Sheet.arsenalPart(chat: JsonObject) {
+        if (!chat.containsKey("arsenal") && snapshot?.obj("mac")?.containsKey("arsenalTiers") != true) return
+        val C = dev.kore.link.node.Control
+        val current = chat.str("arsenal") ?: "off"
+        section("Arsenal")
+        chat.str("arsenalUnavailable")?.let { why ->
+            custom(activity.label(why, 13f, K.faint).apply { setPadding(activity.dp(4), activity.dp(2), activity.dp(4), activity.dp(8)) })
+            return
+        }
+        val tiers = arsenalTiers()
+        segmented(tiers.map { it to arsenalShort(it) }, current, marked = tiers.filter { C.arsenalRaises(current, it) }.toSet()) { t ->
+            if (C.arsenalRaises(current, t)) { dismiss(); raisePrompt(C.arsenalName(t), "arsenal.$t") } else run("arsenal", C.setArsenal(chatId, t))
+        }
+        if (current != "off") item("Stop all", glyph = "■", danger = true, tag = "arsenal stop") { run("arsenalStop", C.arsenalStopAll()) }
+    }
+
+    /** A tier's name short enough for a quarter of the segment; the raise sheet says it in full. */
+    private fun arsenalShort(tier: String) = when (tier) {
+        "own" -> "Act lim."
+        "drive" -> "Unlim."
+        else -> dev.kore.link.node.Control.arsenalName(tier)
+    }
+
+    /** The Mac's tier colours: Read b200, Act limited b400, Act unlimited b300. */
+    private fun arsenalColor(tier: String?): Int = when (tier) {
+        "watch" -> android.graphics.Color.parseColor("#A3C3DC")
+        "own" -> android.graphics.Color.parseColor("#3C97DD")
+        else -> android.graphics.Color.parseColor("#6AB1E7")
+    }
 
     private fun modeCmd(id: String) = JsonObject(mapOf("type" to JsonPrimitive("chat.setMode"), "chatId" to JsonPrimitive(chatId), "modeId" to JsonPrimitive(id)))
 
@@ -607,7 +679,6 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             val at = want["autoCompact"]?.let { it.toIntOrNull() } ?: if (want["autoCompact"] == "off") null else controls["autoCompactAt"].int()
             item("Auto-compact", glyph = "⤓", detail = at?.let { "at $it%" } ?: "Off", chevron = true) { dismiss(); compactSheet() }
         }
-        arsenalRow(chat)
         if (link().hasControl(snapshot)) item("Show on the Mac", glyph = "⇢") { run("select", dev.kore.link.node.Control.select(chatId)); dismiss() }
         if (has("close")) item("Close tab", glyph = "×", danger = true, enabled = can!!.bool("close")) {
             dismiss()
@@ -617,35 +688,12 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         }
     }
 
-    // Arsenal (link 1.3): one row with the chat's tier; its sheet lists the Mac's tiers and Stop all.
+    // Arsenal (link 1.3): its tiers are a segment at the foot of the options sheet (`arsenalPart`).
 
     /** Kore's tiers, lowest first, as the Mac offers them (never `full`). */
     private fun arsenalTiers(): List<String> =
         snapshot?.obj("mac")?.strs("arsenalTiers")?.filter { it in dev.kore.link.node.Control.ARSENAL_TIERS }?.takeIf { it.isNotEmpty() }
             ?: dev.kore.link.node.Control.ARSENAL_TIERS
-
-    private fun Sheet.arsenalRow(chat: JsonObject) {
-        if (!chat.containsKey("arsenal") && snapshot?.obj("mac")?.containsKey("arsenalTiers") != true) return
-        val unavailable = chat.str("arsenalUnavailable")
-        item("Arsenal", glyph = "ϟ", detail = unavailable ?: dev.kore.link.node.Control.arsenalName(chat.str("arsenal")),
-            chevron = unavailable == null, enabled = unavailable == null, tag = "arsenal") { dismiss(); openLive { arsenalSheet() } }
-    }
-
-    /** A raise (off counts as lowest) asks for the fingerprint; a lower or Off doesn't. */
-    private fun Sheet.arsenalSheet() {
-        val chat = chat ?: return
-        val C = dev.kore.link.node.Control
-        val current = chat.str("arsenal") ?: "off"
-        val unavailable = chat.str("arsenalUnavailable")
-        section("Arsenal")
-        for (t in arsenalTiers()) {
-            item(C.arsenalName(t), checked = t == current, enabled = unavailable == null || t == "off", tag = "arsenal $t") {
-                if (t == current) return@item
-                if (C.arsenalRaises(current, t)) { dismiss(); raisePrompt(C.arsenalName(t), "arsenal.$t") } else run("arsenal", C.setArsenal(chatId, t))
-            }
-        }
-        item("Stop all", glyph = "■", danger = true, tag = "arsenal stop") { run("arsenalStop", C.arsenalStopAll()) }
-    }
 
     /**
      * Raising (a mode, or an Arsenal tier as `arsenal.<tier>`): one line saying what it lets the

@@ -42,6 +42,10 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     package var from: String?
     /// 1.11: a pasted copy's line above its history ("copied from “Repos” · MacBook").
     package var copied: String?
+    /// When the chat last did something (ms since 1970) and its last word as one line
+    /// (`ChatMeta.lastAt` / `last`), moved at a message or a turn's start or end.
+    package var lastAt: Int64?
+    package var last: String?
 }
 
 /// A chat frozen for a move (`chat.release` prepare): which move, the grant it goes to, and since
@@ -377,6 +381,37 @@ package final class HostChat {
 
     /// True when it changed.
     @discardableResult
+    /// A message, or a turn's start or end: the chat's recency moves (`line` nil keeps the last word).
+    func noteRecent(at: Date, line: String?) {
+        let ms = Int64((at.timeIntervalSince1970 * 1000).rounded())
+        guard record.lastAt != ms || (line != nil && record.last != line) else { return }
+        record.lastAt = ms
+        if let line { record.last = line }
+        try? saveRecord()
+    }
+
+    /// The last message or answer, as one line: the live chat's own text (an answer goes on the
+    /// wire as a document), else the log's.
+    var lastLine: String? {
+        if let live = chat?.transcriptView.entries {
+            for entry in live.reversed() {
+                switch entry.kind {
+                case .user: return ChatMeta.lastLine(entry.text, mine: true)
+                case .answer: if let line = ChatMeta.lastLine(entry.text, mine: false) { return line }
+                default: continue
+                }
+            }
+        }
+        for entry in entries.reversed() {
+            switch entry.kind {
+            case .user: return ChatMeta.lastLine(entry.text ?? "", mine: true)
+            case .answer: if let line = ChatMeta.lastLine(entry.text ?? "", mine: false) { return line }
+            default: continue
+            }
+        }
+        return nil
+    }
+
     func setDraft(_ text: String) -> Bool {
         guard record.draft != (text.isEmpty ? nil : text) else { return false }
         record.draft = text.isEmpty ? nil : text

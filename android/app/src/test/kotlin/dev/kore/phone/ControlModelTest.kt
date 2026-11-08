@@ -14,10 +14,56 @@ class ControlModelTest {
     private fun list(s: String) = Json.parseToJsonElement(s).let { it as kotlinx.serialization.json.JsonArray }.map { it.jsonObject }
 
     @Test fun modelFamilies() {
-        val f = ControlModel.families(list("""[{"id":"o48","name":"Atlas 4.8"},{"id":"o47","name":"Atlas 4.7"},{"id":"s46","name":"Brook 4.6"},{"id":"luna","name":"gpt-6-luna"}]"""))
-        assertEquals(listOf("Atlas", "Brook", "gpt-6-luna"), f.map { it.name })
-        assertEquals(listOf("o48" to "4.8", "o47" to "4.7"), f[0].versions)
-        assertEquals(listOf("luna" to ""), f[2].versions)
+        // As a CLI lists them: families in the order of their first model, versions newest first,
+        // a " · 1M" tail kept on its version's chip, a name with no number a family of its own.
+        val models = list("""[
+            {"id":"a","name":"Atlas 5.5"},{"id":"a1m","name":"Atlas 5.5 · 1M"},{"id":"f","name":"Fern 5.2"},
+            {"id":"b","name":"Brook 5.5"},{"id":"f51","name":"Fern 5.1"},{"id":"a5","name":"Atlas 5"},
+            {"id":"a48","name":"Atlas 4.8"},{"id":"a410","name":"Atlas 4.10"},{"id":"luna","name":"Orbit-6 Luna"},
+            {"id":"sol61","name":"Orbit-6.1 Sol"},{"id":"sol","name":"Orbit-6 Sol"},{"id":"auto","name":"Default"}]""")
+        val f = ControlModel.families(models)
+        assertEquals(listOf("Atlas", "Fern", "Brook", "Orbit Luna", "Orbit Sol", "Default"), f.map { it.name })
+        assertEquals(listOf("5.5", "5.5 · 1M", "5", "4.10", "4.8"), f[0].versions.map { it.second })
+        assertEquals(listOf("a", "a1m", "a5", "a410", "a48"), f[0].ids)
+        assertEquals(listOf("sol61" to "6.1", "sol" to "6"), f[4].versions)
+        assertTrue(f[5].versionless && !f[0].versionless)
+        // No ids on any chip.
+        assertTrue(f.flatMap { it.versions }.none { (id, label) -> label == id && label.isNotEmpty() })
+    }
+
+    @Test fun theChatsModelIsLit() {
+        val f = ControlModel.families(list("""[{"id":"a","name":"Atlas 5.5"},{"id":"a1m","name":"Atlas 5.5 · 1M"},{"id":"b","name":"Brook 5"}]"""))
+        assertEquals("Atlas" to "5.5 · 1M", ControlModel.current(f, "a1m"))
+        assertEquals("Brook" to "5", ControlModel.current(f, "b"))
+        assertEquals(null, ControlModel.current(f, "gone"))
+    }
+
+    @Test fun anEffortTheModelDoesntOfferIsStruck() {
+        val snap = o("""{"clis":[{"provider":"p","effortScale":["low","medium","high","xhigh","max"],"models":[
+            {"id":"new","name":"Atlas 5","efforts":["low","medium","high","xhigh","max"]},
+            {"id":"old","name":"Atlas 4.6","efforts":["low","medium","high","max"]},
+            {"id":"none","name":"Brook 4.5","efforts":[]}]}]}""")
+        val models = ControlModel.models(snap, "p")
+        val old = ControlModel.efforts(snap, "p", models[1])
+        assertEquals(listOf("low", "medium", "high", "xhigh", "max"), old.map { it.level })
+        assertEquals(listOf("xhigh"), old.filter { !it.offered }.map { it.level })
+        assertTrue(ControlModel.efforts(snap, "p", models[0]).all { it.offered })
+        // A model with no effort: no segment at all.
+        assertTrue(ControlModel.efforts(snap, "p", models[2]).isEmpty())
+        // Picking it from xhigh: the nearest level below it offers.
+        val scale = old.map { it.level }
+        assertEquals("high", ControlModel.effortFallback("xhigh", listOf("low", "medium", "high", "max"), scale))
+        assertEquals("max", ControlModel.effortFallback("max", listOf("low", "medium", "high", "max"), scale))
+        // A CLI without a scale (a box before its list): the models' own levels, lowest first.
+        val bare = o("""{"clis":[{"provider":"q","models":[{"id":"x","name":"Orbit-6 Sol","efforts":["high","low","medium"]}]}]}""")
+        assertEquals(listOf("low", "medium", "high"), ControlModel.efforts(bare, "q", ControlModel.models(bare, "q")[0]).map { it.level })
+    }
+
+    @Test fun theComposersModelChip() {
+        val models = list("""[{"id":"a","name":"Atlas 5.5"}]""")
+        assertEquals("Atlas 5.5 · high", ControlModel.modelChip(models, "a", null, "high"))
+        assertEquals("Brook", ControlModel.modelChip(models, "gone", "Brook", null))
+        assertEquals(null, ControlModel.modelChip(models, "gone", null, "high"))
     }
 
     @Test fun rescueRowsInTheMacsWords() {

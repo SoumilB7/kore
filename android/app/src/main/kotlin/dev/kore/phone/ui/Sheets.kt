@@ -231,8 +231,15 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
         return row
     }
 
-    /** Equal segments in one outlined bar (effort, the auto-compact point). */
-    fun segmented(options: List<Pair<String, String>>, selected: String?, enabled: Boolean = true, onPick: (String) -> Unit) {
+    /**
+     * Equal segments in one outlined bar (effort, the auto-compact point, Arsenal). [off]: shown
+     * struck and faint, no tap (a level the model doesn't offer); [marked]: the fingerprint glyph
+     * beside it (a raise).
+     */
+    fun segmented(
+        options: List<Pair<String, String>>, selected: String?, enabled: Boolean = true, off: Set<String> = emptySet(),
+        marked: Set<String> = emptySet(), onPick: (String) -> Unit,
+    ) {
         val bar = LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
             background = a.rounded(Color.TRANSPARENT, 10, K.line)
@@ -242,14 +249,24 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
         options.forEachIndexed { i, (key, label) ->
             if (i > 0) bar.addView(View(a).apply { setBackgroundColor(K.line) }, LinearLayout.LayoutParams(1, ViewGroup.LayoutParams.MATCH_PARENT))
             val on = key == selected
-            bar.addView(a.label(label, 13f, if (on) K.text else K.dim).apply {
+            val struck = key in off
+            bar.addView(a.label(label, 13f, if (on) K.text else if (struck) K.faint else K.dim).apply {
                 gravity = Gravity.CENTER
                 maxLines = 1
                 setPadding(0, a.dp(9), 0, a.dp(9))
                 if (on) setBackgroundColor(KS.segOn)
-                contentDescription = label
+                if (struck) { paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG; alpha = 0.5f }
+                if (key in marked) {
+                    setCompoundDrawablesRelativeWithIntrinsicBounds(0, 0, dev.kore.phone.R.drawable.ic_fingerprint, 0)
+                    compoundDrawablePadding = a.dp(4)
+                }
+                contentDescription = when {
+                    struck -> "$label, not offered"
+                    key in marked -> "$label, takes your fingerprint"
+                    else -> label
+                }
                 isSelected = on
-                if (enabled && !on) setOnClickListener { onPick(key) }
+                if (enabled && !on && !struck) setOnClickListener { onPick(key) }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
         add(bar, lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -273,6 +290,45 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
         }
         lastWasItem = false
         body.addView(android.widget.HorizontalScrollView(a).apply { isHorizontalScrollBarEnabled = false; addView(line) })
+    }
+
+    /**
+     * A model family's row (the picker, take 1): its name, then its versions as chips that wrap,
+     * the chat's own lit. One tap on a chip picks it; a family of one is its name, a tap away.
+     */
+    fun family(name: String, versions: List<Pair<String, String>>, selected: String?, enabled: Boolean = true, onPick: (String) -> Unit) {
+        val row = LinearLayout(a).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = a.dp(50)
+            setPadding(a.dp(4), a.dp(8), a.dp(4), a.dp(8))
+        }
+        val single = versions.size == 1 && versions[0].second.isEmpty()
+        row.addView(a.label(name, 15f, K.text).apply { maxLines = 2 },
+            if (single) LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) else LinearLayout.LayoutParams(a.dp(76), ViewGroup.LayoutParams.WRAP_CONTENT))
+        if (single) {
+            val (id, _) = versions[0]
+            if (id == selected) row.addView(a.label("✓", 16f, K.accent))
+            row.contentDescription = "model $name"
+            row.isSelected = id == selected
+            if (enabled && id != selected) { row.setBackgroundResource(android.R.drawable.list_selector_background); row.setOnClickListener { onPick(id) } }
+        } else {
+            val flow = Flow(a, a.dp(6))
+            for ((id, label) in versions) {
+                val on = id == selected
+                flow.addView(a.label(label, 13f, if (on) K.text else K.dim).apply {
+                    background = a.rounded(if (on) KS.chipOn else Color.TRANSPARENT, 14, if (on) K.accent else K.line)
+                    setPadding(a.dp(10), a.dp(5), a.dp(10), a.dp(5))
+                    maxLines = 1
+                    contentDescription = "model $name $label"
+                    isSelected = on
+                    alpha = if (enabled) 1f else 0.4f
+                    if (enabled && !on) setOnClickListener { onPick(id) }
+                })
+            }
+            row.addView(flow, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        add(row, item = true)
     }
 
     /** A row with a switch on the right. */
@@ -488,4 +544,38 @@ fun Activity.barButton(bar: View, glyph: String, description: String, go: (View)
     }
     (bar.parent as LinearLayout).addView(b, LinearLayout.LayoutParams(dp(44), dp(48)))
     return b
+}
+
+/** Children left to right, wrapping to the next line when the row is full (a family's version chips). */
+class Flow(context: android.content.Context, private val gap: Int) : ViewGroup(context) {
+    override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+        val width = MeasureSpec.getSize(widthSpec)
+        var x = 0
+        var y = 0
+        var line = 0
+        var widest = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            c.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            if (x > 0 && x + c.measuredWidth > width) { x = 0; y += line + gap; line = 0 }
+            x += c.measuredWidth + gap
+            widest = maxOf(widest, x - gap)
+            line = maxOf(line, c.measuredHeight)
+        }
+        setMeasuredDimension(if (MeasureSpec.getMode(widthSpec) == MeasureSpec.EXACTLY) width else minOf(widest, width), y + line)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val width = r - l
+        var x = 0
+        var y = 0
+        var line = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (x > 0 && x + c.measuredWidth > width) { x = 0; y += line + gap; line = 0 }
+            c.layout(x, y, x + c.measuredWidth, y + c.measuredHeight)
+            x += c.measuredWidth + gap
+            line = maxOf(line, c.measuredHeight)
+        }
+    }
 }

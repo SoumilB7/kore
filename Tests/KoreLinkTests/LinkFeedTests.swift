@@ -348,4 +348,42 @@ struct LinkFeedTests {
         chat.linkSetDraft("")
         #expect(chat.draft.isEmpty && chat.command == nil)
     }
+
+    /** A phone's list orders and labels rows by when a chat last did something and its last
+     * word: moved by a message or a turn's edge, sent to a phone, not to the doorbell's grant. */
+    @Test func aPhoneSeesWhenAChatLastDidSomethingAndItsLastWord() throws {
+        let source = CountingSource()
+        let feed = LinkFeed(source: source, taps: false)
+        let chat = try source.add()
+        let phone = KeptClient(), doorbell = KeptClient()
+        let cp = phone.make(), cd = doorbell.make(phone: false)
+        feed.attach(cp)
+        feed.attach(cd)
+        feed.tick()
+        func meta(_ client: KeptClient) -> ChatMeta? {
+            switch client.messages.last {
+            case .snapshot(_, _, let chats, _)?, .delta(_, _, let chats?, _, _)?: chats.first
+            default: nil
+            }
+        }
+        // A new chat: nothing yet.
+        #expect(meta(phone)?.lastAt == nil && meta(phone)?.last == nil)
+        let before = Int64(Date().timeIntervalSince1970 * 1000)
+        feed.noted(chat, .userMessage(text: "\n  land the drafts branch  \nthen rebase", attachments: []))
+        feed.tick()
+        let made = try #require(meta(phone))
+        #expect(made.last == "You: land the drafts branch")
+        #expect((made.lastAt ?? 0) >= before)
+        #expect(meta(doorbell)?.lastAt == nil && meta(doorbell)?.last == nil)
+        feed.detach(cp)
+        feed.detach(cd)
+    }
+
+    @Test func aLastLineIsOneCappedLine() {
+        #expect(ChatMeta.lastLine("\n\n  Done.  \nmore", mine: false) == "Done.")
+        #expect(ChatMeta.lastLine("   \n ", mine: true) == nil)
+        let long = ChatMeta.lastLine(String(repeating: "a", count: 500), mine: true)
+        #expect(long?.count == ChatMeta.lastCap && long?.hasPrefix("You: ") == true && long?.hasSuffix("…") == true)
+    }
 }
+

@@ -312,6 +312,12 @@ package final class HostDaemon {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return }
         streamRow(hc, event)
         if case .requestUsage(let spent) = event { usage.append(chat: hc.id, provider: hc.record.provider, spent) }
+        switch event {
+        case .userMessage(let text, _, _): hc.noteRecent(at: now(), line: ChatMeta.lastLine(text, mine: true))
+        case .turnStarted: hc.noteRecent(at: now(), line: nil)
+        case .turnFinished: hc.noteRecent(at: now(), line: hc.lastLine)
+        default: break
+        }
         if case .turnFinished(let turn, let outcome, _) = event {
             git.touched(hc.record.folder)
             if let ended = attention.turnEnded(hc, turn: turn, outcome: outcome, at: now()) { sendAttention([ended]) }

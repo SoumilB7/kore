@@ -2,27 +2,79 @@ package dev.kore.phone.ui
 
 import android.content.Intent
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
-import android.widget.ScrollView
+import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.ListAdapter
+import androidx.recyclerview.widget.RecyclerView
 import dev.kore.phone.kore
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
 /**
- * One device (a Mac or a box): its windows as sections of their chats, a "Needs you" strip when a
- * chat waits on you, and ＋ for a new chat or a new window there (phase 18 §3: Kore's recent
- * folders on a Mac, folders already open on a box). Pulling down re-reads what it sent; the list
- * is live either way.
+ * One device (a Mac or a box) as one list, newest first, across its windows (option B of
+ * phone-device-screen.html): two lines a row, needs-you and working first, idle saying nothing.
+ * More than one window: chips on top filter it (an empty window is an outlined chip). ＋ makes a
+ * chat or a window there, and says what a tap makes and where. The list is diffed: a change
+ * rebinds only its rows; ages move once a minute.
  */
 class DeviceActivity : NodeActivity() {
     private var last: JsonObject? = null
-    private var plus: android.widget.TextView? = null
+    private var plus: TextView? = null
+    /** The window the list is filtered to (null: all). */
+    private var filter: String? = null
+    private val rows = Rows()
+    private lateinit var chipsRow: HorizontalScrollView
+    private lateinit var chips: LinearLayout
+    private lateinit var windowLine: TextView
+    private lateinit var list: RecyclerView
+    /** What the list says when it has nothing (waiting, no windows, no chats yet): redrawn with it. */
+    private lateinit var notes: LinearLayout
+    private val minute = Runnable { draw(); scheduleMinute() }
 
-    override fun body(): View {
+    override fun body(): View = column().apply {
         plus = barButton(barTitle, "＋", "New") { createSheet() }.apply { visibility = View.GONE }
-        return PullScroll(this) { render(last); flash("Up to date") }.apply { addView(content) }
+        chips = LinearLayout(this@DeviceActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(16), dp(2), dp(16), dp(8)) }
+        chipsRow = HorizontalScrollView(this@DeviceActivity).apply { isHorizontalScrollBarEnabled = false; addView(chips); visibility = View.GONE }
+        windowLine = label("", 12f, K.faint).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(20), dp(2), dp(20), dp(8))
+            visibility = View.GONE
+        }
+        list = RecyclerView(this@DeviceActivity).apply {
+            layoutManager = LinearLayoutManager(this@DeviceActivity)
+            adapter = rows
+            itemAnimator = null
+            setPadding(dp(16), 0, dp(16), dp(16))
+            clipToPadding = false
+        }
+        notes = column()
+        content.addView(notes)
+        addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(chipsRow)
+        addView(windowLine, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+    }
+
+    override fun onStart() {
+        super.onStart()
+        scheduleMinute()
+    }
+
+    override fun onStop() {
+        list.removeCallbacks(minute)
+        super.onStop()
+    }
+
+    /** Ages read "now", "4 m": once a minute the rows are made again; only those whose age moved rebind. */
+    private fun scheduleMinute() {
+        list.removeCallbacks(minute)
+        list.postDelayed(minute, 60_000)
     }
 
     override fun render(snapshot: JsonObject?) {
@@ -30,49 +82,73 @@ class DeviceActivity : NodeActivity() {
         barTitle.text = macName
         content.removeAllViews()
         stateLine()?.let(content::addView)
+        content.addView(notes)
         plus?.visibility = if (snapshot != null && linkState == dev.kore.link.node.NodeMachine.State.Up) View.VISIBLE else View.GONE
-        if (snapshot == null) {
-            if (linkState == dev.kore.link.node.NodeMachine.State.Up || linkState == dev.kore.link.node.NodeMachine.State.Connecting) {
-                content.addView(empty("Waiting for $macName…", "It shows here as soon as Kore there answers."))
-            }
-            return
-        }
-        val chats = snapshot.chatsById()
-        val windows = snapshot.objs("windows")
-        val waiting = chats.values.filter { it.str("state") == "needsYou" }
-        if (waiting.isNotEmpty()) content.addView(needsYou(waiting))
-        if (windows.isEmpty()) {
-            content.addView(empty("No windows open", "Open a folder in Kore there and it appears here."))
-            return
-        }
-        val control = link.hasControl(snapshot)
-        for (w in windows) {
-            content.addView(section(w.str("name") ?: "Window", w.str("path")).apply {
-                // Tap a window's header: its tabs, ＋ and History. Long-press: Close window.
-                setOnClickListener { startActivity(Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", w.str("id"))) }
-                if (control) setOnLongClickListener { v -> windowMenu(v, w); true }
-            })
-            var any = false
-            for (tab in w.objs("tabs")) {
-                when (tab.str("kind")) {
-                    "chat", "agent" -> chats[tab.str("chatId")]?.let { chatRow(it, tab.str("title")); any = true }
-                    "board" -> {
-                        val ids = tab.obj("board")?.objs("sections").orEmpty().flatMap { it.strs("chatIds") }
-                        val states = ids.mapNotNull { chats[it]?.str("state") }
-                        val (dot, word) = rowLook(states.firstOrNull { it == "needsYou" } ?: states.firstOrNull { it == "working" } ?: "idle")
-                        content.addView(row("▦  ${tab.str("title") ?: "Board"}", listOf("${ids.size} chats", word).filter { it.isNotEmpty() }.joinToString(" · "), dot) {
-                            startActivity(Intent(this, WindowActivity::class.java).putExtra("window", w.str("id")))
-                        })
-                        any = true
-                    }
-                    else -> Unit
-                }
-            }
-            // A box's window lists its chats without tabs.
-            if (!any) for (chat in chats.values.filter { it.str("windowId") == w.str("id") }) { chatRow(chat, null); any = true }
-            if (!any) content.addView(label("No chats in this window", 13f, K.faint).apply { setPadding(dp(4), 0, 0, dp(8)) })
-        }
+        draw()
         folderSheet?.takeIf { it.isShowing }?.refresh()
+    }
+
+    /** The chips, the window's line and the rows, from the last snapshot. */
+    private fun draw() {
+        val snapshot = last
+        notes.removeAllViews()
+        if (snapshot == null) {
+            chipsRow.visibility = View.GONE
+            windowLine.visibility = View.GONE
+            rows.submitList(emptyList())
+            if (linkState == dev.kore.link.node.NodeMachine.State.Up || linkState == dev.kore.link.node.NodeMachine.State.Connecting) {
+                notes.addView(empty("Waiting for $macName…", "It shows here as soon as Kore there answers."))
+            }
+            return
+        }
+        val windows = DeviceList.chips(snapshot)
+        if (windows.isEmpty()) {
+            chipsRow.visibility = View.GONE
+            windowLine.visibility = View.GONE
+            rows.submitList(emptyList())
+            notes.addView(empty("No windows open", "Open a folder in Kore there and it appears here."))
+            return
+        }
+        if (filter != null && windows.none { it.windowId == filter }) filter = null
+        drawChips(windows)
+        // One window, or one picked: its folder as a faint line; a tap opens its tabs and history.
+        val shown = if (windows.size == 1) windows[0].windowId else filter
+        val w = shown?.let { id -> snapshot.objs("windows").firstOrNull { it.str("id") == id } }
+        windowLine.visibility = if (w != null) View.VISIBLE else View.GONE
+        if (w != null) {
+            windowLine.text = listOfNotNull(w.str("name"), w.str("path")).joinToString("  ·  ") + "  ›"
+            windowLine.setOnClickListener { startActivity(Intent(this, WindowActivity::class.java).putExtra("window", w.str("id"))) }
+            if (link.hasControl(snapshot)) windowLine.setOnLongClickListener { v -> windowMenu(v, w); true }
+        }
+        val made = DeviceList.rows(snapshot, filter, System.currentTimeMillis(), kore.seen)
+        rows.submitList(made)
+        if (made.isEmpty() && w != null) {
+            notes.addView(label("No chats in ${w.str("name") ?: "this window"} yet. ＋ starts one.", 13f, K.faint).apply {
+                setPadding(dp(4), dp(8), dp(4), dp(8))
+            })
+        }
+    }
+
+    /** All, then each window by name: a tap filters; an empty window is outlined and opens. */
+    private fun drawChips(windows: List<DeviceList.Chip>) {
+        chips.removeAllViews()
+        chipsRow.visibility = if (windows.size > 1) View.VISIBLE else View.GONE
+        if (windows.size <= 1) return
+        fun chip(text: String, on: Boolean, empty: Boolean, go: () -> Unit) = chips.addView(label(text, 13f, if (on) K.text else K.dim).apply {
+            background = rounded(if (on) KS.chipOn else if (empty) android.graphics.Color.TRANSPARENT else K.surface, 14, if (on) K.accent else K.line)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            alpha = if (empty) 0.7f else 1f
+            isSelected = on
+            contentDescription = if (empty) "$text, no chats" else text
+            setOnClickListener { go() }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
+        chip("All ${windows.sumOf { it.chats }}", filter == null, false) { filter = null; draw() }
+        for (w in windows.sortedByDescending { it.chats > 0 }) {
+            chip(w.name, filter == w.windowId, w.chats == 0) {
+                if (w.chats == 0) startActivity(Intent(this, WindowActivity::class.java).putExtra("window", w.windowId))
+                else { filter = if (filter == w.windowId) null else w.windowId; draw() }
+            }
+        }
     }
 
     /** Why the device isn't up, in one line, and the one thing to do about it. */
@@ -112,90 +188,107 @@ class DeviceActivity : NodeActivity() {
         }
     }
 
-    /** ＋: a new chat in one of the device's windows, or a new window (phase 18 §3's limits). */
+    /** What ＋ makes: a chat or a window. */
+    private var making = "chat"
+    private val prefs by lazy { getSharedPreferences("kore", MODE_PRIVATE) }
+    /** A box's folders, read when the Window half opens. */
+    private var boxFolders: List<JsonObject>? = null
+
+    /**
+     * ＋ (option B): Chat or Window, then where. Chat: the CLI (it remembers the last), then the
+     * window it goes in. Window: Kore's recent folders not open now and Reopen on a Mac; the
+     * folders a box serves on a box. The one line at the foot says what a tap makes and where.
+     */
     private fun createSheet() {
-        val snap = last ?: return
-        val providers = link?.welcome?.value?.objs("providers").orEmpty()
+        if (last == null) return
         val box = link?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
         lateinit var s: Sheet
         s = Sheet(this).show {
+            val snap = last ?: return@show dismiss()
             title("New on $macName")
-            for (w in snap.objs("windows")) {
-                val wid = w.str("id") ?: continue
-                for (p in providers) {
-                    val pid = p.str("id") ?: continue
-                    item("${p.str("name") ?: pid} chat", glyph = providerMark(pid), detail = w.str("name"), tag = "New ${p.str("name")} chat in ${w.str("name")}") {
-                        s.dismiss()
-                        val cmd = if (box && w.str("path") != null) dev.kore.link.node.Control.newChatInFolder(w.str("path")!!, pid) else dev.kore.link.node.Control.newChat(wid, pid)
-                        act(cmd) { r ->
-                            r.str("chatId")?.let { startActivity(Intent(this@DeviceActivity, ChatActivity::class.java).putExtra("chat", it)) }
-                                ?: Quiet.say(this@DeviceActivity, "Started on $macName")
-                        }
-                    }
+            segmented(listOf("chat" to "Chat", "window" to "Window"), making) { making = it; if (it == "window" && box) readBoxFolders(s); refresh() }
+            if (making == "chat") chatHalf(s, snap, box) else windowHalf(s, snap, box)
+        }
+        folderSheet = s
+        s.onDismiss { folderSheet = null }
+    }
+
+    private fun Sheet.chatHalf(s: Sheet, snap: JsonObject, box: Boolean) {
+        val providers = link?.welcome?.value?.objs("providers").orEmpty()
+        val chosen = prefs.getString("newProvider", null)?.takeIf { p -> providers.any { it.str("id") == p } } ?: providers.firstOrNull()?.str("id")
+        if (providers.size > 1) segmented(providers.map { (it.str("id") ?: "") to (it.str("name") ?: it.str("id") ?: "") }, chosen) {
+            prefs.edit().putString("newProvider", it).apply()
+            refresh()
+        }
+        val cli = providers.firstOrNull { it.str("id") == chosen }
+        val cliName = cli?.str("name") ?: "new"
+        val windows = snap.objs("windows")
+        for (w in windows) {
+            val wid = w.str("id") ?: continue
+            item(w.str("name") ?: "Window", glyph = "□", detail = ControlModel.parentOf(w.str("path")), tag = "New $cliName chat in ${w.str("name")}") {
+                val pid = chosen ?: return@item
+                s.dismiss()
+                val cmd = if (box && w.str("path") != null) dev.kore.link.node.Control.newChatInFolder(w.str("path")!!, pid) else dev.kore.link.node.Control.newChat(wid, pid)
+                act(cmd) { r ->
+                    r.str("chatId")?.let { startActivity(Intent(this@DeviceActivity, ChatActivity::class.java).putExtra("chat", it)) }
+                        ?: Quiet.say(this@DeviceActivity, "Started on $macName")
                 }
             }
-            item("New window", glyph = "□") { s.dismiss(); if (box) boxFolders() else openFolder() }
         }
+        val where = if (windows.size == 1) windows[0].str("name") ?: "the window" else "the folder you pick"
+        say(if (box) "A $cliName chat in $where on $macName." else "A $cliName chat in $where, as a new tab there.")
+    }
+
+    private fun Sheet.windowHalf(s: Sheet, snap: JsonObject, box: Boolean) {
+        if (box) {
+            val folders = boxFolders
+            if (folders == null) { say("Reading the folders on $macName…"); return }
+            for (f in folders) {
+                val wid = f.str("windowId") ?: continue
+                item((f.str("path") ?: "Folder").trimEnd('/').substringAfterLast('/'), glyph = "□", detail = ControlModel.parentOf(f.str("path")), enabled = !f.bool("missing")) {
+                    s.dismiss()
+                    startActivity(Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", wid))
+                }
+            }
+            say("Folders open on $macName. A new folder is added from the Mac.")
+            return
+        }
+        // A Mac that doesn't send its recents (before this phone's ask view): say so, not an empty sheet.
+        val mac = snap.obj("mac") ?: return say("Update Kore on $macName to open its folders from here.")
+        val open = snap.objs("windows").mapNotNull { it.str("path") }.toSet()
+        for (r in mac.objs("recents").filter { it.str("path") !in open }) {
+            val id = r.str("id") ?: continue
+            item(r.str("name") ?: "Folder", glyph = "□", detail = ControlModel.parentOf(r.str("path")), tag = "Open ${r.str("name")}") {
+                s.dismiss()
+                act(dev.kore.link.node.Control.windowOpen(id)) { res ->
+                    res.str("windowId")?.let { startActivity(Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", it)) }
+                }
+            }
+        }
+        if (mac.bool("canReopenWindow")) item("Reopen closed window", glyph = "↺") {
+            s.dismiss()
+            act(dev.kore.link.node.Control.windowReopen()) { res ->
+                res.str("windowId")?.let { startActivity(Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", it)) }
+            }
+        }
+        item("Another folder", glyph = " ", detail = "on $macName", enabled = false)
+        say("A window on $macName, from a folder Kore opened before.")
     }
 
     /** A box: the folders it already serves (a new folder is the Mac's to add). */
-    private fun boxFolders() {
+    private fun readBoxFolders(s: Sheet) {
         val node = link ?: return
         kore.scope.launch {
             val r = node.call(dev.kore.link.node.Control.foldersList())
             runOnUiThread {
-                if (!r.bool("ok")) return@runOnUiThread Quiet.say(this@DeviceActivity, refusalWords(r.str("code")))
-                lateinit var s: Sheet
-                s = Sheet(this@DeviceActivity).show {
-                    title("Folders on $macName", "Folders already open there. Adding one is done on the Mac.")
-                    for (f in r.objs("folders")) {
-                        val wid = f.str("windowId") ?: continue
-                        item((f.str("path") ?: "Folder").trimEnd('/').substringAfterLast('/'), glyph = "□", detail = ControlModel.parentOf(f.str("path")), enabled = !f.bool("missing")) {
-                            s.dismiss()
-                            startActivity(Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", wid))
-                        }
-                    }
-                }
+                if (!r.bool("ok")) return@runOnUiThread s.say(refusalWords(r.str("code")))
+                boxFolders = r.objs("folders")
+                if (s.isShowing) s.refresh()
             }
         }
     }
 
     private var folderSheet: Sheet? = null
-
-    /** A Mac: Kore's recent folders, Reopen closed window, and any other folder (that one needs the Mac). */
-    private fun openFolder() {
-        lateinit var s: Sheet
-        s = Sheet(this).show {
-            title("Open a folder on $macName", "Folders Kore opened before.")
-            // A Mac that doesn't send its recents (before this phone's ask view): say so, not an empty sheet.
-            val mac = last?.obj("mac")
-            say(if (mac == null) "Update Kore on $macName to open its folders from here." else "")
-            if (mac == null) return@show
-            for (r in mac.objs("recents")) {
-                val id = r.str("id") ?: continue
-                item(r.str("name") ?: "Folder", glyph = "□", detail = ControlModel.parentOf(r.str("path")), tag = "Open ${r.str("name")}") {
-                    s.dismiss()
-                    act(dev.kore.link.node.Control.windowOpen(id)) { res ->
-                        res.str("windowId")?.let { startActivity(Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", it)) }
-                    }
-                }
-            }
-            if (mac.bool("canReopenWindow")) item("Reopen closed window", glyph = "↺") {
-                s.dismiss()
-                act(dev.kore.link.node.Control.windowReopen()) { res ->
-                    res.str("windowId")?.let { startActivity(Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", it)) }
-                }
-            }
-            val other = item("Another folder", glyph = " ") { say("Pick any other folder on the Mac: it needs the Mac's file picker.") } as LinearLayout
-            (other.getChildAt(1) as android.widget.TextView).setTextColor(K.dim)
-            other.addView(label("on the Mac", 11f, K.faint).apply {
-                background = rounded(android.graphics.Color.TRANSPARENT, 6, android.graphics.Color.parseColor("#2F3337"))
-                setPadding(dp(6), dp(1), dp(6), dp(2))
-            })
-        }
-        folderSheet = s
-        s.onDismiss { folderSheet = null }
-    }
 
     private fun windowMenu(anchor: View, w: JsonObject) {
         val id = w.str("id") ?: return
@@ -205,37 +298,56 @@ class DeviceActivity : NodeActivity() {
         }))
     }
 
-    private fun chatRow(chat: JsonObject, fallback: String?) {
-        val (dot, word) = rowLook(chat.str("state"))
-        content.addView(row(chat.str("title") ?: fallback ?: "Chat", word, dot, providerMark(chat.str("provider"))) {
-            startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", chat.str("id")))
+    /** The rows, diffed: a snapshot rebinds only the rows that changed. */
+    private inner class Rows : ListAdapter<DeviceList.Row, RecyclerView.ViewHolder>(object : DiffUtil.ItemCallback<DeviceList.Row>() {
+        override fun areItemsTheSame(a: DeviceList.Row, b: DeviceList.Row) = a.key == b.key
+        override fun areContentsTheSame(a: DeviceList.Row, b: DeviceList.Row) = a == b
+    }) {
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder = object : RecyclerView.ViewHolder(rowView()) {}
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) = bind(holder.itemView as LinearLayout, getItem(position))
+    }
+
+    /** Two lines: the CLI's mark, the title (bold while unread) and the age; then the cue or the last word. */
+    private fun rowView(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(14), dp(11), dp(14), dp(11))
+        background = rounded(K.surface)
+        layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(label("", 15f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(View(context).apply { background = rounded(K.accent, 4) }, LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginStart = dp(8) })
+            addView(label("", 12f, K.faint).apply { setPadding(dp(8), 0, 0, 0) })
         })
+        addView(label("", 13f, K.dim).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(22), dp(3), 0, 0) })
     }
 
-    /** One amber strip: how many chats wait on you; a tap opens the first. */
-    private fun needsYou(waiting: List<JsonObject>): View = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = dp(48)
-        setPadding(dp(14), dp(10), dp(14), dp(10))
-        background = rounded(android.graphics.Color.parseColor("#2A2316"), 12, android.graphics.Color.parseColor("#4A3A1C"))
-        val first = waiting.first()
-        val words = if (waiting.size == 1) "Needs you" else "${waiting.size} chats need you"
-        addView(label("$words · ${first.str("title") ?: "a chat"}", 14f, K.warn).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(label("›", 18f, K.warn))
-        setOnClickListener { startActivity(Intent(this@DeviceActivity, ChatActivity::class.java).putExtra("chat", first.str("id"))) }
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(14) }
-    }
-
-    /** A window as a section: its folder name, and the path faint beside it. */
-    private fun section(name: String, path: String?): View = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.BOTTOM
-        setPadding(dp(4), dp(12), dp(4), dp(8))
-        addView(label(name, 13f, K.dim, bold = true))
-        if (!path.isNullOrBlank()) addView(label("  $path", 12f, K.faint).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.START },
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+    private fun bind(v: LinearLayout, row: DeviceList.Row) {
+        val top = v.getChildAt(0) as LinearLayout
+        val title = top.getChildAt(0) as TextView
+        val dot = top.getChildAt(1)
+        val age = top.getChildAt(2) as TextView
+        val line = v.getChildAt(1) as TextView
+        val mark = if (row.chatId != null) providerMark(row.provider) else ""
+        title.text = android.text.SpannableStringBuilder(mark).append(if (mark.isNotEmpty()) "  " else "").append(row.title)
+        title.typeface = if (row.unread) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+        dot.visibility = if (row.unread) View.VISIBLE else View.GONE
+        age.text = row.age
+        line.text = row.line
+        line.visibility = if (row.line.isEmpty()) View.GONE else View.VISIBLE
+        line.setTextColor(when (row.cue) {
+            DeviceList.Cue.NEEDS -> K.warn
+            DeviceList.Cue.WORKING -> K.accent
+            DeviceList.Cue.FAILED -> K.err
+            DeviceList.Cue.NONE -> K.dim
+        })
+        v.contentDescription = listOf(row.title, row.age, if (row.unread) "unread" else "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
+        v.setOnClickListener {
+            if (row.chatId != null) startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", row.chatId))
+            else startActivity(Intent(this, WindowActivity::class.java).putExtra("window", row.windowId))
+        }
     }
 
     private fun empty(title: String, line: String): View = LinearLayout(this).apply {
@@ -248,20 +360,4 @@ class DeviceActivity : NodeActivity() {
         addView(label(line, 14f, K.dim).apply { gravity = Gravity.CENTER; setPadding(0, dp(6), 0, 0) })
     }
 
-    private fun flash(text: String) = android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_SHORT).show()
-}
-
-/** A scroll view that calls [onPull] when dragged down past its top. */
-class PullScroll(context: android.content.Context, private val onPull: () -> Unit) : ScrollView(context) {
-    private var startY = -1f
-    override fun onTouchEvent(e: MotionEvent): Boolean {
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> startY = if (scrollY == 0) e.y else -1f
-            MotionEvent.ACTION_UP -> {
-                if (startY >= 0 && e.y - startY > resources.displayMetrics.density * 96) onPull()
-                startY = -1f
-            }
-        }
-        return super.onTouchEvent(e)
-    }
 }

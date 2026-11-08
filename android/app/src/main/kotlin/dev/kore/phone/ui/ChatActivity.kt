@@ -164,6 +164,8 @@ class ChatActivity : NodeActivity() {
 
     override fun render(snapshot: JsonObject?) {
         val chat = snapshot?.chatsById()?.get(chatId)
+        // Shown here: read, as of what it last did.
+        chat?.let { kore.seen.opened(chatId, (it["lastAt"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()) }
         actions.render(chat, snapshot)
         adapter.running = chat?.bool("running") == true
         adapter.canFork = chat?.obj("can")?.let { if (it.containsKey("fork")) it.bool("fork") else null }

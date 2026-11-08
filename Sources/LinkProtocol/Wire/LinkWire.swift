@@ -524,6 +524,23 @@ package struct ChatMeta: Codable, Sendable, Equatable {
     /// that it's being moved now (it refuses sends).
     package var owner: ChatOwner?
     package var moving: Bool?
+    /// When the chat last did something (a message, a turn's start or end), ms since 1970, and
+    /// its last word as one line ("You: …" when the owner spoke last): a phone's list orders and
+    /// labels its rows by them. Set at turn boundaries only, never per streamed token.
+    package var lastAt: Int64?
+    package var last: String?
+
+    /// `last`'s longest, in characters.
+    package static let lastCap = 120
+
+    /// A message as `last` shows it: its first non-empty line, trimmed and capped; "You: " first
+    /// for the owner's own.
+    package static func lastLine(_ text: String, mine: Bool) -> String? {
+        guard let line = text.split(whereSeparator: \.isNewline).lazy.map({ $0.trimmingCharacters(in: .whitespaces) }).first(where: { !$0.isEmpty })
+        else { return nil }
+        let said = (mine ? "You: " : "") + line
+        return said.count > lastCap ? String(said.prefix(lastCap - 1)) + "…" : said
+    }
 
     package init(
         id: String, provider: String, title: String, state: State, mode: Mode, modeIds: [String], allowedModeIds: [String],

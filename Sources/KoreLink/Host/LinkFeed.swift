@@ -177,6 +177,8 @@ package final class LinkFeed {
 
     /// The Mac's drafts as phones see them (kept once typing rests).
     let drafts = LinkDrafts()
+    /// When each chat last did something, and its last word, for a phone's list.
+    let recency = LinkRecency()
 
     package init(source: any LinkFeedSource, taps: Bool = true) {
         self.source = source
@@ -270,6 +272,7 @@ package final class LinkFeed {
             LinkTaps.draft = nil
         }
         drafts.reset()
+        recency.reset()
         cache = [:]
         observed = [.standard: [], .ask: [], .full: []]
         layoutObserved = [:]
@@ -348,6 +351,7 @@ package final class LinkFeed {
 
     func noted(_ chat: Chat, _ event: ChatEvent) {
         dirtyChats.insert(chat.id.uuidString)
+        _ = recency.noted(chat, event)
         if let turn = attention.noted(chat, event) {
             for client in clients where !client.holding { client.sink.send(turn) }
         }
@@ -528,7 +532,12 @@ package final class LinkFeed {
             let source = source
             made = withObservationTracking { source.meta(chat, view: view) } onChange: { [weak self] in self?.observedChange(id, view: view) }
         }
-        // The draft as last kept, read outside Observation: typing on the Mac doesn't redo the meta.
+        // Recency and the draft as last kept, read outside Observation: a streamed token or a
+        // key typed on the Mac doesn't redo the meta.
+        if view != .standard {
+            let recent = recency.of(chat, id: id)
+            (made.lastAt, made.last) = (recent.at, recent.line)
+        }
         if made.controls != nil {
             let kept = drafts.kept(chat, id: id)
             made.controls?.draftRev = kept.rev

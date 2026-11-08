@@ -20,6 +20,8 @@ class KoreApp : Application() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e -> android.util.Log.w("kore", "background: ${e::class.simpleName}") })
 
     val mesh by lazy { Mesh(this) }
+    /** Which chats this phone has shown since they last did something (the lists' unread). */
+    val seen by lazy { dev.kore.phone.ui.SeenBook(getSharedPreferences("seen", MODE_PRIVATE)) }
 
     /** A debug build (installed over adb), never a release one. */
     val debuggable get() = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
