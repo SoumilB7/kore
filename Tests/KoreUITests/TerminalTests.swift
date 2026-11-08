@@ -25,7 +25,9 @@ struct TerminalTests {
     private func send(_ text: String, to shell: TerminalShell) {
         shell.view.process.send(data: Array(text.utf8)[...])
     }
-    private func until(_ check: () -> Bool, seconds: Double = 5) async -> Bool {
+    /// As soon as `check` holds; the bound only ends a wait that never would (5 s ran out on a
+    /// busy Mac).
+    private func until(_ check: () -> Bool, seconds: Double = 30) async -> Bool {
         let end = Date().addingTimeInterval(seconds)
         while Date() < end {
             if check() { return true }
@@ -67,7 +69,12 @@ struct TerminalTests {
         shell.start()
         defer { shell.close(immediately: true) }
         send("sleep 30\n", to: shell)
-        #expect(await until { shell.hasForegroundWork && (shell.child?.descendants().count ?? 0) > 0 })
+        // The job owns the terminal (its group is the foreground one): a ⌃C sent sooner, while
+        // zsh had put the line editor away but not yet handed the terminal over, reached zsh
+        // itself on a busy Mac, and `sleep` ran on.
+        #expect(await until {
+            shell.child?.hasForegroundWork(terminal: shell.view.process.childfd) == true && (shell.child?.descendants().count ?? 0) > 0
+        })
         let owned = try #require(shell.child).descendants()
         send("\u{03}", to: shell)
         #expect(await until { !shell.hasForegroundWork && owned.allSatisfy { !$0.alive } })

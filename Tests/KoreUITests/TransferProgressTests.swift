@@ -225,17 +225,18 @@ struct TransferProgressTests {
         carries.restore()
         #expect(progress.items.first { $0.id == running.id }?.resuming == true)
         #expect(progress.items.first { $0.id == paused.id }?.state == .paused)
-        #expect(await waitFor(5) { journals.load(running.id) == nil })
+        #expect(await waitFor(60) { journals.load(running.id) == nil })
         #expect(FileManager.default.contentsEqual(atPath: root + "/from/proj", andPath: root + "/into/proj"))
         #expect(carries.active == 0 && journals.load(paused.id)?.state == .paused)
         // Cancel: its partial copy and checkpoint go.
         carries.cancel(paused.id)
-        #expect(await waitFor(5) { journals.load(paused.id) == nil })
+        #expect(await waitFor(60) { journals.load(paused.id) == nil })
         #expect(try FileManager.default.contentsOfDirectory(atPath: root + "/into") == ["proj"])
     }
 }
 
-/// Busy test runs run the main actor late: waits for `check`, up to `seconds`.
+/// Busy test runs run the main actor late: waits for `check`, up to `seconds` (only a copy that
+/// never ends takes that long; 5 s ran out on a busy Mac with the copy on its way).
 @MainActor
 private func waitFor(_ seconds: Double, _ check: () -> Bool) async -> Bool {
     let end = Date().addingTimeInterval(seconds)
