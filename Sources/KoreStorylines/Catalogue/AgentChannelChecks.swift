@@ -208,6 +208,12 @@ struct RawLines: Step {
         let script = story.outputs.appendingPathComponent("agent-raw.zsh")
         try Self.script.write(to: script, atomically: true, encoding: .utf8)
         let (pass, under) = try caller.resolve(cast)
+        // The socket this run's caller is told of, there before it connects; if not, where the
+        // channel is (a gate run saw it gone with no close said).
+        guard AgentWatchReads.socketExists else {
+            let channel = AgentChannel.current.map { "open at \($0.socketPath), \($0.connections) connected, its file \(FileManager.default.fileExists(atPath: $0.socketPath) ? "there" : "gone")" } ?? "none open"
+            throw StoryFailure.expectation("\(what): no socket at \(AgentWatchReads.socketPath) (channel \(channel), grants wanted \(AgentGrants.wanted))")
+        }
         let run = KoreRun()
         let input = try lines.map(cast.fill).map { $0 + "\n" }.joined()
         try run.start(
@@ -602,6 +608,9 @@ final class AgentChannelAll: ChatStoryline {
             Do("an isolated shell for the terminal") { try $0.app.workspace?.storyPrepareTerminals() },
             Key(.ctrl("`")),
             Expect("a shell") { $0.app.workspace?.storyTerminal.focused == true },
+            // Its prompt drawn: typing that comes before its line editor is up can be dropped as it
+            // sets the terminal up (a busy Mac starts a shell later than the terminal shows).
+            Expect("the shell's prompt") { $0.app.workspace?.storyTerminal.text.contains("ready>") == true },
             TypeText("KORE_AGENT_SOCKET='\(socket)' '\(KoreRun.binary.path)' whoami > \(term) 2>&1; echo exit=$? >> \(term)"), Key(.returnKey),
             Expect("5. Kore's terminal is outside: refused while outsiders are off", timeout: .seconds(10)) { story in
                 let out = (try? String(contentsOf: story.folder.appendingPathComponent(term), encoding: .utf8)) ?? ""
