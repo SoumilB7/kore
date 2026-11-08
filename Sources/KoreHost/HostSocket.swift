@@ -169,6 +169,9 @@ extension HostSocket: LinkWire {}
 @MainActor
 package final class HostSocket {
     package let fd: Int32
+    /// What `fd` is open on: a number something else closed and the system gave out again is
+    /// never read or written as this socket (a blocking read there would hold the main thread).
+    private let identity: Sockets.Identity?
     private var source: DispatchSourceRead?
     private var writer: DispatchSourceWrite?
     private var buffer = Data()
@@ -184,6 +187,7 @@ package final class HostSocket {
 
     init(fd: Int32) {
         self.fd = fd
+        identity = Sockets.identity(fd)
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
         #if canImport(Darwin)
         var on: Int32 = 1
@@ -209,6 +213,7 @@ package final class HostSocket {
             MainActor.assumeIsolated {
                 // A read queued as it closed: its number may be another socket's by now.
                 guard let self, !self.closed else { return }
+                guard self.ours else { return self.lost() }
                 var chunk = [UInt8](repeating: 0, count: 64 * 1024)
                 let count = read(self.fd, &chunk, chunk.count)
                 if count < 0, errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return }
@@ -243,6 +248,7 @@ package final class HostSocket {
 
     /// Writes what the peer takes now; the rest waits for it to be writable again.
     private func flush() {
+        guard closed || pending.isEmpty || ours else { return lost() }
         while !pending.isEmpty, !closed {
             let written = pending.withUnsafeBytes { raw in write(fd, raw.baseAddress!, raw.count) }
             if written > 0 {
@@ -284,9 +290,27 @@ package final class HostSocket {
         source = nil
         writer?.cancel()
         writer = nil
-        if ending { SocketEnd.start(copying: fd, owed: pending) }
+        let owed = pending
         pending = Data()
+        // A number no longer this socket's is someone else's to close.
+        guard ours else { return }
+        if ending { SocketEnd.start(copying: fd, owed: owed) }
         _ = Glue2.close(fd)
+    }
+
+    private var ours: Bool { identity != nil && Sockets.identity(fd) == identity }
+
+    /// Its descriptor was closed under it (somewhere else): it ends without touching it again.
+    private func lost() {
+        guard !closed else { return }
+        HostJournal.note("socket fd lost", [:])
+        closed = true
+        source?.cancel()
+        source = nil
+        writer?.cancel()
+        writer = nil
+        pending = Data()
+        ended?()
     }
 
     /// The peer went, sent too much, or fell too far behind: closed now.

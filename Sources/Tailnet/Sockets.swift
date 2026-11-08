@@ -329,6 +329,19 @@ package enum Sockets {
 
     package static func closeFD(_ fd: Int32) { _ = close(fd) }
 
+    /// What `fd` is open on (device, inode), nil when it's closed: a number taken over by
+    /// another file says so. Sockets' device is -1, kept as its bits.
+    package static func identity(_ fd: Int32) -> Identity? {
+        var info = stat()
+        guard fstat(fd, &info) == 0 else { return nil }
+        return Identity(device: UInt64(bitPattern: Int64(info.st_dev)), inode: UInt64(info.st_ino))
+    }
+
+    package struct Identity: Equatable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+    }
+
     /// A closed peer is an error, not SIGPIPE (Linux writes pass MSG_NOSIGNAL instead).
     private static func noSigPipe(_ fd: Int32) {
         #if canImport(Darwin)

@@ -2,6 +2,7 @@ import Foundation
 import KoreCore
 import KoreHostSys
 import LinkProtocol
+import Tailnet
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -184,7 +185,7 @@ final class HostPty {
     /// The terminal's descriptor as it was made (device, inode): a number that no longer is it
     /// (closed by something else and given to another file) is never read, which could take
     /// that file's bytes or, blocking, hold the main thread.
-    private var identity: (UInt64, UInt64)?
+    private var identity: Sockets.Identity?
     private var reader: DispatchSourceRead?
     private var reading = false
     private var writer: DispatchSourceWrite?
@@ -234,7 +235,7 @@ final class HostPty {
         guard child > 0, master >= 0 else { return nil }
         pid = child
         fd = master
-        identity = Self.identity(master)
+        identity = Sockets.identity(master)
         startReading()
         watchExit()
     }
@@ -355,14 +356,8 @@ final class HostPty {
         reader.resume()
     }
 
-    private static func identity(_ fd: Int32) -> (UInt64, UInt64)? {
-        var info = stat()
-        guard fstat(fd, &info) == 0 else { return nil }
-        return (UInt64(info.st_dev), UInt64(info.st_ino))
-    }
-
     private func read() {
-        guard let identity, let now = Self.identity(fd), now == identity else {
+        guard let identity, Sockets.identity(fd) == identity else {
             HostJournal.note("terminal fd lost", ["pty": id])
             endReading()
             return
