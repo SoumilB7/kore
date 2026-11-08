@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import KoreTrust
 import LinkProtocol
 import Observation
 import src
@@ -43,6 +44,8 @@ package final class HostConnection {
         case version
         /// Another Kore with this Mac's grant took over (`bye replaced`).
         case replaced
+        /// Taken offline here (Devices ⋯ Take offline): not dialled until brought online.
+        case paused
 
         /// The words a box's window and chats say for it.
         package func line(_ alias: String) -> String {
@@ -50,6 +53,7 @@ package final class HostConnection {
             case .auth: "\(NodeNames.name(alias)) doesn't know this Mac"
             case .version: "\(NodeNames.name(alias)) and this Kore don't match · update one"
             case .replaced: "Another Kore here holds \(NodeNames.name(alias))"
+            case .paused: "\(NodeNames.name(alias)) is taken offline on this Mac"
             }
         }
     }
@@ -73,6 +77,11 @@ package final class HostConnection {
     package private(set) var ghSignedIn: Bool?
     /// The box's kore-host is older than this Kore (`HostWire.older`), as its welcome said.
     @ObservationIgnored package private(set) var hostOlder = false
+    /// kore-host's version on the box, as its welcome said.
+    @ObservationIgnored package private(set) var hostVersion: String?
+    /// The devices waiting at the box for an owner Mac's Allow (`devices.pending`), as it last
+    /// said: what the Devices popup lists under Waiting.
+    package private(set) var pendingDevices: [PendingDevice] = []
     /// The CLIs' logins on the box, and GitHub's (made on first use).
     @ObservationIgnored package private(set) lazy var accounts = BoxAccounts(connection: self)
     @ObservationIgnored package private(set) var chats: [String: ChatMeta] = [:]
@@ -128,6 +137,7 @@ package final class HostConnection {
     @ObservationIgnored private var probing: Task<Void, Never>?
     @ObservationIgnored private var watchdog: Task<Void, Never>?
     @ObservationIgnored private var usageWaits: [String: CheckedContinuation<UsageWire.Page?, Never>] = [:]
+    @ObservationIgnored private var netSwitchWaits: [String: CheckedContinuation<NetSwitchWire.Result?, Never>] = [:]
     @ObservationIgnored private var pullingUsage = false
     @ObservationIgnored private var usageCursor: Int?
     /// Writes to the copy wait while its folder moves (a rekey).
@@ -564,6 +574,7 @@ package final class HostConnection {
     private func dial() {
         guard users > 0, transport == nil else { return }
         redial = nil
+        if Self.isPaused(alias) { return refuse(.paused) }
         if phase != .offline { phase = .connecting }
         let useNet = !skipNet
         skipNet = false
@@ -643,6 +654,8 @@ package final class HostConnection {
         route = nil
         for (_, wait) in usageWaits { wait.resume(returning: nil) }
         usageWaits = [:]
+        for (_, wait) in netSwitchWaits { wait.resume(returning: nil) }
+        netSwitchWaits = [:]
         let was = ready
         ready = false
         if was { for follower in liveFollowers { follower.linked(false) } }
@@ -732,6 +745,7 @@ package final class HostConnection {
             transport?.send(HostWire.hello(build: HostLog.build))
         case .welcome(let welcome):
             hostOlder = HostWire.older(welcome)
+            hostVersion = welcome.host.koreVersion
             boxMinor = welcome.proto.major == LinkProto.major ? welcome.proto.minor : 0
             providers = welcome.providers
             caps = welcome.caps
@@ -820,6 +834,10 @@ package final class HostConnection {
             if let page = try? JSONDecoder().decode(UsageWire.Page.self, from: raw) { usageWaits.removeValue(forKey: page.id)?.resume(returning: page) }
         case .unknown(let type) where type == NetNodeWire.type:
             if let node = NetNodeWire.decode(raw) { activeRouter?.said(node, on: self) }
+        case .unknown(let type) where type == NetSwitchWire.result:
+            if let result = DevicesWire.decode(NetSwitchWire.Result.self, raw) { netSwitchWaits.removeValue(forKey: result.id)?.resume(returning: result) }
+        case .unknown(let type) where type == DevicesWire.pending:
+            if let list = DevicesWire.decode(DevicesWire.Pending.self, raw), list.pending != pendingDevices { pendingDevices = list.pending }
         default:
             break
         }
@@ -1068,6 +1086,46 @@ package final class HostConnection {
         let page = await withCheckedContinuation { usageWaits[id] = $0 }
         timeout.cancel()
         return page
+    }
+
+    // MARK: Taken offline
+
+    /// Whether a box is taken offline on this Mac (Kore: `NetPauses`; tests set their own).
+    package static var isPaused: @MainActor (String) -> Bool = { NetPauses.shared.contains($0) }
+
+    /// Taken offline: the link ends and isn't dialled again until `bringOnline`.
+    package func takeOffline() {
+        guard phase != .refused(.paused) else { return }
+        refuse(.paused)
+        HostLog.note(alias, "taken offline", nil)
+    }
+
+    /// Brought online again: dials now when something holds it.
+    package func bringOnline() {
+        guard phase == .refused(.paused) else { return }
+        phase = .idle
+        attempts = 0
+        if users > 0 { dial() }
+    }
+
+    // MARK: KoreNet on the box
+
+    /// `net.set{on}` to the box, as its owner Mac (turning it on takes the SSH route): its answer,
+    /// or nil when the link isn't up or goes before it comes.
+    package func setBoxNet(_ on: Bool) async -> NetSwitchWire.Result? {
+        guard ready, let transport else { return nil }
+        serial += 1
+        let id = "n\(serial).\(tag)"
+        transport.send(DevicesWire.encode(NetSwitchWire.Set(id: id, on: on)))
+        return await withCheckedContinuation { netSwitchWaits[id] = $0 }
+    }
+
+    /// Dials again at once, so the box's `net.node` is heard anew (its KoreNet just came on, or
+    /// its Tailscale started).
+    package func relink(_ why: String) {
+        guard transport != nil else { return }
+        redialNow = true
+        drop(why)
     }
 
     // MARK: Rekey (`NodeMigration`)

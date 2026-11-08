@@ -438,6 +438,8 @@ struct TabBar: View {
                 LinkMarkButton(mark: mark, size: tabHeight)
                     .storyID(StoryID.Link.mark) { LinkPanel.toggleMarkPopup(mark, under: .zero) }
             }
+            // KoreNet's devices, left of the clock (the slot the link mark held).
+            NetworkButton(size: tabHeight)
             HistoryButton(isOpen: $historyOpen, frame: $clockFrame, size: tabHeight).storyID(StoryID.Titlebar.history)
         }
         .padding(.leading, leadingInset)

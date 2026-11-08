@@ -71,9 +71,9 @@ extension StoryID {
         package static let allow = card.part(.allow)
         package static let allowFull = StoryID(.welcome, "link.card.full")
         package static let deny = card.part(.deny)
-        /// Phase 18: a device asking (a phone joining, a new fingerprint key).
-        package static let deviceCard = StoryID(.welcome, "device.card")
-        package static let deviceAllow = deviceCard.part(.allow)
-        package static let deviceDeny = deviceCard.part(.deny)
+        /// Phase 18: a device asking (a phone joining, a new fingerprint key): `StoryID.Net.card`.
+        package static let deviceCard = StoryID.Net.card
+        package static let deviceAllow = StoryID.Net.allow
+        package static let deviceDeny = StoryID.Net.deny
     }
 }

@@ -154,9 +154,12 @@ final class LinkPeer {
             }
             let (hunks, more) = LinkSnapshot.hunks(change)
             send(.diffHunks(id: id, path: path, hunks: hunks, more: more))
-        case .presence(let onScreen, _):
+        case .presence(let onScreen, let chatId):
             // Phones say it (1.12); the doorbell's companion always counts as looking, as it did.
-            if phone { feed.presence(client, onScreen: onScreen) }
+            if phone {
+                feed.presence(client, onScreen: onScreen, chat: chatId)
+                Devices.shared.changed()
+            }
         case .bye, .challenge, .hello, .welcome, .command, .snapshot, .delta, .txPage, .txDelta, .txReset, .entryChunk, .cardChunk, .result,
             .attnState, .attnEvent, .blobChunk, .policy, .historyPage, .diffHunks, .unknown:
             // `bye` is the host's; the rest are Kore's own messages, or a type from a newer client.

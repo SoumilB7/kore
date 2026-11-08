@@ -131,11 +131,14 @@ struct WelcomeView: View {
             hold(place)
         }
         .onAppear {
+            // Peers coming and going on the tailnet reach the switcher while it shows.
+            Devices.shared.net?.hold("welcome", true)
             sshHosts.value = !BoxList.shared.suggestions().isEmpty
             if monitor.value == nil { monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { key($0) } }
             app.welcomeTakesKeys = true
         }
         .onDisappear {
+            Devices.shared.net?.hold("welcome", false)
             if let m = monitor.value { NSEvent.removeMonitor(m) }
             monitor.value = nil
             app.welcomeTakesKeys = false

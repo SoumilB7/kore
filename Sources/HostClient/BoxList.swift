@@ -407,6 +407,7 @@ package final class BoxList {
             case .auth: return .noGrant
             // Another Kore here took over: nothing to set up, and setting up would log it out.
             case .replaced: return .unreachable(why.line(alias), nil)
+            case .paused: return .unreachable(why.line(alias), nil)
             }
         }
         let unreachable = Status.unreachable("Can't reach \(NodeNames.name(alias))", .tryAgain)

@@ -200,6 +200,15 @@ final class OptionsMenu {
                       y: min(max(flipped ? point.y : point.y - height, room.minY), room.maxY - height), width: width, height: height)
     }
 
+    /// A menu is up.
+    var isOpen: Bool { host != nil }
+
+    /// The event is a press inside the menu (a popup under it keeps itself open for it).
+    func holds(_ event: NSEvent) -> Bool {
+        guard let host, event.window === owner else { return false }
+        return host.bounds.contains(host.convert(event.locationInWindow, from: nil))
+    }
+
     func hover(_ index: Int) { if items[index].enabled && !items[index].separator { selected = index } }
 
     func choose(_ index: Int) {

@@ -129,6 +129,9 @@ package final class KoreNetSwitch: NetRouter {
 
     package private(set) var on: Bool
     package private(set) var state = NetState.off
+    /// The chosen tailnet's status as last read or heard (the Devices popup draws from it, never
+    /// waiting on a read); nil while off or not read yet.
+    package private(set) var status: TailnetStatus?
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let environment: () -> NetEnvironment
@@ -146,6 +149,10 @@ package final class KoreNetSwitch: NetRouter {
     @ObservationIgnored package private(set) var identities = NetIdentityBox()
     @ObservationIgnored private var upgrading: Set<String> = []
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var reading = false
+    /// A join sheet's ears: what each box says on KoreNet, and how its enroll ended.
+    @ObservationIgnored private var nodeWatchers: [String: @MainActor (NetNodeWire.Node) -> Void] = [:]
+    @ObservationIgnored private var enrollWatchers: [String: @MainActor (Bool) -> Void] = [:]
     /// Every bus subscription held now (tests).
     @ObservationIgnored package var busHeld: Bool { bus != nil }
     /// Finished upgrades and choices (tests wait on them).
@@ -234,6 +241,7 @@ package final class KoreNetSwitch: NetRouter {
             }
         }
         HostLog.note("korenet", "chose", "\(state)")
+        readStatus()
         if !holders.isEmpty { holdBus() }
         if state.reaches { for connection in connections() { connection.peerOnline() } }
         settled?("chose")
@@ -245,6 +253,7 @@ package final class KoreNetSwitch: NetRouter {
         bus?.cancel()
         bus = nil
         tailnet = nil
+        status = nil
         env = nil
         upgrading = []
         if let stop = stopSidecar {
@@ -281,10 +290,32 @@ package final class KoreNetSwitch: NetRouter {
         }
     }
 
+    /// Reads the tailnet's status once, off the main actor (about 2 ms over LocalAPI): when
+    /// KoreNet chooses its tailnet, and when the Devices popup or the Welcome opens. Never on a
+    /// timer; a read under way takes the next ask too.
+    package func readStatus() {
+        guard let tailnet, !reading else { return }
+        reading = true
+        let mine = generation
+        Task.detached {
+            let read = try? tailnet.status()
+            await MainActor.run {
+                self.reading = false
+                guard self.generation == mine, self.env != nil, let read else { return }
+                if read != self.status { self.status = read }
+            }
+        }
+    }
+
     private func heard(_ event: TailnetEvent) {
+        let before = status?.backendState
+        note(event)
         switch event {
         case .peer(_, let key?, let online?) where online:
             for connection in connections() where directory.entry(forKey: connection.alias)?.nodeKey == key { connection.peerOnline() }
+        case .state(.running) where state == .sidecar && before != .running:
+            // Kore's own tailnet signed in: its addresses and peers come with a fresh read.
+            readStatus()
         case .state(let backend):
             guard state != .sidecar, state != .off else { return }
             let next: NetState = switch TailnetChooser.choose(.state(backend)) {
@@ -295,6 +326,26 @@ package final class KoreNetSwitch: NetRouter {
             guard next != state else { return }
             state = next
             if next.reaches { for connection in connections() { connection.peerOnline() } }
+        default:
+            break
+        }
+    }
+
+    /// What the bus says, kept in the cached status: a peer's online flag, the backend's state,
+    /// a whole status.
+    private func note(_ event: TailnetEvent) {
+        switch event {
+        case .status(let next):
+            if next != status { status = next }
+        case .peer(_, let key?, let online?):
+            guard var next = status, let i = next.peers.firstIndex(where: { $0.publicKey == key }), next.peers[i].online != online else { return }
+            next.peers[i].online = online
+            if !online { next.peers[i].lastSeen = Date() }
+            status = next
+        case .state(let backend):
+            guard var next = status, next.backendState != backend else { return }
+            next.backendState = backend
+            status = next
         default:
             break
         }
@@ -371,8 +422,12 @@ package final class KoreNetSwitch: NetRouter {
         settled?("rekey \(outcome)")
     }
 
+    package func watchNode(_ key: String, _ watcher: (@MainActor (NetNodeWire.Node) -> Void)?) { nodeWatchers[key] = watcher }
+    package func watchEnroll(_ key: String, _ watcher: (@MainActor (Bool) -> Void)?) { enrollWatchers[key] = watcher }
+
     package func said(_ node: NetNodeWire.Node, on connection: HostConnection) {
         guard let env else { return }
+        defer { nodeWatchers[connection.alias]?(node) }
         let before = directory.entry(forKey: connection.alias)
         if let before, before.device == node.device, before.identityKey != node.identityKey {
             HostLog.note(connection.alias, "korenet refused", "the box's identity key changed")
@@ -421,6 +476,7 @@ package final class KoreNetSwitch: NetRouter {
             if directory.all[device.uuidString.lowercased()]?.nodeKey != nil { connection.preferNet() }
         }
         settled?("enroll \(outcome)")
+        enrollWatchers[key]?(outcome == .enrolled || outcome == .already)
     }
 
     /// Pins the box's identity key (the SSH route vouches for it), then enrolls this Mac once over

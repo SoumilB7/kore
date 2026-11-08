@@ -58,6 +58,8 @@ struct WelcomeSwitcher: View {
     @Binding var state: WelcomeSwitch
     @FocusState private var typing: Bool
     @StateObject private var anchors = Held<[String: NSView]>([:])
+    @StateObject private var plusAnchor = Held<NSView?>(nil)
+    @StateObject private var barAnchor = Held<NSView?>(nil)
 
     private var list: BoxList { .shared }
 
@@ -72,20 +74,49 @@ struct WelcomeSwitcher: View {
                 }
                 if state.adding == nil {
                     Button {
-                        state.adding = ""
+                        plus()
                     } label: {
                         Image(systemName: "plus").font(Chrome.caption).foregroundStyle(Theme.tertiary)
                             .frame(width: Layout.Options.row, height: Layout.Options.row).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .popupAwareHelp("Add a box…")
-                    .storyID(StoryID.Boxes.add, press: { state.adding = "" })
+                    .background(BoxAnchor { [plusAnchor] in plusAnchor.value = $0 })
+                    .storyID(StoryID.Boxes.add, press: { plus() })
                 }
             }
             .padding(Space.xxs)
             .background(Theme.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: Radius.control + Space.xxs))
+            .background(BoxAnchor { [barAnchor] in barAnchor.value = $0 })
             if let text = state.adding { adding(text) }
         }
+    }
+
+    /// "+": on a tailnet, the list of boxes there, New box… and Use SSH…; otherwise the alias
+    /// field at once, as before KoreNet.
+    private func plus() {
+        guard Devices.shared.picture().net == .running, let anchor = plusAnchor.value, let window = anchor.window else {
+            state.adding = ""
+            return
+        }
+        if NetPopupHost.shared.isShowing("add") { return NetPopupHost.shared.close() }
+        let ready: @MainActor (String) -> Void = { [self] key in
+            if BoxList.shared.box(key) == nil { BoxList.shared.add(key) }
+            state.show(key)
+        }
+        let bar = barAnchor.value
+        NetPopupHost.shared.show(
+            "add",
+            WelcomeAddList(
+                useSSH: {
+                    NetPopupHost.shared.close()
+                    state.adding = ""
+                },
+                newBox: {
+                    NetPopupHost.shared.close()
+                    NetPopupHost.shared.show("newbox", NewBoxPopup(ready: ready), in: window, under: bar ?? anchor, edge: .center)
+                }, ready: ready),
+            in: window, under: anchor, edge: .leading)
     }
 
     private func segment(_ title: String, key: String, on: Bool, dot: StatusDot.State?, action: @escaping @MainActor () -> Void) -> some View {
@@ -159,6 +190,8 @@ struct BoxWelcomeLine: View {
         let connection = BoxList.shared.link(alias)
         if let note = box?.note {
             BoxNoteLine(note: note, alias: alias)
+        } else if NetJoinLine.shows(alias) {
+            NetJoinLine(alias: alias)
         } else if connection.ghSignedIn == false || connection.accounts.line(BoxAccounts.gitHub).step != .idle {
             BoxAccountLine(title: "GitHub", key: BoxAccounts.gitHub, accounts: connection.accounts, takesPaste: false) {
                 connection.accounts.signInGitHub()

@@ -14,6 +14,8 @@ UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 900])
 LinkTaps.doorbell = { LinkDoorbell.ring($0, $1) }
 // Phones over KoreNet: the listener follows KoreNet's switch once it's made (nothing while off).
 MacNetSwitch.install()
+// Devices (the network icon's popup) reads the phones through it.
+MacNetDevices.install()
 // Arsenal's way to the agent channel; no chat has it at launch, so nothing opens.
 AgentGrants.install()
 KoreApp.main()

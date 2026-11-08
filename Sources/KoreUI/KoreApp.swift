@@ -317,6 +317,8 @@ private struct AccountCommands: View {
         Button("Account…") { workspace?.openAccount() }
         .keyboardShortcut(",")
         .disabled(workspace == nil)
+        // KoreNet's devices: the network icon's popup, in the front window.
+        Button("Devices…") { DevicesPopup.showFromMenu() }
         // Hard to hit by chance; the tab's right-click shows it.
         Button("Arsenal") { workspace?.toggleArsenal() }
         .keyboardShortcut("k", modifiers: [.command, .option])

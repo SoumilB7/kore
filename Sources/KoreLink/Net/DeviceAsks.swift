@@ -28,7 +28,8 @@ package final class DeviceAsks {
     package var present: @MainActor (DeviceCardInfo, @escaping @MainActor (Bool) -> Void) -> Void = { info, answer in
         LinkPanel.showDeviceCard(info) { allow in MainActor.assumeIsolated { answer(allow) } }
     }
-    package var dismiss: @MainActor () -> Void = { LinkPanel.closeDeviceCard() }
+    /// The device went, or the owner didn't answer in time: the card says it stopped waiting.
+    package var dismiss: @MainActor () -> Void = { LinkPanel.deviceStoppedWaiting() }
     /// Runs `work` after `seconds`; the closure it gives back cancels it (tests: a hand clock).
     package var schedule: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> () -> Void = { seconds, work in
         let item = DispatchWorkItem { MainActor.assumeIsolated { work() } }

@@ -107,6 +107,8 @@ package final class LinkFeed {
         package let sweeps: Bool
         /// Its user is looking at it (`presence`); a client that never says is on screen.
         package fileprivate(set) var onScreen = true
+        /// The chat open on it now, as its `presence` said (Devices shows it in the phone's row).
+        package fileprivate(set) var watching: String?
         /// It has nothing yet, or came back on screen: every chat's meta at the next tick.
         package fileprivate(set) var needsAll = true
         /// Waiting for its cursors: nothing goes to it yet.
@@ -258,9 +260,10 @@ package final class LinkFeed {
 
     /// `presence{onScreen}`: off screen it gets attention only; back on screen it gets what it
     /// missed (every chat's meta diffed, its transcripts whole), at the next tick.
-    package func presence(_ client: Client, onScreen: Bool) {
+    package func presence(_ client: Client, onScreen: Bool, chat: String? = nil) {
         let back = onScreen && !client.onScreen
         client.onScreen = onScreen
+        client.watching = onScreen ? chat : nil
         guard back else { return }
         client.needsAll = true
         for id in client.subs.keys { client.subs[id]?.fresh = true }

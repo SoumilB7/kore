@@ -26,6 +26,8 @@ enum NetLiveness {
         net.start()
         // The phones' listener (`MacNet`) follows the switch, off as it is.
         LinkTaps.netStarted?(net)
+        // The Welcome's tailnet boxes (found only when its "+" list or New box… asks).
+        if Devices.shared.claims == nil { Devices.shared.claims = TailnetClaims() }
         // A rekey a crash left half done finishes before anything reads the stores.
         Task.detached(priority: .utility) { _ = try? NodeMigration().resume() }
         wake = LinkWake(center: NSWorkspace.shared.notificationCenter, name: NSWorkspace.didWakeNotification)

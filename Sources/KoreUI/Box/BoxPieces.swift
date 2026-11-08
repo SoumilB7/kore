@@ -72,10 +72,11 @@ struct BoxAliasField: View {
     }
 }
 
-/// A box's status: connected (filled, green), offline (filled, dim), not set up (a ring), not
-/// asked yet (a faint ring).
+/// A box's status (frame F): connected (filled, green), offline (filled, dim), not set up or
+/// hasn't allowed this Mac (a ring), needs an update (filled accent: it needs you), not asked yet
+/// (a faint ring).
 struct StatusDot: View {
-    enum State { case connected, offline, notSetUp, unknown }
+    enum State { case connected, offline, notSetUp, needsAllow, needsUpdate, unknown }
     let state: State
 
     var body: some View {
@@ -84,7 +85,8 @@ struct StatusDot: View {
             switch state {
             case .connected: Circle().fill(Theme.success)
             case .offline: Circle().fill(Theme.tertiary)
-            case .notSetUp: Circle().strokeBorder(Theme.tertiary, lineWidth: Stroke.hairline * 1.5)
+            case .needsUpdate: Circle().fill(Theme.accent)
+            case .notSetUp, .needsAllow: Circle().strokeBorder(Theme.tertiary, lineWidth: Stroke.hairline * 1.5)
             case .unknown: Circle().strokeBorder(Theme.border, lineWidth: Stroke.hairline * 1.5)
             }
         }
@@ -97,6 +99,8 @@ struct StatusDot: View {
         case .connected: "Connected"
         case .offline: "Offline"
         case .notSetUp: "Not set up"
+        case .needsAllow: "Hasn't allowed this Mac"
+        case .needsUpdate: "Needs an update"
         case .unknown: "Not checked"
         }
     }
@@ -129,10 +133,12 @@ extension BoxList.Box {
     /// Its dot: connected while a window holds it online or it last answered, else what the last
     /// probe found.
     @MainActor var dotState: StatusDot.State {
-        if HostConnection.live(alias)?.isOnline == true { return .connected }
+        if HostConnection.live(alias)?.isOnline == true { return older ? .needsUpdate : .connected }
         switch status {
-        case .ready: return .connected
-        case .notSetUp, .noGrant, .stale, .failed: return .notSetUp
+        case .ready: return older ? .needsUpdate : .connected
+        case .noGrant: return .needsAllow
+        case .stale: return .needsUpdate
+        case .notSetUp, .failed: return .notSetUp
         case .stopped, .unreachable: return .offline
         case .unknown, .probing, .working: return .unknown
         }

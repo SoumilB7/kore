@@ -174,6 +174,7 @@ package final class MacNet {
         addCancel = schedule(Self.addWindowLength) { [weak self] in self?.closeAddWindow() }
         NetAudit.line("add-window", ["open": "1"])
         refresh()
+        Devices.shared.changed()
     }
 
     package func closeAddWindow() {
@@ -182,8 +183,17 @@ package final class MacNet {
         shared.withLock { $0.addUntil = nil }
         addCancel?()
         addCancel = nil
+        refusals = []
         refresh()
+        Devices.shared.changed()
     }
+
+    /// Tagged nodes without Kore's app capability turned away while the window is open: the one
+    /// place a refusal shows (Devices, one quiet line each).
+    package private(set) var refusals: [DeviceRefusal] = []
+
+    /// This Mac's device id, once read (the first `refresh` reads it off the main actor).
+    package var device: UUID? { shared.withLock { $0.identity?.device } }
 
     /// Looks again (KoreNet switched, Tailscale's state changed, a phone allowed or removed, the
     /// window opened or closed): binds what the rule and Tailscale say, or closes.
@@ -355,6 +365,13 @@ package final class MacNet {
     /// connection would come).
     package func greet(_ fd: Int32, remote: String, whois: TailnetWhoIs) {
         let state = shared.withLock { $0 }
+        if addOpen, let tag = whois.node.tags.first, AppCap.abilities(capMap: whois.capMap, tagged: true) == nil {
+            let name = Self.shortName(whois.node.name)
+            if !refusals.contains(where: { $0.name == name }) {
+                refusals.append(DeviceRefusal(name: name, tag: tag))
+                Devices.shared.changed()
+            }
+        }
         guard let identity = state.identity, let me = state.selfNode, let signer else {
             return Sockets.closeFD(fd)
         }
@@ -439,9 +456,8 @@ package final class MacNet {
         switch event {
         case .held(let record):
             NetAudit.line("enroll", ["device": record.id.uuidString.lowercased(), "kind": record.kind.rawValue, "node": connection.whois.node.key])
-            let info = DeviceCardInfo(
-                title: "\(record.name) wants to join", note: "It could read your chats and ask in them, as a phone does.",
-                node: Self.shortName(connection.whois.node.name), address: connection.remote, login: connection.whois.user.loginName,
+            let info = DeviceCardInfo.phone(
+                name: record.name, node: Self.shortName(connection.whois.node.name), address: connection.remote, login: connection.whois.user.loginName,
                 firstSeen: connection.firstSeen)
             let ask = asks.ask(info) { [weak self] answer in self?.answered(answer, record: record, connection: connection) }
             held[key] = (connection, ask)
@@ -495,9 +511,11 @@ package final class MacNet {
     /// The phones changed: the boxes hear (merging, only what this Mac issued), the port follows.
     package func phonesChanged() {
         let state = shared.withLock { $0 }
-        let mine = allowedPhones().filter { $0.issuedBy == state.identity?.device }
+        // Every record this Mac issued (its phones, and devices it allowed at a box).
+        let mine = ((try? host.book.read().devices) ?? []).filter { $0.kind != .mac && $0.issuedBy == state.identity?.device }
         pushDevices(mine)
         refresh()
+        Devices.shared.changed()
     }
 
     private func phoneUp(_ peer: NetPeer, connection: PhoneConnection, binding: Data) {
@@ -508,6 +526,7 @@ package final class MacNet {
         NetAudit.line("connect", ["device": peer.record.id.uuidString.lowercased(), "resumed": peer.resumed ? "1" : nil])
         StayAwakePhones.connected(phones.count)
         changed?("up \(peer.record.id.uuidString)")
+        Devices.shared.changed()
         if phone.waitsForCursors {
             // Its cursors come first; a phone with none sends something else, or a second goes by.
             _ = schedule(1) { [weak phone] in phone?.beginIfWaiting() }
@@ -520,6 +539,7 @@ package final class MacNet {
         if phones[phone.id] === phone { phones[phone.id] = nil }
         StayAwakePhones.connected(phones.count)
         changed?("gone \(phone.id.uuidString)")
+        Devices.shared.changed()
     }
 
     // MARK: Resume
@@ -547,7 +567,7 @@ package final class MacNet {
         let info = DeviceCardInfo(
             title: "\(phone.record.name): new fingerprint key", note: "Raises from this phone will take the new fingerprint.",
             node: Self.shortName(phone.connection.whois.node.name), address: phone.connection.remote, login: phone.connection.whois.user.loginName,
-            firstSeen: phone.connection.firstSeen)
+            firstSeen: phone.connection.firstSeen, kind: .phone, name: phone.record.name)
         NetAudit.line("raise-key", ["device": device.uuidString.lowercased(), "asked": "1"])
         asks.ask(info) { [weak self, weak phone] answer in
             guard let self else { return }
