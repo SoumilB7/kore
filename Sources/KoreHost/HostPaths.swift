@@ -86,6 +86,16 @@ package struct HostPaths: Sendable {
     }
 
     package var grants: URL { state.appendingPathComponent("grants") }
+    /// Phase 18: the devices this box trusts (`<id>.json`, `rev.json`) and those waiting
+    /// (`pending.json`).
+    package var devices: URL { state.appendingPathComponent("devices") }
+    /// The box's own identity: its P-256 key (0600) and its device id.
+    package var identityKey: URL { state.appendingPathComponent("identity.key") }
+    package var deviceId: URL { state.appendingPathComponent("device-id") }
+    /// A week of what the box's chats spent, a line per model request.
+    package var usageLedger: URL { state.appendingPathComponent("usage/ledger.jsonl") }
+    /// `attach --proto 2`'s way in: link 2.0 sessions over SSH.
+    package var netSocket: URL { runtime.appendingPathComponent("net.sock") }
     package var chats: URL { state.appendingPathComponent("chats") }
     /// Each CLI's model list as it last gave it (`clis[]`), for a client that connects before
     /// any CLI runs.
@@ -173,15 +183,21 @@ package enum HostPathsError: Error, CustomStringConvertible {
 /// kept as it is: the journal says why, the box serves nothing from it, and nothing saves over it.
 package struct HostConfig: Codable, Sendable, Equatable {
     package var folders: [String]
+    /// Phase 18: whether the box is on KoreNet (`kore-host net on|off`, `join`, a Mac's
+    /// `net.set`). Off unless set: no tailnet listener, no LocalAPI or netlink watching.
+    package var net: Bool?
     /// Why `config.json` couldn't be read; nil when it could (or isn't there).
     package var unreadable: String?
 
-    private enum CodingKeys: String, CodingKey { case folders }
+    private enum CodingKeys: String, CodingKey { case folders, net }
 
-    package init(folders: [String] = [], unreadable: String? = nil) {
+    package init(folders: [String] = [], net: Bool? = nil, unreadable: String? = nil) {
         self.folders = folders
+        self.net = net
         self.unreadable = unreadable
     }
+
+    package var netOn: Bool { net == true }
 
     package static func load(_ url: URL, home: String = HostPaths.home().path) -> HostConfig {
         guard let data = try? Data(contentsOf: url) else { return HostConfig() }
@@ -201,7 +217,7 @@ package struct HostConfig: Codable, Sendable, Equatable {
             }
             if !folders.contains(path) { folders.append(path) }
         }
-        return HostConfig(folders: folders)
+        return HostConfig(folders: folders, net: config.net)
     }
 
     /// An absolute path as the box keeps it: `~` is this user's home, `.` and `..` are resolved,
