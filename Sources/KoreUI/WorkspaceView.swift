@@ -70,7 +70,13 @@ struct TabBar: View {
     private struct TabDrag: Equatable {
         let id: UUID
         let from: Int
+        /// How far the dragged tab is drawn from its place (kept within the strip).
         var dx: CGFloat
+        /// Where in the tab it was taken, from its start.
+        let grab: CGFloat
+        /// The pointer along the strip, and where a drop there lands: worked out once per move.
+        var x: CGFloat
+        var drop: TabStrip.Drop
         /// Held on this tab's middle long enough: a drop now groups the two.
         var groupWith: UUID? = nil
     }
@@ -126,36 +132,17 @@ struct TabBar: View {
 
     private var strip: TabStrip { strip(layout) }
 
-    /// Where the dragged tab's middle is, along the strip.
-    private func centre(_ drag: TabDrag, _ strip: TabStrip) -> CGFloat {
-        strip.minX(drag.from) + strip.width(drag.from) / 2 + drag.dx
+    /// The pointer's place along the strip, `translation` from where the tab was taken. Before
+    /// the strip's start or past its end is first or last (`TabStrip.drop`).
+    private func pointer(_ index: Int, grab: CGFloat, translation: CGFloat, _ strip: TabStrip) -> CGFloat {
+        strip.minX(index) + grab + translation
     }
 
-    /// Where the dragged tab would land: past a tab once its middle is past that tab's middle
-    /// third (resting on the middle third groups them instead).
-    private func target(_ drag: TabDrag, _ strip: TabStrip) -> Int {
-        let c = centre(drag, strip)
-        var to = drag.from
-        if drag.dx > 0 {
-            for k in stride(from: drag.from + 1, to: strip.count, by: 1) {
-                guard c > (strip.minX(k) + strip.maxX(k)) / 2 + strip.width(k) / 6 else { break }
-                to = k
-            }
-        } else if drag.dx < 0 {
-            for k in stride(from: drag.from - 1, through: 0, by: -1) {
-                guard c < (strip.minX(k) + strip.maxX(k)) / 2 - strip.width(k) / 6 else { break }
-                to = k
-            }
-        }
-        return to
-    }
-
-    /// The tab whose middle third the dragged tab's middle is over.
-    private func resting(_ drag: TabDrag, _ strip: TabStrip, tabs: [ChatTab]) -> ChatTab? {
-        let to = target(drag, strip)
-        let k = drag.dx > 0 ? to + 1 : drag.dx < 0 ? to - 1 : -1
-        guard k != drag.from, k >= 0, k < min(strip.count, tabs.count) else { return nil }
-        return abs(centre(drag, strip) - (strip.minX(k) + strip.maxX(k)) / 2) <= strip.width(k) / 6 ? tabs[k] : nil
+    /// Where in the tab the press was, from its start: its middle if its frame isn't known.
+    private func grabbed(_ tab: ChatTab, _ index: Int, at x: CGFloat, _ strip: TabStrip) -> CGFloat {
+        let width = strip.width(index)
+        guard let frame = tabFrames.value[tab.id] else { return width / 2 }
+        return min(max(x - frame.minX, 0), width)
     }
 
     /// How far a tab is moved from its place while another is dragged: the dragged one with the
@@ -163,7 +150,7 @@ struct TabBar: View {
     private func shift(_ index: Int, _ strip: TabStrip, _ layout: StripLayout) -> CGFloat {
         if let moving = groupDrag.value { return groupShift(tab: index, chip: nil, moving, strip, layout) }
         guard let drag = drag.value else { return 0 }
-        let to = target(drag, strip)
+        let to = drag.drop.place
         let slot = strip.width(drag.from) + Size.tabGap
         if index == drag.from { return drag.dx }
         if drag.from < to, index > drag.from, index <= to { return -slot }
@@ -175,7 +162,7 @@ struct TabBar: View {
     private func chipShift(_ k: Int, _ strip: TabStrip, _ layout: StripLayout) -> CGFloat {
         if let moving = groupDrag.value { return groupShift(tab: nil, chip: k, moving, strip, layout) }
         guard let drag = drag.value, strip.chips.indices.contains(k) else { return 0 }
-        let to = target(drag, strip)
+        let to = drag.drop.place
         let before = strip.chips[k].before
         let slot = strip.width(drag.from) + Size.tabGap
         if drag.from < to, before > drag.from, before <= to { return -slot }
@@ -183,7 +170,7 @@ struct TabBar: View {
         return 0
     }
 
-    /// The group a tab let go with its middle at `c` lands in: an open group's run, from its
+    /// The group a tab let go with the pointer at `c` lands in: an open group's run, from its
     /// chip's middle to its last tab's end, or a folded group's chip.
     private func dropGroup(at c: CGFloat, _ strip: TabStrip, _ layout: StripLayout) -> UUID? {
         let groups = workspace.tabGroups
@@ -228,10 +215,14 @@ struct TabBar: View {
                 }
                 let layout = layout
                 let strip = strip(layout)
-                // Kept within the strip.
+                // Drawn within the strip; where it lands follows the pointer, which may go past
+                // either end (first, or last up to `+`).
                 let dx = min(max(value.translation.width, -strip.minX(index)), max(0, strip.content - strip.maxX(index)))
-                var moved = TabDrag(id: tab.id, from: index, dx: dx, groupWith: drag.value?.groupWith)
-                let rest = board == nil ? resting(moved, strip, tabs: layout.tabs) : nil
+                let grab = drag.value?.id == tab.id ? drag.value?.grab ?? 0 : grabbed(tab, index, at: value.startLocation.x, strip)
+                let x = pointer(index, grab: grab, translation: value.translation.width, strip)
+                let landing = strip.drop(at: x, from: index)
+                var moved = TabDrag(id: tab.id, from: index, dx: dx, grab: grab, x: x, drop: landing, groupWith: drag.value?.groupWith)
+                let rest = board == nil ? landing.onto.flatMap { layout.tabs.indices.contains($0) ? layout.tabs[$0] : nil } : nil
                 if rest?.id != dwell.value?.id {
                     endDwell()
                     moved.groupWith = nil
@@ -265,8 +256,8 @@ struct TabBar: View {
                     if let made = workspace.group(tab, onto: other) { workspace.editGroup(made) }
                     return
                 }
-                let to = target(ended, strip)
-                let group = dropGroup(at: centre(ended, strip), strip, layout)
+                let to = strip.drop(at: ended.x, from: ended.from).place
+                let group = dropGroup(at: ended.x, strip, layout)
                 let place = insertion(of: tab, to: to, from: ended.from, layout)
                 withAnimation(reduceMotion ? nil : Motion.fade) {
                     if let group, workspace.tabGroups.group(group)?.folded == true, workspace.tabGroups.member[tab.id] != group {
@@ -606,7 +597,7 @@ struct TabBar: View {
     /// What the others slide aside for: the dragged tab's landing place, or the dragged group's.
     private func slideKey(_ strip: TabStrip, _ layout: StripLayout) -> Int? {
         if let moving = groupDrag.value { return groupTarget(moving, units(strip, layout)).map { -1 - $0.to } }
-        return drag.value.map { target($0, strip) }
+        return drag.value?.drop.place
     }
 
     /// The line under each open group's tabs in view: from its chip to its last tab.
@@ -803,6 +794,35 @@ struct TabStrip: Equatable {
         let chips = chipX.indices.last.map { chipMaxX($0) } ?? 0
         return max(tabs, chips)
     }
+
+    /// Where a tab dragged from `from` lands, the pointer at `x` along the strip: `place` among
+    /// the tabs once it's moved, and `onto` the tab whose middle third the pointer is over (held
+    /// there, a drop groups the two; let go sooner, it lands beside it).
+    struct Drop: Equatable {
+        let place: Int
+        let onto: Int?
+    }
+
+    /// Each tab's leading and trailing thirds are the places before and after it, its middle
+    /// third the tab itself; before the first tab is first, past the last (up to `+`) last.
+    func drop(at x: CGFloat, from: Int) -> Drop {
+        guard count > 0 else { return Drop(place: 0, onto: nil) }
+        let from = min(max(from, 0), count - 1)
+        var before = count
+        for k in 0..<count {
+            let third = width(k) / 3
+            if x < minX(k) + third {
+                before = k
+                break
+            }
+            if x <= maxX(k) - third {
+                guard k != from else { return Drop(place: from, onto: nil) }
+                return Drop(place: k > from ? k - 1 : k + 1, onto: k)
+            }
+        }
+        return Drop(place: before > from ? before - 1 : before, onto: nil)
+    }
+
     /// The most the strip takes: every tab at full size, and the chips with their names.
     var cap: CGFloat {
         CGFloat(count) * slotMax + (asking == nil ? 0 : Size.tabAsking - Size.tabMaxWidth)

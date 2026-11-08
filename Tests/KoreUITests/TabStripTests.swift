@@ -98,4 +98,76 @@ struct TabStripTests {
         #expect(strip.minX(4) == strip.maxX(3) + Size.tabGap)
         #expect(strip.minX(2) == 2 * strip.slot)
     }
+
+    // MARK: A dragged tab's drop, by where the pointer is
+
+    /// Four tabs at full size: a third of one either side of its middle third.
+    private var four: TabStrip { TabStrip(count: 4, width: 4 * (Size.tabMaxWidth + Size.tabGap)) }
+
+    private func lead(_ strip: TabStrip, _ k: Int) -> CGFloat { strip.minX(k) + strip.width(k) / 6 }
+    private func middle(_ strip: TabStrip, _ k: Int) -> CGFloat { (strip.minX(k) + strip.maxX(k)) / 2 }
+    private func trail(_ strip: TabStrip, _ k: Int) -> CGFloat { strip.maxX(k) - strip.width(k) / 6 }
+
+    @Test func theFirstTabsLeadingThirdAndBeforeTheStripAreFirst() {
+        let strip = four
+        for from in 1..<4 {
+            #expect(strip.drop(at: lead(strip, 0), from: from) == .init(place: 0, onto: nil))
+            #expect(strip.drop(at: 0, from: from) == .init(place: 0, onto: nil))
+            #expect(strip.drop(at: -80, from: from) == .init(place: 0, onto: nil))
+        }
+    }
+
+    @Test func theLastTabsTrailingThirdAndPastItUpToPlusAreLast() {
+        let strip = four
+        for from in 0..<3 {
+            #expect(strip.drop(at: trail(strip, 3), from: from) == .init(place: 3, onto: nil))
+            #expect(strip.drop(at: strip.content + Size.tabGap, from: from) == .init(place: 3, onto: nil))
+            #expect(strip.drop(at: strip.content + 400, from: from) == .init(place: 3, onto: nil))
+        }
+    }
+
+    @Test func aTabsMiddleThirdIsTheTabItselfAndLandsBesideIt() {
+        let strip = four
+        // Rightwards: beside it on the near side, its outline for a group.
+        #expect(strip.drop(at: middle(strip, 3), from: 0) == .init(place: 2, onto: 3))
+        #expect(strip.drop(at: middle(strip, 0), from: 3) == .init(place: 1, onto: 0))
+        #expect(strip.drop(at: middle(strip, 2), from: 1) == .init(place: 1, onto: 2))
+        // Its own middle: where it is.
+        #expect(strip.drop(at: middle(strip, 2), from: 2) == .init(place: 2, onto: nil))
+        // Just inside the middle third's edges.
+        let third = strip.width(1) / 3
+        #expect(strip.drop(at: strip.minX(1) + third + 0.5, from: 3).onto == 1)
+        #expect(strip.drop(at: strip.maxX(1) - third - 0.5, from: 3).onto == 1)
+        #expect(strip.drop(at: strip.minX(1) + third - 0.5, from: 3).onto == nil)
+    }
+
+    @Test func aTabsEdgesAreThePlacesBeforeAndAfterIt() {
+        let strip = four
+        // Tab 0 dragged right: before tab 2 is second, after it third.
+        #expect(strip.drop(at: lead(strip, 2), from: 0) == .init(place: 1, onto: nil))
+        #expect(strip.drop(at: trail(strip, 2), from: 0) == .init(place: 2, onto: nil))
+        // Tab 3 dragged left: before tab 1 is second, after it third.
+        #expect(strip.drop(at: lead(strip, 1), from: 3) == .init(place: 1, onto: nil))
+        #expect(strip.drop(at: trail(strip, 1), from: 3) == .init(place: 2, onto: nil))
+        // The gap between two tabs is the place between them.
+        #expect(strip.drop(at: strip.maxX(1) + Size.tabGap / 2, from: 3) == .init(place: 2, onto: nil))
+        // Its own edges, or the places either side of it: where it is.
+        for x in [lead(strip, 2), trail(strip, 2), trail(strip, 1), lead(strip, 3)] {
+            #expect(strip.drop(at: x, from: 2) == .init(place: 2, onto: nil))
+        }
+    }
+
+    @Test func dropsHoldWithAWiderTabAndAChipBeforeTheFirst() {
+        let chip = TabStrip.Chip(id: UUID(), before: 0, named: 60, folded: false)
+        let strip = TabStrip(count: 4, width: 900, asking: 3, chips: [chip])
+        #expect(strip.minX(0) > 0)
+        // Over the chip, before the first tab: first.
+        #expect(strip.drop(at: strip.chipMinX(0) + 1, from: 2).place == 0)
+        // The asking tab's own thirds.
+        #expect(strip.drop(at: strip.maxX(3) - strip.width(3) / 4, from: 0) == .init(place: 3, onto: nil))
+        #expect(strip.drop(at: middle(strip, 3), from: 0) == .init(place: 2, onto: 3))
+        // One tab, or none: nowhere else to go.
+        #expect(TabStrip(count: 1, width: 600).drop(at: -50, from: 0) == .init(place: 0, onto: nil))
+        #expect(TabStrip(count: 0, width: 600).drop(at: 10, from: 0) == .init(place: 0, onto: nil))
+    }
 }

@@ -188,6 +188,8 @@ package final class Workspace {
     }
     /// The title row's Sync button: a box's window only.
     var hasBoxButton: Bool { box != nil }
+    /// The box a window's chats live on, by its alias; nil for a folder on this Mac (storylines).
+    package var boxAlias: String? { box?.alias }
     /// ⌘P: files, or go to line (⌃G).
     var quickOpen: QuickOpenMode?
     /// What the sidebar shows: the tree, or Search (⇧⌘F).

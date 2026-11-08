@@ -190,15 +190,17 @@ final class TabGroupDragOut: TabGroupStoryline {
     override class var tags: Set<Tag> { [.chat, .gate] }
 
     override func steps() -> [any Step] {
-        super.steps() + [
+        let dragged = TabEdges.Ids()
+        return super.steps() + [
             TabGroupProbe.make(1, onto: 0),
             TabGroupProbe.make(2, onto: 1),
             Expect("tabs 1–3 grouped") { try TabGroupProbe.members($0) == [0, 1, 2] },
+            Do("Note the dragged tab") { story in dragged.value = [try TabGroupProbe.tab(story, 1).id] },
             DragTabPast(tab: 1, past: 3),
             Expect("the dragged tab last and out of the group, the other two still in it") { story in
                 let workspace = try TabGroupProbe.workspace(story)
                 let moved = workspace.tabs[3]
-                return try TabGroupProbe.members(story) == [0, 1] && workspace.tabGroups.member[moved.id] == nil
+                return try moved.id == dragged.value.first && TabGroupProbe.members(story) == [0, 1] && workspace.tabGroups.member[moved.id] == nil
             },
             Snapshot("group-dragged-out"),
         ]

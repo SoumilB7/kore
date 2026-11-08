@@ -69,6 +69,12 @@ package final class AppModel {
         BoxBinding.open(place, chat: chat, openWindow: openWindow)
     }
 
+    /// Opens a box folder's window as the Welcome's row does (storylines).
+    package func storyOpenBox(alias: String, folder: String) {
+        guard let openWindow = windowActions?.0 else { return }
+        BoxBinding.open(BoxPlace(alias: alias, folder: folder), chat: nil, openWindow: openWindow)
+    }
+
     /// The Welcome window, where a folder (or a recent one) opens its window: the Dock menu's
     /// New Window.
     func showWelcome() {
