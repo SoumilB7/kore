@@ -20,7 +20,8 @@ import kotlinx.serialization.json.JsonObject
  * phone-device-screen.html): two lines a row, needs-you and working first, idle saying nothing.
  * More than one window: chips on top filter it (an empty window is an outlined chip). ＋ makes a
  * chat or a window there, and says what a tap makes and where. The list is diffed: a change
- * rebinds only its rows; ages move once a minute.
+ * rebinds only its rows; ages move once a minute. At its foot, the device's Accounts: each CLI
+ * login's usage as the device pushes it (link 1.14), asked for once as the screen opens.
  */
 class DeviceActivity : NodeActivity() {
     private companion object { const val LOADING_MS = 10_000L }
@@ -29,6 +30,9 @@ class DeviceActivity : NodeActivity() {
     /** The window the list is filtered to (null: all). */
     private var filter: String? = null
     private val rows = Rows()
+    private val accounts = Accounts()
+    /** This opening asked the device for its logins' usage (once; the device answers in `clis`). */
+    private var askedUsage = false
     private lateinit var chipsRow: HorizontalScrollView
     private lateinit var chips: LinearLayout
     private lateinit var windowLine: TextView
@@ -58,7 +62,7 @@ class DeviceActivity : NodeActivity() {
         }
         list = RecyclerView(this@DeviceActivity).apply {
             layoutManager = LinearLayoutManager(this@DeviceActivity)
-            adapter = rows
+            adapter = androidx.recyclerview.widget.ConcatAdapter(rows, accounts)
             itemAnimator = null
             setPadding(dp(16), 0, dp(16), dp(16))
             clipToPadding = false
@@ -74,6 +78,7 @@ class DeviceActivity : NodeActivity() {
     override fun onStart() {
         super.onStart()
         scheduleMinute()
+        askedUsage = false
         // Opening a device's screen tries it now: an away one dials at once, a quiet link gets a probe.
         link?.reconnectNow()
     }
@@ -96,6 +101,7 @@ class DeviceActivity : NodeActivity() {
         stateLine()?.let(content::addView)
         content.addView(notes)
         plus?.visibility = if (snapshot != null && linkState == dev.kore.link.node.NodeMachine.State.Up) View.VISIBLE else View.GONE
+        askUsage()
         draw()
         folderSheet?.takeIf { it.isShowing }?.refresh()
     }
@@ -110,6 +116,7 @@ class DeviceActivity : NodeActivity() {
             chipsRow.visibility = View.GONE
             windowLine.visibility = View.GONE
             rows.submitList(emptyList())
+            accounts.submitList(emptyList())
             notes.addView(v)
             content.visibility = View.VISIBLE
             quietBanner()
@@ -119,6 +126,7 @@ class DeviceActivity : NodeActivity() {
             chipsRow.visibility = View.GONE
             windowLine.visibility = View.GONE
             rows.submitList(emptyList())
+            accounts.submitList(emptyList())
             val s = linkState
             if (s == dev.kore.link.node.NodeMachine.State.Up || s == dev.kore.link.node.NodeMachine.State.Connecting) {
                 // Up, its first state not here yet: skeleton rows for 10 s, then the waiting state.
@@ -134,6 +142,7 @@ class DeviceActivity : NodeActivity() {
             chipsRow.visibility = View.GONE
             windowLine.visibility = View.GONE
             rows.submitList(emptyList())
+            accounts.submitList(emptyList())
             notes.addView(emptyState(dev.kore.phone.R.drawable.i_folder, "No windows open", "Open a folder in Kore on the Mac, or start one from here.", "New window" to { createSheet() }))
             return
         }
@@ -150,6 +159,8 @@ class DeviceActivity : NodeActivity() {
         }
         val made = DeviceList.rows(snapshot, filter, System.currentTimeMillis(), kore.seen)
         rows.submitList(made)
+        val usage = UsageMeters.rows(snapshot, System.currentTimeMillis())
+        accounts.submitList(if (usage.isEmpty()) emptyList() else listOf(usage))
         // Nothing above the chips (no state line, no empty state): no gap either.
         content.visibility = if (made.isEmpty() || content.childCount > 1) View.VISIBLE else View.GONE
         if (made.isEmpty() && w != null) {
@@ -409,6 +420,31 @@ class DeviceActivity : NodeActivity() {
         if (!isBox) items += PopMenu.Item("Show on the Mac") { act(dev.kore.link.node.Control.select(chatId)) { Quiet.say(this, "Shown on $macName") } }
         if (CloseHold.offered(chat, isBox)) items += PopMenu.Item("Close tab", danger = true, rule = items.isNotEmpty()) { closeChat(chat) }
         if (items.isNotEmpty()) PopMenu(this).show(anchor, items)
+    }
+
+    /** Once per opening, while the device is up: its CLIs' logins read again where due (at most once a minute each). */
+    private fun askUsage() {
+        val node = link ?: return
+        if (askedUsage || linkState != dev.kore.link.node.NodeMachine.State.Up) return
+        askedUsage = true
+        node.askUsage(node.welcome.value?.objs("providers").orEmpty().mapNotNull { it.str("id") })
+    }
+
+    /** The Accounts block at the list's foot: one item, made again only when a login's usage changed. */
+    private inner class Accounts : ListAdapter<List<UsageMeters.Row>, RecyclerView.ViewHolder>(object : DiffUtil.ItemCallback<List<UsageMeters.Row>>() {
+        override fun areItemsTheSame(a: List<UsageMeters.Row>, b: List<UsageMeters.Row>) = true
+        override fun areContentsTheSame(a: List<UsageMeters.Row>, b: List<UsageMeters.Row>) = a == b
+    }) {
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder =
+            object : RecyclerView.ViewHolder(android.widget.FrameLayout(this@DeviceActivity).apply {
+                layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }) {}
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            val frame = holder.itemView as android.widget.FrameLayout
+            frame.removeAllViews()
+            frame.addView(usageBlock(getItem(position)), android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
     }
 
     /** The rows, diffed: a snapshot rebinds only the rows that changed. */

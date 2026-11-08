@@ -212,6 +212,13 @@ object Control {
     fun logsChunk(id: String, offset: Int, total: Int, text: String): JsonObject = buildJsonObject {
         put("t", "logs.chunk"); put("id", id); put("offset", offset); put("total", total); put("text", text)
     }
+    /**
+     * Its logins' usage read again where due (link 1.14, read-only: no login named, nothing
+     * switched); the windows come back in `clis[].usage`. Posted as it is ([envelope]) when a
+     * screen that shows them opens, never on a timer.
+     */
+    fun accountUsage(provider: String) = cmd("account.usage") { put("provider", provider) }
+
     /** A command in its envelope. */
     fun envelope(id: String, cmd: JsonObject): JsonObject = buildJsonObject { put("t", "cmd"); put("id", id); put("cmd", cmd) }
 

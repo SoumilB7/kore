@@ -4,7 +4,8 @@ import Foundation
 /// and on a box alike: follow and read; send within the chat's mode, answer cards plainly, stop,
 /// keep drafts, rename, arrange chats, tabs and windows Kore already has. Never accounts or
 /// sign-ins, a box's files, Always allow, or a raise without the fingerprint: a mode, an Arsenal
-/// tier, or a risky card's Allow takes a signed `raise` (`LinkRaiseWire`).
+/// tier, or a risky card's Allow takes a signed `raise` (`LinkRaiseWire`). Of accounts, only
+/// their usage is read (1.14 `account.usage` without a login): no login named, nothing switched.
 package enum LinkAsk {
     /// The 1.2 control commands ask covers.
     package static func allows(_ kind: ControlKind) -> Bool {
@@ -37,6 +38,12 @@ package enum LinkAsk {
     /// A control command as ask may send it: allowed kinds only, checked as full control checks
     /// them, and an Arsenal tier raised only with the fingerprint.
     package static func check(_ kind: ControlKind, _ args: ControlArgs, _ chat: LinkPolicy.ChatFacts?, arsenal: String?) -> LinkPolicy.Verdict {
+        if kind == .accountUsage {
+            // A read of the CLI's logins' usage, pushed back in `clis[].usage`; one login's own
+            // reading is the Mac's.
+            guard args.login == nil else { return .deny(.deniedControl, "A phone can't do that; do it in Kore.") }
+            return LinkPolicy.check(kind, args, chat, control: .full)
+        }
         guard allows(kind) else { return .deny(.deniedControl, "A phone can't do that; do it in Kore.") }
         if kind == .chatSetArsenal, arsenalRaises(from: arsenal, to: args.tier ?? "") {
             return .deny(.raiseMode, "Raising Arsenal takes your fingerprint.")

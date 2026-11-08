@@ -151,7 +151,8 @@ enum LinkSnapshot {
         return (out, change.isTruncated)
     }
 
-    /// Each CLI's models, read from its open chats (a CLI says them once it runs), and its account.
+    /// Each CLI's models, read from its open chats (a CLI says them once it runs), its account,
+    /// and its logins' usage as this Mac knows it (`AccountStore.linkUsage`).
     static func clis(_ chats: [Chat]) -> [CLIState] {
         Registry.all.compactMap { provider in
             let chat = chats.first(where: { $0.provider.id == provider.id && !$0.linkModels.isEmpty })
@@ -161,7 +162,7 @@ enum LinkSnapshot {
                 models: (chat?.linkModels ?? []).map {
                     .init(id: $0.id, name: $0.name, efforts: $0.efforts, fast: $0.supportsFastMode, auto: $0.supportsAutoMode)
                 },
-                effortScale: chat?.linkEffortScale ?? [], account: account)
+                effortScale: chat?.linkEffortScale ?? [], account: account, usage: AccountStore.shared.linkUsage(provider.id))
         }
     }
 

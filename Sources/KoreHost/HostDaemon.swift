@@ -119,6 +119,39 @@ package final class HostDaemon {
         return HostPaths.home(sessionEnv).appendingPathComponent(".codex", isDirectory: true)
     }
 
+    /// 1.14: each login's plan windows for the link (`clis[].usage`), kept from what the box
+    /// hears and read when a client asks.
+    package private(set) lazy var planUsage: HostPlanUsage = makePlanUsage()
+
+    private func makePlanUsage() -> HostPlanUsage {
+        let state = paths.state
+        let made = HostPlanUsage(read: { [weak self] cli, login in
+            guard let self else { throw UsageUnavailable() }
+            switch cli {
+            case "claude": return try await self.accounts.usage(login)
+            case "codex":
+                guard login == LinkAccount.main else { throw HostAccounts.Failure.gone(login) }
+                if HostLoginMoves.isPaused(HostLoginMoves.codexKey, state: state) { throw HostAccounts.Failure.codexMoving }
+                return try await self.codexUsage()
+            default: throw UsageUnavailable()
+            }
+        })
+        made.logins = { [weak self] cli in
+            guard let self, self.installed[cli] == true || self.clis.contains(where: { $0.provider == cli }) else { return [] }
+            return cli == "claude" ? self.accounts.ids() : [LinkAccount.main]
+        }
+        made.changed = { [weak self] in self?.pushClis() }
+        made.now = { [weak self] in self?.now() ?? Date() }
+        return made
+    }
+
+    /// Codex's one login's plan and limits: a short-lived `codex app-server` (tests answer for it).
+    package var codexUsage: @Sendable () async throws -> PlanReading = HostDaemon.codexReading
+    nonisolated static func codexReading() async throws -> PlanReading { try await PlanUsage.codex() }
+
+    /// The CLIs as the link carries them: their models and their logins' usage.
+    package var linkClis: [CLIState] { planUsage.carried(clis) }
+
     /// 1.14: logins moved in and out by the owner's Mac.
     package lazy var loginMoves: HostLoginMoves = {
         let moves = HostLoginMoves(accounts: accounts, state: paths.state, codexHome: codexHome)
@@ -135,6 +168,7 @@ package final class HostDaemon {
         config = HostConfig.load(paths.config)
         services.onEvent = { [weak self] chat, event in self?.noted(chat, event) }
         services.onModels = { [weak self] cli, models in self?.listed(cli, models) }
+        services.onPlanWindows = { [weak self] cli, snapshot in self?.planUsage.take(cli, snapshot: snapshot) }
         services.server = { [weak self] chat in self?.server(for: chat) }
         services.onTranscript = { [weak self] chat in self?.chats.first { $0.chat === chat }?.attach(chat, replaced: true) }
         services.accountEnvironment = { [weak self] id in try self?.accounts.environment(id) ?? [:] }
@@ -400,8 +434,15 @@ package final class HostDaemon {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(clis) { try? HostPaths.privateFile(data, to: paths.models) }
+        pushClis()
+    }
+
+    /// The CLIs (models and usage) to the act and full grants on screen; one off screen gets
+    /// them in its snapshot when it's back.
+    private func pushClis() {
+        let carried = linkClis
         for connection in connections where connection.proven && (connection.control ?? .watch) >= .act && connection.takesPushes() {
-            connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: clis)))
+            connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: carried)))
         }
     }
 
@@ -858,6 +899,12 @@ package final class HostDaemon {
         case .authGh:
             guard control == .full else { return fail(.deniedControl, "GitHub's sign-in needs a grant with full control.") }
             return gitHub(id: id, reply: reply)
+        case .accountUsage where args.login == nil:
+            // 1.14: a client that acts (a phone) asks for its logins' usage: read again where due,
+            // pushed in `clis[].usage`. Read-only, and nothing about a login is named.
+            guard control >= .act else { return fail(.deniedControl, "This grant only watches.") }
+            planUsage.refresh(args.provider ?? "")
+            return .init(id: id, ok: true)
         case .accountSignIn, .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh, .accountList, .accountUsage, .accountSwitch:
             guard control == .full else { return fail(.deniedControl, "Accounts need a grant with full control.") }
             return account(kind, args, id: id, reply: reply)
@@ -881,6 +928,7 @@ package final class HostDaemon {
                 return found
             }.value
             self?.installed = found
+            self?.planUsage.update()
         }
     }
 
@@ -967,6 +1015,20 @@ package final class HostDaemon {
                 reply(Self.told(id: id, provider: cli, reading: reply1.map(ops.parse)))
             }
             return nil
+        case .accountUsage where cli == "codex":
+            // Codex's one login (1.14): its reading, kept for what the link pushes too.
+            guard args.login == LinkAccount.main else { return .init(id: id, ok: false, code: .goneLogin, message: "Codex keeps one login on a box.") }
+            let usage = planUsage
+            Task {
+                do {
+                    let reading = try await usage.read(cli, LinkAccount.main)
+                    usage.take(cli, login: LinkAccount.main, reading: reading)
+                    reply(.init(id: id, ok: true, reading: reading))
+                } catch {
+                    reply(.init(id: id, ok: false, code: .invalid, message: AccountReason.of(error) ?? "Couldn't read Codex's usage."))
+                }
+            }
+            return nil
         case .accountList, .accountUsage, .accountSwitch:
             return claudeAccounts(kind, args, id: id, reply: reply)
         case .accountSignIn:
@@ -1025,8 +1087,10 @@ package final class HostDaemon {
         let folder = hc?.record.folder ?? args.folder.map(Self.standard)
         switch kind {
         case .accountList:
+            let usage = planUsage
             Task {
                 let list = await accounts.list()
+                usage.listed(list)
                 reply(
                     .init(
                         id: id, ok: true, accounts: list, login: hc.map { $0.record.account ?? LinkAccount.main },
@@ -1035,9 +1099,12 @@ package final class HostDaemon {
             return nil
         case .accountUsage:
             guard let login = args.login, accounts.exists(login) else { return fail(.goneLogin, "That account isn't on the box any more.") }
+            let usage = planUsage
             Task {
                 do {
-                    reply(.init(id: id, ok: true, reading: try await accounts.usage(login)))
+                    let reading = try await accounts.usage(login)
+                    usage.take("claude", login: login, reading: reading)
+                    reply(.init(id: id, ok: true, reading: reading))
                 } catch {
                     reply(.init(id: id, ok: false, code: .invalid, message: AccountReason.of(error) ?? "Couldn't read that account's usage."))
                 }

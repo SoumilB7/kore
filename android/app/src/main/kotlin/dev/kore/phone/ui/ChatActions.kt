@@ -743,7 +743,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
      * model offers them. Its corners take the mode's colour.
      */
     private fun chooseMode() {
-        if (chat == null) return
+        val chat = chat ?: return
+        // Its account's usage read again where due (at most once a minute); it comes in `clis`.
+        chat.str("provider")?.let { link()?.askUsage(listOf(it)) }
         openLive { modeSheet() }
     }
 
@@ -760,6 +762,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val current = chat.obj("mode")
         corner = modeColor(current?.get("level").int())
         modelPart(chat)
+        usagePart(chat)
         val allowed = chat.strs("allowedModeIds")
         val offered = chat.strs("modeIds")
         val modes = modes(chat).filter { it.str("id") in offered || it.str("id") == current?.str("id") }.sortedBy { it["level"].int() ?: 1 }
@@ -815,6 +818,16 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             val on = want["fast"]?.toBoolean() ?: controls.bool("fast")
             toggle("Fast mode", on) { pick("fast", it.toString()) }
         }
+    }
+
+    /**
+     * The chat's account under the model (link 1.14): its login, plan and meters, as the device
+     * pushed them; nothing from a device that sends none.
+     */
+    private fun Sheet.usagePart(chat: JsonObject) {
+        val row = UsageMeters.forChat(snapshot, chat, System.currentTimeMillis()) ?: return
+        section("Usage")
+        custom(activity.usageRow(row, logo = false).apply { setPadding(activity.dp(4), activity.dp(2), activity.dp(4), activity.dp(4)) })
     }
 
     /** Arsenal at the foot of the options sheet: its tiers in one segment, a raise marked; the reason when it can't. */

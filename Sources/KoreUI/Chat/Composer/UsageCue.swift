@@ -15,6 +15,9 @@ final class UsageCues {
     private(set) var shown: [String: UsageCueBook.Cue] = [:]
     /// The account each CLI's last reading came from, while the Account store has none.
     private(set) var lastAccount: [String: String] = [:]
+    /// Each account's windows as read, by `account(_:)`'s key: what the link pushes as a login's
+    /// usage (`AccountUsage`). Set only when it changes.
+    private(set) var tracks: [String: [UsageCueBook.Limit: UsageCueBook.Track]] = [:]
 
     @ObservationIgnored private var book: UsageCueBook
     @ObservationIgnored private let defaults: UserDefaults
@@ -76,7 +79,7 @@ final class UsageCues {
         ending?.cancel()
         book = UsageCueBook()
         book.save(defaults)
-        (shown, lastAccount) = ([:], [:])
+        (shown, lastAccount, tracks) = ([:], [:], [:])
     }
 
     private func update() {
@@ -86,6 +89,7 @@ final class UsageCues {
             if let cue = book.cue(account, now: now) { next[account] = cue }
         }
         if next != shown { shown = next }
+        if book.tracks != tracks { tracks = book.tracks }
         ending?.cancel()
         guard let end = book.nextEnd(after: now) else { return }
         ending = Task { [weak self] in

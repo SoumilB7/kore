@@ -536,8 +536,10 @@ final class LinkClient {
         send(.welcome(host.welcome(control: control)))
         rev += 1
         let full = control == .full
-        // The CLIs' models go to an ask grant too (a phone picks a model); they carry no account.
-        let clis = control >= .act && !host.clis.isEmpty ? host.clis : nil
+        // The CLIs' models go to an ask grant too (a phone picks a model), and their logins' usage;
+        // they carry no account.
+        let carried = host.linkClis
+        let clis = control >= .act && !carried.isEmpty ? carried : nil
         send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
         send(host.attention.ledger.state(after: attentionAfter()))
         if control == .full, let node = host.netNode(enrolled: deviceId) { sendRaw(StreamWire.encode(node)) }
@@ -626,8 +628,10 @@ final class LinkClient {
         missed = false
         rev += 1
         let full = control == .full
-        // The CLIs' models go to an ask grant too (a phone picks a model); they carry no account.
-        let clis = control >= .act && !host.clis.isEmpty ? host.clis : nil
+        // The CLIs' models go to an ask grant too (a phone picks a model), and their logins' usage;
+        // they carry no account.
+        let carried = host.linkClis
+        let clis = control >= .act && !carried.isEmpty ? carried : nil
         send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
         for chatId in following.keys.sorted() { if let hc = host.chat(chatId) { page(hc, last: nil) } }
     }

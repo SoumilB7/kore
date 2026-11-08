@@ -8,6 +8,7 @@
                 <action android:name="dev.kore.android.debug.STATE" />
                 <action android:name="dev.kore.android.debug.ASK_LOGS" />
                 <action android:name="dev.kore.android.debug.CLIP_IMAGE" />
+                <action android:name="dev.kore.android.debug.TAP" />
             </intent-filter>
         </receiver>
         <!-- The demo (no Mac, box or Tailscale), on with files/demo: set up before the app starts. -->

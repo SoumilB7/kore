@@ -502,6 +502,27 @@ class NodeClient(
     /** A message with no answer of its own ([Control.txEarlier], [Control.txMore]); false without a link. */
     fun post(message: JsonObject): Boolean = session?.send(message.bytes()) ?: false
 
+    /** When each CLI's usage was last asked for (ms), so screens opening often ask once a minute. */
+    private val usageAsked = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * A screen that shows usage opened: each of [providers] asks the node to read its logins
+     * again ([Control.accountUsage]), at most once a minute per CLI and only while the link is
+     * up (never queued: the next opening asks again). The answer is the next `clis[].usage`; the
+     * `result` is nobody's. Returns the CLIs asked.
+     */
+    fun askUsage(providers: Collection<String>): List<String> {
+        val link = session ?: return emptyList()
+        if (machine.state != NodeMachine.State.Up) return emptyList()
+        val now = clock()
+        return providers.distinct().filter { p ->
+            val last = usageAsked[p]
+            if (last != null && now - last < USAGE_EVERY_MS) return@filter false
+            usageAsked[p] = now
+            link.send(Control.envelope(UUID.randomUUID().toString(), Control.accountUsage(p)).bytes())
+        }
+    }
+
     /**
      * Raises the chat's mode (or an Arsenal tier, `arsenal.<tier>`) with the fingerprint: the node's
      * nonce, the `kore_raise` signature over `SHA256("kore-raise/1" | B | nonce | chatId | modeId)`,
@@ -698,6 +719,9 @@ class NodeClient(
         const val LEAVE_MS = 2_000L
         /** Bytes per upload chunk, before base64. */
         const val UPLOAD_CHUNK = 48 * 1024
+
+        /** How often a CLI's usage is asked for at most ([askUsage]); the node reads no more often either. */
+        const val USAGE_EVERY_MS = 60_000L
 
         /** A delta onto the snapshot: windows and extras replaced when sent, chats upserted by id, removed ids dropped. */
         fun merge(snapshot: JsonObject, delta: JsonObject): JsonObject {

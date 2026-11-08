@@ -53,7 +53,8 @@ class DemoStart : ContentProvider() {
 /**
  * [scenario] (the text in files/demo): "" the normal demo; `waiting` the Mac never answers (no
  * snapshot); `no-windows` the Mac has none open; `no-devices` this phone knows none; `asleep` the
- * Mac says it's going to sleep.
+ * Mac says it's going to sleep; `usage-near` its logins past 80 % (amber), `usage-limit` at a
+ * limit (red). Each device pushes its logins' usage (link 1.14) with resets from now.
  */
 class Demo(private val context: Context, private val scenario: String = "") : StandIn {
     private val mac = Device(UUID.fromString("B3D9E1F0-7A2C-4E6B-8D41-5C0F9A3E2B02"), "MacBook", NodeKind.MAC, ByteArray(91) { 1 }, listOf("nodekey:mac"), "macbook.tail.ts.net.")
@@ -103,7 +104,7 @@ class Demo(private val context: Context, private val scenario: String = "") : St
         private var snapshot: JsonObject? = when (scenario) {
             "waiting" -> null
             "no-windows" -> buildJsonObject { put("t", "snapshot"); put("rev", 1); put("windows", kotlinx.serialization.json.JsonArray(emptyList())); put("chats", kotlinx.serialization.json.JsonArray(emptyList())) }
-            else -> asset("$dir/snapshot.json")
+            else -> asset("$dir/snapshot.json")?.let { withUsage(it, dir) }
         }
 
         init {
@@ -230,6 +231,45 @@ class Demo(private val context: Context, private val scenario: String = "") : St
             val rev = ((snap["rev"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 1) + 1
             snapshot = JsonObject(snap + mapOf("rev" to JsonPrimitive(rev), "chats" to kotlinx.serialization.json.JsonArray(chats.map { if (it === chat) updated else it })))
             push(buildJsonObject { put("t", "delta"); put("rev", rev); put("chats", kotlinx.serialization.json.JsonArray(listOf(updated))) })
+        }
+
+        /**
+         * The device's CLIs with their logins' usage (`clis[].usage`), as a Mac or kore-host pushes
+         * them: the Mac's two Claude logins and Codex; the box's Claude accounts (its first chat on
+         * "ajinkya", `controls.login`) and Codex. Normal, near a limit or at one, by [scenario].
+         */
+        private fun withUsage(snap: JsonObject, dir: String): JsonObject {
+            val now = System.currentTimeMillis()
+            val hour = 3_600_000L
+            fun limits(five: Int, fiveIn: Long, week: Int, weekIn: Long) = kotlinx.serialization.json.JsonArray(listOf(
+                buildJsonObject { put("kind", "5h"); put("used", five); put("resetsAt", (now + fiveIn) / 60_000 * 60_000) },
+                buildJsonObject { put("kind", "7d"); put("used", week); put("resetsAt", (now + weekIn) / 60_000 * 60_000) },
+            ))
+            fun login(id: String, email: String?, active: Boolean, plan: String?, limits: kotlinx.serialization.json.JsonArray?) = buildJsonObject {
+                put("login", id); email?.let { put("email", it) }; put("active", active); plan?.let { put("plan", it) }
+                put("limits", limits ?: kotlinx.serialization.json.JsonArray(emptyList()))
+            }
+            fun cli(provider: String, vararg logins: JsonObject) = buildJsonObject {
+                put("provider", provider); put("models", kotlinx.serialization.json.JsonArray(emptyList())); put("effortScale", kotlinx.serialization.json.JsonArray(emptyList()))
+                put("usage", kotlinx.serialization.json.JsonArray(logins.toList()))
+            }
+            val (claude, codex) = when (scenario) {
+                "usage-near" -> limits(86, 2 * hour + 20 * 60_000, 81, 3 * 24 * hour) to limits(64, 3 * hour, 92, 2 * 24 * hour)
+                "usage-limit" -> limits(100, hour + 40 * 60_000, 93, 3 * 24 * hour) to limits(100, 2 * hour + 5 * 60_000, 100, 4 * 24 * hour + 2 * hour)
+                else -> limits(42, 2 * hour + 10 * 60_000, 61, 3 * 24 * hour) to limits(18, 4 * hour, 44, 5 * 24 * hour)
+            }
+            val clis = if (dir == "mac") listOf(
+                cli("claude", login("main", "ku••••@••il.com", true, "Max", claude), login("work", "so••••@••rp.com", false, "Team", limits(12, 3 * hour, 30, 6 * 24 * hour))),
+                cli("codex", login("main", "ku••••@••il.com", true, "Pro", codex)),
+            ) else listOf(
+                cli("claude", login("main", "ku••••@••il.com", true, "Max", limits(8, 4 * hour, 22, 6 * 24 * hour)), login("ajinkya", "aj••••@••il.com", false, "Max", claude)),
+                cli("codex", login("main", "ku••••@••il.com", true, "Pro", codex)),
+            )
+            val chats = (snap["chats"] as? kotlinx.serialization.json.JsonArray)?.mapIndexed { i, c ->
+                val chat = c as JsonObject
+                if (dir == "box" && i == 0) JsonObject(chat + ("controls" to JsonObject(((chat["controls"] as? JsonObject) ?: JsonObject(emptyMap())) + ("login" to JsonPrimitive("ajinkya"))))) else chat
+            }
+            return JsonObject(snap + ("clis" to kotlinx.serialization.json.JsonArray(clis)) + (chats?.let { mapOf("chats" to kotlinx.serialization.json.JsonArray(it)) } ?: emptyMap()))
         }
 
         override fun ping(): Deferred<Unit> = CompletableDeferred(Unit)

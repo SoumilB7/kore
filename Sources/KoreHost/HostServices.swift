@@ -56,7 +56,9 @@ package final class HostServices: ChatServices {
         """
 
     package func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend { backend(provider, options) }
-    package func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}
+    /// A turn's plan windows (`HostPlanUsage`): what the box pushes as its logins' usage.
+    package var onPlanWindows: ((String, PlanSnapshot?) -> Void)?
+    package func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) { onPlanWindows?(cli, snapshot) }
     package func makeTranscript() -> any ChatTranscript { HostTranscript() }
     package func makeViewState() -> AnyObject { HostViewState.shared }
     package func register(_ chat: Chat) {}

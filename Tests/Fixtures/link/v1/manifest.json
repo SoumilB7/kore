@@ -240,11 +240,19 @@
       "type": "cmd"
     },
     {
+      "file": "cmd.account.usage.json",
+      "type": "cmd"
+    },
+    {
       "file": "result.account.json",
       "type": "result"
     },
     {
       "file": "delta.account.json",
+      "type": "delta"
+    },
+    {
+      "file": "delta.usage.json",
       "type": "delta"
     },
     {

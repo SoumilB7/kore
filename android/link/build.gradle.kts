@@ -2,7 +2,7 @@
 // session, identity proofs over B, raises, the node clients and their machine, the outbox,
 // Control's builders, and signed updates. No Android here: the app wraps it (Keystore keys, the
 // embedded tailnet, the screens), and every byte is checked on the Mac against
-// Tests/Fixtures/link/v2.
+// Tests/Fixtures/link/v2 (and the message bodies it reads, Tests/Fixtures/link/v1).
 plugins {
     kotlin("jvm")
 }
@@ -21,6 +21,8 @@ dependencies {
 val repoRoot = rootProject.projectDir.resolve("..").canonicalFile
 tasks.test {
     systemProperty("kore.fixtures", repoRoot.resolve("Tests/Fixtures/link/v2").path)
+    // The message bodies (link 1.x, unchanged under 2.0): what the phone reads of them.
+    systemProperty("kore.fixturesV1", repoRoot.resolve("Tests/Fixtures/link/v1").path)
     systemProperty("kore.releaseKey", repoRoot.resolve("Sources/KoreCore/ReleaseKey.swift").path)
     systemProperty("kore.signerDoc", repoRoot.resolve("docs/android.md").path)
     // scripts/tests/release-rehearsal.sh: a dry-run release served locally (UpdateRehearsalTest).

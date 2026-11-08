@@ -178,6 +178,8 @@ package enum LinkPolicy {
             guard args.provider != nil, args.login != nil else { return .deny(.invalid, "Name the CLI and the login.") }
         case .accountCancel, .accountSignOut, .accountRefresh:
             guard args.provider != nil else { return .deny(.invalid, "Name the CLI.") }
+        case .accountUsage:
+            guard let provider = args.provider, LinkLogins.clis.contains(provider) else { return .deny(.invalid, "Name the CLI.") }
         case .accountPrivacy:
             guard args.on != nil else { return .deny(.invalid, "Say on or off.") }
         case .chatSetArsenal:
@@ -399,7 +401,15 @@ package enum LinkPolicy {
         case .accountList:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             return args.provider == "claude" ? .allow : .deny(.invalid, boxAccountsClaudeOnly)
-        case .accountUsage, .accountSwitch:
+        case .accountUsage:
+            guard let provider = args.provider, LinkLogins.clis.contains(provider) else { return .deny(.invalid, "Name the CLI.") }
+            // 1.14: without a login, a read of what the box pushes (`clis[].usage`): any grant
+            // that acts (a phone). With one, that login's reading: full grants (the Mac).
+            guard let login = args.login else { return .allow }
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard plainID(login), provider == "claude" || login == LinkAccount.main else { return .deny(.invalid, "Name the account.") }
+            return .allow
+        case .accountSwitch:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             guard args.provider == "claude" else { return .deny(.invalid, boxAccountsClaudeOnly) }
             guard let login = args.login, plainID(login) else { return .deny(.invalid, "Name the account.") }
