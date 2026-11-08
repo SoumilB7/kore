@@ -73,7 +73,8 @@ mkdir -p "$OUT"
 built() { # build/release's copy into OUT, when OUT is another folder
     if [[ -f "build/release/$1" && ! "$OUT" -ef build/release ]]; then cp "build/release/$1" "$OUT/"; fi
 }
-for arch in x86_64 aarch64; do
+# A dry run may build fewer (KORE_HOST_ARCHS="x86_64"); a real run needs both.
+for arch in ${=${KORE_HOST_ARCHS:-x86_64 aarch64}}; do
     [[ -f "$OUT/kore-host-linux-$arch.xz" ]] || { scripts/build-host.sh $arch; built kore-host-linux-$arch.xz; }
 done
 [[ -f "$OUT/kore-tailnet-macos-arm64" ]] || { scripts/build-tailnet.sh macos-arm64; built kore-tailnet-macos-arm64; }
