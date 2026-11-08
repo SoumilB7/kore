@@ -47,7 +47,12 @@ package enum StorylineHost {
             forName: NSApplication.didFinishLaunchingNotification, object: nil, queue: .main
         ) { _ in
             Task { @MainActor in
+                // Offscreen and in the background, the host is App Nap's to slow down: its timers
+                // and run loop held back for a minute and more mid-step. Not while it runs (the
+                // Mac may still sleep when idle).
+                let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Storylines running")
                 let report = await runner.run()
+                ProcessInfo.processInfo.endActivity(activity)
                 print(report.text)
                 print("report: \(options.out.path)")
                 fflush(stdout)
