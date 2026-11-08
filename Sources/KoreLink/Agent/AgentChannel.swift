@@ -7,6 +7,7 @@ import KoreCore
 import KoreUI
 import LinkProtocol
 import src
+import Tailnet
 
 /// Kore's agent channel (`z-docs/agent-protocol.md`): the socket the `kore` command and agents in
 /// Kore's chats read Kore through, apart from the local link. It exists only while the master
@@ -171,6 +172,8 @@ package final class AgentChannel {
     /// reconnecting in a loop keeps hitting.
     private nonisolated static let tooMany = encode(AgentBye(code: .rateLimited, message: AgentTools.tooManyLine)) + Data([0x0A])
     private nonisolated static let unknownProcess = encode(AgentBye(code: .mismatch, message: "Kore couldn't tell which process this is.")) + Data([0x0A])
+    /// A caller that reaches the socket as it goes (agent control just went off) is told so.
+    private nonisolated static let switchedOff = encode(AgentBye(code: .stopped, message: "Agent control is off in Kore.")) + Data([0x0A])
 
     /// Says why, as far as the socket's buffer takes it without waiting, and closes.
     private nonisolated static func turnAway(_ fd: Int32, _ line: Data) {
@@ -244,7 +247,10 @@ package final class AgentChannel {
         // A grant whose chat has closed counts no more; with none left, the socket goes.
         AgentGrants.prune(open: Set(AgentReads.chatsByID().keys))
         guard AgentGrants.wanted else {
-            turnAway()
+            // Its hello may be in already: `SocketEnd` sends the bye and reads to its end, so a
+            // close with that unread doesn't reset the line away.
+            SocketEnd.start(fd, owed: Self.switchedOff)
+            queue.async { slots.release(peer.pid) }
             close(.stopped)
             return
         }

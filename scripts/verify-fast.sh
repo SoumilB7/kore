@@ -369,8 +369,14 @@ if [[ -n $fixtures && -x $rel/kore-storylines ]]; then
   spids=()
   for line in ${(f)"$(<$out/shards.txt)"}; do
     i=${line%%$'\t'*}; names=${line#*$'\t'}
-    # Shard i runs as kore-storylines-i (a link beside the binary): its own defaults domain and pasteboard.
-    bin=$rel/kore-storylines; (( i > 1 )) && { bin=$rel/kore-storylines-$i; ln -sf kore-storylines $bin }
+    # Shard i runs as kore-storylines-i (a link beside the binary): its own defaults domain and
+    # pasteboard, shard 1 too, so a `scripts/storylines.sh` run elsewhere never touches a shard's.
+    # (A ref whose hosts can't run under another name keeps the plain one, in its single shard.)
+    if grep -q 'hasPrefix("kore-storylines")' $src/Sources/KoreCore/KoreLog.swift 2>/dev/null; then
+      bin=$rel/kore-storylines-$i; ln -sf kore-storylines $bin
+    else
+      bin=$rel/kore-storylines
+    fi
     domain=${bin:t}
     sout=$out/storylines/s$i
     mkdir -p $sout

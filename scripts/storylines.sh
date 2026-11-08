@@ -53,12 +53,19 @@ bins="$(swift build -c $build --show-bin-path)"
 (( process )) && args+=(--fake-cli "$bins/kore-fake-cli")
 [[ -n $out ]] || out="${TMPDIR:-/tmp}/kore-storylines/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$out"
-defaults delete kore-storylines >/dev/null 2>&1
+# The run's own name (a link beside the binary), so its own defaults domain: another run's
+# `defaults delete` never empties this one's settings mid-run (the agent switch is read there).
+name=kore-storylines-run$$
+ln -sf kore-storylines "$bins/$name"
+defaults delete $name >/dev/null 2>&1
+cleanup() { rm -f "$bins/$name"; defaults delete $name >/dev/null 2>&1; }
 # Recorded Codex threads take one writer at a time: replays wait for any other run's (the lock
 # verify-landing takes too). A caller that already holds it says so with KORE_REPLAY_LOCK_HELD.
 lock=/private/tmp/kore-verify-replay.lock
 if (( replay )) && [[ -z ${KORE_REPLAY_LOCK_HELD:-} ]]; then
   until mkdir $lock 2>/dev/null; do sleep 2; done
-  trap "rmdir $lock 2>/dev/null" EXIT
+  trap "rmdir $lock 2>/dev/null; cleanup" EXIT
+else
+  trap cleanup EXIT
 fi
-"$bins/kore-storylines" "${args[@]}" --cassettes "$PWD/Tests/Fixtures/cassettes" --out "$out" 2>"$out/stderr.log"
+"$bins/$name" "${args[@]}" --cassettes "$PWD/Tests/Fixtures/cassettes" --out "$out" 2>"$out/stderr.log"

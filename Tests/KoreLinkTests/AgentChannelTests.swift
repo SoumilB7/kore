@@ -403,8 +403,29 @@ struct AgentChannelTests {
             defer { client.close() }
             return client.hello()
         }
-        #expect(answer == nil)
+        // Told why, not just closed on.
+        #expect(answer?["type"] as? String == "bye" && answer?["code"] as? String == "stopped")
         #expect(AgentChannel.current == nil && AgentGrants.tiers.isEmpty && !FileManager.default.fileExists(atPath: path))
+    }
+
+    /// The switch read off under the channel (its defaults emptied by someone else): the next
+    /// caller hears that agent control is off, rather than only a closed connection.
+    @Test func aSwitchGoneOffUnderneathTellsTheNextCaller() async throws {
+        let directory = Self.reset()
+        defer { AgentGrants.stopAll() }
+        AgentGrants.setEnabled(true)
+        AgentGrants.set(.watch, chat: "some-chat")
+        #expect(AgentChannel.current != nil)
+        let path = Self.socket(directory)
+        AgentGrants.defaults.removeObject(forKey: AgentGrants.switchKey)
+        let answer: AgentLine? = await off {
+            guard let client = AgentTestClient(path: path) else { return nil }
+            defer { client.close() }
+            return client.hello()
+        }
+        #expect(answer?["type"] as? String == "bye" && answer?["code"] as? String == "stopped")
+        #expect(answer?["message"] as? String == "Agent control is off in Kore.")
+        #expect(AgentChannel.current == nil)
     }
 
     @Test func externalCallersOnlyThroughTheSeam() async throws {
