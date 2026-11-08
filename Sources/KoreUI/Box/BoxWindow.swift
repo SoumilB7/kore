@@ -33,17 +33,12 @@ final class BoxBinding {
         HostConnection.named(alias, grant: grant(alias), command: command(alias))
     }
 
-    /// The Mac's grant name on the box: `defaults write <Kore> boxGrant.<alias> <name>`, else
-    /// `laptop`.
-    static func grant(_ alias: String) -> String {
-        UserDefaults.standard.string(forKey: "boxGrant." + alias) ?? HostConnection.defaultGrant
-    }
+    /// The Mac's grant name on the box: the one its setup made, else this Mac's name.
+    static func grant(_ alias: String) -> String { BoxSetup.grant(for: alias) }
 
     /// kore-host's path on the box: `defaults write <Kore> boxKoreHost.<alias> <path>`, else
     /// `~/.local/bin/kore-host`.
-    static func command(_ alias: String) -> String {
-        UserDefaults.standard.string(forKey: "boxKoreHost." + alias) ?? SSHTransport.defaultCommand
-    }
+    static func command(_ alias: String) -> String { BoxSetup.command(for: alias) }
 
     /// The window's key among the open workspaces: never a folder on this Mac's.
     var key: String { "box:" + alias + ":" + folder }

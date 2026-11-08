@@ -31,10 +31,13 @@ package struct BoxFolder: Codable, Sendable, Equatable, Hashable {
     /// Its window in the box's state, whose tabs are its chats.
     package var windowId: String?
     package var name: String
+    /// The box serves it, but it isn't there any more.
+    package var missing: Bool?
 
-    package init(path: String, windowId: String? = nil) {
+    package init(path: String, windowId: String? = nil, missing: Bool? = nil) {
         self.path = path
         self.windowId = windowId
+        self.missing = missing
         name = BoxFolder.lastPart(path)
     }
 
@@ -97,7 +100,7 @@ package enum HostWire {
     /// The `folders` a result carries (`folders.list`, `folder.add`).
     package static func folders(_ raw: Data?) -> [BoxFolder]? {
         guard let raw, let peek = try? JSONDecoder().decode(FoldersPeek.self, from: raw), let list = peek.folders else { return nil }
-        return list.map { BoxFolder(path: $0.path, windowId: $0.windowId) }
+        return list.map { BoxFolder(path: $0.path, windowId: $0.windowId, missing: $0.missing) }
     }
 
     package static func bye() -> Data { encode(.bye(.quit)) }
@@ -170,9 +173,29 @@ package enum HostWire {
         if StreamWire.type(data) == "chat.events" { return .events(try JSONDecoder().decode(ChatEvents.self, from: data)) }
         let message = try LinkMessage.decode(data)
         if case .result(let result) = message, result.ok, let folders = try? JSONDecoder().decode(FoldersPeek.self, from: data).folders {
-            return .folders(id: result.id, folders.map { BoxFolder(path: $0.path, windowId: $0.windowId) })
+            return .folders(id: result.id, folders.map { BoxFolder(path: $0.path, windowId: $0.windowId, missing: $0.missing) })
         }
         return .link(message)
+    }
+
+    /// Whether the box's kore-host is older than this Kore: a lower link minor than the one this
+    /// client speaks, or a lower `koreVersion` than `mine` (this app's version; a dev build has none
+    /// and compares the link only).
+    package static func older(_ welcome: LinkMessage.Welcome, mine: String? = appVersion) -> Bool {
+        if welcome.proto.major == proto.major, welcome.proto.minor < proto.minor { return true }
+        guard let mine else { return false }
+        let box = versionParts(welcome.host.koreVersion), ours = versionParts(mine)
+        guard !box.isEmpty, !ours.isEmpty else { return false }
+        return box.lexicographicallyPrecedes(ours)
+    }
+
+    /// This app's version (`CFBundleShortVersionString`); nil outside Kore.app.
+    package static var appVersion: String? { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String }
+
+    /// "0.2.3" as [0, 2, 3]; empty when it isn't one.
+    static func versionParts(_ text: String) -> [Int] {
+        let parts = text.split(separator: ".").map { Int($0.prefix { $0.isNumber }) }
+        return parts.contains(nil) ? [] : parts.compactMap { $0 }
     }
 
     /// The welcome's `host.kind` ("box" for kore-host); nil from a host that doesn't say.
@@ -188,6 +211,7 @@ package enum HostWire {
         struct Folder: Decodable {
             var windowId: String?
             var path: String
+            var missing: Bool?
         }
         var folders: [Folder]?
     }

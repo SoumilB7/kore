@@ -208,12 +208,14 @@ struct HostClientTests {
         down.refuse = true
         let root = Fixture.scratch()
         let defaults = try #require(UserDefaults(suiteName: "hostclient-\(UUID().uuidString)"))
-        let list = BoxList(defaults: defaults, hosts: { ["other", "mybox", "spare"] }) { alias in
+        let list = BoxList(defaults: defaults, hosts: { ["other", "mybox", "spare"] }, cacheRoot: root.appendingPathComponent("cache")) { alias in
             let connection = makeConnection(root: root.appendingPathComponent(alias), dials: alias == "mybox" ? up : down)
             connection.backoff = [.seconds(30)]
             return connection
         }
-        // mybox has answered on this Mac before; the other hosts are suggestions.
+        // A new Mac lists no box; added, mybox stays listed, and the other hosts are suggestions.
+        #expect(list.boxes.isEmpty)
+        list.add("mybox")
         #expect(list.boxes.map(\.alias) == ["mybox"])
         #expect(list.suggestions("sp") == ["spare"])
         // Nothing dials until asked.
@@ -236,7 +238,7 @@ struct HostClientTests {
         list.add("other")
         await list.probe("other")
         #expect(list.box("other")?.status == .unreachable("Can't reach other"))
-        #expect(BoxList(defaults: defaults, hosts: { [] }).boxes.map(\.alias) == ["mybox", "other"])
+        #expect(BoxList(defaults: defaults, hosts: { [] }, cacheRoot: root).boxes.map(\.alias) == ["mybox", "other"])
     }
 
     @Test func sshHostsAndArguments() {

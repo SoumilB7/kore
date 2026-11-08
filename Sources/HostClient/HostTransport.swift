@@ -169,11 +169,29 @@ package final class SSHTransport: HostTransport, @unchecked Sendable {
         if process.isRunning { process.terminate() }
     }
 
-    /// The last line SSH or the host printed: why it ended ("Permission denied", "command not found").
+    /// Why it ended: ssh's exit status (kore-host attach's own, or ssh's 255) and the last line
+    /// either printed, as `ended(status:line:)` writes it.
     private func lastWords() -> String? {
-        // A moment for stderr to arrive after stdout closed.
-        Thread.sleep(forTimeInterval: 0.1)
+        // A moment for the process to end and its stderr to arrive after stdout closed.
+        let end = Date().addingTimeInterval(1)
+        while process.isRunning, Date() < end { Thread.sleep(forTimeInterval: 0.02) }
+        Thread.sleep(forTimeInterval: 0.05)
         let text = lock.withLock { String(decoding: said, as: UTF8.self) }
-        return text.split(whereSeparator: \.isNewline).last.map { String($0).trimmingCharacters(in: .whitespaces) }
+        let line = text.split(whereSeparator: \.isNewline).last.map { String($0).trimmingCharacters(in: .whitespaces) }
+        guard !process.isRunning, process.terminationReason == .exit else { return line }
+        return Self.ended(status: process.terminationStatus, line: line)
+    }
+
+    /// "exit 3: kore-host isn't running": a link's end with ssh's exit status.
+    package static func ended(status: Int32, line: String?) -> String { "exit \(status)" + (line.map { ": " + $0 } ?? "") }
+
+    /// The exit status in a reason `ended` wrote, and the line after it.
+    package static func exit(of reason: String?) -> (status: Int32, line: String)? {
+        guard let reason, reason.hasPrefix("exit ") else { return nil }
+        let rest = reason.dropFirst(5)
+        let number = rest.prefix { $0.isNumber || $0 == "-" }
+        guard let status = Int32(number) else { return nil }
+        let line = rest.dropFirst(number.count).drop { $0 == ":" || $0 == " " }
+        return (status, String(line))
     }
 }

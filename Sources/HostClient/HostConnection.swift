@@ -52,6 +52,8 @@ package final class HostConnection {
     }
     /// GitHub's CLI on the box is signed in, as the box last said; nil until it says.
     package private(set) var ghSignedIn: Bool?
+    /// The box's kore-host is older than this Kore (`HostWire.older`), as its welcome said.
+    @ObservationIgnored package private(set) var hostOlder = false
     /// The CLIs' logins on the box, and GitHub's (made on first use).
     @ObservationIgnored package private(set) lazy var accounts = BoxAccounts(connection: self)
     @ObservationIgnored package private(set) var chats: [String: ChatMeta] = [:]
@@ -468,6 +470,7 @@ package final class HostConnection {
         case .challenge:
             transport?.send(HostWire.hello(build: HostLog.build))
         case .welcome(let welcome):
+            hostOlder = HostWire.older(welcome)
             hostKind = HostWire.hostKind(raw)
             providers = welcome.providers
             caps = welcome.caps

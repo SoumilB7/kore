@@ -76,24 +76,43 @@ struct BoxesPanel: View {
             StatusDot(state: dot(box))
             Text(box.alias).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
         }
+        .koreContextMenu("box-row") {
+            // Remove asks once, a step in: it forgets the box here and leaves the box as it is.
+            [OptionItem("Remove", destructive: true, children: [OptionItem("Forget \(box.alias) on this Mac", destructive: true) { list.remove(box.alias) }])]
+        }
     }
 
     @ViewBuilder private func inside(_ box: BoxList.Box) -> some View {
-        if let line = line(box) {
-            Text(line).font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(2)
-                .padding(.leading, Space.xl + Space.md).padding(.vertical, Space.xs)
-        }
+        if let note = box.note { noteLine(note, alias: box.alias) }
         ForEach(box.folders, id: \.self) { folder in
             let here = workspace.box?.alias == box.alias && workspace.box?.folder == folder.path
+            let missing = folder.missing == true
             row(indent: 1, lit: here) {
                 openWindow(value: BoxPlace(alias: box.alias, folder: folder.path))
             } label: {
-                Image(systemName: "folder").font(Chrome.caption).foregroundStyle(Theme.secondary)
-                Text(folder.name).font(Chrome.label).foregroundStyle(here ? Theme.text : Theme.secondary).lineLimit(1)
+                Image(systemName: "folder").font(Chrome.caption).foregroundStyle(missing ? Theme.tertiary : Theme.secondary)
+                Text(folder.name).font(Chrome.label).foregroundStyle(missing ? Theme.tertiary : here ? Theme.text : Theme.secondary).lineLimit(1)
             }
-            .help(folder.path)
+            .disabled(missing)
+            .help(missing ? "Missing on \(box.alias): \(folder.path)" : folder.path)
         }
         if box.status == .ready { addFolder(box.alias) }
+    }
+
+    /// The box's one line, and its action after a dot ("kore-host isn't on mybox · Set up").
+    private func noteLine(_ note: BoxList.Note, alias: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+            Text(note.line).foregroundStyle(Theme.tertiary).lineLimit(2)
+            if let action = note.action {
+                Text("·").foregroundStyle(Theme.tertiary)
+                Button(action.title) { Task { await list.act(action, on: alias) } }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.accent)
+                    .fixedSize()
+            }
+        }
+        .font(Chrome.caption)
+        .padding(.leading, Space.xl + Space.md).padding(.vertical, Space.xs)
     }
 
     @ViewBuilder private func addFolder(_ alias: String) -> some View {
@@ -201,19 +220,9 @@ struct BoxesPanel: View {
         if HostConnection.live(box.alias)?.isOnline == true { return .connected }
         switch box.status {
         case .ready: return .connected
-        case .notSetUp: return .notSetUp
-        case .unreachable: return .offline
-        case .unknown, .probing: return .unknown
-        }
-    }
-
-    private func line(_ box: BoxList.Box) -> String? {
-        switch box.status {
-        case .probing where box.folders.isEmpty: "Connecting…"
-        case .notSetUp: "kore-host isn't on \(box.alias)"
-        case .unreachable(let why): why
-        case .ready where box.folders.isEmpty: "No folders on \(box.alias)"
-        default: nil
+        case .notSetUp, .noGrant, .stale, .failed: return .notSetUp
+        case .stopped, .unreachable: return .offline
+        case .unknown, .probing, .working: return .unknown
         }
     }
 }
