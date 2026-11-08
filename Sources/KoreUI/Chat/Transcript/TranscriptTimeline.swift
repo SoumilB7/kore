@@ -21,6 +21,12 @@ struct TranscriptTimeline: View, Equatable {
     /// streamed token) is read by `TailWatch` alone, so a token doesn't draw the timeline again.
     @StateObject private var frozen = Frozen<[TranscriptStore.SectionModel]>()
     @StateObject private var following = Local(true)
+    /// The reader's own inputs on the view (`ScrollShift.readerInputs`) when the end was last
+    /// taken up: one since is the reader leaving it (`readerLeft`).
+    @StateObject private var followTaken = Held(0)
+    @StateObject private var wasFollowing = Held(true)
+    /// The reader's inputs as the last shown pass saw them.
+    @StateObject private var inputsSeen = Held(0)
     /// Long messages open, and whether the end was followed when the first opened: followed
     /// again once they've all closed.
     @StateObject private var openMessages = Held((count: 0, followed: false))
@@ -272,7 +278,7 @@ struct TranscriptTimeline: View, Equatable {
                 // moves aren't the reader's, who takes over by scrolling (nothing followed then).
                 var renewed = false
                 if let until = renewing.value {
-                    if Date() >= until {
+                    if Date() >= until || Self.readerLeft(inputs: shift.readerInputs, taken: followTaken.value) {
                         renewing.value = nil
                     } else if following.value {
                         renewed = true
@@ -290,6 +296,16 @@ struct TranscriptTimeline: View, Equatable {
                     return
                 }
                 seenShown.value = new
+                // The end taken up again, or still there with nothing moved up (a wheel turned down
+                // at the end): the reader's inputs before this pass are behind it (one that came
+                // with this pass's move is that move's).
+                let atEnd = offset + new[2] >= height - Self.atBottom
+                if Self.takesEnd(following: following.value, was: wasFollowing.value, atEnd: atEnd, movedUp: offset < geometry.value.offset - 1) {
+                    followTaken.value = inputsSeen.value
+                }
+                inputsSeen.value = shift.readerInputs
+                wasFollowing.value = following.value
+                let readerLeft = Self.readerLeft(inputs: shift.readerInputs, taken: followTaken.value)
                 // A move with no scroll phase (the scroll bar, End) never reaches `.idle` above.
                 // A new width can leave the content's height past its rows: looked at soon.
                 if old.count == new.count, old[4] > 0, new[4] != old[4] { checkBlank(soon: true) }
@@ -305,7 +321,7 @@ struct TranscriptTimeline: View, Equatable {
                 // A new width wraps the rows anew: at the end, the view stays there through every
                 // pass of it (`WidthHold` keeps a reader's place above it), and a glide stops.
                 if following.value, old.count == new.count, old[4] > 0, new[4] != old[4] {
-                    if widthHold.rest?.atEnd ?? true {
+                    if widthHold.rest?.atEnd ?? true || !readerLeft {
                         glidingUntil.value = nil
                         glideCut.value = store.sentAt
                         shift.hold(.end, until: Date() + WidthHold.lasts)
@@ -430,17 +446,17 @@ struct TranscriptTimeline: View, Equatable {
                     nudge.value &+= 1
                     return
                 }
-                // Moved up, away from the end, with no new content: the scroll bar, Page Up or a
-                // programmatic scroll, none of which has a scroll phase. Stop following, or each
-                // row measured on the way would pull the view back to the end. Only once there's
-                // more than a screen (a shorter chat sits at the bottom and moves as it grows), and
-                // only well clear of the end: our own pin aims at estimated row heights and can
-                // land a little above it.
                 if insetSettling.value, !following.value || gesturing.value || offset + new[2] >= height - Self.atBottom {
                     insetSettling.value = false
                 }
-                if !shift.zoomAdjusting, following.value, !widthHeld, !renewed, !insetSettling.value, height == geometry.value.height, height > new[2] + Self.atBottom,
-                    offset < geometry.value.offset - 1, offset + new[2] < height - Self.leftEnd
+                // Moved up, away from the end, by the reader with no scroll phase: the scroll bar, a
+                // wheel, Page Up. Stop following, or each row measured on the way would pull the view
+                // back to the end. Only the reader's (`ScrollShift.readerInputs`): the lazy stack
+                // measuring rows and SwiftUI settling a pin or a glide move it up too, in passes of
+                // their own, with nobody scrolling. Only once there's more than a screen (a shorter
+                // chat sits at the bottom and moves as it grows), and only well clear of the end.
+                if !shift.zoomAdjusting, following.value, !widthHeld, !renewed, !insetSettling.value,
+                    Self.leavesEnd(readerLeft: readerLeft, height: height, visible: new[2], offset: offset, was: geometry.value.offset)
                 {
                     following.value = false
                 }
@@ -550,6 +566,12 @@ struct TranscriptTimeline: View, Equatable {
                     guard new[1] == 0 else { return }
                     let showing = old[1] == 1
                     if showing, old[0] == new[0], glidingUntil.value.map({ Date() >= $0 }) ?? true { return }
+                    // Rows came while it was out of sight: at the end, it's built anew there before
+                    // it draws (pins aimed at their estimates don't converge).
+                    if Self.renewsOnShow(showing: showing, grew: old[0] != new[0], following: following.value, magnified: shift.isMagnified) {
+                        renewAtEnd()
+                        return
+                    }
                     follow(proxy, showing: showing)
                 }
             }
@@ -807,6 +829,11 @@ struct TranscriptTimeline: View, Equatable {
     /// by the time the tab shows, and holds nothing of what left.
     private func renewOutOfSight() {
         guard !store.isOnScreen else { return }
+        renewAtEnd()
+    }
+
+    /// The scroll view built anew at the end, laid out from there (`renewing`).
+    private func renewAtEnd() {
         following.value = true
         glidingUntil.value = nil
         glideCut.value = store.sentAt
@@ -865,6 +892,7 @@ struct TranscriptTimeline: View, Equatable {
         if let sent = store.sentAt, sent != lastSend.value {
             lastSend.value = sent
             following.value = true
+            followTaken.value = shift.readerInputs
         }
         guard following.value else { return }
         if shift.isMagnified {
@@ -877,6 +905,7 @@ struct TranscriptTimeline: View, Equatable {
         }
         let glideEnd = store.sentAt.map { $0.addingTimeInterval(Self.glide) }
         if !showing, !reduceMotion, store.sentAt != glideCut.value, let glideEnd, Date() < glideEnd {
+            if glidingUntil.value != glideEnd { landGlide(proxy, at: glideEnd) }
             glidingUntil.value = glideEnd
             withAnimation(Motion.glide) { proxy.scrollTo(Self.end, anchor: .bottom) }
         } else if showing {
@@ -889,6 +918,47 @@ struct TranscriptTimeline: View, Equatable {
         } else {
             proxy.scrollTo(Self.end, anchor: .bottom)
         }
+    }
+
+    /// When a send's glide is over, the end once more, at once: the glide aimed at the heights the
+    /// lazy stack had then, and rows measured taller under it aren't pinned meanwhile, so it can
+    /// stop short of the end with nothing left to bring it there. One look per send; not once the
+    /// reader has moved the view.
+    private func landGlide(_ proxy: ScrollViewProxy, at end: Date) {
+        let (following, glidingUntil, shift, taken) = (following, glidingUntil, shift, followTaken)
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, end.timeIntervalSinceNow) + 0.05) { [weak store] in
+            // Another send's glide, or one a tab switch or a new width cut: not this one's to land.
+            guard glidingUntil.value == end else { return }
+            glidingUntil.value = nil
+            guard following.value, store?.hidden == false, !shift.zoomAdjusting, !shift.isMagnified,
+                !Self.readerLeft(inputs: shift.readerInputs, taken: taken.value)
+            else { return }
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) { proxy.scrollTo(Self.end, anchor: .bottom) }
+        }
+    }
+
+    /// The reader moved the view themselves since the end was taken up.
+    static func readerLeft(inputs: Int, taken: Int) -> Bool { inputs != taken }
+
+    /// The reader's inputs so far are behind a followed end: it was just taken up, or the view is
+    /// at it with nothing moved up.
+    static func takesEnd(following: Bool, was: Bool, atEnd: Bool, movedUp: Bool) -> Bool {
+        following && (!was || atEnd && !movedUp)
+    }
+
+    /// A followed view moved up `was` → `offset` leaves the end: the reader's move, well clear of
+    /// the end, in a chat taller than a screen. A move of layout's never does, whatever the pass
+    /// measured; the reader's does even in a pass that measured rows too.
+    static func leavesEnd(readerLeft: Bool, height: CGFloat, visible: CGFloat, offset: CGFloat, was: CGFloat) -> Bool {
+        readerLeft && height > visible + atBottom && offset < was - 1 && offset + visible < height - leftEnd
+    }
+
+    /// A tab shown again with rows that came while it was hidden, and following: built anew at
+    /// the end. Not a magnified page, which keeps its own place (`PinchZoom`).
+    static func renewsOnShow(showing: Bool, grew: Bool, following: Bool, magnified: Bool) -> Bool {
+        showing && grew && following && !magnified
     }
 
     /// Whether layout pins a followed end: new content or rows measured anew (a new height), an
@@ -907,7 +977,11 @@ struct TranscriptTimeline: View, Equatable {
         if shift.isMagnified {
             shift.hold(.end, until: Date() + Self.landing)
         } else {
-            proxy.scrollTo(Self.end, anchor: .bottom)
+            // At once, whatever transaction layout runs in (a glide's would animate it, and an
+            // animation under way outlives a reader's move).
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) { proxy.scrollTo(Self.end, anchor: .bottom) }
         }
     }
 
@@ -958,7 +1032,7 @@ struct TranscriptTimeline: View, Equatable {
         let (tops, answerTops, hold) = (rowTops, answerTops, widthHold)
         let (anchor, readerMoved, geometry, position, nudge, shift, visible) = (anchor, readerMoved, geometry, position, nudge, shift, visibleHeight)
         let foldKeep = foldKeep
-        let (following, opened) = (following, openMessages)
+        let (following, opened, taken) = (following, openMessages, followTaken)
         let scroll = scroll
         // Each row's new frame, and the reader's place kept as the width changes (`WidthHold`).
         let put = { (put: WidthHold.Put?) in
@@ -969,8 +1043,8 @@ struct TranscriptTimeline: View, Equatable {
                 if case .offset(let offset) = place {
                     geometry.value.offset = offset
                     hold.rest = (offset, false)
-                    // Not at the end (a move with no scroll phase left it set): not followed.
-                    following.value = false
+                    // Not at the end (a move of the reader's left it set): not followed.
+                    if Self.readerLeft(inputs: shift.readerInputs, taken: taken.value) { following.value = false }
                 } else {
                     hold.rest?.atEnd = true
                 }

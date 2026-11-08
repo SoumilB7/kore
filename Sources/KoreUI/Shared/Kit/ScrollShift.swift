@@ -27,6 +27,76 @@ final class ScrollShift: ObservableObject {
         release()
         scrollView = scroll
         Self.known.setObject(self, forKey: scroll)
+        Self.watchInput()
+        liveObservers.forEach(NotificationCenter.default.removeObserver)
+        // A live scroll is the reader's: the trackpad, the wheel's momentum, the scroller dragged.
+        liveObservers = [NSScrollView.willStartLiveScrollNotification, NSScrollView.didLiveScrollNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: scroll, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated { self?.readerInput() }
+            }
+        }
+    }
+
+    // MARK: The reader's own input
+
+    /// The reader's own moves of this view, counted: a live scroll (the trackpad, the scroller
+    /// dragged), a wheel turn over it, a click on its scroller, a key that scrolls it while it
+    /// has the keyboard. Only those leave the end by moving it (`TranscriptTimeline`): layout, the
+    /// lazy stack measuring rows and SwiftUI settling a scroll of ours move the view too, in
+    /// passes of their own. Kore's own moves away from it (a jump, a reveal) drop the end as
+    /// they're made.
+    private(set) var readerInputs = 0
+    func readerInput() { readerInputs &+= 1 }
+    private var liveObservers: [NSObjectProtocol] = []
+
+    isolated deinit { liveObservers.forEach(NotificationCenter.default.removeObserver) }
+
+    /// A move of `scroll` made for the reader (the navigation bench's, standing in for the scroll bar).
+    static func readerMoved(_ scroll: NSScrollView) { known.object(forKey: scroll)?.readerInput() }
+
+    private static var inputMonitor: Any?
+    /// Home, Page Up, End, Page Down, ↓, ↑, space: keys a scroll view takes to move.
+    private static let movingKeys: Set<UInt16> = [115, 116, 119, 121, 125, 126, 49]
+
+    /// One monitor for the app, as events come in (nothing per frame).
+    private static func watchInput() {
+        guard inputMonitor == nil else { return }
+        inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown, .leftMouseDown]) { event in
+            MainActor.assumeIsolated { route(event) }
+            return event
+        }
+    }
+
+    /// A wheel with no phases counts each turn; a gesture once, as it begins (its live scroll
+    /// counts the rest).
+    static func countsWheel(_ phase: NSEvent.Phase, momentum: NSEvent.Phase) -> Bool {
+        phase.isEmpty && momentum.isEmpty || phase.contains(.began)
+    }
+
+    /// A wheel turn counts for the scroll view under the pointer, and a click for the one whose
+    /// scroller it's on; a scrolling key for the one holding the keyboard, unless a text has it.
+    static func route(_ event: NSEvent) {
+        guard let window = event.window else { return }
+        let view: NSView?
+        let hit = { window.contentView.flatMap { $0.hitTest($0.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow) } }
+        switch event.type {
+        case .scrollWheel:
+            guard countsWheel(event.phase, momentum: event.momentumPhase) else { return }
+            view = hit()
+        case .leftMouseDown:
+            guard let scroller = hit() as? NSScroller else { return }
+            view = scroller.superview
+        case .keyDown where movingKeys.contains(event.keyCode):
+            view = window.firstResponder as? NSView
+            if view is NSText { return }
+        default:
+            return
+        }
+        var scroll = view as? NSScrollView ?? view?.enclosingScrollView
+        while let current = scroll {
+            if let shift = known.object(forKey: current) { return shift.readerInput() }
+            scroll = current.enclosingScrollView
+        }
     }
 
     @discardableResult
