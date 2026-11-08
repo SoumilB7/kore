@@ -187,7 +187,7 @@ struct FsOpsFallbackTests {
             connection.release()
             rig.finish()
         }
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         #expect(connection.fsOps2)
         let work = rig.folder.path
         try FileManager.default.createDirectory(atPath: work + "/src", withIntermediateDirectories: true)

@@ -39,7 +39,7 @@ struct ChatMoveTests {
         try FileManager.default.createDirectory(at: mac, withIntermediateDirectories: true)
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         #expect(connection.moves)
         let store = MovedChats(root: rig.root.appendingPathComponent("cache"))
         var moves = ChatMoves(connection: connection, box: try fakeSSH(rig.root), staging: rig.root.appendingPathComponent("staging"), name: "MacBook", store: store)

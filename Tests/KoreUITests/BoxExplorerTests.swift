@@ -215,7 +215,9 @@ struct BoxExplorerTests {
     }
 
     func until(_ check: () -> Bool) async throws {
-        let end = ContinuousClock.now + .seconds(3)
+        // Ends only a wait that never would: as soon as it holds, it goes on (3 s ran out
+        // while a parallel gate kept the main actor busy).
+        let end = ContinuousClock.now + .seconds(30)
         while !check() {
             guard ContinuousClock.now < end else { throw CancellationError() }
             try await Task.sleep(for: .milliseconds(5))

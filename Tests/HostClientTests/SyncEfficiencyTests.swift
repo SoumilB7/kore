@@ -98,7 +98,7 @@ struct SyncEfficiencyTests {
                 let socket = try #require(rig.sync.channel?.socket)
                 #expect(FileManager.default.fileExists(atPath: socket))
                 rig.sync.stop()
-                #expect(await until(5) { !FileManager.default.fileExists(atPath: socket) })
+                #expect(await until { !FileManager.default.fileExists(atPath: socket) })
             }
         }
     }

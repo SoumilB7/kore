@@ -156,7 +156,7 @@ struct HostSyncTests {
         let pair = rig.pair(mac, box)
         #expect(SyncPairs.pair(alias: "testbox", box: box.path, rig.defaults) == pair)
         let sync = try rig.sync(pair)
-        #expect(await until(15) { read(box, "a.txt") == "one" && read(box, "sub/b.txt") == "two" })
+        #expect(await until { read(box, "a.txt") == "one" && read(box, "sub/b.txt") == "two" })
         #expect(read(mac, "a.txt") == "one")
         sync.stop()
     }
@@ -174,7 +174,7 @@ struct HostSyncTests {
         try FileManager.default.createDirectory(at: mac, withIntermediateDirectories: true)
         #expect(await rig.check(mac, box) == .go(.toMac))
         let sync = try rig.sync(rig.pair(mac, box))
-        #expect(await until(15) { read(mac, "index.html") == "<p>" && read(mac, "css/s.css") == "p{}" })
+        #expect(await until { read(mac, "index.html") == "<p>" && read(mac, "css/s.css") == "p{}" })
         #expect(read(mac, ".git/HEAD") == nil)
         #expect(read(box, "index.html") == "<p>")
         sync.stop()
@@ -193,10 +193,10 @@ struct HostSyncTests {
         try write(mac, "same.txt", "mac version")
         #expect(await rig.check(mac, box) == .ask(HostSync.mergeQuestion, .merge))
         let sync = try rig.sync(rig.pair(mac, box))
-        #expect(await until(15) { read(mac, "box.txt") == "made on the box" && read(box, "mac.txt") == "made here" })
-        #expect(await until(10) { read(mac, "same (testbox).txt") == "box version, longer" && read(box, "same (testbox).txt") == "box version, longer" })
+        #expect(await until { read(mac, "box.txt") == "made on the box" && read(box, "mac.txt") == "made here" })
+        #expect(await until { read(mac, "same (testbox).txt") == "box version, longer" && read(box, "same (testbox).txt") == "box version, longer" })
         #expect(read(mac, "same.txt") == "mac version")
-        #expect(await until(5) { read(box, "same.txt") == "mac version" })
+        #expect(await until { read(box, "same.txt") == "mac version" })
         sync.stop()
     }
 
@@ -213,7 +213,7 @@ struct HostSyncTests {
         try write(mac, "mac.txt", "made here")
         #expect(await rig.check(mac, box) == .ask(HostSync.mergeQuestion, .merge))
         var sync = try rig.sync(rig.pair(mac, box))
-        #expect(await until(15) { read(mac, "box.txt") != nil && read(box, "mac.txt") != nil })
+        #expect(await until { read(mac, "box.txt") != nil && read(box, "mac.txt") != nil })
         sync.stop()
         HostSync.drop(boxes: ["testbox"], root: rig.cache, defaults: rig.defaults)
         #expect(SyncPairs.all(rig.defaults).isEmpty)
@@ -221,7 +221,7 @@ struct HostSyncTests {
         try FileManager.default.removeItem(at: mac.appendingPathComponent("box.txt"))
         #expect(await rig.check(mac, box) == .ask(HostSync.mergeQuestion, .merge))
         sync = try rig.sync(rig.pair(mac, box))
-        #expect(await until(15) { read(mac, "box.txt") == "made on the box" })
+        #expect(await until { read(mac, "box.txt") == "made on the box" })
         #expect(read(box, "box.txt") == "made on the box" && read(box, "mac.txt") == "made here" && read(mac, "mac.txt") == "made here")
         sync.stop()
     }
@@ -236,7 +236,7 @@ struct HostSyncTests {
         let box = try await rig.boxFolder("keep")
         let pair = rig.pair(mac, box)
         let sync = try rig.sync(pair)
-        #expect(await until(15) { read(box, "f4.txt") == "4" })
+        #expect(await until { read(box, "f4.txt") == "4" })
         try await settle(sync)
         HostSync.unpair(alias: "testbox", box: box.path, root: rig.cache, defaults: rig.defaults)
         #expect(SyncPairs.pair(alias: "testbox", box: box.path, rig.defaults) == nil)
@@ -272,7 +272,7 @@ struct HostSyncTests {
         #expect(SyncPairs.pair(mac: mac.standardizedFileURL.path, rig.defaults) == pair)
         let copy = URL(fileURLWithPath: pair.box)
         var sync = try rig.sync(pair)
-        #expect(await until(15) { read(copy, "a.txt") == "one" && read(copy, "sub/b.txt") == "two" && odd.allSatisfy { read(copy, $0) == $0 } })
+        #expect(await until { read(copy, "a.txt") == "one" && read(copy, "sub/b.txt") == "two" && odd.allSatisfy { read(copy, $0) == $0 } })
         #expect(read(copy, "debug.log") == nil)
         #expect(read(copy, "node_modules/x.js") == nil)
         #expect(!FileManager.default.fileExists(atPath: copy.appendingPathComponent("PWNED").path))
@@ -282,31 +282,31 @@ struct HostSyncTests {
         try await settle(sync)
         let before = sync.carried
         try write(mac, "a.txt", "mac edit")
-        #expect(await until(10) { read(copy, "a.txt") == "mac edit" })
+        #expect(await until { read(copy, "a.txt") == "mac edit" })
         try await Task.sleep(for: .seconds(2))
         #expect(sync.carried == before + 1)
 
         // The box's edit reaches the Mac, once.
         try write(copy, "sub/b.txt", "box edit")
-        #expect(await until(10) { read(mac, "sub/b.txt") == "box edit" })
+        #expect(await until { read(mac, "sub/b.txt") == "box edit" })
         try await Task.sleep(for: .seconds(2))
         #expect(sync.carried == before + 2)
 
         // A delete on the Mac goes on the box.
         try FileManager.default.removeItem(at: mac.appendingPathComponent("a.txt"))
-        #expect(await until(10) { read(copy, "a.txt") == nil })
+        #expect(await until { read(copy, "a.txt") == nil })
 
         // A rename that changes only case on the box is a rename on the Mac, never a delete.
         try FileManager.default.moveItem(at: copy.appendingPathComponent("c.txt"), to: copy.appendingPathComponent("C.txt"))
-        #expect(await until(10) { (try? FileManager.default.contentsOfDirectory(atPath: mac.path))?.contains("C.txt") == true })
+        #expect(await until { (try? FileManager.default.contentsOfDirectory(atPath: mac.path))?.contains("C.txt") == true })
         try await settle(sync)
         #expect(read(mac, "C.txt") == "three" && read(copy, "C.txt") == "three")
 
         // A newly ignored folder stops syncing and is deleted on neither side, a whole round included.
         try write(mac, "data/keep.csv", "1,2")
-        #expect(await until(10) { read(copy, "data/keep.csv") == "1,2" })
+        #expect(await until { read(copy, "data/keep.csv") == "1,2" })
         try write(mac, ".gitignore", "*.log\ndata/\n")
-        #expect(await until(10) { read(copy, ".gitignore") == "*.log\ndata/\n" })
+        #expect(await until { read(copy, ".gitignore") == "*.log\ndata/\n" })
         try await settle(sync)
         sync.stop()
         sync = try rig.sync(pair)
@@ -319,10 +319,10 @@ struct HostSyncTests {
         try write(mac, "C.txt", "mac side")
         try write(copy, "C.txt", "box side, longer")
         sync = try rig.sync(pair)
-        #expect(await until(15) { read(mac, "C (testbox).txt") == "box side, longer" && read(copy, "C (testbox).txt") == "box side, longer" })
+        #expect(await until { read(mac, "C (testbox).txt") == "box side, longer" && read(copy, "C (testbox).txt") == "box side, longer" })
         #expect(read(mac, "C.txt") == "mac side")
-        #expect(await until(5) { read(copy, "C.txt") == "mac side" })
-        #expect(await until(5) { sync.notice?.contains("Kept both") == true })
+        #expect(await until { read(copy, "C.txt") == "mac side" })
+        #expect(await until { sync.notice?.contains("Kept both") == true })
         sync.stop()
     }
 
@@ -337,7 +337,7 @@ struct HostSyncTests {
         let pair = try await rig.copy(mac)
         let copy = URL(fileURLWithPath: pair.box)
         var sync = try rig.sync(pair)
-        #expect(await until(15) { read(copy, "f19.txt") == "19" })
+        #expect(await until { read(copy, "f19.txt") == "19" })
         try await settle(sync)
         sync.stop()
 
@@ -345,14 +345,14 @@ struct HostSyncTests {
         let aside = rig.root.appendingPathComponent("aside")
         try FileManager.default.moveItem(at: copy, to: aside)
         sync = try rig.sync(pair)
-        #expect(await until(10) { sync.notice?.contains("missing on testbox") == true })
+        #expect(await until { sync.notice?.contains("missing on testbox") == true })
         #expect(read(mac, "f0.txt") == "0" && read(mac, "f19.txt") == "19")
         sync.stop()
 
         // The box copy is there but empty: the same.
         try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
         sync = try rig.sync(pair)
-        #expect(await until(10) { sync.notice?.contains("is empty on testbox") == true })
+        #expect(await until { sync.notice?.contains("is empty on testbox") == true })
         #expect(read(mac, "f0.txt") == "0" && read(mac, "f19.txt") == "19")
         sync.stop()
         try FileManager.default.removeItem(at: copy)
@@ -361,10 +361,10 @@ struct HostSyncTests {
         // Twelve of twenty go on the box: asked first, then done once allowed.
         for i in 0..<12 { try FileManager.default.removeItem(at: copy.appendingPathComponent("f\(i).txt")) }
         sync = try rig.sync(pair)
-        #expect(await until(10) { sync.askDeletes == 12 })
+        #expect(await until { sync.askDeletes == 12 })
         #expect(read(mac, "f0.txt") == "0")
         sync.allowDeletes()
-        #expect(await until(10) { read(mac, "f0.txt") == nil && read(mac, "f11.txt") == nil })
+        #expect(await until { read(mac, "f0.txt") == nil && read(mac, "f11.txt") == nil })
         #expect(read(mac, "f12.txt") == "12")
         sync.stop()
     }
@@ -382,8 +382,8 @@ struct HostSyncTests {
         let old = SyncPair(mac: mac.standardizedFileURL.path, alias: "testbox", box: box.path, fresh: true)
         SyncPairs.save(old, rig.defaults)
         let sync = try rig.sync(old)
-        #expect(await until(15) { read(box, "w.txt") == "work" && read(box, "stale.txt") == nil })
-        #expect(await until(5) { SyncPairs.pair(mac: mac.standardizedFileURL.path, rig.defaults)?.fresh == nil })
+        #expect(await until { read(box, "w.txt") == "work" && read(box, "stale.txt") == nil })
+        #expect(await until { SyncPairs.pair(mac: mac.standardizedFileURL.path, rig.defaults)?.fresh == nil })
         sync.stop()
     }
 
@@ -405,7 +405,7 @@ struct HostSyncTests {
         defer { connection.release() }
         let defaults = try #require(UserDefaults(suiteName: "kore-sync-real-\(UUID().uuidString)"))
         let box = try #require(SyncBox.ssh(alias))
-        #expect(await until(20) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         let made = await box.shell("mkdir -p -- \"$HOME/Code/kore-sync-check\" && cd -- \"$HOME/Code/kore-sync-check\" && pwd")
         let path = made.out.trimmingCharacters(in: .whitespacesAndNewlines)
         _ = try await connection.addFolder(path).get()
@@ -433,7 +433,7 @@ struct HostSyncTests {
         }
         #expect(pushed)
         _ = await box.shell("printf 'box edit' > \"$1/sub/b.txt\"", [pair.box])
-        #expect(await until(20) { read(mac, "sub/b.txt") == "box edit" })
+        #expect(await until { read(mac, "sub/b.txt") == "box edit" })
         print("real box: watching \(sync.boxWatches) carried \(sync.carried) rounds \(sync.rounds) notice \(sync.notice ?? "-")")
         sync.stop()
     }
@@ -472,14 +472,14 @@ struct HostSyncTests {
             daemon.environment = env
             try daemon.run()
             let socket = root.appendingPathComponent("run/kore-host/link.sock").path
-            #expect(await until(10) { FileManager.default.fileExists(atPath: socket) })
+            #expect(await until { FileManager.default.fileExists(atPath: socket) })
             cache = root.appendingPathComponent("cache")
             connection = HostConnection(alias: "testbox", cache: HostCache(alias: "testbox", root: cache)) {
                 SSHTransport(executable: bin, arguments: ["attach", "--as", "laptop"], environment: env)
             }
             connection.retain()
             let connection = connection
-            #expect(await until(10) { connection.isOnline })
+            #expect(await until { connection.isOnline })
             defaults = UserDefaults(suiteName: "kore-sync-test-\(UUID().uuidString)")!
             box = try fakeBox(root, base: root.appendingPathComponent("code"))
         }

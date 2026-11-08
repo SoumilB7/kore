@@ -49,7 +49,7 @@ struct BoxTermGitTests {
         defer { rig.finish() }
         rig.host.terminals.base = ["HOME": rig.root.path, "PATH": "/usr/bin:/bin", "PS1": "$ "]
         let link = Link(rig)
-        #expect(await until(5) { link.connection.isOnline })
+        #expect(await until { link.connection.isOnline })
         #expect(link.connection.caps.contains("pty"))
 
         let pty = BoxPty(connection: link.connection, cwd: rig.folder.path)
@@ -68,29 +68,29 @@ struct BoxTermGitTests {
         // Typed before the shell is there: it goes once it is.
         pty.input(Data("echo h''i\r".utf8))
         pty.open()
-        #expect(await until(5) { text.contains("hi\r\n") })
+        #expect(await until { text.contains("hi\r\n") })
         #expect(shell != nil)
         pty.input(Data("stty size\r".utf8))
-        #expect(await until(5) { text.contains("30 100") })
+        #expect(await until { text.contains("30 100") })
         pty.resize(cols: 90, rows: 20)
         pty.input(Data("stty size\r".utf8))
-        #expect(await until(5) { text.contains("20 90") })
+        #expect(await until { text.contains("20 90") })
 
         // The link drops; the shell writes meanwhile; back, it shows that once, with no reset.
         pty.input(Data("sleep 0.3; echo la''ter\r".utf8))
-        #expect(await until(5) { text.contains("sleep 0.3") })
+        #expect(await until { text.contains("sleep 0.3") })
         link.transports.last?.close()
-        #expect(await until(5) { !link.connection.isOnline })
-        #expect(await until(5) { link.connection.isOnline })
-        #expect(await until(5) { text.contains("later\r\n") })
+        #expect(await until { !link.connection.isOnline })
+        #expect(await until { link.connection.isOnline })
+        #expect(await until { text.contains("later\r\n") })
         try await Task.sleep(for: .milliseconds(200))
         #expect(text.components(separatedBy: "later\r\n").count == 2)
         #expect(resets == 0)
         #expect(pty.stood == Int64(screen.count))
 
         pty.input(Data("exit 7\r".utf8))
-        #expect(await until(5) { ended == 7 })
-        #expect(await until(5) { rig.host.terminals.count == 0 })
+        #expect(await until { ended == 7 })
+        #expect(await until { rig.host.terminals.count == 0 })
         link.connection.release()
     }
 
@@ -101,9 +101,9 @@ struct BoxTermGitTests {
         let link = Link(rig)
         let pty = BoxPty(connection: link.connection, cwd: rig.folder.path)
         pty.open()
-        #expect(await until(5) { rig.host.terminals.count == 1 && pty.ptyId != nil })
+        #expect(await until { rig.host.terminals.count == 1 && pty.ptyId != nil })
         pty.close()
-        #expect(await until(5) { rig.host.terminals.count == 0 })
+        #expect(await until { rig.host.terminals.count == 0 })
         link.connection.release()
     }
 
@@ -120,12 +120,12 @@ struct BoxTermGitTests {
         try Data("n\n".utf8).write(to: folder.appendingPathComponent("new/n.txt"))
 
         let link = Link(rig)
-        #expect(await until(5) { link.connection.isOnline })
+        #expect(await until { link.connection.isOnline })
         let status = BoxGitStatus(root: folder.path, connection: link.connection)
         var moved: [[String]?] = []
         status.moved = { moved.append($0) }
         status.visible = true
-        #expect(await until(5) { status.state(of: folder.path + "/a.txt") == .modified })
+        #expect(await until { status.state(of: folder.path + "/a.txt") == .modified })
         #expect(status.state(of: folder.path + "/new/n.txt") == .untracked)
         #expect(status.state(of: folder.path + "/new") == .untracked)
         let runs = rig.host.git.runs
@@ -134,7 +134,7 @@ struct BoxTermGitTests {
         let before = status.status
         try Data("one\ntwo\n".utf8).write(to: folder.appendingPathComponent("a.txt"))
         rig.host.git.touched(folder.path + "/a.txt")
-        #expect(await until(5) { status.state(of: folder.path + "/a.txt") == nil })
+        #expect(await until { status.state(of: folder.path + "/a.txt") == nil })
         #expect(status.status != before)
         #expect(status.state(of: folder.path + "/new/n.txt") == .untracked)
         #expect(moved.last == [folder.path + "/a.txt"])
@@ -151,7 +151,7 @@ struct BoxTermGitTests {
 
         // Hidden: the box stops watching.
         status.visible = false
-        #expect(await until(5) { !rig.host.git.watching(folder.path) })
+        #expect(await until { !rig.host.git.watching(folder.path) })
         link.connection.release()
     }
 

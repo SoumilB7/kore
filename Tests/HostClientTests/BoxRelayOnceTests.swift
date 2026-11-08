@@ -341,16 +341,16 @@ struct BoxRelayRigTests {
         let connection = rig.connection()
         connection.retain()
         defer { connection.release() }
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         let box = boxed(provider, rig, connection)
         await box.startOnce()
         #expect(box.sendFromLink("who am i"))
-        #expect(await until(5) { box.transcriptView.entries.contains { $0.kind == .answer && $0.text == "Done." } && !box.isBusy })
+        #expect(await until { box.transcriptView.entries.contains { $0.kind == .answer && $0.text == "Done." } && !box.isBusy })
 
         let here = local(provider, ToolScriptCLI(codex: codex), folder: rig.folder)
         await here.startOnce()
         #expect(here.sendFromLink("who am i"))
-        #expect(await until(5) { here.transcriptView.entries.contains { $0.kind == .answer && $0.text == "Done." } && !here.isBusy })
+        #expect(await until { here.transcriptView.entries.contains { $0.kind == .answer && $0.text == "Done." } && !here.isBusy })
 
         #expect(shown(box) == shown(here))
         #expect(box.transcriptView.entries.filter { $0.kind == .user }.count == 1)
@@ -365,13 +365,13 @@ struct BoxRelayRigTests {
         defer { rig.finish() }
         let ssh = rig.connection()
         ssh.retain()
-        #expect(await until(5) { ssh.isOnline })
+        #expect(await until { ssh.isOnline })
         let made = LinkChatBackend(connection: ssh, provider: .claude, folder: rig.folder.path, chatId: nil, model: nil)
         try await made.start()
         let chatId = try #require(made.chatId)
         let first = await ssh.call(chatId, .send(text: "hello", files: [], queued: nil, id: "m1"))
         #expect(first.ok)
-        #expect(await until(5) { rig.made.last?.calls.contains("send hello m1") == true })
+        #expect(await until { rig.made.last?.calls.contains("send hello m1") == true })
         await made.close()
         ssh.release()
 
@@ -379,7 +379,7 @@ struct BoxRelayRigTests {
         let tailnet = rig.connection()
         tailnet.retain()
         defer { tailnet.release() }
-        #expect(await until(5) { tailnet.isOnline })
+        #expect(await until { tailnet.isOnline })
         let again = await tailnet.call(chatId, .send(text: "hello", files: [], queued: nil, id: "m1"))
         #expect(again.ok)
         #expect(rig.made.flatMap(\.calls).filter { $0.hasPrefix("send hello") } == ["send hello m1"])

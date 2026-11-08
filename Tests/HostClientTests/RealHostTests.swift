@@ -46,7 +46,7 @@ struct RealHostTests {
         try daemon.run()
         defer { daemon.terminate() }
         let socket = root.appendingPathComponent("run/kore-host/link.sock").path
-        #expect(await until(10) { FileManager.default.fileExists(atPath: socket) })
+        #expect(await until { FileManager.default.fileExists(atPath: socket) })
 
         let cache = root.appendingPathComponent("cache")
         func connect() -> HostConnection {
@@ -58,7 +58,7 @@ struct RealHostTests {
         // Handshake, folders, a new chat, one turn.
         let connection = connect()
         connection.retain()
-        #expect(await until(10) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         let folders = await connection.listFolders()
         #expect(folders.map(\.path) == [project.path])
         let backend = LinkChatBackend(connection: connection, provider: provider, folder: project.path, chatId: nil, model: model)
@@ -76,9 +76,9 @@ struct RealHostTests {
         let answer = log.texts.joined().lowercased()
         print("box answer (\(cli)/\(model)): \(answer) · events \(log.events.count)")
         #expect(answer.contains("pong"))
-        #expect(await until(5) { !counted.requests.isEmpty })
+        #expect(await until { !counted.requests.isEmpty })
         print("forwarded requests: \(counted.requests.map { "\($0.request) \($0.units)" })")
-        #expect(await until(5) { connection.chats(in: project.path).map(\.id).contains(chatId) })
+        #expect(await until { connection.chats(in: project.path).map(\.id).contains(chatId) })
         try await Task.sleep(for: .milliseconds(1200))
         connection.cache.flush()
         await backend.close()
@@ -92,7 +92,7 @@ struct RealHostTests {
         let offline = await until { second.texts.joined().lowercased().contains("pong") }
         #expect(offline)
         again.retain()
-        #expect(await until(10) { again.isOnline })
+        #expect(await until { again.isOnline })
         try await Task.sleep(for: .milliseconds(500))
         #expect(!second.events.contains { if case .historyReplaced = $0 { true } else { false } })
         #expect(second.flat.filter { if case .userMessage = $0 { true } else { false } }.count == 1)

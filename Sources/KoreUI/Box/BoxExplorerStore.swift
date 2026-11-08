@@ -107,10 +107,8 @@ final class BoxExplorerStore {
 
     /// The window closed: the box stops watching its folders.
     func stop() {
-        watchTask?.cancel()
-        let source = source, key = watchKey
         watched = []
-        Task { _ = await source.watch(key, [], changed: nil) }
+        sendWatch([])
     }
 
     func toggle(_ path: String) {
@@ -561,11 +559,24 @@ final class BoxExplorerStore {
         let open = openFolders
         guard open != watched else { return }
         watched = open
-        watchTask?.cancel()
+        sendWatch(open)
+    }
+
+    /// Tells the box what to watch, one call at a time in the order the sets were made: two calls
+    /// in flight could land the other way round on a busy Mac (an older set after a newer one, or a
+    /// watch after the window's closing `[]`), leaving the box watching what no longer shows. A set
+    /// a newer one replaced before its turn isn't sent.
+    private func sendWatch(_ folders: Set<String>) {
+        let previous = watchTask
         let source = source, key = watchKey
         watchTask = Task { [weak self] in
-            let watching = await source.watch(key, open) { [weak self] folders in self?.changed(folders) }
-            guard !Task.isCancelled else { return }
+            await previous?.value
+            if let self, self.watched != folders { return }
+            if folders.isEmpty {
+                _ = await source.watch(key, [], changed: nil)
+                return
+            }
+            let watching = await source.watch(key, folders) { [weak self] change in self?.changed(change) }
             self?.watching = watching
         }
     }

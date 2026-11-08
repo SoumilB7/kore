@@ -69,7 +69,7 @@ struct FileCarryTests {
         let rig = try BoxRig()
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         return Box(rig: rig, connection: connection, carry: CarryBox(alias: alias, files: connection, ssh: try fakeSSH(rig.root)))
     }
 
@@ -222,7 +222,7 @@ struct FileCarryTests {
         var told: [Int64] = []
         carry.onProgress = { told.append(carry.bytes) }
         let running = Task { await carry.run() }
-        #expect(await until(5) { carry.bytes >= 30_000 })
+        #expect(await until { carry.bytes >= 30_000 })
         #expect(told.contains { $0 > 0 && $0 < 300_011 })
         // What it measured: the hidden copy in the box folder.
         let place = try #require(measured.first)

@@ -89,7 +89,9 @@ struct ChatWorkEpochTests {
         NetworkWatch.shared.pin(nil)
     }
     private func until(_ condition: () -> Bool) async throws {
-        let end = ContinuousClock.now + .seconds(3)
+        // Ends only a wait that never would: as soon as it holds, it goes on (3 s ran out
+        // while a parallel gate kept the main actor busy).
+        let end = ContinuousClock.now + .seconds(30)
         while !condition() {
             guard ContinuousClock.now < end else { Issue.record("A controlled backend await did not settle"); return }
             try await Task.sleep(for: .milliseconds(2))

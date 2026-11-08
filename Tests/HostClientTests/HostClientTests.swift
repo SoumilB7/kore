@@ -69,7 +69,7 @@ struct HostClientTests {
         // Back: the follow goes again, then the call, once.
         dials.refuse = false
         let back = dials.hosts.count
-        #expect(await until(5) { dials.hosts.count > back })
+        #expect(await until { dials.hosts.count > back })
         let host = dials.hosts[dials.hosts.count - 1]
         _ = await host.handshake(windows: [Fixture.window(["c1"])], chats: [Fixture.meta("c1")])
         #expect(await host.next("chat.follow") != nil)

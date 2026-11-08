@@ -17,7 +17,7 @@ struct BoxGlueTests {
         defer { rig.finish() }
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         let (chat, _) = rig.chat(connection, id: nil)
         await chat.startOnce()
         let inside = rig.folder.path + "/notes.txt"
@@ -26,11 +26,11 @@ struct BoxGlueTests {
         #expect(BoxFileRef.path(URL(fileURLWithPath: inside)) == nil)
 
         #expect(chat.sendFromLink("read it", files: [BoxFileRef.url(inside)]))
-        #expect(await until(5) { !(rig.made.last?.files ?? []).isEmpty })
+        #expect(await until { !(rig.made.last?.files ?? []).isEmpty })
         // Not uploaded: the box's CLI gets the file where it is.
         #expect((rig.made.last?.files ?? []).first?.url.path == inside)
         #expect((rig.made.last?.files ?? []).first?.name == "notes.txt")
-        #expect(await until(5) { !chat.isBusy })
+        #expect(await until { !chat.isBusy })
 
         let outside = rig.root.path + "/secret.txt"
         try Data("no\n".utf8).write(to: URL(fileURLWithPath: outside))
@@ -57,7 +57,7 @@ struct BoxGlueTests {
         rig.host.terminals.base = ["HOME": rig.root.path, "PATH": "/usr/bin:/bin"]
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
 
         // The explorer shows; a file saved over the link comes back as its state, unasked.
         let git = BoxGitStatus(root: folder.path, connection: connection)
@@ -67,26 +67,26 @@ struct BoxGlueTests {
             HostWire.command(id: $0, .control(.fsWrite, ControlArgs(text: "hi\n", path: folder.path + "/new.txt")))
         }
         #expect(result.ok)
-        #expect(await until(5) { git.state(of: folder.path + "/new.txt") == .untracked })
+        #expect(await until { git.state(of: folder.path + "/new.txt") == .untracked })
 
         // A shell's foreground job: said when it starts and when it ends.
         let pty = BoxPty(connection: connection, cwd: folder.path)
         var text = ""
         pty.output = { bytes, _ in text += String(decoding: bytes, as: UTF8.self) }
         pty.open()
-        #expect(await until(5) { pty.ptyId != nil })
+        #expect(await until { pty.ptyId != nil })
         #expect(!pty.busy)
         pty.input(Data("sleep 1\r".utf8))
-        #expect(await until(5) { pty.busy })
-        #expect(await until(5) { !pty.busy })
+        #expect(await until { pty.busy })
+        #expect(await until { !pty.busy })
 
         // A goodbye (Kore quitting, the last window closing) ends the box's shells.
         let other = BoxPty(connection: connection, cwd: folder.path)
         other.open()
-        #expect(await until(5) { other.ptyId != nil && rig.host.terminals.count == 2 })
+        #expect(await until { other.ptyId != nil && rig.host.terminals.count == 2 })
         HostConnection.adopt(connection)
         HostConnection.quitAll()
-        #expect(await until(5) { rig.host.terminals.count == 0 })
+        #expect(await until { rig.host.terminals.count == 0 })
         git.visible = false
         connection.release()
     }

@@ -23,7 +23,7 @@ struct CarryResumeTests {
         let rig = try BoxRig()
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         return Box(rig: rig, connection: connection)
     }
 

@@ -29,7 +29,7 @@ struct ChatCopyClientTests {
         rig.host.sessionEnv = ["CLAUDE_CONFIG_DIR": rig.root.appendingPathComponent("boxclaude").path, "HOME": rig.root.path]
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         #expect(connection.copiesChats)
         let moves = ChatMoves(
             connection: connection, box: try fakeSSH(rig.root), staging: rig.root.appendingPathComponent("staging"), name: "MacBook",
@@ -87,9 +87,9 @@ struct ChatCopyClientTests {
         // Its history, once its CLI starts there, has the copy's line at the top.
         let live = try #require(b.rig.host.live(chat))
         await live.start()
-        #expect(await until(5) { !b.rig.made.isEmpty })
+        #expect(await until { !b.rig.made.isEmpty })
         b.rig.cli.sink.yield(.replayed([.userMessage(text: "step 0", attachments: [], id: "u0"), .text("a0", .answer, "ok")]))
-        #expect(await until(5) { live.transcriptView.entries.count >= 3 })
+        #expect(await until { live.transcriptView.entries.count >= 3 })
         #expect(live.transcriptView.entries.first?.kind == .divider && live.transcriptView.entries.first?.text == "Copied from “Repos” · app")
         #expect(live.transcriptView.entries.dropFirst().first?.kind == .user)
         print("mac → box copy: rsync sent \(made.cost.rsyncSent) B, link \(made.cost.linkBytes) B")

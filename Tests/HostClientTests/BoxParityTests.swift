@@ -209,20 +209,20 @@ struct BoxParityTests {
         defer { rig.finish() }
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         #expect(connection.streams)
         let (chat, backend) = rig.chat(connection, id: nil)
         await chat.startOnce()
 
         // The box's CLI starts as the tab shows; its model list, model and wheel reach this chat.
-        #expect(await until(5) { chat.controls.models.map(\.id) == ["small", "other"] })
+        #expect(await until { chat.controls.models.map(\.id) == ["small", "other"] })
         #expect(chat.controls.modelId == "small")
         #expect(await until { chat.context.usage?.used == 30_000 })
         #expect(chat.sessionId == "s1")
 
         // A message: its row once, its answer streamed whole.
         #expect(chat.sendFromLink("hello"))
-        #expect(await until(5) { rows(chat, .answer) == ["Hi: hello"] && !chat.isBusy })
+        #expect(await until { rows(chat, .answer) == ["Hi: hello"] && !chat.isBusy })
         #expect(rows(chat, .user) == ["hello"])
         let message = try #require(chat.transcriptView.entries.first { $0.kind == .user })
         #expect(rig.cli.calls.contains("send hello \(message.source ?? "")"))
@@ -239,7 +239,7 @@ struct BoxParityTests {
         // A slash command the box's CLI offers.
         #expect(chat.sendFromLink("/review now"))
         #expect(await until { rig.cli.calls.contains { $0.hasPrefix("send /review now") } })
-        #expect(await until(5) { !chat.isBusy })
+        #expect(await until { !chat.isBusy })
 
         // An approval asked there is answered here.
         rig.cli.sink.yield(.approvalRequested(Approval(id: "ap1", title: "Run ls", detail: nil, body: nil, canAlwaysAllow: false, questions: [])))
@@ -257,11 +257,11 @@ struct BoxParityTests {
         let file = rig.root.appendingPathComponent("notes.txt")
         try Data("box notes\n".utf8).write(to: file)
         #expect(chat.sendFromLink("read it", files: [file]))
-        #expect(await until(5) { !rig.cli.files.isEmpty })
+        #expect(await until { !rig.cli.files.isEmpty })
         let sent = try #require(rig.cli.files.first)
         #expect(sent.url.path.hasPrefix(rig.root.path + "/state") && sent.name == "notes.txt")
         #expect(try Data(contentsOf: sent.url) == Data("box notes\n".utf8))
-        #expect(await until(5) { !chat.isBusy })
+        #expect(await until { !chat.isBusy })
 
         // Fork: where it starts comes from the box's backend.
         let start = await chat.forkStart(message)
@@ -270,7 +270,7 @@ struct BoxParityTests {
 
         // Rollback: the box's history is cut, and this chat shows what's left.
         chat.rollBack(message)
-        #expect(await until(5) { rows(chat, .user) == ["first"] })
+        #expect(await until { rows(chat, .user) == ["first"] })
         #expect(rig.cli.calls.contains("rollback \(message.source ?? "")"))
         #expect(rows(boxChat, .user) == ["first"])
 
@@ -330,10 +330,10 @@ struct BoxParityTests {
         let connection = rig.connection()
         connection.retain()
         defer { connection.release() }
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         let (chat, _) = rig.chat(connection, id: hc.id)
         await chat.startOnce()
-        #expect(await until(5) { rows(chat, .answer) == ["half"] })
+        #expect(await until { rows(chat, .answer) == ["half"] })
         #expect(await until { !chat.isBusy && !chat.status.isRunning })
         // Live after the catch-up: a turn starts and ends as the box says.
         hc.stream.add(.turnStarted("t2", origin: .user, at: .now), by: nil)
@@ -345,17 +345,17 @@ struct BoxParityTests {
         // A turn the box's CLI is running now: a follow from 0 keeps it running.
         let running = try #require(rig.host.live(hc))
         await running.startOnce()
-        #expect(await until(5) { !rig.made.isEmpty })
+        #expect(await until { !rig.made.isEmpty })
         rig.cli.sink.yield(.turnStarted("t3", origin: .user, at: .now))
         #expect(await until { hc.running })
         let other = rig.connection()
         other.retain()
         defer { other.release() }
-        #expect(await until(5) { other.isOnline && other.chats[hc.id]?.running == true })
+        #expect(await until { other.isOnline && other.chats[hc.id]?.running == true })
         let (watching, _) = rig.chat(other, id: hc.id)
         await watching.startOnce()
         rig.cli.sink.yield(.text("b3", .answer, "working"))
-        #expect(await until(5) { rows(watching, .answer).last == "working" })
+        #expect(await until { rows(watching, .answer).last == "working" })
         #expect(watching.isBusy)
         rig.cli.sink.yield(.turnFinished("t3", .completed, duration: nil))
         #expect(await until { !watching.isBusy })
@@ -381,7 +381,7 @@ struct BoxParityTests {
         let connection = rig.connection()
         connection.retain()
         defer { connection.release() }
-        #expect(await until(5) { connection.isOnline && connection.marksLive })
+        #expect(await until { connection.isOnline && connection.marksLive })
 
         /// A Mac chat on it: what its backend gave it, and whether it was ever busy after an event.
         func open() async -> (Chat, () -> [ChatEvent], () -> Bool) {
@@ -399,11 +399,11 @@ struct BoxParityTests {
 
         // Nothing held here: the whole log, one history.
         let (first, raw, busy) = await open()
-        #expect(await until(5) { rows(first, .answer).count == turns })
+        #expect(await until { rows(first, .answer).count == turns })
         #expect(count(raw(), history) == 1 && count(raw(), started) == 0 && !busy() && !first.isBusy)
         // The composer works at once.
         #expect(first.sendFromLink("next"))
-        #expect(await until(5) { rows(first, .answer).last == "Hi: next" && !first.isBusy })
+        #expect(await until { rows(first, .answer).last == "Hi: next" && !first.isBusy })
         connection.cache.flush()
 
         // Closed (the box closes it, this Mac keeps its copy), then opened again from History.
@@ -415,7 +415,7 @@ struct BoxParityTests {
         let back = rig.host.apply(.control(.historyOpen, ControlArgs(sessionId: hc.id)), id: "h1", control: .full) { _ in }
         #expect(back?.ok == true && back?.chatId == hc.id)
         let (again, rawAgain, busyAgain) = await open()
-        #expect(await until(5) { rows(again, .answer).count == turns + 1 })
+        #expect(await until { rows(again, .answer).count == turns + 1 })
         let shown = rawAgain().filter(history)
         // The copy at once; then only what came since (the close's own end of things), if anything.
         #expect((1...2).contains(shown.count) && count(rawAgain(), started) == 0 && !busyAgain() && !again.isBusy)
@@ -423,7 +423,7 @@ struct BoxParityTests {
         #expect(again.sendFromLink("more"))
         // (The stand-in CLI names each answer's block by its own count of calls: this one's joins
         // the row of the last, from the CLI before it.)
-        #expect(await until(5) { rows(again, .answer).last?.hasSuffix("Hi: more") == true && !again.isBusy })
+        #expect(await until { rows(again, .answer).last?.hasSuffix("Hi: more") == true && !again.isBusy })
         again.close()
     }
 
@@ -432,7 +432,7 @@ struct BoxParityTests {
         defer { rig.finish() }
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         let (chat, backend) = rig.chat(connection, id: nil)
         await chat.startOnce()
         let link = try #require(backend())
@@ -453,12 +453,12 @@ struct BoxParityTests {
         defer { rig.finish() }
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         #expect(connection.keepsHistory)
         let (chat, backend) = rig.chat(connection, id: nil)
         await chat.startOnce()
         #expect(chat.sendFromLink("one"))
-        #expect(await until(5) { rows(chat, .answer) == ["Hi: one"] && !chat.isBusy })
+        #expect(await until { rows(chat, .answer) == ["Hi: one"] && !chat.isBusy })
         let link = try #require(backend())
         let hc = try #require(link.chatId.flatMap(rig.host.chat))
 
@@ -470,7 +470,7 @@ struct BoxParityTests {
 
         // Rename: through `chat.call`, kept on the box (its list and other Macs read it there).
         chat.rename("Release plan")
-        #expect(await until(5) { hc.record.title == "Release plan" })
+        #expect(await until { hc.record.title == "Release plan" })
         // Fork: its start from the box, then a new chat there from that point, titled.
         let message = try #require(chat.transcriptView.entries.first { $0.kind == .user })
         guard case .pending(let point)? = await chat.forkStart(message) else { Issue.record("no fork point"); return }
@@ -484,9 +484,9 @@ struct BoxParityTests {
 
         // The point and the draft: kept on the box.
         chat.setAutoCompact(70)
-        #expect(await until(5) { hc.record.autoCompact == 70 })
+        #expect(await until { hc.record.autoCompact == 70 })
         link.keepDraft("/review half a thought")
-        #expect(await until(5) { hc.record.draft == "/review half a thought" })
+        #expect(await until { hc.record.draft == "/review half a thought" })
 
         // Another client's changes reach this chat.
         var point2: Int?? = nil
@@ -499,7 +499,7 @@ struct BoxParityTests {
         _ = rig.host.apply(.control(.chatSetAutoCompact, args(ControlArgs(at: 50))), id: "p1", control: .act) { _ in }
         _ = rig.host.apply(.control(.chatSetDraft, args(ControlArgs(text: "from elsewhere"))), id: "p2", control: .act) { _ in }
         _ = rig.host.apply(.control(.chatSetArsenal, args(ControlArgs(tier: "drive"))), id: "p3", control: .full) { _ in }
-        #expect(await until(5) { point2 == .some(50) && draft == "from elsewhere" && tier == .some("drive") })
+        #expect(await until { point2 == .some(50) && draft == "from elsewhere" && tier == .some("drive") })
 
         // History: the box's past sessions, opened as a box chat; renamed and archived there.
         rig.sessions["claude"] = [SessionSummary(id: "past1", agent: .claude, title: "Old work", updated: Date(timeIntervalSince1970: 1_700_000_000))]
@@ -527,7 +527,7 @@ struct BoxParityTests {
         defer { rig.finish() }
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         #expect(!connection.streams)
         let backend = LinkChatBackend(connection: connection, provider: .claude, folder: rig.folder.path, chatId: "x", model: nil)
         let log = EventLog(backend.events)
@@ -546,11 +546,11 @@ struct BoxParityTests {
         rig.usage = usage()
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         let (chat, backend) = rig.chat(connection, id: nil)
         await chat.startOnce()
         #expect(chat.sendFromLink("one"))
-        #expect(await until(5) { rows(chat, .answer) == ["Hi: one"] && !chat.isBusy })
+        #expect(await until { rows(chat, .answer) == ["Hi: one"] && !chat.isBusy })
         let chatId = try #require(backend()?.chatId)
         // Nothing of it shows in the chat.
         let reading = PlanReading(
