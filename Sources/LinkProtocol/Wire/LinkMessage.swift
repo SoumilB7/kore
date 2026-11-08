@@ -36,10 +36,13 @@ package enum LinkMessage: Sendable, Equatable {
         package var koreVersion: String
         /// 1.4: "box" for a headless host (`kore-host`); absent for the Mac.
         package var kind: String?
-        package init(name: String, koreVersion: String, kind: String? = nil) {
+        /// 1.4 (a box): whether `gh` is signed in to github.com there.
+        package var ghSignedIn: Bool?
+        package init(name: String, koreVersion: String, kind: String? = nil, ghSignedIn: Bool? = nil) {
             self.name = name
             self.koreVersion = koreVersion
             self.kind = kind
+            self.ghSignedIn = ghSignedIn
         }
     }
 
@@ -128,9 +131,12 @@ package enum LinkMessage: Sendable, Equatable {
         package var tabId: String?
         /// Set on `folders.list`'s and `folder.add`'s results (1.4).
         package var folders: [Folder]?
+        /// Set on `auth.gh`'s result (1.4): the page to open and the one-time code to type there.
+        package var url: String?
+        package var authCode: String?
         package init(
             id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, chatId: String? = nil, windowId: String? = nil,
-            blobId: String? = nil, tabId: String? = nil, folders: [Folder]? = nil
+            blobId: String? = nil, tabId: String? = nil, folders: [Folder]? = nil, url: String? = nil, authCode: String? = nil
         ) {
             self.id = id
             self.ok = ok
@@ -141,6 +147,8 @@ package enum LinkMessage: Sendable, Equatable {
             self.blobId = blobId
             self.tabId = tabId
             self.folders = folders
+            self.url = url
+            self.authCode = authCode
         }
     }
 
@@ -244,7 +252,7 @@ extension LinkMessage: Codable {
         case t, nonce, proto, client, proof, commands, epoch, host, providers, policy, caps, reason, rev, windows, chats, removed, chatId, last,
             count, txRev, entries, turns, hasEarlier, upserts, order, id, entryId, field, offset, text, total, cardId, cmd, ok, code,
             message, windowId, aid, open, recent, op, item, key, turn, uploadId, name, mime, size, sha256, index, data, ref, variant, blobId,
-            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders
+            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders, ghSignedIn, url, authCode
     }
 
     package init(from decoder: any Decoder) throws {
@@ -255,7 +263,8 @@ extension LinkMessage: Codable {
         func extras() throws -> LinkExtras? {
             let mac: MacState? = try o(.mac)
             let clis: [CLIState]? = try o(.clis)
-            return mac == nil && clis == nil ? nil : LinkExtras(mac: mac, clis: clis)
+            let gh: Bool? = try o(.ghSignedIn)
+            return mac == nil && clis == nil && gh == nil ? nil : LinkExtras(mac: mac, clis: clis, ghSignedIn: gh)
         }
         switch t {
         case "challenge": self = .challenge(nonce: try d(.nonce))
@@ -306,7 +315,8 @@ extension LinkMessage: Codable {
             self = .result(
                 .init(
                     id: try d(.id), ok: try d(.ok), code: try o(.code), message: try o(.message), chatId: try o(.chatId), windowId: try o(.windowId),
-                    blobId: try o(.blobId), tabId: try o(.tabId), folders: try o(.folders)))
+                    blobId: try o(.blobId), tabId: try o(.tabId), folders: try o(.folders), url: try o(.url),
+                    authCode: try o(.authCode)))
         case "attn.state": self = .attnState(aid: try d(.aid), open: try d(.open), recent: try d(.recent))
         case "attn.event": self = .attnEvent(aid: try d(.aid), op: try d(.op), item: try o(.item), key: try o(.key), turn: try o(.turn))
         default: self = .unknown(t)
@@ -339,6 +349,7 @@ extension LinkMessage: Codable {
             try c.encode(chats, forKey: .chats)
             try c.encodeIfPresent(extras?.mac, forKey: .mac)
             try c.encodeIfPresent(extras?.clis, forKey: .clis)
+            try c.encodeIfPresent(extras?.ghSignedIn, forKey: .ghSignedIn)
         case .delta(let rev, let windows, let chats, let removed, let extras):
             try c.encode(rev, forKey: .rev)
             try c.encodeIfPresent(windows, forKey: .windows)
@@ -346,6 +357,7 @@ extension LinkMessage: Codable {
             try c.encodeIfPresent(removed, forKey: .removed)
             try c.encodeIfPresent(extras?.mac, forKey: .mac)
             try c.encodeIfPresent(extras?.clis, forKey: .clis)
+            try c.encodeIfPresent(extras?.ghSignedIn, forKey: .ghSignedIn)
         case .policy(let control): try c.encode(control, forKey: .control)
         case .txEarlier(let chatId): try c.encode(chatId, forKey: .chatId)
         case .historyList(let id, let windowId, let query, let archived, let offset):
@@ -444,6 +456,8 @@ extension LinkMessage: Codable {
             try c.encodeIfPresent(r.blobId, forKey: .blobId)
             try c.encodeIfPresent(r.tabId, forKey: .tabId)
             try c.encodeIfPresent(r.folders, forKey: .folders)
+            try c.encodeIfPresent(r.url, forKey: .url)
+            try c.encodeIfPresent(r.authCode, forKey: .authCode)
         case .attnState(let aid, let open, let recent):
             try c.encode(aid, forKey: .aid)
             try c.encode(open, forKey: .open)

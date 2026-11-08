@@ -60,6 +60,8 @@ package enum ControlKind: String, Sendable, CaseIterable {
     // 1.4: a box's folders (its windows).
     case foldersList = "folders.list"
     case folderAdd = "folder.add"
+    /// 1.4: `gh` signs in to github.com on the box, by its device code.
+    case authGh = "auth.gh"
 
     /// It acts on a CLI's account.
     package var onAccount: Bool { rawValue.hasPrefix("account.") }
@@ -425,9 +427,12 @@ package struct CLIState: Codable, Sendable, Equatable {
 package struct LinkExtras: Sendable, Equatable {
     package var mac: MacState?
     package var clis: [CLIState]?
-    package init(mac: MacState? = nil, clis: [CLIState]? = nil) {
+    /// 1.4 (a box): whether `gh` is signed in to github.com there.
+    package var ghSignedIn: Bool?
+    package init(mac: MacState? = nil, clis: [CLIState]? = nil, ghSignedIn: Bool? = nil) {
         self.mac = mac
         self.clis = clis
+        self.ghSignedIn = ghSignedIn
     }
 }
 

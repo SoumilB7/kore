@@ -66,6 +66,34 @@ struct LiveHostTests {
         #expect(w.host.kind == "box")
         guard case .snapshot(_, let windows, let chats, _) = try next() else { Issue.record("no snapshot"); return }
         print("snapshot: \(windows.count) windows, \(chats.count) chats")
+        // The accounts' status, read through the box (nothing is signed in or changed).
+        for cli in ["claude", "codex"] {
+            let ask = try LinkMessage.cmd(id: "acct-\(cli)", .control(.accountRefresh, ControlArgs(provider: cli))).encoded()
+            input.fileHandleForWriting.write(LinkFrame.frame(ask))
+            while true {
+                guard case .result(let r) = try next() else { continue }
+                print("\(cli) account: ok \(r.ok) · \(r.message ?? "-")")
+                break
+            }
+        }
+        // KORE_HOST_SSH_SIGNIN=<cli>: a sign-in starts with the box's no-browser flow and is cancelled.
+        if let cli = ProcessInfo.processInfo.environment["KORE_HOST_SSH_SIGNIN"] {
+            let ask = try LinkMessage.cmd(id: "in", .control(.accountSignIn, ControlArgs(provider: cli))).encoded()
+            input.fileHandleForWriting.write(LinkFrame.frame(ask))
+            while true {
+                guard case .result(let r) = try next(), r.id == "in" else { continue }
+                print("\(cli) sign-in: ok \(r.ok) · \(r.message ?? "-")")
+                #expect(r.ok)
+                break
+            }
+            let cancel = try LinkMessage.cmd(id: "out", .control(.accountCancel, ControlArgs(provider: cli))).encoded()
+            input.fileHandleForWriting.write(LinkFrame.frame(cancel))
+            while true {
+                guard case .result(let r) = try next(), r.id == "out" else { continue }
+                print("\(cli) cancel: ok \(r.ok)")
+                break
+            }
+        }
         input.fileHandleForWriting.write(LinkFrame.frame(try LinkMessage.bye(.quit).encoded()))
     }
 }

@@ -20,6 +20,9 @@ package final class HostDaemon {
     package var maxRunning = 3
     private var idleStops: [String: DispatchWorkItem] = [:]
     private var signIns: [String: SignInHandle] = [:]
+    /// Whether `gh` is signed in, as last read: on a connect and after `auth.gh`.
+    package private(set) var ghSignedIn = false
+    private var ghLogin: Process?
     package static let version = "0.1"
 
     package init(paths: HostPaths) {
@@ -150,9 +153,10 @@ package final class HostDaemon {
     }
 
     func welcome(control: GrantControl) -> LinkMessage.Welcome {
-        LinkMessage.Welcome(
+        ghSignedIn = GitHubLogin.signedIn()
+        return LinkMessage.Welcome(
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
-            host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box"), providers: HostMeta.providers(),
+            host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box"])
     }
@@ -190,7 +194,7 @@ package final class HostDaemon {
 
     /// What a grant may do: `watch` reads, `act` works in chats and folders, `full` also the accounts.
     /// The command's result; nil when it comes later, through `reply` (an account's call).
-    func apply(_ command: LinkCommand, id: String, control: GrantControl, reply: @escaping (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+    func apply(_ command: LinkCommand, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         guard control != .watch else { return fail(.deniedControl, "This grant only watches.") }
         let hc = command.chatId.flatMap(chat)
@@ -275,7 +279,7 @@ package final class HostDaemon {
         }
     }
 
-    private func control(_ kind: ControlKind, _ args: ControlArgs, id: String, control: GrantControl, reply: @escaping (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+    private func control(_ kind: ControlKind, _ args: ControlArgs, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         switch kind {
         case .chatNew:
@@ -296,6 +300,9 @@ package final class HostDaemon {
         case .folderAdd:
             guard let path = args.path, addFolder(path) != nil else { return fail(.goneFolder, "An absolute path to a folder on the box.") }
             return .init(id: id, ok: true, folders: folders)
+        case .authGh:
+            guard control == .full else { return fail(.deniedControl, "GitHub's sign-in needs a grant with full control.") }
+            return gitHub(id: id, reply: reply)
         case .accountSignIn, .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh:
             guard control == .full else { return fail(.deniedControl, "Accounts need a grant with full control.") }
             return account(kind, args, id: id, reply: reply)
@@ -304,12 +311,43 @@ package final class HostDaemon {
         }
     }
 
+    // MARK: GitHub
+
+    /// `gh auth login --web` on the box: the result carries the page and code once `gh` prints
+    /// them; `<id>:done` says how it ended, and `ghSignedIn` follows in a delta.
+    private func gitHub(id: String, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+        if ghLogin?.isRunning == true { ghLogin?.terminate() }
+        ghLogin = GitHubLogin.start(
+            started: { found, said in
+                Task { @MainActor in
+                    if let found {
+                        reply(.init(id: id, ok: true, url: found.url, authCode: found.code))
+                    } else {
+                        let line = said.split(separator: "\n").last.map(String.init) ?? "gh didn't give a code."
+                        reply(.init(id: id, ok: false, code: .invalid, message: line))
+                    }
+                }
+            },
+            ended: { [weak self] ok in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.ghLogin = nil
+                    self.ghSignedIn = GitHubLogin.signedIn()
+                    reply(.init(id: id + ":done", ok: ok, message: ok ? "gh is signed in." : "gh didn't sign in."))
+                    for connection in self.connections where connection.proven {
+                        connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(ghSignedIn: self.ghSignedIn)))
+                    }
+                }
+            })
+        return nil
+    }
+
     // MARK: Accounts
 
     /// The CLIs' own logins on the box. A sign-in's result carries its page (and code) in
     /// `message`, for the client to open; `<id>:done` says how it ended. The others answer once
     /// the CLI has.
-    private func account(_ kind: ControlKind, _ args: ControlArgs, id: String, reply: @escaping (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+    private func account(_ kind: ControlKind, _ args: ControlArgs, id: String, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
         guard let provider = args.provider.flatMap(Registry.provider) else { return .init(id: id, ok: false, code: .invalid, message: "No such CLI.") }
         let ops = provider.account
         let cli = provider.id
@@ -321,7 +359,8 @@ package final class HostDaemon {
             }
             return nil
         case .accountSignIn:
-            let method = ops.methods.first { $0.id == args.method } ?? ops.methods.first
+            // No browser on the box: Codex's device code, and Claude's page whose code is typed back.
+            let method = ops.methods.first { $0.id == (args.method ?? Self.boxMethod[cli]) } ?? ops.methods.first
             guard let method else { return .init(id: id, ok: false, code: .invalid, message: "No sign-in method.") }
             let home = URL(fileURLWithPath: NSHomeDirectory())
             Task { [weak self] in
@@ -361,6 +400,9 @@ package final class HostDaemon {
             return .init(id: id, ok: false, code: .invalid, message: "The box doesn't take that command.")
         }
     }
+
+    /// The sign-in a box uses when the client names none.
+    static let boxMethod = ["claude": "claudeai", "codex": "chatgptDeviceCode"]
 
     private static func told(id: String, provider: String, reading: AccountReading?) -> LinkMessage.Result {
         let message: String =

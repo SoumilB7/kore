@@ -62,7 +62,17 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 | `account.submit` | `provider, serial, input` | The code from the page. |
 | `account.cancel`, `account.signOut` | `provider` | |
 
-All other 1.2/1.3 commands are `invalid` on the box. `account.*` needs a `full` grant.
+| `auth.gh` | | `gh auth login --web` on the box. Result: `url` and `authCode` (the one-time code to type at `url`; `code` stays the error field). When it ends: `result {id: "<id>:done", ok}`, `gh auth setup-git` run, and a `delta` with `ghSignedIn`. |
+
+All other 1.2/1.3 commands are `invalid` on the box. `account.*` and `auth.gh` need a `full` grant.
+Without `method`, `account.signIn` uses the box's no-browser flows: Codex's device code
+(`chatgptDeviceCode`: open `url`, type the code) and Claude's page (`claudeai`: open the page,
+then send the code it shows with `account.submit`).
+
+## GitHub
+
+`ghSignedIn` (whether `gh auth status` succeeds for github.com) is in `welcome.host` and in the
+`snapshot` (beside `windows` and `chats`). It's read on each connect and after `auth.gh`, never polled.
 
 ## CLIs
 

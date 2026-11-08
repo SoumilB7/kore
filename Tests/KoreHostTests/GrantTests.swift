@@ -23,3 +23,18 @@ struct GrantTests {
         #expect(throws: GrantError.self) { try store.allow("../x", control: .act, socket: URL(fileURLWithPath: "/tmp/x.sock")) }
     }
 }
+
+@Suite("gh on the box")
+struct GitHubLoginTests {
+    @Test func theCodeAndPageAreReadFromGhsOutput() {
+        let said = """
+            ! Failed to copy one-time code to clipboard
+            ! First copy your one-time code: 8811-2366
+            Open this URL to continue in your web browser: https://github.com/login/device
+            """
+        let found = GitHubLogin.parse(said)
+        #expect(found?.code == "8811-2366")
+        #expect(found?.url == "https://github.com/login/device")
+        #expect(GitHubLogin.parse("! First copy your one-time code: 8811-2366") == nil)
+    }
+}
