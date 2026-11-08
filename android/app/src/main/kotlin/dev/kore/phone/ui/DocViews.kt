@@ -22,8 +22,11 @@ import kotlinx.serialization.json.JsonObject
  */
 object DocViews {
     private const val BODY = 15f
-    /** A table cell wraps past this many dp rather than widening its column. */
-    private const val CELL_MAX = 260
+    /** The least a table column gets in a grid; under it the table stacks (spec §5). */
+    private const val COL_MIN = 72
+    /** A stacked card's header column. */
+    private const val STACK_HEADER = 52
+    private const val CELL_SP = 14f
     private const val LINE = 1.4f
     private val CODE = android.graphics.Color.parseColor("#E8C08A")
 
@@ -103,38 +106,106 @@ object DocViews {
     }
 
     /**
-     * A grid in its own box: columns line up (a TableLayout), a long cell wraps at [CELL_MAX] dp
-     * rather than stretching its column, and a table wider than the screen scrolls sideways with
-     * a scrollbar and a fading edge saying there's more. The header row is bold.
+     * A table that fits the width it gets (spec §5): a grid with wrapping cells when every column
+     * can have [COL_MIN] dp, else one card per row. Nothing scrolls sideways. Which one is decided
+     * by [TableFit] once the width is known, and again only if it changes (a rotation).
      */
     private fun table(ctx: Context, b: JsonObject): View {
-        val header = (b["header"] as? JsonArray)?.map { cellSpans(it) }.orEmpty()
-        val rows = (b["rows"] as? JsonArray)?.map { row -> (row as? JsonArray)?.map { cellSpans(it) }.orEmpty() }.orEmpty()
-        val grid = android.widget.TableLayout(ctx)
-        fun addRow(cells: List<List<JsonObject>>, bold: Boolean, last: Boolean) {
-            grid.addView(android.widget.TableRow(ctx).apply {
-                cells.forEach { cell ->
-                    addView(TextView(ctx).apply {
-                        text = spans(cell)
-                        textSize = 14f
-                        setTextColor(if (bold) K.text else K.dim)
-                        if (bold) setTypeface(typeface, Typeface.BOLD)
-                        maxWidth = ctx.dp(CELL_MAX)
-                        setPadding(ctx.dp(10), ctx.dp(7), ctx.dp(10), ctx.dp(7))
-                    })
-                }
-            })
-            if (!last) grid.addView(View(ctx).apply { setBackgroundColor(K.line) }, android.widget.TableLayout.LayoutParams(android.widget.TableLayout.LayoutParams.MATCH_PARENT, 1))
+        val header = (b["header"] as? JsonArray)?.map { spans(cellSpans(it)) }.orEmpty()
+        val rows = (b["rows"] as? JsonArray)?.map { row -> (row as? JsonArray)?.map { spans(cellSpans(it)) }.orEmpty() }.orEmpty()
+        return TableBox(ctx, header, rows)
+    }
+
+    private class TableBox(ctx: Context, val header: List<CharSequence>, val rows: List<List<CharSequence>>) : LinearLayout(ctx) {
+        private var builtFor = -1
+        private val pad = ctx.dp(10)
+
+        init { orientation = VERTICAL }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val width = MeasureSpec.getSize(widthMeasureSpec)
+            if (width > 0 && width != builtFor) {
+                builtFor = width
+                build(width)
+            }
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
         }
-        addRow(header, true, rows.isEmpty())
-        rows.forEachIndexed { i, r -> addRow(r, false, i == rows.lastIndex) }
-        return HorizontalScrollView(ctx).apply {
-            isHorizontalScrollBarEnabled = true
-            isScrollbarFadingEnabled = true
-            isHorizontalFadingEdgeEnabled = true
-            setFadingEdgeLength(ctx.dp(28))
-            background = ctx.rounded(K.surface, 8, K.line)
-            addView(grid)
+
+        private fun columns(): Int = maxOf(header.size, rows.maxOfOrNull { it.size } ?: 0)
+
+        /** Each column's one-line width: its widest cell, padding included. */
+        private fun natural(): List<Int> {
+            val paint = TextView(context).apply { textSize = CELL_SP }.paint
+            val bold = TextView(context).apply { textSize = CELL_SP; setTypeface(typeface, Typeface.BOLD) }.paint
+            return (0 until columns()).map { c ->
+                val cells = listOfNotNull(header.getOrNull(c)?.let { bold.measureText(it.toString()) }) +
+                    rows.mapNotNull { it.getOrNull(c)?.let { cell -> paint.measureText(cell.toString()) } }
+                (cells.maxOrNull() ?: 0f).toInt() + 2 * pad + 1
+            }
+        }
+
+        private fun build(width: Int) {
+            removeAllViews()
+            when (val fit = TableFit.fit(natural(), width, context.dp(COL_MIN))) {
+                is TableFit.Fit.Grid -> grid(fit.widths)
+                TableFit.Fit.Stacked -> stacked()
+            }
+        }
+
+        private fun cell(text: CharSequence, bold: Boolean) = TextView(context).apply {
+            this.text = text
+            textSize = CELL_SP
+            setTextColor(if (bold) K.text else K.dim)
+            if (bold) setTypeface(typeface, Typeface.BOLD)
+            setPadding(pad, context.dp(7), pad, context.dp(7))
+        }
+
+        private fun grid(widths: List<Int>) {
+            background = context.rounded(K.surface, 8, K.line)
+            val all = listOf(header to true) + rows.map { it to false }
+            all.forEachIndexed { i, (cells, bold) ->
+                if (cells.isEmpty()) return@forEachIndexed
+                addView(LinearLayout(context).apply {
+                    orientation = HORIZONTAL
+                    widths.forEachIndexed { c, w -> addView(cell(cells.getOrNull(c) ?: "", bold), LayoutParams(w, LayoutParams.WRAP_CONTENT)) }
+                })
+                if (i < all.lastIndex) addView(View(context).apply { setBackgroundColor(K.line) }, LayoutParams(LayoutParams.MATCH_PARENT, 1))
+            }
+        }
+
+        /** One card per row: the first column as its title, then each other column as "Header  value". */
+        private fun stacked() {
+            background = null
+            rows.forEachIndexed { i, row ->
+                addView(LinearLayout(context).apply {
+                    orientation = VERTICAL
+                    background = context.rounded(K.surface, 12, K.line)
+                    setPadding(context.dp(14), context.dp(10), context.dp(14), context.dp(10))
+                    addView(TextView(context).apply {
+                        text = row.firstOrNull() ?: ""
+                        textSize = 15f
+                        setTextColor(K.text)
+                        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                    })
+                    for (c in 1 until columns()) {
+                        val value = row.getOrNull(c)?.takeIf { it.isNotEmpty() } ?: continue
+                        addView(LinearLayout(context).apply {
+                            orientation = HORIZONTAL
+                            setPadding(0, context.dp(4), 0, 0)
+                            addView(TextView(context).apply {
+                                text = header.getOrNull(c) ?: ""
+                                textSize = 13f
+                                setTextColor(K.faint)
+                            }, LayoutParams(context.dp(STACK_HEADER), LayoutParams.WRAP_CONTENT).apply { marginEnd = context.dp(8) })
+                            addView(TextView(context).apply {
+                                text = value
+                                textSize = CELL_SP
+                                setTextColor(K.dim)
+                            }, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+                        })
+                    }
+                }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply { if (i > 0) topMargin = context.dp(6) })
+            }
         }
     }
 

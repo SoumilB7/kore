@@ -98,8 +98,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         setPadding(activity.dp(14), activity.dp(10), activity.dp(14), activity.dp(4))
         // A normal text field: the keyboard's suggestions, learning and voice typing all work (an
         // incognito flag turned Gboard's mic off). Nothing typed here is a secret.
-        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
-            InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
+        inputType = ComposerKeys.INPUT_TYPE
+        imeOptions = ComposerKeys.IME_OPTIONS
         importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         minLines = 1
         maxLines = 6
@@ -671,7 +671,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 "close" -> activity.finish()
                 "select" -> quiet("Shown on the Mac")
                 "compact" -> quiet("Compacting…")
-                "revert" -> quiet("Went back")
+                "revert" -> quiet("Reverted")
                 "sendAtReset" -> quiet("")
                 "rename" -> quiet("")
                 else -> Unit
@@ -828,18 +828,16 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
      * as they are), never under a running turn.
      */
     fun revert(entryId: String, after: Boolean) {
-        if (running) return quiet("Stop the turn first, then go back.")
+        if (running) return quiet("Stop the turn first, then revert.")
         lateinit var s: Sheet
         s = Sheet(activity, K.err).show {
-            title("Go back to here?", if (after) "Everything after this answer leaves the chat. Files aren't changed."
-                else "This message and everything after it leave the chat; its text comes back to the message field. Files aren't changed.")
-            buttons("Go back", danger = true) {
+            title("Revert to here?", revertLine(prompt = !after))
+            buttons("Revert", danger = true) {
                 s.dismiss()
                 run("revert", dev.kore.link.node.Control.rollback(chatId, entryId, after))
             }
         }
     }
-
 
     // Cards
 
@@ -952,3 +950,11 @@ fun arsenalTint(tier: String?): Int = when (tier) {
     "full" -> 0xFFE1C08D.toInt()
     else -> 0xFF6AB1E7.toInt()
 }
+
+/**
+ * The Revert sheet's line (design spec §8), as this revert does it: the chat goes back, and on a
+ * prompt its text returns to the field. Files aren't touched by it, so the spec's files line never shows.
+ */
+fun revertLine(prompt: Boolean): String =
+    if (prompt) "The chat goes back to before this message. Its text returns to the field."
+    else "The chat goes back to this answer; what came after it leaves."
