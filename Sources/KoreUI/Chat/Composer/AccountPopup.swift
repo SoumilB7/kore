@@ -1029,8 +1029,9 @@ private struct LoginList: View {
         .task(id: keys) { await store.loginUsage.show(keys) }
     }
 
-    /// The row's caption: one state at a time. A move under way or that didn't happen, and one
-    /// sign-in held on two devices (amber, with its point), come before what the login is to Kore.
+    /// The row's caption: one state at a time. A move under way or that didn't happen, and a
+    /// moved login's copy left on two devices (amber, with its point), come before what the login
+    /// is to Kore.
     private func caption(_ login: AccountStore.Login) -> (text: String?, warn: Bool, point: Bool) {
         if !store.onBox {
             switch LoginMoves.shared.line(provider, login.id) {

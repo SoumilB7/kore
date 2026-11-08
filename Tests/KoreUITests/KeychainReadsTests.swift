@@ -6,6 +6,7 @@ import Testing
 
 @testable import KoreUI
 
+extension HostOverrideTests {
 /// Kore reads a Claude login's Keychain item only for a move the owner clicks at this Mac (macOS
 /// asks then). Launch, an account refresh, the popup opening, the same-account check, a usage
 /// read and a login switch read none: the vault here counts every read.
@@ -75,7 +76,8 @@ struct KeychainReadsTests {
             LoginMoves.shared.macs = { [] }
             LoginMoves.shared.settle()
             await LoginMoves.shared.check()?.value
-            #expect(LoginMoves.shared.alsoOn("claude", nil) == "mybox" && LoginMoves.shared.alsoOn("claude", work) == nil)
+            // The box signed in to main by itself: not a moved login's copy, so not flagged.
+            #expect(LoginMoves.shared.alsoOn("claude", nil) == nil && LoginMoves.shared.alsoOn("claude", work) == nil)
             // A login switch, and back.
             store.switchLogin("claude", to: work, LoginPick.byMove())
             await store.refresh("claude")
@@ -86,8 +88,11 @@ struct KeychainReadsTests {
         }
     }
 
-    @Test func theSameEmailOrAccountIdOnBothIsFlaggedAnotherIsNot() async throws {
+    @Test func aMovedLoginsCopyLeftHereIsFlaggedByEmailOrAccountIdAnotherIsNot() async throws {
         try await scratch { folder, vault in
+            // Kore moved main and work there; solo is signed in there by itself.
+            CLIProfiles.markMoved("claude", email: "me@example.com", box: "mybox")
+            CLIProfiles.markMoved("claude", email: "work@acme.dev", box: "mybox")
             let file = folder.appendingPathComponent("work.claude.json")
             try Data(#"{"oauthAccount":{"emailAddress":"work@acme.dev","accountUuid":"uuid-w"}}"#.utf8).write(to: file)
             LoginMoves.shared.held = { cli in
@@ -103,6 +108,8 @@ struct KeychainReadsTests {
                 LoginPrint(cli: "claude", login: "dev", email: nil, fingerprint: "", account: "uuid-w"),
                 // Another account.
                 LoginPrint(cli: "claude", login: "x", email: "someone@else.dev", fingerprint: "", account: "uuid-x"),
+                // Solo, signed in there by itself (never moved).
+                LoginPrint(cli: "claude", login: "solo", email: "solo@example.com", fingerprint: ""),
                 LoginPrint(cli: "codex", login: "main", email: "other@example.com", fingerprint: "", account: "team"),
             ])] }
             await LoginMoves.shared.check()?.value
@@ -133,4 +140,5 @@ struct KeychainReadsTests {
         let read = try #require(mac.range(of: "func exportRead("))
         #expect(refuse.lowerBound < read.lowerBound)
     }
+}
 }

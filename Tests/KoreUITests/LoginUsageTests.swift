@@ -6,6 +6,7 @@ import Testing
 
 @testable import KoreUI
 
+extension HostOverrideTests {
 @Suite("Login usage meters", .serialized) @MainActor
 struct LoginUsageTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -488,4 +489,5 @@ struct LoginUsageTests {
         #expect(store.state(newer) == .ready(reading("new@example.com"), now))
     }
 
+}
 }
