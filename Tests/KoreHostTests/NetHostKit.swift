@@ -115,12 +115,13 @@ final class NetRig {
 
     /// A device dialling the box: the box's half goes through `HostNet.greet` as an accepted
     /// connection would (WhoIs `whois`, or the SSH route).
-    func dial(_ device: Device, route: Binding.Route = .tailnet, whois: TailnetWhoIs? = nil, enroll: NetControl.Enroll? = nil) throws -> Dialled {
+    /// `pinned` false: the device's own book doesn't hold the box (it hangs up at the challenge).
+    func dial(_ device: Device, route: Binding.Route = .tailnet, whois: TailnetWhoIs? = nil, enroll: NetControl.Enroll? = nil, pinned: Bool = true) throws -> Dialled {
         let (a, b) = try Sockets.pair()
         let book = DeviceBook(url: rig.root.appendingPathComponent("macs/\(device.id.uuidString).json"))
         var box = boxRecord
         if route == .ssh { box.nodeKeys = [Binding.Route.sshNodeKey] }
-        try book.update { $0 = [box] }
+        try book.update { $0 = pinned ? [box] : [] }
         let own = route == .ssh ? Binding.Route.sshNodeKey : device.nodeKey
         let peer = route == .ssh ? NetPeerFacts.ssh : NetPeerFacts(nodeKey: "nodekey:box", userId: 7)
         let local = NetLocal(device: device.id, kind: device.kind, nodeKey: own, signer: device.key)

@@ -85,17 +85,20 @@ package struct BoxForget {
 
     /// KoreNet's side of a box: its entries, the name given it, its pause, and its records in
     /// this Mac's book (phones hear the directory without it).
+    /// The records go before the entries: a Remove cut short between them leaves an entry
+    /// without its pin (healed by enrolling again), never a pin no entry names.
     private func drop(names: Set<String>, entries: [NodeDirectory.Entry]) {
+        let devices = Set(entries.map(\.device))
+        var removed: [DeviceRecord] = []
+        if !devices.isEmpty {
+            _ = try? book.update { records in
+                removed = records.filter { $0.kind == .box && devices.contains($0.id) }
+                records.removeAll { $0.kind == .box && devices.contains($0.id) }
+            }
+        }
         if !entries.isEmpty { directory.update { for entry in entries { $0[entry.id.raw] = nil } } }
         directory.forgetNames(names)
         NetPauses.shared.drop(names)
-        let devices = Set(entries.map(\.device))
-        guard !devices.isEmpty else { return }
-        var removed: [DeviceRecord] = []
-        _ = try? book.update { records in
-            removed = records.filter { $0.kind == .box && devices.contains($0.id) }
-            records.removeAll { $0.kind == .box && devices.contains($0.id) }
-        }
         guard !removed.isEmpty else { return }
         for record in removed { HostLog.audit("forget", ["device": record.id.uuidString.lowercased(), "kind": "box"]) }
         net?.boxForgotten(issued: removed.contains { $0.issuedBy != nil })
@@ -107,8 +110,8 @@ package struct BoxForget {
         return DeviceBook(url: support.appendingPathComponent("net/devices.json"))
     }
 
-    /// KoreNet's entries and this Mac's book records of boxes no longer listed: dropped, with the
-    /// name and pause they had. What's on disk under them stays (it's only a copy). Twice is once.
+    /// KoreNet's entries of boxes no longer listed, and their records in this Mac's book: dropped,
+    /// with the name and pause they had. What's on disk under them stays (it's only a copy). Twice is once.
     @discardableResult
     package func dropOrphans(listed: [String]) -> [String] {
         let listedKeys = Set(listed)
@@ -121,14 +124,10 @@ package struct BoxForget {
             if let ssh = entry.ssh, !listedKeys.contains(ssh) { names.insert(ssh) }
         }
         drop(names: names, entries: orphans)
-        // A box record no entry names (a Remove that dropped the entry only).
-        let known = Set(directory.all.values.map(\.device))
-        var stray: [DeviceRecord] = []
-        _ = try? book.update { records in
-            stray = records.filter { $0.kind == .box && !known.contains($0.id) }
-            records.removeAll { $0.kind == .box && !known.contains($0.id) }
-        }
-        if !stray.isEmpty { net?.boxForgotten(issued: stray.contains { $0.issuedBy != nil }) }
+        // A book record no entry names stays: absence here isn't a device leaving. Kore runs
+        // under other settings over this same folder (a storyline host, a bench), whose empty
+        // directory names no box (2026-11-15: one dropped mybox's pin, every dial then ended at
+        // the box's challenge).
         // Sync pairs of a box no longer listed (by its alias or its id): their syncs never run
         // again, and pairing those folders anew would be refused by them.
         var kept = listedKeys
@@ -141,7 +140,7 @@ package struct BoxForget {
             unpaired = Set(SyncPairs.all(defaults).map(\.alias).filter { !kept.contains($0) && !kept.contains($0.lowercased()) })
             HostSync.drop(boxes: unpaired, root: hosts, defaults: defaults)
         }
-        let dropped = orphans.map(\.id.raw) + stray.map { $0.id.uuidString.lowercased() } + unpaired
+        let dropped = orphans.map(\.id.raw) + unpaired
         if !dropped.isEmpty { HostLog.note("korenet", "orphans dropped", Set(dropped).sorted().joined(separator: " ")) }
         return Array(Set(dropped)).sorted()
     }

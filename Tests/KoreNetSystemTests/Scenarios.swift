@@ -372,6 +372,42 @@ struct KoreNetSystemTests {
         }
     }
 
+    /// The owner's 2026-11-15 afternoon: mybox on KoreNet, a phone allowed; a Kore under other
+    /// settings (the storyline host) launched over the same folder, mybox's pin left this Mac's
+    /// book while its entry stayed enrolled, and after a restart every dial ended at the box's
+    /// challenge (`unknown`) with nothing re-enrolling. Now that launch leaves the pin; and a pin
+    /// lost anyway (a Remove cut short) heals by itself after the restart: re-enrolled over SSH,
+    /// back on the tailnet, the phone still in, with no click.
+    @Test func aBoxWhosePinLeftTheBookReconnectsByItself() async throws {
+        try await play("mybox's pin gone from the Mac's book, Kore restarts · I8 I22 ID1") { w in
+            await w.koreNetOn()
+            let box = try await w.sshBox("mybox")
+            await w.onKoreNet(box)
+            await w.plus()
+            let pixel = w.phone("Pixel 9")
+            await w.joinPhone(pixel)
+            await w.expectSettled(boxes: [box], phones: [pixel], "before")
+            let device = try #require(box.device)
+            let id = device.uuidString.lowercased()
+            // Another Kore's launch over this folder, with settings of its own (emptied first).
+            let other = UserDefaults(suiteName: "kns-other-\(UUID().uuidString)")!
+            BoxForget(defaults: other, directory: NodeDirectory(defaults: other), hosts: w.mac.support.appendingPathComponent("hosts"), net: nil)
+                .dropOrphans(listed: [])
+            #expect(w.mac.book.contains { $0.id == device }, "another Kore's launch dropped mybox's pin")
+            // The pin goes anyway; the entry stays enrolled, as the owner's did.
+            let switcher = try #require(w.mac.switcher)
+            try switcher.book(try #require(switcher.env)).update { $0.removeAll { $0.id == device } }
+            #expect(w.mac.directory.all[id]?.enrolled == true)
+            let runs = w.mac.upgradeRuns["mybox"] ?? 0
+            await w.step("Kore restarts with mybox's pin gone", .event("Mac restart"), until: {
+                w.mac.directory.all[id]?.enrolled == true && w.mac.book.contains { $0.id == device && !$0.sshOnly }
+                    && box.device.map { pixel.state(of: $0) == .up } == true
+            }) { w.mac.restart() }
+            #expect((w.mac.upgradeRuns["mybox"] ?? 0) > runs, "mybox's upgrade didn't run again")
+            await w.expectSettled(boxes: [box], phones: [pixel])
+        }
+    }
+
     // MARK: More devices
 
     @Test func twoPhones() async throws {

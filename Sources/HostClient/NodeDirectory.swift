@@ -83,13 +83,16 @@ package final class NodeDirectory: Sendable {
         package var refused = false
     }
 
-    /// A box's `net.node`, said over the link `ssh` reaches it by, against the entry its key had.
-    package static func heard(_ node: NetNodeWire.Node, before: Entry?, ssh: String?) -> Heard {
+    /// A box's `net.node`, said over the link `ssh` reaches it by, against the entry its key had
+    /// (`before`) and the one its device id has (`own`). The same device id is the same box under
+    /// any key (its alias, a rekeyed id): never another device, nothing of it replaced.
+    package static func heard(_ node: NetNodeWire.Node, before: Entry?, own: Entry? = nil, ssh: String?) -> Heard {
         let fresh = Entry(device: node.device, name: node.name, ssh: ssh, nodeKey: nil, identityKey: node.identityKey, on: false)
-        guard let before else { return Heard(entry: fresh.hearing(node)) }
-        if before.device != node.device {
-            // Another box behind the same alias: a new entry, never the old one's trust.
-            return Heard(entry: fresh.hearing(node), replaced: before)
+        // Another box behind the same alias goes; the device that said this stays as it was kept.
+        let other = before.flatMap { $0.device == node.device ? nil : $0 }
+        guard let before = own ?? (other == nil ? before : nil) else {
+            // A new entry, never the old one's trust.
+            return Heard(entry: fresh.hearing(node), replaced: other)
         }
         if before.identityKey != node.identityKey {
             // Refused: never dialled on the tailnet as it was (its last key kept for the record),
@@ -99,7 +102,7 @@ package final class NodeDirectory: Sendable {
             entry.nodeKey = nil
             return Heard(entry: entry, refused: true)
         }
-        return Heard(entry: before.hearing(node))
+        return Heard(entry: before.hearing(node), replaced: other)
     }
 
     /// A push the box took: which Mac identity sent it, the Mac book's rev it carried, and the

@@ -481,6 +481,7 @@ package final class KoreNetSwitch: NetRouter {
         guard state.reaches, let tailnet, let env, let entry = directory.entry(forKey: connection.alias), entry.enrolled, let nodeKey = entry.nodeKey
         else { return nil }
         let book = book(env)
+        if pinGone(entry, book: book, connection: connection) { return nil }
         let identities = identities
         let server = entry.device
         return NetTransport(
@@ -526,6 +527,7 @@ package final class KoreNetSwitch: NetRouter {
             sshEnvironment = env
         }
         let book = book(env)
+        if pinGone(entry, book: book, connection: connection) { return nil }
         let identities = identities
         let (alias, grant, command, server) = (connection.sshAlias, connection.grant, connection.sshCommand, entry.device)
         return NetTransport(route: .ssh) {
@@ -536,6 +538,25 @@ package final class KoreNetSwitch: NetRouter {
                 book: book, server: server, service: "link")
             return NetTransport.Opened(fd: fd, setup: setup, onClose: onClose)
         }
+    }
+
+    /// An enrolled box whose pin left this Mac's book (a Remove cut short, another Kore over the
+    /// same folder): its proof can't be checked here, so every dial would end at its challenge.
+    /// It isn't counted enrolled any more and its upgrade runs again: the enroll over SSH pins it
+    /// anew, with the same trust as the first time, while this dial goes over SSH with the grant.
+    /// An unreadable book isn't a missing pin: nothing changes.
+    private func pinGone(_ entry: NodeDirectory.Entry, book: DeviceBook, connection: HostConnection) -> Bool {
+        do {
+            guard try book.record(entry.device) == nil else { return false }
+        } catch {
+            return false
+        }
+        directory.update { $0[entry.id.raw]?.enrolled = false }
+        HostLog.note(connection.alias, "korenet", "box record missing · re-enrolling")
+        directoryChanged?()
+        upgrades?.repin(connection.alias)
+        settled?("repin")
+        return true
     }
 
     /// The box's first KoreNet welcome: its stores move from its alias to its id.
@@ -562,7 +583,8 @@ package final class KoreNetSwitch: NetRouter {
     package func said(_ node: NetNodeWire.Node, on connection: HostConnection) {
         guard let env else { return }
         defer { nodeWatchers[connection.alias]?(node) }
-        let heard = NodeDirectory.heard(node, before: directory.entry(forKey: connection.alias), ssh: connection.sshAlias)
+        let heard = NodeDirectory.heard(
+            node, before: directory.entry(forKey: connection.alias), own: directory.all[node.device.uuidString.lowercased()], ssh: connection.sshAlias)
         let entry = heard.entry
         if heard.refused {
             // Its row says so (Forget and set up again); nothing else is taken from it.

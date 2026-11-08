@@ -241,8 +241,9 @@ struct BoxForgetTests {
 
     // MARK: At launch
 
-    /// KoreNet entries, book records and sync pairs of boxes no longer listed go; a box listed
-    /// by its alias while KoreNet keys it by id stays whole. Twice is once.
+    /// KoreNet entries, their book records and sync pairs of boxes no longer listed go; a box
+    /// listed by its alias while KoreNet keys it by id stays whole; a book record no entry names
+    /// stays (absence isn't a device leaving: `NetRepinTests`). Twice is once.
     @Test func launchRepairDropsOrphansAndKeepsListedBoxes() throws {
         let kore = Kore()
         defer { kore.end() }
@@ -262,7 +263,7 @@ struct BoxForgetTests {
 
         #expect(Set(dropped) == [orphan.id.raw, stray.uuidString.lowercased(), "orphanbox"])
         #expect(Array(kore.directory.all.keys) == [kept.id.raw])
-        #expect(Set(try book.read().devices.map(\.id)) == [kept.device, phone.id])
+        #expect(Set(try book.read().devices.map(\.id)) == [kept.device, stray, phone.id])
         #expect(SyncPairs.all(kore.defaults).map(\.alias) == [kept.id.raw])
         #expect(list.boxes.map(\.alias) == ["keptbox"])
         #expect(list.dropOrphans().isEmpty)

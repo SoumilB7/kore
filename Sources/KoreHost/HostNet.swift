@@ -464,16 +464,29 @@ package final class HostNet {
             handshakes[key] = nil
             // A connect that closed without a word (Kore's "is kore-host there?" probe) costs no
             // pre-auth slot; a silent one held to its deadline still does.
-            if shake.quietEnd, !shake.heard, let remote = shake.remote { limiter.refund(remote) }
-            if reason == NetControl.Reason.timeout || reason == NetControl.Reason.limit {
-                HostJournal.note("korenet refused", ["route": shake.route.rawValue, "reason": reason])
-            }
+            let probe = shake.quietEnd && !shake.heard
+            if probe, let remote = shake.remote { limiter.refund(remote) }
+            // Every refusal before the proof, and every peer that hung up after the challenge
+            // (its `bye`, or gone), says who and why; a probe that never spoke isn't one.
+            if !probe || reason == NetControl.Reason.timeout || reason == NetControl.Reason.limit { refused(shake, reason) }
         case .established(let peer):
             shake.cancel()
             handshakes[key] = nil
             established(shake, peer)
         }
         greetWaiting()
+    }
+
+    /// A handshake that ended before its proof held: the device as its hello named it, else (on
+    /// the tailnet) as its node key's record here names it.
+    private func refused(_ shake: Handshake, _ reason: String) {
+        let route = shake.route
+        let device = shake.session.hello?.device
+            ?? (route == .tailnet ? (try? host.devices.book.record(nodeKey: shake.facts.nodeKey))?.id : nil)
+        HostJournal.audit("refused", [
+            "device": device?.uuidString.lowercased(), "node": route == .tailnet ? shake.facts.nodeKey : nil, "from": shake.remote,
+            "route": route.rawValue, "reason": reason,
+        ])
     }
 
     /// A handshake slot freed: the SSH connects that waited for one are greeted, oldest first.

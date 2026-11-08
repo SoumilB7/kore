@@ -89,6 +89,8 @@ package final class BoxNetJoin {
 
     package let key: String
     package let name: String
+    /// What its row says it's doing: upgrading, or reconnecting a box whose pin this Mac lost.
+    package var verb = "Upgrading"
     package private(set) var rows: [Row] = []
     package private(set) var ending = Ending.working
     package private(set) var step = Step.checking
@@ -246,7 +248,7 @@ package final class BoxNetJoin {
     /// Under way: "Upgrading mybox… · joining the tailnet".
     package var working: String? {
         guard ending == .working else { return nil }
-        return "Upgrading \(name)… · \(step.rawValue)"
+        return "\(verb) \(name)… · \(step.rawValue)"
     }
 
     /// Stopped, or on with a catch: the one line.

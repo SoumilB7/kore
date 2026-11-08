@@ -134,6 +134,8 @@ package final class BoxUpgrades {
     nonisolated package static let retryWaits: [Duration] = [.seconds(60), .seconds(300), .seconds(900)]
     /// Automatic runs, and each failed box's retries so far and the one waiting.
     @ObservationIgnored private var automatic: Set<String> = []
+    /// Boxes enrolled before whose pin this Mac lost (`repin`): their run says "Reconnecting".
+    @ObservationIgnored private var reconnecting: Set<String> = []
     @ObservationIgnored private var retries: [String: (count: Int, wait: Task<Void, Never>?)] = [:]
 
     private struct Mark {
@@ -175,6 +177,15 @@ package final class BoxUpgrades {
         }
         started += 1
         _ = begin(key, net: net, auto: true)
+    }
+
+    /// An enrolled box whose pin left this Mac's book: it isn't enrolled any more, and its upgrade
+    /// runs again (its enroll over SSH pins it), its row "Reconnecting mybox…" meanwhile.
+    package func repin(_ key: String) {
+        let key = current(key)
+        reconnecting.insert(key)
+        reached(key, fresh: true)
+        if running(key) == nil { reconnecting.remove(key) }
     }
 
     /// A failed automatic upgrade's next try, while it has some left (bounded: never polls).
@@ -236,6 +247,7 @@ package final class BoxUpgrades {
     private func begin(_ key: String, net: KoreNetSwitch, auto: Bool) -> BoxNetJoin {
         if auto { automatic.insert(key) } else { automatic.remove(key) }
         let join = BoxNetJoin(key: key, name: NodeNames.name(key))
+        if reconnecting.contains(key) { join.verb = "Reconnecting" }
         let runner = BoxNetJoinRun(connection: link(key), net: net, directory: book, shell: shell, auto: auto, openURL: openURL, sleep: sleep, want: want)
         adopt(join, runner)
         runner.start(join)
@@ -268,6 +280,8 @@ package final class BoxUpgrades {
         let joined = join.ending == .done || join.ending == .relayed
         tried[key] = Mark(state: state(key), at: now(), failed: !joined)
         let auto = automatic.remove(join.key) != nil || automatic.remove(key) != nil
+        reconnecting.remove(join.key)
+        reconnecting.remove(key)
         if joined {
             retries[key]?.wait?.cancel()
             retries[key] = nil
@@ -303,6 +317,7 @@ package final class BoxUpgrades {
             retries[key]?.wait?.cancel()
             retries[key] = nil
             automatic.remove(key)
+            reconnecting.remove(key)
         }
         // Gone from the maps first: its end, told now, finds nothing to note.
         for (runner, join) in stopping { runner.cancel(join) }

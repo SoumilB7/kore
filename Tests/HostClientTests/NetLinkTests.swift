@@ -176,8 +176,10 @@ struct NetLinkTests {
         let connection = HostConnection(alias: "route-box", cache: HostCache(alias: "route-box", root: root)) { FakeHost.pair().client }
         // Not enrolled there yet: SSH.
         #expect(switcher.transport(for: connection) == nil)
+        // Enrolled, the box pinned in this Mac's book (as its enroll left it).
         entry.enrolled = true
         directory.upsert(entry)
+        try switcher.book(try #require(switcher.env)).update { $0 = [box.pinned] }
         #expect((switcher.transport(for: connection) != nil) == net)
         switcher.set(false)
     }

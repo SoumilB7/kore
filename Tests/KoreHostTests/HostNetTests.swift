@@ -20,6 +20,17 @@ struct HostNetTests {
         return dialled
     }
 
+    /// Whether `check` holds within 5 s, yielding to the main queue (the box's sources) between
+    /// looks; never sleeps.
+    func settles(_ check: () -> Bool) async -> Bool {
+        let end = ContinuousClock.now + .seconds(5)
+        while !check() {
+            guard ContinuousClock.now < end else { return false }
+            await Task.yield()
+        }
+        return true
+    }
+
     @Test func aKnownDeviceGetsTheLinkWithTheBooksRev() async throws {
         let rig = try await NetRig.make()
         defer { rig.finish() }
@@ -65,6 +76,43 @@ struct HostNetTests {
         let allowed = try await up(rig, phone)
         guard case .established(let peer) = allowed.session.state else { return }
         #expect(peer.abilities == [.read, .ask])
+    }
+
+    /// Never silent (2026-11-15: a Mac whose book lost this box hung up after the challenge
+    /// every few seconds, and the journal said nothing): every refusal before the proof, and every
+    /// peer that hangs up after the challenge, is an audit line with the device and the reason.
+    /// A connect that closes without a word (Kore's probe) isn't one.
+    @Test func everyRefusalAndHangUpAfterTheChallengeIsJournaled() async throws {
+        let rig = try await NetRig.make()
+        defer { rig.finish() }
+        let journal = Journal()
+        let mac = Device("mac")
+        try rig.allow(mac)
+        let id = mac.id.uuidString.lowercased()
+        // The Mac's own book doesn't hold this box: it says `bye unknown` to the challenge.
+        let lost = try rig.dial(mac, pinned: false)
+        try await lost.until { lost.closed != nil }
+        #expect(lost.closed == "unknown")
+        let hungUp = await settles { journal.audit("refused").contains { $0.contains("device=\(id)") } }
+        #expect(hungUp, "\(journal.lines)")
+        #expect(journal.audit("refused").contains { $0.contains("device=\(id)") && $0.contains("node=\(mac.nodeKey)") && $0.contains("reason=\"bye unknown\"") })
+        // Over SSH too (no node key there to name it by).
+        let overSSH = try rig.dial(mac, route: .ssh, pinned: false)
+        try await overSSH.until { overSSH.closed != nil }
+        #expect(await settles { journal.audit("refused").contains { $0.contains("route=ssh") && $0.contains("reason=\"bye unknown\"") } }, "\(journal.lines)")
+        // A device the box doesn't hold, refused before its proof: its hello names it.
+        let stranger = Device("other")
+        let shared = try rig.dial(stranger, whois: FakeTailnet.who(key: stranger.nodeKey, user: 99))
+        try await shared.until { shared.closed != nil }
+        let other = stranger.id.uuidString.lowercased()
+        #expect(await settles { journal.audit("refused").contains { $0.contains("device=\(other)") && $0.contains("reason=unknown") } }, "\(journal.lines)")
+        // A probe: connected, closed without a word (its own node key: suites run side by side).
+        let key = "nodekey:probe-\(UUID().uuidString.prefix(8))"
+        let (probe, boxSide) = try Sockets.pair()
+        rig.net.greet(boxSide, route: .tailnet, facts: HostNet.facts(FakeTailnet.who(key: key)), whois: FakeTailnet.who(key: key))
+        Sockets.closeFD(probe)
+        _ = await settles { rig.net.handshaking(.tailnet) == 0 }
+        #expect(!journal.audit("refused").contains { $0.contains(key) }, "\(journal.lines)")
     }
 
     @Test func anOwnerMacIsToldWhenADeviceWaits() async throws {
