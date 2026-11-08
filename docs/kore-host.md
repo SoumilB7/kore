@@ -47,12 +47,15 @@ changes nothing on the box.
 
 ## Setting it up by hand
 
-Kore.app carries the binaries as `Contents/Resources/kore-host-linux-x86_64.xz` and
-`kore-host-linux-aarch64.xz`.
+A Kore built with `KORE_BUNDLE_BOX_HOST=1` carries the binaries as
+`Contents/Resources/kore-host-linux-x86_64.xz` and `kore-host-linux-aarch64.xz`; any other build
+downloads its version's from the GitHub release (`kore-host-linux-<arch>.xz`) and uses it only if
+its SHA-256 matches the one the build recorded.
 
 ```sh
 # On the Mac
-xz -dc /Applications/Kore.app/Contents/Resources/kore-host-linux-x86_64.xz > kore-host
+curl -LO https://github.com/SoumilB7/kore/releases/download/v<version>/kore-host-linux-x86_64.xz
+xz -dc kore-host-linux-x86_64.xz > kore-host
 ssh box mkdir -p .local/bin
 scp kore-host box:.local/bin/kore-host.new
 ssh box 'chmod 755 .local/bin/kore-host.new && mv -f .local/bin/kore-host.new .local/bin/kore-host'

@@ -184,7 +184,11 @@ package final class StreamLog {
             handle = try? FileHandle(forWritingTo: url)
             _ = try? handle?.seekToEnd()
         }
-        try? handle?.write(contentsOf: data)
+        do {
+            try handle?.write(contentsOf: data)
+        } catch {
+            HostJournal.writeFailed(url, HostJournal.code(error))
+        }
         bytes += data.count
     }
 

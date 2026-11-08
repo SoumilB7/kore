@@ -26,6 +26,13 @@ package enum HostJournal {
         sink?(line)
     }
 
+    /// A thrown write error's errno (Foundation's out-of-space error as ENOSPC).
+    package static func code(_ error: Error) -> Int32 {
+        let error = error as NSError
+        if error.domain == NSCocoaErrorDomain, error.code == NSFileWriteOutOfSpaceError { return ENOSPC }
+        return error.domain == NSPOSIXErrorDomain ? Int32(error.code) : (error.userInfo[NSUnderlyingErrorKey] as? NSError).map { Int32($0.code) } ?? EIO
+    }
+
     /// A write that failed: a full disk by name, else the system's reason.
     package static func writeFailed(_ url: URL, _ code: Int32) {
         note(code == ENOSPC ? "disk full" : "write failed", ["path": url.path, "reason": String(cString: strerror(code))])

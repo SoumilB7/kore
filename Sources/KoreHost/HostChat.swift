@@ -180,7 +180,11 @@ package final class HostChat {
             log = try? FileHandle(forWritingTo: logURL)
             _ = try? log?.seekToEnd()
         }
-        try? log?.write(contentsOf: data)
+        do {
+            try log?.write(contentsOf: data)
+        } catch {
+            HostJournal.writeFailed(logURL, HostJournal.code(error))
+        }
     }
 
     // MARK: The live chat

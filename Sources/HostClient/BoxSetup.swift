@@ -69,9 +69,12 @@ package struct BoxSetup: Sendable {
     package var grant: String
     package var shell: BoxShell
     /// The binary for a CPU (`x86_64`, `aarch64`), and whether it's a temp file to remove after.
-    package var binary: @Sendable (String) throws -> (url: URL, temporary: Bool)
+    package var binary: @Sendable (String) async throws -> (url: URL, temporary: Bool)
 
-    package init(alias: String, grant: String, shell: BoxShell = BoxShell(), binary: @escaping @Sendable (String) throws -> (url: URL, temporary: Bool) = { try BoxBinary.local(arch: $0) }) {
+    package init(
+        alias: String, grant: String, shell: BoxShell = BoxShell(),
+        binary: @escaping @Sendable (String) async throws -> (url: URL, temporary: Bool) = { try await BoxBinary.local(arch: $0) }
+    ) {
         self.alias = alias
         self.grant = grant
         self.shell = shell
@@ -93,7 +96,7 @@ package struct BoxSetup: Sendable {
         guard uname.ok else { throw fail(uname, "Can't reach \(alias)") }
         guard let arch = BoxBinary.arch(uname: uname.lastLine) else { throw Failure(message: "\(alias) isn't a Linux box Kore knows (\(uname.lastLine))") }
         let file: (url: URL, temporary: Bool)
-        do { file = try binary(arch) } catch { throw Failure(message: "This Kore has no kore-host for \(arch)") }
+        do { file = try await binary(arch) } catch { throw Failure(message: "Couldn't get kore-host for \(arch): \(error.localizedDescription)") }
         defer { if file.temporary { try? FileManager.default.removeItem(at: file.url) } }
 
         await step("Copying kore-host…")
@@ -159,10 +162,13 @@ package struct BoxSetup: Sendable {
     }
 }
 
-/// The kore-host binaries Kore carries: `Contents/Resources/kore-host-linux-<arch>.xz`, or a
-/// development build named by the `koreHostBinary` default.
+/// The kore-host binary for a box: a development build named by the `koreHostBinary` default; one
+/// Kore carries (`Contents/Resources/kore-host-linux-<arch>.xz`, in builds made with
+/// `KORE_BUNDLE_BOX_HOST=1`); else this version's from its GitHub release, checked against the
+/// SHA-256 the build wrote into Info.plist (`KoreHostSHA256-<arch>`) and kept for next time.
 package enum BoxBinary {
     package static let overrideKey = "koreHostBinary"
+    package static let releases = "https://github.com/SoumilB7/kore/releases/download"
 
     /// The box's CPU from `uname -sm` ("Linux x86_64"): nil for another system or CPU.
     package static func arch(uname: String) -> String? {
@@ -176,14 +182,16 @@ package enum BoxBinary {
     }
 
     /// The binary for `arch`, unpacked to a temp file when it's compressed.
-    package static func local(arch: String, defaults: UserDefaults = .standard, bundle: Bundle = .main) throws -> (url: URL, temporary: Bool) {
+    package static func local(
+        arch: String, override: String? = UserDefaults.standard.string(forKey: overrideKey), bundle: Bundle = .main
+    ) async throws -> (url: URL, temporary: Bool) {
         let packed: URL
-        if let path = defaults.string(forKey: overrideKey), !path.isEmpty {
+        if let path = override, !path.isEmpty {
             packed = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         } else if let url = bundle.url(forResource: "kore-host-linux-\(arch)", withExtension: "xz") {
             packed = url
         } else {
-            throw CocoaError(.fileNoSuchFile)
+            packed = try await download(arch: arch, bundle: bundle)
         }
         guard packed.pathExtension == "xz" else { return (packed, false) }
         let data = try unxz(Data(contentsOf: packed))
@@ -192,8 +200,33 @@ package enum BoxBinary {
         return (temp, true)
     }
 
+    /// This version's binary from its release, once: kept under Application Support, and used only
+    /// when its SHA-256 is the one this build recorded.
+    static func download(arch: String, bundle: Bundle) async throws -> URL {
+        guard let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            let expected = (bundle.object(forInfoDictionaryKey: "KoreHostSHA256-\(arch)") as? String)?.lowercased()
+        else { throw BoxBinaryError("This Kore build has no kore-host for \(arch)") }
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let kept = support.appendingPathComponent("Kore/kore-host/v\(version)/kore-host-linux-\(arch).xz")
+        if let data = try? Data(contentsOf: kept), HostWire.sha256(data) == expected { return kept }
+        guard let url = URL(string: "\(releases)/v\(version)/kore-host-linux-\(arch).xz") else { throw BoxBinaryError("No release address") }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw BoxBinaryError("Release v\(version) has no kore-host for \(arch)") }
+        guard HostWire.sha256(data) == expected else { throw BoxBinaryError("The downloaded kore-host isn't the one this Kore was built with") }
+        try FileManager.default.createDirectory(at: kept.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: kept, options: .atomic)
+        return kept
+    }
+
     /// An `.xz` file's contents (Compression's LZMA reads the xz format).
     package static func unxz(_ data: Data) throws -> Data {
         try (data as NSData).decompressed(using: .lzma) as Data
     }
+}
+
+/// Why there's no kore-host binary to put on a box, in a line.
+package struct BoxBinaryError: LocalizedError {
+    package let message: String
+    package init(_ message: String) { self.message = message }
+    package var errorDescription: String? { message }
 }

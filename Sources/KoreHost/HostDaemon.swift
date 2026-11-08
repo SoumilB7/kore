@@ -108,7 +108,7 @@ package final class HostDaemon {
         folder: String, provider: String, modelId: String?, fork: (from: String, at: String)? = nil, title: String? = nil, mode: String? = nil,
         effort: String? = nil
     ) -> HostChat? {
-        guard config.folders.contains(folder), Registry.provider(provider) != nil,
+        guard config.folders.contains(folder), !HostConfig.missing(folder), Registry.provider(provider) != nil,
             let chat = try? HostChat.create(
                 provider: provider, folder: folder, modelId: modelId, in: paths.chats, fork: fork, title: title, mode: mode, effort: effort)
         else { return nil }
@@ -369,7 +369,9 @@ package final class HostDaemon {
     }
 
     private func newChat(id: String, folder: String?, provider: String, modelId: String?, args: ControlArgs? = nil) -> LinkMessage.Result {
-        guard let folder else { return .init(id: id, ok: false, code: .goneFolder, message: "That folder isn't on this box.") }
+        guard let folder, config.folders.contains(folder), !HostConfig.missing(folder) else {
+            return .init(id: id, ok: false, code: .goneFolder, message: "That folder isn't on this box.")
+        }
         if let modelId, !offers(model: modelId, provider) { return .init(id: id, ok: false, code: .invalid, message: "The CLI doesn't offer that model.") }
         if let level = args?.level, !offers(effort: level, provider) { return .init(id: id, ok: false, code: .invalid, message: "The CLI doesn't offer that effort.") }
         // 1.5: a fork's start (`sessionId`, `entryId`), and its title, mode and effort.

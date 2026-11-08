@@ -25,19 +25,26 @@ cp -R Resources/ThirdParty "$APP/Contents/Resources/ThirdParty"
 cp -R "${BIN:h}"/*.bundle "$APP/Contents/Resources/"
 
 # kore-host for Linux boxes, which Set up in the Boxes panel copies over SSH: static (musl) builds
-# for x86_64 and aarch64, packed with xz. They need a swift.org toolchain with its Static Linux SDK
-# (`swift sdk install …static-linux…`); without one, or with KORE_NO_BOX_HOST=1, the app is built
-# without them and Set up says so.
+# for x86_64 and aarch64, packed with xz into build/ (the files a release carries), and their
+# SHA-256 written into Info.plist. The app carries them itself only with KORE_BUNDLE_BOX_HOST=1
+# (the owner's local installs); otherwise Set up downloads its version's from the GitHub release
+# and checks it against that SHA-256. They need a swift.org toolchain with its Static Linux SDK
+# (`swift sdk install …static-linux…`); without one, or with KORE_NO_BOX_HOST=1, there are none.
 LINUX_SWIFT="${KORE_LINUX_SWIFT:-$HOME/Library/Developer/Toolchains/swift-6.4.2-RELEASE.xctoolchain/usr/bin/swift}"
+HOST_SHAS=""
 if [[ -n "${KORE_NO_BOX_HOST:-}" ]]; then
     echo "kore-host for boxes: skipped (KORE_NO_BOX_HOST)"
 elif [[ ! -x "$LINUX_SWIFT" ]] || ! "$LINUX_SWIFT" sdk list 2>/dev/null | grep -q static-linux || ! command -v xz >/dev/null; then
     echo "kore-host for boxes: skipped (needs $LINUX_SWIFT with the Static Linux SDK, and xz)" >&2
 else
+    mkdir -p build
     for arch in x86_64 aarch64; do
         linux=(--swift-sdk "$arch-swift-linux-musl" -c release --product kore-host --scratch-path .build-linux)
         "$LINUX_SWIFT" build "${linux[@]}" -Xlinker --strip-all
-        xz -9 -T0 -c "$("$LINUX_SWIFT" build "${linux[@]}" --show-bin-path)/kore-host" > "$APP/Contents/Resources/kore-host-linux-$arch.xz"
+        packed="build/kore-host-linux-$arch.xz"
+        xz -9 -T0 -c "$("$LINUX_SWIFT" build "${linux[@]}" --show-bin-path)/kore-host" > "$packed"
+        HOST_SHAS+="    <key>KoreHostSHA256-$arch</key><string>$(shasum -a 256 "$packed" | cut -d' ' -f1)</string>"$'\n'
+        if [[ -n "${KORE_BUNDLE_BOX_HOST:-}" ]]; then cp "$packed" "$APP/Contents/Resources/"; fi
     done
 fi
 
@@ -61,7 +68,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>
     <key>KoreBuild</key><string>$BUILD_SHA</string>
-    <key>LSMinimumSystemVersion</key><string>15.0</string>
+${HOST_SHAS}    <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>

@@ -86,6 +86,8 @@ public enum CLILocator {
         binFolder(home + "/.asdf/shims", "asdf")
         binFolder(home + "/Library/pnpm", "pnpm")
         binFolder(home + "/.bun/bin", "bun")
+        // npm's global prefix moved into the home (`npm config set prefix ~/.npm-global`).
+        binFolder(home + "/.npm-global/bin", "npm-global")
         // 8 · An app bundle that ships the CLI. Names are matched as listed, case and all: the
         // volume ignores case, and `Contents/MacOS/Claude` is the desktop app itself.
         let bundle = claude ? "Claude.app" : "Codex.app"

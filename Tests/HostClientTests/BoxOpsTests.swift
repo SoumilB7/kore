@@ -180,7 +180,7 @@ struct BoxOpsTests {
         #expect(fake.calls.contains("ssh mybox .local/bin/kore-host allow '\(BoxSetup.macGrantName())' --control full"))
     }
 
-    @Test func theBinaryComesUnpackedForTheBoxsCPU() throws {
+    @Test func theBinaryComesUnpackedForTheBoxsCPU() async throws {
         #expect(BoxBinary.arch(uname: "Linux x86_64") == "x86_64")
         #expect(BoxBinary.arch(uname: "Linux aarch64") == "aarch64")
         #expect(BoxBinary.arch(uname: "Darwin arm64") == nil)
@@ -195,7 +195,7 @@ struct BoxOpsTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         try packed.write(to: dir.appendingPathComponent("kore-host.xz"))
         defaults.set(dir.appendingPathComponent("kore-host.xz").path, forKey: BoxBinary.overrideKey)
-        let local = try BoxBinary.local(arch: "x86_64", defaults: defaults)
+        let local = try await BoxBinary.local(arch: "x86_64", override: defaults.string(forKey: BoxBinary.overrideKey))
         defer { try? FileManager.default.removeItem(at: local.url) }
         #expect(local.temporary)
         #expect(try String(contentsOf: local.url, encoding: .utf8) == "kore-host test\n")
