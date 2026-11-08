@@ -132,6 +132,9 @@ package final class HostCache: Sendable {
         let decoder = JSONDecoder()
         for line in data.split(separator: 0x0A) {
             if let item = try? decoder.decode(StreamItem.self, from: line) {
+                // Each seq once, in order: a copy written twice (an older Kore appended a
+                // catch-up's overlap) is read as the box has it.
+                if let last = result.items.last?.s, item.s <= last { continue }
                 result.items.append(item)
             } else if let header = try? decoder.decode(Header.self, from: line) {
                 result = Events(log: header.log)

@@ -445,6 +445,38 @@ struct KoreNetSystemTests {
         }
     }
 
+    // MARK: A box chat across the move
+
+    /// A box chat mid-conversation while its link moves from SSH to the tailnet (and its stores
+    /// are rekeyed to the box's id): each message reaches the box's CLI once, and the Mac shows
+    /// each row once, its own messages included.
+    @Test func boxChatAcrossTheMoveToKoreNet() async throws {
+        try await play("S42 box chat across SSH to KoreNet · each row once") { w in
+            let box = try await w.sshBox("mybox")
+            let cli = RelayCLI()
+            box.host.services.backend = { _, _ in cli }
+            let link = try #require(w.mac.link(box))
+            w.mac.openWindow(box)
+            let chat = RelayCLI.chat(on: link, folder: box.root.appendingPathComponent("work"))
+            await chat.startOnce()
+            await w.step("send one over SSH", .event("send one"), until: { RelayCLI.rows(chat, .answer).count == 1 && !chat.isBusy }) {
+                _ = chat.sendFromLink("one")
+            }
+            await w.koreNetOn()
+            await w.onKoreNet(box)
+            await w.step("send two over the tailnet", .event("send two"), until: { RelayCLI.rows(chat, .answer).count == 2 && !chat.isBusy }) {
+                _ = chat.sendFromLink("two")
+            }
+            #expect(link.route == .net)
+            #expect(cli.sent == ["one", "two"])
+            #expect(RelayCLI.rows(chat, .user) == ["one", "two"])
+            #expect(RelayCLI.rows(chat, .answer) == ["Done: one", "Done: two"])
+            #expect(RelayCLI.rows(chat, .tool).count == 2)
+            chat.close()
+            w.mac.closeWindow(box)
+        }
+    }
+
     /// The box's Tailscale is off: its row says so, and once it's on the upgrade finishes by itself.
     @Test func upgradeThatCantFinishSaysWhyAndRetries() async throws {
         try await play("S39 upgrade can't finish · I24 I5") { w in

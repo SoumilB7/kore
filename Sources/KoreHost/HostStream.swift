@@ -38,6 +38,10 @@ package final class StreamLog {
     private var held: [String: Waiting] = [:]
     private var heldOrder: [String] = []
     private var heldQueued = false
+    /// The ids of the messages the chat took (its rows, a history's too), kept across the log's
+    /// restarts: a send with one of them again (a resend whose answer the box no longer has)
+    /// isn't given to the CLI twice.
+    private var messageIds: Set<String> = []
     /// New items to send, or a log started again (`reset`).
     package var flushed: ((_ items: [StreamItem], _ reset: Bool) -> Void)?
 
@@ -104,7 +108,10 @@ package final class StreamLog {
         var open: String?
         var close: Bool?
         var e: Kind?
-        struct Kind: Decodable { var type: String? }
+        struct Kind: Decodable {
+            var type: String?
+            var id: String?
+        }
     }
 
     /// Reads where the log stands, the first time it's needed.
@@ -129,6 +136,7 @@ package final class StreamLog {
                 seq = s
                 if s % Self.indexEvery == 0 { offsets.append((s, offset)) }
             }
+            if let e = peek.e, e.type == "userMessage" || e.type == "messageQueued", let message = e.id { messageIds.insert(message) }
             if peek.open != nil { inHistory = true }
             if peek.close == true { inHistory = false }
             if !inHistory, let type = peek.e?.type {
@@ -146,6 +154,22 @@ package final class StreamLog {
     package var isEmpty: Bool {
         load()
         return seq < first
+    }
+
+    /// Whether the chat took a message with this id already (its row is in the log).
+    package func holds(message id: String) -> Bool {
+        load()
+        flush()
+        return messageIds.contains(id)
+    }
+
+    private func noteMessages(_ items: [StreamItem]) {
+        for item in items {
+            switch item.e {
+            case .userMessage(_, _, let id?)?, .messageQueued(let id, _, _)?: messageIds.insert(id)
+            default: break
+            }
+        }
     }
 
     // MARK: In
@@ -301,6 +325,7 @@ package final class StreamLog {
         first = seq + 1
         var items: [StreamItem] = []
         for event in events { items += StreamItem.items(event, seq: &seq) }
+        noteMessages(items)
         var data = StreamWire.encode(Header(log: id)) + Data([0x0A])
         for item in items { data += StreamWire.encode(item) + Data([0x0A]) }
         try? HostPaths.privateFile(data, to: url)
@@ -322,6 +347,7 @@ package final class StreamLog {
     }
 
     private func write(_ items: [StreamItem]) {
+        noteMessages(items)
         var data = Data()
         var lines: [Int] = []
         for item in items {
@@ -464,6 +490,16 @@ extension HostDaemon {
         let full = client.control == .full
         if case .deny(let code, let message) = LinkPolicy.check(call.command, HostMeta.facts(hc, raise: full), control: full ? .full : .standard) {
             return answer(ChatCallResult(id: call.id, ok: false, code: code, message: message))
+        }
+        // A message the chat took already, sent again under another key (from before the Mac
+        // enrolled, or after the box restarted and forgot its answers), reaches the CLI once.
+        if case .send(_, _, _, let message?) = call.command, hc.stream.holds(message: message) {
+            var value = CallValue()
+            value.bool = hc.chat?.isBusy ?? false
+            let bytes = StreamWire.encode(ChatCallResult(id: call.id, ok: true, value: value))
+            hc.answered.append((key, bytes))
+            if hc.answered.count > 64 { hc.answered.removeFirst(hc.answered.count - 64) }
+            return client.sendRaw(bytes)
         }
         hc.calling[key] = [client]
         let by = client.rowMark

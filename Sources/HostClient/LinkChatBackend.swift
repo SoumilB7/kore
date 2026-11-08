@@ -165,11 +165,20 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     package func streamed(_ frame: ChatEvents) {
         guard let chatId, !closed else { return }
         if frame.reset == true {
-            // The box's log started again, or this copy was behind it: what it holds replaces
-            // what's shown. A history already shown comes as a rebuild of it.
+            // The box's log started again, or this copy was behind or ahead of it: what it holds
+            // replaces what's kept. Of the same log, only what this copy didn't have is shown (the
+            // rest is on screen already); a new log's history comes as a rebuild of what's shown.
+            let had = frame.log == log ? seq : nil
             assembler.reset()
-            var list = assembler.take(frame.items)
-            if shown, let at = list.firstIndex(where: ChatEngine.isReplay), case .replayed(let history) = list[at] {
+            var taken: [(item: StreamItem, event: ChatEvent)] = []
+            for item in frame.items {
+                guard let event = assembler.take(item), had.map({ item.s > $0 }) ?? true else { continue }
+                taken.append((item, event))
+            }
+            // A rebuild shows the log whole; otherwise this chat's own rows are on screen already.
+            let rebuild = shown && taken.contains { ChatEngine.isReplay($0.event) }
+            var list = taken.filter { rebuild || !ownRow($0.item, $0.event) }.map(\.event)
+            if rebuild, let at = list.firstIndex(where: ChatEngine.isReplay), case .replayed(let history) = list[at] {
                 list[at] = .historyReplaced(history)
             }
             log = frame.log
@@ -179,21 +188,28 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             return
         }
         guard frame.log == log else { return }
-        seq = frame.seq ?? seq
-        connection.cache.append(frame.items, chat: chatId)
-        // This chat's own rows (its message, its answer) are shown already.
+        // Each item once: a catch-up overlapping what came live, a frame again after a resume or
+        // a route move, or a second follow's answer brings nothing new.
+        let items = seq.map { last in frame.items.filter { $0.s > last } } ?? frame.items
+        guard let last = items.last?.s else { return }
+        seq = last
+        connection.cache.append(items, chat: chatId)
         var list: [ChatEvent] = []
-        for item in frame.items {
-            if item.by == connection.grant, let event = item.e, ownRow(event) { continue }
-            if let event = assembler.take(item) { list.append(event) }
+        for item in items {
+            guard let event = assembler.take(item), !ownRow(item, event) else { continue }
+            list.append(event)
         }
         show(list)
     }
 
-    private func ownRow(_ event: ChatEvent) -> Bool {
+    /// This chat's own row (its message, its answer), shown here already. The box marks it with
+    /// whoever sent it: a grant's name over SSH, the device's id over KoreNet. The id is one this
+    /// chat made in this run, so it's known whatever the route and the mark.
+    private func ownRow(_ item: StreamItem, _ event: ChatEvent) -> Bool {
+        guard item.by != nil else { return false }
         switch event {
-        case .userMessage(_, _, let id?), .messageQueued(let id, _, _), .approvalWithdrawn(let id): sentHere.contains(id)
-        default: false
+        case .userMessage(_, _, let id?), .messageQueued(let id, _, _), .approvalWithdrawn(let id): return sentHere.contains(id)
+        default: return false
         }
     }
 

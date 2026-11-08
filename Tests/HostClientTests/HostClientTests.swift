@@ -93,8 +93,8 @@ struct HostClientTests {
             ],
         ])
         #expect(await until { log.flat.contains { if case .userMessage("from another client", _, _) = $0 { true } else { false } } })
-        // The reset shows the log whole (a copy holds the box's rows); live, its own row is skipped.
-        #expect(log.flat.filter { if case .userMessage("are you there", _, _) = $0 { true } else { false } }.count == 1)
+        // Its own row is never said again, reset or live: the chat shows it already.
+        #expect(log.flat.filter { if case .userMessage("are you there", _, _) = $0 { true } else { false } }.isEmpty)
         #expect(await host.next("chat.call", within: 0.3) == nil)
         connection.release()
     }
