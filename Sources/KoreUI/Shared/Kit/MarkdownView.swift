@@ -129,12 +129,10 @@ private struct MarkdownCodeBlock: View {
 }
 
 /// Copy just below a block at its right edge, shown on hover, in a row kept for it as under a
-/// message, so it covers none of the block: a code block's and a table's. With `option`, an
-/// ⌥-click copies that text instead (a table's Markdown).
+/// message, so it covers none of the block: a code block's.
 private struct CopyBelow<Block: View>: View {
     let id: StoryID
     let text: () -> String
-    var option: (() -> String)?
     @ViewBuilder let block: Block
     @StateObject private var hovered = Local(false)
     @StateObject private var copied = Local(false)
@@ -148,7 +146,7 @@ private struct CopyBelow<Block: View>: View {
             HStack(spacing: 0) {
                 if hovered.value {
                     IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
-                        copy(NSApp.currentEvent?.modifierFlags.contains(.option) == true ? option ?? text : text)
+                        copyToBoard(text, copied)
                     }
                     .storyID(id.part(.copy))
                     .padding(.trailing, past.value)
@@ -164,20 +162,62 @@ private struct CopyBelow<Block: View>: View {
         .storyAction(id.part(.hover)) { hovered.value = true }
         // The copy button is built only on hover.
         .accessibilityActions {
-            Button("Copy") { copy(text) }
-            if let option { Button("Copy as Markdown") { copy(option) } }
+            Button("Copy") { copyToBoard(text, copied) }
         }
     }
+}
 
-    private func copy(_ text: () -> String) {
-        let board = TranscriptSelection.pasteboard
-        board.clearContents()
-        board.setString(text(), forType: .string)
-        copied.value = true
-        Task {
-            try? await Task.sleep(for: .seconds(Motion.copied))
-            copied.value = false
-        }
+/// Copy inside a block's bottom-right corner, shown on hover over it, on a small chip of the
+/// page's ground so the row under it stays readable: it takes no room, so the block's height is
+/// the same with it or without (a row kept under a table moved the reader to a chat's end on a
+/// quick resize). A press on it is the button's, not a selection of the text under it; a drag
+/// across the block still selects. Zoomed in and panned, it comes in to the visible edge.
+private struct CopyInCorner<Block: View>: View {
+    let id: StoryID
+    let text: () -> String
+    @ViewBuilder let block: Block
+    @Environment(\.transcriptSelection) private var selection
+    @StateObject private var hovered = Local(false)
+    @StateObject private var copied = Local(false)
+    @StateObject private var past = Local(CGFloat(0))
+
+    var body: some View {
+        block
+            .overlay(alignment: .bottomTrailing) {
+                if hovered.value {
+                    IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
+                        copyToBoard(text, copied)
+                    }
+                    .background(Theme.background, in: RoundedRectangle(cornerRadius: Radius.chip))
+                    .storyID(id.part(.copy))
+                    // Its frame is the selection's to leave alone: a press here copies.
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TranscriptSelection.space)) } action: { [selection, raw = id.raw] in
+                        selection?.blocker(raw, $0)
+                    }
+                    .onDisappear { [selection, raw = id.raw] in selection?.blocker(raw, nil) }
+                    .padding(Space.xs)
+                    .padding(.trailing, past.value)
+                }
+            }
+            // Read only while the button shows: nothing per scroll or frame otherwise.
+            .background(VisibleRightEdge(active: hovered.value, keep: Size.MessageActions.row * 2) { if past.value != $0 { past.value = $0 } })
+            .onHover { hovered.value = $0 }
+            .storyID(id)
+            .storyAction(id.part(.hover)) { hovered.value = true }
+            .accessibilityActions { Button("Copy") { copyToBoard(text, copied) } }
+    }
+}
+
+/// The text on the pasteboard, and the button's tick for a moment.
+@MainActor
+private func copyToBoard(_ text: () -> String, _ copied: Local<Bool>) {
+    let board = TranscriptSelection.pasteboard
+    board.clearContents()
+    board.setString(text(), forType: .string)
+    copied.value = true
+    Task {
+        try? await Task.sleep(for: .seconds(Motion.copied))
+        copied.value = false
     }
 }
 
@@ -342,9 +382,9 @@ private struct MarkdownListView: View {
 }
 
 /// A table: 1pt rules around every cell (the grid's spacing over a rule-coloured ground), bold
-/// centred header, and sideways scrolling when wider than the column. A drag across it copies it
-/// whole (its cells split by tabs, a row a line). No Copy row under it for now: the room kept
-/// for one moved the reader to the end of a chat resized quickly (TranscriptHoldsOnResize).
+/// centred header, and sideways scrolling when wider than the column. Copy in its bottom-right
+/// corner on hover (`CopyInCorner`, no room kept) takes exactly what a drag across all of it copies
+/// (its cells split by tabs, a row a line).
 private struct MarkdownTableView: View {
     let table: MarkdownTable
     let path: [Int]
@@ -352,7 +392,7 @@ private struct MarkdownTableView: View {
     private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0) }
 
     var body: some View {
-        grid
+        CopyInCorner(id: StoryID.Transcript.table(path), text: { [table] in table.copyText(markdown: false) }) { grid }
             // Rows as tall as their text: cells fill their row, not the height on offer.
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)

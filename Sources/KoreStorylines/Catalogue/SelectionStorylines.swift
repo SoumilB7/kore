@@ -118,6 +118,9 @@ final class TableCopy: ChatStoryline {
         Done counting.
         """
     static let tabbed = "Name\tQty\nalpha\t3\nbeta\t12"
+    static let table = StoryID.Transcript.table([1])
+    /// The table's height before its Copy shows: the same after (it takes no room).
+    nonisolated(unsafe) static var resting: CGFloat = 0
 
     override class var tags: Set<Tag> { [.chat] }
     override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(reply)]) }
@@ -127,6 +130,30 @@ final class TableCopy: ChatStoryline {
             Send("Count them"), TurnFinished(1), WaitIdle(),
             DragSelect(from: .answer(1, [0], at: "Totals so far:", "so far"), to: .answer(1, [2], at: "Done counting.", " counting")),
             CopySelection("so far:\n\n" + Self.tabbed + "\n\nDone"),
+            Key(.escape),
+            WaitForElement(.id(Self.table)),
+            Expect("the table at rest, Copy not shown") { _ in
+                guard let table = StoryRegistry.entry(Self.table.raw)?.frame, StoryRegistry.entry(Self.table.part(.copy).raw) == nil else { return false }
+                Self.resting = table.height
+                return true
+            },
+            Press(.id(Self.table.part(.hover))),
+            Expect("Copy inside the table's bottom-right corner, the table no taller") { _ in
+                guard let table = StoryRegistry.entry(Self.table.raw)?.frame, let copy = StoryRegistry.entry(Self.table.part(.copy).raw)?.frame
+                else { return false }
+                // Frames are the window's, y up: the table's bottom is its minY.
+                return abs(table.height - Self.resting) < 0.5 && copy.maxX <= table.maxX + 0.5 && copy.minY >= table.minY - 0.5
+                    && copy.maxX > table.maxX - 40 && copy.minY < table.minY + 40
+            },
+            Snapshot("table-copy"),
+            Do("clear the pasteboard") { _ in StoryTranscript.clearCopied() },
+            Click(.id(Self.table.part(.copy))),
+            Expect("Copy to take the whole table, as a drag across it copies", found: { _ in StoryTranscript.copied }) { _ in
+                StoryTranscript.copied == Self.tabbed
+            },
+            // With Copy showing, the last row's text still selects.
+            DragSelect(from: .answer(1, [1, 2, 0], at: "beta", "beta"), to: .answer(1, [1, 2, 1], at: "12", "12").shifted(2)),
+            CopySelection("Name\tQty\nbeta\t12"),
         ]
     }
 }
