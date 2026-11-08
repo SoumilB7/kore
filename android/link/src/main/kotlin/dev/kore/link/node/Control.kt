@@ -200,6 +200,10 @@ object Control {
     fun blobGet(id: String, chatId: String, ref: String, variant: String, offset: Int = 0): JsonObject = buildJsonObject {
         put("t", "blob.get"); put("id", id); put("chatId", chatId); put("ref", ref); put("variant", variant); put("offset", offset)
     }
+    /** One piece of the phone app the Mac offers (1.13): `sums`, `sig` or `apk`, from [offset]. */
+    fun appGet(id: String, part: String, offset: Long = 0): JsonObject = buildJsonObject {
+        put("t", "app.get"); put("id", id); put("part", part); put("offset", offset)
+    }
     /** A command in its envelope. */
     fun envelope(id: String, cmd: JsonObject): JsonObject = buildJsonObject { put("t", "cmd"); put("id", id); put("cmd", cmd) }
 

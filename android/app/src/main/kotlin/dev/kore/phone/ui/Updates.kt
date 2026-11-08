@@ -8,6 +8,7 @@ import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import dev.kore.link.update.MacCopy
 import dev.kore.link.update.RangedDownload
 import dev.kore.link.update.ReleaseError
 import dev.kore.link.update.ReleaseManifest
@@ -58,6 +59,29 @@ object Updates {
         }
     }
 
+    /** Macs asked already while this process lives: each once, when its link first comes up. */
+    private val macsAsked = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /**
+     * A Mac's copy of the phone app (over KoreNet, no USB): asked once per Mac per app run, when
+     * its link is up; offered only if newer and nothing else is on offer. Checked as a GitHub
+     * release is ([MacCopy]); the signer is checked before the installer sees it.
+     */
+    suspend fun checkMac(app: KoreApp, node: dev.kore.link.node.NodeClient) {
+        if (!macsAsked.add(node.id.toString()) || status.value is Status.Available || status.value is Status.Downloading || status.value is Status.Installing) return
+        val offer = try {
+            MacCopy.offer({ part, offset -> node.appPiece(part, offset) }, installed(app), app.debuggable)
+        } catch (e: Exception) {
+            android.util.Log.w("kore", "update: ${node.name}'s copy refused (${e.message})")
+            null
+        } ?: return
+        if (status.value !is Status.Available) status.value = Status.Available(offer.copy(url = MacCopy.MAC + node.id))
+    }
+
+    /** The Mac an offer comes from, by name, or null for GitHub's. */
+    fun fromMac(app: KoreApp, offer: UpdateOffer): String? =
+        if (offer.url.startsWith(MacCopy.MAC)) app.mesh.node(offer.url.removePrefix(MacCopy.MAC))?.name ?: "your Mac" else null
+
     /** Downloads, verifies and installs [offer]; first time, sends the owner to allow Kore to install apps. */
     suspend fun install(app: KoreApp, offer: UpdateOffer) {
         if (!app.packageManager.canRequestPackageInstalls()) {
@@ -67,8 +91,14 @@ object Updates {
         }
         status.value = Status.Downloading(0)
         val dest = File(app.noBackupFilesDir, "update/kore-${offer.version}.apk").apply { parentFile?.mkdirs() }
+        val progress = { got: Long -> status.value = Status.Downloading((got * 100 / maxOf(1, offer.size)).toInt()) }
         val file = try {
-            RangedDownload(offer.url, offer.size, offer.sha256, dest).run { got -> status.value = Status.Downloading((got * 100 / maxOf(1, offer.size)).toInt()) }
+            if (offer.url.startsWith(MacCopy.MAC)) {
+                val node = app.mesh.node(offer.url.removePrefix(MacCopy.MAC)) ?: throw java.io.IOException("that Mac isn't here")
+                MacCopy.download({ part, offset -> node.appPiece(part, offset) }, offer, dest, progress)
+            } else {
+                RangedDownload(offer.url, offer.size, offer.sha256, dest).run(progress)
+            }
         } catch (e: Exception) {
             // What's on disk stays: the next tap goes on from there.
             status.value = Status.Problem(if (e is ReleaseError) e.message ?: "The download didn't match." else "The download stopped. Tap to go on.")

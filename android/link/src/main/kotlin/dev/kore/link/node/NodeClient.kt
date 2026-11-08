@@ -35,6 +35,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -548,6 +549,25 @@ class NodeClient(
             val total = m["total"]?.jsonPrimitive?.intOrNull ?: return null
             if (out.size() >= total || data.isEmpty()) return out.toByteArray()
         }
+    }
+
+    /**
+     * One piece of the phone app this node (a Mac) offers (1.13): null when it has none, refuses,
+     * or the link is down. Only while the app is open, as every link is.
+     */
+    suspend fun appPiece(part: String, offset: Long): dev.kore.link.update.AppPiece? {
+        val link = session ?: return null
+        val id = UUID.randomUUID().toString()
+        val answer = scope.async(start = CoroutineStart.UNDISPATCHED) {
+            messageFlow.first { it.str("id") == id && (it.str("t") == "blob.chunk" || it.str("t") == "result") }
+        }
+        link.send(Control.appGet(id, part, offset).bytes())
+        val m = withTimeoutOrNull(20_000) { answer.await() } ?: run { answer.cancel(); return null }
+        if (m.str("t") != "blob.chunk") return null
+        val data = Base64.getDecoder().decode(m.str("data") ?: "")
+        val total = m["total"]?.jsonPrimitive?.longOrNull ?: return null
+        val at = m["offset"]?.jsonPrimitive?.longOrNull ?: return null
+        return dev.kore.link.update.AppPiece(at, total, data)
     }
 
     /** Sends now when the link is up, else queues it (see [queued]). */

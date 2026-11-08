@@ -59,7 +59,7 @@ class HomeActivity : Activity() {
         watch = kore.scope.launch {
             kore.mesh.nodes.flatMapLatest { nodes ->
                 if (nodes.isEmpty()) flowOf(emptyList()) else combine(nodes.map { n -> n.state.combine(n.snapshot) { s, snap -> Triple(n, s, snap) } }) { it.toList() }
-            }.collect { rows -> runOnUiThread { render(rows) } }
+            }.combine(Updates.status) { rows, _ -> rows }.collect { rows -> runOnUiThread { render(rows) } }
         }
     }
 
@@ -73,10 +73,18 @@ class HomeActivity : Activity() {
         val waiting = rows.flatMap { (n, _, snap) -> snap?.objs("chats").orEmpty().filter { it.str("state") == "needsYou" }.map { n to it } }
         if (waiting.isNotEmpty()) content.addView(needYou(waiting))
         for ((n, s, snap) in rows) content.addView(deviceRow(n, s, snap))
-        if (Updates.status.value is Updates.Status.Available) content.addView(label("An update is ready · Settings", 13f, K.accent).apply {
-            setPadding(dp(4), dp(14), 0, 0)
-            setOnClickListener { startActivity(Intent(this@HomeActivity, SettingsActivity::class.java)) }
-        })
+        // A Mac that's up may have a newer phone app (asked once per Mac per run, only while open).
+        for ((n, s, _) in rows) if (s == NodeMachine.State.Up && n.device.value.kind == NodeKind.MAC) kore.scope.launch { Updates.checkMac(kore, n) }
+        (Updates.status.value as? Updates.Status.Available)?.let { st ->
+            val mac = Updates.fromMac(kore, st.offer)
+            // One line whichever source: from a Mac, one tap downloads, checks and installs it.
+            content.addView(label(if (mac != null) "Update ready · from $mac" else "An update is ready · Settings", 13f, K.accent).apply {
+                setPadding(dp(4), dp(14), 0, 0)
+                setOnClickListener {
+                    if (mac != null) kore.scope.launch { Updates.install(kore, st.offer) } else startActivity(Intent(this@HomeActivity, SettingsActivity::class.java))
+                }
+            })
+        }
     }
 
     /** One cue: how many chats wait, the first one's title and device; a tap opens it. */

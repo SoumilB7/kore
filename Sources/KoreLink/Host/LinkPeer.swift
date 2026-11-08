@@ -154,6 +154,14 @@ final class LinkPeer {
             }
             let (hunks, more) = LinkSnapshot.hunks(change)
             send(.diffHunks(id: id, path: path, hunks: hunks, more: more))
+        case .appGet(let id, let part, let offset):
+            // Phones only: the app the Mac has for them, in pieces; the phone checks it (1.13).
+            guard phone else { return send(.result(.init(id: id, ok: false, code: .deniedControl))) }
+            switch PhoneApp.piece(part, from: offset) {
+            case .none: send(.result(.init(id: id, ok: false, code: .goneBlob, message: "This Mac has no phone app to offer.")))
+            case .some(let piece):
+                send(.blobChunk(id: id, mime: PhoneApp.mime(part), offset: piece.offset, total: piece.total, data: piece.data.base64EncodedString()))
+            }
         case .presence(let onScreen, let chatId):
             // Phones say it (1.12); the doorbell's companion always counts as looking, as it did.
             if phone {

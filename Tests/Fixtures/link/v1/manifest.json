@@ -172,6 +172,10 @@
       "type": "blob.chunk"
     },
     {
+      "file": "app.get.json",
+      "type": "app.get"
+    },
+    {
       "file": "delta.commands.json",
       "type": "delta"
     },
