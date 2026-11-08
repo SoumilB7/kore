@@ -84,6 +84,13 @@ final class Runner {
         return report
     }
 
+    /// The step's longest stretch without a main run-loop pass, when over 2 s.
+    private func stalled() -> Int? {
+        let gap = waits.longestGap
+        guard gap > .seconds(2) else { return nil }
+        return Int(gap.components.seconds * 1000 + gap.components.attoseconds / 1_000_000_000_000_000)
+    }
+
     private func run(_ type: Storyline.Type, _ variant: Variant) async -> RunReport.StoryResult {
         let name = variant.name.isEmpty ? type.storyName : "\(type.storyName)-\(variant.name)"
         var result = RunReport.StoryResult(name: type.storyName, variant: variant.name)
@@ -135,13 +142,14 @@ final class Runner {
                 continue
             }
             let stepStart = ContinuousClock.now
+            waits.resetGap()
             do {
                 if let timeout = step.timeout { context.timeout = timeout } else { context.timeout = .seconds(5) }
                 try await step.run(context)
-                result.steps.append(.init(label: step.label, outcome: .pass, ms: ms(since: stepStart)))
+                result.steps.append(.init(label: step.label, outcome: .pass, ms: ms(since: stepStart), stalledMs: stalled()))
             } catch {
                 failed = true
-                result.steps.append(.init(label: step.label, outcome: .fail, ms: ms(since: stepStart), error: "\(error)"))
+                result.steps.append(.init(label: step.label, outcome: .fail, ms: ms(since: stepStart), error: "\(error)", stalledMs: stalled()))
                 result.files += evidence(context, step: result.steps.count)
             }
         }

@@ -8,6 +8,8 @@ package struct RunReport: Codable {
         package var outcome: Outcome
         package var ms: Int = 0
         package var error: String? = nil
+        /// The longest the main run loop went without a pass during the step, when over 2 s.
+        package var stalledMs: Int? = nil
     }
 
     package struct StoryResult: Codable {
@@ -33,7 +35,8 @@ package struct RunReport: Codable {
             lines.append("\(story.skipped ? "SKIP" : story.passed ? "PASS" : "FAIL") \(name)  \(story.ms) ms")
             for step in story.steps {
                 let mark = switch step.outcome { case .pass: "  ✓"; case .fail: "  ✗"; case .skip: "  ·" }
-                lines.append("\(mark) \(step.label)  \(step.ms) ms" + (step.error.map { "\n      \($0)" } ?? ""))
+                lines.append("\(mark) \(step.label)  \(step.ms) ms" + (step.stalledMs.map { "  (main run loop stalled \($0) ms)" } ?? "")
+                    + (step.error.map { "\n      \($0)" } ?? ""))
             }
             for file in story.files { lines.append("    → \(file)") }
         }

@@ -18,6 +18,15 @@ final class Waits {
     private var timer: Timer?
     /// Main run-loop passes so far; `StoryContext.idle` counts them.
     private(set) var passes = 0
+    /// The longest time between two passes since `resetGap`: a step that took long because the
+    /// main run loop didn't turn (the process stalled), not because its event was slow.
+    private(set) var longestGap: Duration = .zero
+    private var lastPass: ContinuousClock.Instant?
+
+    func resetGap() {
+        longestGap = .zero
+        lastPass = ContinuousClock.now
+    }
 
     /// How much longer every wait may run (`KORE_STORY_WAIT_SCALE`, 1 by default): a gate running
     /// its storylines side by side on a busy Mac gives them more time. A wait ends at its event
@@ -66,6 +75,9 @@ final class Waits {
 
     private func evaluate() {
         passes += 1
+        let pass = ContinuousClock.now
+        if let lastPass { longestGap = max(longestGap, pass - lastPass) }
+        lastPass = pass
         guard !waiters.isEmpty else { return }
         let now = ContinuousClock.now
         // Resuming can add waiters (a step's next wait); check the ones that were here.
