@@ -1,7 +1,7 @@
 # Link 1.4 and 1.5: the box (`kore-host`)
 
-§13 of the link protocol. A box is a headless machine running `kore-host`: the Mac reaches it with
-`ssh <box> kore-host attach --as <grant>`. Everything in link 1.0–1.3 holds unless this page says
+A box is a headless machine running `kore-host`: the Mac reaches it with
+`ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Everything in link 1.0–1.3 holds unless this page says
 otherwise. All additions are optional fields or new command types, so a 1.3 peer ignores them.
 
 ## Grants
@@ -26,8 +26,9 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
   already connected takes over: the older one gets `bye replaced` (a link that died while the Mac
   slept never locks it out). A client told `replaced` doesn't dial again.
 - Writes to a client never block the daemon: each connection queues what its peer hasn't read,
-  and one more than 8 MiB behind is closed (it catches up by `seq` when it's back).
-- Framing, `challenge` and `hello` are as §2–3, with `hello.grant: "<name>"`. The proof is
+  and one more than 8 MiB behind is closed (a 1.5 follower catches up by `seq` when it's back; a
+  `tx` client gets a fresh page).
+- Framing, `challenge` and `hello` are as in link 1.0, with `hello.grant: "<name>"`. The proof is
   `HMAC-SHA256(grant secret, "kore-link/1|" + nonce)`. Unknown grant or bad proof: `bye auth`.
 - `attach --as <name>` reads the grant, passes frames between stdin/stdout and the socket, and
   fills in `grant` and `proof` on the client's first `hello` (send it with `"proof": ""`).
@@ -46,9 +47,9 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 
 - Windows are the box's folders: `{id: "w_<hash of path>", name, path ("~/…"), tabs, activeTabId}`.
   Tabs are the folder's chats, `{id: "t_<chatId>", kind: "chat", title, chatId}`.
-- `ChatMeta` as §4, with no `rescue` or `arsenal`. A chat's meta goes out only when it changed.
+- `ChatMeta` as in link 1.0, with no `rescue` or `arsenal`. A chat's meta goes out only when it changed.
   A chat whose mode isn't one its CLI lists counts as Danger. `state` is `needsYou`, `working` or `idle`.
-- With a `full` grant, `ChatMeta.controls` as §11: `{modelId, effort, fast, fastOffered,
+- With a `full` grant, `ChatMeta.controls` as in link 1.2: `{modelId, effort, fast, fastOffered,
   planAllow, contextPct, autoCompactAt, compacting, remote}`, plus two 1.4 fields,
   `contextUsed` (tokens in context) and `contextWindow` (what they're measured against), both
   absent until the CLI says. `contextPct` is `contextUsed * 100 / contextWindow`, at most 100.
@@ -66,11 +67,11 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
   kept in `${XDG_STATE_HOME:-~/.local/state}/kore-host/models.json` (0600), so a connection
   gets them in its snapshot before any CLI runs.
 - Cards: a plan card's `plan` is absent; the plan's markdown is in `body` (4 KiB cut,
-  `card.more` for the rest). The digest is as §4.
+  `card.more` for the rest). The digest is as in link 1.0.
 
 ## Transcripts
 
-- As §5, with no rendering on the box: answers, plans and summaries carry `text`, never `doc`.
+- As in link 1.0, with no rendering on the box: answers, plans and summaries carry `text`, never `doc`.
   The client renders markdown.
 - `tx.open` never starts a CLI; it answers from the chat's log at once, a restarted box included.
 - When a chat's CLI resumes (its first send after a restart or an idle stop), the log keeps what
@@ -80,8 +81,8 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
   on reading. A page's frame stays under 900 KiB: fewer of the newest entries when they don't fit.
 - `entry.more` reads from the live chat only; for a chat whose CLI is stopped it answers
   `result {id, ok: false, code: "gone.chat"}`.
-- No `tx.earlier`, `history.*`, `diff.get`, `blob.*` on the box (uploads: `chat.send` with `blobs`
-  is `invalid`).
+- No `tx.earlier`, `history.*`, `diff.get` or `blob.get` on the box. A `tx` client's `chat.send`
+  with `blobs` is `invalid`; a 1.5 full grant uploads with `blob.put.*` (see Calls below).
 
 ## Commands (1.4 additions)
 
@@ -92,14 +93,13 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 | `chat.setModel` | `chatId, modelId` | Also for an `act` grant. A chat whose CLI isn't running starts on that model. The model must be one the box's CLI listed (or, before any list, a plain id of letters, digits and `._:[]-`, at most 128); `invalid` otherwise. |
 | `chat.setEffort` | `chatId, level` | Also for an `act` grant. A running CLI switches; a stopped one starts on it. `invalid` when the chat's models offer no such level. |
 | `chat.setFast` | `chatId, on` | Also for an `act` grant. Only while the chat's CLI runs and has said fast mode is there for its model; `invalid` otherwise. |
-| `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as §6 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link (§11). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
+| `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as in link 1.0 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link under full control (1.2). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
 | `folders.list` | | Result: `folders: [{windowId, path, missing?}]`; `missing: true` for a served folder that isn't there any more. |
 | `folder.add` | `path` | An existing folder, by absolute path or under `~` (the box's home); it's added to `config.json`. Result: `folders`. `gone.folder` otherwise. |
 | `account.refresh` | `provider` | Result `message`: "Signed in as …" / "… isn't signed in.". |
 | `account.signIn` | `provider, method?` | Result `message`: the page to open (and `code …` for a device code), space-separated. When the sign-in ends: `result {id: "<id>:done", ok, message}`. |
 | `account.submit` | `provider, serial, input` | The code from the page. |
 | `account.cancel`, `account.signOut` | `provider` | |
-
 | `auth.gh` | | `gh auth login --web` on the box. Result: `url` and `authCode` (the one-time code to type at `url`; `code` stays the error field). When it ends: `result {id: "<id>:done", ok}`, `gh auth setup-git` run, and a `delta` with `ghSignedIn`. |
 
 Every control command goes through the box's rule table (`LinkPolicy.checkBox`); all other

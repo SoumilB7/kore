@@ -16,6 +16,8 @@ The protocol is in [link-1.4-box.md](link-1.4-box.md).
   accepted once (`ssh <box>` in Terminal).
 - The CLIs you want there: claude (its native installer puts it in `~/.local/bin`) and codex
   (`npm i -g @openai/codex`, which needs `nodejs` and `npm`), and `git`.
+- `rsync`, for two-way sync (the Mac runs its own `/usr/bin/rsync`, which needs one on the box).
+  Minimal images often leave it out: `sudo apt install rsync` on Debian and Ubuntu.
 
 ## Setting it up from Kore
 
@@ -79,6 +81,30 @@ different name, set it with `defaults write dev.kore.Kore boxGrant.<box> <name>`
 - (re)starts it.
 
 Run it again after replacing the binary.
+
+## Two-way sync
+
+A folder on the Mac can get a copy on a box, so its chats run there on the same files. From the
+folder's window, the box button's popup offers to open it on a box. Kore then:
+- makes the copy at `~/Code/<name>` on the box: a `git clone` of the folder's origin at its branch
+  and commit, or an empty folder (`git init` for a repository without an origin);
+- asks once before carrying more than 1 GB or 20,000 files, and refuses when the box hasn't the
+  room;
+- adds the copy to the box's folders and opens its window.
+
+While that window is open, Kore keeps both sides the same with rsync over your SSH login. The Mac
+watches its side with FSEvents; kore-host watches the box's with inotify and only says what
+changed. Nothing polls, and nothing syncs while the window is closed: the next open catches up.
+- Both ends leave out `.git/`, `.build/`, `node_modules/`, `.DS_Store` and what each folder's
+  `.gitignore` names. Only regular files are carried.
+- Edits, new files and deletes go both ways: a file deleted on one side is deleted on the other.
+- A file changed on both sides since the last sync is kept twice: the Mac's in place, and the
+  box's beside it as `<name> (<box>).<ext>`. The window's box button marks it.
+- When a sync can't run (the box is offline, or rsync is missing), the window's box button says
+  "Sync paused", and the next change tries again.
+
+The Mac keeps the pairs in Kore's settings, and what both sides last agreed on (each file's size
+and mtime) in `~/Library/Application Support/Kore/hosts/<box>/sync/`.
 
 ## Commands
 
