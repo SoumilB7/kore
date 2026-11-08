@@ -359,7 +359,11 @@ struct TranscriptTimeline: View, Equatable {
                     // Back to where the reader was when this chat's tab was last shown.
                     restore.value = nil
                     if !saved.atEnd {
+                        // A glide the new view began toward the end, followed as it appeared, is
+                        // over: the reader's place is where it goes.
                         following.value = false
+                        glidingUntil.value = nil
+                        glideCut.value = store.sentAt
                         settle(at: nil)
                         if let row = saved.row {
                             proxy.scrollTo(row, anchor: .top)
@@ -464,15 +468,16 @@ struct TranscriptTimeline: View, Equatable {
                 // Page Down, End) starts following again, as a phased scroll ending there does,
                 // even while a reply streams in. Only between gestures, and only on a move down:
                 // content arriving under a reader held just above the end doesn't move them, so
-                // it doesn't pull them along.
+                // it doesn't pull them along. Not while a view new or built again settles: it lays
+                // out from the bottom before a place being restored lands.
                 // The first settled pass after a gesture that ended short: at the end by now, it's
                 // followed, as if the gesture had ended there.
                 if endAfterGesture.value, !gesturing.value, height == geometry.value.height {
                     endAfterGesture.value = false
                     if !shift.zoomAdjusting, !following.value, offset + new[2] >= height - Self.atBottom { following.value = true }
                 }
-                if !shift.zoomAdjusting, !following.value, !widthHeld, !gesturing.value || Self.stuck(animatingSince.value), offset > geometry.value.offset + 1,
-                    offset + new[2] >= height - Self.atBottom
+                if !shift.zoomAdjusting, !following.value, !widthHeld, !gesturing.value || Self.stuck(animatingSince.value),
+                    Self.movesToEnd(settling: settling.value != nil, height: height, visible: new[2], offset: offset, was: geometry.value.offset)
                 {
                     following.value = true
                 }
@@ -953,6 +958,13 @@ struct TranscriptTimeline: View, Equatable {
     /// measured; the reader's does even in a pass that measured rows too.
     static func leavesEnd(readerLeft: Bool, height: CGFloat, visible: CGFloat, offset: CGFloat, was: CGFloat) -> Bool {
         readerLeft && height > visible + atBottom && offset < was - 1 && offset + visible < height - leftEnd
+    }
+
+    /// A view not followed moved down `was` → `offset` to within the slack of the end takes it up
+    /// again; not while a view new or built again settles, laid out from the bottom before the
+    /// place it's restored to lands.
+    static func movesToEnd(settling: Bool, height: CGFloat, visible: CGFloat, offset: CGFloat, was: CGFloat) -> Bool {
+        !settling && offset > was + 1 && offset + visible >= height - atBottom
     }
 
     /// A tab shown again with rows that came while it was hidden, and following: built anew at

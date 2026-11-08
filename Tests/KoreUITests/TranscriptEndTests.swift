@@ -161,6 +161,18 @@ struct TranscriptEndTests {
         #expect(!TranscriptTimeline.renewsOnShow(showing: false, grew: true, following: true, magnified: false))
     }
 
+    /// A view not followed takes up the end when it moves down to it; a view built again for a
+    /// tab coming back doesn't while it settles, though it lays out from the bottom first.
+    @Test func aRestoredViewSettlingAtTheBottomDoesntTakeUpTheEnd() {
+        // 2500 pt of content, 623 shown: down from 400 to the end (1877), then 1839.
+        #expect(TranscriptTimeline.movesToEnd(settling: false, height: 2500, visible: 623, offset: 1877, was: 400))
+        #expect(TranscriptTimeline.movesToEnd(settling: false, height: 2500, visible: 623, offset: 1839, was: 400))
+        #expect(!TranscriptTimeline.movesToEnd(settling: true, height: 2500, visible: 623, offset: 1839, was: 400))
+        // Short of the slack, or not a move down: not taken up.
+        #expect(!TranscriptTimeline.movesToEnd(settling: false, height: 2500, visible: 623, offset: 1800, was: 400))
+        #expect(!TranscriptTimeline.movesToEnd(settling: false, height: 2500, visible: 623, offset: 1877, was: 1877))
+    }
+
     @Test func aPageAtItsNaturalSizeIsNotMagnified() {
         let (window, _, shift) = page()
         defer { window.contentView = nil }
