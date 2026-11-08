@@ -3,7 +3,7 @@ import Tailnet
 
 /// KoreNet's port, bound only to the addresses given (this node's tailnet addresses), never
 /// 0.0.0.0 or ::. Each connection passes the pre-auth limiter before a session sees a byte.
-package final class NetListener {
+package final class NetListener: Sendable {
     /// Port 47470 until the owner settles it (plan §11 q2).
     package static let port: UInt16 = 47470
 

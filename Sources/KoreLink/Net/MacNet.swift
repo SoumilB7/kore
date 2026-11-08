@@ -321,7 +321,9 @@ package final class MacNet {
         let accepted: @Sendable (Int32, String) -> Void = { [weak self] fd, remote in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.whois(fd, remote: remote) ?? Sockets.closeFD(fd) } }
         }
-        source.setEventHandler {
+        // Runs on `acceptQueue`, not the main actor: `@Sendable` keeps it out of MacNet's isolation
+        // (an inferred @MainActor handler traps there, Swift's runtime isolation check).
+        source.setEventHandler { @Sendable in
             while true {
                 guard let next = try? listener.accept(on: socket) else { return }
                 accepted(next.fd, next.remote)
@@ -329,7 +331,7 @@ package final class MacNet {
                 if case .handoff = socket { return }
             }
         }
-        source.setCancelHandler { Sockets.closeFD(socket.fd) }
+        source.setCancelHandler { @Sendable in Sockets.closeFD(socket.fd) }
         sources.append(source)
         source.resume()
     }

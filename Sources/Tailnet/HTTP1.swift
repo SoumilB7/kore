@@ -56,14 +56,17 @@ struct HTTP1 {
 
         /// The bytes up to a CRLF (not included), at most `limit`.
         private mutating func crlfLine(limit: Int) throws -> [UInt8] {
-            var searched = position
+            // How far past `position` is already searched. Relative, because `fill()` may move the
+            // unread bytes to the front of the buffer (an absolute index would point past its end).
+            var scanned = 0
             while true {
-                if let i = (searched..<buffer.count).first(where: { buffer[$0] == 0x0A && $0 > position && buffer[$0 - 1] == 0x0D }) {
+                let start = position + scanned
+                if start < buffer.count, let i = (start..<buffer.count).first(where: { buffer[$0] == 0x0A && $0 > position && buffer[$0 - 1] == 0x0D }) {
                     let line = Array(buffer[position..<(i - 1)])
                     position = i + 1
                     return line
                 }
-                searched = max(position, buffer.count - 1)
+                scanned = max(0, buffer.count - position - 1)
                 guard available <= limit else { throw TailnetError.malformed("line") }
                 guard try fill() else { throw SocketError.closed }
             }
