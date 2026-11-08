@@ -126,6 +126,14 @@ package final class HostConnection {
     /// Each box usage ledger line pulled on link-up (`usage.since`), as forwarded usage.
     package static var usageSink: @Sendable (ForwardedRequest) -> Void = { request in Task { await KoreUsage.shared.forwarded(request) } }
     @ObservationIgnored private var skipNet = false
+    /// KoreNet dials that failed in a row: the first falls back to SSH and the next `net.node`
+    /// tries again; from the second, SSH holds and one more try comes after `netRetryAfter` (a
+    /// tailnet that refuses never flaps the link between routes). A KoreNet link up, a relink or
+    /// a stop clears it.
+    @ObservationIgnored private var netFailures = 0
+    @ObservationIgnored private var netRetry: Task<Void, Never>?
+    @ObservationIgnored private var netHeldOff = false
+    @ObservationIgnored package var netRetryAfter: Duration = .seconds(30)
     @ObservationIgnored private var redialNow = false
     @ObservationIgnored private var wantsNet = false
     @ObservationIgnored private var switching = false
@@ -574,7 +582,7 @@ package final class HostConnection {
     private func dial() {
         guard users > 0, transport == nil else { return }
         redial = nil
-        if Self.isPaused(alias) { return refuse(.paused) }
+        if isPaused(alias) { return refuse(.paused) }
         if phase != .offline { phase = .connecting }
         let useNet = !skipNet
         skipNet = false
@@ -624,6 +632,7 @@ package final class HostConnection {
     private func stop() {
         redial?.cancel()
         redial = nil
+        clearNetHold()
         let transport = transport
         if ready { transport?.send(HostWire.bye()) }
         teardown()
@@ -667,13 +676,26 @@ package final class HostConnection {
     private func dropped(_ reason: String?) {
         guard transport != nil || pump != nil else { return }
         // KoreNet that never came up: SSH at once (`NetPaths`: tailnet, then SSH). A switch of
-        // route, or a stale route's `replaced`, dials again at once too.
-        let netFailed = route == .net && !ready
+        // route, or a stale route's `replaced`, dials again at once too. A tailnet dial this Mac
+        // ended itself (a relink, a switch) didn't fail: it isn't held off.
+        let netFailed = route == .net && !ready && !redialNow && !switching
         let now = redialNow || netFailed || switching
         let quiet = switching
         redialNow = false
         switching = false
         if netFailed { skipNet = true }
+        if netFailed, netFailures >= 1 {
+            netHeldOff = true
+            netRetry?.cancel()
+            let sleep = sleep, after = netRetryAfter
+            netRetry = Task { [weak self] in
+                await sleep(after)
+                guard !Task.isCancelled, let self else { return }
+                self.netHeldOff = false
+                self.preferNet()
+            }
+        }
+        if netFailed { netFailures += 1 }
         teardown()
         // Sent, never answered: the box may or may not have it. A forwarded call goes again (the box
         // runs it once); anything else says so.
@@ -852,6 +874,7 @@ package final class HostConnection {
     private func becameReady() {
         guard !ready else { return }
         ready = true
+        if route == .net { clearNetHold() }
         phase = .online
         lastHeard = nil
         lateHello = false
@@ -968,7 +991,7 @@ package final class HostConnection {
     /// link moves to KoreNet once nothing is in flight. A failed KoreNet dial falls back to SSH
     /// at once.
     package func preferNet() {
-        guard users > 0, ready, case .ssh? = route, activeRouter != nil else { return }
+        guard users > 0, ready, case .ssh? = route, activeRouter != nil, !netHeldOff else { return }
         // A `net.set` waiting on its answer counts as in flight: the box's node key can come just
         // ahead of it (Join), and dropping the link would lose the answer.
         guard inFlight.isEmpty, outbox.isEmpty, uploadWaits.isEmpty, netSwitchWaits.isEmpty else {
@@ -1097,6 +1120,8 @@ package final class HostConnection {
 
     /// Whether a box is taken offline on this Mac (Kore: `NetPauses`; tests set their own).
     package static var isPaused: @MainActor (String) -> Bool = { NetPauses.shared.contains($0) }
+    /// This link's own look (a test's, without touching every other link in the process).
+    @ObservationIgnored package var isPaused: @MainActor (String) -> Bool = { HostConnection.isPaused($0) }
 
     /// Taken offline: the link ends and isn't dialled again until `bringOnline`.
     package func takeOffline() {
@@ -1128,9 +1153,20 @@ package final class HostConnection {
     /// Dials again at once, so the box's `net.node` is heard anew (its KoreNet just came on, or
     /// its Tailscale started).
     package func relink(_ why: String) {
+        // Asked to look anew (Join, the box's Tailscale came on): a KoreNet hold-off goes.
+        clearNetHold()
         guard transport != nil else { return }
+        // A KoreNet dial under way hears `net.node` anew on its welcome (on SSH too, should it fail).
+        if route == .net, !ready { return }
         redialNow = true
         drop(why)
+    }
+
+    private func clearNetHold() {
+        netRetry?.cancel()
+        netRetry = nil
+        netHeldOff = false
+        netFailures = 0
     }
 
     // MARK: Rekey (`NodeMigration`)

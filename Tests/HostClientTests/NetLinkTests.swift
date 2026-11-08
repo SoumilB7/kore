@@ -234,6 +234,66 @@ struct NetLinkTests {
         connection.release()
     }
 
+    /// One failed KoreNet dial holds nothing: the box's next `net.node` tries it again. A second
+    /// in a row holds SSH (no flapping); a relink (Join) looks again at once.
+    @Test func aFirstFailedKoreNetDialIsTriedAgainARepeatHoldsUntilARelink() async throws {
+        let root = netScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let router = FakeRouter()
+        router.make = { NetTransport(route: .tailnet) { throw TailnetError.notTailnet("box") } }
+        let dials = Dials()
+        let connection = link("held-net", router: router, dials: dials, clock: VirtualClock(), root: root)
+        let up = links(connection)
+        connection.retain()
+        defer { connection.release() }
+        await welcome112(await dials.next())
+        #expect(await up.next { $0 })
+        #expect(router.asked == 1)
+        connection.preferNet()
+        await welcome112(await dials.next())
+        #expect(await up.next { $0 })
+        #expect(router.asked == 2, "one failure held the next try off")
+        connection.preferNet()
+        #expect(router.asked == 2 && connection.isOnline, "a second failure in a row flapped the link")
+        connection.relink("korenet on")
+        await welcome112(await dials.next())
+        #expect(await up.next { $0 })
+        #expect(router.asked == 3, "a relink didn't look at KoreNet again")
+    }
+
+    /// A KoreNet dial the link let go while its `open` ran (a relink, a switch) never says hello:
+    /// the box would take it over this Mac's newer link and refuse that one as replaced.
+    @Test func aKoreNetDialLetGoWhileOpeningNeverSaysHello() async throws {
+        let root = netScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (box, mac, book) = try pairedBox(root)
+        // The box's end: its challenge sent, then left unread, so all the Mac says stays there.
+        let (macEnd, boxEnd) = try Sockets.pair()
+        defer { Sockets.closeFD(boxEnd) }
+        var server = NetSession.Server(
+            local: NetLocal(device: box.device, kind: .box, nodeKey: box.nodeKey, signer: box.identity), route: .tailnet,
+            peer: NetPeerFacts(nodeKey: "nodekey:mac", userId: 7), book: box.book, tickets: ResumeTickets())
+        server.ownUser = 7
+        let boxSession = NetSession(fd: boxEnd, role: .server(server))
+        boxSession.start()
+        let opening = DispatchSemaphore(value: 0)
+        let transport = NetTransport(route: .tailnet) {
+            opening.wait()
+            let local = NetLocal(device: mac.device, kind: .mac, nodeKey: "nodekey:mac", signer: mac.signer)
+            var setup = NetSession.Client(
+                local: local, route: .tailnet, peer: NetPeerFacts(nodeKey: box.nodeKey, userId: 7), book: book, server: box.device, service: "link")
+            setup.ownUser = 7
+            return NetTransport.Opened(fd: macEnd, setup: setup)
+        }
+        try transport.start()
+        transport.close()
+        opening.signal()
+        for await _ in transport.events {}
+        let said = try Sockets.read(boxEnd, max: 64 << 10)
+        #expect(said.isEmpty, "the let-go dial said \(said.count) bytes to the box")
+        _ = boxSession
+    }
+
     @Test func aCallSentOnTheTailnetThenDroppedIsSentOnceMoreOverSSH() async throws {
         let root = netScratch()
         defer { try? FileManager.default.removeItem(at: root) }

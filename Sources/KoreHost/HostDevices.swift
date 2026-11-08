@@ -132,7 +132,8 @@ extension HostDaemon {
     func netNode(enrolled: UUID?) -> NetNodeWire.Node? {
         guard let identity = net?.identity else { return nil }
         let name = String(ProcessInfo.processInfo.hostName.split(separator: ".").first ?? "box")
-        let nodeKey = net?.tailnet != nil ? net?.selfNode?.publicKey : nil
+        // The node key only while the port takes connections: a Mac dials as soon as it hears it.
+        let nodeKey = net?.tailnet != nil && net?.listening == true ? net?.selfNode?.publicKey : nil
         return NetNodeWire.Node(
             device: identity.device, identityKey: identity.signer.publicKey, name: name, on: config.netOn, nodeKey: nodeKey, enrolled: enrolled)
     }

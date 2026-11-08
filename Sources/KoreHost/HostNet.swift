@@ -37,6 +37,10 @@ package final class HostNet {
     /// `attach --proto 2` handshakes (this user only), counted apart so tailnet peers can't
     /// crowd them out.
     package static let maxSSHHandshakes = 4
+    /// SSH connects over the cap wait their turn (a Mac's relinks can briefly overlap), up to
+    /// this many; never closed without a word while a slot is about to free.
+    package static let maxSSHWaiting = 16
+    private var sshWaiting: [Int32] = []
 
     func handshaking(_ route: Binding.Route) -> Int { handshakes.values.filter { $0.route == route }.count }
 
@@ -173,6 +177,8 @@ package final class HostNet {
         leave()
         ssh?.source.cancel()
         ssh = nil
+        for fd in sshWaiting { close(fd) }
+        sshWaiting = []
         unlink(host.paths.netSocket.path)
         for shake in handshakes.values {
             shake.cancel()
@@ -245,8 +251,10 @@ package final class HostNet {
         }
         let before = selfNode?.publicKey
         selfNode = status.selfNode
-        // Macs linked now hear this box's node key as soon as it's known (or changed).
-        if selfNode?.publicKey != before, selfNode?.publicKey != nil { host.netNodeChanged() }
+        // Macs linked now hear this box's node key once it's listening (below), or here when the
+        // key changed under a listener that stays: never before the port takes connections, or a
+        // Mac would dial, fail and settle back on SSH.
+        let keyChanged = selfNode?.publicKey != before && selfNode?.publicKey != nil
         let want: [String]
         do {
             want = try Self.addresses(status)
@@ -257,7 +265,10 @@ package final class HostNet {
             return
         }
         let index = interfaceIndex()
-        if Self.keeps(want: want, bound: bound, listening: !listeners.isEmpty, boundIndex: boundIndex, index: index) { return }
+        if Self.keeps(want: want, bound: bound, listening: !listeners.isEmpty, boundIndex: boundIndex, index: index) {
+            if keyChanged { host.netNodeChanged() }
+            return
+        }
         closeListeners()
         guard !want.isEmpty else { return noteProblem("Tailscale is \(status.backendState.rawValue)") }
         #if os(Linux)
@@ -297,6 +308,8 @@ package final class HostNet {
             source.resume()
             listeners.append((fd, source))
         }
+        // Now taking connections: every linked Mac hears the node key (it moves to KoreNet).
+        host.netNodeChanged()
         busWatch?.cancel()
         busWatch = nil
         HostJournal.note("korenet listening", ["addresses": want.joined(separator: ","), "port": "\(port)"])
@@ -459,6 +472,14 @@ package final class HostNet {
             shake.cancel()
             handshakes[key] = nil
             established(shake, peer)
+        }
+        greetWaiting()
+    }
+
+    /// A handshake slot freed: the SSH connects that waited for one are greeted, oldest first.
+    private func greetWaiting() {
+        while !sshWaiting.isEmpty, handshaking(.ssh) < Self.maxSSHHandshakes, ssh != nil {
+            greet(sshWaiting.removeFirst(), route: .ssh, facts: .ssh, whois: nil)
         }
     }
 
@@ -651,11 +672,15 @@ package final class HostNet {
                 while true {
                     let client = Sockets.accept(fd)
                     guard client >= 0 else { return }
-                    guard let self, self.handshaking(.ssh) < Self.maxSSHHandshakes, HostListener.peerIsUser(client) else {
+                    guard let self, HostListener.peerIsUser(client) else {
                         close(client)
                         continue
                     }
                     Self.noSigPipe(client)
+                    guard self.handshaking(.ssh) < Self.maxSSHHandshakes else {
+                        if self.sshWaiting.count < Self.maxSSHWaiting { self.sshWaiting.append(client) } else { close(client) }
+                        continue
+                    }
                     self.greet(client, route: .ssh, facts: .ssh, whois: nil)
                 }
             }

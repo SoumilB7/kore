@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import KoreNet
 import KoreTrust
 import Tailnet
@@ -42,6 +43,9 @@ package final class NetTransport: HostTransport, @unchecked Sendable {
     private var up = false
     private var ended = false
     private var onClose: (@Sendable () -> Void)?
+    /// Set by `close` at once (not on the queue): a dial whose `open` was under way when the link
+    /// let it go never says hello, so the box never takes it over a newer link of this Mac.
+    private let closing = Mutex(false)
 
     package init(
         route: Binding.Route, clock: @escaping @Sendable () -> Date = { Date() }, open: @escaping @Sendable () throws -> Opened,
@@ -64,6 +68,10 @@ package final class NetTransport: HostTransport, @unchecked Sendable {
                 return end("couldn't reach it on KoreNet: \(error)")
             }
             onClose = opened.onClose
+            if closing.withLock({ $0 }) {
+                Sockets.closeFD(opened.fd)
+                return end(nil)
+            }
             let session = NetSession(fd: opened.fd, role: .client(opened.setup), clock: clock)
             self.session = session
             guard let watched = Self.watched(session.descriptor) else { return end("the connection broke") }
@@ -90,6 +98,7 @@ package final class NetTransport: HostTransport, @unchecked Sendable {
     }
 
     package func close() {
+        closing.withLock { $0 = true }
         queue.async { [self] in
             session?.close("quit")
             end(nil)

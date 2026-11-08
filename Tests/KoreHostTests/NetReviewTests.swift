@@ -213,6 +213,25 @@ struct NetReviewTests {
         for _ in 0..<3 { #expect(try await challenged(port: port) == true) }
     }
 
+    /// SSH connects over the handshake cap wait for a slot (a Mac's relinks can overlap), never
+    /// closed unread.
+    @Test func sshConnectsOverTheCapWaitTheirTurn() async throws {
+        let rig = try await NetRig.make()
+        defer { rig.finish() }
+        let path = rig.rig.paths.netSocket.path
+        var held: [Int32] = []
+        defer { for fd in held { Sockets.closeFD(fd) } }
+        for _ in 0..<HostNet.maxSSHHandshakes {
+            let fd = try Sockets.connectUnix(path)
+            held.append(fd)
+            #expect(try await readsSomething(fd))
+        }
+        let waiting = try Sockets.connectUnix(path)
+        defer { Sockets.closeFD(waiting) }
+        Sockets.closeFD(held.removeFirst())
+        #expect(try await readsSomething(waiting), "an SSH connect over the cap was closed unread")
+    }
+
     func challenged(port: UInt16) async throws -> Bool {
         let fd = try Sockets.connectTCP(try #require(IPAddress("127.0.0.1")), port: port)
         defer { Sockets.closeFD(fd) }

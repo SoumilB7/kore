@@ -10,52 +10,64 @@ import Tailnet
 import Testing
 import src
 
-/// Waits, yielding (never sleeping), until `check` holds; false after `seconds`.
-@MainActor
-func soon(_ seconds: Int = 5, _ check: () -> Bool) async -> Bool {
-    let end = ContinuousClock.now + .seconds(seconds)
-    while !check() {
-        guard ContinuousClock.now < end else { return false }
-        await Task.yield()
-    }
-    return true
-}
-
-/// Whether `feed` gives a value matching `match` within 5 s. The wait runs in a task of its own,
-/// polled: a feed that never gives one fails the test instead of hanging the run.
+/// Whether `feed` gives a value matching `match` within 5 s. The wait runs in a task of its own:
+/// a feed that never gives one fails the test instead of hanging the run (the 5 s only bounds a
+/// failure; a pass is the event itself).
 @MainActor
 func arrives<T: Sendable>(_ feed: Feed<T>, _ match: @escaping @Sendable (T) -> Bool = { _ in true }) async -> Bool {
-    let got = Mutex(false)
-    let waiter = Task { _ = await feed.next(match); got.withLock { $0 = true } }
-    let arrived = await soon { got.withLock { $0 } }
-    if !arrived { waiter.cancel() }
+    let done = Feed<Bool>()
+    let waiter = Task { _ = await feed.next(match); done.send(true) }
+    let bound = Task {
+        try? await Task.sleep(for: .seconds(5))
+        done.send(false)
+    }
+    let arrived = await done.next()
+    waiter.cancel()
+    bound.cancel()
+    return arrived
+}
+
+/// Whether `condition` holds (now, or once what it reads changes) within 5 s: woken by
+/// observation, never polled.
+@MainActor
+func holds(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
+    let held = Feed<Bool>()
+    let watcher = Task { @MainActor in
+        await Observed.until(condition)
+        held.send(true)
+    }
+    let arrived = await arrives(held)
+    watcher.cancel()
     return arrived
 }
 
 /// `kore-host attach --proto 2` in this process: the real `NetAttach` relay between a socket the
-/// Mac's transport holds and the daemon's `net.sock`, as ssh would carry it.
-@MainActor
-final class InProcessAttach {
+/// Mac's transport holds and the daemon's `net.sock`, as ssh would carry it. Dialled on the
+/// transport's queue; the relay runs on its own (nothing here hops to the main actor).
+final class InProcessAttach: Sendable {
     let socket: URL
     let grant: Grant
-    let dials = Mutex(0)
-    private var held: [NetAttach] = []
+    let dials = Feed<Int>()
+    private let held = Mutex<[NetAttach]>([])
 
     init(socket: URL, grant: Grant) {
         self.socket = socket
         self.grant = grant
     }
 
-    nonisolated func dial() throws -> (fd: Int32, onClose: @Sendable () -> Void) {
-        dials.withLock { $0 += 1 }
+    func dial() throws -> (fd: Int32, onClose: @Sendable () -> Void) {
         let (mine, theirs) = try Sockets.pair()
-        try DispatchQueue.main.sync {
-            try MainActor.assumeIsolated {
-                let attach = try NetAttach(grant: grant, socket: socket, input: theirs, output: theirs) { _ in Sockets.closeFD(theirs) }
-                attach.start()
-                held.append(attach)
-            }
+        let attach: NetAttach
+        do {
+            attach = try NetAttach(grant: grant, socket: socket, input: theirs, output: theirs) { _ in Sockets.closeFD(theirs) }
+        } catch {
+            Sockets.closeFD(mine)
+            Sockets.closeFD(theirs)
+            throw error
         }
+        attach.start()
+        let count = held.withLock { $0.append(attach); return $0.count }
+        dials.send(count)
         return (mine, {})
     }
 }
@@ -99,13 +111,16 @@ struct NetSweepMacTests {
         let macNet = FakeTailnet()
         let peer = #"{"PublicKey":"nodekey:box","TailscaleIPs":["127.0.0.1"],"Online":true,"UserID":7,"HostName":"box-1"}"#
         let boxWho = #"{"Node":{"Key":"nodekey:box","Name":"box-1.tail.ts.net."},"UserProfile":{"ID":7,"LoginName":"me@example.com"}}"#
+        let netState = paths.netState
         macNet.held.withLock {
             $0.status.peers = [try! JSONDecoder().decode(TailnetStatus.Peer.self, from: Data(peer.utf8))]
             $0.whois["127.0.0.1"] = try! JSONDecoder().decode(TailnetWhoIs.self, from: Data(boxWho.utf8))
-            // The box's real tailnet port, as it bound it.
+            // The box's real tailnet port, as it bound it (its `net.state`, read here off the
+            // main actor: "listening <addresses> port <n>").
             $0.dial = { _ in
-                let port = DispatchQueue.main.sync { MainActor.assumeIsolated { host.net?.firstListener.flatMap(Sockets.localPort) } }
-                guard let port else { throw TailnetError.sidecar("the box isn't listening") }
+                let state = (try? String(contentsOf: netState, encoding: .utf8)) ?? ""
+                guard state.hasPrefix("listening"), let port = state.split(separator: " ").last.flatMap({ UInt16($0.trimmingCharacters(in: .whitespacesAndNewlines)) })
+                else { throw TailnetError.sidecar("the box isn't listening") }
                 return try Sockets.connectTCP(IPAddress("127.0.0.1")!, port: port)
             }
         }
@@ -125,10 +140,10 @@ struct NetSweepMacTests {
         let switcher = KoreNetSwitch(
             defaults: defaults, directory: directory, rekeyer: rekeyer, global: false, connections: { [connection] }, environment: { env })
         connection.router = switcher
-        var settled: [String] = []
-        switcher.settled = { settled.append($0) }
+        let settled = Feed<String>()
+        switcher.settled = { settled.send($0) }
         switcher.set(true)
-        #expect(await soon { settled.contains("chose") })
+        #expect(await arrives(settled) { $0 == "chose" })
         #expect(switcher.state == .installed)
 
         // The legacy link; the box says who it is; this Mac enrolls there.
@@ -136,28 +151,27 @@ struct NetSweepMacTests {
         connection.retain()
         defer { connection.release() }
         #expect(await arrives(ups) { $0 })
-        #expect(await soon { settled.contains("enroll enrolled") })
+        #expect(await arrives(settled) { $0 == "enroll enrolled" })
         #expect(directory.entry(forKey: connection.alias)?.enrolled == true)
         // The fix: the link dials again over `attach --proto 2` without waiting for anything.
-        #expect(await soon { attach.dials.withLock { $0 } == 2 }, "the link stayed on `attach --as`")
+        #expect(await arrives(attach.dials) { $0 == 2 }, "the link stayed on `attach --as`")
         #expect(await arrives(ups) { $0 })
 
-        // Join KoreNet.
+        // Join KoreNet: the box's node key comes once its port listens, and the link moves to
+        // the tailnet (however `net.node` and `net.set`'s answer interleave with Join's relink).
         let join = BoxNetJoin(key: alias, name: "box-1")
         let run = BoxNetJoinRun(connection: connection, net: switcher, directory: directory)
         run.start(join)
-        #expect(await soon { host.net?.listening == true || join.ending.over }, "\(join.ending)")
-        // The box's node key reached the Mac: it moves the link to the tailnet.
-        // (A link's redial waits on real backoff: room for one under a loaded test run.)
-        #expect(await soon(15) { join.ending.over }, "\(join.rows) · \(String(describing: connection.route))")
+        #expect(await holds { join.ending.over }, "\(join.rows) · \(String(describing: connection.route))")
         #expect(join.ending == .done, "\(join.ending) · \(join.rows)")
         #expect(connection.route == .net && connection.isOnline)
-        #expect(host.config.netOn)
+        #expect(host.config.netOn && host.net?.listening == true)
         // The box holds this Mac with its tailnet node key now.
         let mac = try #require(try host.devices.book.read().devices.first { $0.kind == .mac })
         #expect(mac.owner && mac.nodeKeys.contains("nodekey:mac"))
         // And the link answers over it.
         #expect(await connection.listFolders().map(\.path) == [work.path])
+        if !join.ending.over { run.cancel(join) }
         switcher.set(false)
     }
 
@@ -222,17 +236,17 @@ struct NetSweepMacTests {
         connection.router = switcher
         // The link up at 1.12, full, as Join needs it.
         connection.retain()
-        #expect(await soon { !dials.hosts.isEmpty })
+        #expect(await arrives(dials.made))
         guard let ssh = dials.hosts.first else { return }
         await welcome112(ssh)
-        #expect(await soon { connection.isOnline })
+        #expect(await holds { connection.isOnline })
         connection.release()
         #expect(!connection.inUse)
 
         let join = BoxNetJoin(key: alias, name: "box-1")
         let run = BoxNetJoinRun(connection: connection, net: switcher, directory: NodeDirectory(defaults: defaults))
         run.start(join)
-        #expect(await soon { join.ending.over })
+        #expect(await holds { join.ending.over })
         #expect(join.ending == .failed("Tailscale is off on this Mac."))
         #expect(!connection.inUse, "the join still holds the link")
         #expect(!switcher.busHeld, "the join still holds the bus")

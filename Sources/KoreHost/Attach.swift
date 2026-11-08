@@ -98,8 +98,11 @@ private enum Glue3 {
 /// today's `attach` fills in the proof, it fills in the upgrade's `legacyGrant{name, secret}`
 /// when the client's hello enrolls, so the secret never crosses the wire from the Mac; the box
 /// honours it once.
-@MainActor
-package final class NetAttach {
+///
+/// It relays on a queue of its own, never the main thread: a write that waits for its reader
+/// (`write` blocks until the peer takes the bytes) then holds nothing else up.
+package final class NetAttach: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "kore.attach.relay")
     private let grant: Grant
     private let fd: Int32
     /// The client's side: stdin and stdout under SSH (tests: a socket).
@@ -127,18 +130,16 @@ package final class NetAttach {
     }
 
     package func start() {
-        let fromHost = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
-        fromHost.setEventHandler { [weak self] in
-            MainActor.assumeIsolated {
+        queue.async { [self] in
+            let fromHost = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+            fromHost.setEventHandler { [weak self] in
                 guard let self, !self.ended else { return }
                 guard let bytes = try? Sockets.read(self.fd, max: 64 << 10), !bytes.isEmpty else { return self.end(AttachExit.ended.rawValue) }
                 // A byte lost would leave the session's framing broken for good: the attach ends.
                 guard Self.write(self.output, Data(bytes)) else { return self.end(AttachExit.ended.rawValue) }
             }
-        }
-        let fromClient = DispatchSource.makeReadSource(fileDescriptor: input, queue: .main)
-        fromClient.setEventHandler { [weak self] in
-            MainActor.assumeIsolated {
+            let fromClient = DispatchSource.makeReadSource(fileDescriptor: input, queue: queue)
+            fromClient.setEventHandler { [weak self] in
                 guard let self, !self.ended else { return }
                 var chunk = [UInt8](repeating: 0, count: 64 << 10)
                 let count = read(self.input, &chunk, chunk.count)
@@ -149,13 +150,13 @@ package final class NetAttach {
                 }
                 guard self.fromClient(Data(chunk[0..<count])) else { return self.end(AttachExit.ended.rawValue) }
             }
+            sources = [fromHost, fromClient]
+            fromHost.resume()
+            fromClient.resume()
         }
-        sources = [fromHost, fromClient]
-        fromHost.resume()
-        fromClient.resume()
     }
 
-    /// Once: the sources stop and `done` hears the code.
+    /// Once: the sources stop and `done` hears the code (on the relay's queue).
     private func end(_ code: Int32) {
         guard !ended else { return }
         ended = true

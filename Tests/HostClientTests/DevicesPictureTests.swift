@@ -447,11 +447,10 @@ struct BoxLinkDevicesTests {
     @Test func takenOfflineIsNeverDialledUntilBroughtOnline() async throws {
         final class Flag { var on = true }
         let paused = Flag()
-        let before = HostConnection.isPaused
-        HostConnection.isPaused = { _ in paused.on }
-        defer { HostConnection.isPaused = before }
         let dialed = Dialed()
         let connection = link(dialed)
+        // This link's own look: a global one would take every link in a parallel run offline.
+        connection.isPaused = { _ in paused.on }
         connection.retain()
         defer { connection.release() }
         #expect(connection.phase == .refused(.paused) && dialed.count == 0)

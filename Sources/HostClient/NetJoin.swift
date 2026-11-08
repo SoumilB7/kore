@@ -274,6 +274,14 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
             join.allowedBySSH()
             if join.ending.over { self.finish(join) }
         }
+        // The box's node key may have come before this watch (just ahead of `net.set`'s answer):
+        // what it said counts now, not only at the next `net.node`.
+        if let key = directory.entry(forKey: connection.alias)?.nodeKey { join.node(on: true, nodeKey: key) }
+        // And a link already up on the tailnet by now (its `onLink` came before this watch).
+        if connection.isOnline, connection.route == .net {
+            join.linked(net: true, relayed: relayed())
+            if join.ending.over { finish(join) }
+        }
         // Waiting on sudo: the box's node coming online on the tailnet is the cue to look again.
         followTailnet(join)
     }
