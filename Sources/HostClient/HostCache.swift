@@ -64,11 +64,20 @@ package final class HostCache: Sendable {
     package struct Pending: Codable, Sendable {
         package var id: String
         package var payload: Data
-        package init(id: String, payload: Data) {
+        /// When it was first asked; one older than `HostCache.sendLifetime` isn't sent.
+        package var at: Date?
+        /// The chat it's for, to say so there when it's dropped.
+        package var chatId: String?
+        package init(id: String, payload: Data, at: Date, chatId: String?) {
             self.id = id
             self.payload = payload
+            self.at = at
+            self.chatId = chatId
         }
     }
+
+    /// How long a message waits for its box across a quit of Kore.
+    package static let sendLifetime: TimeInterval = 24 * 3600
 
     private var outboxFile: URL { folder.appendingPathComponent("outbox.json") }
 
@@ -127,13 +136,32 @@ package final class HostCache: Sendable {
     package func append(_ items: [StreamItem], chat chatId: String) {
         guard !items.isEmpty else { return }
         queue.async { [self] in
-            guard let handle = try? FileHandle(forWritingTo: log(chatId)) else { return }
+            guard let handle = try? FileHandle(forUpdating: log(chatId)) else { return }
             defer { try? handle.close() }
+            Self.endOnNewline(handle)
             _ = try? handle.seekToEnd()
             var data = Data()
             for item in items { data += StreamWire.encode(item) + Data([0x0A]) }
             try? handle.write(contentsOf: data)
         }
+    }
+
+    /// A torn last line (Kore stopped mid-write) is cut off, so the next isn't glued onto it.
+    static func endOnNewline(_ handle: FileHandle) {
+        guard let size = try? handle.seekToEnd(), size > 0 else { return }
+        var at = size
+        while at > 0 {
+            let from = at > 65536 ? at - 65536 : 0
+            try? handle.seek(toOffset: from)
+            guard let data = try? handle.read(upToCount: Int(at - from)) else { return }
+            if at == size, data.last == 0x0A { return }
+            if let newline = data.lastIndex(of: 0x0A) {
+                try? handle.truncate(atOffset: from + UInt64(newline - data.startIndex) + 1)
+                return
+            }
+            at = from
+        }
+        try? handle.truncate(atOffset: 0)
     }
 
     package func forget(chat chatId: String) {

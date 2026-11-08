@@ -260,6 +260,8 @@ package final class HostDaemon {
 
     // MARK: Connections
 
+    var provenClients: [LinkClient] { connections.filter(\.proven) }
+
     var fullClients: [LinkClient] { connections.filter { $0.proven && $0.grant?.control == .full } }
 
     private func accepted(_ socket: HostSocket) {
@@ -503,8 +505,11 @@ package final class HostDaemon {
     /// installed here).
     func findCLIs() {
         Task { [weak self] in
-            var found: [String: Bool] = [:]
-            for provider in Registry.all { found[provider.id] = await CLIExecutable.located(provider.id) != nil }
+            let found = await Task.detached(priority: .utility) {
+                var found: [String: Bool] = [:]
+                for provider in Registry.all { found[provider.id] = await CLIExecutable.located(provider.id) != nil }
+                return found
+            }.value
             self?.installed = found
         }
     }
@@ -517,7 +522,7 @@ package final class HostDaemon {
         guard ghRead.map({ Date().timeIntervalSince($0) > 60 }) ?? true else { return }
         ghRead = Date()
         Task { [weak self] in
-            let now = await Task.detached { GitHubLogin.signedIn() }.value
+            let now = await Task.detached(priority: .utility) { GitHubLogin.signedIn() }.value
             guard let self, now != self.ghSignedIn else { return }
             self.ghSignedIn = now
             for connection in self.connections where connection.proven {
@@ -545,7 +550,8 @@ package final class HostDaemon {
                 Task { @MainActor in
                     guard let self else { return }
                     self.ghLogin = nil
-                    self.ghSignedIn = GitHubLogin.signedIn()
+                    // Read off the main thread, as on a connect.
+                    self.ghSignedIn = await Task.detached(priority: .utility) { GitHubLogin.signedIn() }.value
                     reply(.init(id: id + ":done", ok: ok, message: ok ? "gh is signed in." : "gh didn't sign in."))
                     for connection in self.connections where connection.proven {
                         connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(ghSignedIn: self.ghSignedIn)))

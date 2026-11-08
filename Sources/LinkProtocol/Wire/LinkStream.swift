@@ -207,33 +207,39 @@ package enum StreamWire {
         var frames: [Data] = []
         var batch: [Data] = []
         var size = 0
-        func flush() {
-            guard !batch.isEmpty || (reset && frames.isEmpty) else { return }
-            let head = StreamWire.encode(ChatEvents(chatId: chatId, log: log, reset: reset && frames.isEmpty ? true : nil, items: []))
-            // `{"chatId":…,"items":[],…}` with the items spliced in.
-            var data = head
-            if let range = data.range(of: Data("\"items\":[]".utf8)) {
-                var list = Data("\"items\":[".utf8)
-                for (i, item) in batch.enumerated() {
-                    if i > 0 { list.append(UInt8(ascii: ",")) }
-                    list.append(item)
-                }
-                list.append(Data("]".utf8))
-                data.replaceSubrange(range, with: list)
-            }
-            frames.append(data)
-            batch = []
-            size = 0
-        }
         for item in items {
-            var data = encode(item)
-            if data.count > itemMax { data = encode(trimmed(item)) }
-            if size + data.count > frameBudget { flush() }
+            let data = encoded(item)
+            if !batch.isEmpty, size + data.count > frameBudget {
+                frames.append(frame(chatId: chatId, log: log, reset: reset && frames.isEmpty, encoded: batch))
+                (batch, size) = ([], 0)
+            }
             batch.append(data)
             size += data.count + 1
         }
-        flush()
+        if !batch.isEmpty || (reset && frames.isEmpty) { frames.append(frame(chatId: chatId, log: log, reset: reset && frames.isEmpty, encoded: batch)) }
         return frames
+    }
+
+    /// An item's bytes, its long text cut when it's too large for a frame.
+    package static func encoded(_ item: StreamItem) -> Data {
+        let data = encode(item)
+        return data.count > itemMax ? encode(trimmed(item)) : data
+    }
+
+    /// One `chat.events` frame of items already encoded.
+    package static func frame(chatId: String, log: String, reset: Bool, encoded items: [Data]) -> Data {
+        // `{"chatId":…,"items":[],…}` with the items spliced in.
+        var data = StreamWire.encode(ChatEvents(chatId: chatId, log: log, reset: reset ? true : nil, items: []))
+        if let range = data.range(of: Data("\"items\":[]".utf8)) {
+            var list = Data("\"items\":[".utf8)
+            for (i, item) in items.enumerated() {
+                if i > 0 { list.append(UInt8(ascii: ",")) }
+                list.append(item)
+            }
+            list.append(Data("]".utf8))
+            data.replaceSubrange(range, with: list)
+        }
+        return data
     }
 
     /// An event too large for a frame, with its long text cut to fit.

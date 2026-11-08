@@ -90,7 +90,10 @@ package struct BoxSetup: Sendable {
     }
 
     /// Sets the box up (`allow`: and grants this Mac full control), saying each step as it starts.
-    package func run(allow: Bool, step: @MainActor @Sendable (String) -> Void) async throws(Failure) {
+    /// What it says when the box set up fine but has a catch (linger off: Kore stops with the last
+    /// login there); nil otherwise.
+    @discardableResult
+    package func run(allow: Bool, step: @MainActor @Sendable (String) -> Void) async throws(Failure) -> String? {
         await step("Checking \(alias)…")
         let uname = await shell.run(alias, "uname -sm")
         guard uname.ok else { throw fail(uname, "Can't reach \(alias)") }
@@ -114,6 +117,7 @@ package struct BoxSetup: Sendable {
             let allowed = await shell.run(alias, "\(Self.target) allow '\(grant)' --control full")
             guard allowed.ok else { throw fail(allowed, "\(alias) didn't let this Mac in") }
         }
+        return installed.output.contains("linger is off") ? "\(alias) stops Kore when you log out · see the setup doc" : nil
     }
 
     /// `systemctl --user start kore-host`: a stopped service started again.

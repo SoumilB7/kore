@@ -19,7 +19,16 @@ final class LinkClient {
     private var streaming: Set<String> = []
     private var uploads = LinkUploads()
     /// Catch-ups still to send, a part at a time as the socket drains (a log can be megabytes).
-    private var catchUps: [(chatId: String, log: String, reset: Bool, items: ArraySlice<StreamItem>)] = []
+    private var catchUps: [CatchUp] = []
+
+    private struct CatchUp {
+        var chatId: String
+        var log: String
+        var reset: Bool
+        var items: ArraySlice<StreamItem>
+        /// Its start is still being read off the main thread: live items wait behind it.
+        var loading = false
+    }
     /// `sync.watch`es, by folder; they end with the link.
     private var syncs: [String: SyncWatch] = [:]
 
@@ -40,7 +49,7 @@ final class LinkClient {
             MainActor.assumeIsolated {
                 guard self?.proven == false else { return }
                 HostJournal.note("refused", ["reason": "no hello in 10 s"])
-                self?.end(.auth)
+                self?.end(.slow)
             }
         }
         helloWait = wait
@@ -64,6 +73,7 @@ final class LinkClient {
         host.ended(self)
         for chatId in streaming { host.unfollowed(chatId) }
         streaming = []
+        for chatId in following.keys { host.txFollowersChanged(chatId) }
     }
 
     private func uploadFailed(_ uploadId: String, _ failure: LinkUploads.Failure) {
@@ -81,31 +91,51 @@ final class LinkClient {
     /// live items for that chat wait behind it.
     func events(_ hc: HostChat, _ items: [StreamItem], reset: Bool) {
         guard reset || !items.isEmpty else { return }
-        if reset { catchUps.removeAll { $0.chatId == hc.id } }
+        if reset { catchUps.removeAll { $0.chatId == hc.id && !$0.loading } }
         if let at = catchUps.firstIndex(where: { $0.chatId == hc.id }) {
             catchUps[at].items += items
+            if reset, !catchUps[at].loading { catchUps[at].reset = true }
         } else {
-            catchUps.append((hc.id, hc.stream.id, reset, items[...]))
+            catchUps.append(CatchUp(chatId: hc.id, log: hc.stream.id, reset: reset, items: items[...]))
         }
         sendCatchUps()
     }
 
-    /// Sends waiting catch-ups while the socket's queue is short.
+    /// A follow's catch-up is being read: live items for the chat wait until it's in.
+    func catchUpStarts(_ chatId: String, log: String) {
+        catchUps.removeAll { $0.chatId == chatId }
+        catchUps.append(CatchUp(chatId: chatId, log: log, reset: false, items: [], loading: true))
+    }
+
+    /// The catch-up read: it goes first, then what came live meanwhile that it doesn't hold.
+    func catchUpRead(_ hc: HostChat, _ items: [StreamItem], reset: Bool) {
+        guard let at = catchUps.firstIndex(where: { $0.chatId == hc.id && $0.loading }) else { return events(hc, items, reset: reset) }
+        let last = items.last?.s ?? Int.min
+        catchUps[at].items = items[...] + catchUps[at].items.filter { $0.s > last }
+        catchUps[at].reset = reset
+        catchUps[at].log = hc.stream.id
+        catchUps[at].loading = false
+        sendCatchUps()
+    }
+
+    /// Sends waiting catch-ups a frame at a time, while the socket's queue is short: each frame
+    /// filled to `StreamWire.frameBudget` by its items' real sizes.
     private func sendCatchUps() {
-        while !catchUps.isEmpty, socket.backlog < HostSocket.lowWater {
-            var next = catchUps.removeFirst()
-            var part: [StreamItem] = []
+        while let at = catchUps.firstIndex(where: { !$0.loading }), socket.backlog < HostSocket.lowWater {
+            var next = catchUps.remove(at: at)
+            var part: [Data] = []
             var size = 0
-            while let item = next.items.first, size < StreamWire.frameBudget * 2 || part.isEmpty {
-                part.append(item)
-                size += item.e.map { _ in 256 } ?? 64
+            while let item = next.items.first {
+                let data = StreamWire.encoded(item)
+                if !part.isEmpty, size + data.count > StreamWire.frameBudget { break }
+                part.append(data)
+                size += data.count + 1
                 next.items = next.items.dropFirst()
-                if part.count >= 2000 { break }
             }
-            for frame in StreamWire.frames(chatId: next.chatId, log: next.log, reset: next.reset, items: part) { socket.send(frame) }
+            socket.send(StreamWire.frame(chatId: next.chatId, log: next.log, reset: next.reset, encoded: part))
             if !next.items.isEmpty {
                 next.reset = false
-                catchUps.insert(next, at: 0)
+                catchUps.insert(next, at: at)
             }
         }
     }
@@ -162,6 +192,7 @@ final class LinkClient {
                 return send(.result(.init(id: "tx.open:" + chatId, ok: false, code: .goneChat, message: "No such chat on this box.")))
             }
             following[chatId] = (min(max(last ?? 60, 1), 2000), 0)
+            hc.txFollowed = true
             page(hc, last: nil)
         case .txMore(let chatId, let count):
             guard let hc = host.chat(chatId), let follow = following[chatId] else { return }
@@ -169,6 +200,7 @@ final class LinkClient {
             page(hc, last: nil)
         case .txClose(let chatId):
             following[chatId] = nil
+            host.txFollowersChanged(chatId)
         case .entryMore(let id, let chatId, let entryId, let field, let offset):
             entryMore(id: id, chatId: chatId, entryId: entryId, field: field, offset: offset)
         case .cardMore(let id, let chatId, let cardId, let offset):

@@ -271,7 +271,13 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         if !connection.isOnline { linked(false) }
         var sent: [CallFile] = []
         for file in files { sent.append(try await upload(file)) }
-        return try await call(.send(text: text, files: sent, queued: queued, id: id)).bool ?? true
+        // A message longer than one frame carries goes as a file, the way a pasted log would.
+        var words = text
+        if text.utf8.count > Self.longText {
+            sent.append(try await uploadText(text))
+            words = ""
+        }
+        return try await call(.send(text: words, files: sent, queued: queued, id: id)).bool ?? true
     }
 
     /// A file to the box by the link's upload: the blob its message names it by there, which the
@@ -284,6 +290,17 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         guard data.count <= LinkUploads.maxSize else { throw HostRefusal(message: "\(file.name) is over 12 MB, too large to send to \(connection.alias)") }
         switch await connection.upload(data, name: file.name, mime: Self.mime(data)) {
         case .success(let blob): return CallFile(blob: blob, name: file.name, kind: file.kind)
+        case .failure(let refusal): throw refusal
+        }
+    }
+
+    /// Longer than this, a message goes to the box as a text file (one frame to the box is at
+    /// most 256 KiB, and the box takes 64 KiB of text in a message).
+    static let longText = 60 * 1024
+
+    private func uploadText(_ text: String) async throws -> CallFile {
+        switch await connection.upload(Data(text.utf8), name: "message.txt", mime: "text/plain") {
+        case .success(let blob): return CallFile(blob: blob, name: "message.txt", kind: .text)
         case .failure(let refusal): throw refusal
         }
     }

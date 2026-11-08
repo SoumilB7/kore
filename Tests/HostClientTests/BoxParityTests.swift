@@ -315,7 +315,7 @@ struct BoxParityTests {
         connection.release()
     }
 
-    @Test func anActGrantIsToldItNeedsFullControl() async throws {
+    @Test func anActGrantIsToldItOnlyWatches() async throws {
         let rig = try BoxRig(control: .act)
         defer { rig.finish() }
         let connection = rig.connection()
@@ -325,7 +325,7 @@ struct BoxParityTests {
         let backend = LinkChatBackend(connection: connection, provider: .claude, folder: rig.folder.path, chatId: "x", model: nil)
         let log = EventLog(backend.events)
         try await backend.start()
-        #expect(await until { log.events.contains { if case .notice(let text, true) = $0 { text.contains("full control") } else { false } } })
+        #expect(await until { log.events.contains { if case .notice(let text, true) = $0 { text.contains("only watch") } else { false } } })
         connection.release()
     }
 

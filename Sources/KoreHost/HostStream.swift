@@ -19,6 +19,11 @@ package final class StreamLog {
     package private(set) var seq = 0
     private var bytes = 0
     private var loaded = false
+    /// Where every `indexEvery`th item's line starts: a follow reads only from there on.
+    private var offsets: [(seq: Int, offset: Int)] = []
+    private static let indexEvery = 256
+    /// Past this, the log starts again at a turn's end from a compact history (merged text).
+    private var rotateAt = StreamLog.cap
     private var handle: FileHandle?
     /// A resumed session's history while the log already holds the chat: the clients have it,
     /// so it isn't sent again (nor its correction).
@@ -48,19 +53,23 @@ package final class StreamLog {
     private func load() {
         guard !loaded else { return }
         loaded = true
+        // A torn last line (a crash mid-write) is cut off; any other bad line is skipped.
+        HostPaths.endOnNewline(url)
         guard let data = try? Data(contentsOf: url) else { return restart(with: [], announce: false) }
         bytes = data.count
         var firstSeq: Int?
         var inHistory = false
         var turnOpen = false
         let decoder = JSONDecoder()
-        // A torn line (a crash mid-write) is skipped, never the whole log.
-        for line in data.split(separator: 0x0A) {
-            guard let peek = try? decoder.decode(Peek.self, from: line) else { continue }
+        var offset = 0
+        for line in data.split(separator: 0x0A, omittingEmptySubsequences: false) {
+            defer { offset += line.count + 1 }
+            guard !line.isEmpty, let peek = try? decoder.decode(Peek.self, from: line) else { continue }
             if let log = peek.log { id = log }
             if let s = peek.s {
                 if firstSeq == nil { firstSeq = s }
                 seq = s
+                if s % Self.indexEvery == 0 { offsets.append((s, offset)) }
             }
             if peek.open != nil { inHistory = true }
             if peek.close == true { inHistory = false }
@@ -145,7 +154,7 @@ package final class StreamLog {
         }
     }
 
-    /// Writes what's waiting and hands it on.
+    /// Writes what's waiting and hands it on. A log past `rotateAt` starts again at a turn's end.
     func flush() {
         flushQueued = false
         guard !pending.isEmpty else { return }
@@ -155,6 +164,27 @@ package final class StreamLog {
         for (event, by) in waiting { items += StreamItem.items(event, seq: &seq, by: by) }
         write(items)
         flushed?(items, false)
+        if bytes > rotateAt, case .turnFinished? = waiting.last?.event { rotate() }
+    }
+
+    /// The log again from its history so far, streamed pieces merged: clients take it as a rebuild.
+    private func rotate() {
+        var assembler = StreamAssembler()
+        let events = assembler.take(read())
+        let start = events.lastIndex { if case .replayed = $0 { true } else if case .historyReplaced = $0 { true } else { false } }
+        var history: [ChatEvent] = []
+        var earlier: ChatEvent?
+        for (i, event) in events.enumerated() where start.map({ i >= $0 }) ?? true {
+            switch event {
+            case .replayed(let inner), .historyReplaced(let inner): history = inner
+            case .earlierHistory: earlier = event
+            default:
+                if let last = history.last, let merged = Self.merge(last, event) { history[history.count - 1] = merged } else { history.append(event) }
+            }
+        }
+        restart(with: [.replayed(history)] + (earlier.map { [$0] } ?? []))
+        // A history that stays large isn't rebuilt at every turn's end.
+        rotateAt = max(Self.cap, bytes * 2)
     }
 
     /// The log starts again from `events` (a rollback's history, or a history past the cap), and
@@ -172,17 +202,41 @@ package final class StreamLog {
         var data = StreamWire.encode(Header(log: id)) + Data([0x0A])
         for item in items { data += StreamWire.encode(item) + Data([0x0A]) }
         try? HostPaths.privateFile(data, to: url)
+        bytes = 0
+        offsets = []
+        index(items, header: data.count - items.reduce(0) { $0 + StreamWire.encode($1).count + 1 })
         bytes = data.count
         if announce { flushed?(items, true) }
     }
 
+    /// Notes where indexed items start, from `start` (the bytes before them).
+    private func index(_ items: [StreamItem], header start: Int) {
+        var at = start
+        for item in items {
+            let length = StreamWire.encode(item).count + 1
+            if item.s % Self.indexEvery == 0 { offsets.append((item.s, at)) }
+            at += length
+        }
+    }
+
     private func write(_ items: [StreamItem]) {
         var data = Data()
-        for item in items { data += StreamWire.encode(item) + Data([0x0A]) }
+        var lines: [Int] = []
+        for item in items {
+            let line = StreamWire.encode(item)
+            lines.append(line.count + 1)
+            data += line + Data([0x0A])
+        }
         if handle == nil {
             if !FileManager.default.fileExists(atPath: url.path) { try? HostPaths.privateFile(StreamWire.encode(Header(log: id)) + Data([0x0A]), to: url) }
+            HostPaths.endOnNewline(url)
             handle = try? FileHandle(forWritingTo: url)
-            _ = try? handle?.seekToEnd()
+            bytes = Int((try? handle?.seekToEnd()) ?? UInt64(bytes))
+        }
+        var at = bytes
+        for (item, length) in zip(items, lines) {
+            if item.s % Self.indexEvery == 0 { offsets.append((item.s, at)) }
+            at += length
         }
         do {
             try handle?.write(contentsOf: data)
@@ -196,17 +250,28 @@ package final class StreamLog {
 
     /// What a client following from `after` of log `log` gets: what came since, or the whole log
     /// with `reset` when it names another log, holds nothing, or is behind what's kept.
-    package func since(_ after: Int?, log: String?) -> (items: [StreamItem], reset: Bool) {
+    /// Read off the main thread, from the nearest indexed line before `after`.
+    package func since(_ after: Int?, log: String?) async -> (items: [StreamItem], reset: Bool) {
         load()
         flush()
+        let (url, first) = (url, first)
         if let after, log == id, after >= first - 1, after <= seq {
-            return after == seq ? ([], false) : (read().filter { $0.s > after }, false)
+            if after == seq { return ([], false) }
+            let offset = offsets.last { $0.seq <= after + 1 }?.offset ?? 0
+            let items = await Task.detached(priority: .utility) { Self.read(url, from: offset, first: first).filter { $0.s > after } }.value
+            return (items, false)
         }
-        return (read(), true)
+        let items = await Task.detached(priority: .utility) { Self.read(url, from: 0, first: first) }.value
+        return (items, true)
     }
 
-    private func read() -> [StreamItem] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
+    private func read() -> [StreamItem] { Self.read(url, from: 0, first: first) }
+
+    private nonisolated static func read(_ url: URL, from offset: Int, first: Int) -> [StreamItem] {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: UInt64(offset))
+        guard let data = try? handle.readToEnd() else { return [] }
         let decoder = JSONDecoder()
         return data.split(separator: 0x0A).compactMap { line in
             guard let item = try? decoder.decode(StreamItem.self, from: line), item.s >= first else { return nil }
@@ -230,13 +295,22 @@ extension HostDaemon {
             return client.send(.result(.init(id: "chat.follow:" + request.chatId, ok: false, code: .goneChat, message: "No such chat on this box.")))
         }
         let fresh = hc.stream.isEmpty
-        let (items, reset) = hc.stream.since(request.after, log: request.log)
-        client.events(hc, items, reset: reset)
+        client.catchUpStarts(hc.id, log: hc.stream.id)
         hc.chat?.automatic = false
-        // A chat shown for the first time starts its CLI (its models, its history), as a tab on the
-        // Mac does; following one again (a reconnect) starts nothing.
-        guard fresh, let chat = live(hc) else { return }
-        Task { await chat.startOnce() }
+        Task { [weak self, weak client] in
+            let (items, reset) = await hc.stream.since(request.after, log: request.log)
+            client?.catchUpRead(hc, items, reset: reset)
+            // A chat shown for the first time starts its CLI (its models, its history), as a tab on
+            // the Mac does; following one again (a reconnect) starts nothing.
+            guard fresh, let self, let chat = self.live(hc) else { return }
+            await chat.startOnce()
+        }
+    }
+
+    /// Whether any watch or act client still follows the chat's transcript.
+    func txFollowersChanged(_ chatId: String) {
+        guard let hc = chat(chatId) else { return }
+        hc.txFollowed = provenClients.contains { $0.follows(chatId) }
     }
 
     func unfollowed(_ chatId: String) {
@@ -287,13 +361,38 @@ extension HostDaemon {
         Task {
             var result = await perform(call.command, hc, by: by)
             result.id = call.id
-            let bytes = StreamWire.encode(result)
+            // An answer stays under one frame: its long text or its oldest events give way.
+            let bytes = StreamWire.encode(Self.fitted(result))
             hc.answered.append((key, bytes))
             if hc.answered.count > 64 { hc.answered.removeFirst(hc.answered.count - 64) }
             for waiting in hc.calling.removeValue(forKey: key) ?? [] { waiting.sendRaw(bytes) }
             armIdle(hc)
             broadcast(chats: [hc])
         }
+    }
+
+    /// The most an answer's frame carries (a client drops a frame over 1 MiB).
+    static let answerBudget = 900 * 1024
+
+    /// `result` under `answerBudget`: a text keeps its end, a list of events its newest (with
+    /// `more`); past that, the answer says it's too large.
+    static func fitted(_ result: ChatCallResult) -> ChatCallResult {
+        guard StreamWire.encode(result).count > answerBudget, var value = result.value else { return result }
+        var fitted = result
+        if let text = value.text, text.utf8.count > answerBudget / 2 {
+            let tail = Array(text.utf8.suffix(answerBudget / 2))
+            value.text = "… (the start is cut: too long to send)\n" + String(decoding: tail, as: UTF8.self)
+        }
+        if var events = value.events {
+            while events.count > 1, StreamWire.encode(events).count > answerBudget * 9 / 10 {
+                events.removeFirst(max(1, events.count / 4))
+                value.more = true
+            }
+            value.events = events
+        }
+        fitted.value = value
+        guard StreamWire.encode(fitted).count > answerBudget else { return fitted }
+        return ChatCallResult(id: result.id, ok: false, code: .tooLarge, message: "Too large to send")
     }
 
     private static func callID(_ data: Data) -> String {

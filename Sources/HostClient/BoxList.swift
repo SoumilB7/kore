@@ -37,12 +37,16 @@ package final class BoxList {
         case start
         /// Copy this Kore's kore-host there and restart it.
         case update
+        /// The same while chats there are working (their turns end with the restart).
+        case setUpAnyway, updateAnyway
 
         package var title: String {
             switch self {
             case .setUp: "Set up"
             case .start: "Start"
             case .update: "Update"
+            case .setUpAnyway: "Set up anyway"
+            case .updateAnyway: "Update anyway"
             }
         }
     }
@@ -66,6 +70,8 @@ package final class BoxList {
         package var older = false
         /// Set up or updated a moment ago: "Ready" until the next probe.
         package var fresh = false
+        /// Set up fine, with a catch to say (linger off).
+        package var warning: String?
         package var id: String { alias }
 
         package init(alias: String) { self.alias = alias }
@@ -81,6 +87,7 @@ package final class BoxList {
             case .failed(let why, let action): Note(line: why, action: action)
             case .unreachable(let why): Note(line: why)
             case .ready where older: Note(line: "\(alias) needs an update", action: .update)
+            case .ready where warning != nil: Note(line: warning ?? "")
             case .ready where fresh: Note(line: "Ready")
             case .ready where folders.isEmpty: Note(line: "No folders on \(alias)")
             default: nil
@@ -212,9 +219,18 @@ package final class BoxList {
     /// The line's action: set up (or grant this Mac again), start the service, or update.
     package func act(_ action: Action, on alias: String) async {
         switch action {
-        case .setUp: await setUp(alias)
-        case .start: await perform(alias, grant: nil, retry: .start) { setup, _ in try await setup.start() }
-        case .update: await perform(alias, grant: nil, retry: .update) { setup, step in try await setup.run(allow: false, step: step) }
+        case .setUp, .update:
+            // Restarting it ends the turns running there: asked once first.
+            let working = HostConnection.live(alias)?.chats.values.filter(\.running).count ?? 0
+            if working > 0 {
+                let line = working == 1 ? "1 chat is working on \(alias)" : "\(working) chats are working on \(alias)"
+                update(alias) { $0.status = .failed(line, action == .setUp ? .setUpAnyway : .updateAnyway) }
+                return
+            }
+            await act(action == .setUp ? .setUpAnyway : .updateAnyway, on: alias)
+        case .setUpAnyway: await setUp(alias)
+        case .start: await perform(alias, grant: nil, retry: .start) { setup, _ in try await setup.start(); return nil }
+        case .updateAnyway: await perform(alias, grant: nil, retry: .update) { setup, step in try await setup.run(allow: false, step: step) }
         }
     }
 
@@ -227,7 +243,7 @@ package final class BoxList {
     /// Runs one of the box's steps, then reaches it, a few times while its service comes up.
     private func perform(
         _ alias: String, grant: String?, retry: Action,
-        _ work: @escaping @MainActor (BoxSetup, @escaping @MainActor @Sendable (String) -> Void) async throws -> Void
+        _ work: @escaping @MainActor (BoxSetup, @escaping @MainActor @Sendable (String) -> Void) async throws -> String?
     ) async {
         guard box(alias) != nil, !busy.contains(alias) else { return }
         busy.insert(alias)
@@ -235,7 +251,8 @@ package final class BoxList {
         let setup = makeSetup(alias, grant ?? BoxSetup.grant(for: alias, defaults: defaults))
         update(alias) { $0.status = .working(retry == .start ? "Starting…" : "Checking \(alias)…") }
         do {
-            try await work(setup) { [weak self] line in self?.update(alias) { $0.status = .working(line) } }
+            let warning = try await work(setup) { [weak self] line in self?.update(alias) { $0.status = .working(line) } }
+            update(alias) { $0.warning = warning }
         } catch {
             let why = (error as? BoxSetup.Failure)?.message ?? "Couldn't reach \(alias)"
             HostLog.note(alias, "setup failed", why)
@@ -267,7 +284,7 @@ package final class BoxList {
             try? await Task.sleep(for: .milliseconds(100))
         }
         guard connection.isOnline else {
-            let status = Self.status(alias, phase: connection.phase, reason: connection.lastReason)
+            let status = Self.status(alias, phase: connection.phase, reason: connection.lastReason, lateHello: connection.lateHello)
             update(alias) { $0.status = status }
             return nil
         }
@@ -276,7 +293,8 @@ package final class BoxList {
 
     /// Why a box didn't link, from how its link ended: ssh's exit status (attach's own codes, the
     /// shell's 126 and 127, ssh's 255) or the box's refusal.
-    package static func status(_ alias: String, phase: HostConnection.Phase, reason: String?) -> Status {
+    package static func status(_ alias: String, phase: HostConnection.Phase, reason: String?, lateHello: Bool = false) -> Status {
+        if lateHello { return .unreachable("\(alias) waited too long for this Mac · trying again") }
         if case .refused(let why) = phase {
             switch why {
             case .version: return .stale

@@ -9,6 +9,10 @@ import Musl
 import KoreHost
 import LinkProtocol
 
+// Small pages only, before anything is allocated (`run` and `attach` alike): a huge page touched
+// once stays resident whole.
+HostMemory.smallPages()
+
 /// kore-host: Kore's chats on a headless machine, served over the link (`docs/kore-host.md`).
 let usage = """
     usage: kore-host run
@@ -48,7 +52,6 @@ case "run":
     signal(SIGPIPE, SIG_IGN)
     if let problem = paths.runtimeProblem { fail("kore-host: \(problem)") }
     if HostLock.held(paths.lock) { fail("kore-host is already running\(runningPid()); this one stops here") }
-    HostMemory.smallPages()
     let host = HostDaemon(paths: paths)
     do {
         try host.start()

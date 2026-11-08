@@ -179,6 +179,7 @@ package final class HostChat {
         }
         if log == nil {
             if !FileManager.default.fileExists(atPath: logURL.path) { try? HostPaths.privateFile(Data(), to: logURL) }
+            HostPaths.endOnNewline(logURL)
             log = try? FileHandle(forWritingTo: logURL)
             _ = try? log?.seekToEnd()
         }
@@ -220,7 +221,7 @@ package final class HostChat {
         guard let transcript = chat.transcriptView as? HostTranscript else { return }
         transcript.onChange = { [weak self, weak chat] from, reset in
             guard let self, let chat else { return }
-            self.project(chat, from: from, reset: reset)
+            self.changed(chat, from: from, reset: reset)
         }
         if replaced {
             expectingWake = false
@@ -228,14 +229,58 @@ package final class HostChat {
         }
     }
 
+    /// A watch or act client follows the chat's transcript (`tx.open`): the projection runs as
+    /// the chat changes. With none (a Mac on the event stream only), it runs once a second at most.
+    var txFollowed = false {
+        didSet {
+            guard txFollowed, !oldValue, let chat else { return }
+            projectWaiting(chat)
+        }
+    }
+    private var waitingFrom: Int?
+    private var waitingReset = false
+    private var waitingQueued = false
+
+    private func changed(_ chat: Chat, from: Int, reset: Bool) {
+        if txFollowed { return project(chat, from: from, reset: reset) }
+        // A reset (a history read in) is kept apart: the wake rule tells a resumed CLI's from a new one.
+        if reset { projectWaiting(chat) }
+        waitingFrom = min(waitingFrom ?? from, from)
+        waitingReset = waitingReset || reset
+        guard !waitingQueued else { return }
+        waitingQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self, weak chat] in
+            MainActor.assumeIsolated {
+                guard let self, let chat else { return }
+                self.projectWaiting(chat)
+            }
+        }
+    }
+
+    private func projectWaiting(_ chat: Chat) {
+        waitingQueued = false
+        guard let from = waitingFrom else { return }
+        let reset = waitingReset
+        (waitingFrom, waitingReset) = (nil, false)
+        project(chat, from: from, reset: reset)
+    }
+
     /// Its CLI ends and the chat goes; the record and log stay, and the next send resumes it.
     func sleep() {
         guard let chat else { return }
+        projectWaiting(chat)
         // A turn its CLI takes along ends here, so no client keeps it running.
         if chat.isBusy { stream.add(.turnFinished(nil, .interrupted, duration: nil), by: nil) }
         stream.flush()
         chat.close(reason: "idle")
         self.chat = nil
+        // Nothing of it stays in memory while no one follows its transcript: read again when asked.
+        if !txFollowed {
+            (stored, index, storedTurns) = ([], [:], [:])
+            logRead = false
+            try? log?.close()
+            log = nil
+        }
     }
 
     /// The chat's state after an event: its session, title and mode are kept.

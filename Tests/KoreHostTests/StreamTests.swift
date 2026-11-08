@@ -188,7 +188,8 @@ struct StreamTests {
         // The log outlives a restart.
         rig.restart()
         let back = try #require(rig.host.chat(hc.id))
-        #expect(back.stream.since(nil, log: nil).items.count == hc.stream.since(nil, log: nil).items.count)
+        let kept = await back.stream.since(nil, log: nil).items.count
+        #expect(kept == (await hc.stream.since(nil, log: nil)).items.count)
         #expect(back.stream.id == log)
     }
 

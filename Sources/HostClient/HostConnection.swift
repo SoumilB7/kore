@@ -63,6 +63,8 @@ package final class HostConnection {
     package private(set) var folders: [BoxFolder] = []
     /// Why the link last ended, in SSH's or the box's last words ("command not found").
     @ObservationIgnored package private(set) var lastReason: String?
+    /// The box closed the last link because this Mac's hello came too late.
+    @ObservationIgnored package private(set) var lateHello = false
     /// GitHub's CLI on the box is signed in, as the box last said; nil until it says.
     package private(set) var ghSignedIn: Bool?
     /// The box's kore-host is older than this Kore (`HostWire.older`), as its welcome said.
@@ -102,6 +104,11 @@ package final class HostConnection {
     @ObservationIgnored private let tag = String(UUID().uuidString.prefix(8)).lowercased()
     /// Commands a dropped link sends again (forwarded calls: the box answers a repeat once).
     @ObservationIgnored private var resend: [String: Data] = [:]
+    /// Of those, the messages kept on disk across a quit (only sends: a Stop, a compaction or a
+    /// rollback from before a quit never runs after it), with when and for which chat.
+    @ObservationIgnored private var kept: [String: (at: Date, chatId: String)] = [:]
+    /// Messages dropped for waiting too long, by chat: said in the chat when it follows.
+    @ObservationIgnored private var expired: [String: Int] = [:]
     @ObservationIgnored private var outbox: [(id: String, payload: Data)] = []
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var waiting: [String: CheckedContinuation<LinkMessage.Result, Never>] = [:]
@@ -146,10 +153,18 @@ package final class HostConnection {
         }
         // Sends a quit Kore didn't get to: they go once the box is back; their answers aren't
         // waited on (the chat shows them when the box does).
+        let now = Date()
         for pending in self.cache.outbox() {
+            guard let at = pending.at, now.timeIntervalSince(at) < HostCache.sendLifetime else {
+                if let chat = pending.chatId { expired[chat, default: 0] += 1 }
+                HostLog.note(alias, "send expired", pending.id)
+                continue
+            }
             outbox.append((pending.id, pending.payload))
             resend[pending.id] = pending.payload
+            if let chat = pending.chatId { kept[pending.id] = (at, chat) }
         }
+        if !expired.isEmpty { keepOutbox() }
     }
 
     // MARK: Shared, per alias
@@ -202,6 +217,9 @@ package final class HostConnection {
     package func follow(_ follower: any HostFollower) {
         guard let id = follower.chatId else { return }
         followers[id] = Weak(follower: follower)
+        if let count = expired.removeValue(forKey: id) {
+            follower.refused(count == 1 ? "A message from before Kore quit waited over a day and wasn't sent" : "\(count) messages from before Kore quit waited over a day and weren't sent")
+        }
         if ready { askEvents(follower) }
     }
 
@@ -231,21 +249,17 @@ package final class HostConnection {
 
     /// `resending`: a link that drops before the answer sends it again once it's back (a forwarded
     /// call, which the box runs once per id).
-    private func command(_ payload: (String) -> Data, resending: Bool) async -> LinkMessage.Result {
+    private func command(_ payload: (String) -> Data, resending: Bool, keeping chatId: String? = nil) async -> LinkMessage.Result {
         serial += 1
         let id = "c\(serial).\(tag)"
         let data = payload(id)
         if case .refused(let why) = phase { return LinkMessage.Result(id: id, ok: false, code: .unknown, message: why.line(alias)) }
         if resending {
             resend[id] = data
+            if let chatId { kept[id] = (Date(), chatId) }
             keepOutbox()
         }
-        defer {
-            if resending {
-                resend[id] = nil
-                keepOutbox()
-            }
-        }
+        defer { answered(id) }
         return await withCheckedContinuation { continuation in
             waiting[id] = continuation
             if ready, let transport {
@@ -281,7 +295,7 @@ package final class HostConnection {
             asked = id
             calls.insert(id)
             return StreamWire.encode(ChatCall(id: id, chatId: chatId, command: command))
-        }, resending: true)
+        }, resending: true, keeping: Self.keeps(command) ? chatId : nil)
         calls.remove(asked)
         return answers.removeValue(forKey: result.id) ?? ChatCallResult(id: result.id, ok: result.ok, code: result.code, message: result.message)
     }
@@ -527,6 +541,11 @@ package final class HostConnection {
             case .auth: refuse(.auth)
             case .version: refuse(.version)
             case .replaced: refuse(.replaced)
+            // The box's own wait for this Mac's hello ran out (a Mac that slept mid-handshake): it
+            // dials again.
+            case .slow:
+                lateHello = true
+                drop("\(alias) waited too long for this Mac")
             default: drop("\(alias) said \(reason.rawValue)")
             }
         case .snapshot(_, let windows, let chats, let extras):
@@ -565,6 +584,10 @@ package final class HostConnection {
                 followers[String(result.id.dropFirst("chat.follow:".count))]?.follower?.refused(result.message ?? "This chat isn't on \(alias) any more")
             } else if let wait = uploadWaits.removeValue(forKey: result.id) {
                 wait.resume(returning: result)
+            } else if resend[result.id] != nil, waiting[result.id] == nil {
+                // A send kept from before a quit, answered now: done with.
+                inFlight.remove(result.id)
+                answered(result.id)
             } else if inFlight.remove(result.id) != nil || waiting[result.id] != nil {
                 if wantRaw.remove(result.id) != nil { raws[result.id] = raw }
                 if calls.contains(result.id) { answers[result.id] = try? JSONDecoder().decode(ChatCallResult.self, from: raw) }
@@ -588,6 +611,7 @@ package final class HostConnection {
         ready = true
         phase = .online
         lastHeard = nil
+        lateHello = false
         for follower in liveFollowers {
             askEvents(follower)
             follower.linked(true)
@@ -610,8 +634,24 @@ package final class HostConnection {
 
     /// Calls that go again after a drop are kept on disk, so a quit Kore sends them when it's back
     /// (the box runs each id once).
+    /// A forwarded call is done with (answered here, or by the box's answer cache): it isn't sent
+    /// again, now or after a quit.
+    private func answered(_ id: String) {
+        guard resend.removeValue(forKey: id) != nil else { return }
+        let wasKept = kept.removeValue(forKey: id) != nil
+        if wasKept { keepOutbox() }
+    }
+
+    /// Only a message is kept across a quit.
+    private static func keeps(_ command: ChatCommand) -> Bool {
+        if case .send = command { return true }
+        return false
+    }
+
     private func keepOutbox() {
-        let kept = resend.sorted { $0.key < $1.key }.map { HostCache.Pending(id: $0.key, payload: $0.value) }
+        let kept = self.kept.compactMap { id, entry in
+            resend[id].map { HostCache.Pending(id: id, payload: $0, at: entry.at, chatId: entry.chatId) }
+        }.sorted { $0.id < $1.id }
         cache.saveOutbox(kept)
     }
 

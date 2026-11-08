@@ -10,6 +10,8 @@ package enum KoreUsageRefresh {
     package static let delay: Duration = .seconds(5)
 
     package static func soon(_ cli: String) {
+        // A box keeps none of the Mac's bookkeeping: no index to read for.
+        guard !KoreLog.keepsNothing else { return }
         pending[cli]?.cancel()
         pending[cli] = Task.detached(priority: .utility) {
             try? await Task.sleep(for: delay)

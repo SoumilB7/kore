@@ -71,6 +71,28 @@ package struct HostPaths: Sendable {
 
     /// Writes `data` as a file only this user can read (0600), whole or not at all: a temp file,
     /// synced, then renamed over the old one. A full disk is said in the journal.
+    /// A log about to be appended to ends with a whole line: a torn last line (a crash or power
+    /// loss mid-write) is cut off, so the next line isn't glued onto it and lost.
+    package static func endOnNewline(_ url: URL) {
+        guard let handle = try? FileHandle(forUpdating: url) else { return }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd(), size > 0 else { return }
+        var at = size
+        let chunk: UInt64 = 64 * 1024
+        while at > 0 {
+            let from = at > chunk ? at - chunk : 0
+            try? handle.seek(toOffset: from)
+            guard let data = try? handle.read(upToCount: Int(at - from)) else { return }
+            if at == size, data.last == 0x0A { return }
+            if let newline = data.lastIndex(of: 0x0A) {
+                try? handle.truncate(atOffset: from + UInt64(newline - data.startIndex) + 1)
+                return
+            }
+            at = from
+        }
+        try? handle.truncate(atOffset: 0)
+    }
+
     package static func privateFile(_ data: Data, to url: URL) throws {
         try privateFolder(url.deletingLastPathComponent())
         let temp = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(getpid())")
