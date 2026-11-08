@@ -51,7 +51,12 @@ final class ArsenalKeep: ChatStoryline {
 
         @MainActor func run(_ story: StoryContext) async throws {
             let cast = AgentCast.of(story)
-            let session = try cast.chat("a").sessionId
+            let a = try cast.chat("a")
+            let session = a.sessionId
+            // The relaunched window's first history read drops a restored tab, or a closed tab's
+            // recovery, whose session its CLI doesn't list (deleted elsewhere). The scripted CLI
+            // lists only forks: a's session, said in, as the CLI's own list would have it.
+            if let session { ScriptedWorld.shared.list(session, provider: a.provider.id, folder: a.folder, title: "hello") }
             guard let workspace = story.app.workspace, let window = story.window else { throw StoryFailure.modelMissing("the window") }
             let folder = story.folder
             let saved = try workspace.storySaved()
