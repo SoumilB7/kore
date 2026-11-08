@@ -111,6 +111,9 @@ package protocol ChatBackend: AnyObject {
     func relaunch(reason: String) async
     /// The CLI's model list, read again from the running CLI; nil when it isn't running or can't.
     func listModels() async -> [ModelOption]?
+    /// A row the chat showed of its own that the CLI isn't sent (a typed /compact): a backend whose
+    /// history is kept elsewhere (a box's) keeps it there.
+    func keepRow(_ text: String, id: String) async
     func close() async
 }
 
@@ -258,6 +261,9 @@ extension ChatBackend {
 
     /// For a backend that can't list its models again.
     package func listModels() async -> [ModelOption]? { nil }
+
+    /// For a backend whose history is the CLI's own.
+    package func keepRow(_ text: String, id: String) async {}
 
     /// For a backend with no account to read.
     package func usage() async throws -> PlanReading { throw UsageUnavailable() }

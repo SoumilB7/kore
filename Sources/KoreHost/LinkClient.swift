@@ -220,11 +220,22 @@ final class LinkClient {
         guard var follow = following[hc.id] else { return }
         follow.txRev += 1
         following[hc.id] = follow
-        let shown = Array(hc.entries.suffix(last ?? follow.last))
-        let turnIds = Set(shown.compactMap(\.turn))
-        let turns = turnIds.compactMap { hc.turns[$0] }.sorted { $0.startedAt < $1.startedAt }
-        send(.txPage(chatId: hc.id, txRev: follow.txRev, entries: shown, turns: turns, hasEarlier: hc.entries.count > shown.count))
+        // A page stays under the client's frame limit: fewer of the newest entries when they don't fit.
+        var count = min(last ?? follow.last, hc.entries.count)
+        while true {
+            let shown = Array(hc.entries.suffix(count))
+            let turnIds = Set(shown.compactMap(\.turn))
+            let turns = turnIds.compactMap { hc.turns[$0] }.sorted { $0.startedAt < $1.startedAt }
+            let page = LinkMessage.txPage(chatId: hc.id, txRev: follow.txRev, entries: shown, turns: turns, hasEarlier: hc.entries.count > shown.count)
+            if count <= 1 || ((try? page.encoded())?.count ?? 0) <= Self.pageBudget {
+                return send(page)
+            }
+            count /= 2
+        }
     }
+
+    /// The most a page's frame carries, under `LinkFrame.outboundMax`.
+    static let pageBudget = 900 * 1024
 
     func txDelta(_ hc: HostChat, upserts: [LinkEntry], removed: [String], order: [String]?, turns: [LinkTurn]) {
         guard var follow = following[hc.id] else { return }

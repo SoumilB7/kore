@@ -306,6 +306,15 @@ extension HostDaemon {
             close(hc)
             return ok()
         }
+        if case .keepRow(let text, let id) = command {
+            hc.sentBy[id] = grant
+            if let chat = hc.chat {
+                chat.showSent(text, id: id)
+            } else {
+                hc.stream.add(.userMessage(text: text, attachments: [], id: id), by: grant)
+            }
+            return ok()
+        }
         switch command {
         case .setModel(let model) where !offers(model: model, hc.record.provider):
             return fail("The chat's CLI doesn't offer that model.", .invalid)
@@ -430,7 +439,7 @@ extension HostDaemon {
                 return fail("Remote control of a box's chat is turned on on the box.", .command)
             case .relaunch(let reason):
                 await backend.relaunch(reason: reason)
-            case .close:
+            case .close, .keepRow:
                 break
             case .listModels:
                 var value = CallValue()
@@ -459,7 +468,7 @@ extension HostDaemon {
     /// A finished upload, kept with the box's state until the daemon stops: its blob id, by which
     /// a forwarded message names it.
     func keep(_ file: LinkUploads.File) -> String? {
-        sweepUploads()
+        sweepUploads(adding: file.data.count)
         let blob = UUID().uuidString.lowercased()
         let folder = paths.state.appendingPathComponent("uploads/\(blob)", isDirectory: true)
         let url = folder.appendingPathComponent(LinkUploads.safeName(file.name))
@@ -473,17 +482,27 @@ extension HostDaemon {
         return blob
     }
 
-    /// Uploads last a day (a turn reads them, and the transcript names them): older ones go when
-    /// the daemon starts and before each new one.
-    func sweepUploads() {
+    /// Uploads last a day (a turn reads them, and the transcript names them), and together take
+    /// at most `uploadsCap`: older ones go first, when the daemon starts and before each new one.
+    func sweepUploads(adding size: Int = 0) {
         let folder = paths.state.appendingPathComponent("uploads", isDirectory: true)
         let files = FileManager.default
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .totalFileAllocatedSizeKey, .fileSizeKey]
         guard let dirs = try? files.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
-        for dir in dirs {
+        var kept: [(dir: URL, made: Date, size: Int)] = dirs.map { dir in
             let made = (try? dir.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            guard Date().timeIntervalSince(made) > 24 * 3600 else { continue }
-            try? files.removeItem(at: dir)
-            blobs = blobs.filter { $0.value.deletingLastPathComponent() != dir }
+            let inside = (try? files.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys)) ?? []
+            let size = inside.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: Set(keys)))?.fileSize ?? 0) }
+            return (dir, made, size)
+        }
+        kept.sort { $0.made < $1.made }
+        var total = kept.reduce(size) { $0 + $1.size }
+        for entry in kept where Date().timeIntervalSince(entry.made) > 24 * 3600 || total > Self.uploadsCap {
+            try? files.removeItem(at: entry.dir)
+            total -= entry.size
+            blobs = blobs.filter { $0.value.deletingLastPathComponent() != entry.dir }
         }
     }
+
+    static let uploadsCap = 200 * 1024 * 1024
 }

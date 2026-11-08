@@ -1,4 +1,5 @@
 import Foundation
+import KoreHostSys
 #if canImport(Glibc)
 import Glibc
 #elseif canImport(Musl)
@@ -17,6 +18,9 @@ private func mi_collect(_ force: Bool)
 @MainActor
 package enum HostMemory {
     private static var due = false
+
+    /// Small pages only (Linux): a huge page an idle daemon touched once stays resident whole.
+    package static func smallPages() { _ = kore_host_disable_thp() }
 
     /// Once, after what's running now has let go of its memory.
     package static func releaseSoon() {

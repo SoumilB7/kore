@@ -320,6 +320,9 @@ extension ChatCommand: Codable {
             try t.put("credit", credit)
             try t.put("attempt", attempt)
         case .relaunch(let reason): try t.put("reason", reason)
+        case .keepRow(let text, let id):
+            try t.put("text", text)
+            try t.put("id", id)
         case .interrupt, .forkAtEnd, .earlierMessages, .usage, .listModels, .close, .unknown: break
         }
     }
@@ -356,6 +359,7 @@ extension ChatCommand: Codable {
         case "relaunch": self = .relaunch(reason: try u.opt("reason") ?? "")
         case "listModels": self = .listModels
         case "close": self = .close
+        case "keepRow": self = .keepRow(text: try u.get("text"), id: try u.get("id"))
         default: self = .unknown(u.type)
         }
     }

@@ -38,6 +38,7 @@ package final class HostDaemon {
         config = HostConfig.load(paths.config)
         services.onEvent = { [weak self] chat, event in self?.noted(chat, event) }
         services.onModels = { [weak self] cli, models in self?.listed(cli, models) }
+        services.onTranscript = { [weak self] chat in self?.chats.first { $0.chat === chat }?.attach(chat, replaced: true) }
         if let data = try? Data(contentsOf: paths.models), let kept = try? JSONDecoder().decode([CLIState].self, from: data) { clis = kept }
         let note = paths.state.appendingPathComponent("instructions.md")
         try? HostPaths.privateFile(Data(HostServices.instructions(host: ProcessInfo.processInfo.hostName).utf8), to: note)

@@ -334,6 +334,11 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     package func compact(instructions: String) async throws { try await call(.compact(instructions: instructions)) }
 
+    package func keepRow(_ text: String, id: String) async {
+        sentHere.insert(id)
+        _ = try? await call(.keepRow(text: text, id: id))
+    }
+
     package func usage() async throws -> PlanReading {
         guard let reading = try await call(.usage).reading else { throw UsageUnavailable() }
         return reading

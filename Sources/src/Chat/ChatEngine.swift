@@ -30,6 +30,8 @@ package protocol ChatServices: AnyObject {
     /// Where the chat's CLI runs, for sharing model lists (`ModelCatalog`): nil for this
     /// machine's own CLIs; a box's chats share only that box's lists.
     var modelScope: String? { get }
+    /// The chat's transcript was built again in a new store (a rollback, a corrected history).
+    func transcriptReplaced(_ chat: Chat)
     /// Kore's stall watchdog runs for the chat's turns: not for a box's, whose box watches its own.
     var watchesStall: Bool { get }
     /// The chat runs on a box (its window's chats): what's this Mac's alone (Arsenal, its usage,
@@ -75,6 +77,7 @@ package protocol ChatServices: AnyObject {
 extension ChatServices {
     package var modelScope: String? { nil }
     package var watchesStall: Bool { true }
+    package func transcriptReplaced(_ chat: Chat) {}
     package var onBox: Bool { false }
 }
 

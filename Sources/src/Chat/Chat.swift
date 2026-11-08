@@ -342,6 +342,7 @@ package final class Chat: Identifiable {
         for event in sinceReplay ?? [] { store.apply(event) }
         if let since = transcriptView.pendingSendSince { store.sending(true, at: since) }
         transcriptView = store
+        services.transcriptReplaced(self)
         let replay = ChatEvent.replayed(events)
         approvals.apply(replay)
         controls.apply(replay)
@@ -814,8 +815,7 @@ package final class Chat: Identifiable {
             guard canCompact else { return }
             draft = ""
             command = nil
-            let message = ChatEvent.userMessage(text: text, attachments: [])
-            if awaitingHistory { hold(message) } else { dispatch(message) }
+            showCompactRow(text)
             compact(instructions: instructions)
             return
         }
@@ -836,8 +836,7 @@ package final class Chat: Identifiable {
         let sent = services.attachments(files)
         if sent.isEmpty, let instructions = Self.compactCommand(text) {
             guard canCompact else { return false }
-            let message = ChatEvent.userMessage(text: text, attachments: [])
-            if awaitingHistory { hold(message) } else { dispatch(message) }
+            showCompactRow(text)
             compact(instructions: instructions)
             return true
         }
@@ -855,6 +854,23 @@ package final class Chat: Identifiable {
         guard !closed, !accountRestartPending else { return done(.failure(CallRefusal("The chat can't take a message right now."))) }
         cancelContinue()
         deliver(text, services.attachments(files), id: id, queued: .some(queued), done: done)
+    }
+
+    /// A typed /compact shows as the user's message (the CLI isn't sent it as one); a backend
+    /// whose history lives elsewhere (a box's) keeps the row there too.
+    private func showCompactRow(_ text: String) {
+        let id = UUID().uuidString.lowercased()
+        let message = ChatEvent.userMessage(text: text, attachments: [], id: id)
+        if awaitingHistory { hold(message) } else { dispatch(message) }
+        let backend = connect()
+        Task { await backend.keepRow(text, id: id) }
+    }
+
+    /// A row another Kore's chat showed of its own (a Mac's typed /compact in a box's chat): this
+    /// chat shows it too.
+    package func showSent(_ text: String, id: String) {
+        let message = ChatEvent.userMessage(text: text, attachments: [], id: id)
+        if awaitingHistory { hold(message) } else { dispatch(message) }
     }
 
     /// Messages waiting while a turn runs.
@@ -1281,7 +1297,7 @@ package final class Chat: Identifiable {
     }
 
     /// The instructions of a typed `/compact` (empty when it has none); nil for anything else.
-    package static func compactCommand(_ text: String) -> String? {
+    package nonisolated static func compactCommand(_ text: String) -> String? {
         let command = "/compact"
         guard text.hasPrefix(command), text.dropFirst(command.count).first.map(\.isWhitespace) ?? true else { return nil }
         return text.dropFirst(command.count).trimmingCharacters(in: .whitespacesAndNewlines)

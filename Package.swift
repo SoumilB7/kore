@@ -52,7 +52,9 @@ let package = Package(
         .target(name: "KoreLink", dependencies: ["KoreUI", "LinkProtocol", "src", "KoreCore"], swiftSettings: releaseForSize),
         // kore-host: Kore's chats on a headless machine (phase 17), served over the link. It
         // never links KoreUI or KoreLink, and the Mac app never links it.
-        .target(name: "KoreHost", dependencies: ["src", "LinkProtocol", "KoreCore"], swiftSettings: releaseForSize),
+        .target(name: "KoreHost", dependencies: ["src", "LinkProtocol", "KoreCore", "KoreHostSys"], swiftSettings: releaseForSize),
+        // kore-host's one Linux call Swift can't make (a variadic one): empty on macOS.
+        .target(name: "KoreHostSys"),
         .executableTarget(name: "kore-host", dependencies: ["KoreHost"], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),

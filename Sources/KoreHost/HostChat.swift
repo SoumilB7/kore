@@ -56,6 +56,12 @@ package final class HostChat {
     private var storedTurns: [String: LinkTurn] = [:]
     private var index: [String: Int] = [:]
     private var logRead = false
+    /// A resumed CLI reads its session in again: the log keeps what it had (`wakeKept` entries)
+    /// and goes on from the chat's entries past `wakeBase`, rather than starting again from the
+    /// CLI's page of history.
+    private var expectingWake = false
+    private var wakeKept: Int?
+    private var wakeBase: Int?
     /// The chat, while it lives (from a send, or a command that needs it, until idle).
     package private(set) var chat: Chat?
     package private(set) var lastUsed = Date()
@@ -195,14 +201,25 @@ package final class HostChat {
         chat.backendTap = { [weak self] event in self?.stream.raw(event) }
         chat.launchModel = record.modelId
         chat.launchEffort = record.effort
-        if let transcript = chat.transcriptView as? HostTranscript {
-            transcript.onChange = { [weak self, weak chat] from, reset in
-                guard let self, let chat else { return }
-                self.project(chat, from: from, reset: reset)
-            }
-        }
+        expectingWake = session != nil && !entries.isEmpty
+        (wakeKept, wakeBase) = (nil, nil)
+        attach(chat)
         self.chat = chat
         return chat
+    }
+
+    /// Follows the chat's transcript: its first, and the one a rollback or a corrected history
+    /// builds in its place (sent whole).
+    func attach(_ chat: Chat, replaced: Bool = false) {
+        guard let transcript = chat.transcriptView as? HostTranscript else { return }
+        transcript.onChange = { [weak self, weak chat] from, reset in
+            guard let self, let chat else { return }
+            self.project(chat, from: from, reset: reset)
+        }
+        if replaced {
+            expectingWake = false
+            project(chat, from: 0, reset: true)
+        }
     }
 
     /// Its CLI ends and the chat goes; the record and log stay, and the next send resumes it.
@@ -256,8 +273,19 @@ package final class HostChat {
     private func project(_ chat: Chat, from: Int, reset: Bool) {
         readLogOnce()
         let log = chat.transcriptView.log
+        if reset, expectingWake, !stored.isEmpty {
+            // The resumed CLI's history: the log already has the chat, so nothing is sent again.
+            expectingWake = false
+            (wakeKept, wakeBase) = (stored.count, log.entries.count)
+            return
+        }
+        expectingWake = false
+        if reset { (wakeKept, wakeBase) = (nil, nil) }
+        let base = min(wakeBase ?? 0, log.entries.count)
+        let kept = min(wakeKept ?? 0, stored.count)
+        let live = log.entries[base...]
         let reading = HostReading()
-        let made = log.entries.indices.dropFirst(reset ? 0 : max(0, min(from, log.entries.count))).map {
+        let made = live.indices.dropFirst(reset ? 0 : max(0, min(from, log.entries.count) - base)).map {
             LinkProjection.entry(log.entries[$0], folder: folderURL, reading: reading)
         }
         var lines: [LogLine] = []
@@ -270,11 +298,11 @@ package final class HostChat {
             upserts = made
             lines = [LogLine(reset: true)] + made.map { LogLine(e: $0) }
         } else {
-            let ids = log.entries.map(\.id.uuidString)
-            let live = Set(ids)
-            removed = stored.map(\.id).filter { !live.contains($0) }
+            let ids = live.map(\.id.uuidString)
+            let current = Set(ids)
+            removed = stored[kept...].map(\.id).filter { !current.contains($0) }
             if !removed.isEmpty {
-                stored.removeAll { !live.contains($0.id) }
+                stored = Array(stored[..<kept]) + stored[kept...].filter { current.contains($0.id) }
                 index = Dictionary(uniqueKeysWithValues: stored.enumerated().map { ($1.id, $0) })
             }
             for e in made where index[e.id].map({ stored[$0] != e }) ?? true {
@@ -283,15 +311,15 @@ package final class HostChat {
                 // Streaming text goes to disk once it's done (the event log has every piece).
                 if e.done || ![.answer, .thinking, .plan].contains(e.kind) { lines.append(LogLine(e: e)) }
             }
-            if stored.map(\.id) != ids {
+            if stored[kept...].map(\.id) != ids {
                 // Something went in above the end (a peer's message, a mode line): the order again.
-                stored = ids.compactMap { id in index[id].map { stored[$0] } }
+                stored = Array(stored[..<kept]) + ids.compactMap { id in index[id].map { stored[$0] } }
                 index = Dictionary(uniqueKeysWithValues: stored.enumerated().map { ($1.id, $0) })
-                order = ids
+                order = stored.map(\.id)
             }
         }
         var changedTurns: [LinkTurn] = []
-        for id in Set(log.entries.compactMap(\.turn)) {
+        for id in Set(live.compactMap(\.turn)) {
             guard let turn = log.turns[id] else { continue }
             let made = LinkProjection.turn(turn)
             if reset || storedTurns[id] != made {

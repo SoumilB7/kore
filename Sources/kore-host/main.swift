@@ -31,6 +31,7 @@ var keep: [Any] = []
 switch arguments.first {
 case "run":
     signal(SIGPIPE, SIG_IGN)
+    HostMemory.smallPages()
     let host = HostDaemon(paths: paths)
     do { try host.start() } catch { fail("\(error)") }
     HostService.notifyReady()

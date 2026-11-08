@@ -40,6 +40,8 @@ package enum ChatCommand: Sendable {
     case listModels
     /// The chat's tab closed: it leaves the box's windows and its CLI ends (not a backend call).
     case close
+    /// A row the client's chat showed of its own (a typed /compact): the box's chat and log keep it.
+    case keepRow(text: String, id: String)
     /// A tag this side doesn't know.
     case unknown(String)
 
@@ -75,6 +77,7 @@ package enum ChatCommand: Sendable {
         case .relaunch: "relaunch"
         case .listModels: "listModels"
         case .close: "close"
+        case .keepRow: "keepRow"
         case .unknown(let tag): tag
         }
     }
@@ -83,7 +86,7 @@ package enum ChatCommand: Sendable {
     package static let tags = [
         "send", "interrupt", "respond", "setMode", "setPlanMode", "setModel", "setEffort", "setFastMode", "rename", "stopAgent", "stopCommand",
         "backgroundCommand", "commandOutput", "watchCommands", "agentHistory", "fork", "forkAtEnd", "rollback", "earlier", "earlierMessages",
-        "unloadPoint", "unloaded", "compact", "usage", "useReset", "setRemoteControl", "relaunch", "listModels", "close",
+        "unloadPoint", "unloaded", "compact", "usage", "useReset", "setRemoteControl", "relaunch", "listModels", "close", "keepRow",
     ]
 
     /// Reads a command; one whose tag (or shape) this side doesn't know is `.unknown`, never a

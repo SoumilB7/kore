@@ -216,6 +216,9 @@ package enum LinkPolicy {
                 ? .allow : .deny(.invalid, "A title is one line, up to 200 characters.")
         case .compact(let instructions):
             return instructions.utf8.count <= maxText ? .allow : .deny(.invalid, "Too long.")
+        case .keepRow(let text, _):
+            // Only the row of a typed /compact, the one a chat shows without sending.
+            return Chat.compactCommand(text) != nil && text.utf8.count <= maxText ? .allow : .deny(.invalid, "Only a /compact row is kept that way.")
         case .setRemoteControl:
             // The CLI's own remote hands the chat to another service: only on the box itself.
             return .deny(.command, "Remote control of a box's chat is turned on on the box.")

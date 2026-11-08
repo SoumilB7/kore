@@ -61,7 +61,7 @@ struct StreamCodingTests {
         .agentHistory("ag1"), .fork(message: "m1", text: "hi"), .forkAtEnd, .rollback(message: nil, text: "hi"), .earlier(turns: 5),
         .earlierMessages, .unloadPoint(message: "m1", text: "hi"), .unloaded(to: "e1"), .compact(instructions: "keep"), .usage,
         .useReset(credit: "c1", attempt: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!), .setRemoteControl(true),
-        .relaunch(reason: "stalled"), .listModels, .close,
+        .relaunch(reason: "stalled"), .listModels, .close, .keepRow(text: "/compact keep it", id: "m9"),
     ]
 
     func lines<T: Encodable>(_ values: [T]) -> String {

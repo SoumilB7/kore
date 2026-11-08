@@ -8,6 +8,8 @@ import src
 @MainActor
 package final class HostServices: ChatServices {
     package var onEvent: ((Chat, ChatEvent) -> Void)?
+    /// A chat's transcript was built again in a new store: the box follows that one.
+    package var onTranscript: ((Chat) -> Void)?
     /// A CLI's model list came: its session's start, or a turn's end read it again (`ModelCatalog`).
     package var onModels: ((String, [ModelOption]) -> Void)?
     /// Makes the backend; tests set a stand-in.
@@ -36,6 +38,7 @@ package final class HostServices: ChatServices {
     package func modelsListed(_ cli: String, _ models: [ModelOption]) { onModels?(cli, models) }
     package func arsenalFollowMode(_ chat: Chat) {}
     package func tap(_ chat: Chat, _ event: ChatEvent) { onEvent?(chat, event) }
+    package func transcriptReplaced(_ chat: Chat) { onTranscript?(chat) }
     package func log(_ name: String, _ fields: KeyValuePairs<String, String?>) {}
     package var timeReplay: Bool { false }
     package func logReplay(_ took: Duration) {}
