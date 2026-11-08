@@ -49,7 +49,7 @@ struct UsageModal: View {
         let bars = reading?.limits?.bars ?? []
         let limit = state.pickedLimit
         let share = limit.flatMap { state.share($0) }
-        let lines = (share?.surfaces.isEmpty == false ? 1 : 0) + (quality(limit, share) == nil ? 0 : 1) + (share?.boxes.count ?? 0)
+        let lines = (share?.surfaces.isEmpty == false ? 1 : 0) + (quality(limit, share) == nil ? 0 : 1) + (share?.boxes.isEmpty == false ? 1 : 0)
         // What doesn't scroll: the insets, the header, the limits, the rules, In Kore, Outside
         // Kore and the lines under it. The chats get the rest, whole rows and a half.
         var fixed = Inset.card.top + Inset.card.bottom + Size.iconButtonSmall + CGFloat(bars.count) * Self.row
@@ -219,10 +219,8 @@ struct UsageModal: View {
                 let showFolders = folders.count > 1 && width >= Size.usageModalFolders
                 let this = UsageChats.key(chat)
                 UsageShareRow(title: "In Kore", points: share.kore, used: limit.used, bar: bar, hatched: true)
-                // What came through each box, when any did.
-                ForEach(share.boxes, id: \.box) { box in
-                    note("On \(box.box) · \(UsageText.kore(box.points))")
-                }
+                // Where Kore's share ran, when any of it ran on a box: one line, this Mac first.
+                if let split = UsageText.places(share) { note(split) }
                 let rows = LazyVStack(spacing: 0) {
                     ForEach(share.chats) { chatShare in
                         let current = chatShare.id == this

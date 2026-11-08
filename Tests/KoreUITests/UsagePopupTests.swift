@@ -133,7 +133,7 @@ struct UsagePopupTests {
         state.named(["a": "Fix the race"])
         #expect(
             state.ledger(current: "mybox/c2") == [
-                "In Kore · ~20%", "On mybox · ~14%", "ComplianceOS basecamp · mybox · ~9%", "Fix the race · ~6%", "This chat · mybox · ~5%",
+                "In Kore · ~20%", "This Mac ~6% · mybox ~14%", "ComplianceOS basecamp · mybox · ~9%", "Fix the race · ~6%", "This chat · mybox · ~5%",
                 "Outside Kore · ~20%",
             ])
         state.closeExtended()

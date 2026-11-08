@@ -11,6 +11,15 @@ package enum UsageText {
 
     /// One of Kore's figures, which are estimates: whole percents rounded to nearest with "~",
     /// "<1%" under one.
+    /// Where Kore's share ran, when some of it ran on a box: "This Mac ~74% · mybox <1%". Nil when
+    /// it all ran here, so the ledger shows nothing extra.
+    package static func places(_ share: KoreShare) -> String? {
+        let boxes = share.boxes
+        guard !boxes.isEmpty else { return nil }
+        let here = max(0, share.kore - boxes.reduce(0) { $0 + $1.points })
+        return (["This Mac " + kore(here)] + boxes.map { "\($0.box) " + kore($0.points) }).joined(separator: " · ")
+    }
+
     package static func kore(_ points: Double) -> String {
         points <= 0 ? "~0%" : points < 1 ? "<1%" : "~\(Int(points.rounded()))%"
     }

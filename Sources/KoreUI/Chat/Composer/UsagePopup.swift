@@ -256,7 +256,7 @@ final class UsageState {
     func ledger(current: String?) -> [String] {
         guard let limit = pickedLimit, let share = share(limit) else { return [] }
         guard share.kore > 0 else { return [UsageText.nothingFromKore] }
-        let boxes = share.boxes.map { "On \($0.box) · " + UsageText.kore($0.points) }
+        let boxes = UsageText.places(share).map { [$0] } ?? []
         let chats = share.chats.map { chat in
             [chat.id == current ? "This chat" : chatNames[chat.id] ?? chat.title ?? UsageText.untitled, chat.box, UsageText.kore(chat.points)]
                 .compactMap { $0 }.joined(separator: " · ")
