@@ -28,7 +28,11 @@ extension KoreNetSwitch: MacNetHost {
 package enum MacNetSwitch {
     /// At launch, before the switch is made.
     package static func install() {
-        LinkTaps.netStarted = { net in MacNet.shared = follow(net) }
+        LinkTaps.netStarted = { net in
+            // One listener: one the switch had before is retired, never left to bind the port.
+            MacNet.shared?.retire()
+            MacNet.shared = follow(net)
+        }
         // Every box link that comes up is caught up on the phones this Mac issued.
         HostConnection.devicesCatchUp = { MacNet.shared?.catchUp($0) }
         HostConnection.devicesResult = { _, result in MacNet.shared?.took(result) }

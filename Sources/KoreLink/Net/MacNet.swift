@@ -269,6 +269,8 @@ package final class MacNet {
     }
 
     private func look() {
+        // Retired: replaced by another listener, it never takes the port again.
+        guard !retired else { return }
         generation += 1
         let mine = generation
         host.hold(Self.busKey, !allowedPhones().isEmpty || addOpen)
@@ -417,6 +419,17 @@ package final class MacNet {
     package var retrying: Bool { retryCancel != nil }
     /// The descriptors of sockets let go and not closed yet (their sources close them).
     private let closing = DispatchGroup()
+    /// The last stopped listener's `closing` (KoreNet turned off, or this Mac's Kore restarting in
+    /// one process): a new one's bind that clashes waits for it too, as its descriptors may still
+    /// hold the port.
+    private static var stopped: DispatchGroup?
+    /// The longest a clash waits for descriptors to close before it looks again anyway (then the
+    /// retry steps): a close that never comes can't hold the listener off for good.
+    nonisolated(unsafe) package static var closeWait: TimeInterval = 2
+    /// Whether a one-shot ran (main actor only).
+    private final class Ran: @unchecked Sendable { var done = false }
+    /// The queue the listening sockets' sources run on (tests hold it to keep a close pending).
+    package var listenQueue: DispatchQueue { acceptQueue }
 
     private func retryLater(_ problem: String) {
         cancelRetry()
@@ -440,9 +453,23 @@ package final class MacNet {
         retryCancel = nil
     }
 
-    /// Runs `work` once every socket let go is closed.
+    /// Runs `work` once every socket let go is closed, this listener's and the last stopped one's,
+    /// or after `closeWait` at most, whichever comes first.
     private func afterClosing(_ work: @escaping @MainActor () -> Void) {
-        closing.notify(queue: .main) { MainActor.assumeIsolated { work() } }
+        let groups = [closing] + (Self.stopped.map { $0 === closing ? [] : [$0] } ?? [])
+        let all = DispatchGroup()
+        for group in groups {
+            all.enter()
+            group.notify(queue: .main) { all.leave() }
+        }
+        let ran = Ran()
+        let fire = { @MainActor in
+            guard !ran.done else { return }
+            ran.done = true
+            work()
+        }
+        all.notify(queue: .main) { MainActor.assumeIsolated { fire() } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeWait) { MainActor.assumeIsolated { fire() } }
     }
 
     /// The identity was read for the first time: every box linked now is caught up, and every
@@ -531,6 +558,14 @@ package final class MacNet {
         if was { changed?("closed") }
     }
 
+    /// Another listener takes over (the switch started again in this process): this one stops
+    /// for good, whatever still asks it to look.
+    package func retire() {
+        retired = true
+        stop()
+    }
+    private var retired = false
+
     /// KoreNet went off: the port, every phone and every handshake go.
     package func stop() {
         generation += 1
@@ -541,6 +576,7 @@ package final class MacNet {
         reaching = [:]
         host.hold(Self.busKey, false)
         close()
+        Self.stopped = closing
         closeAddWindow()
         // Switched off, not refused: each phone retries by itself and is back once it's on.
         for phone in Array(phones.values) { phone.end(NetControl.Reason.off) }

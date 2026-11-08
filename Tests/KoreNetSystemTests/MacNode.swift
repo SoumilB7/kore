@@ -283,7 +283,9 @@ final class MacNode {
         }
         for connection in links { while connection.inUse { connection.release() } }
         links = []
-        macNet?.stop()
+        // Its switch isn't turned off (a quit, not the owner's switch): retired, its state's
+        // changes can't have it bind the port again.
+        macNet?.retire()
         MacNet.shared = nil
         NetAudit.unwatch(auditWatch)
         if KoreNetSwitch.shared === switcher { KoreNetSwitch.shared = nil }
