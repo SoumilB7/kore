@@ -127,12 +127,6 @@ else
     swift scripts/sign/sign.swift sign "$OUT/SHA256SUMS" --expect "$KEY"
 fi
 swift scripts/sign/sign.swift verify "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$KEY" >/dev/null
-# This Mac offers the release's phone app to linked phones (the Mac-copy update): the signed
-# SUMS and the APK go where Kore serves them from. Real releases only.
-if [[ -z $DRY && -f "$OUT/kore.apk" ]]; then
-    phone="$HOME/Library/Application Support/Kore/phone-app"
-    mkdir -p "$phone" && cp "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$OUT/kore.apk" "$phone/"
-fi
 else
     # Publishing: the files are the ones SHA256SUMS lists (checked above).
     assets=($(tail -n +2 "$OUT/SHA256SUMS" | awk '{print $2}'))
@@ -192,6 +186,10 @@ gh release create "$TAG" --verify-tag --title "$title" --notes "$notes" --latest
 # Only once the new one is up with every file: every other release and tag goes.
 up=$(gh release view "$TAG" --json assets --jq '.assets | length')
 (( up == ${#files} )) || { print -u2 "$TAG is up with $up of ${#files} files: older releases kept"; exit 1; }
+# This Mac offers the release's phone app to linked phones (the Mac-copy update), only once the
+# release is up: a prepared but unpublished build is never offered.
+phone="$HOME/Library/Application Support/Kore/phone-app"
+mkdir -p "$phone" && cp "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$OUT/kore.apk" "$phone/"
 [[ -n $drop ]] || { echo "published $TAG; older releases and tags kept"; exit 0; }
 for old in $(gh release list --limit 200 --json tagName --jq '.[].tagName'); do
     [[ "$old" == "$TAG" ]] && continue
