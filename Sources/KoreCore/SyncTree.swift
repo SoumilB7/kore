@@ -33,10 +33,24 @@ package enum SyncPath {
         guard !path.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else { return false }
         return !path.split(separator: "/", omittingEmptySubsequences: false).contains { $0.isEmpty || $0 == "." || $0 == ".." }
     }
+
+    /// A name a carry gives what it lands on its way (hidden): `.kore-copy-…`, or
+    /// `.<name>.kore-<8 hex>` (`LinkFiles.copyLanding`). A sync never lists, carries or deletes
+    /// one: it's a copy under way, or one a stopped carry left.
+    package static func isLanding(_ name: some StringProtocol) -> Bool {
+        guard name.hasPrefix(".") else { return false }
+        if name.hasPrefix(".kore-copy-") { return true }
+        guard let range = name.range(of: ".kore-", options: .backwards) else { return false }
+        let token = name[range.upperBound...]
+        return token.count == 8 && token.allSatisfy(\.isHexDigit)
+    }
+
+    /// The path is a landing or inside one.
+    package static func inLanding(_ path: String) -> Bool { path.split(separator: "/").contains { isLanding($0) } }
 }
 
 /// The files a folder's two-way sync carries, and the ones it leaves alone: `.git/`, `.build/`,
-/// `node_modules/`, `.DS_Store`, and what each folder's `.gitignore` names (patterns with `*`, `?`,
+/// `node_modules/`, `.DS_Store`, a carry's landing (`SyncPath.isLanding`), and what each folder's `.gitignore` names (patterns with `*`, `?`,
 /// `[…]`, `**`, a leading `/` or a `/` inside anchoring to that folder, a trailing `/` for folders
 /// only, `!` taking a name back; the last match wins). Both ends of a sync read the same rules, so
 /// what one end lists is what the other expects. Only regular files are carried.
@@ -259,7 +273,7 @@ package final class SyncTree: @unchecked Sendable {
     /// The path alone (its folders above already let through).
     private func ignoredHere(_ relative: String, isDirectory dir: Bool) -> Bool {
         let name = relative.split(separator: "/").last.map(String.init) ?? relative
-        if Self.skipped.contains(name) { return true }
+        if Self.skipped.contains(name) || SyncPath.isLanding(name) { return true }
         var verdict = false
         // From the root down: a deeper folder's rule comes later, so it wins.
         var folders = [""]

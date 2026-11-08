@@ -209,6 +209,74 @@ package enum SyncProcess {
 
 }
 
+// MARK: - Batches
+
+/// rsync's `--files-from` lists go in batches: the Mac's openrsync stalls sending a long one to
+/// the box (61k paths never finished; 20k took 10 s, 2k 4 s), so no list it's given holds more
+/// than `size` paths. Batches run one after another; a list is read in pieces, never held whole.
+package enum SyncBatch {
+    package static let size = 5_000
+
+    /// Runs `run` on `list` (a path a line) cut into files of at most `size` lines in `scratch`,
+    /// each with its count of lines; a batch's file goes once it ran. False at the first batch
+    /// that fails (none after it runs); an empty list runs none. Throws when the list can't be
+    /// read or a batch written whole (a full disk): no batch runs on part of its paths.
+    static func each(_ list: URL, in scratch: URL, size: Int = size, _ run: @Sendable (URL, Int) async -> Bool) async throws -> Bool {
+        let reader = try FileHandle(forReadingFrom: list)
+        defer { try? reader.close() }
+        let size = max(1, size)
+        var batch: (url: URL, handle: FileHandle)?
+        defer {
+            if let batch {
+                try? batch.handle.close()
+                try? FileManager.default.removeItem(at: batch.url)
+            }
+        }
+        var lines = 0
+        /// The batch's last line has no newline yet.
+        var open = false
+        func write(_ bytes: Data) throws {
+            guard !bytes.isEmpty else { return }
+            open = bytes.last != 10
+            if batch == nil {
+                let url = scratch.appendingPathComponent("batch-\(UUID().uuidString).txt")
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+                batch = (url, try FileHandle(forWritingTo: url))
+            }
+            try batch?.handle.write(contentsOf: bytes)
+        }
+        func send(_ count: Int) async throws -> Bool {
+            guard let done = batch else { return true }
+            batch = nil
+            defer { try? FileManager.default.removeItem(at: done.url) }
+            try done.handle.close()
+            return await run(done.url, count)
+        }
+        while let piece = try reader.read(upToCount: 64 * 1024), !piece.isEmpty {
+            // Where in this piece each batch ends: just past its `size`th newline.
+            var ends: [Int] = []
+            piece.withUnsafeBytes { bytes in
+                for (i, byte) in bytes.enumerated() where byte == 10 {
+                    lines += 1
+                    if lines == size {
+                        ends.append(i + 1)
+                        lines = 0
+                    }
+                }
+            }
+            var from = 0
+            for end in ends {
+                try write(piece.subdata(in: piece.startIndex + from..<piece.startIndex + end))
+                guard try await send(size) else { return false }
+                from = end
+            }
+            try write(piece.subdata(in: piece.startIndex + from..<piece.endIndex))
+        }
+        // The last batch, a last line without its newline counted.
+        return try await send(lines + (open ? 1 : 0))
+    }
+}
+
 // MARK: - Line files
 
 /// "path\tsize\tmtime" a line, sorted by the path's bytes (sort(1) under LC_ALL=C): the agreed
@@ -415,6 +483,12 @@ package final class HostSync {
     @ObservationIgnored package var onRound: (() -> Void)?
     /// The Mac's watch latency: changes gathered for this long go together.
     @ObservationIgnored package var settle: TimeInterval = 0.3
+    /// Runs one rsync of a round (tests: a stand-in that records each argv).
+    @ObservationIgnored var runRsync: @Sendable (_ arguments: [String], _ low: Bool) async -> SyncProcess.Output = {
+        await SyncProcess.run("/usr/bin/rsync", $0, low: $1)
+    }
+    /// Paths one rsync's list holds at most (tests: fewer).
+    @ObservationIgnored var batch = SyncBatch.size
 
     /// The pairs syncing now, by Mac folder: one sync per pair, however its windows come and go.
     static var live: [String: HostSync] {
@@ -542,8 +616,10 @@ package final class HostSync {
         guard started, let changed = HostWire.syncChanged(raw) else { return }
         // Every path the box names is checked here: relative, plain parts, no control characters.
         // One that isn't is dropped and said once.
-        let paths = changed.paths.filter { SyncPath.valid($0.p) }
-        if paths.count < changed.paths.count { notice = "\(pair.alias) sent a path outside the folder" }
+        let valid = changed.paths.filter { SyncPath.valid($0.p) }
+        if valid.count < changed.paths.count { notice = "\(pair.alias) sent a path outside the folder" }
+        // A carry's landing on the box (an older kore-host lists it) never syncs.
+        let paths = valid.filter { !SyncPath.inLanding($0.p) }
         if changed.all == true {
             if changed.missing == true {
                 listing?.close()
@@ -631,8 +707,9 @@ package final class HostSync {
     // MARK: Rounds
 
     /// The whole lists, compared as three sorted streams (the Mac's, the box's, the agreed), off
-    /// the main thread at low priority: on opening and after the link was down.
-    private func whole(_ boxFile: URL) async {
+    /// the main thread at low priority: on opening and after the link was down (tests: called
+    /// with a list of their own).
+    func whole(_ boxFile: URL) async {
         defer { try? FileManager.default.removeItem(at: boxFile) }
         guard tree.rootExists else {
             notice = "Sync paused: \(shownMac) is missing on this Mac"
@@ -706,14 +783,6 @@ package final class HostSync {
         }
         let mac = tree.root.path + "/", remote = box.spec(pair.box + "/")
         let rsync = Self.rsyncArguments(box, low: low)
-        func ok(_ output: SyncProcess.Output) -> Bool {
-            // 23/24: a file went between the listing and the copy; the next round sees it.
-            guard [0, 23, 24].contains(output.status) else {
-                notice = "Sync paused: " + output.said
-                return false
-            }
-            return true
-        }
         // rename(2): a case-only rename on a volume that ignores case.
         for (from, to) in plan.renames where tree.plain(from) && tree.plain(to) { _ = rename(tree.url(from).path, tree.url(to).path) }
         // The box's side of files changed on both: pulled by the same list form into a scratch
@@ -728,15 +797,25 @@ package final class HostSync {
             }
             try? FileManager.default.createDirectory(at: landing, withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: list.path, contents: Data(plan.both.map { $0.path + "\n" }.joined().utf8))
-            guard ok(await SyncProcess.run("/usr/bin/rsync", rsync + ["--files-from=" + list.path, remote, landing.path + "/"], low: low)) else { return false }
+            // All of them land before any is moved: a round cut short moves none.
+            let landed = await batches(list) { @MainActor [self] chunk, _ in
+                ok(await runRsync(rsync + ["--files-from=" + chunk.path, remote, landing.path + "/"], low))
+            }
+            guard landed else { return false }
             for (path, copy) in plan.both where tree.plain(copy) {
                 let into = tree.url(copy)
                 try? FileManager.default.createDirectory(at: into.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? FileManager.default.moveItem(at: landing.appendingPathComponent(path), to: into)
             }
         }
+        // Lists go in batches; each one done counts, and the agreed list waits for the whole round.
         if plan.pulls > 0 {
-            guard ok(await SyncProcess.run("/usr/bin/rsync", rsync + ["--files-from=" + plan.pullList.path, remote, mac], low: low)) else { return false }
+            let pulled = await batches(plan.pullList) { @MainActor [self] chunk, paths in
+                guard ok(await runRsync(rsync + ["--files-from=" + chunk.path, remote, mac], low)) else { return false }
+                carried += paths
+                return true
+            }
+            guard pulled else { return false }
         }
         for path in plan.deleteMac where tree.plain(path) {
             try? FileManager.default.removeItem(at: tree.url(path))
@@ -749,15 +828,40 @@ package final class HostSync {
             }
         }
         if plan.pushes > 0 {
-            guard ok(await SyncProcess.run("/usr/bin/rsync", rsync + ["--files-from=" + plan.pushList.path, mac, remote], low: low)) else { return false }
+            let pushed = await batches(plan.pushList) { @MainActor [self] chunk, paths in
+                guard ok(await runRsync(rsync + ["--files-from=" + chunk.path, mac, remote], low)) else { return false }
+                carried += paths
+                return true
+            }
+            guard pushed else { return false }
         }
-        carried += plan.pushes + plan.pulls + plan.both.count + plan.deleteMac.count + plan.deleteBox.count + plan.renames.count
+        carried += plan.both.count + plan.deleteMac.count + plan.deleteBox.count + plan.renames.count
         if let first = plan.both.first {
             notice = plan.both.count == 1
                 ? "Kept both: \(URL(fileURLWithPath: first.copy).lastPathComponent)"
                 : "Kept both copies of \(plan.both.count) files"
         } else if notice?.hasPrefix("Sync paused") == true {
             notice = nil
+        }
+        return true
+    }
+
+    /// `SyncBatch.each` on a round's list; a list that can't be read or cut pauses the sync.
+    private func batches(_ list: URL, _ run: @Sendable (URL, Int) async -> Bool) async -> Bool {
+        do {
+            return try await SyncBatch.each(list, in: scratch, size: batch, run)
+        } catch {
+            notice = "Sync paused: couldn't write a list (\(error.localizedDescription))"
+            return false
+        }
+    }
+
+    /// An rsync of a round went: 23/24 (a file went between the listing and the copy) too, the
+    /// next round sees it. Else the sync pauses with its last line.
+    private func ok(_ output: SyncProcess.Output) -> Bool {
+        guard [0, 23, 24].contains(output.status) else {
+            notice = "Sync paused: " + output.said
+            return false
         }
         return true
     }
@@ -911,6 +1015,9 @@ package struct SyncRound: Sendable {
                 o = olds.next()
                 plan.agreedBefore += 1
             }
+            // A carry's landing (an older box lists it) leaves the sync: nothing is carried or
+            // deleted, its agreed state dropped.
+            if SyncPath.inLanding(path) { continue }
             // A path through a link on this Mac, or one of two box names that fold together, is
             // left alone, its agreed state kept.
             guard tree.plain(path), !clashing.contains(fold(path)) else {
@@ -961,7 +1068,7 @@ package struct SyncRound: Sendable {
         }
         var taken: Set<String> = []
         var pulled: [String: String] = [:]
-        for path in paths.sorted(by: SyncLines.before) where SyncPath.valid(path) {
+        for path in paths.sorted(by: SyncLines.before) where SyncPath.valid(path) && !SyncPath.inLanding(path) {
             guard tree.plain(path) else {
                 plan.skippedLinks = true
                 continue
@@ -1063,11 +1170,14 @@ extension HostSync {
 
     package static let mergeQuestion = "Both have files · Merge (keeps both on conflicts)"
 
-    /// Script for the box: the folder's carried files (as SyncTree skips them, less .gitignore),
-    /// its size and the room left there, or `missing`.
+    /// `.<name>.kore-<8 hex>` as a find(1) pattern's tail.
+    private static let landingHex = String(repeating: "[0-9a-fA-F]", count: 8)
+
+    /// Script for the box: the folder's carried files (as SyncTree skips them, less .gitignore,
+    /// carries' landings too), its size and the room left there, or `missing`.
     static let boxCountScript = """
         [ -d "$1" ] || { echo missing; exit 0; }
-        n=$(find "$1" \\( -name .git -o -name .build -o -name node_modules \\) -prune -o -type f ! -name .DS_Store -print 2>/dev/null | wc -l)
+        n=$(find "$1" \\( -name .git -o -name .build -o -name node_modules -o -name '.kore-copy-*' -o -name '.*.kore-\(landingHex)' \\) -prune -o -type f ! -name .DS_Store -print 2>/dev/null | wc -l)
         k=$(du -sk "$1" 2>/dev/null | cut -f1)
         f=$(df -Pk "$1" | tail -1 | awk '{print $4}')
         echo "$n ${k:-0} ${f:-0}"

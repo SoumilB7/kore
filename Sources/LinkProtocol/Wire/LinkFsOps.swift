@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 
 // Link 1.12 (`docs/link-1.4-box.md`): the box's own file operations in place of the Mac's remote
 // shell (`sh -c` over SSH): a sync round's deletes and folders (`sync.apply`), a folder's carried
@@ -27,12 +28,7 @@ package enum LinkFsOps {
     }
 
     /// A name a carry gives what it lands on its way (hidden): `.kore-copy-…`, or
-    /// `.<name>.kore-<8 hex>` (`LinkFiles.copyLanding`). The only names `fs.delete {landing}` takes.
-    package static func isLanding(_ name: String) -> Bool {
-        guard name.hasPrefix(".") else { return false }
-        if name.hasPrefix(".kore-copy-") { return true }
-        guard let range = name.range(of: ".kore-", options: .backwards) else { return false }
-        let token = name[range.upperBound...]
-        return token.count == 8 && token.allSatisfy(\.isHexDigit)
-    }
+    /// `.<name>.kore-<8 hex>` (`LinkFiles.copyLanding`), as `SyncPath.isLanding` reads it. The
+    /// only names `fs.delete {landing}` takes.
+    package static func isLanding(_ name: String) -> Bool { SyncPath.isLanding(name) }
 }
