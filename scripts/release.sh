@@ -50,6 +50,15 @@ if [[ -n "$(git status --porcelain)" ]]; then
     [[ -n $DRY ]] || { print -u2 "uncommitted changes: commit first"; exit 1; }
     print "(dry run: there are uncommitted changes)"
 fi
+# Publishing takes only what --prepare made for this very commit, signed with the release key
+# (checked first: these need no network, and say what's wrong before the tag check does).
+if [[ -n $PUBLISH ]]; then
+    [[ -f "$OUT/SHA256SUMS" && -f "$OUT/SHA256SUMS.sig" ]] || { print -u2 "nothing prepared in $OUT: scripts/release.sh --prepare"; exit 1; }
+    head="$(head -1 "$OUT/SHA256SUMS")"
+    [[ $head == "# kore $VERSION $(git rev-parse HEAD)" ]] || { print -u2 "$OUT was prepared for another commit or version ($head): --prepare again"; exit 1; }
+    swift scripts/sign/sign.swift verify "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$KEY" >/dev/null || { print -u2 "SHA256SUMS.sig doesn't check out"; exit 1; }
+    (cd "$OUT" && shasum -a 256 -c <(tail -n +2 SHA256SUMS) >/dev/null) || { print -u2 "a prepared file changed since it was signed"; exit 1; }
+fi
 [[ -n $DRY ]] || git fetch --quiet --tags origin
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     [[ -n $DRY ]] || { print -u2 "$TAG already exists"; exit 1; }
@@ -82,14 +91,6 @@ highlights=$(print -r -- "$section" | awk '
     }
   }')
 
-# Publishing takes only what --prepare made for this very commit, signed with the release key.
-if [[ -n $PUBLISH ]]; then
-    [[ -f "$OUT/SHA256SUMS" && -f "$OUT/SHA256SUMS.sig" ]] || { print -u2 "nothing prepared in $OUT: scripts/release.sh --prepare"; exit 1; }
-    head="$(head -1 "$OUT/SHA256SUMS")"
-    [[ $head == "# kore $VERSION $(git rev-parse HEAD)" ]] || { print -u2 "$OUT was prepared for another commit or version ($head): --prepare again"; exit 1; }
-    swift scripts/sign/sign.swift verify "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$KEY" >/dev/null || { print -u2 "SHA256SUMS.sig doesn't check out"; exit 1; }
-    (cd "$OUT" && shasum -a 256 -c <(tail -n +2 SHA256SUMS) >/dev/null) || { print -u2 "a prepared file changed since it was signed"; exit 1; }
-fi
 
 # The files: a real build starts from an empty folder, so nothing older slips in.
 [[ -n $PREPARE ]] && rm -rf "$OUT"
