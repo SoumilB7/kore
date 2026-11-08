@@ -10,8 +10,7 @@ import Foundation
 /// Keychain) into `SHA256SUMS.sig`; Kore.app, kore-host and the install scripts check it with this.
 /// scripts/kore-host.sh and install.sh carry the same string (a test keeps the three equal).
 package enum KoreReleaseKey {
-    // PLACEHOLDER until the owner runs `swift scripts/sign/sign.swift --new-key`: nothing verifies.
-    package static let base64 = "PLACEHOLDER-run-scripts/sign/sign.swift--new-key"
+    package static let base64 = "MW8ncKRkTxWM5evUmGFcZiQ0nT1eOq1AiPdsuvQVwyA="
 
     /// The key, or nil while it's still the placeholder.
     package static var key: Curve25519.Signing.PublicKey? { try? ReleaseManifest.publicKey(base64) }

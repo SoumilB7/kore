@@ -15,8 +15,7 @@ import kotlinx.serialization.json.longOrNull
  * signed with the private half into `SHA256SUMS.sig` (raw 64 bytes).
  */
 object KoreReleaseKey {
-    // PLACEHOLDER until the owner runs `swift scripts/sign/sign.swift --new-key`: nothing verifies.
-    const val BASE64 = "PLACEHOLDER-run-scripts/sign/sign.swift--new-key"
+    const val BASE64 = "MW8ncKRkTxWM5evUmGFcZiQ0nT1eOq1AiPdsuvQVwyA="
 
     /** The key, or null while it's still the placeholder. */
     fun key(base64: String = BASE64): ByteArray? = runCatching { Base64.getDecoder().decode(base64) }.getOrNull()?.takeIf { it.size == 32 }

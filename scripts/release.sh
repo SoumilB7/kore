@@ -61,6 +61,8 @@ for name in $tailnet; do
     if [[ -f "build/release/$name" && ! "$OUT" -ef build/release ]]; then cp "build/release/$name" "$OUT/"; fi
 done
 cp scripts/kore-host.sh "$OUT/kore-host.sh"
+# The phone app, signed with the owner's keystore (a dry run leaves it out: no Keychain).
+if [[ ! -f "$OUT/kore.apk" && -z $DRY ]]; then android/scripts/sign-release.sh "$OUT"; fi
 git archive --format=tar.gz --prefix=kore/ -o "$OUT/kore-src.tar.gz" HEAD
 assets=(kore-host-linux-x86_64.xz kore-host-linux-aarch64.xz kore-host.sh kore-src.tar.gz)
 for optional in $tailnet kore.apk; do

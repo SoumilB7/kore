@@ -7,7 +7,7 @@
 set -eu
 
 # Kore's release key (Ed25519, raw 32 bytes, base64): the same as KoreReleaseKey in Kore.app.
-KORE_RELEASE_KEY="PLACEHOLDER-run-scripts/sign/sign.swift--new-key"
+KORE_RELEASE_KEY="MW8ncKRkTxWM5evUmGFcZiQ0nT1eOq1AiPdsuvQVwyA="
 BASE="${KORE_RELEASE_URL:-https://github.com/SoumilB7/kore/releases/latest/download}"
 BIN="$HOME/.local/bin"
 
