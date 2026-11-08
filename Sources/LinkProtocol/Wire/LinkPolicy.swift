@@ -77,7 +77,7 @@ package enum LinkPolicy {
     package static let maxSignInInput = 4096
     /// Arsenal's built tiers, lowest first: what `chat.setArsenal` takes besides "off". Full isn't
     /// built, so it is refused.
-    package static let arsenalTiers = ["watch", "own", "drive"]
+    package static let arsenalTiers = ["watch", "own", "drive", "device"]
 
     package static func check(_ command: LinkCommand, _ chat: ChatFacts?, control: LinkControlLevel = .standard) -> Verdict {
         switch command {

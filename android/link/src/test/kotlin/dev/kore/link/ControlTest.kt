@@ -34,5 +34,8 @@ class ControlTest {
         assertEquals(true, Control.arsenalRaises("watch", "own"))
         assertEquals(false, Control.arsenalRaises("drive", "own"))
         assertEquals(true, Control.arsenalRaises(null, "watch"))
+        assertEquals(true, Control.arsenalRaises("drive", "device"))
+        assertEquals(false, Control.arsenalRaises("device", "drive"))
+        assertEquals("Act device", Control.arsenalName("device"))
     }
 }

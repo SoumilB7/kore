@@ -12,6 +12,7 @@ extension Theme {
             case .watch: watch
             case .own: own
             case .drive: Blue.b300
+            case .device: Blue.b500
             case .full: Theme.warning
             }
         }

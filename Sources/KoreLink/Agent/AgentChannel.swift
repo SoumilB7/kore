@@ -631,7 +631,7 @@ package final class AgentChannel {
     /// `chat.ask`: a question to another Act unlimited chat, by its id, sent once it's idle
     /// (`ArsenalAsks`). Answers with the ask's id at once; the answer comes to `chat.wait`. A box's
     /// chat asks a Mac's as a Mac's asks a box's (the owner, 2026-11-19): a message, as `chat.send`
-    /// sends one; only files stay behind `arsenalBoxReachesMac`.
+    /// sends one; only a fetch from another device needs Act device.
     private func askChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
         guard let asker = callerChat(client) else {
             fail(client, id, .noWindow, "Only a chat in Kore asks another.")
@@ -715,7 +715,7 @@ package final class AgentChannel {
         Task { @MainActor [weak self, weak client] in
             // Its own folder only, on its own device.
             let roots = source.alias == own.alias ? [own.path] : []
-            let result = await ArsenalFetch.run(source, roots: roots, into: inbox, boxes: held.boxes, allowBoxToMac: true)
+            let result = await ArsenalFetch.run(source, roots: roots, into: inbox, boxes: held.boxes, acrossDevices: true)
             held.release()
             guard let self, let client else { return }
             switch result {
@@ -734,7 +734,8 @@ package final class AgentChannel {
     }
 
     /// `file.fetch`: one file from a folder a Kore window has open, on this Mac or a box, into
-    /// this chat's `.kore/inbox/` (`ArsenalFetch`).
+    /// this chat's `.kore/inbox/` (`ArsenalFetch`); from another device than the chat's, at Act
+    /// device only.
     private func fetchFile(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
         guard let asker = callerChat(client), let window = AgentReads.workspace(of: asker) else {
             fail(client, id, .noWindow, "Only a chat in Kore fetches, into its own folder.")
@@ -759,8 +760,9 @@ package final class AgentChannel {
         }
         let held = Workspace.arsenalBoxes(Set([source.alias, inbox.alias].compactMap { $0 }))
         let roots = Workspace.arsenalRoots(on: source.alias)
+        let across = tier(client) >= .device
         Task { @MainActor [weak self, weak client] in
-            let result = await ArsenalFetch.run(source, roots: roots, into: inbox, boxes: held.boxes, allowBoxToMac: ArsenalAsks.boxReachesMac)
+            let result = await ArsenalFetch.run(source, roots: roots, into: inbox, boxes: held.boxes, acrossDevices: across)
             held.release()
             guard let self, let client else { return }
             switch result {

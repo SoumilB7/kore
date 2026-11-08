@@ -127,7 +127,7 @@ package enum AgentTools {
             required: ["ask", "text"]),
         Tool(
             name: "kore_fetch", command: "file.fetch",
-            description: "Copy one file from a folder a Kore window has open (this Mac's, or a box's as device:path) into this chat's .kore/inbox/. Copies only, 50 MB at most, never a secret-looking path (.env, keys, credentials, .ssh); 50 an hour (Act unlimited).",
+            description: "Copy one file from a folder a Kore window has open (this Mac's, or a box's as device:path) into this chat's .kore/inbox/. Copies only, 50 MB at most, never a secret-looking path (.env, keys, credentials, .ssh); 50 an hour (Act unlimited; from another device, Act device).",
             args: [("path", "string", "device:path (a box's name, then its path), or a path on this chat's device.")], required: ["path"]),
         Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
@@ -155,12 +155,13 @@ package enum AgentTools {
 
     package static let ownCommands = ["chat.options", "chat.rename", "chat.model", "chat.effort", "chat.fast", "chat.mode", "chat.compact"]
 
-    /// A tier's name as the user sees it, from its wire id (`watch`, `own`, `drive`, `full`, `off`).
+    /// A tier's name as the user sees it, from its wire id (`watch`, `own`, `drive`, `device`, `full`, `off`).
     package static func tierName(_ id: String) -> String {
         switch id {
         case "watch": "Read"
         case "own": "Act limited"
         case "drive": "Act unlimited"
+        case "device": "Act device"
         case "full": "Full"
         case "off", "": "Off"
         default: id

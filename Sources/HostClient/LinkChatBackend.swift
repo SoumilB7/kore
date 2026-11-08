@@ -76,9 +76,11 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     package var localPath: ((String) -> String)?
     /// A chat made from this Mac has its id on the box.
     package var onCreated: ((String) -> Void)?
-    /// The chat's Arsenal tier here (`watch`, `own`, `drive`; nil for off), told to the box with
-    /// each message so its CLI has the `kore_app` server while it's on (1.6).
+    /// The chat's Arsenal tier here (`watch`, `own`, `drive`, `device`; nil for off), told to the
+    /// box with each message so its CLI has the `kore_app` server while it's on (1.6).
     package var arsenal: () -> String? = { nil }
+    /// The tier as the box takes it: `device` is `drive` to a box that doesn't know it.
+    private func boxTier(_ tier: String?) -> String? { BoxTools.said(tier, caps: connection.caps) }
     /// A `KoreReach.note` for the next message (the tier changed since the agent was told).
     private var note: String?
     /// 1.9: what the box keeps with the chat changed from another client (its controls'
@@ -171,7 +173,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     // MARK: From the box
 
-    package var following: ChatFollow? { chatId.map { ChatFollow(chatId: $0, after: seq, log: log, arsenal: arsenal()) } }
+    package var following: ChatFollow? { chatId.map { ChatFollow(chatId: $0, after: seq, log: log, arsenal: boxTier(arsenal())) } }
 
     /// A mirror's copy took a batch: what it holds past what's shown, shown.
     package func reread() async {
@@ -433,7 +435,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             seen.arsenal = .some(tier)
             if !first {
                 onArsenal?(tier)
-            } else if tier != arsenal() {
+            } else if tier != boxTier(arsenal()) {
                 sayArsenal(arsenal())
             }
         }
@@ -502,7 +504,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         }
         let note = self.note
         self.note = nil
-        return try await call(.send(text: words, files: sent, queued: queued, id: id), arsenal: arsenal(), note: note).bool ?? true
+        return try await call(.send(text: words, files: sent, queued: queued, id: id), arsenal: boxTier(arsenal()), note: note).bool ?? true
     }
 
     /// Goes to the box with the next message, which its CLI gets before the user's words.
@@ -657,6 +659,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// 1.9: the chat's Arsenal tier changed here: the box shows it, and says it to other clients.
     package func sayArsenal(_ tier: String?) {
         guard offers("setArsenal"), chatId != nil else { return }
+        let tier = boxTier(tier)
         seen.arsenal = .some(tier)
         setting.arsenal += 1
         Task {

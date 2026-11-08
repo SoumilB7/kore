@@ -4,8 +4,8 @@ import Testing
 
 /// `file.fetch` (the owner, 2026-11-17): one file from an open folder, this Mac's or a box's, into
 /// the asker's `.kore/inbox/` through the carry engine; never a secret-looking path, nothing
-/// outside the open folders (links followed), no folder, 50 MB at most, and a box never reaches
-/// into the Mac. Each refusal leaves the inbox empty.
+/// outside the open folders (links followed), no folder, 50 MB at most, and another device's file
+/// only at Act device. Each refusal leaves the inbox empty.
 @MainActor
 @Suite("Arsenal fetch", .serialized)
 struct ArsenalFetchTests {
@@ -84,16 +84,19 @@ struct ArsenalFetchTests {
         #expect(await fetch(.mac(root + "/a/sub")) == .folder(root + "/a/sub"))
         #expect(await fetch(.mac(root + "/a/none.txt")) == .missing(root + "/a/none.txt"))
         #expect(await fetch(.mac(root + "/a/big.bin")) == .tooBig("big.bin", bytes: ArsenalFetch.cap + 1))
-        // A box asker never reaches into the Mac.
-        #expect(await fetch(.mac(root + "/a/sub"), into: .box(alias: "mybox", path: "/srv/w/.kore/inbox")) == .boxToMac)
-        #expect(ArsenalFetch.Refusal.boxToMac.line == "a box can't reach into the Mac")
+        // Another device's file, below Act device: box to Mac, Mac to box, box to box.
+        #expect(await fetch(.mac(root + "/a/sub"), into: .box(alias: "mybox", path: "/srv/w/.kore/inbox")) == .otherDevice)
+        #expect(await fetch(.box(alias: "mybox", path: "/srv/w/a.sql")) == .otherDevice)
+        #expect(await fetch(.box(alias: "other", path: "/srv/w/a.sql"), into: .box(alias: "mybox", path: "/srv/w/.kore/inbox")) == .otherDevice)
+        #expect(ArsenalFetch.Refusal.otherDevice.line == "a file on another device needs Arsenal's Act device tier")
         #expect(ArsenalFetch.Refusal.secret(".env").line == ".env looks like a secret")
         #expect(names(root + "/b").isEmpty)
     }
 
-    /// Across devices: a box's file comes to the Mac's inbox through the carry engine (the box's
-    /// link for its count, rsync over a stand-in ssh for the bytes); a path that climbs out of
-    /// the box's open folder is refused before the box is asked.
+    /// Across devices, at Act device: a box's file comes to the Mac's inbox through the carry engine
+    /// (the box's link for its count, rsync over a stand-in ssh for the bytes), and a Mac's file
+    /// goes to a box chat's inbox; a path that climbs out of the box's open folder is refused
+    /// before the box is asked. Below Act device, neither goes.
     @Test func aBoxFileComesOverToTheMacsInbox() async throws {
         let rig = try BoxRig()
         let connection = rig.connection()
@@ -108,12 +111,21 @@ struct ArsenalFetchTests {
         try write(rig.folder.path + "/0007_users.sql", "create table users (id int);")
         let boxes = [connection.alias: CarryBox(alias: connection.alias, files: connection, ssh: try fakeSSH(rig.root))]
         let inbox = FilePlace.mac(mac + "/.kore/inbox")
-        let landed = await ArsenalFetch.run(
-            .box(alias: connection.alias, path: rig.folder.path + "/0007_users.sql"), roots: [rig.folder.path], into: inbox, boxes: boxes)
+        let source = FilePlace.box(alias: connection.alias, path: rig.folder.path + "/0007_users.sql")
+        #expect(await ArsenalFetch.run(source, roots: [rig.folder.path], into: inbox, boxes: boxes) == .failure(.otherDevice))
+        #expect(names(mac).isEmpty)
+        let landed = await ArsenalFetch.run(source, roots: [rig.folder.path], into: inbox, boxes: boxes, acrossDevices: true)
         #expect(try landed.get() == .mac(mac + "/.kore/inbox/0007_users.sql"))
         #expect(try String(contentsOfFile: mac + "/.kore/inbox/0007_users.sql", encoding: .utf8) == "create table users (id int);")
+        // Box to Mac: the Mac's file into the box chat's inbox.
+        try write(mac + "/notes.md", "from the mac")
+        let boxInbox = FilePlace.box(alias: connection.alias, path: rig.folder.path + "/.kore/inbox")
+        #expect(await ArsenalFetch.run(.mac(mac + "/notes.md"), roots: [mac], into: boxInbox, boxes: boxes) == .failure(.otherDevice))
+        let up = await ArsenalFetch.run(.mac(mac + "/notes.md"), roots: [mac], into: boxInbox, boxes: boxes, acrossDevices: true)
+        #expect(try up.get() == .box(alias: connection.alias, path: rig.folder.path + "/.kore/inbox/notes.md"))
+        #expect(try String(contentsOfFile: rig.folder.path + "/.kore/inbox/notes.md", encoding: .utf8) == "from the mac")
         let climbed = await ArsenalFetch.run(
-            .box(alias: connection.alias, path: rig.folder.path + "/../state/x"), roots: [rig.folder.path], into: inbox, boxes: boxes)
+            .box(alias: connection.alias, path: rig.folder.path + "/../state/x"), roots: [rig.folder.path], into: inbox, boxes: boxes, acrossDevices: true)
         #expect(climbed == .failure(.outside(rig.folder.path + "/../state/x", device: FilePlace.box(alias: connection.alias, path: "/").device)))
     }
 }

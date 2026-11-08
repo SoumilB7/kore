@@ -103,8 +103,9 @@ extension AgentChannelTests {
             }
 
             /// The channel opened afresh (its limits new), the callers at `tier`, the chats they act on
-            /// readable.
+            /// readable and idle (a tier's `kore_send` leaves them working: the stand-in never ends a turn).
             func open(_ tier: AgentTier) {
+                for chat in [macTarget, boxTarget] { chat.status.setRunning(false) }
                 AgentGrants.stopAll()
                 ArsenalAsks.shared.reset()
                 AgentGrants.setEnabled(true)
@@ -240,7 +241,7 @@ extension AgentChannelTests {
         func everyToolAtEveryTierAnswersAlike(_ cli: String) async throws {
             let rig = try Rig(cli)
             defer { rig.finish() }
-            for tier in [AgentTier.off, .watch, .own, .drive] {
+            for tier in [AgentTier.off, .watch, .own, .drive, .device] {
                 rig.open(tier)
                 let onMac = await macCalls(rig, tier)
                 let onBox = await boxCalls(rig, tier)
@@ -298,9 +299,9 @@ extension AgentChannelTests {
             #expect(AgentTools.answer((try JSONSerialization.jsonObject(with: whoami)) as? [String: Any] ?? [:], box: true).ok)
         }
 
-        /// What differs on purpose: a box chat opens chats on its box or the Mac (`place`), and reaches
-        /// up into the Mac's files only when the owner turned that on. Asks go both ways alike
-        /// (the owner, 2026-11-19).
+        /// What differs on purpose: a box chat opens chats on its box or the Mac (`place`). Asks go
+        /// both ways alike (the owner, 2026-11-19); files from another device, both ways, at Act
+        /// device only (the owner, 2026-11-20).
         @Test func whatABoxChatDoesDifferently() async throws {
             let rig = try Rig("claude")
             defer { rig.finish() }
@@ -327,9 +328,29 @@ extension AgentChannelTests {
             AgentGrants.set(.watch, chat: rig.macTarget.id.uuidString)
             let notDrive = await call("kore_ask", ["chat": .string(AgentReads.short(rig.macTarget.id.uuidString)), "text": .string("q")])
             #expect(!notDrive.ok && notDrive.text.hasPrefix("Not asked:") && notDrive.text.hasSuffix("isn't Act unlimited"), "\(notDrive.text)")
-            // Files from the Mac stay behind the owner's switch.
-            let fetched = await call("kore_fetch", ["path": .string("mac:" + rig.mac.folder.appendingPathComponent("notes.md").path)])
-            #expect(!fetched.ok && fetched.text == "Not fetched: a box can't reach into the Mac")
+            // A file from another device: refused at Act unlimited, box to Mac and Mac to box.
+            let notes = rig.mac.folder.appendingPathComponent("notes.md")
+            try Data("notes".utf8).write(to: notes)
+            let needs = "Not fetched: " + ArsenalFetch.Refusal.otherDevice.line
+            func fromBox(_ path: String) async throws -> AgentTools.Object {
+                let line = await channel.boxCall(chat: rig.macCaller.id.uuidString, "file.fetch", ["path": rig.connection.alias + ":" + path])
+                return (try JSONSerialization.jsonObject(with: line)) as? [String: Any] ?? [:]
+            }
+            let fetched = await call("kore_fetch", ["path": .string("mac:" + notes.path)])
+            #expect(!fetched.ok && fetched.text == needs, "\(fetched.text)")
+            let down = AgentTools.answer(try await fromBox("/home/me/app/notes.md"), box: false)
+            #expect(!down.ok && down.text == needs, "\(down.text)")
+            // At Act device both pass the tier to fetch's own rules (each file here fails one before
+            // any copy: this box isn't online to carry it; ArsenalFetchTests carries them).
+            AgentGrants.set(.device, chat: rig.boxCaller.id.uuidString)
+            AgentGrants.set(.device, chat: rig.macCaller.id.uuidString)
+            let missing = rig.mac.folder.appendingPathComponent("none.md").path
+            let up = await call("kore_fetch", ["path": .string("mac:" + missing)])
+            #expect(!up.ok && up.text == "Not fetched: \(missing) isn't there", "\(up.text)")
+            let downAtDevice = AgentTools.answer(try await fromBox("/etc/hosts"), box: false)
+            #expect(!downAtDevice.ok && downAtDevice.text.hasPrefix("Not fetched: /etc/hosts is outside"), "\(downAtDevice.text)")
+            AgentGrants.set(.drive, chat: rig.boxCaller.id.uuidString)
+            AgentGrants.set(.drive, chat: rig.macCaller.id.uuidString)
             // Into the other CLI: Import carries a history file on this Mac, so a box's chat forks into its own.
             let across = await call("kore_fork", ["chat": .string("."), "provider": .string("codex")])
             #expect(!across.ok && across.text.contains("forks into its own CLI only"))

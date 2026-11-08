@@ -79,7 +79,8 @@ package enum Reads {
                kore reply <ask id> "answer" [file]
                                      answer an ask this chat was asked, a file of its folder with it
                kore fetch <device:path | path>
-                                     copy a file from an open folder into .kore/inbox/ (50 MB, no secrets)
+                                     copy a file from an open folder into .kore/inbox/ (50 MB, no secrets;
+                                     another device's needs Act device)
                kore send <chat> "message"
                                      send to another chat, queued while it works
                kore stop <chat>      stop its turn

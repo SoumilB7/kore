@@ -38,6 +38,16 @@ struct ArsenalMemoryTests {
         #expect((reread.array(forKey: ArsenalMemory.defaultsKey) as? [[String]])?.contains(["claude:s2", "own"]) == true)
     }
 
+    /// Act device, the top tier, is kept and read back as itself, by its wire id.
+    @Test func actDeviceIsKeptAsItself() {
+        ArsenalMemory.keep(.device, under: "codex:s3")
+        #expect(ArsenalMemory.tier(key: "codex:s3") == .device)
+        let reread = UserDefaults(suiteName: "arsenal-memory-tests")!
+        #expect((reread.array(forKey: ArsenalMemory.defaultsKey) as? [[String]])?.contains(["codex:s3", "device"]) == true)
+        #expect(ArsenalTier.device.title == "Act device" && ArsenalTier.device.built)
+        #expect(ArsenalTier.allCases.filter(\.built) == [.watch, .own, .drive, .device])
+    }
+
     @Test func stopAgentControlForgetsEveryChat() {
         ArsenalMemory.keep(.drive, under: "claude:a")
         ArsenalMemory.keep(.watch, under: "codex:b")

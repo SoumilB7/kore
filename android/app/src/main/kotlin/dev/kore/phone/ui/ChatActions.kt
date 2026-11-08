@@ -851,6 +851,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     private fun arsenalShort(tier: String) = when (tier) {
         "own" -> "Act lim."
         "drive" -> "Unlim."
+        "device" -> "Device"
         else -> dev.kore.link.node.Control.arsenalName(tier)
     }
 
@@ -1286,6 +1287,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 fun arsenalTint(tier: String?): Int = when (tier) {
     "watch" -> Tone.b200
     "own" -> Tone.b400
+    "device" -> Tone.b500
     "full" -> Tone.warn
     else -> Tone.accent
 }

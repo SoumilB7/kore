@@ -15,10 +15,6 @@ package final class ArsenalAsks {
     package static let lifetime: TimeInterval = 30 * 60
     package static let asksPerHour = 20
     package static let fetchesPerHour = 50
-    /// A chat on a box reaching up into the Mac's files (`file.fetch`): off unless the owner turns it
-    /// on (`defaults write <Kore> arsenalBoxReachesMac -bool YES`). Its asks to the Mac's chats
-    /// need none (the owner, 2026-11-19).
-    package static var boxReachesMac: Bool { UserDefaults.standard.bool(forKey: "arsenalBoxReachesMac") }
 
     /// The clock: tests move it.
     package var now: () -> Date = Date.init

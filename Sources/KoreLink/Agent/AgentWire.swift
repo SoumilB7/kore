@@ -14,7 +14,7 @@ package enum AgentProto {
 /// A chat's Kore access, lowest first. Each adds to the one before (`kore-access.html`); step 1
 /// serves Watch's reads, and the higher tiers hold the same reads until their commands exist.
 package enum AgentTier: String, Codable, Sendable, CaseIterable, Comparable {
-    case off, watch, own, drive, full
+    case off, watch, own, drive, device, full
 
     package static func < (a: Self, b: Self) -> Bool { a.rank < b.rank }
     private var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }

@@ -99,7 +99,7 @@ struct LinkArsenalTests {
         #expect(LinkSnapshot.meta(codex, full: false).arsenalUnavailable == nil)
         // The Mac's state, with Arsenal's built tiers, goes only with full control (`LinkHost.tick`);
         // the policy's list is Arsenal's own.
-        #expect(LinkSnapshot.mac().arsenalTiers == ["watch", "own", "drive"])
+        #expect(LinkSnapshot.mac().arsenalTiers == ["watch", "own", "drive", "device"])
         #expect(LinkPolicy.arsenalTiers == ArsenalTier.allCases.filter(\.built).map(\.rawValue))
     }
 

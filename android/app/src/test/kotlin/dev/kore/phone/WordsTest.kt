@@ -96,6 +96,7 @@ class WordsTest {
         assertEquals(0xFFA3C3DC.toInt(), arsenalTint("watch"))
         assertEquals(0xFF3C97DD.toInt(), arsenalTint("own"))
         assertEquals(0xFF6AB1E7.toInt(), arsenalTint("drive"))
+        assertEquals(0xFF257DC1.toInt(), arsenalTint("device"))
         assertEquals(0xFFE1C08D.toInt(), arsenalTint("full"))
     }
 }

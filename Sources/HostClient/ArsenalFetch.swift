@@ -5,7 +5,8 @@ import LinkProtocol
 /// `file.fetch` and an ask's reply file (the owner, 2026-11-17): one file copied from a folder a
 /// Kore window has open, on this Mac or a box, into the asker's `.kore/inbox/`, through the carry
 /// engine (`FileCarry`), as Paste carries one. Copies only, `cap` at most, never a path that looks
-/// like a secret; a box asker never reaches into the Mac unless the owner turned that on.
+/// like a secret. A file on another device than the asker's (box to Mac, Mac to box, box to box)
+/// needs Act device (the owner, 2026-11-20): `acrossDevices`.
 package enum ArsenalFetch {
     package static let cap: Int64 = 50 * 1024 * 1024
     /// Inside the asker's folder.
@@ -14,7 +15,7 @@ package enum ArsenalFetch {
     package enum Refusal: Error, Equatable, Sendable {
         case secret(String)
         case outside(String, device: String)
-        case boxToMac
+        case otherDevice
         case noDevice(String)
         case missing(String)
         case folder(String)
@@ -26,7 +27,7 @@ package enum ArsenalFetch {
             switch self {
             case .secret(let name): "\(name) looks like a secret"
             case .outside(let path, let device): "\(path) is outside \(device)'s open folders"
-            case .boxToMac: "a box can't reach into the Mac"
+            case .otherDevice: "a file on another device needs Arsenal's Act device tier"
             case .noDevice(let name): "no open box is named \(name)"
             case .missing(let path): "\(path) isn't there"
             case .folder(let path): "\(path) is a folder: fetch takes one file"
@@ -87,14 +88,14 @@ package enum ArsenalFetch {
     /// Copies `source` into `inbox` (made if it isn't there), under its own name or "name 2" when
     /// that's taken. `roots`: the open folders on the source's device; it has to be in one, after
     /// its links are followed on this Mac. `boxes`: each box it reaches, by alias. Answers with
-    /// where the copy landed.
+    /// where the copy landed. `acrossDevices`: the source may be on another device than the inbox.
     @MainActor
     package static func run(
-        _ source: FilePlace, roots: [String], into inbox: FilePlace, boxes: [String: CarryBox], allowBoxToMac: Bool = false
+        _ source: FilePlace, roots: [String], into inbox: FilePlace, boxes: [String: CarryBox], acrossDevices: Bool = false
     ) async -> Result<FilePlace, Refusal> {
         let shown = source.path
         if secret(shown) { return .failure(.secret(source.name)) }
-        if inbox.alias != nil, source.alias == nil, !allowBoxToMac { return .failure(.boxToMac) }
+        if source.alias != inbox.alias, !acrossDevices { return .failure(.otherDevice) }
         let path: String
         switch source {
         case .mac(let given):

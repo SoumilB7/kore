@@ -97,13 +97,14 @@ object Control {
     // `full` is never sent.
 
     /** Arsenal's tiers by wire id, lowest first. */
-    val ARSENAL_TIERS = listOf("off", "watch", "own", "drive")
+    val ARSENAL_TIERS = listOf("off", "watch", "own", "drive", "device")
     /** A tier's name as Kore shows it. */
     fun arsenalName(tier: String?): String = when (tier ?: "off") {
         "off" -> "Off"
         "watch" -> "Read"
         "own" -> "Act limited"
         "drive" -> "Act unlimited"
+        "device" -> "Act device"
         else -> tier!!
     }
     /** Whether moving a chat from [from] to [to] raises it (and so needs the fingerprint). */

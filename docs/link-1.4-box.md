@@ -304,8 +304,10 @@ and never sees the new messages.
   chats an hour and 6 of them open, wherever they opened; 4 calls in flight at once, as a Mac
   chat's process holds 4 connections.
 - Chat to chat goes both ways alike: a box chat's `kore_ask` reaches a Mac chat as a Mac chat's
-  reaches a box chat's (both at Act unlimited, by id, one hop, 20 an hour). Only files stay behind
-  the owner's switch: `kore_fetch` from a box into the Mac's folders needs `arsenalBoxReachesMac`.
+  reaches a box chat's (both at Act unlimited, by id, one hop, 20 an hour). Only files across
+  devices need more: `kore_fetch` from another device (box to Mac, Mac to box, box to box) needs
+  Act device (`device`); below it, "Not fetched: a file on another device needs Arsenal's Act
+  device tier". A box whose welcome lacks the `arsenalDevice` cap is told `drive` for it.
 - `kore` in a box chat's shell: kore-host keeps a link named `kore` to itself in
   `$XDG_RUNTIME_DIR/kore-host/bin/` and puts that folder at the front of each chat CLI's PATH
   (`kore-host kore …` is the same). It runs the Mac `kore`'s chat commands (`ls`, `show`, `log`,
