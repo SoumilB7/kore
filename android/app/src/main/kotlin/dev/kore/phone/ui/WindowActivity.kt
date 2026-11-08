@@ -5,6 +5,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import dev.kore.link.node.Control
+import dev.kore.phone.kore
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -21,13 +22,31 @@ class WindowActivity : NodeActivity() {
     private val unfolded = HashMap<String, Boolean>()
     private var newSheet: Sheet? = null
 
+    private var more: android.view.View? = null
+
     override fun body(): View {
+        more = barButton(barTitle, "⋮", "Window menu") { windowSheet() }.apply { visibility = View.GONE }
         plus = barButton(barTitle, "＋", "New") { openNew() }.apply { visibility = View.GONE }
         return super.body()
     }
 
-    /** Chat rows kept by what they show, and what was last drawn: a change elsewhere on the device draws nothing here. */
-    private val rows = RowCache()
+    /** ⋮ (spec §6): Show on the Mac (its active chat comes forward) and Close window. */
+    private fun windowSheet() {
+        val w = snapshot?.objs("windows")?.firstOrNull { it.str("id") == windowId } ?: return
+        val shown = w.objs("tabs").firstOrNull { it.str("id") == w.str("activeTabId") }?.str("chatId")
+            ?: w.objs("tabs").firstOrNull { it.str("chatId") != null }?.str("chatId")
+        lateinit var s: Sheet
+        s = Sheet(this).show {
+            title(w.str("name") ?: "Window", w.str("path"))
+            item("Show on the Mac", glyph = "Show on the Mac", enabled = shown != null) { s.dismiss(); shown?.let { id -> act(Control.select(id)) { Quiet.say(this@WindowActivity, "Shown on $macName") } } }
+            item("Close window", glyph = "Close window", danger = true) {
+                s.dismiss()
+                act(Control.windowClose(windowId), forced = Control.windowClose(windowId, force = true), ask = "A chat in ${w.str("name") ?: "this window"} is working. Closing stops it.")
+            }
+        }
+    }
+
+    /** What was last drawn: a change elsewhere on the device draws nothing here. */
     private var shown: Any? = null
 
     override fun render(snapshot: JsonObject?) {
@@ -43,12 +62,26 @@ class WindowActivity : NodeActivity() {
         shown = look
         content.removeAllViews()
         if (w == null) {
-            content.addView(label(if (snapshot == null) "Waiting for $macName…" else "This window was closed.", 14f, K.dim))
+            more?.visibility = View.GONE
+            plus?.visibility = View.GONE
+            content.addView(if (snapshot == null) emptyState(dev.kore.phone.R.drawable.i_laptop, "Waiting for $macName", "It shows here as soon as Kore there answers.", waiting = true)
+                else emptyState(dev.kore.phone.R.drawable.i_folder, "This window was closed", "It's no longer open in Kore on $macName."))
             return
         }
         plus?.visibility = if (control) View.VISIBLE else View.GONE
+        more?.visibility = if (control) View.VISIBLE else View.GONE
         barTitle.text = w.str("name") ?: ""
-        content.addView(label(w.str("path") ?: "", 12f, K.faint).apply { setPadding(dp(4), 0, 0, dp(8)) })
+        // Its folder (spec §6): Mono 12, faint.
+        content.addView(label(w.str("path") ?: "").apply {
+            type(Type.Mono); textSize = 12f; setTextColor(Tone.faint)
+            maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            setPadding(dp(4), dp(2), dp(4), dp(10))
+        })
+        if (w.objs("tabs").none { it.str("kind") == "chat" || it.str("kind") == "agent" || it.str("kind") == "board" }) {
+            content.addView(emptyState(dev.kore.phone.R.drawable.i_chat, "No chats here yet", "A new chat opens as a tab in ${w.str("name") ?: "this window"} on $macName.",
+                if (control) "New chat" to { openNew() } else null))
+            return
+        }
         val segments = ControlModel.segments(w)
         val grouped = segments.any { it is ControlModel.Segment.Group }
         var labelled = false
@@ -64,16 +97,16 @@ class WindowActivity : NodeActivity() {
             is ControlModel.Segment.Tab -> {
                 // After a group, the loose tabs get their own small label, as on the Mac's strip.
                 if (grouped && !labelled) {
-                    content.addView(label("Tabs", 12f, K.faint).apply { setPadding(dp(4), dp(12), 0, dp(6)) })
+                    content.addView(sectionLabel("Tabs"))
                     labelled = true
                 }
                 tab(w, seg.tab, chats, control)
             }
         }
-        if (control) content.addView(quietRow("History") {
+        // One grouped History row closes the list (spec §6).
+        if (control) content.addView(grouped(listOf(groupRow(dev.kore.phone.R.drawable.i_archive, "History", "Closed chats in ${w.str("name") ?: "this window"}", chevron = true) {
             startActivity(Intent(this, HistoryActivity::class.java).putExtra("window", windowId))
-        }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(10) })
-        rows.done()
+        })), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
         newSheet?.takeIf { it.isShowing }?.refresh()
     }
 
@@ -88,7 +121,7 @@ class WindowActivity : NodeActivity() {
                 if (control) row.setOnLongClickListener { tabMenu(it, w, tab, chats[tab.str("chatId")]); true }
             }
             "board" -> {
-                content.addView(label("▦  ${tab.str("title") ?: "Board"}", 13f, K.dim, bold = true).apply { setPadding(dp(4), dp(14), 0, dp(8)) })
+                content.addView(sectionLabel(tab.str("title") ?: "Board"))
                 // Every chat on the board, in order: a chat opened from here swipes to its neighbours.
                 val sections = tab.obj("board")?.objs("sections").orEmpty()
                 val order = sections.flatMap { it.strs("chatIds") }.toTypedArray()
@@ -106,43 +139,52 @@ class WindowActivity : NodeActivity() {
                     }
                 }
             }
-            "file" -> content.addView(row(tab.str("title") ?: "File", "on $macName", null, glyphSpan(dev.kore.phone.R.drawable.ic_file, 15), onClick = null))
+            "file" -> content.addView(grouped(listOf(groupRow(dev.kore.phone.R.drawable.i_file_doc, tab.str("title") ?: "File", "Open on $macName"))),
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
             else -> Unit
         }
     }
 
+    /** A chat's row card (spec §5), the Device screen's own: lead, title and age, symbols and its state or last word. */
     private fun chatRow(chat: JsonObject?, fallback: String?, board: Array<String>? = null, control: Boolean = false): View? {
         if (chat == null) return null
-        val (dot, word) = rowLook(chat.str("state"))
-        val key = listOf(chat.str("id"), chat.str("title") ?: fallback, chat.str("state"), chat.str("provider"), board?.toList(), control)
-        val v = rows.row(key) {
-            row(chat.str("title") ?: fallback ?: "Chat", word, dot, providerMark(chat.str("provider"))) {
-                startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", chat.str("id")).apply { if (board != null) putExtra("board", board) })
-            }
+        val row = DeviceList.chatRow(chat, windowId, "", false, System.currentTimeMillis(), kore.seen)?.let { if (fallback != null && chat.str("title") == null) it.copy(title = fallback) else it } ?: return null
+        val v = chatCard()
+        bindChatCard(v, row) {
+            startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", chat.str("id")).apply { if (board != null) putExtra("board", board) })
         }
         content.addView(v)
         return v
     }
 
+    /** A tab group (spec §6): an 8 square in its colour, its name (Label), its count at the end, a chevron that turns when open. */
     private fun groupHeader(g: JsonObject, count: Int, open: Boolean): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(4), dp(12), dp(4), dp(8))
-        addView(View(context).apply { background = rounded(groupColor(g.str("color")), 3) }, LinearLayout.LayoutParams(dp(10), dp(10)).apply { marginEnd = dp(8) })
-        addView(label("${g.str("name")?.ifBlank { null } ?: "Group"} · $count", 13f, K.dim), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(label(if (open) "⌄" else "›", 14f, K.faint))
-        contentDescription = "Group ${g.str("name")}"
+        minimumHeight = dp(44)
+        setPadding(dp(6), dp(10), dp(6), dp(6))
+        addView(View(context).apply { background = shape(groupColor(g.str("color")), 2) }, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(10) })
+        val name = g.str("name")?.ifBlank { null } ?: "Group"
+        addView(label(name).apply { type(Type.Label); setTextColor(Tone.dim) }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(label("$count").apply { type(Type.Caption); setTextColor(Tone.faint) })
+        addView(android.widget.ImageView(context).apply {
+            setImageResource(dev.kore.phone.R.drawable.i_chevron)
+            imageTintList = android.content.res.ColorStateList.valueOf(Tone.faint)
+            rotation = if (open) 90f else 0f
+        }, LinearLayout.LayoutParams(dp(15), dp(15)).apply { marginStart = dp(8) })
+        contentDescription = "Group $name, $count, ${if (open) "open" else "folded"}"
         val gid = g.str("id") ?: ""
         setOnClickListener { unfolded[gid] = !open; render(snapshot) }
         setOnLongClickListener { groupMenu(it, g); true }
+        pressFill(null, Tone.l1, 10)
     }
 
     private fun sectionHeader(name: String, swatch: String?): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(8), dp(4), dp(4), dp(6))
-        swatchColor(swatch)?.let { addView(View(context).apply { background = rounded(it, 3) }, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(8) }) }
-        addView(label(name, 12f, K.faint))
+        swatchColor(swatch)?.let { addView(View(context).apply { background = shape(it, 2) }, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(8) }) }
+        addView(label(name).apply { type(Type.Caption); setTextColor(Tone.faint) })
         contentDescription = "Section $name"
     }
 

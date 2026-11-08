@@ -14,7 +14,8 @@ object DeviceList {
     enum class Cue { NONE, NEEDS, WORKING, FAILED }
 
     /** A window as a filter chip; [chats] 0 is an empty window (an outlined chip, a tap opens it). */
-    data class Chip(val windowId: String, val name: String, val chats: Int)
+    /** A window's chip: its name, its chats' count, its folder, and whether a chat in it needs you. */
+    data class Chip(val windowId: String, val name: String, val chats: Int, val path: String? = null, val needs: Boolean = false)
 
     /** One row. Equal rows draw the same: the list rebinds only rows that changed. */
     data class Row(
@@ -43,7 +44,24 @@ object DeviceList {
         val chats = snapshot.objs("chats")
         return snapshot.objs("windows").mapNotNull { w ->
             val id = w.str("id") ?: return@mapNotNull null
-            Chip(id, w.str("name") ?: "Window", chatsIn(w, chats).size + boardsIn(w).size)
+            val mine = chatsIn(w, chats)
+            Chip(id, w.str("name") ?: "Window", mine.size + boardsIn(w).size, w.str("path"), mine.any { it.str("state") == "needsYou" })
+        }
+    }
+
+    /**
+     * What tells chips apart when their names match (spec §5): the parent folder (" · Projects"),
+     * and if those match too, the folder above it ("Code/Projects"). Null for a name that's its own.
+     */
+    fun chipSuffixes(chips: List<Chip>): List<String?> {
+        val byName = chips.groupBy { it.name }
+        return chips.map { c ->
+            val twins = byName.getValue(c.name)
+            if (twins.size < 2) return@map null
+            val parts = { x: Chip -> x.path.orEmpty().trimEnd('/').split('/').dropLast(1).filter { it.isNotEmpty() } }
+            val one = parts(c).lastOrNull()
+            if (one != null && twins.count { parts(it).lastOrNull() == one } == 1) one
+            else parts(c).takeLast(2).joinToString("/").ifEmpty { null }
         }
     }
 
@@ -63,23 +81,8 @@ object DeviceList {
             if (window != null && wid != window) continue
             val prefix = if (many) "${w.str("name") ?: "Window"} · " else ""
             for (chat in chatsIn(w, chats)) {
-                val id = chat.str("id") ?: continue
-                val at = lastAt(chat)
-                val waiting = Waiting.of(chat)
-                // Background work keeps it working between turns (link 1.13).
-                val cue = cue(chat.str("state")).let { if (it == Cue.NONE && waiting != null) Cue.WORKING else it }
-                val line = when (cue) {
-                    Cue.NEEDS -> chat.objs("cards").firstOrNull()?.str("title")?.let { firstLine(it) } ?: "Needs you"
-                    Cue.WORKING -> "Working"
-                    Cue.FAILED -> if (chat.str("state") == "stuck") "Stuck" else "Failed"
-                    Cue.NONE -> prefix + (chat.str("last") ?: "")
-                }.let { if (cue != Cue.NONE && many) prefix + it else it }.trimEnd(' ', '·')
-                val row = Row(
-                    key = "c:$id", chatId = id, windowId = wid, boardIds = null, title = chat.str("title") ?: "Chat",
-                    provider = chat.str("provider"), age = if (cue == Cue.WORKING) "now" else age(at, now), line = line, cue = cue,
-                    unread = cue == Cue.NONE && seen.unread(id, at), waiting = waiting,
-                )
-                made += Made(row, rank(cue), at ?: Long.MIN_VALUE, made.size)
+                val row = chatRow(chat, wid, prefix, many, now, seen) ?: continue
+                made += Made(row, rank(row.cue), lastAt(chat) ?: Long.MIN_VALUE, made.size)
             }
             for (board in boardsIn(w)) {
                 val ids = board.obj("board")?.objs("sections").orEmpty().flatMap { it.strs("chatIds") }
@@ -102,6 +105,27 @@ object DeviceList {
             }
         }
         return made.sortedWith(compareBy<Made> { it.rank }.thenByDescending { it.at }.thenBy { it.order }).map { it.row }
+    }
+
+    /** One chat's row (the Device screen's and a window's): its cue, its line, its age, its symbols. */
+    fun chatRow(chat: JsonObject, wid: String?, prefix: String, many: Boolean, now: Long, seen: Seen): Row? {
+        val id = chat.str("id") ?: return null
+        val at = lastAt(chat)
+        val waiting = Waiting.of(chat)
+        // Background work keeps it working between turns (link 1.13).
+        val cue = cue(chat.str("state")).let { if (it == Cue.NONE && waiting != null) Cue.WORKING else it }
+        val line = when (cue) {
+            Cue.NEEDS -> chat.objs("cards").firstOrNull()?.str("title")?.let { firstLine(it) } ?: "Needs you"
+            Cue.WORKING -> "Working"
+            Cue.FAILED -> if (chat.str("state") == "stuck") "Stuck" else "Failed"
+            Cue.NONE -> prefix + (chat.str("last") ?: "")
+        }.let { if (cue != Cue.NONE && many) prefix + it else it }.trimEnd(' ', '·')
+        val row = Row(
+            key = "c:$id", chatId = id, windowId = wid, boardIds = null, title = chat.str("title") ?: "Chat",
+            provider = chat.str("provider"), age = if (cue == Cue.WORKING) "now" else age(at, now), line = line, cue = cue,
+            unread = cue == Cue.NONE && seen.unread(id, at), waiting = waiting,
+        )
+        return row
     }
 
     /** "now", "4 m", "2 h", "yesterday", "3 d"; nothing when the time isn't known. */

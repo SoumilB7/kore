@@ -23,6 +23,7 @@ import kotlinx.serialization.json.JsonObject
  * rebinds only its rows; ages move once a minute.
  */
 class DeviceActivity : NodeActivity() {
+    private companion object { const val LOADING_MS = 10_000L }
     private var last: JsonObject? = null
     private var plus: android.view.View? = null
     /** The window the list is filtered to (null: all). */
@@ -38,9 +39,18 @@ class DeviceActivity : NodeActivity() {
 
     override fun body(): View = column().apply {
         plus = barButton(barTitle, "＋", "New") { createSheet() }.apply { visibility = View.GONE }
-        chips = LinearLayout(this@DeviceActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(16), dp(2), dp(16), dp(8)) }
-        chipsRow = HorizontalScrollView(this@DeviceActivity).apply { isHorizontalScrollBarEnabled = false; addView(chips); visibility = View.GONE }
-        windowLine = label("", 12f, K.faint).apply {
+        chips = LinearLayout(this@DeviceActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(16), dp(2), dp(16), dp(10)) }
+        // The chips scroll, fading over the row's last stretch (spec §5).
+        chipsRow = HorizontalScrollView(this@DeviceActivity).apply {
+            isHorizontalScrollBarEnabled = false
+            isHorizontalFadingEdgeEnabled = true
+            setFadingEdgeLength(dp(44))
+            addView(chips)
+            visibility = View.GONE
+        }
+        windowLine = label("").apply {
+            type(Type.Caption)
+            setTextColor(Tone.faint)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(dp(20), dp(2), dp(20), dp(8))
@@ -94,15 +104,31 @@ class DeviceActivity : NodeActivity() {
     private fun draw() {
         val snapshot = last
         notes.removeAllViews()
+        content.visibility = View.VISIBLE
+        // Away: the device's own state in place of its list (spec §6: asleep, offline, not answering).
+        (linkState as? dev.kore.link.node.NodeMachine.State.Away)?.let { away -> awayState(away)?.let { v ->
+            chipsRow.visibility = View.GONE
+            windowLine.visibility = View.GONE
+            rows.submitList(emptyList())
+            notes.addView(v)
+            content.visibility = View.VISIBLE
+            quietBanner()
+            return
+        } }
         if (snapshot == null) {
             chipsRow.visibility = View.GONE
             windowLine.visibility = View.GONE
             rows.submitList(emptyList())
-            if (linkState == dev.kore.link.node.NodeMachine.State.Up || linkState == dev.kore.link.node.NodeMachine.State.Connecting) {
-                notes.addView(emptyState(dev.kore.phone.R.drawable.i_laptop, "Waiting for $macName", "It shows here as soon as Kore there answers.", waiting = true))
+            val s = linkState
+            if (s == dev.kore.link.node.NodeMachine.State.Up || s == dev.kore.link.node.NodeMachine.State.Connecting) {
+                // Up, its first state not here yet: skeleton rows for 10 s, then the waiting state.
+                val since = loadingSince ?: System.currentTimeMillis().also { loadingSince = it; list.postDelayed({ draw() }, LOADING_MS + 50) }
+                if (s == dev.kore.link.node.NodeMachine.State.Up && System.currentTimeMillis() - since < LOADING_MS) notes.addView(skeleton())
+                else notes.addView(emptyState(dev.kore.phone.R.drawable.i_laptop, "Waiting for $macName", "It shows here as soon as Kore there answers.", waiting = true))
             }
             return
         }
+        loadingSince = null
         val windows = DeviceList.chips(snapshot)
         if (windows.isEmpty()) {
             chipsRow.visibility = View.GONE
@@ -124,34 +150,83 @@ class DeviceActivity : NodeActivity() {
         }
         val made = DeviceList.rows(snapshot, filter, System.currentTimeMillis(), kore.seen)
         rows.submitList(made)
+        // Nothing above the chips (no state line, no empty state): no gap either.
+        content.visibility = if (made.isEmpty() || content.childCount > 1) View.VISIBLE else View.GONE
         if (made.isEmpty() && w != null) {
-            notes.addView(label("No chats in ${w.str("name") ?: "this window"} yet. ＋ starts one.", 13f, K.faint).apply {
-                setPadding(dp(4), dp(8), dp(4), dp(8))
-            })
+            notes.addView(emptyState(dev.kore.phone.R.drawable.i_chat, "No chats here yet", "A new chat opens as a tab in ${w.str("name") ?: "this window"} on $macName.",
+                if (link.hasControl(snapshot)) "New chat" to { createSheet() } else null))
         }
     }
 
-    /** All, then each window by name: a tap filters; an empty window is outlined and opens. */
+    /** When the device's first state started loading (the skeleton's 10 s). */
+    private var loadingSince: Long? = null
+
+    /** An away device's state (spec §6): asleep (moon), offline or not answering (wifi off), waiting; else null (a line says it). */
+    private fun awayState(away: dev.kore.link.node.NodeMachine.State.Away): View? {
+        val node = link ?: return null
+        val seen = lastSeenWords(node.lastSeen)?.replaceFirstChar { it.uppercase() }
+        val retry = "Try again" to { node.reconnectNow(); Unit }
+        return when (away.why) {
+            dev.kore.link.node.NodeMachine.AwayWhy.ASLEEP -> emptyState(dev.kore.phone.R.drawable.i_moon, "$macName is asleep",
+                listOfNotNull(seen?.let { "$it." }, "Wake it and Kore picks up here.").joinToString(" "), retry)
+            dev.kore.link.node.NodeMachine.AwayWhy.OFFLINE -> emptyState(dev.kore.phone.R.drawable.i_wifi_off, "$macName is offline",
+                listOfNotNull(seen?.let { "$it." }, "Kore picks up here once it's back.").joinToString(" "), retry)
+            dev.kore.link.node.NodeMachine.AwayWhy.UNREACHABLE -> emptyState(dev.kore.phone.R.drawable.i_wifi_off, "$macName isn't answering",
+                "Kore there may be closed. It shows here as soon as it answers.", retry)
+            dev.kore.link.node.NodeMachine.AwayWhy.WAITING -> emptyState(dev.kore.phone.R.drawable.i_laptop, "Waiting for $macName",
+                "It shows here as soon as Kore there answers.", waiting = true)
+            else -> null
+        }
+    }
+
+    /**
+     * All, then each window by name (spec §5): 32 high, Label; at rest `l1` with a hair edge, the
+     * picked one accentFill and b200. A window with a chat that needs you has a warn point after
+     * its name; names that match add their folder, faint. A tap filters (an empty window opens);
+     * a long-press holds Show on the Mac and Close window.
+     */
     private fun drawChips(windows: List<DeviceList.Chip>) {
         chips.removeAllViews()
         chipsRow.visibility = if (windows.size > 1) View.VISIBLE else View.GONE
         if (windows.size <= 1) return
-        fun chip(text: String, on: Boolean, empty: Boolean, go: () -> Unit) = chips.addView(label(text, 13f, if (on) K.text else K.dim).apply {
-            background = rounded(if (on) KS.chipOn else if (empty) android.graphics.Color.TRANSPARENT else K.surface, 14, if (on) K.accent else K.line)
-            setPadding(dp(12), dp(6), dp(12), dp(6))
+        val control = link.hasControl(last)
+        fun chip(text: String, suffix: String?, needs: Boolean, on: Boolean, empty: Boolean, w: DeviceList.Chip?, go: () -> Unit) = chips.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+            addView(label(text).apply { type(Type.Label); setTextColor(if (on) Tone.b200 else Tone.dim) })
+            if (suffix != null) addView(label(" · $suffix").apply { type(Type.Label); setTextColor(Tone.faint); typeface = android.graphics.Typeface.DEFAULT })
+            if (needs) addView(point(Tone.warn, 6), LinearLayout.LayoutParams(dp(6), dp(6)).apply { marginStart = dp(6) })
             alpha = if (empty) 0.7f else 1f
             isSelected = on
-            contentDescription = if (empty) "$text, no chats" else text
+            contentDescription = listOfNotNull(text, suffix, if (needs) "needs you" else null, if (empty) "no chats" else null).joinToString(", ")
             setOnClickListener { go() }
-            pressable(14)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) })
-        chip("All ${windows.sumOf { it.chats }}", filter == null, false) { filter = null; draw() }
-        for (w in windows.sortedByDescending { it.chats > 0 }) {
-            chip(w.name, filter == w.windowId, w.chats == 0) {
+            if (w != null && control) setOnLongClickListener { v -> chipMenu(v, w); true }
+            pressFill(if (on) Tone.accentFill else Tone.l1, if (on) Tone.accentFill else Tone.l2, 16, if (on) null else Tone.hair)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32)).apply { marginEnd = dp(8) })
+        chip("All ${windows.sumOf { it.chats }}", null, false, filter == null, false, null) { filter = null; draw() }
+        val ordered = windows.sortedByDescending { it.chats > 0 }
+        val suffixes = DeviceList.chipSuffixes(ordered)
+        ordered.forEachIndexed { i, w ->
+            chip(w.name, suffixes[i], w.needs, filter == w.windowId, w.chats == 0, w) {
                 if (w.chats == 0) startActivity(Intent(this, WindowActivity::class.java).putExtra("window", w.windowId))
                 else { filter = if (filter == w.windowId) null else w.windowId; draw() }
             }
         }
+    }
+
+    /** A chip held (spec §6): Show on the Mac (its active chat comes forward), a rule, Close window. */
+    private fun chipMenu(anchor: View, chip: DeviceList.Chip) {
+        val w = last?.objs("windows")?.firstOrNull { it.str("id") == chip.windowId } ?: return
+        val C = dev.kore.link.node.Control
+        val shown = w.objs("tabs").firstOrNull { it.str("id") == w.str("activeTabId") }?.str("chatId")
+            ?: w.objs("tabs").firstOrNull { it.str("chatId") != null }?.str("chatId")
+        PopMenu(this).show(anchor, listOf(
+            PopMenu.Item("Show on the Mac", enabled = shown != null) { shown?.let { id -> act(C.select(id)) { Quiet.say(this, "Shown on $macName") } } },
+            PopMenu.Item("Close window", danger = true, rule = true) {
+                act(C.windowClose(chip.windowId), forced = C.windowClose(chip.windowId, force = true), ask = "A chat in ${w.str("name") ?: "this window"} is working. Closing stops it.")
+            },
+        ))
     }
 
     /** Why the device isn't up, in one line, and the one thing to do about it. */
@@ -164,6 +239,8 @@ class DeviceActivity : NodeActivity() {
             val act = t.action?.let { a -> t.fact.substringAfterLast(" · ") to { rowAction(node, a) } }
             return stateRow(if (t.action == null) t.fact else said, act)
         }
+        // An away device that shows its own state (asleep, offline…) needs no line too.
+        if (s is dev.kore.link.node.NodeMachine.State.Away && awayState(s) != null) return null
         val (text, action) = when (s) {
             is dev.kore.link.node.NodeMachine.State.Away -> awayLine(s.why, macName, kore.mesh.macFor(node), node.lastSeen).let { (line, retry) ->
                 line to (if (retry) "Retry" to { node.reconnectNow() } else null)
@@ -178,11 +255,14 @@ class DeviceActivity : NodeActivity() {
     private fun stateRow(text: String, action: Pair<String, () -> Unit>?): View {
         return LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), 0, dp(4), dp(10))
-            addView(label(text, 13f, K.dim), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            if (action != null) addView(label(action.first, 13f, K.accent).apply {
-                setPadding(dp(8), dp(6), 0, dp(6))
+            setPadding(dp(20), 0, dp(16), dp(10))
+            addView(label(text).apply { type(Type.Callout); setTextColor(Tone.dim) }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            if (action != null) addView(label(action.first).apply {
+                type(Type.Label)
+                setTextColor(Tone.accent)
+                setPadding(dp(12), dp(8), dp(12), dp(8))
                 setOnClickListener { action.second() }
+                pressFill(null, Tone.l2, 15)
             })
         }
     }
@@ -306,77 +386,8 @@ class DeviceActivity : NodeActivity() {
         override fun areItemsTheSame(a: DeviceList.Row, b: DeviceList.Row) = a.key == b.key
         override fun areContentsTheSame(a: DeviceList.Row, b: DeviceList.Row) = a == b
     }) {
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder = object : RecyclerView.ViewHolder(rowView()) {}
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder = object : RecyclerView.ViewHolder(chatCard()) {}
 
-        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) = bind(holder.itemView as LinearLayout, getItem(position))
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) = bindChatCard(holder.itemView as LinearLayout, getItem(position))
     }
-
-    /**
-     * A chat row card (spec §5): `l1`, radius 14, a hair edge, 8 apart. The lead is the CLI's logo,
-     * or the working spinner in its colour while the chat works (a window's row: a folder). Line 1:
-     * the title (Body medium when unread, working or needing you) and the age; line 2 (Callout):
-     * the window and the state or last word, warn when it needs you, err when it failed.
-     */
-    private fun rowView(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(14), dp(12), dp(14), dp(12))
-        pressFill(Tone.l1, Tone.l2, Radius.row, Tone.hair)
-        layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
-        addView(android.widget.FrameLayout(context).apply {
-            addView(android.widget.ImageView(context), android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
-            addView(Spinner(context, Tone.spinClaude).apply { visibility = View.GONE }, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
-        }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { marginEnd = dp(12) })
-        addView(LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                addView(label("").apply { type(Type.Body); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                addView(label("").apply { type(Type.Caption); setTextColor(Tone.faint); setPadding(dp(8), 0, 0, 0) })
-            })
-            addView(label("").apply { type(Type.Callout); setTextColor(Tone.dim); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(2), 0, 0) })
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-    }
-
-    private fun bind(v: LinearLayout, row: DeviceList.Row) {
-        val lead = v.getChildAt(0) as android.widget.FrameLayout
-        val logo = lead.getChildAt(0) as android.widget.ImageView
-        val spinner = lead.getChildAt(1) as Spinner
-        val text = v.getChildAt(1) as LinearLayout
-        val top = text.getChildAt(0) as LinearLayout
-        val title = top.getChildAt(0) as TextView
-        val age = top.getChildAt(1) as TextView
-        val line = text.getChildAt(1) as TextView
-        val working = row.cue == DeviceList.Cue.WORKING
-        if (row.chatId == null) {
-            logo.setImageResource(dev.kore.phone.R.drawable.i_folder)
-            logo.imageTintList = android.content.res.ColorStateList.valueOf(Tone.dim)
-        } else {
-            logo.setImageResource(providerLogo(row.provider))
-            logo.imageTintList = null
-        }
-        logo.visibility = if (working) View.INVISIBLE else View.VISIBLE
-        spinner.visibility = if (working) View.VISIBLE else View.GONE
-        spinner.tint = if (row.provider == "codex") Tone.spinCodex else Tone.spinClaude
-        title.text = row.title
-        val strong = row.unread || working || row.cue == DeviceList.Cue.NEEDS
-        title.type(if (strong) Type.BodyMedium else Type.Body)
-        title.setTextColor(Tone.text)
-        age.text = row.age
-        line.text = row.waiting?.let { android.text.SpannableStringBuilder(waitingPrefix(it)).append(row.line) } ?: row.line
-        line.visibility = if (row.line.isEmpty() && row.waiting == null) View.GONE else View.VISIBLE
-        line.setTextColor(when (row.cue) {
-            DeviceList.Cue.NEEDS -> Tone.warn
-            DeviceList.Cue.FAILED -> Tone.err
-            else -> Tone.dim
-        })
-        v.contentDescription = listOf(row.title, row.age, if (row.unread) "unread" else "", if (working) "working" else "", row.waiting?.words ?: "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
-        v.setOnClickListener {
-            if (row.chatId != null) startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", row.chatId))
-            else startActivity(Intent(this, WindowActivity::class.java).putExtra("window", row.windowId))
-        }
-    }
-
-
 }

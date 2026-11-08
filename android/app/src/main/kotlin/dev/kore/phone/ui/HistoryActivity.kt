@@ -33,17 +33,23 @@ class HistoryActivity : NodeActivity() {
     private var started = false
     private lateinit var list: LinearLayout
     private lateinit var archiveButton: android.view.View
-    private lateinit var state: android.widget.TextView
+    private lateinit var state: LinearLayout
 
     override fun body(): View {
         archiveButton = barButton(barTitle, "▣", "Archived") { archived = !archived; load(reset = true) }
+        // The search field (spec §6): 44 high, radius 22, l1 with a hair edge, a search icon, Body.
         val search = EditText(this).apply {
-            hint = "Search chats…"
-            setHintTextColor(K.faint)
-            setTextColor(K.text)
-            textSize = 14f
-            background = rounded(android.graphics.Color.TRANSPARENT, 10, K.line)
-            setPadding(dp(12), dp(9), dp(12), dp(9))
+            hint = "Search"
+            type(Type.Body)
+            setHintTextColor(Tone.faint)
+            setTextColor(Tone.text)
+            background = shape(Tone.l1, 22, Tone.hair)
+            minHeight = dp(44)
+            setPadding(dp(14), 0, dp(14), 0)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(getDrawable(dev.kore.phone.R.drawable.i_search)?.mutate()?.apply {
+                setTint(Tone.faint); setBounds(0, 0, dp(18), dp(18))
+            }, null, null, null)
+            compoundDrawablePadding = dp(10)
             isSingleLine = true
             inputType = InputType.TYPE_CLASS_TEXT
             imeOptions = EditorInfo.IME_ACTION_SEARCH
@@ -57,8 +63,8 @@ class HistoryActivity : NodeActivity() {
             })
         }
         list = column()
-        state = label("", 13f, K.faint).apply { setPadding(dp(4), dp(16), dp(4), dp(16)); visibility = View.GONE }
-        content.addView(search, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) })
+        state = column()
+        content.addView(search, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)).apply { bottomMargin = dp(4) })
         content.addView(list)
         content.addView(state)
         return object : ScrollView(this) {
@@ -86,8 +92,8 @@ class HistoryActivity : NodeActivity() {
             val r = l.read(Control.historyList(windowId, query, archived, offset))
             runOnUiThread {
                 if (r == null || r.str("t") == "result") {
-                    state.text = if (r == null) "$macName didn't answer." else refusalWords(r.str("code"))
-                    state.visibility = View.VISIBLE
+                    state.removeAllViews()
+                    state.addView(emptyState(dev.kore.phone.R.drawable.i_wifi_off, if (r == null) "$macName didn't answer" else "History isn't open", if (r == null) "Try again in a moment." else refusalWords(r.str("code"))))
                     return@runOnUiThread
                 }
                 if (reset) rows.clear()
@@ -98,28 +104,53 @@ class HistoryActivity : NodeActivity() {
         }
     }
 
+    /**
+     * Newest first under "Today", "This week" and "Earlier" (spec §6), each a grouped list of rows
+     * 52 high: the CLI's logo, the title, the time. A tap opens it; a long-press holds its menu.
+     */
     private fun draw() {
         list.removeAllViews()
+        state.removeAllViews()
         val now = System.currentTimeMillis()
-        var header: String? = null
+        val buckets = LinkedHashMap<String, MutableList<JsonObject>>()
         for (s in rows) {
             val at = (s["updatedAt"] as? JsonPrimitive)?.longOrNull ?: 0L
-            val bucket = ControlModel.bucket(at, now)
-            if (bucket != header) {
-                header = bucket
-                list.addView(label(bucket.uppercase(), 11f, K.faint).apply { letterSpacing = 0.06f; setPadding(dp(4), dp(12), 0, dp(6)) })
-            }
-            val title = (if (s.bool("archived")) "▣ " else "") + (s.str("title")?.ifBlank { null } ?: "Untitled chat")
-            val v = row(title, whenText(at, now, bucket), null, providerMark(s.str("provider"))) { open(s) }
-            v.setOnLongClickListener { menu(it, s); true }
-            list.addView(v)
+            buckets.getOrPut(ControlModel.bucket(at, now)) { ArrayList() } += s
         }
-        state.text = when {
-            rows.isEmpty() && query.isNotEmpty() -> "No chats match."
-            rows.isEmpty() -> if (archived) "No archived chats." else "No past chats in this folder."
-            else -> ""
+        var first = true
+        for ((bucket, sessions) in buckets) {
+            list.addView(sectionLabel(bucket, first))
+            first = false
+            list.addView(grouped(sessions.map { s ->
+                val at = (s["updatedAt"] as? JsonPrimitive)?.longOrNull ?: 0L
+                historyRow(s, whenText(at, now, bucket)).apply { setOnLongClickListener { menu(it, s); true } }
+            }, inset = 47))
         }
-        state.visibility = if (state.text.isEmpty()) View.GONE else View.VISIBLE
+        when {
+            rows.isNotEmpty() -> Unit
+            query.isNotEmpty() -> state.addView(emptyState(dev.kore.phone.R.drawable.i_search, "No chats match", "Search looks at titles and the first message."))
+            archived -> state.addView(emptyState(dev.kore.phone.R.drawable.i_archive, "No archived chats", "Chats you archive here or on $macName show up here."))
+            else -> state.addView(emptyState(dev.kore.phone.R.drawable.i_archive, "No past chats here", "Chats you close in this folder show up here."))
+        }
+    }
+
+    /** One past chat: its CLI's logo (17), its title (Body), its time (Caption, faint). */
+    private fun historyRow(s: JsonObject, time: String): View = LinearLayout(this).apply {
+        gravity = android.view.Gravity.CENTER_VERTICAL
+        minimumHeight = dp(52)
+        setPadding(dp(16), dp(10), dp(16), dp(10))
+        addView(android.widget.ImageView(context).apply { setImageResource(providerLogo(s.str("provider"))) },
+            LinearLayout.LayoutParams(dp(17), dp(17)).apply { marginEnd = dp(14) })
+        val title = s.str("title")?.ifBlank { null } ?: "Untitled chat"
+        addView(label(title).apply { type(Type.Body); setTextColor(Tone.text); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        if (s.bool("archived")) addView(android.widget.ImageView(context).apply {
+            setImageResource(dev.kore.phone.R.drawable.i_archive); imageTintList = android.content.res.ColorStateList.valueOf(Tone.faint)
+        }, LinearLayout.LayoutParams(dp(15), dp(15)).apply { marginStart = dp(8) })
+        addView(label(time).apply { type(Type.Caption); setTextColor(Tone.faint); setPadding(dp(10), 0, 0, 0) })
+        contentDescription = listOfNotNull(title, if (s.bool("archived")) "archived" else null, time).joinToString(", ")
+        setOnClickListener { open(s) }
+        pressFill(null, Tone.l2, 0)
     }
 
     private fun whenText(at: Long, now: Long, bucket: String): String {

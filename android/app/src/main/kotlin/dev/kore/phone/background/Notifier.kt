@@ -65,20 +65,48 @@ class Notifier(private val context: Context, private val node: String = "", priv
         if (key in open) return
         open[key] = Item(chatId, item.str("window") ?: "", item.str("chatTitle") ?: "A chat", item.str("kind") ?: "")
         if (chatId == onScreen) return
-        post(NEEDS, chatId, "${item.str("window") ?: "Kore"} · ${item.str("chatTitle") ?: "a chat"}", "Needs you")
+        // Spec §6: "Kore · {device} · now", "{chat} needs you", then what it asks.
+        post(NEEDS, chatId, "${item.str("chatTitle") ?: "A chat"} needs you", ask(item.str("kind")))
+        summarize()
     }
 
     private fun clear(key: String) {
         val item = open.remove(key) ?: return
         if (open.values.none { it.chatId == item.chatId }) manager.cancel(id(item.chatId))
+        summarize()
+    }
+
+    /**
+     * Two or more chats needing you fold under one "N chats need you", a line per chat (spec §6);
+     * one or none, the fold goes.
+     */
+    private fun summarize() {
+        val chats = open.values.distinctBy { it.chatId }
+        if (chats.size < 2) return manager.cancel(summaryId())
+        val style = Notification.InboxStyle().setBigContentTitle(folded(chats.size))
+        chats.take(6).forEach { style.addLine("${it.title} · ${ask(it.kind)}") }
+        val note = Notification.Builder(context, NEEDS)
+            .setSmallIcon(R.drawable.ic_notify).setColor(ACCENT)
+            .setContentTitle(folded(chats.size))
+            .setContentText(chats.joinToString(", ") { it.title })
+            .setStyle(style)
+            .apply { nodeName()?.let { setSubText(it) } }
+            .setGroup(GROUP)
+            .setGroupSummary(true)
+            .setLocalOnly(true)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setPublicVersion(Notification.Builder(context, NEEDS).setSmallIcon(R.drawable.ic_notify).setColor(ACCENT).setContentTitle("Kore").setContentText(folded(chats.size)).build())
+            .setContentIntent(PendingIntent.getActivity(context, summaryId(), Intent(context, HomeActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            .setAutoCancel(true)
+            .build()
+        runCatching { manager.notify(summaryId(), note) }
     }
 
     private fun turn(turn: JsonObject, onScreen: String?) {
         val chatId = turn.str("chatId") ?: return
         if (chatId == onScreen || open.values.any { it.chatId == chatId }) return
         val failed = turn.str("outcome") == "failed"
-        val where = "${turn.str("window") ?: "Kore"} · ${turn.str("chatTitle") ?: "a chat"}"
-        post(if (failed) FAILED else FINISHED, chatId, where, if (failed) "Failed" else "Finished")
+        post(if (failed) FAILED else FINISHED, chatId, turn.str("chatTitle") ?: "A chat", if (failed) "Failed" else "Finished")
     }
 
     private fun post(channel: String, chatId: String, title: String, what: String) {
@@ -104,7 +132,7 @@ class Notifier(private val context: Context, private val node: String = "", priv
             .setAllowSystemGeneratedContextualActions(false)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setPublicVersion(public)
-            .setGroup("kore")
+            .setGroup(GROUP)
             .build()
         runCatching { manager.notify(id(chatId), note) }
     }
@@ -116,9 +144,24 @@ class Notifier(private val context: Context, private val node: String = "", priv
     }
 
     private fun id(chatId: String) = 1000 + ("$node/$chatId".hashCode() and 0x7fffff)
+    private fun summaryId() = 1000 + ("$node/needs-you".hashCode() and 0x7fffff)
     private fun JsonObject.str(key: String) = this[key]?.jsonPrimitive?.contentOrNull
 
     companion object {
+        /** What a card asks, by its kind: the notification's text (never the card's own words). */
+        fun ask(kind: String?): String = when (kind) {
+            "permission" -> "Asks to go ahead"
+            "question" -> "Has a question"
+            "plan" -> "Has a plan to approve"
+            "planReady" -> "Plan ready to build"
+            "signIn" -> "Needs a sign-in on the Mac"
+            else -> "Waiting for you"
+        }
+
+        /** The fold's title. */
+        fun folded(n: Int) = "$n chats need you"
+
+        private const val GROUP = "kore"
         const val NEEDS = "needs-you"
         const val FAILED = "failed"
         const val FINISHED = "finished"

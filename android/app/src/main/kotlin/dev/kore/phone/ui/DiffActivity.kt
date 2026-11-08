@@ -29,8 +29,9 @@ class DiffActivity : NodeActivity() {
     private data class Line(val kind: Char, val text: String, val old: Int?, val new: Int?)
 
     override fun body(): View = column().apply {
-        addView(label(path, 12f, K.faint, mono = true).apply { setPadding(dp(16), 0, dp(16), dp(8)); maxLines = 2 })
-        state = label("Reading the changes…", 13f, K.faint).apply { gravity = Gravity.CENTER; setPadding(0, dp(40), 0, 0) }
+        // Its path (spec §6): Mono 12, faint.
+        addView(label(path).apply { type(Type.Mono); textSize = 12f; setTextColor(Tone.faint); setPadding(dp(16), 0, dp(16), dp(10)); maxLines = 2 })
+        state = label("Reading the changes…").apply { type(Type.Callout); setTextColor(Tone.faint); gravity = Gravity.CENTER; setPadding(0, dp(40), 0, 0) }
         addView(state)
         list = RecyclerView(this@DiffActivity).apply {
             layoutManager = LinearLayoutManager(this@DiffActivity)
@@ -78,15 +79,17 @@ class DiffActivity : NodeActivity() {
     }
 
     private inner class Lines : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-        private val addBg = android.graphics.Color.argb(38, 95, 196, 138)
-        private val delBg = android.graphics.Color.argb(38, 229, 115, 107)
+        private val addBg = Tone.okLine
+        private val delBg = Tone.errLine
 
         override fun getItemCount() = lines.size
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = object : RecyclerView.ViewHolder(LinearLayout(this@DiffActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            addView(label("", 11f, K.faint, mono = true).apply { gravity = Gravity.END; setPadding(0, dp(1), dp(8), dp(1)) }, LinearLayout.LayoutParams(dp(48), ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(label("", 12f, K.text, mono = true).apply { setPadding(dp(4), dp(1), dp(12), dp(1)) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            // Spec §6: rows Mono 12 at 1.7; a 44 gutter, right-aligned, faint.
+            addView(label("").apply { type(Type.Mono); textSize = 12f; lineHeight = (12f * 1.7f * resources.displayMetrics.scaledDensity).toInt(); setTextColor(Tone.faint); gravity = Gravity.END; setPadding(0, 0, dp(10), 0) },
+                LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(label("").apply { type(Type.Mono); textSize = 12f; lineHeight = (12f * 1.7f * resources.displayMetrics.scaledDensity).toInt(); setPadding(dp(4), 0, dp(12), 0) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }) {}
 
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {

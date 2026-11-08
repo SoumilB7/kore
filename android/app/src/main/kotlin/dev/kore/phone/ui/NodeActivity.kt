@@ -27,6 +27,9 @@ abstract class NodeActivity : Activity() {
     protected lateinit var root: LinearLayout
     protected lateinit var content: LinearLayout
     private lateinit var banner: TextView
+
+    /** A screen that shows the link's state as its own empty state hides the line under the title (spec §5). */
+    protected fun quietBanner() { banner.visibility = android.view.View.GONE }
     private lateinit var titleColumn: LinearLayout
     /** The top bar's title: the device's, the window's or the chat's name. */
     protected lateinit var barTitle: TextView

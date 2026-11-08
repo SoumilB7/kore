@@ -36,7 +36,7 @@ class HomeActivity : Activity() {
     private var latest: List<Triple<NodeClient, NodeMachine.State, JsonObject?>> = emptyList()
 
     /** Everything Home draws; equal looks draw nothing. */
-    private data class Look(val cue: Cue?, val devices: List<Device>, val update: Update?)
+    private data class Look(val cue: Cue?, val devices: List<Device>, val update: Update?, val offline: Boolean = false)
     private data class Cue(val count: Int, val title: String, val node: String, val nodeName: String, val chat: String?)
     private data class Device(val id: String, val name: String, val fact: String, val up: Boolean, val mac: Boolean, val dot: Int, val action: RowAction? = null)
     /** An update ready: from a Mac (one tap installs it) or from the release page (Settings). */
@@ -74,6 +74,29 @@ class HomeActivity : Activity() {
         }
     }
 
+    /** Whether this phone has a network at all (none: Home says the phone is offline). */
+    private fun phoneOnline(): Boolean {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return true
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    /** Home draws again when the phone's network comes or goes. */
+    private val netWatch = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) = runOnUiThread { render() }
+        override fun onLost(network: android.net.Network) = runOnUiThread { render() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.registerDefaultNetworkCallback(netWatch) }
+    }
+
+    override fun onPause() {
+        runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(netWatch) }
+        super.onPause()
+    }
+
     override fun onStop() {
         watch?.cancel()
         super.onStop()
@@ -92,11 +115,18 @@ class HomeActivity : Activity() {
             content.addView(grouped(look.devices.map { d -> rows.row(d) { deviceRow(d) } }), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(16), 0, dp(16), 0) })
         }
         if (look.devices.isEmpty()) content.addView(emptyState(R.drawable.i_laptop, "No devices yet", "On your Mac, open Kore's Devices and press +. This phone shows up there."))
+        // The phone itself offline (spec §6): its own state above the devices it can't reach.
+        if (look.offline && look.devices.isNotEmpty()) content.addView(emptyState(R.drawable.i_wifi_off, "This phone is offline", "Your chats are where you left them. Kore goes on once you're back."), 0)
         (Updates.status.value as? Updates.Status.Available)?.let { st ->
-            // One line whichever source: from a Mac, one tap downloads, checks and installs it.
+            // "Update" (spec §6): one grouped row; from a Mac, Install downloads, checks and installs it.
             val mac = look.update?.mac
-            if (mac != null) content.addView(quietLine("Update ready", "from $mac") { kore.scope.launch { Updates.install(kore, st.offer) } })
-            else content.addView(quietLine("An update is ready", "Settings ›") { startActivity(Intent(this, SettingsActivity::class.java)) })
+            val install = label(if (mac != null) "Install" else "Open").apply {
+                type(Type.Label); setTextColor(Tone.accent); setPadding(dp(12), dp(8), dp(12), dp(8))
+            }
+            val go: () -> Unit = if (mac != null) ({ kore.scope.launch { Updates.install(kore, st.offer) }; Unit }) else ({ startActivity(Intent(this, SettingsActivity::class.java)) })
+            content.addView(sectionLabel("Update"), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(16), 0, dp(16), 0) })
+            content.addView(grouped(listOf(groupRow(R.drawable.i_download, "Kore ${st.offer.version}", if (mac != null) "From $mac" else "In Settings", iconTint = Tone.accent, end = install, go = go))),
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(16), 0, dp(16), 0) })
         }
         rows.done()
     }
@@ -123,7 +153,7 @@ class HomeActivity : Activity() {
             Device(n.id.toString(), n.name, fact, up, n.device.value.kind == NodeKind.MAC, nodeLook(s).second, trouble?.action)
         }
         val update = (Updates.status.value as? Updates.Status.Available)?.let { Update(it.offer, Updates.fromMac(kore, it.offer)) }
-        return Look(cue, devices, update)
+        return Look(cue, devices, update, offline = !phoneOnline())
     }
 
     /** One cue (mockup E8 .need), amber as chats that need you are everywhere: how many wait, the first one's title and device; a tap opens it. */
@@ -165,19 +195,6 @@ class HomeActivity : Activity() {
     }.apply {
         contentDescription = "${d.name}: ${d.fact}"
         tag = "device ${d.name}"
-    }
-
-    /** One quiet line at the list's end: what it is, and the one thing to do. */
-    private fun quietLine(text: String, action: String, go: () -> Unit): View = LinearLayout(this).apply {
-        gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = dp(48)
-        setPadding(dp(20), 0, dp(20), 0)
-        addView(label(text, 13f, K.dim))
-        addView(label("  ·  ", 13f, K.faint))
-        addView(label(action, 13f, K.accent))
-        contentDescription = "$text. $action"
-        setOnClickListener { go() }
-        pressable(0)
     }
 
     private fun toJoin() {

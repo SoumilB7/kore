@@ -91,4 +91,16 @@ class DeviceListTest {
         val b = DeviceList.rows(mac, null, now + 10_000, none)
         assertEquals(a, b)
     }
+
+    /** Spec §5: chips whose names match add their parent folder; if those match too, the folder above. */
+    @Test fun collidingChipNamesAddTheirFolder() {
+        val chips = listOf(
+            DeviceList.Chip("a", "kore", 1, "~/Code/Projects/kore"),
+            DeviceList.Chip("b", "kore", 1, "~/Code/clones/kore"),
+            DeviceList.Chip("c", "api", 1, "~/Work/x/api"),
+            DeviceList.Chip("d", "api", 1, "~/Play/x/api"),
+            DeviceList.Chip("e", "solo", 1, "~/solo"),
+        )
+        assertEquals(listOf("Projects", "clones", "Work/x", "Play/x", null), DeviceList.chipSuffixes(chips))
+    }
 }

@@ -85,13 +85,13 @@ class JoinActivity : Activity() {
             is Step.Join -> if (again && kore.mesh.joined) home() else {
                 screen(logo(), "Kore", if (s.failed) "Tailscale didn't start on this phone. Try again." else "Your Mac's chats, from here.") {
                     primary(if (s.failed) "Try again" else "Join KoreNet") { kore.mesh.beginJoin() }
-                    addView(label("Signs in with Tailscale", 12f, K.faint).apply { gravity = Gravity.CENTER })
+                    addView(label("Signs in with Tailscale").apply { type(Type.Caption); setTextColor(Tone.faint); gravity = Gravity.CENTER })
                 }
             }
-            Step.Starting -> screen(halo(R.drawable.ic_mac, pulse = true), "Starting…", "Kore's own Tailscale is coming up.$noNet") { quiet("Cancel") { flow.cancel() } }
+            Step.Starting -> screen(halo(R.drawable.i_laptop, pulse = true), "Starting…", "Kore's own Tailscale is coming up.$noNet") { quiet("Cancel") { flow.cancel() } }
             is Step.SigningIn -> {
                 val small = if (unopened == s.url) "No browser here opened the sign-in page. Copy its link into one." else "Finish in the browser tab; Kore goes on from there."
-                screen(halo(R.drawable.ic_mac, pulse = true), "Sign in to Tailscale", small + noNet) {
+                screen(halo(R.drawable.i_laptop, pulse = true), "Sign in to Tailscale", small + noNet) {
                     if (unopened == s.url) secondary("Copy sign-in link") { copy("sign-in link", s.url) }
                     else secondary("Open sign-in again") { if (!signIn(s.url)) { unopened = s.url; render(s, offline) } }
                     quiet("Cancel") { flow.cancel() }
@@ -118,21 +118,21 @@ class JoinActivity : Activity() {
                     one -> "$mac is on your tailnet.\nIn Kore there, open Devices and press +."
                     else -> "$mac are on your tailnet.\nIn Kore on one of them, open Devices and press +."
                 }
-                screen(halo(R.drawable.ic_mac, pulse = !s.stopped), if (s.stopped) "No answer yet" else "Finding your Mac…", line) {
+                screen(halo(R.drawable.i_laptop, pulse = !s.stopped), if (s.stopped) "No answer yet" else "Finding your Mac…", line) {
                     if (s.stopped) primary("Try again") { flow.again() }
                     quiet("Cancel") { flow.cancel() }
                 }
             }
-            is Step.Allowing -> screen(halo(R.drawable.ic_mac, pulse = true), "Allow on ${s.mac}", "Kore there is asking about this phone.") {
+            is Step.Allowing -> screen(halo(R.drawable.i_laptop, pulse = true), "Allow on ${s.mac}", "Kore there is asking about this phone.") {
                 addView(facts(listOf("This phone" to dev.kore.phone.PhoneName.of(this@JoinActivity), "Tailscale" to s.self.shortName, "Address" to (s.self.ips.firstOrNull() ?: ""))))
                 quiet("Cancel") { flow.cancel() }
             }
-            is Step.Denied -> screen(halo(R.drawable.ic_mac), if (s.timedOut) "No answer on ${s.mac}" else "Not allowed on ${s.mac}",
+            is Step.Denied -> screen(halo(R.drawable.i_laptop), if (s.timedOut) "No answer on ${s.mac}" else "Not allowed on ${s.mac}",
                 if (s.timedOut) "Nobody pressed Allow on ${s.mac} in time." else "${s.mac} said no to this phone.") {
                 secondary("Ask again") { flow.again() }
                 quiet("Leave KoreNet") { leave() }
             }
-            is Step.NoMac -> screen(halo(R.drawable.ic_net), "No Mac with Kore here",
+            is Step.NoMac -> screen(halo(R.drawable.i_net), "No Mac with Kore here",
                 (s.login?.let { "Signed in as $it.\n" } ?: "") + "Kore may be on a Mac signed in to another account.") {
                 secondary("Switch account") { leave() }
                 quiet("Get Kore for Mac") { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(KORE_FOR_MAC))) }
@@ -190,12 +190,14 @@ class JoinActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(34), 0, dp(34), 0)
-            addView(top, LinearLayout.LayoutParams(dp(64), dp(64)))
-            addView(label(big, 20f, bold = true).apply { gravity = Gravity.CENTER; setPadding(0, dp(14), 0, dp(6)) })
-            addView(label(small, 13.5f, K.dim).apply { gravity = Gravity.CENTER; setLineSpacing(0f, 1.25f) })
+            addView(top, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(label(big).apply { type(Type.Display); setTextColor(Tone.text); gravity = Gravity.CENTER; setPadding(0, dp(8), 0, dp(6)) })
+            addView(label(small).apply { type(Type.Callout); setTextColor(Tone.dim); gravity = Gravity.CENTER; maxWidth = dp(280) })
         }
         root.addView(android.widget.ScrollView(this).apply {
             isFillViewport = true
+            // Nothing in the middle takes a tap: no keyboard-focus wash over it.
+            defaultFocusHighlightEnabled = false
             addView(mid, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.MATCH_PARENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT))
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(LinearLayout(this).apply {
@@ -205,67 +207,36 @@ class JoinActivity : Activity() {
         })
     }
 
-    private fun logo(): View = label("K", 30f, K.accent, bold = true).apply {
-        gravity = Gravity.CENTER
-        typeface = Typeface.DEFAULT_BOLD
-        background = rounded(K.surface, 16)
-    }
+    /** The Kore mark on a 104 tile, radius 32 (spec §6 Join). */
+    private fun logo(): View = stateTile(R.drawable.kore_mark, waiting = false, size = 104, radius = 32, glyph = 52, tint = false)
 
     /** The halo's glow while something is under way; one at a time, stopped off screen. */
     private var pulse: android.animation.ValueAnimator? = null
 
-    private fun halo(glyph: Int, pulse: Boolean = false): View = ImageView(this).apply {
-        setImageResource(glyph)
-        scaleType = ImageView.ScaleType.CENTER_INSIDE
-        setPadding(dp(18), dp(18), dp(18), dp(18))
-        val ring = android.graphics.drawable.GradientDrawable().apply {
-            shape = android.graphics.drawable.GradientDrawable.OVAL
-            setStroke(dp(2), K.raised)
-        }
-        background = ring
-        // Mockup .halo.pulse: the ring breathes to the accent and back, 1.6 s, for as long as it shows.
-        if (pulse) this@JoinActivity.pulse = android.animation.ValueAnimator.ofArgb(K.raised, K.accent).apply {
-            duration = 800
-            repeatMode = android.animation.ValueAnimator.REVERSE
-            repeatCount = android.animation.ValueAnimator.INFINITE
-            addUpdateListener { ring.setStroke(dp(2), it.animatedValue as Int) }
-            start()
-        }
-    }
+    /** A step's tile (spec §6): its icon on the state tile; the waiting steps breathe. */
+    private fun halo(glyph: Int, pulse: Boolean = false): View = stateTile(glyph, waiting = pulse)
 
     private fun facts(rows: List<Pair<String, String>>): View = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(14), dp(10), dp(14), dp(10))
-        background = rounded(K.surface, 12)
+        background = shape(Tone.l1, 12, Tone.hair)
         for ((k, v) in rows) addView(LinearLayout(this@JoinActivity).apply {
-            addView(label(k, 12f, K.faint), LinearLayout.LayoutParams(dp(110), LinearLayout.LayoutParams.WRAP_CONTENT))
-            addView(label(v, 12f, K.text).apply { typeface = Typeface.MONOSPACE; maxLines = 1 })
+            setPadding(0, dp(3), 0, dp(3))
+            addView(label(k).apply { type(Type.Callout); setTextColor(Tone.faint) }, LinearLayout.LayoutParams(dp(110), LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(label(v).apply { type(Type.Mono); setTextColor(Tone.text); maxLines = 1 })
         })
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) }
     }
 
-    private fun LinearLayout.primary(text: String, go: () -> Unit) = addView(label(text, 15f, K.onAccent, bold = true).apply {
-        gravity = Gravity.CENTER
-        background = rounded(K.accent, 14)
-        setOnClickListener { go() }
-        pressable(14)
-        tag = text
-    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(10) })
+    // The foot's buttons (spec §5): primary, secondary and quiet, full width.
+    private fun LinearLayout.primary(text: String, go: () -> Unit) = addView(button(text, Btn.Primary, go).apply { tag = text },
+        LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
 
-    private fun LinearLayout.secondary(text: String, go: () -> Unit) = addView(label(text, 15f, K.text).apply {
-        gravity = Gravity.CENTER
-        background = rounded(K.surface, 14)
-        setOnClickListener { go() }
-        pressable(14)
-        tag = text
-    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(10) })
+    private fun LinearLayout.secondary(text: String, go: () -> Unit) = addView(button(text, Btn.Secondary, go).apply { tag = text },
+        LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
 
-    private fun LinearLayout.quiet(text: String, go: () -> Unit) = addView(label(text, 15f, K.dim).apply {
-        gravity = Gravity.CENTER
-        setOnClickListener { go() }
-        pressable(14)
-        tag = text
-    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
+    private fun LinearLayout.quiet(text: String, go: () -> Unit) = addView(button(text, Btn.Quiet, go).apply { tag = text },
+        LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
     companion object {
         const val KORE_FOR_MAC = "https://github.com/SoumilB7/kore"

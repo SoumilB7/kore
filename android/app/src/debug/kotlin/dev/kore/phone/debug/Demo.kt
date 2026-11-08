@@ -52,7 +52,8 @@ class DemoStart : ContentProvider() {
 
 /**
  * [scenario] (the text in files/demo): "" the normal demo; `waiting` the Mac never answers (no
- * snapshot); `no-windows` the Mac has none open; `no-devices` this phone knows none.
+ * snapshot); `no-windows` the Mac has none open; `no-devices` this phone knows none; `asleep` the
+ * Mac says it's going to sleep.
  */
 class Demo(private val context: Context, private val scenario: String = "") : StandIn {
     private val mac = Device(UUID.fromString("B3D9E1F0-7A2C-4E6B-8D41-5C0F9A3E2B02"), "MacBook", NodeKind.MAC, ByteArray(91) { 1 }, listOf("nodekey:mac"), "macbook.tail.ts.net.")
@@ -106,6 +107,8 @@ class Demo(private val context: Context, private val scenario: String = "") : St
         }
 
         init {
+            // `asleep`: the Mac says it's going to sleep as soon as it's reached.
+            if (scenario == "asleep" && dir == "mac") { end.complete("sleep"); channel.close() }
             if (scenario != "waiting") asset("$dir/welcome.json")?.let(::push)
             snapshot?.let(::push)
             asset("$dir/attn.state.json")?.let(::push)
@@ -140,6 +143,38 @@ class Demo(private val context: Context, private val scenario: String = "") : St
                 "blob.put.end" -> (m["uploadId"] as? JsonPrimitive)?.content?.let { upload ->
                     push(buildJsonObject { put("t", "result"); put("id", "blob.put:$upload"); put("ok", true); put("blobId", "demo-$upload") })
                 }
+                // History: a few closed chats, filtered by the search, newest first (Today, This week, Earlier).
+                "history.list" -> {
+                    val q = (m["query"] as? JsonPrimitive)?.content.orEmpty().lowercase()
+                    val now = System.currentTimeMillis()
+                    val all = listOf(
+                        Triple("Fix the login redirect", "claude", now - 2 * 3_600_000L),
+                        Triple("Rate limit banner copy", "codex", now - 5 * 3_600_000L),
+                        Triple("Box sync, first pass", "claude", now - 3 * 86_400_000L),
+                        Triple("Tables on narrow phones", "claude", now - 4 * 86_400_000L),
+                        Triple("0.2.9 release notes", "codex", now - 20 * 86_400_000L),
+                    ).filter { q.isEmpty() || it.first.lowercase().contains(q) }
+                    push(buildJsonObject {
+                        put("t", "history.page"); put("id", id); put("windowId", (m["windowId"] as? JsonPrimitive)?.content ?: ""); put("more", false)
+                        put("sessions", kotlinx.serialization.json.JsonArray(all.mapIndexed { i, (title, provider, at) ->
+                            buildJsonObject { put("id", "s$i"); put("title", title); put("provider", provider); put("updatedAt", at); put("archived", false); put("open", false) }
+                        }))
+                    })
+                }
+                // A file's changes in a turn.
+                "diff.get" -> push(buildJsonObject {
+                    put("t", "diff.hunks"); put("id", id); put("path", (m["path"] as? JsonPrimitive)?.content ?: "src/total.ts"); put("more", false)
+                    put("hunks", kotlinx.serialization.json.JsonArray(listOf(buildJsonObject {
+                        put("oldStart", 12); put("newStart", 12)
+                        put("lines", kotlinx.serialization.json.JsonArray(listOf(
+                            " export const total = (lines: Line[]) =>",
+                            "-  lines.reduce((sum, l) => sum + round(l.price * l.qty), 0)",
+                            "+  round(lines.reduce((sum, l) => sum + l.price * l.qty, 0))",
+                            " ",
+                            "+// Round once, on the total: per-line rounding lost a cent on long carts.",
+                        ).map { JsonPrimitive(it) }))
+                    })))
+                })
                 "logs.chunk" -> logsRead = (m["total"] as? JsonPrimitive)?.content?.toIntOrNull() ?: -1
             }
             return true

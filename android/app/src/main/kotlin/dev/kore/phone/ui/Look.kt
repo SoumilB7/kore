@@ -63,6 +63,9 @@ object Tone {
     const val l3Pressed = 0xFF2E3A41.toInt()
     /** Pressed on errFill (a destructive button). */
     const val errPressed = 0x33F0736B
+    /** A diff's added and removed lines: ok and err at 10 %. */
+    const val okLine = 0x1A74C991
+    const val errLine = 0x1AF0736B
     /** The skeleton's moving band. */
     const val shimmer = 0xFF1B2227.toInt()
     /** The switch's knob (spec §5): on, off. */
@@ -276,23 +279,18 @@ fun android.content.Context.point(color: Int, size: Int = 7): View = View(this).
 }
 
 /**
- * An empty state (spec §5): centred, 40 side padding; an 88 tile (`l1`, radius 28, a hair2 edge)
- * holding a 32 [icon] in b200; [title] in Display 8 below; [line] in Callout dim, at most 250 wide;
- * at most one [button] (primary, at most 260 wide, 24 above). [waiting]: a ring 8 outside the tile
- * (accent at 35 %, 1.5) breathes from 0.25 at 97 % to 1 at 100 % over 2.4 s; still with animations off.
+ * A state's tile (spec §5): [size] square (`l1`, [radius], a hair2 edge) holding a [glyph]-dp icon,
+ * tinted b200 unless [tint] is false (the Kore mark keeps its colours). [waiting]: a ring 8 outside
+ * it breathes, from 0.25 at 97 % to 1 at 100 % over 2.4 s; still with animations off. The view is
+ * [size] + 16 square.
  */
-fun android.app.Activity.emptyState(
-    icon: Int, title: String, line: String, button: Pair<String, () -> Unit>? = null, waiting: Boolean = false,
-): View = android.widget.LinearLayout(this).apply {
-    orientation = android.widget.LinearLayout.VERTICAL
-    gravity = android.view.Gravity.CENTER_HORIZONTAL
-    setPadding(dp(40), dp(72), dp(40), dp(32))
-    val tile = android.widget.FrameLayout(context).apply {
+fun android.app.Activity.stateTile(icon: Int, waiting: Boolean, size: Int = 88, radius: Int = Radius.tile, glyph: Int = 32, tint: Boolean = true): View =
+    android.widget.FrameLayout(this).apply {
         if (waiting) {
             val ring = View(context).apply {
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    cornerRadius = dp(Radius.tile + 8).toFloat()
+                    cornerRadius = dp(radius + 8).toFloat()
                     setStroke((1.5f * resources.displayMetrics.density).toInt(), 0x596AB1E7)
                 }
             }
@@ -314,17 +312,30 @@ fun android.app.Activity.emptyState(
                     override fun onViewDetachedFromWindow(v: View) = breathe.cancel()
                 })
             }
-            addView(ring, android.widget.FrameLayout.LayoutParams(dp(104), dp(104), android.view.Gravity.CENTER))
+            addView(ring, android.widget.FrameLayout.LayoutParams(dp(size + 16), dp(size + 16), android.view.Gravity.CENTER))
         }
         addView(android.widget.FrameLayout(context).apply {
-            background = shape(Tone.l1, Radius.tile, Tone.hair2)
+            background = shape(Tone.l1, radius, Tone.hair2)
             addView(android.widget.ImageView(context).apply {
                 setImageResource(icon)
-                imageTintList = ColorStateList.valueOf(Tone.b200)
-            }, android.widget.FrameLayout.LayoutParams(dp(32), dp(32), android.view.Gravity.CENTER))
-        }, android.widget.FrameLayout.LayoutParams(dp(88), dp(88), android.view.Gravity.CENTER))
+                if (tint) imageTintList = ColorStateList.valueOf(Tone.b200)
+            }, android.widget.FrameLayout.LayoutParams(dp(glyph), dp(glyph), android.view.Gravity.CENTER))
+        }, android.widget.FrameLayout.LayoutParams(dp(size), dp(size), android.view.Gravity.CENTER))
     }
-    addView(tile, android.widget.LinearLayout.LayoutParams(dp(104), dp(104)))
+
+/**
+ * An empty state (spec §5): centred, 40 side padding; an 88 tile (`l1`, radius 28, a hair2 edge)
+ * holding a 32 [icon] in b200; [title] in Display 8 below; [line] in Callout dim, at most 250 wide;
+ * at most one [button] (primary, at most 260 wide, 24 above). [waiting]: a ring 8 outside the tile
+ * (accent at 35 %, 1.5) breathes from 0.25 at 97 % to 1 at 100 % over 2.4 s; still with animations off.
+ */
+fun android.app.Activity.emptyState(
+    icon: Int, title: String, line: String, button: Pair<String, () -> Unit>? = null, waiting: Boolean = false,
+): View = android.widget.LinearLayout(this).apply {
+    orientation = android.widget.LinearLayout.VERTICAL
+    gravity = android.view.Gravity.CENTER_HORIZONTAL
+    setPadding(dp(40), dp(72), dp(40), dp(32))
+    addView(stateTile(icon, waiting), android.widget.LinearLayout.LayoutParams(dp(104), dp(104)))
     addView(TextView(context).apply {
         text = title; type(Type.Display); setTextColor(Tone.text); gravity = android.view.Gravity.CENTER
     }, android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
@@ -419,4 +430,56 @@ object ComposerFit {
         pill <= room -> Step.NoModel
         else -> Step.DotOnly
     }
+}
+
+/**
+ * A loading row (spec §5): 64 high, `l1`, radius 14, with a lighter band (`shimmer`) moving across
+ * it over 1.4 s. Still under "Remove animations"; the animation runs only while it's on screen.
+ */
+class SkeletonRow(context: Context) : View(context) {
+    private val ground = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Tone.l1 }
+    private val band = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = android.graphics.RectF()
+    private val clip = android.graphics.Path()
+    private var t = 0f
+    private val run = ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = 1400
+        repeatCount = ValueAnimator.INFINITE
+        addUpdateListener { t = it.animatedValue as Float; invalidate() }
+    }
+
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (Motion.scale > 0f) run.start()
+    }
+
+    override fun onDetachedFromWindow() {
+        run.cancel()
+        super.onDetachedFromWindow()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val r = Radius.row * resources.displayMetrics.density
+        rect.set(0f, 0f, width.toFloat(), height.toFloat())
+        canvas.drawRoundRect(rect, r, r, ground)
+        if (Motion.scale == 0f) return
+        clip.reset(); clip.addRoundRect(rect, r, r, android.graphics.Path.Direction.CW)
+        canvas.save(); canvas.clipPath(clip)
+        val w = width * 0.4f
+        val x = -w + (width + w) * t
+        band.shader = android.graphics.LinearGradient(x, 0f, x + w, 0f, intArrayOf(Tone.l1, Tone.shimmer, Tone.l1), null, android.graphics.Shader.TileMode.CLAMP)
+        canvas.drawRect(x, 0f, x + w, height.toFloat(), band)
+        canvas.restore()
+    }
+}
+
+/** Five loading rows, 8 apart (spec §5 Loading). */
+fun android.app.Activity.skeleton(rows: Int = 5): View = android.widget.LinearLayout(this).apply {
+    orientation = android.widget.LinearLayout.VERTICAL
+    contentDescription = "Loading"
+    repeat(rows) { addView(SkeletonRow(context), android.widget.LinearLayout.LayoutParams(android.widget.LinearLayout.LayoutParams.MATCH_PARENT, dp(64)).apply { if (it > 0) topMargin = dp(8) }) }
 }
