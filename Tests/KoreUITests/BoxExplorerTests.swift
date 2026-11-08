@@ -33,6 +33,69 @@ struct BoxExplorerTests {
         }
 
         func makeFolder(_ path: String) async -> Result<String, HostRefusal> { .success(path) }
+
+        // 1.8: an in-memory box folder.
+        var trashed: [String] = []
+        var watched: [String: Set<String>] = [:]
+        var changedHandlers: [String: (@MainActor (Set<String>) -> Void)] = [:]
+        var watching = true
+        var refuseEdits: String?
+
+        private func parent(_ path: String) -> String { (path as NSString).deletingLastPathComponent }
+        private func name(_ path: String) -> String { (path as NSString).lastPathComponent }
+
+        func write(_ path: String, _ bytes: Data, base: FileStamp?) async -> Result<FileStamp, BoxWriteFailure> {
+            if let why = refuseEdits { return .failure(.refused(why)) }
+            let now = files[path]?.stamp
+            if let base, base != now { return .failure(.conflict(now)) }
+            let stamp = FileStamp(size: Int64(bytes.count), mtime: (now?.mtime ?? 0) + 1)
+            files[path] = BoxFileRead(path: path, kind: .text, size: stamp.size, text: String(decoding: bytes, as: UTF8.self), image: nil, truncated: false, stamp: stamp)
+            if folders[parent(path)]?.contains(where: { $0.name == name(path) }) == false { folders[parent(path)]?.append(FileEntry(name: name(path), kind: .file)) }
+            return .success(stamp)
+        }
+
+        func create(_ path: String, folder: Bool) async -> Result<String, HostRefusal> {
+            if let why = refuseEdits { return .failure(HostRefusal(message: why)) }
+            folders[parent(path), default: []].append(FileEntry(name: name(path), kind: folder ? .dir : .file))
+            if folder { folders[path] = [] } else { files[path] = BoxFileRead(path: path, kind: .text, size: 0, text: "", image: nil, truncated: false, stamp: FileStamp(size: 0, mtime: 1)) }
+            return .success(path)
+        }
+
+        func rename(_ from: String, to: String) async -> Result<String, HostRefusal> {
+            if let why = refuseEdits { return .failure(HostRefusal(message: why)) }
+            guard var entry = folders[parent(from)]?.first(where: { $0.name == name(from) }) else { return .failure(HostRefusal(message: "Not there.")) }
+            folders[parent(from)]?.removeAll { $0.name == name(from) }
+            entry.name = name(to)
+            folders[parent(to), default: []].append(entry)
+            for key in folders.keys where key == from || key.hasPrefix(from + "/") { folders[to + key.dropFirst(from.count)] = folders.removeValue(forKey: key) }
+            for key in files.keys where key == from || key.hasPrefix(from + "/") { files[to + key.dropFirst(from.count)] = files.removeValue(forKey: key) }
+            return .success(to)
+        }
+
+        func trash(_ path: String) async -> Result<Void, HostRefusal> {
+            if let why = refuseEdits { return .failure(HostRefusal(message: why)) }
+            folders[parent(path)]?.removeAll { $0.name == name(path) }
+            trashed.append(path)
+            return .success(())
+        }
+
+        func search(_ root: String, _ query: String, text: Bool, max: Int) async -> Result<(hits: [FileHit], more: Bool), HostRefusal> {
+            let hits = files.keys.sorted().filter { $0.hasPrefix(root + "/") }.flatMap { path -> [FileHit] in
+                if !text { return name(path).lowercased().contains(query.lowercased()) ? [FileHit(path: path)] : [] }
+                let lines = (files[path]?.text ?? "").split(separator: "\n", omittingEmptySubsequences: false)
+                return lines.enumerated().compactMap { $0.element.lowercased().contains(query.lowercased()) ? FileHit(path: path, line: $0.offset + 1, text: String($0.element)) : nil }
+            }
+            return .success((Array(hits.prefix(max)), hits.count > max))
+        }
+
+        func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (Set<String>) -> Void)?) async -> Bool {
+            watched[key] = folders.isEmpty ? nil : folders
+            changedHandlers[key] = changed
+            return watching
+        }
+
+        /// The box says these folders changed.
+        func say(_ folders: Set<String>) { for handler in changedHandlers.values { handler(folders) } }
     }
 
     private static func fake() -> FakeBox {
@@ -104,10 +167,11 @@ struct BoxExplorerTests {
     @Test func aBoxFileOpensReadOnlyWithItsTextOrImage() async throws {
         let box = Self.fake()
         box.files["/w/README.md"] = BoxFileRead(path: "/w/README.md", kind: .text, size: 6, text: "hi\r\nyo", image: nil, truncated: false)
-        let text = FileDocument(box: "/w/README.md", standIn: URL(fileURLWithPath: "/fakebox/w/README.md")) { await box.read($0, max: nil) }
-        #expect(text.readOnly)
+        let text = FileDocument(box: "/w/README.md", source: box, standIn: URL(fileURLWithPath: "/fakebox/w/README.md"))
         text.loadIfNeeded()
         try await until { text.loaded }
+        // A box that can't say when it was read: read-only.
+        #expect(text.readOnly)
         #expect(text.storage.string == "hi\nyo")
         #expect(text.file.lineEnding == .crlf)
         #expect(text.boxCut == nil)
@@ -119,26 +183,26 @@ struct BoxExplorerTests {
         #expect(text.revision == revision)
 
         box.files["/w/big.log"] = BoxFileRead(path: "/w/big.log", kind: .text, size: 9_000_000, text: "start", image: nil, truncated: true)
-        let big = FileDocument(box: "/w/big.log", standIn: URL(fileURLWithPath: "/fakebox/w/big.log")) { await box.read($0, max: nil) }
+        let big = FileDocument(box: "/w/big.log", source: box, standIn: URL(fileURLWithPath: "/fakebox/w/big.log"))
         big.load()
         try await until { big.loaded }
         #expect(big.boxCut == 9_000_000)
 
         let png = NSImage(size: NSSize(width: 2, height: 2), flipped: false) { _ in true }.tiffRepresentation
         box.files["/w/p.png"] = BoxFileRead(path: "/w/p.png", kind: .image, size: 10, text: nil, image: png, truncated: false)
-        let image = FileDocument(box: "/w/p.png", standIn: URL(fileURLWithPath: "/fakebox/w/p.png")) { await box.read($0, max: nil) }
+        let image = FileDocument(box: "/w/p.png", source: box, standIn: URL(fileURLWithPath: "/fakebox/w/p.png"))
         image.load()
         try await until { image.loaded }
         #expect(image.boxImage != nil)
         #expect(image.file.content == .image)
 
-        let gone = FileDocument(box: "/w/nope", standIn: URL(fileURLWithPath: "/fakebox/w/nope")) { await box.read($0, max: nil) }
+        let gone = FileDocument(box: "/w/nope", source: box, standIn: URL(fileURLWithPath: "/fakebox/w/nope"))
         gone.load()
         try await until { gone.loaded }
         #expect(gone.file.content == .unreadable("Not there on this box."))
     }
 
-    private func until(_ check: () -> Bool) async throws {
+    func until(_ check: () -> Bool) async throws {
         let end = ContinuousClock.now + .seconds(3)
         while !check() {
             guard ContinuousClock.now < end else { throw CancellationError() }

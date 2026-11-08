@@ -28,8 +28,11 @@ package struct BoxFileRead: Sendable, Equatable {
     package var text: String?
     package var image: Data?
     package var truncated: Bool
+    /// The file as it was read: what a save checks it against (1.8; nil from an older box).
+    package var stamp: FileStamp?
 
-    package init(path: String, kind: FileReadKind, size: Int64, text: String?, image: Data?, truncated: Bool) {
+    package init(path: String, kind: FileReadKind, size: Int64, text: String?, image: Data?, truncated: Bool, stamp: FileStamp? = nil) {
+        self.stamp = stamp
         self.path = path
         self.kind = kind
         self.size = size
@@ -46,6 +49,22 @@ package protocol BoxFileSource: AnyObject {
     func list(_ path: String?, hidden: Bool) async -> Result<BoxListing, HostRefusal>
     func read(_ path: String, max: Int?) async -> Result<BoxFileRead, HostRefusal>
     func makeFolder(_ path: String) async -> Result<String, HostRefusal>
+    // 1.8: a served folder's files edited, found and watched.
+    func write(_ path: String, _ bytes: Data, base: FileStamp?) async -> Result<FileStamp, BoxWriteFailure>
+    func create(_ path: String, folder: Bool) async -> Result<String, HostRefusal>
+    func rename(_ from: String, to: String) async -> Result<String, HostRefusal>
+    func trash(_ path: String) async -> Result<Void, HostRefusal>
+    func search(_ root: String, _ query: String, text: Bool, max: Int) async -> Result<(hits: [FileHit], more: Bool), HostRefusal>
+    /// Watches `folders` for `key` (a window), with the other keys' on this box; `changed` gets
+    /// the folders that changed. False when the box can't watch them.
+    func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (Set<String>) -> Void)?) async -> Bool
+}
+
+/// Why a save didn't go: the file changed on the box since it was read (its stamp now, if it's
+/// still there), or the box refused.
+package enum BoxWriteFailure: Error, Equatable, Sendable {
+    case conflict(FileStamp?)
+    case refused(String)
 }
 
 extension HostConnection: BoxFileSource {
@@ -60,7 +79,72 @@ extension HostConnection: BoxFileSource {
         guard result.ok, let kind = result.kind else { return .failure(refusal(result)) }
         return .success(BoxFileRead(
             path: result.path ?? path, kind: kind, size: result.size ?? 0, text: result.text,
-            image: result.data.flatMap { Data(base64Encoded: $0) }, truncated: result.truncated == true))
+            image: result.data.flatMap { Data(base64Encoded: $0) }, truncated: result.truncated == true,
+            stamp: result.mtime.map { FileStamp(size: result.size ?? 0, mtime: $0) }))
+    }
+
+    /// Text up to `LinkFiles.inlineMax` goes in the command; more (or bytes that aren't UTF-8)
+    /// goes as an upload first (12 MB at most).
+    package func write(_ path: String, _ bytes: Data, base: FileStamp?) async -> Result<FileStamp, BoxWriteFailure> {
+        var args = ControlArgs(path: path, base: base)
+        if bytes.count <= LinkFiles.inlineMax, let text = String(data: bytes, encoding: .utf8) {
+            args.text = text
+        } else {
+            guard bytes.count <= LinkUploads.maxSize else { return .failure(.refused("Files can be at most 12 MB.")) }
+            switch await upload(bytes, name: (path as NSString).lastPathComponent, mime: "application/octet-stream") {
+            case .success(let blob): args.blob = blob
+            case .failure(let why): return .failure(.refused(why.message))
+            }
+        }
+        let result = await files(.fsWrite, args)
+        if result.code == .conflict { return .failure(.conflict(result.mtime.map { FileStamp(size: result.size ?? 0, mtime: $0) })) }
+        guard result.ok else { return .failure(.refused(refusal(result).message)) }
+        return .success(FileStamp(size: result.size ?? Int64(bytes.count), mtime: result.mtime ?? 0))
+    }
+
+    package func create(_ path: String, folder: Bool) async -> Result<String, HostRefusal> {
+        let result = await files(.fsCreate, ControlArgs(path: path, dir: folder ? true : nil))
+        return result.ok ? .success(result.path ?? path) : .failure(refusal(result))
+    }
+
+    package func rename(_ from: String, to: String) async -> Result<String, HostRefusal> {
+        let result = await files(.fsRename, ControlArgs(from: from, to: to))
+        return result.ok ? .success(result.path ?? to) : .failure(refusal(result))
+    }
+
+    package func trash(_ path: String) async -> Result<Void, HostRefusal> {
+        let result = await files(.fsDelete, ControlArgs(path: path))
+        return result.ok ? .success(()) : .failure(refusal(result))
+    }
+
+    package func search(_ root: String, _ query: String, text: Bool, max: Int) async -> Result<(hits: [FileHit], more: Bool), HostRefusal> {
+        let result = await files(.fsSearch, ControlArgs(mode: text ? "text" : "name", max: max, root: root, query: query))
+        guard result.ok else { return .failure(refusal(result)) }
+        return .success((result.hits ?? [], result.more == true))
+    }
+
+    package func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (Set<String>) -> Void)?) async -> Bool {
+        if folders.isEmpty { fileWatchers[key] = nil } else { fileWatchers[key] = (folders, changed) }
+        return await sendWatches()
+    }
+
+    /// Every window's open folders on this box, as one `fs.watch` (the box keeps one set a link).
+    @discardableResult
+    package func sendWatches() async -> Bool {
+        let all = fileWatchers.values.reduce(into: Set<String>()) { $0.formUnion($1.folders) }
+        guard isOnline else { return false }
+        let result = await files(.fsWatch, ControlArgs(folders: Array(all.sorted().prefix(LinkFiles.watchMax))))
+        return result.ok && result.watching != false && all.count <= LinkFiles.watchMax
+    }
+
+    /// `fs.changed`: to each window whose folders it names.
+    func filesChanged(_ raw: Data) {
+        guard let changed = try? JSONDecoder().decode(FilesChanged.self, from: raw) else { return }
+        let folders = Set(changed.folders)
+        for watcher in fileWatchers.values {
+            let mine = folders.intersection(watcher.folders)
+            if !mine.isEmpty { watcher.changed?(mine) }
+        }
     }
 
     package func makeFolder(_ path: String) async -> Result<String, HostRefusal> {

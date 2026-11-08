@@ -124,6 +124,8 @@ package final class HostConnection {
     @ObservationIgnored private var early: [String: LinkMessage.Result] = [:]
     @ObservationIgnored private var saveQueued = false
     @ObservationIgnored private var snapshotWatchers: [String: @MainActor () -> Void] = [:]
+    /// Box windows' open explorer folders (1.8 `fs.watch`), by window, and who hears their changes.
+    @ObservationIgnored package var fileWatchers: [String: (folders: Set<String>, changed: (@MainActor (Set<String>) -> Void)?)] = [:]
     /// `sync.changed`'s readers, by the box folder they sync.
     @ObservationIgnored private var syncReaders: [String: @MainActor (Data) -> Void] = [:]
 
@@ -604,6 +606,8 @@ package final class HostConnection {
             if let folder = HostWire.syncFolder(raw) { syncReaders[folder]?(raw) }
         case .unknown(let type) where type == BoxToolCall.type:
             toolCall(raw)
+        case .unknown(let type) where type == FilesChanged.type:
+            filesChanged(raw)
         default:
             break
         }
@@ -621,6 +625,14 @@ package final class HostConnection {
         for follower in liveFollowers {
             askEvents(follower)
             follower.linked(true)
+        }
+        // A new link watches nothing yet: the windows' open folders again, and they list them
+        // again (what changed meanwhile).
+        if !fileWatchers.isEmpty {
+            Task { [weak self] in
+                await self?.sendWatches()
+                for watcher in self?.fileWatchers.values.map({ $0 }) ?? [] { watcher.changed?(watcher.folders) }
+            }
         }
         let queued = outbox
         outbox = []

@@ -1,5 +1,6 @@
 import AppKit
 import HostClient
+import LinkProtocol
 import KoreCore
 import Observation
 
@@ -81,8 +82,10 @@ final class FileDocument: Identifiable {
     let id = UUID()
     var name: String { url.lastPathComponent }
 
-    /// A file on a box (`BoxFiles`): read over the link, read-only. `url` is its stand-in under the
-    /// box window's folder, for the path row; nothing on this Mac is read or written there.
+    /// A file on a box (`BoxFiles`): read and saved over the link (`fs.read`, `fs.write` with the
+    /// stamp it was read at, so a change on the box meanwhile is a conflict, never overwritten).
+    /// `url` is its stand-in under the box window's folder, for the path row; nothing on this Mac
+    /// is read or written there. Read-only past what the box sends (2 MB).
     @ObservationIgnored private(set) var box: BoxFile?
     /// A box image's picture, once read.
     private(set) var boxImage: NSImage?
@@ -90,19 +93,29 @@ final class FileDocument: Identifiable {
     private(set) var boxCut: Int64?
 
     struct BoxFile {
-        let path: String
+        var path: String
+        let alias: String
         let read: @MainActor (String) async -> Result<BoxFileRead, HostRefusal>
+        let write: @MainActor (String, Data, FileStamp?) async -> Result<FileStamp, BoxWriteFailure>
         var reading = false
+        var saving = false
+        /// The file as last read or written: what a save checks against.
+        var stamp: FileStamp?
+        /// The box's own stamp when a save found it changed: Keep Mine writes over that.
+        var theirs: FileStamp?
     }
 
-    init(box path: String, standIn: URL, read: @escaping @MainActor (String) async -> Result<BoxFileRead, HostRefusal>) {
+    init(
+        box path: String, alias: String, standIn: URL, read: @escaping @MainActor (String) async -> Result<BoxFileRead, HostRefusal>,
+        write: @escaping @MainActor (String, Data, FileStamp?) async -> Result<FileStamp, BoxWriteFailure>
+    ) {
         autoSave = .shared
         url = standIn
-        box = BoxFile(path: path, read: read)
+        box = BoxFile(path: path, alias: alias, read: read, write: write)
         let language = Language.of(standIn)
         self.language = language
         wrap = Self.wraps(language)
-        readOnly = true
+        autoSave.register(self)
     }
 
     init(url: URL, autoSave: FileAutoSave = .shared) {
@@ -158,13 +171,33 @@ final class FileDocument: Identifiable {
         }
     }
 
-    /// Reads the box's file again (a turn ended): text in place, the caret kept as near as it can be.
-    func reloadFromBox() {
-        guard box != nil, loaded, isText else { return }
-        loadFromBox()
+    /// The box file moved (renamed or moved in the explorer): its path there and its stand-in.
+    func boxMoved(to path: String, standIn: URL) {
+        guard box != nil else { return }
+        box?.path = path
+        url = standIn
+        let language = Language.of(standIn)
+        if language != self.language {
+            self.language = language
+            editor.setLanguage(language)
+        }
     }
 
-    private func loadFromBox() {
+    /// Moved to the box's trash from the explorer: said, the edits kept (Save writes it again).
+    func boxGone() {
+        guard box != nil else { return }
+        cancelAutoSave()
+        notice = .deleted
+    }
+
+    /// The box says the file changed (its folder's watch, or a turn's end): read again. Without
+    /// edits the text changes in place, the caret kept; with edits, the notice asks.
+    func reloadFromBox() {
+        guard box != nil, loaded, isText else { return }
+        loadFromBox(again: true)
+    }
+
+    private func loadFromBox(again: Bool = false, discard: Bool = false) {
         guard var box, !box.reading else { return }
         box.reading = true
         self.box = box
@@ -173,9 +206,10 @@ final class FileDocument: Identifiable {
             guard let self else { return }
             self.box?.reading = false
             self.loaded = true
-            self.boxCut = nil
             switch result {
             case .failure(let why):
+                // Read again and couldn't: what's shown stays (a save says if it's gone).
+                if again { return }
                 self.file = TextFile(content: .unreadable(why.message))
             case .success(let read):
                 switch read.kind {
@@ -183,10 +217,26 @@ final class FileDocument: Identifiable {
                     let text = read.text ?? ""
                     let crlf = text.contains("\r\n")
                     let normal = crlf ? text.replacingOccurrences(of: "\r\n", with: "\n") : text
-                    if case .text(let shown) = self.file.content, shown == normal { return }
-                    self.file = TextFile(content: .text(normal), lineEnding: crlf ? .crlf : .lf, indent: TextFile.detectIndent(normal))
-                    if read.truncated { self.boxCut = read.size }
-                    self.setText(normal)
+                    if again, !discard {
+                        guard read.stamp != self.box?.stamp else { return }
+                        if isDirty {
+                            self.box?.theirs = read.stamp
+                            notice = .changed
+                            return
+                        }
+                    }
+                    self.box?.stamp = read.stamp
+                    self.box?.theirs = nil
+                    self.boxCut = read.truncated ? read.size : nil
+                    // Past what the box sends, or a box that can't say when it was read: no saving.
+                    self.readOnly = read.truncated || read.stamp == nil
+                    if notice == .deleted || discard { notice = nil }
+                    if again, isText {
+                        self.replaceInPlace(normal, lineEnding: crlf ? .crlf : .lf)
+                    } else {
+                        self.file = TextFile(content: .text(normal), lineEnding: crlf ? .crlf : .lf, indent: TextFile.detectIndent(normal))
+                        self.setText(normal)
+                    }
                 case .image:
                     if let data = read.image, let image = NSImage(data: data) {
                         self.boxImage = image
@@ -197,6 +247,67 @@ final class FileDocument: Identifiable {
                 case .binary, .unknown:
                     self.file = TextFile(content: .binary)
                 }
+            }
+        }
+    }
+
+    /// Text that came again, replacing only what differs (the caret and scroll stay).
+    private func replaceInPlace(_ text: String, lineEnding: TextFile.LineEnding) {
+        cancelAutoSave()
+        file.content = .text(text)
+        file.lineEnding = lineEnding
+        savedLineEnding = lineEnding
+        let old = storage.string as NSString
+        let new = text as NSString
+        let prefix = Self.commonPrefix(old, new)
+        let suffix = Self.commonSuffix(old, new, limit: min(old.length, new.length) - prefix)
+        let replaced = NSRange(location: prefix, length: old.length - prefix - suffix)
+        let inserted = new.substring(with: NSRange(location: prefix, length: new.length - prefix - suffix))
+        saved = text
+        if replaced.length > 0 || !inserted.isEmpty {
+            reloadedRanges = [NSRange(location: prefix, length: (inserted as NSString).length)]
+            editor.replaceFromDisk(replaced, with: inserted)
+        }
+        isDirty = false
+        revision += 1
+    }
+
+    /// Saves to the box: the text as the file had it (line endings, encoding, BOM), checked
+    /// against the stamp it was read at. A change there meanwhile is a conflict (the notice:
+    /// Compare, Reload, Keep Mine); a file gone since is said as deleted (Save writes it again).
+    private func saveToBox(automatically: Bool) {
+        guard var box, !box.saving, isText, !readOnly else { return }
+        let text = storage.string
+        let out = file.lineEnding == .crlf ? text.replacingOccurrences(of: "\n", with: "\r\n") : text
+        guard var data = out.data(using: file.encoding) else { return }
+        if file.hasBOM, file.encoding == .utf8 { data.insert(contentsOf: [0xEF, 0xBB, 0xBF], at: 0) }
+        // Keep Mine writes over theirs; a file deleted there is written new.
+        let base = notice == .deleted ? nil : box.theirs ?? box.stamp
+        box.saving = true
+        self.box = box
+        Task { [weak self] in
+            let result = await box.write(box.path, data, base)
+            guard let self else { return }
+            self.box?.saving = false
+            switch result {
+            case .success(let stamp):
+                self.box?.stamp = stamp
+                self.box?.theirs = nil
+                saved = text
+                savedLineEnding = file.lineEnding
+                isDirty = storage.string != text
+                notice = nil
+                editor.refreshChanges()
+                if isDirty { scheduleAutoSave() }
+            case .failure(.conflict(let theirs)):
+                if let theirs {
+                    self.box?.theirs = theirs
+                    notice = .changed
+                } else {
+                    notice = .deleted
+                }
+            case .failure(.refused(let why)):
+                notice = .saveFailed(why)
             }
         }
     }
@@ -235,6 +346,10 @@ final class FileDocument: Identifiable {
 
     private func write(automatically: Bool) -> Bool {
         guard isText, !readOnly else { return false }
+        if box != nil {
+            saveToBox(automatically: automatically)
+            return true
+        }
         let text = storage.string
         do {
             file.stamp = try file.write(text, to: url)
@@ -314,6 +429,10 @@ final class FileDocument: Identifiable {
 
     @discardableResult private func saveAutomatically() -> Bool {
         guard autoSave.isEnabled, !closed, loaded, isText, !readOnly, isDirty, notice == nil else { return false }
+        if box != nil {
+            saveToBox(automatically: true)
+            return true
+        }
         guard let stamp = TextFile.Stamp.of(url) else {
             if FileManager.default.fileExists(atPath: path) { autoSaveFailed("Kore can't read this file.") }
             else {
@@ -377,6 +496,7 @@ final class FileDocument: Identifiable {
     /// Replaces only what changed, so the caret and scroll stay, and remembers the changed
     /// lines for the flash.
     func reloadInPlace() {
+        if box != nil { return loadFromBox(again: true, discard: true) }
         cancelAutoSave()
         let (next, bytes) = TextFile.readWithBytes(url)
         savedBytes = bytes
@@ -405,12 +525,20 @@ final class FileDocument: Identifiable {
 
     /// The disk against the unsaved edits, for the changes modal.
     func compare() async -> FileChange? {
+        if let box {
+            guard case .success(let read) = await box.read(box.path), let theirs = read.text else { return nil }
+            return await UnifiedDiff.compare(old: theirs.replacingOccurrences(of: "\r\n", with: "\n"), new: storage.string, path: path)
+        }
         guard case .text(let disk) = TextFile.read(url).content else { return nil }
         return await UnifiedDiff.compare(old: disk, new: storage.string, path: path)
     }
 
     /// Keeps the edits; the next save overwrites the disk.
     func keepMine() {
+        if box != nil {
+            notice = nil
+            return saveToBox(automatically: false)
+        }
         file.stamp = TextFile.Stamp.of(url)
         diskStamp = file.stamp
         savedBytes = try? Data(contentsOf: url)

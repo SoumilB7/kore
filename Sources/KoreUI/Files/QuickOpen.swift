@@ -26,7 +26,8 @@ struct QuickOpenView: View {
 
     private var lineMode: Bool { mode == .line || query.value.hasPrefix(":") }
 
-    private var root: String { workspace.filesStore().root }
+    /// The folder: this Mac's, or (a box window) the box folder, whose files the box finds.
+    private var root: String { workspace.box?.folder ?? workspace.filesStore().root }
 
     private var matches: [Match] {
         let text = query.value.trimmingCharacters(in: .whitespaces)
@@ -86,7 +87,17 @@ struct QuickOpenView: View {
             PointerGate.keyed()
         }
         .task {
+            guard workspace.box == nil else { return }
             index.value = await FileIndex.files(in: URL(fileURLWithPath: root))
+        }
+        // A box: its files by name as typed (`fs.search`), ranked here as this Mac's are.
+        .task(id: query.value) {
+            guard let box = workspace.box, !lineMode else { return }
+            let typed = query.value.trimmingCharacters(in: .whitespaces)
+            guard !typed.isEmpty else { return }
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, case .success(let found) = await box.connection.search(root, typed, text: false, max: 300) else { return }
+            index.value = found.hits.map { $0.path.hasPrefix(root + "/") ? String($0.path.dropFirst(root.count + 1)) : $0.path }
         }
         .onChange(of: query.value) {
             selected.value = 0
@@ -159,7 +170,11 @@ struct QuickOpenView: View {
 
     private func open(_ match: Match) {
         close()
-        workspace.openFile(URL(fileURLWithPath: root + "/" + match.path))
+        if workspace.box != nil {
+            workspace.openBoxFile(root + "/" + match.path, preview: false)
+        } else {
+            workspace.openFile(URL(fileURLWithPath: root + "/" + match.path))
+        }
         // Its editor isn't in the window yet: it takes the caret as it comes up.
         workspace.activeFile?.editor.focus()
     }

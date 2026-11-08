@@ -645,6 +645,15 @@ package final class Workspace {
     func showSearch() {
         explorerOpen = true
         sidebar = .search
+        // A box folder's Search is the box's (`fs.search`): this Mac's disk isn't read for it.
+        if let box {
+            if let text = activeFile?.editor.textView, text.selectedRange().length > 0, text.selectedRange().length < 200 {
+                let selected = (text.string as NSString).substring(with: text.selectedRange())
+                if !selected.contains("\n") { box.search.query = selected }
+            }
+            box.search.focusToken += 1
+            return
+        }
         let store = searchStore()
         if let text = activeFile?.editor.textView, text.selectedRange().length > 0, text.selectedRange().length < 200 {
             let selected = (text.string as NSString).substring(with: text.selectedRange())
@@ -667,6 +676,13 @@ package final class Workspace {
     /// new tab after the active one.
     /// `select`: a place to select once the editor shows (a search hit).
     func openFile(_ url: URL, preview: Bool = false, select place: FileDocument.Place? = nil) {
+        // A box window's file (a link in a chat, a recent): the box's, never this Mac's disk.
+        if let box {
+            guard let path = box.boxPath(url.path) else { return }
+            openBoxFile(path, preview: preview)
+            if let place { activeFile?.reveal(place) }
+            return
+        }
         _ = filesStore()
         // The real path, as the watcher and the tree see it.
         let path = realPath(url.path)
@@ -861,7 +877,7 @@ package final class Workspace {
     /// Every open folder window's workspace, for the quit check.
     package static let all = NSHashTable<Workspace>.weakObjects()
 
-    private func remember(_ path: String) {
+    func remember(_ path: String) {
         recentFiles.removeAll { $0 == path }
         recentFiles.insert(path, at: 0)
         if recentFiles.count > 20 { recentFiles.removeLast() }

@@ -276,12 +276,12 @@ private struct NoticeBar: View {
     private var message: Text {
         switch notice {
         case .deleted:
-            return Text("This file was deleted on disk.")
+            return Text(document.box.map { "This file was deleted on \($0.alias)." } ?? "This file was deleted on disk.")
         case .saveFailed(let reason):
             return Text("Auto Save couldn't save this file. \(reason)")
         case .changed:
             guard let touch, !touch.sources.isEmpty else {
-                return Text("This file changed on disk. Your edits aren't saved.")
+                return Text(document.box.map { "This file changed on \($0.alias). Your edits aren't saved." } ?? "This file changed on disk. Your edits aren't saved.")
             }
             let when = touch.sources.contains(where: \.running) ? "the running turn" : "its last turn"
             let rest = Text(" changed this file in \(when). Your edits aren't saved.")

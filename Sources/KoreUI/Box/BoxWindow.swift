@@ -50,14 +50,34 @@ final class BoxBinding {
     /// The folder's files as the window's explorer shows them (made when it first shows).
     private(set) lazy var files: BoxExplorerStore = {
         filesMade = true
-        return BoxExplorerStore(root: folder, source: connection)
+        let store = BoxExplorerStore(root: folder, source: connection)
+        store.onMoved = { [weak self] old, new in self?.workspace?.boxMoved(old, to: new) }
+        store.onTrashed = { [weak self] gone in
+            for tab in self?.workspace?.tabs ?? [] {
+                guard let file = tab.file, let path = file.box?.path, gone.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { continue }
+                file.boxGone()
+            }
+        }
+        store.onChanged = { [weak self] folders in self?.workspace?.boxFoldersChanged(folders) }
+        return store
     }()
+    /// Search in the box folder (the explorer's Search, Find in Folder…).
+    private(set) lazy var search = BoxSearchStore(root: folder, source: connection)
     private(set) var filesMade = false
 
     /// A box path's stand-in under `folderURL`, for a file tab's path row.
     func standIn(_ path: String) -> URL {
         let inside = path.hasPrefix(folder + "/") ? String(path.dropFirst(folder.count)) : "/" + BoxFolder.lastPart(path)
         return URL(fileURLWithPath: folderURL.standardizedFileURL.path + inside)
+    }
+
+    /// A path a box window's link or recent names, as the box's own: one under the box folder, or
+    /// its stand-in here. Nil for anything else.
+    func boxPath(_ path: String) -> String? {
+        if path == folder || path.hasPrefix(folder + "/") { return path }
+        let base = folderURL.standardizedFileURL.path
+        if path.hasPrefix(base + "/") { return folder + path.dropFirst(base.count) }
+        return nil
     }
 
     /// The window's workspace, for the chats the box opens in this folder meanwhile.
@@ -83,6 +103,7 @@ final class BoxBinding {
 
     func windowClosed() {
         connection.onSnapshot(key, nil)
+        if filesMade { files.stop() }
         stopSync()
         connection.release()
     }
