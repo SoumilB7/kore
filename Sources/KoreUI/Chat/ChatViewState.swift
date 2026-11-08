@@ -66,10 +66,15 @@ extension Chat {
             cacheScope: (services as? BoxChatServices).map { "box:" + $0.connection.alias })
     }
 
+    /// The logins this chat's CLI uses: this Mac's, or its box's.
+    var accountStore: AccountStore {
+        (services as? BoxChatServices).map { BoxAccountStores.store($0.connection) } ?? .shared
+    }
+
     /// Opens the Account popup for this chat's CLI.
     func openAccount() {
         closePopups(keeping: .account)
-        account.open(provider: provider.id, folder: folder)
+        account.open(provider: provider.id, folder: folder, store: accountStore)
     }
 
     /// The model chip or the mode pill: its picker opens in the popups' place, or closes when
@@ -83,12 +88,8 @@ extension Chat {
     /// method (the login lapsed), unless one is already under way.
     func signInAgain() {
         openAccount()
-        // A box's login signs in on the box, never this Mac's.
-        if let box = services as? BoxChatServices {
-            box.connection.accounts.signIn(provider.id)
-            return
-        }
-        let store = AccountStore.shared
+        // A box's login signs in on the box (its own store), never this Mac's.
+        let store = accountStore
         if case .signedIn(let identity) = store.status(provider.id), !identity.changeable { return }
         account.signIn()
     }

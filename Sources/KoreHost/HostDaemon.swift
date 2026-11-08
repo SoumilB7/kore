@@ -655,7 +655,13 @@ package final class HostDaemon {
             case nil: "Couldn't read \(provider)'s account."
             }
         var result = LinkMessage.Result(id: id, ok: reading != nil, message: message)
-        if case .signedIn? = reading { result.signedIn = true } else if case .signedOut? = reading { result.signedIn = false }
+        switch reading {
+        case .signedIn(let identity)?:
+            result.signedIn = true
+            result.account = LinkIdentity(identity)
+        case .signedOut?: result.signedIn = false
+        case nil: break
+        }
         return result
     }
 }

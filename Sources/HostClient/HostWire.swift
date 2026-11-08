@@ -154,6 +154,7 @@ package enum HostWire {
         command(id: id, type: "account.submit", ["provider": provider, "serial": 0, "input": input])
     }
     package static func cancelSignIn(id: String, provider: String) -> Data { command(id: id, type: "account.cancel", ["provider": provider]) }
+    package static func signOut(id: String, provider: String) -> Data { command(id: id, type: "account.signOut", ["provider": provider]) }
     package static func refresh(id: String, provider: String) -> Data { command(id: id, type: "account.refresh", ["provider": provider]) }
     package static func gitHub(id: String) -> Data { command(id: id, type: "auth.gh", [:]) }
 

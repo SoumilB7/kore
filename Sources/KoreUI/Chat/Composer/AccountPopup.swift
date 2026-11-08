@@ -56,12 +56,14 @@ final class AccountState {
     @ObservationIgnored private var askedAt: TimeInterval = 0
     @ObservationIgnored private var copiedTimer: Task<Void, Never>?
 
-    private var store: AccountStore { .shared }
+    /// This Mac's logins, or a box's for a chat on a box (`BoxAccountStores`).
+    @ObservationIgnored private(set) var store: AccountStore = .shared
 
     /// Opens on what the store has, and reads the account again behind it.
-    func open(provider: String, folder: URL) {
+    func open(provider: String, folder: URL, store: AccountStore = .shared) {
         self.provider = provider
         self.folder = folder
+        self.store = store
         isOpen = true
         (askingSignOut, copied, palette, editor, formPicker, formError, filled) = (false, false, nil, nil, nil, nil, [])
         store.dismissOutcome(provider)
@@ -380,7 +382,7 @@ struct AccountPopup: View {
     let chat: Chat
     let state: AccountState
     var room: CGFloat?
-    private var store: AccountStore { .shared }
+    private var store: AccountStore { state.store }
     private var product: String { chat.provider.usage.product }
 
     var body: some View {
@@ -388,10 +390,7 @@ struct AccountPopup: View {
             chat: chat, id: StoryID.Composer.account, room: room, isOpen: { state.isOpen }, stepBack: { state.stepBack() }, close: { state.close() },
             editing: { state.isEditing }
         ) {
-            if let box = (chat.services as? BoxChatServices)?.connection {
-                // A chat on a box: its logins are the box's.
-                BoxAccountLines(chat: chat, connection: box)
-            } else if case .platform(let platform) = state.editor {
+            if case .platform(let platform) = state.editor {
                 PlatformFormView(state: state, platform: platform)
                     .transition(.opacity.animation(Motion.fade))
             } else {
@@ -902,7 +901,7 @@ private struct LoginList: View {
     let identity: AccountIdentity?
     /// The row under the pointer, by login key: one at a time, as a pointer is.
     @StateObject private var hovered = Local<String?>(nil)
-    private var store: AccountStore { .shared }
+    private var store: AccountStore { state.store }
 
     var body: some View {
         let logins = store.logins(provider)
@@ -1092,7 +1091,7 @@ private struct LoginFallback: View {
     @StateObject private var sending = Local(false)
     @StateObject private var reason = Local<String?>(nil)
     @FocusState private var focused: Bool
-    private var store: AccountStore { .shared }
+    private var store: AccountStore { state.store }
     private var callback: Bool { provider == "codex" }
     private var fieldID: StoryID { StoryID.Composer.accountField("login") }
 

@@ -4,6 +4,7 @@ import CryptoKit
 import Crypto
 #endif
 import Foundation
+import src
 
 /// One message on the link: its type in `t`, then its fields.
 package enum LinkMessage: Sendable, Equatable {
@@ -141,11 +142,14 @@ package enum LinkMessage: Sendable, Equatable {
         /// Set on `account.refresh`'s and a sign-in's results (1.5, a box): whether the CLI is
         /// signed in there.
         package var signedIn: Bool?
+        /// 1.7, with `signedIn: true`: who the CLI there is signed in as, for the Account popup.
+        package var account: LinkIdentity?
         package init(
             id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, chatId: String? = nil, windowId: String? = nil,
             blobId: String? = nil, tabId: String? = nil, folders: [Folder]? = nil, url: String? = nil, authCode: String? = nil,
-            signedIn: Bool? = nil
+            signedIn: Bool? = nil, account: LinkIdentity? = nil
         ) {
+            self.account = account
             self.id = id
             self.ok = ok
             self.code = code
@@ -261,7 +265,7 @@ extension LinkMessage: Codable {
         case t, nonce, proto, client, proof, commands, epoch, host, providers, policy, caps, reason, rev, windows, chats, removed, chatId, last,
             count, txRev, entries, turns, hasEarlier, upserts, order, id, entryId, field, offset, text, total, cardId, cmd, ok, code,
             message, windowId, aid, open, recent, op, item, key, turn, uploadId, name, mime, size, sha256, index, data, ref, variant, blobId,
-            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders, ghSignedIn, url, authCode, signedIn
+            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders, ghSignedIn, url, authCode, signedIn, account
     }
 
     package init(from decoder: any Decoder) throws {
@@ -325,7 +329,7 @@ extension LinkMessage: Codable {
                 .init(
                     id: try d(.id), ok: try d(.ok), code: try o(.code), message: try o(.message), chatId: try o(.chatId), windowId: try o(.windowId),
                     blobId: try o(.blobId), tabId: try o(.tabId), folders: try o(.folders), url: try o(.url),
-                    authCode: try o(.authCode), signedIn: try o(.signedIn)))
+                    authCode: try o(.authCode), signedIn: try o(.signedIn), account: try? o(.account)))
         case "attn.state": self = .attnState(aid: try d(.aid), open: try d(.open), recent: try d(.recent))
         case "attn.event": self = .attnEvent(aid: try d(.aid), op: try d(.op), item: try o(.item), key: try o(.key), turn: try o(.turn))
         default: self = .unknown(t)
@@ -468,6 +472,7 @@ extension LinkMessage: Codable {
             try c.encodeIfPresent(r.url, forKey: .url)
             try c.encodeIfPresent(r.authCode, forKey: .authCode)
             try c.encodeIfPresent(r.signedIn, forKey: .signedIn)
+            try c.encodeIfPresent(r.account, forKey: .account)
         case .attnState(let aid, let open, let recent):
             try c.encode(aid, forKey: .aid)
             try c.encode(open, forKey: .open)
@@ -557,5 +562,31 @@ package enum LinkProof {
         var generator = SystemRandomNumberGenerator()
         let bytes = (0..<count).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
         return Data(bytes).base64EncodedString()
+    }
+}
+
+/// Who a box's CLI is signed in as (1.7): `AccountIdentity` on the wire, never a token.
+package struct LinkIdentity: Codable, Sendable, Equatable {
+    package var email: String?
+    package var plan: String?
+    package var organization: String?
+    package var method: String
+    package var changeable: Bool
+    package var methodID: String?
+    package var platform: String?
+
+    package init(_ identity: AccountIdentity) {
+        email = identity.email
+        plan = identity.plan
+        organization = identity.organization
+        method = identity.method
+        changeable = identity.changeable
+        methodID = identity.methodID
+        platform = identity.platform
+    }
+
+    package var identity: AccountIdentity {
+        AccountIdentity(
+            email: email, plan: plan, organization: organization, method: method, changeable: changeable, methodID: methodID, platform: platform)
     }
 }

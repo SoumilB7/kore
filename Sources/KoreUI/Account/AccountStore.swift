@@ -14,6 +14,16 @@ import src
 package final class AccountStore {
     package static let shared = AccountStore()
 
+    /// The logins of a box's CLIs (`BoxAccountStores`): the same store, its calls made on the box
+    /// (`account.*`), one login per CLI, nothing of this Mac's logins read or written. Nil: this
+    /// Mac's own.
+    @ObservationIgnored package let calls: (@MainActor (String) -> AccountOps?)?
+
+    package init(calls: (@MainActor (String) -> AccountOps?)? = nil) { self.calls = calls }
+
+    /// A box's logins, not this Mac's.
+    var onBox: Bool { calls != nil }
+
     /// The longest a sign-in waits for the browser before it's cancelled.
     static let patience: Duration = .seconds(10 * 60)
     /// A device code's: Codex's own expiry ends it first.
@@ -136,6 +146,7 @@ package final class AccountStore {
 
     /// The CLI's login operations: a storyline host's scripted ones, else the CLI's own.
     private func ops(_ provider: String) -> AccountOps? {
+        if let calls { return calls(provider) }
         guard let ops = Registry.provider(provider)?.account else { return nil }
         guard let calls = StorylineSeams.accounts?(provider) else { return ops }
         return AccountOps(methods: ops.methods, parse: ops.parse, calls: calls, loginFile: ops.loginFile, stamp: ops.stamp)
@@ -216,11 +227,11 @@ package final class AccountStore {
     /// chats start again at their next turn boundary.
     private func note(_ provider: String, _ reading: AccountReading) {
         let key: String
-        let login = Self.loginKey(CLIProfiles.active(provider))
+        let login = Self.loginKey(onBox ? nil : CLIProfiles.active(provider))
         switch reading {
         case .signedIn(let identity):
             statuses[provider] = .signedIn(identity)
-            if (!StoryHost.installed || CLIProfiles.root.value != nil), CLIProfiles.note(provider, email: identity.email, workspace: identity.workspace) {
+            if !onBox, (!StoryHost.installed || CLIProfiles.root.value != nil), CLIProfiles.note(provider, email: identity.email, workspace: identity.workspace) {
                 loginsVersion += 1
                 // The first status read can correct saved identity without a prior `known`
                 // value to bump against. A visible cached card must leave immediately too.
@@ -278,7 +289,7 @@ package final class AccountStore {
         guard flows[provider]?.step.live != true, let ops = ops(provider), let method = method ?? currentMethod(provider), method.runs,
             !method.opensEditor
         else { return }
-        if case .login(let id) = aim, CLIProfiles.active(provider) != id { aimed[provider] = CLIProfiles.Pin(cli: provider, id: id) }
+        if !onBox, case .login(let id) = aim, CLIProfiles.active(provider) != id { aimed[provider] = CLIProfiles.Pin(cli: provider, id: id) }
         let serial = (serials[provider] ?? 0) + 1
         serials[provider] = serial
         if quiet { linkStarted[provider] = serial } else { linkStarted[provider] = nil }
@@ -512,7 +523,8 @@ package final class AccountStore {
         guard flows[provider]?.step.live != true, let ops = ops(provider) else { return }
         let serial = (serials[provider] ?? 0) + 1
         serials[provider] = serial
-        let setting: AccountIdentity? = if case .signedIn(let identity) = status(provider), identity.isKoreSetting { identity } else { nil }
+        // A box's login is the box's: nothing in this Mac's settings is touched.
+        let setting: AccountIdentity? = if !onBox, case .signedIn(let identity) = status(provider), identity.isKoreSetting { identity } else { nil }
         flows[provider] = Flow(method: nil, step: .signingOut, switching: false)
         for chat in liveChats(provider) where chat.hasWork { chat.stopAllWork() }
         Task {
@@ -564,7 +576,7 @@ package final class AccountStore {
     func logins(_ provider: String) -> [Login] {
         _ = loginsVersion
         // Under a storyline host, only where it gave the logins a folder of their own.
-        guard CLIProfiles.supports(provider), !StoryHost.installed || CLIProfiles.root.value != nil else { return [] }
+        guard !onBox, CLIProfiles.supports(provider), !StoryHost.installed || CLIProfiles.root.value != nil else { return [] }
         let active = CLIProfiles.active(provider)
         let out = lapsed[provider] ?? []
         let main = Login(
@@ -596,6 +608,8 @@ package final class AccountStore {
     /// Adds a login: a sign-in in a folder of its own, kept and switched to if it lands on an
     /// account not listed yet.
     func addLogin(_ provider: String, method: SignInMethod? = nil, in folder: URL, quiet: Bool = false) {
+        // A box keeps one login per CLI: adding one is its sign-in.
+        if onBox { return signIn(provider, method: method, in: folder) }
         guard flows[provider]?.step.live != true, let id = try? CLIProfiles.prepare(provider) else { return }
         adding[provider] = id
         signIn(provider, method: method, in: folder, quiet: quiet)
@@ -606,7 +620,7 @@ package final class AccountStore {
     /// working chats stop first, then each starts again as the new login. Only a login picked by
     /// hand gets here (`LoginPick`): no limit, error, timer or restore moves a CLI to another.
     func switchLogin(_ provider: String, to id: String?, _ pick: LoginPick) {
-        guard flows[provider]?.step.live != true, CLIProfiles.active(provider) != id else { return }
+        guard !onBox, flows[provider]?.step.live != true, CLIProfiles.active(provider) != id else { return }
         UILog.event("account-switch", ["cli": provider, "login": Self.loginKey(id)])
         stopWork(provider)
         CLIProfiles.activate(provider, id)
@@ -625,7 +639,7 @@ package final class AccountStore {
 
     /// Signs an added login out (its folder's only) and forgets it.
     func removeLogin(_ provider: String, _ id: String) {
-        guard CLIProfiles.active(provider) != id, let ops = ops(provider) else { return }
+        guard !onBox, CLIProfiles.active(provider) != id, let ops = ops(provider) else { return }
         let duplicate = logins(provider).first { $0.id == id }?.duplicate == true
         UILog.event("account-remove", ["cli": provider, "login": id, "duplicate": duplicate ? "yes" : "no"])
         Task { await discard(CLIProfiles.Pin(cli: provider, id: id), signOut: ops) }
