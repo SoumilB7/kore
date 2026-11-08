@@ -1138,6 +1138,10 @@ package final class MacNet {
     /// Handshakes under way.
     package var handshaking: Int { shaking.count }
 
+    /// Handshakes under way that aren't waiting on the owner's card: work still running (a WhoIs,
+    /// the proofs), each inside its pre-auth window.
+    package var handshakesRunning: Int { shaking.keys.count { held[$0] == nil } }
+
     /// What `id` was last sent is kept for its resume.
     package func keeps(_ id: UUID) -> Bool { kept[id] != nil }
 }

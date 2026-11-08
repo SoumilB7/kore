@@ -254,8 +254,12 @@ final class World {
                 let reading = sent && ContinuousClock.now - (unreadSince ?? .now) < .seconds(5)
                 // Work handed off and not back yet, likewise: 5 s of it at most in a row (a hand-off
                 // that never ends mustn't stop the world's time for good).
-                if pulse.busy { busySince = busySince ?? .now } else { busySince = nil }
-                let working = pulse.busy && ContinuousClock.now - (busySince ?? .now) < .seconds(5)
+                // A phone's handshake the Mac is still working through (not one waiting on the
+                // owner's card) counts too: moving time on would run its 2 s pre-auth window out
+                // before a busy Mac got to the hello, and the phone would knock again and again.
+                let busy = pulse.busy || (mac.macNet?.handshakesRunning ?? 0) > 0
+                if busy { busySince = busySince ?? .now } else { busySince = nil }
+                let working = busy && ContinuousClock.now - (busySince ?? .now) < .seconds(5)
                 if working || reading || (!dials.isEmpty && waiting) {
                     idle = 0
                 } else if clock.advanceToNext(limit: end - clock.now) != nil {
