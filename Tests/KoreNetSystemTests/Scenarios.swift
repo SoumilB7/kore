@@ -13,11 +13,8 @@ import Testing
 /// gap that fixes them. A scenario lists the ones it trips; its failures are then a known issue.
 /// A fix branch deletes its case here and from the scenarios' lists: a scenario that still lists
 /// a fixed bug fails ("known issue was not recorded"), so nothing stays wrapped by mistake.
-enum Known: String {
-    /// G32 (new): a failed automatic upgrade (box unreachable over SSH, or its Tailscale off) is
-    /// tried again only on a fresh reach (a BoxList probe, a window, KoreNet switched on): with no
-    /// window it stays on its failure line after the box is fine again.
-    case g32NoRetryAfterFailedUpgrade = "G32 a failed upgrade never retries by itself"
+enum Known {
+    // None open. A gap's case here (`case g99Name`) lists it on the scenarios it trips.
 }
 
 /// Every scenario: one world, the owner's moves, the invariants after each, then the expected
@@ -35,7 +32,7 @@ struct KoreNetSystemTests {
         if known.isEmpty {
             #expect(failures.isEmpty, "\(world.report)")
         } else {
-            withKnownIssue("\(known.map(\.rawValue).joined(separator: "; "))") {
+            withKnownIssue("\(known.map { "\($0)" }.joined(separator: "; "))") {
                 #expect(failures.isEmpty, "\(world.report)")
             }
         }
@@ -190,7 +187,10 @@ struct KoreNetSystemTests {
             await w.plus()
             let pixel = w.phone("Pixel 9")
             await w.joinPhone(pixel)
-            try await w.step("mybox restarts", .event("box restart")) { try box.restart() }
+            // Back within 10 s: the box says `restart`, the phone tries at 1, 2 and 5 s.
+            try await w.step("mybox restarts", .event("box restart"), budget: .seconds(10), until: {
+                pixel.rows.allSatisfy { $0.glyph == "●" }
+            }) { try box.restart() }
             await w.expectSettled(boxes: [box], phones: [pixel])
         }
     }
@@ -284,7 +284,7 @@ struct KoreNetSystemTests {
     /// KoreNet turned on while the box is known only by SSH and no window is open: it upgrades
     /// the next time it's reachable.
     @Test func koreNetTurnedOnLaterUpgradesWhenReachable() async throws {
-        try await play("S40 KoreNet on later, box reachable later · I24", known: [.g32NoRetryAfterFailedUpgrade]) { w in
+        try await play("S40 KoreNet on later, box reachable later · I24") { w in
             let box = try await w.sshBox("mybox")
             box.attach.reachable.withLock { $0 = false }
             await w.koreNetOn()
@@ -312,7 +312,7 @@ struct KoreNetSystemTests {
 
     /// The box's Tailscale is off: its row says so, and once it's on the upgrade finishes by itself.
     @Test func upgradeThatCantFinishSaysWhyAndRetries() async throws {
-        try await play("S39 upgrade can't finish · I24 I5", known: [.g32NoRetryAfterFailedUpgrade]) { w in
+        try await play("S39 upgrade can't finish · I24 I5") { w in
             let box = try await w.sshBox("mybox", tailscale: .stopped)
             await w.koreNetOn()
             await w.step("Devices shows why mybox isn't on KoreNet", until: {

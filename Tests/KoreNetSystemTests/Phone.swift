@@ -114,6 +114,9 @@ struct NodeMachine: Equatable {
     static let waitingCapMS: Int64 = 60_000
     private(set) var state = State.idle
     private var attempt = 0
+    /// After a `restart`: the next of `restartMS` waits.
+    private var quick: Int?
+    static let restartMS: [Int64] = [1_000, 2_000, 5_000]
     /// A box's machine: `unknown` there means its Mac's push is on its way.
     var box = false
 
@@ -125,6 +128,7 @@ struct NodeMachine: Equatable {
         case .enrolling: if s == .connecting { state = .awaitingAllow }
         case .connected:
             attempt = 0
+            quick = nil
             state = .up
         case .failed: if s == .connecting || s == .awaitingAllow { state = backoff(now, .unreachable) }
         case .ended(let reason): if !passive(s) { state = ended(reason, now) }
@@ -161,6 +165,10 @@ struct NodeMachine: Equatable {
         case "refused", "proof": return .denied(reason!)
         case "paused": return .away(.off, at: nil, attempt: 0)
         case "online": return connecting(reset: true)
+        case "restart":
+            attempt = 0
+            quick = 0
+            return backoff(now, .unreachable)
         case "quit", "sleep": return .away(.asleep, at: now + Self.capMS, attempt: 0)
         case "abandoned": return connecting(reset: true)
         default: return state == .awaitingAllow && reason == nil ? .denied("closed") : backoff(now, .unreachable)
@@ -173,6 +181,13 @@ struct NodeMachine: Equatable {
     }
 
     private mutating func backoff(_ now: Int64, _ why: AwayWhy, cap: Int64 = NodeMachine.capMS) -> State {
+        if let i = quick {
+            if i < Self.restartMS.count {
+                quick = i + 1
+                return .away(why, at: now + Self.restartMS[i], attempt: attempt)
+            }
+            quick = nil
+        }
         let base = min(Double(cap), 1000.0 * Double(1 << min(attempt, 16)))
         attempt += 1
         return .away(why, at: now + Int64(base), attempt: attempt)
@@ -295,6 +310,13 @@ final class PhoneEmu {
 
     private var tailnet: NodeNet { NodeNet(net, ip: ip) }
 
+    /// The phone's sessions keep the world's time: a handshake's window (20 s) is the world's,
+    /// not the test machine's under load.
+    private var sessionClock: @Sendable () -> Date {
+        let clock = clock
+        return { Date(timeIntervalSince1970: 1_800_000_000).addingTimeInterval(Double(clock.nowMS) / 1000) }
+    }
+
     // MARK: The owner's taps
 
     /// "Join KoreNet": signs in to Tailscale (the embedded tailnet) and knocks on the Macs.
@@ -407,13 +429,17 @@ final class PhoneEmu {
         step = .allowing(mac.hostName)
         pulse.beat()
         let ended = Feed<Wire.Event>()
+        // First contact waits on the owner's Allow: its window stays the machine's (the world's
+        // time moves on while the card is up).
         let wire = Wire(NetSession(fd: fd, role: .client(setup))) { event in
             switch event {
             case .up, .closed: ended.send(event)
             case .message: break
             }
         }
+        trail.append("enroll \(device.uuidString.prefix(4)) at \(clock.nowMS)")
         let event = await ended.next()
+        trail.append("enroll ended \(event) at \(clock.nowMS)")
         switch event {
         case .up(let peer, let directory):
             wire.close("quit")
@@ -524,7 +550,15 @@ final class PhoneEmu {
         let id = c.record.id
         let mine = generation
         let slot = Slot()
-        let wire = Wire(NetSession(fd: fd, role: .client(setup))) { [weak self] event in
+        // The handshake is work under way: the world's time waits for it.
+        let pulse = pulse
+        pulse.began()
+        let shaking = Mutex(true)
+        let wire = Wire(NetSession(fd: fd, role: .client(setup), clock: sessionClock)) { [weak self] event in
+            switch event {
+            case .up, .closed: if shaking.withLock({ let was = $0; $0 = false; return was }) { pulse.ended() }
+            case .message: break
+            }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.heard(event, id: id, generation: mine, wire: slot.wire) }
             }

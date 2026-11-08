@@ -85,10 +85,9 @@ final class BoxNode {
     /// `kore-host net on|off` on the box itself.
     func setNet(_ on: Bool) throws { try host.setNet(on) }
 
-    /// kore-host stops (its links told `quit`, as a service restart does) and starts again from
-    /// the same folder.
+    /// kore-host restarts (a service restart: its links told `restart`) from the same folder.
     func restart() throws {
-        host.stop()
+        host.stop(restarting: true)
         host = nil
         try start()
     }

@@ -28,8 +28,9 @@ final class SharedTailnet: Sendable {
         var state: BackendState = .running
         /// What the node binds as its own address (a box binds a real 127.0.0.1 port).
         var bindIP: String
-        /// A Mac's handoff socket while it listens (the tailnet's end).
-        var handoff: Int32?
+        /// A Mac's handoff sockets, one per `listen` (the tailnet's ends), newest last: a dial goes
+        /// to the newest whose listener still holds its end.
+        var handoffs: [Int32] = []
         /// Where dials to this box go (set by the box rig).
         var greet: (@Sendable (_ fd: Int32, _ remote: String) -> Bool)?
         var os: String { kind == .mac ? "macOS" : kind == .box ? "linux" : "android" }
@@ -143,12 +144,7 @@ final class SharedTailnet: Sendable {
         guard let me = node(ip), me.kind == .mac else { return [] }
         guard me.state == .running else { throw TailnetError.notRunning(me.state) }
         let (ours, theirs) = try Sockets.pair()
-        let old = state.withLock { s -> Int32? in
-            let old = s.nodes[ip]?.handoff
-            s.nodes[ip]?.handoff = ours
-            return old
-        }
-        if let old { Sockets.closeFD(old) }
+        state.withLock { $0.nodes[ip]?.handoffs.append(ours) }
         pulse()
         return [.handoff(theirs)]
     }
@@ -181,22 +177,23 @@ final class SharedTailnet: Sendable {
         defer { pulse() }
         switch target.kind {
         case .mac:
-            guard let handoff = target.handoff else {
-                Sockets.closeFD(client)
-                Sockets.closeFD(server)
-                throw SocketError.failed("connect", ECONNREFUSED)
-            }
             let body = Data(#"{"conn":{"remote":"\#(me.ip):41641"}}"#.utf8)
-            do {
-                try SidecarWire.send(handoff, body, attach: server)
-            } catch {
-                Sockets.closeFD(client)
+            // The newest listener first; one its owner let go of fails the send and goes.
+            for handoff in target.handoffs.reversed() {
+                do {
+                    try SidecarWire.send(handoff, body, attach: server)
+                } catch {
+                    state.withLock { $0.nodes[address]?.handoffs.removeAll { $0 == handoff } }
+                    Sockets.closeFD(handoff)
+                    continue
+                }
                 Sockets.closeFD(server)
-                throw SocketError.failed("connect", ECONNREFUSED)
+                drainAcks(handoff)
+                return client
             }
+            Sockets.closeFD(client)
             Sockets.closeFD(server)
-            drainAcks(handoff)
-            return client
+            throw SocketError.failed("connect", ECONNREFUSED)
         case .box:
             guard let greet = target.greet, greet(server, me.ip) else {
                 Sockets.closeFD(client)
@@ -222,16 +219,16 @@ final class SharedTailnet: Sendable {
 
     /// Every connection to or from `ip` ends as a dead node's would: no bye, the sockets just go.
     func cut(_ ip: String) {
-        let (gone, handoff) = state.withLock { s -> ([FDRef], Int32?) in
+        let (gone, handoffs) = state.withLock { s -> ([FDRef], [Int32]) in
             let hit = s.links.filter { $0.a == ip || $0.b == ip }
             s.links.removeAll { $0.a == ip || $0.b == ip }
-            let h = s.nodes[ip]?.kind == .mac ? s.nodes[ip]?.handoff : nil
-            if h != nil { s.nodes[ip]?.handoff = nil }
+            let h = s.nodes[ip]?.handoffs ?? []
+            s.nodes[ip]?.handoffs = []
             return (hit.flatMap(\.fds), h)
         }
         // Shut, never closed: the descriptors are their owners' to close.
         for ref in gone { ref.shut() }
-        if let handoff { Sockets.closeFD(handoff) }
+        for fd in handoffs { Sockets.closeFD(fd) }
         pulse()
     }
 
@@ -240,10 +237,10 @@ final class SharedTailnet: Sendable {
     func closeAll() {
         let (refs, handoffs, buses) = state.withLock { s -> ([FDRef], [Int32], [AsyncStream<TailnetEvent>.Continuation]) in
             let all = s.links.flatMap(\.fds)
-            let handoffs = s.nodes.values.compactMap(\.handoff)
+            let handoffs = s.nodes.values.flatMap(\.handoffs)
             let buses = s.buses.values.flatMap(\.values)
             s.links = []
-            for ip in s.nodes.keys { s.nodes[ip]?.handoff = nil }
+            for ip in s.nodes.keys { s.nodes[ip]?.handoffs = [] }
             s.buses = [:]
             return (all, handoffs, buses)
         }

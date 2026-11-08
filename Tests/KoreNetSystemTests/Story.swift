@@ -45,7 +45,9 @@ extension World {
     /// A phone: Join KoreNet (Tailscale sign-in), its card on the Mac, Allow.
     func joinPhone(_ phone: PhoneEmu) async {
         await step("\(phone.label) joins", .signIn(phone.label), until: { !self.mac.cards.isEmpty || phone.step.over }) { phone.join() }
-        guard !mac.cards.isEmpty else { return }
+        guard !mac.cards.isEmpty else {
+            return note("I5", "\(phone.label)'s Join ended at \"\(phone.step)\" with no Allow card on the Mac (add window \(mac.macNet.addOpen), listening \(mac.macNet.listening))")
+        }
         await step("Allow \(phone.name)", .allow, until: { phone.step.isJoined && phone.rows.first?.glyph == "●" }) {
             mac.answerCard(true)
         }

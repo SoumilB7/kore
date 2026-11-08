@@ -205,7 +205,7 @@ final class World {
             note("I5", "\"\(label)\" never reached its end within \(budget) (stuck)")
             if ProcessInfo.processInfo.environment["KNS_DEBUG"] != nil {
                 let m = mac.macNet!
-                print("DEBUG \(label): switch \(mac.switcher.state) addOpen \(m.addOpen) listening \(m.listening) binds \(m.binds) bound \(m.bound) cards \(mac.cards.count) audits \(mac.audits.suffix(4)) phones \(phones.map { "\($0.step) \($0.trail.suffix(4))" })")
+                print("DEBUG \(label): switch \(mac.switcher.state) addOpen \(m.addOpen) listening \(m.listening) binds \(m.binds) bound \(m.bound) cards \(mac.cards.count) audits \(mac.audits.suffix(4)) phones \(phones.map { "\($0.step) \($0.trail.suffix(8))" }) cardsShown \(mac.cards.map(\.title)) asking \(mac.asks.showing != nil)")
             }
         }
         steps.append((label, ContinuousClock.now - wall))
