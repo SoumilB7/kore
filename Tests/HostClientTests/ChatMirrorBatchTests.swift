@@ -119,13 +119,13 @@ struct ChatMirrorBatchTests {
     @Test func catchUpNowAndToggleOff() async {
         let link = Link(), clock = Clock()
         link.metas = [Self.meta("Main-struc", running: true)]
-        var synced: Set<String> = ["Main-struc"]
-        let mirrors = ChatMirrorBatches(link: link, folder: "/f") { synced.contains($0) }
+        let synced = Synced(["Main-struc"])
+        let mirrors = ChatMirrorBatches(link: link, folder: "/f") { synced.names.contains($0) }
         mirrors.sleep = { _ in await clock.sleep() }
         mirrors.start()
         #expect(await mirrors.catchUp("Main-struc"))
         #expect(link.fetches["Main-struc"] == 1)
-        synced = []
+        synced.names = []
         mirrors.refresh()
         #expect(mirrors.looping.isEmpty)
         mirrors.stop()
@@ -174,4 +174,10 @@ struct ChatMirrorBatchTests {
         list.setSyncs(false, pair: leveled, chatId: "Slack")
         #expect(!list.syncs(leveled, chatId: "Slack"))
     }
+}
+
+/// The chats a test's mirror sees as synced, changed while it runs.
+private final class Synced: @unchecked Sendable {
+    var names: Set<String>
+    init(_ names: Set<String>) { self.names = names }
 }
