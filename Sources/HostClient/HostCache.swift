@@ -9,6 +9,8 @@ import src
 /// Writes go on a queue of their own; reads happen once, when a chat or window opens.
 package final class HostCache: Sendable {
     package let folder: URL
+    /// The `hosts` folder it was made under (a rekey makes its successor beside it).
+    package let root: URL
     private let queue = DispatchQueue(label: "kore.host.cache")
 
     package static func root() -> URL {
@@ -17,7 +19,11 @@ package final class HostCache: Sendable {
     }
 
     package init(alias: String, root: URL = HostCache.root()) {
-        folder = root.appendingPathComponent(Self.safe(alias), isDirectory: true)
+        // A KoreNet node's copy is under `nodes/<id>` beside `hosts/` (where `NodeMigration`
+        // moves an alias's).
+        let base = NodeDirectory.isNodeKey(alias) ? root.deletingLastPathComponent().appendingPathComponent("nodes", isDirectory: true) : root
+        folder = base.appendingPathComponent(Self.safe(alias), isDirectory: true)
+        self.root = root
     }
 
     /// A name that stays one path part.
@@ -41,6 +47,8 @@ package final class HostCache: Sendable {
         package var folders: [BoxFolder] = []
         /// When the box last said anything, in seconds since 1970.
         package var updated: Double?
+        /// Phase 18: where the box's usage ledger was read to (`usage.since`).
+        package var usageCursor: Int?
 
         package init() {}
     }

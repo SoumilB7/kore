@@ -12,7 +12,10 @@ package struct BoxAddress: Equatable, Hashable, Sendable {
     package let port: Int?
 
     package init?(_ typed: String) {
-        let text = typed.trimmingCharacters(in: .whitespaces)
+        // A box rekeyed to its KoreNet id is still reached over SSH by the alias it was set up by.
+        let resolved = NodeDirectory.isNodeKey(typed) ? NodeDirectory.shared.sshAlias(forKey: typed) : typed
+        guard let resolved else { return nil }
+        let text = resolved.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, text.count <= 255, !text.hasPrefix("-") else { return nil }
         var rest = Substring(text)
         var user: String?
