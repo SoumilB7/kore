@@ -158,6 +158,9 @@ final class BoxChatServices: ChatServices {
     let connection: HostConnection
     private let folder: String
     private(set) var chatId: String?
+    /// The CLI runs on the box, which sets its own instructions; nothing of this Mac's reaches it.
+    var agentTools: Bool { false }
+    var instructions: URL? { nil }
 
     init(binding: BoxBinding, chatId: String?) {
         self.binding = binding
