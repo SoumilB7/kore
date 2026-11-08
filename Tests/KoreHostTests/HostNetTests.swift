@@ -58,16 +58,17 @@ struct HostNetTests {
         let waiting = try #require(rig.store.pending().first)
         #expect(waiting.nodeKey == phone.nodeKey && waiting.device == phone.id && waiting.kind == .phone && waiting.login == "me@example.com")
         #expect(waiting.identityKey == phone.key.publicKey && !waiting.claim)
+        // This phone's notes: the journal is the process's, and tests running alongside note
+        // their own devices in it.
+        let notes = { journal.audit("pending").filter { $0.contains("device=\(phone.id.uuidString.lowercased())") } }
         // Again within the cool-down: kept once, noted once.
         let again = try rig.dial(phone, enroll: enroll)
         try await again.until { again.closed != nil }
-        #expect(rig.store.pending().count == 1 && journal.audit("pending").count == 1)
+        #expect(rig.store.pending().count == 1 && notes().count == 1)
         rig.clock.advance(DeviceStore.coolDown)
         let later = try rig.dial(phone, enroll: enroll)
         try await later.until { later.closed != nil }
-        // Its note is written beside the close (a busy Mac's journal lands a moment after the bye).
-        try await later.until { journal.audit("pending").count >= 2 }
-        #expect(journal.audit("pending").count == 2)
+        #expect(notes().count == 2)
         // Another user's node (shared in): closed, nothing kept.
         let stranger = Device("other")
         let shared = try rig.dial(stranger, whois: FakeTailnet.who(key: stranger.nodeKey, user: 99))
