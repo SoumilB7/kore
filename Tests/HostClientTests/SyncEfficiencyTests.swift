@@ -225,7 +225,7 @@ struct SyncEfficiencyTests {
         func wire() -> Int {
             ["up", "down"].reduce(0) { $0 + (((try? FileManager.default.attributesOfItem(atPath: dir.path + "/" + $1))?[.size] as? Int) ?? 0) }
         }
-        _ = await until(5) { FileManager.default.fileExists(atPath: dir.path + "/pid") }
+        _ = await until { FileManager.default.fileExists(atPath: dir.path + "/pid") }
         let rounds = 6
         for held in [false, true] {
             let mac = dir.appendingPathComponent("mac-\(held)"), box = dir.appendingPathComponent("box-\(held)")

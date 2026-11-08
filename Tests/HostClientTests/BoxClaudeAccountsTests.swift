@@ -38,7 +38,7 @@ struct BoxClaudeAccountsTests {
         defer { rig.finish() }
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until { connection.isOnline })
         let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: "claude", modelId: nil))
         let accounts = connection.accounts
         accounts.viewing = (hc.id, rig.folder.path)
