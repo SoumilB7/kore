@@ -448,7 +448,7 @@ final class BoxExplorerStore {
             switch await source.write(folder + "/" + name, file.data, base: nil) {
             case .success: last = folder + "/" + name
             case .failure(.refused(let why)): failure = failure ?? why
-            case .failure(.conflict): failure = failure ?? "\(name) changed on \(alias) meanwhile."
+            case .failure(.conflict): failure = failure ?? "\(name) changed on \(NodeNames.name(alias)) meanwhile."
             }
         }
         await settle([folder], selecting: last)

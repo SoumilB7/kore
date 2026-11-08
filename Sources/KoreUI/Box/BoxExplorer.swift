@@ -572,7 +572,7 @@ private struct BoxNameField: View {
             ? "Are you sure you want to delete “\((paths[0] as NSString).lastPathComponent)”?"
             : "Are you sure you want to delete the following \(paths.count) items?"
         alert.informativeText = (paths.count == 1 ? "" : paths.prefix(10).map { ($0 as NSString).lastPathComponent }.joined(separator: "\n") + "\n\n")
-            + "You can restore \(paths.count == 1 ? "it" : "them") from the trash on \(store.alias)."
+            + "You can restore \(paths.count == 1 ? "it" : "them") from the trash on \(NodeNames.name(store.alias))."
         alert.addButton(withTitle: "Move to Trash")
         alert.addButton(withTitle: "Cancel")
         guard StorylineSeams.confirm?("trash") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
@@ -710,7 +710,7 @@ private struct BoxDrop: DropDelegate {
         }
         let failure = await store.upload(files, into: folder) { _ in .keepBoth }
         if !skipped.isEmpty {
-            store.say("Not copied to \(store.alias): \(skipped.joined(separator: ", ")). Files up to 12 MB go; folders don't.")
+            store.say("Not copied to \(NodeNames.name(store.alias)): \(skipped.joined(separator: ", ")). Files up to 12 MB go; folders don't.")
         } else if let failure {
             store.say(failure)
         }

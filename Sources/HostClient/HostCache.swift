@@ -65,6 +65,9 @@ package final class HostCache: Sendable {
         return try? JSONDecoder().decode(State.self, from: data)
     }
 
+    /// Returns once every write asked for so far is on disk.
+    package func settle() { queue.sync {} }
+
     package func save(_ state: State) {
         queue.async { [self] in
             guard let data = try? JSONEncoder().encode(state) else { return }

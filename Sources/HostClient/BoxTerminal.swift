@@ -80,7 +80,7 @@ package final class BoxPty {
         }
         // A box from before 1.8 would never answer.
         guard connection.caps.contains("pty") else {
-            return failed?(connection.control == .full ? "\(connection.alias) needs an update for terminals" : "Terminals need a grant with full control on \(connection.alias)") ?? ()
+            return failed?(connection.control == .full ? "\(NodeNames.name(connection.alias)) needs an update for terminals" : "Terminals need a grant with full control on \(NodeNames.name(connection.alias))") ?? ()
         }
         opening = true
         Task { await self.opened() }
@@ -194,7 +194,7 @@ package final class BoxPty {
             exitCode = -1
             connection.boxReaders[BoxStreams.pty(ptyId)] = nil
             connection.onSnapshot(BoxStreams.pty(ptyId), nil)
-            failed?("This terminal ended on \(connection.alias)")
+            failed?("This terminal ended on \(NodeNames.name(connection.alias))")
             exited?(-1)
         }
     }
@@ -202,9 +202,9 @@ package final class BoxPty {
     private static func why(_ result: LinkMessage.Result, _ answer: PtyResult?, alias: String) -> String {
         let message = answer?.message ?? result.message
         if result.code == .invalid, message == nil || message == "That message isn't one this box reads." || message == "Unknown command." {
-            return "\(alias) needs an update for terminals"
+            return "\(NodeNames.name(alias)) needs an update for terminals"
         }
-        if result.code == .deniedControl { return "Terminals need a grant with full control on \(alias)" }
-        return message ?? "\(alias) couldn't start a shell"
+        if result.code == .deniedControl { return "Terminals need a grant with full control on \(NodeNames.name(alias))" }
+        return message ?? "\(NodeNames.name(alias)) couldn't start a shell"
     }
 }

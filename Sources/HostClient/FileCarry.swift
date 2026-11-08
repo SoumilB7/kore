@@ -45,7 +45,7 @@ package enum FilePlace: Hashable, Sendable {
     package func within(_ other: FilePlace) -> Bool { sameDevice(other) && LinkFiles.inside(path, other.path) }
 
     /// The device, as a line names it: the alias, or "this Mac".
-    package var device: String { alias ?? "this Mac" }
+    package var device: String { alias.map(NodeNames.name) ?? "this Mac" }
 }
 
 /// How one entry gets from where it is into a folder.
@@ -539,10 +539,10 @@ package final class FileCarry {
             var isFolder: ObjCBool = false
             return FileManager.default.fileExists(atPath: path, isDirectory: &isFolder) && isFolder.boolValue ? nil : "\(folder.name) isn't a folder on this Mac."
         case .box(let alias, let path):
-            guard let box = boxes[alias] else { return "\(alias) can't be reached." }
+            guard let box = boxes[alias] else { return "\(NodeNames.name(alias)) can't be reached." }
             guard Self.plain(path) else { return "\(path) isn't a path Kore takes." }
             switch await box.files.count(path) {
-            case .success(let count): return count.dir ? nil : "\(folder.name) isn't a folder on \(alias)."
+            case .success(let count): return count.dir ? nil : "\(folder.name) isn't a folder on \(NodeNames.name(alias))."
             case .failure(let why): return why.message
             }
         }
@@ -554,7 +554,7 @@ package final class FileCarry {
             let found = await Task.detached(priority: .userInitiated) { CarryCount.mac(path) }.value
             return found.map { .success($0) } ?? .failure("\(place.name) isn't there any more.")
         case .box(let alias, let path):
-            guard let box = boxes[alias] else { return .failure("\(alias) can't be reached.") }
+            guard let box = boxes[alias] else { return .failure("\(NodeNames.name(alias)) can't be reached.") }
             return await box.files.count(path).mapError { CarryWhy($0.message) }
         }
     }
@@ -589,7 +589,7 @@ package final class FileCarry {
             }.value
             return moved.map { .failure(CarryWhy($0)) } ?? .success(to)
         case (.box(let alias, let a), .box(_, let b)):
-            guard let box = boxes[alias] else { return .failure("\(alias) can't be reached.") }
+            guard let box = boxes[alias] else { return .failure("\(NodeNames.name(alias)) can't be reached.") }
             return await box.files.rename(a, to: b).map { _ in to }.mapError { CarryWhy($0.message) }
         default:
             return .failure("Not on one device.")
@@ -845,7 +845,7 @@ package final class FileCarry {
             }.value
             return why.map { .failure(CarryWhy($0)) } ?? .success(())
         case .box(let alias, let path):
-            guard let box = boxes[alias] else { return .failure("\(alias) can't be reached.") }
+            guard let box = boxes[alias] else { return .failure("\(NodeNames.name(alias)) can't be reached.") }
             return await box.files.trash(path).mapError { CarryWhy($0.message) }
         }
     }

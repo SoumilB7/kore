@@ -66,7 +66,7 @@ package final class BoxAccounts {
             Task { await KoreUsage.shared.boxLogin(box: box, cli: provider, email: email) }
         }
         set(provider) {
-            $0.said = result.message ?? (result.ok ? nil : "Couldn't read the login on \(alias)")
+            $0.said = result.message ?? (result.ok ? nil : "Couldn't read the login on \(NodeNames.name(alias))")
             $0.signedIn = result.signedIn
         }
     }
@@ -77,7 +77,7 @@ package final class BoxAccounts {
         Task {
             let result = await connection.command { HostWire.signIn(id: $0, provider: provider) }
             guard result.ok else {
-                set(provider) { $0.step = .failed(result.message ?? "Couldn't sign in on \(alias)") }
+                set(provider) { $0.step = .failed(result.message ?? "Couldn't sign in on \(NodeNames.name(alias))") }
                 return
             }
             set(provider) { $0.step = .waiting(HostWire.page(result.message)) }
@@ -85,7 +85,7 @@ package final class BoxAccounts {
             set(provider) {
                 $0.said = done.message ?? $0.said
                 $0.signedIn = done.signedIn ?? $0.signedIn
-                $0.step = done.ok ? .idle : .failed(done.message ?? "Couldn't sign in on \(alias)")
+                $0.step = done.ok ? .idle : .failed(done.message ?? "Couldn't sign in on \(NodeNames.name(alias))")
             }
         }
     }
@@ -114,7 +114,7 @@ package final class BoxAccounts {
         Task {
             let (result, raw) = await connection.commandRaw { HostWire.gitHub(id: $0) }
             guard result.ok, let page = HostWire.gitHubPage(raw) else {
-                set(Self.gitHub) { $0.step = .failed(result.message ?? "Couldn't start GitHub's sign-in on \(alias)") }
+                set(Self.gitHub) { $0.step = .failed(result.message ?? "Couldn't start GitHub's sign-in on \(NodeNames.name(alias))") }
                 return
             }
             set(Self.gitHub) { $0.step = .waiting(page) }

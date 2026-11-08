@@ -57,18 +57,18 @@ enum BoxAccountStores {
         let alias = connection.alias
         let status: @MainActor @Sendable () async throws -> JSONValue = {
             let result = await connection.command { HostWire.refresh(id: $0, provider: provider) }
-            guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't read the login on \(alias)") }
+            guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't read the login on \(NodeNames.name(alias))") }
             return Self.status(result)
         }
         let signIn: @MainActor @Sendable (SignInMethod.Mechanism, SignInContext) async throws -> SignInHandle = { _, _ in
             // The box picks its own way in (`HostDaemon.boxMethod`).
             let result = await connection.command { HostWire.signIn(id: $0, provider: provider) }
-            guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't sign in on \(alias)") }
+            guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't sign in on \(NodeNames.name(alias))") }
             return handle(HostWire.page(result.message), done: result.id + HostWire.doneSuffix, provider: provider, connection)
         }
         let signOut: @MainActor @Sendable () async throws -> Void = {
             let result = await connection.command { HostWire.signOut(id: $0, provider: provider) }
-            guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't sign out on \(alias)") }
+            guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't sign out on \(NodeNames.name(alias))") }
         }
         return AccountCalls(
             status: status, signIn: signIn, useKey: { _ in throw HostRefusal(message: "Keys aren't sent to a box") }, signOut: signOut)
@@ -80,7 +80,7 @@ enum BoxAccountStores {
         let alias = connection.alias
         let wait: @MainActor @Sendable () async throws -> JSONValue? = {
             let end = await connection.later(done)
-            guard end.ok else { throw HostRefusal(message: end.message ?? "Couldn't sign in on \(alias)") }
+            guard end.ok else { throw HostRefusal(message: end.message ?? "Couldn't sign in on \(NodeNames.name(alias))") }
             return Self.status(end)
         }
         let cancel: @MainActor @Sendable () async -> Void = {
@@ -88,7 +88,7 @@ enum BoxAccountStores {
         }
         let submit: @MainActor @Sendable (String) async throws -> Void = { input in
             let result = await connection.command { HostWire.submit(id: $0, provider: provider, input: input) }
-            guard result.ok else { throw HostRefusal(message: result.message ?? "\(alias) didn't take that code") }
+            guard result.ok else { throw HostRefusal(message: result.message ?? "\(NodeNames.name(alias)) didn't take that code") }
         }
         // Codex's device code needs nothing typed back.
         var typedBack: (@Sendable (String) async throws -> Void)?

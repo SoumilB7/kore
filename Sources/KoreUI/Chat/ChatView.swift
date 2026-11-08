@@ -1,4 +1,5 @@
 import AppKit
+import HostClient
 import KoreCore
 import src
 import SwiftUI
@@ -214,7 +215,7 @@ struct ChatView: View {
         guard let box = (chat.services as? BoxChatServices)?.connection, !chat.status.hasConversation, !chat.status.isRunning,
             HandoffWriters.writer(chat.provider.id) != nil
         else { return nil }
-        return "Imports come from this Mac's chats, not \(box.alias)'s"
+        return "Imports come from this Mac's chats, not \(NodeNames.name(box.alias))'s"
     }
 
     /// The picker over the composer, with `file` picked when one was dropped. With no other

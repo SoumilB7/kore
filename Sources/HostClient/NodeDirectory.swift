@@ -92,9 +92,11 @@ package final class NodeDirectory: Sendable {
         return all[key.lowercased()]?.ssh
     }
 
-    /// What a box is called in words: its name once rekeyed, else its alias.
+    /// What a box is called in words: the alias it was set up by (what the owner always saw),
+    /// else the name it gave; a key that isn't a node's id is its own name.
     package func name(forKey key: String) -> String {
         guard Self.isNodeKey(key) else { return key }
-        return all[key.lowercased()]?.name ?? key
+        guard let entry = all[key.lowercased()] else { return key }
+        return entry.ssh ?? entry.name
     }
 }

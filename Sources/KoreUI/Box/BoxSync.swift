@@ -137,7 +137,7 @@ struct BoxSyncButton: View {
         let place = BoxPlace(alias: box.alias, folder: box.folder)
         checking.value?.cancel()
         guard let mac = AppModel.shared?.chooseFolder(
-            prompt: "Sync", message: "Sync \(BoxFolder.lastPart(box.folder)) on \(box.alias) with a folder on this Mac")
+            prompt: "Sync", message: "Sync \(BoxFolder.lastPart(box.folder)) on \(NodeNames.name(box.alias)) with a folder on this Mac")
         else { return close() }
         let pairs = SyncPairList.shared
         if let why = pairs.refusal(mac: mac, alias: box.alias, box: box.folder) {
@@ -145,7 +145,7 @@ struct BoxSyncButton: View {
             return
         }
         guard let ssh = SyncBox.ssh(box.alias) else {
-            pairing.value = BoxPairing(place: place, state: .failed("\(box.alias) isn't an SSH alias Kore can use"))
+            pairing.value = BoxPairing(place: place, state: .failed("\(NodeNames.name(box.alias)) isn't an SSH alias Kore can use"))
             return
         }
         pairing.value = BoxPairing(place: place, state: .checking(SyncPairs.shown(mac: mac.path)))
@@ -330,13 +330,13 @@ struct BoxOfflineDialog: View {
 
     /// "mybox disconnected · last update 14:32".
     @MainActor static func line(_ box: BoxBinding) -> String {
-        box.alias + " disconnected" + ((box.connection.lastHeard ?? box.linkCard.lastHeard).map { " · last update " + BoxBinding.when($0) } ?? "")
+        NodeNames.name(box.alias) + " disconnected" + ((box.connection.lastHeard ?? box.linkCard.lastHeard).map { " · last update " + BoxBinding.when($0) } ?? "")
     }
 
     /// The line by the pulsing dot: "Reconnecting…", or that the box keeps dropping.
     @MainActor static func status(_ box: BoxBinding, note: BoxList.Note?) -> String {
-        if box.linkCard.keepsDropping { return box.alias + " keeps dropping · Reconnecting…" }
-        guard let note, !(note.action == .tryAgain && note.line == "Can't reach \(box.alias)") else { return "Reconnecting…" }
+        if box.linkCard.keepsDropping { return NodeNames.name(box.alias) + " keeps dropping · Reconnecting…" }
+        guard let note, !(note.action == .tryAgain && note.line == "Can't reach \(NodeNames.name(box.alias))") else { return "Reconnecting…" }
         return note.line
     }
 

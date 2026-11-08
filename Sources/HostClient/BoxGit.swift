@@ -124,11 +124,11 @@ package final class BoxGitStatus {
 
     /// The work tree's changes under the root (one path's, or all), with absolute box paths.
     package func diff(_ path: String? = nil, staged: Bool = false) async -> Result<[FileChange], HostRefusal> {
-        guard offered else { return .failure(HostRefusal(message: "\(connection.alias) can't show changes now")) }
+        guard offered else { return .failure(HostRefusal(message: "\(NodeNames.name(connection.alias)) can't show changes now")) }
         let root = root
         let (result, raw) = await connection.commandRaw { StreamWire.encode(GitDiffAsk(id: $0, root: root, path: path, staged: staged ? true : nil)) }
         guard result.ok, let text = raw.flatMap({ try? JSONDecoder().decode(GitTextResult.self, from: $0) })?.diff else {
-            return .failure(HostRefusal(message: result.message ?? "\(connection.alias) couldn't read the changes"))
+            return .failure(HostRefusal(message: result.message ?? "\(NodeNames.name(connection.alias)) couldn't read the changes"))
         }
         return .success(UnifiedDiff.files(text, root: URL(fileURLWithPath: root)))
     }

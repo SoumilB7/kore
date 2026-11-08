@@ -99,6 +99,58 @@ struct CarryResumeTests {
         #expect(LinkFiles.copyLanding("/srv/w/x") != LinkFiles.copyLanding("/srv/w/y"))
     }
 
+    /// The box's stores move to its KoreNet id while a carry is stopped where it was (as
+    /// `FileCarries.rekeying` stops it, with part of a file landed): its checkpoint moves with the
+    /// rest (`NodeMigration`), and it goes on under the id from there, sending only what's left.
+    /// Every wait is the carry's own end: no clock.
+    @Test func aCarryInterruptedByARekeyGoesOnUnderTheNewKey() async throws {
+        let b = try await box("one")
+        let mac = try scratch()
+        defer {
+            finish(b)
+            try? FileManager.default.removeItem(atPath: mac)
+        }
+        let source = mac + "/proj"
+        try FileManager.default.createDirectory(atPath: source, withIntermediateDirectories: true)
+        var random = SystemRandomNumberGenerator()
+        let bytes = Data((0..<1_200_000).map { _ in UInt8.random(in: 0...255, using: &random) })
+        try bytes.write(to: URL(fileURLWithPath: source + "/big.bin"))
+        try Data("hello\n".utf8).write(to: URL(fileURLWithPath: source + "/a.txt"))
+        let count = try #require(CarryCount.mac(source))
+        let support = URL(fileURLWithPath: mac + "/Kore")
+        let journals = CarryJournals(directory: support.appendingPathComponent("transfers"))
+        let old = "rekey-box", new = UUID().uuidString.lowercased()
+        let log = mac + "/sent.log"
+        let first = FileCarry(items: [CarryItem(source: .mac(source))], into: .box(alias: old, path: b.work), move: true,
+            boxes: [old: b.carry(try relaySSH(b.rig.root, name: "cut", limit: 500_000, log: log))], journals: journals)
+        let stopped = await first.run()
+        // What `FileCarries.rekeying` does to a carry still going: the same stop, saved.
+        first.interrupt()
+        #expect(stopped.interrupted && stopped.landed.isEmpty && CarryCount.mac(source) == count)
+        let before = try #require(journals.load(first.id))
+        let partial = CarryCount.mac(before.landing(0).path)?.bytes ?? 0
+        #expect(partial > 0 && partial < count.bytes, "\(partial)")
+
+        // The stores move: the checkpoint names the id, its landing and progress kept.
+        let defaults = try #require(UserDefaults(suiteName: "kore-carry-\(UUID().uuidString)"))
+        #expect(try NodeMigration(root: support, defaults: defaults).rekey(from: old, to: NodeID(new)) == .done)
+        let moved = try #require(journals.load(first.id))
+        #expect(moved.id == before.id && moved.items == before.rekeyed(old, new).items && moved.state == .running && moved.move)
+        #expect(moved.folder == .box(alias: new, path: b.work) && moved.landing(0).path == before.landing(0).path)
+        #expect(before.rekeyed(old, new).folder == moved.folder)
+
+        // On under the id: only the rest crosses, the copy lands whole, the move's source goes.
+        try FileManager.default.removeItem(atPath: log)
+        b.connection.rekey(to: new)
+        let second = FileCarry(resuming: moved, boxes: [new: b.carry(try relaySSH(b.rig.root, name: "count", limit: 0, log: log))], journals: journals)
+        let done = await second.run()
+        #expect(done.failure == nil && done.landed == [.box(alias: new, path: b.work + "/proj")])
+        #expect(CarryCount.mac(b.work + "/proj") == count && !FileManager.default.fileExists(atPath: source))
+        #expect((try? Data(contentsOf: URL(fileURLWithPath: b.work + "/proj/big.bin"))) == bytes)
+        #expect(sent(log) > 0 && sent(log) < Int(count.bytes), "\(sent(log)) of \(count.bytes)")
+        #expect(journals.load(first.id) == nil)
+    }
+
     // MARK: Mac to box
 
     /// The link drops halfway through a 6 MB file: rsync stops, the hidden landing stays with the

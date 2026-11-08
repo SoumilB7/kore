@@ -57,7 +57,7 @@ final class PairedBox {
     var line: String? {
         let count = chats.count
         guard count > 0 else { return nil }
-        return "\(alias) · \(count) \(count == 1 ? "chat" : "chats") here"
+        return "\(NodeNames.name(alias)) · \(count) \(count == 1 ? "chat" : "chats") here"
     }
 
     /// The link again if something holds it, else the saved state (a file read, no link).
@@ -159,7 +159,7 @@ struct PairedBoxCue: View {
             }
             .buttonStyle(.plain)
             .onHover { hovered.value = $0 }
-            .help("\(paired.alias) · \(paired.folder)")
+            .help("\(NodeNames.name(paired.alias)) · \(paired.folder)")
             .layoutPriority(-1)
         }
     }

@@ -252,7 +252,7 @@ package struct ChatMoves {
         cost.files = files.count
         let committed = await connection.move(.chatRelease, ControlArgs(chatId: chatId, phase: MovePhase.commit.rawValue, gen: gen, moveId: info.moveId, host: name))
         cost.linkBytes += connection.lastMoveBytes
-        guard committed.ok, let owner = committed.owner else { return .failure(MoveFailure(committed.message ?? "\(connection.alias) didn't hand it over", committed.code)) }
+        guard committed.ok, let owner = committed.owner else { return .failure(MoveFailure(committed.message ?? "\(NodeNames.name(connection.alias)) didn't hand it over", committed.code)) }
         var moved = MovedChat(
             alias: connection.alias, boxChat: chatId, boxFolder: boxFolder, macFolder: mac, provider: info.provider, session: info.sessionId, gen: owner.gen,
             title: info.title)
@@ -307,7 +307,7 @@ package struct ChatMoves {
         commit.seq = mirrored
         let adopted = await connection.move(.chatAdopt, commit)
         cost.linkBytes += connection.lastMoveBytes
-        guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(connection.alias) didn't take it", adopted.code)) }
+        guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(NodeNames.name(connection.alias)) didn't take it", adopted.code)) }
         store.forget(session: moved.session)
         ChatMirrors.shared.ended(session: moved.session)
         HostLog.note(connection.alias, "move back", "chat \(chatId) files \(found.files.count) rsync \(cost.rsyncSent)B")

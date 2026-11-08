@@ -1,6 +1,7 @@
 import AppKit
-import LinkProtocol
+import HostClient
 import KoreCore
+import LinkProtocol
 import SwiftUI
 
 /// A file tab (look §5–§7): the path row, a notice when the disk disagrees, the editor (or
@@ -142,11 +143,11 @@ private struct PathRow: View {
             if let box = document.box {
                 HStack(spacing: Space.xxs) {
                     Image(systemName: "server.rack").font(Chrome.caption)
-                    Text(box.alias).font(Chrome.label)
+                    Text(NodeNames.name(box.alias)).font(Chrome.label)
                 }
                 .foregroundStyle(Theme.tertiary)
                 .padding(.horizontal, Space.xs)
-                .help("On \(box.alias): \(box.path)")
+                .help("On \(NodeNames.name(box.alias)): \(box.path)")
                 Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
             }
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
@@ -287,12 +288,12 @@ private struct NoticeBar: View {
     private var message: Text {
         switch notice {
         case .deleted:
-            return Text(document.box.map { "This file was deleted on \($0.alias)." } ?? "This file was deleted on disk.")
+            return Text(document.box.map { "This file was deleted on \(NodeNames.name($0.alias))." } ?? "This file was deleted on disk.")
         case .saveFailed(let reason):
             return Text("Auto Save couldn't save this file. \(reason)")
         case .changed:
             guard let touch, !touch.sources.isEmpty else {
-                return Text(document.box.map { "This file changed on \($0.alias). Your edits aren't saved." } ?? "This file changed on disk. Your edits aren't saved.")
+                return Text(document.box.map { "This file changed on \(NodeNames.name($0.alias)). Your edits aren't saved." } ?? "This file changed on disk. Your edits aren't saved.")
             }
             let when = touch.sources.contains(where: \.running) ? "the running turn" : "its last turn"
             let rest = Text(" changed this file in \(when). Your edits aren't saved.")

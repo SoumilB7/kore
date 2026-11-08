@@ -169,7 +169,7 @@ final class FileCarries {
         watchSleep()
         transfers.begin(
             Self.text(items, into: folder, move: journal.move), done: Self.doneText(items, into: folder, move: journal.move), id: id, place: folder,
-            peer: folder.alias ?? items.lazy.compactMap(\.source.alias).first, shown: restored, resuming: restored && journal.state == .running,
+            peer: (folder.alias ?? items.lazy.compactMap(\.source.alias).first).map(NodeNames.name), shown: restored, resuming: restored && journal.state == .running,
             cancel: { [weak self] in self?.cancel(id) }, retry: { [weak self] in self?.resume(id) },
             pause: { [weak self] in self?.pause(id) }, resume: { [weak self] in self?.resume(id) })
         transfers.update(id, bytes: journal.bytes, total: journal.total)

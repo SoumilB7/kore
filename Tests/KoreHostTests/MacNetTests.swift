@@ -11,7 +11,7 @@ import src
 
 /// Kore's own `HostConnection` against a real kore-host in this process: KoreNet first, SSH
 /// (`attach`, played in-process) when it's gone, and a call resent across the two answered once.
-@Suite("mac over korenet", .serialized)
+@Suite("mac over korenet", .serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct MacNetTests {
     /// Routes the Mac's link to the rig's tailnet port while `up`.
@@ -19,8 +19,12 @@ struct MacNetTests {
         var make: (@MainActor () -> (any HostTransport)?)?
         func transport(for connection: HostConnection) -> (any HostTransport)? { make?() }
         func using(_ connection: HostConnection, _ inUse: Bool) {}
-        func said(_ node: NetNodeWire.Node, on connection: HostConnection) { nodes.append(node) }
+        func said(_ node: NetNodeWire.Node, on connection: HostConnection) {
+            nodes.append(node)
+            told.send(node)
+        }
         var nodes: [NetNodeWire.Node] = []
+        let told = Events<NetNodeWire.Node>()
     }
 
     /// A transport that stops hearing call results while `deaf` (the link dying with an answer
@@ -30,13 +34,18 @@ struct MacNetTests {
         let events: AsyncStream<TransportEvent>
         private let continuation: AsyncStream<TransportEvent>.Continuation
         var deaf = false
+        /// Each result kept from the link while deaf.
+        let dropped = Events<Int>()
 
         init(_ inner: any HostTransport) {
             self.inner = inner
             (events, continuation) = AsyncStream.makeStream(of: TransportEvent.self)
             Task { [self] in
                 for await event in inner.events {
-                    if case .frame(let data) = event, deaf, StreamWire.type(data) == "result" { continue }
+                    if case .frame(let data) = event, deaf, StreamWire.type(data) == "result" {
+                        dropped.send(0)
+                        continue
+                    }
                     continuation.yield(event)
                     if case .closed = event { continuation.finish() }
                 }
@@ -149,15 +158,24 @@ struct MacNetTests {
             return relay.transport
         }
         connection.router = router
+        // The redial after the drop waits nothing; every other wait never ends (no clock here).
         connection.backoff = [.milliseconds(1)]
+        connection.sleep = { wait in
+            guard wait != .milliseconds(1) else { return }
+            try? await Task.sleep(for: .seconds(3600))
+        }
+        let ups = Events<Bool>()
+        connection.onLink("test") { ups.send($0) }
         connection.retain()
-        try await until { connection.isOnline }
+        #expect(await ups.next())
         #expect(connection.route == .net)
 
         // The call reaches the box on the tailnet; its answer never makes it back.
         net?.deaf = true
         let answer = Task { await connection.call(hc.id, .send(text: "hello", files: [], queued: nil, id: "m1")) }
-        try await until { hc.answered.count == 1 }
+        // The box answered (and the answer was lost on the way).
+        await (try #require(net)).dropped.next()
+        #expect(hc.answered.count == 1)
         router.make = nil
         net?.inner.close()
         // Resent over SSH: the box's kept answer, the CLI asked once.
@@ -167,9 +185,42 @@ struct MacNetTests {
         #expect(backend.calls.filter { $0.hasPrefix("send hello") }.count == 1)
         // On both routes the box said who it is after its welcome (a full link): its id and key,
         // and that this Mac enrolled there.
-        try await until { router.nodes.count == 2 }
+        await router.told.next()
+        await router.told.next()
         #expect(router.nodes.allSatisfy { $0.device == rig.identity.device && $0.enrolled == mac.id && $0.identityKey == rig.identity.signer.publicKey })
         connection.release()
         relays.forEach { $0.close() }
+    }
+}
+
+/// Things that happen, awaited as they happen (no polling, no clock).
+final class Events<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [T] = []
+    private var waiters: [CheckedContinuation<T, Never>] = []
+
+    func send(_ item: T) {
+        lock.lock()
+        if !waiters.isEmpty {
+            let waiter = waiters.removeFirst()
+            lock.unlock()
+            return waiter.resume(returning: item)
+        }
+        items.append(item)
+        lock.unlock()
+    }
+
+    @discardableResult
+    func next() async -> T {
+        await withCheckedContinuation { wake in
+            lock.lock()
+            if !items.isEmpty {
+                let item = items.removeFirst()
+                lock.unlock()
+                return wake.resume(returning: item)
+            }
+            waiters.append(wake)
+            lock.unlock()
+        }
     }
 }

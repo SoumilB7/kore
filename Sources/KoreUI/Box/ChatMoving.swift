@@ -75,7 +75,7 @@ final class MoveSheet: Identifiable {
         self.chat = chat
     }
 
-    var heading: String { way == .bring ? "Bring “\(title)” to this Mac" : "Send “\(title)” back to \(alias)" }
+    var heading: String { way == .bring ? "Bring “\(title)” to this Mac" : "Send “\(title)” back to \(NodeNames.name(alias))" }
 
     var working: Bool { chat?.isWorking == true }
 
@@ -100,7 +100,7 @@ final class MoveSheet: Identifiable {
 
     var folderLine: String? {
         guard let folder else { return nil }
-        return (way == .bring ? "Local folder: " : "Folder on \(alias): ") + folder
+        return (way == .bring ? "Local folder: " : "Folder on \(NodeNames.name(alias)): ") + folder
     }
 
     var button: String { way == .bring ? "Bring here" : "Send back" }
@@ -150,7 +150,7 @@ enum ChatMoving {
     /// The tab menu's move items.
     static func menuItems(_ tab: ChatTab, in workspace: Workspace) -> [OptionItem] {
         if canBring(tab, in: workspace) { return [OptionItem("Bring to this Mac") { bring(tab, in: workspace) }] }
-        if let moved = held(tab) { return [OptionItem("Send back to \(moved.alias)") { sendBack(moved, from: workspace) }] }
+        if let moved = held(tab) { return [OptionItem("Send back to \(NodeNames.name(moved.alias))") { sendBack(moved, from: workspace) }] }
         return []
     }
 
@@ -166,8 +166,8 @@ enum ChatMoving {
             sheet.finish()
         }
         workspace.moveSheet = sheet
-        guard connection.isOnline else { return sheet.fail("Can't reach \(box.alias) · the chat stays there") }
-        guard connection.moves else { return sheet.fail("Update kore-host on \(box.alias) to move chats") }
+        guard connection.isOnline else { return sheet.fail("Can't reach \(NodeNames.name(box.alias)) · the chat stays there") }
+        guard connection.moves else { return sheet.fail("Update kore-host on \(NodeNames.name(box.alias)) to move chats") }
         func check() {
             sheet.checks?.cancel()
             guard let pair = pair(alias: box.alias, boxFolder: box.folder) else {
@@ -193,7 +193,7 @@ enum ChatMoving {
                 guard await turnEnds(sheet) else { return }
                 sheet.moving = true
                 let stop = sheet.working && sheet.busy == .stopFirst
-                guard let moves = engine(connection) else { return sheet.fail("\(box.alias) isn't an SSH alias Kore can use") }
+                guard let moves = engine(connection) else { return sheet.fail("\(NodeNames.name(box.alias)) isn't an SSH alias Kore can use") }
                 switch await release(moves, alias: box.alias, chatId: chatId, boxFolder: box.folder, pair: pair, stop: stop) {
                 case .failure(let failure):
                     sheet.fail(failure.line)
@@ -274,14 +274,14 @@ enum ChatMoving {
         workspace.moveSheet = sheet
         guard let pair = pair(alias: moved.alias, boxFolder: moved.boxFolder) else {
             sheet.sync = .noPair
-            return sheet.fail("\(SyncPairs.shown(mac: moved.macFolder)) no longer syncs with \(moved.alias)")
+            return sheet.fail("\(SyncPairs.shown(mac: moved.macFolder)) no longer syncs with \(NodeNames.name(moved.alias))")
         }
         sheet.folder = moved.boxFolder
         let running = Workspace.all.allObjects.first { !$0.isClosed && $0.box?.alias == moved.alias && $0.box?.sync?.pair == pair }?.box?.sync
         sheet.checks = Task {
             // Up first: a box that can't be reached keeps the chat here.
-            guard await online(connection) else { return sheet.fail("Can't reach \(moved.alias) · the chat stays here") }
-            guard connection.moves else { return sheet.fail("Update kore-host on \(moved.alias) to move chats") }
+            guard await online(connection) else { return sheet.fail("Can't reach \(NodeNames.name(moved.alias)) · the chat stays here") }
+            guard connection.moves else { return sheet.fail("Update kore-host on \(NodeNames.name(moved.alias)) to move chats") }
             // The pair's sync while no box window runs it: started for the check, stopped after.
             var sync = running
             if sync == nil, let made = makeSync(pair, connection) {
@@ -297,7 +297,7 @@ enum ChatMoving {
             Task {
                 guard await turnEnds(sheet) else { return }
                 sheet.moving = true
-                guard let moves = engine(connection) else { return sheet.fail("\(moved.alias) isn't an SSH alias Kore can use") }
+                guard let moves = engine(connection) else { return sheet.fail("\(NodeNames.name(moved.alias)) isn't an SSH alias Kore can use") }
                 // Its CLI here ends first: the tab closes (the session stays in the folder's history).
                 let shown = Workspace.localTab(session: moved.session)
                 let chat = shown?.1.chat
@@ -314,7 +314,7 @@ enum ChatMoving {
                 switch result {
                 case .failure(var failure):
                     // The box holds that session for a chat of its own now: the copy stays here.
-                    if failure.code == .staleGen { failure.line = "\(moved.alias) has newer changes to this chat · kept here" }
+                    if failure.code == .staleGen { failure.line = "\(NodeNames.name(moved.alias)) has newer changes to this chat · kept here" }
                     // It stays here: its tab back as it was.
                     if let window = shown?.0 ?? Workspace.local(URL(fileURLWithPath: moved.macFolder)), shown != nil,
                         let provider = Registry.provider(moved.provider)
@@ -325,7 +325,7 @@ enum ChatMoving {
                 case .success(let back):
                     places.noteGen(moved.alias, back.chatId, moved.gen + 1)
                     if back.chatId != moved.boxChat {
-                        places.leaveNote(moved.alias, back.chatId, "Came back as a new chat · \(moved.alias)'s copy had changed")
+                        places.leaveNote(moved.alias, back.chatId, "Came back as a new chat · \(NodeNames.name(moved.alias))'s copy had changed")
                     }
                     sheet.onClose()
                     returned(alias: moved.alias, boxFolder: moved.boxFolder, chatId: back.chatId)
@@ -361,7 +361,7 @@ enum ChatMoving {
     /// it gathered, this Mac's rounds carry it), its count on the way as the line.
     static func settle(_ sheet: MoveSheet, connection: HostConnection, folder: String, sync: @escaping () -> HostSync?) async {
         sheet.sync = .checking
-        guard let moves = engine(connection) else { return sheet.sync = .failed("\(sheet.alias) isn't an SSH alias Kore can use") }
+        guard let moves = engine(connection) else { return sheet.sync = .failed("\(NodeNames.name(sheet.alias)) isn't an SSH alias Kore can use") }
         while !Task.isCancelled {
             let settled = await moves.flush(folder: folder, sync: sync()) { left in
                 if !Task.isCancelled, left > 0 || sheet.sync != .checking { sheet.sync = .pending(left) }
@@ -394,11 +394,11 @@ enum ChatMoving {
     /// Sync with a Mac folder…: the open panel, the pair checked (asked once when both sides have
     /// files), and kept; then the checks again.
     static func startPairing(_ sheet: MoveSheet, alias: String, boxFolder: String, link: HostConnection? = nil, then: @escaping () -> Void) {
-        guard let mac = AppModel.shared?.chooseFolder(prompt: "Sync", message: "Sync \(BoxFolder.lastPart(boxFolder)) on \(alias) with a folder on this Mac")
+        guard let mac = AppModel.shared?.chooseFolder(prompt: "Sync", message: "Sync \(BoxFolder.lastPart(boxFolder)) on \(NodeNames.name(alias)) with a folder on this Mac")
         else { return }
         let pairs = SyncPairList.shared
         if let why = pairs.refusal(mac: mac, alias: alias, box: boxFolder) { return sheet.sync = .failed(why) }
-        guard let ssh = SyncBox.ssh(alias) else { return sheet.sync = .failed("\(alias) isn't an SSH alias Kore can use") }
+        guard let ssh = SyncBox.ssh(alias) else { return sheet.sync = .failed("\(NodeNames.name(alias)) isn't an SSH alias Kore can use") }
         sheet.sync = .checking
         Task {
             switch await pairs.check(mac: mac, alias: alias, box: boxFolder, via: ssh, link: link) {

@@ -7,6 +7,52 @@ import Synchronization
 import Tailnet
 import src
 
+/// Things that happen, awaited as they happen: each `next` takes the first one that matches,
+/// already here or still to come. No polling, no wall clock; a suite's time limit bounds a hang.
+final class Feed<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [T] = []
+    private var waiters: [(match: (T) -> Bool, wake: CheckedContinuation<T, Never>)] = []
+
+    init() {}
+
+    func send(_ item: T) {
+        lock.lock()
+        if let i = waiters.firstIndex(where: { $0.match(item) }) {
+            let waiter = waiters.remove(at: i)
+            lock.unlock()
+            waiter.wake.resume(returning: item)
+            return
+        }
+        items.append(item)
+        lock.unlock()
+    }
+
+    @discardableResult
+    func next(_ match: @escaping @Sendable (T) -> Bool = { _ in true }) async -> T {
+        await withCheckedContinuation { wake in
+            lock.lock()
+            if let i = items.firstIndex(where: match) {
+                let item = items.remove(at: i)
+                lock.unlock()
+                wake.resume(returning: item)
+                return
+            }
+            waiters.append((match, wake))
+            lock.unlock()
+        }
+    }
+}
+
+/// A decoded message, handed across queues.
+struct Got: @unchecked Sendable {
+    var session: Int
+    var object: [String: Any]
+    var type: String? { object["t"] as? String }
+    var command: String? { (object["cmd"] as? [String: Any])?["type"] as? String }
+    var id: String? { object["id"] as? String }
+}
+
 /// A tailnet answering from what a test set: status, WhoIs, the bus (pushed by hand, its
 /// subscribers counted) and dials that reach a `FakeNetBox`. No LocalAPI, no sockets of its own.
 final class FakeTailnet: Tailnet {
@@ -27,6 +73,8 @@ final class FakeTailnet: Tailnet {
     }
 
     var buses: Int { held.withLock { $0.buses.count } }
+    /// Each bus subscription as it ends.
+    let busEnded = Feed<Int>()
     var statusReads: Int { held.withLock { $0.statusReads } }
 
     func status() throws -> TailnetStatus {
@@ -48,7 +96,10 @@ final class FakeTailnet: Tailnet {
             h.buses[h.nextBus] = continuation
             return h.nextBus
         }
-        continuation.onTermination = { [weak self] _ in self?.held.withLock { _ = $0.buses.removeValue(forKey: id) } }
+        continuation.onTermination = { [weak self] _ in
+            self?.held.withLock { _ = $0.buses.removeValue(forKey: id) }
+            self?.busEnded.send(id)
+        }
         return stream
     }
 
@@ -87,6 +138,9 @@ final class FakeNetBox: @unchecked Sendable {
     private var got: [(session: Int, object: [String: Any])] = []
     /// Who connected, by route, in order.
     private(set) var dialled: [Binding.Route] = []
+    /// Each session's index as it's accepted, and what the Mac sent on any.
+    let accepted = Feed<Int>()
+    let received = Feed<Got>()
     /// Answers each session's link with a welcome and snapshot (false: never, a silent box).
     var welcomes = true
     var minor = 12
@@ -152,6 +206,7 @@ final class FakeNetBox: @unchecked Sendable {
             session.source = source
             session.session.start()
             source.resume()
+            accepted.send(index)
         }
         return mac
     }
@@ -161,6 +216,7 @@ final class FakeNetBox: @unchecked Sendable {
         for message in s.session.pump() {
             let object = (try? JSONSerialization.jsonObject(with: message.payload)) as? [String: Any] ?? [:]
             lock.withLock { got.append((index, object)) }
+            received.send(Got(session: index, object: object))
         }
         if case .established = s.session.state, !s.welcomed, welcomes {
             s.welcomed = true
@@ -220,11 +276,24 @@ final class FakeNetBox: @unchecked Sendable {
 final class VirtualClock: Sendable {
     private struct Sleeper {
         var id: Int
+        var duration: Duration
         var end: Duration
         var wake: CheckedContinuation<Void, Never>
     }
 
     private let held = Mutex<(now: Duration, next: Int, sleepers: [Sleeper], asked: [Duration])>((.zero, 0, [], []))
+    /// Each wait as it starts, and each one ended early (its task cancelled), by its duration.
+    private let started = Feed<Duration>()
+    private let cancelled = Feed<Duration>()
+
+    /// Returns once a wait of `duration` has started (one already waiting counts).
+    func pending(_ duration: Duration) async {
+        // A start seen earlier may have ended since: each one wakes a look at who waits now.
+        while !held.withLock({ $0.sleepers.contains { $0.duration == duration } }) { await started.next { $0 == duration } }
+    }
+
+    /// Returns once a wait of `duration` was given up (an answer came first).
+    func gaveUp(_ duration: Duration) async { await cancelled.next { $0 == duration } }
 
     /// Every wait asked for, in order.
     var asked: [Duration] { held.withLock { $0.asked } }
@@ -244,17 +313,20 @@ final class VirtualClock: Sendable {
             await withCheckedContinuation { (wake: CheckedContinuation<Void, Never>) in
                 let resumeNow = held.withLock { h -> Bool in
                     guard !Task.isCancelled else { return true }
-                    h.sleepers.append(Sleeper(id: id, end: h.now + duration, wake: wake))
+                    h.sleepers.append(Sleeper(id: id, duration: duration, end: h.now + duration, wake: wake))
                     return false
                 }
-                if resumeNow { wake.resume() }
+                if resumeNow { wake.resume() } else { started.send(duration) }
             }
         } onCancel: {
-            let woken = held.withLock { h -> CheckedContinuation<Void, Never>? in
+            let woken = held.withLock { h -> Sleeper? in
                 guard let i = h.sleepers.firstIndex(where: { $0.id == id }) else { return nil }
-                return h.sleepers.remove(at: i).wake
+                return h.sleepers.remove(at: i)
             }
-            woken?.resume()
+            if let woken {
+                woken.wake.resume()
+                cancelled.send(woken.duration)
+            }
         }
     }
 

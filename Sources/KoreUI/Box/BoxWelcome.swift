@@ -123,9 +123,10 @@ struct WelcomeSwitcher: View {
         VStack(alignment: .leading, spacing: 0) {
             BoxAliasField(text: Binding(get: { text }, set: { state.adding = $0 }), add: add) { state.adding = nil }
                 .storyID(StoryID.Boxes.field)
-            ForEach(list.suggestions(text).prefix(5), id: \.self) { alias in
-                Button { add(alias) } label: {
-                    Text(alias).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1)
+            // SSH config hosts: plain aliases, never a node's id.
+            ForEach(list.suggestions(text).prefix(5), id: \.self) { host in
+                Button { add(host) } label: {
+                    Text(host).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1)
                         .padding(.horizontal, Space.sm)
                         .frame(maxWidth: .infinity, minHeight: Layout.Options.row, alignment: .leading)
                         .contentShape(Rectangle())
@@ -186,7 +187,7 @@ extension BoxList.Box {
             let parent = (window as NSString).deletingLastPathComponent
             return WelcomeItem(
                 id: "folder:" + folder.path, symbol: "folder", title: folder.name, detail: parent,
-                help: folder.missing == true ? "Missing on \(alias): \(folder.path)" : folder.path, missing: folder.missing == true,
+                help: folder.missing == true ? "Missing on \(NodeNames.name(alias)): \(folder.path)" : folder.path, missing: folder.missing == true,
                 story: StoryID.Boxes.folder(folder.path)
             ) { open(place, nil) }
         }

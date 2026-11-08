@@ -12,9 +12,8 @@ import src
 /// The SSH → KoreNet upgrade from the Mac's side, and the rekey of the box's stores on its first
 /// KoreNet welcome with everything live kept from writing the alias back.
 @MainActor
-@Suite("korenet upgrade on the Mac", .serialized)
+@Suite("korenet upgrade on the Mac", .serialized, .timeLimit(.minutes(1)))
 struct NetUpgradeTests {
-    final class Dials { var hosts: [FakeHost] = [] }
 
     @Test func anSSHBoxEnrollsThisMacMovesToTheTailnetAndRekeysEveryStore() async throws {
         let root = netScratch()
@@ -61,6 +60,7 @@ struct NetUpgradeTests {
         let connection = HostConnection(alias: alias, grant: "laptop", cache: HostCache(alias: alias, root: hosts)) {
             let (client, host) = FakeHost.pair()
             dials.hosts.append(host)
+            dials.made.send(dials.hosts.count - 1)
             return client
         }
         connection.sleep = clock.sleep
@@ -68,21 +68,30 @@ struct NetUpgradeTests {
             defaults: defaults, directory: directory, rekeyer: rekeyer, global: false, connections: { [connection] },
             environment: { fakeEnv(.state(.running), local: local, box: box, root: root, defaults: defaults, calls: calls) })
         connection.router = switcher
+        let settled = Feed<String>()
+        switcher.settled = { settled.send($0) }
         switcher.set(true)
-        #expect(await until { switcher.state == .installed })
+        await settled.next { $0 == "chose" }
+        #expect(switcher.state == .installed)
 
         // Over SSH (the box not known on KoreNet yet), at link 1.12: the box says who it is.
+        let ups = links(connection)
         connection.retain()
-        #expect(await until { dials.hosts.count == 1 })
+        let ssh = await dials.next()
         #expect(connection.route == .ssh(alias: alias, grant: "laptop"))
-        await welcome112(dials.hosts[0])
-        let node = try JSONSerialization.jsonObject(with: JSONEncoder().encode(box.node)) as! [String: Any]
-        dials.hosts[0].send(json: node)
+        await welcome112(ssh)
+        #expect(await ups.next())
+        let node = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(box.node)) as? [String: Any])
+        ssh.send(json: node)
 
         // Enrolled once over `attach --proto 2`, then the link moves to the tailnet and the box's
         // stores move to its id.
         let id = box.device.uuidString.lowercased()
-        #expect(await until(5) { connection.alias == id })
+        #expect(await settled.next { $0.hasPrefix("enroll") } == "enroll enrolled")
+        #expect(await settled.next { $0.hasPrefix("rekey") } == "rekey done")
+        // The move to the tailnet is quiet (no down), then up again.
+        #expect(await ups.next())
+        #expect(connection.alias == id)
         #expect(calls.held.withLock { $0.upgrades } == 1)
         #expect(box.dialled == [.ssh, .tailnet])
         #expect(connection.isOnline && connection.route == .net && connection.grant == "laptop")
@@ -109,12 +118,12 @@ struct NetUpgradeTests {
         #expect(said.withLock { $0 } == ["will \(alias) \(id)", "did \(alias) \(id)"])
         // The alias still names the same link; the SSH route still reaches it by its alias.
         #expect(HostConnection.named(alias) === connection)
-        #expect(connection.sshAlias == alias && connection.name == "box-1")
+        #expect(connection.sshAlias == alias && connection.name == alias)
         #expect(BoxAddress(id)?.host == alias)
         // Its copy is written under the id from now on.
         #expect(connection.cache.folder.path.hasSuffix("nodes/" + id))
-        clock.advance(.seconds(1))
-        #expect(await until { files.fileExists(atPath: support.appendingPathComponent("nodes/\(id)/state.json").path) })
+        connection.cache.settle()
+        #expect(files.fileExists(atPath: support.appendingPathComponent("nodes/\(id)/state.json").path))
         #expect(!files.fileExists(atPath: hosts.appendingPathComponent(alias).path))
         connection.release()
         switcher.set(false)
@@ -150,19 +159,24 @@ struct NetUpgradeTests {
         let connection = HostConnection(alias: "held-box", cache: HostCache(alias: "held-box", root: hosts)) {
             let (client, host) = FakeHost.pair()
             dials.hosts.append(host)
+            dials.made.send(dials.hosts.count - 1)
             return client
         }
         connection.sleep = clock.sleep
+        let ups = links(connection)
         connection.retain()
-        #expect(await until { dials.hosts.count == 1 })
+        let host = await dials.next()
         connection.holdCache()
-        await welcome112(dials.hosts[0])
-        #expect(await until { connection.isOnline })
+        await welcome112(host)
+        #expect(await ups.next())
+        // The state's save comes due while held: nothing lands under the alias.
+        await clock.pending(.seconds(1))
         clock.advance(.seconds(1))
         let id = UUID().uuidString.lowercased()
         connection.rekey(to: id)
+        connection.cache.settle()
         let files = FileManager.default
-        #expect(await until { files.fileExists(atPath: root.appendingPathComponent("nodes/\(id)/state.json").path) })
+        #expect(files.fileExists(atPath: root.appendingPathComponent("nodes/\(id)/state.json").path))
         #expect(!files.fileExists(atPath: hosts.appendingPathComponent("held-box").path))
         connection.release()
     }

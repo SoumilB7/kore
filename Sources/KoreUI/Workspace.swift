@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import HostClient
 import KoreCore
 import Observation
 import src
@@ -300,7 +301,7 @@ package final class Workspace {
     }
 
     func historyLocked(_ row: SessionSummary) -> String? {
-        if let alias = boxRowPlace(row.id) { return "Rename or archive it in \(alias)'s window" }
+        if let alias = boxRowPlace(row.id) { return "Rename or archive it in \(NodeNames.name(alias))'s window" }
         return box?.historyLocked
     }
 

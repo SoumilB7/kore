@@ -149,7 +149,7 @@ struct BoxFolderBrowser: View {
             // One plain line, its room always kept: nothing below moves when it comes.
             Text(model.problem ?? " ").font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.tail)
                 .help(model.problem ?? "")
-            TextField("", text: $typed.value, prompt: Text(model.path ?? "Path on \(model.alias)").foregroundStyle(Theme.tertiary))
+            TextField("", text: $typed.value, prompt: Text(model.path ?? "Path on \(NodeNames.name(model.alias))").foregroundStyle(Theme.tertiary))
                 .textFieldStyle(.plain)
                 .font(Chrome.label)
                 .focused($field)
@@ -192,7 +192,7 @@ struct BoxFolderBrowser: View {
     private var crumbs: some View {
         HStack(spacing: Space.xxs) {
             Image(systemName: "server.rack").font(Chrome.caption).foregroundStyle(Theme.tertiary)
-            Button(model.alias) { Task { await model.go("/") } }.buttonStyle(.plain).font(Chrome.label).foregroundStyle(Theme.secondary)
+            Button(NodeNames.name(model.alias)) { Task { await model.go("/") } }.buttonStyle(.plain).font(Chrome.label).foregroundStyle(Theme.secondary)
             ForEach(Array(model.crumbs.enumerated()), id: \.offset) { index, crumb in
                 Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
                 Button(crumb.name) { Task { await model.go(crumb.path) } }

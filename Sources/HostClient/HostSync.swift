@@ -79,13 +79,13 @@ package enum SyncPairs {
         let home = realPath(FileManager.default.homeDirectoryForCurrentUser.path)
         if real == "/" || real == home { return "Pick a project folder, not \(shown(mac: path))" }
         for pair in pairs {
-            let other = realPath(pair.mac), with = "\(pair.alias) · \(shown(box: pair.box))"
+            let other = realPath(pair.mac), with = "\(NodeNames.name(pair.alias)) · \(shown(box: pair.box))"
             if pair.alias == alias, pair.box == box { return "Already synced locally to \(shown(mac: pair.mac))" }
             if real == other { return "\(shown(mac: pair.mac)) already syncs with \(with)" }
             if within(real, other) { return "Inside \(shown(mac: pair.mac)), which syncs with \(with)" }
             if within(other, real) { return "Holds \(shown(mac: pair.mac)), which syncs with \(with)" }
             if pair.alias == alias, within(box, pair.box) || within(pair.box, box) {
-                return "\(shown(box: pair.box)) on \(alias) syncs with \(shown(mac: pair.mac))"
+                return "\(shown(box: pair.box)) on \(NodeNames.name(alias)) syncs with \(shown(mac: pair.mac))"
             }
         }
         return nil
@@ -602,7 +602,7 @@ package final class HostSync {
         Task { [weak self] in
             let result = await connection.command { HostWire.syncWatch(id: $0, folder: folder) }
             if !result.ok, let self, self.started {
-                self.notice = result.code == .invalid ? "\(self.pair.alias) can't sync yet · update it" : result.message ?? "Sync paused"
+                self.notice = result.code == .invalid ? "\(NodeNames.name(self.pair.alias)) can't sync yet · update it" : result.message ?? "Sync paused"
             }
         }
     }
@@ -617,21 +617,21 @@ package final class HostSync {
         // Every path the box names is checked here: relative, plain parts, no control characters.
         // One that isn't is dropped and said once.
         let valid = changed.paths.filter { SyncPath.valid($0.p) }
-        if valid.count < changed.paths.count { notice = "\(pair.alias) sent a path outside the folder" }
+        if valid.count < changed.paths.count { notice = "\(NodeNames.name(pair.alias)) sent a path outside the folder" }
         // A carry's landing on the box (an older kore-host lists it) never syncs.
         let paths = valid.filter { !SyncPath.inLanding($0.p) }
         if changed.all == true {
             if changed.missing == true {
                 listing?.close()
                 listing = nil
-                notice = "Sync paused: \(shownBox) is missing on \(pair.alias)"
+                notice = "Sync paused: \(shownBox) is missing on \(NodeNames.name(pair.alias))"
                 return
             }
             if let capped = changed.capped {
                 // Too many files to list: no round runs on part of a list.
                 listing?.close()
                 listing = nil
-                notice = "Sync paused: over \(capped.formatted()) files on \(pair.alias)"
+                notice = "Sync paused: over \(capped.formatted()) files on \(NodeNames.name(pair.alias))"
                 return
             }
             if listing == nil { listing = SyncLines.Writer(scratch.appendingPathComponent("box-\(UUID().uuidString).tsv")) }
@@ -646,7 +646,7 @@ package final class HostSync {
             boxWatches = changed.watching ?? true
             if !boxWatches {
                 let limit = changed.limit.map { $0.formatted() } ?? "?"
-                notice = "\(pair.alias) can't watch \((changed.folders ?? 0).formatted())+ folders (limit \(limit)) · syncs on focus"
+                notice = "\(NodeNames.name(pair.alias)) can't watch \((changed.folders ?? 0).formatted())+ folders (limit \(limit)) · syncs on focus"
             }
         } else {
             for path in paths {
@@ -748,7 +748,7 @@ package final class HostSync {
         if let clash = plan.clash { notice = "Can't sync \(clash) to a Mac that ignores case" }
         if whole, plan.agreedBefore > 0 {
             if plan.boxFiles == 0 {
-                notice = "Sync paused: \(shownBox) is empty on \(pair.alias)"
+                notice = "Sync paused: \(shownBox) is empty on \(NodeNames.name(pair.alias))"
                 return false
             }
             if plan.macFiles == 0 {
@@ -1132,7 +1132,7 @@ package struct SyncRound: Sendable {
         let folder = path.contains("/") ? String(path[..<path.lastIndex(of: "/")!]) + "/" : ""
         var n = 1
         while true {
-            let mark = n == 1 ? alias : "\(alias) \(n)"
+            let mark = n == 1 ? NodeNames.name(alias) : "\(NodeNames.name(alias)) \(n)"
             let name = folder + "\(stem) (\(mark))\(ext)"
             if !taken.contains(fold(name)), tree.stat(name) == nil, !FileManager.default.fileExists(atPath: tree.url(name).path) {
                 taken.insert(fold(name))
@@ -1219,8 +1219,8 @@ extension HostSync {
         guard SyncTree(root: mac).rootExists else { return .refuse("\(SyncPairs.shown(mac: mac.path)) isn't a folder on this Mac") }
         let boxFiles: Int, boxBytes: Int64, boxFree: Int64
         switch await boxSide(path, via: box, link: link) {
-        case .failure(let why): return .refuse("Can't reach \(alias): " + why.message)
-        case .success(nil): return .refuse("\(SyncPairs.shown(box: path)) is missing on \(alias)")
+        case .failure(let why): return .refuse("Can't reach \(NodeNames.name(alias)): " + why.message)
+        case .success(nil): return .refuse("\(SyncPairs.shown(box: path)) is missing on \(NodeNames.name(alias))")
         case .success(let stat?): (boxFiles, boxBytes, boxFree) = (stat.files, stat.bytes, stat.free)
         }
         let (macFiles, macBytes) = await count(mac)
@@ -1230,7 +1230,7 @@ extension HostSync {
         func amount(_ files: Int, _ bytes: Int64) -> String { "\(size(bytes)) · \(files >= 1000 ? "\(files / 1000)k" : "\(files)") files" }
         // What goes to the box must fit there, what comes here must fit here, a tenth to spare.
         if macFiles > 0, boxFree > 0, macBytes + macBytes / 10 > boxFree {
-            return .refuse("Needs \(size(macBytes)) · \(alias) has \(size(boxFree)) free")
+            return .refuse("Needs \(size(macBytes)) · \(NodeNames.name(alias)) has \(size(boxFree)) free")
         }
         if boxFiles > 0, let macFree, macFree > 0, boxBytes + boxBytes / 10 > macFree {
             return .refuse("Needs \(size(boxBytes)) · this Mac has \(size(macFree)) free")
@@ -1238,7 +1238,7 @@ extension HostSync {
         switch (macFiles > 0, boxFiles > 0) {
         case (true, true): return .ask(mergeQuestion, .merge)
         case (false, true): return big(boxFiles, boxBytes) ? .ask("\(amount(boxFiles, boxBytes)) · Copy to this Mac", .toMac) : .go(.toMac)
-        default: return big(macFiles, macBytes) ? .ask("\(amount(macFiles, macBytes)) · Copy to \(alias)", .toBox) : .go(.toBox)
+        default: return big(macFiles, macBytes) ? .ask("\(amount(macFiles, macBytes)) · Copy to \(NodeNames.name(alias))", .toBox) : .go(.toBox)
         }
     }
 

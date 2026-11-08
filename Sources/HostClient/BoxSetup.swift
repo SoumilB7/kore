@@ -175,7 +175,7 @@ package struct BoxSetup: Sendable {
         let ran = await shell.script(alias, BoxMachine.script(deep: deep))
         guard ran.status != AttachExit.sshFailed else { throw Self.sshFailure(alias, ran.output) }
         guard let machine = BoxMachine.parse(ran.output) else {
-            throw Failure(message: "\(alias) didn't answer like a shell" + (ran.lastLine.isEmpty ? "" : ": " + ran.lastLine), fix: .tryAgain)
+            throw Failure(message: "\(NodeNames.name(alias)) didn't answer like a shell" + (ran.lastLine.isEmpty ? "" : ": " + ran.lastLine), fix: .tryAgain)
         }
         return machine
     }
@@ -184,12 +184,12 @@ package struct BoxSetup: Sendable {
     @discardableResult
     package func run(allow: Bool, step: @escaping @MainActor @Sendable (String) -> Void) async throws(Failure) -> Done {
         let retry: BoxFix = allow ? .setUp : .update
-        await step("Checking \(alias)…")
+        await step("Checking \(NodeNames.name(alias))…")
         let machine = try await detect()
         if let why = machine.unsupported(alias) { throw Failure(message: why) }
-        guard let platform = machine.platform else { throw Failure(message: "\(alias) runs \(machine.uname)") }
+        guard let platform = machine.platform else { throw Failure(message: "\(NodeNames.name(alias)) runs \(machine.uname)") }
         if let free = machine.freeKB, free < Self.room {
-            throw Failure(message: "\(alias) has \(free / 1024) MB free · kore-host needs about \(Self.room / 1024) MB", fix: .tryAgain)
+            throw Failure(message: "\(NodeNames.name(alias)) has \(free / 1024) MB free · kore-host needs about \(Self.room / 1024) MB", fix: .tryAgain)
         }
 
         await step("Getting kore-host for \(machine.kind)…")
@@ -201,42 +201,42 @@ package struct BoxSetup: Sendable {
         } catch let why as Failure {
             throw why
         } catch {
-            throw Failure(message: "Couldn't get kore-host for \(alias): \(error.localizedDescription)", fix: retry)
+            throw Failure(message: "Couldn't get kore-host for \(NodeNames.name(alias)): \(error.localizedDescription)", fix: retry)
         }
         defer { if file.temporary { try? FileManager.default.removeItem(at: file.url) } }
 
-        await step("Copying kore-host to \(alias)…")
+        await step("Copying kore-host to \(NodeNames.name(alias))…")
         let folder = await shell.run(alias, "mkdir -p .local/bin")
-        guard folder.ok else { throw fail(folder, "Couldn't make ~/.local/bin on \(alias)", retry) }
+        guard folder.ok else { throw fail(folder, "Couldn't make ~/.local/bin on \(NodeNames.name(alias))", retry) }
         let copied = await shell.copy(file.url, to: alias, path: Self.target + ".new")
-        guard copied.ok else { throw fail(copied, "Couldn't copy kore-host to \(alias)", retry) }
+        guard copied.ok else { throw fail(copied, "Couldn't copy kore-host to \(NodeNames.name(alias))", retry) }
         // It runs there before it replaces the one that does.
         let checked = await shell.run(alias, "chmod 755 \(Self.target).new && \(Self.target).new --version")
         guard checked.ok, checked.output.contains("kore-host ") else {
             _ = await shell.run(alias, "rm -f \(Self.target).new")
-            throw fail(checked, "That kore-host doesn't run on \(alias)", nil)
+            throw fail(checked, "That kore-host doesn't run on \(NodeNames.name(alias))", nil)
         }
         let moved = await shell.run(alias, "mv -f \(Self.target).new \(Self.target)")
-        guard moved.ok else { throw fail(moved, "Couldn't put kore-host in place on \(alias)", retry) }
+        guard moved.ok else { throw fail(moved, "Couldn't put kore-host in place on \(NodeNames.name(alias))", retry) }
 
         await step("Starting kore-host (\(machine.service))…")
         let installed = await shell.run(alias, "\(Self.target) install-service")
-        guard installed.ok else { throw fail(installed, "kore-host didn't start on \(alias)", retry) }
+        guard installed.ok else { throw fail(installed, "kore-host didn't start on \(NodeNames.name(alias))", retry) }
         if allow {
             await step("Letting this Mac in…")
             let allowed = await shell.run(alias, "\(Self.target) allow '\(grant)' --control full")
-            guard allowed.ok else { throw fail(allowed, "\(alias) didn't let this Mac in", retry) }
+            guard allowed.ok else { throw fail(allowed, "\(NodeNames.name(alias)) didn't let this Mac in", retry) }
         }
         var found = machine
         found.koreHost = checked.output.split(whereSeparator: \.isNewline).first { $0.hasPrefix("kore-host ") }.map(String.init)
-        let warning = installed.output.contains("linger is off") ? "\(alias) stops kore-host when you log out · sudo loginctl enable-linger" : nil
+        let warning = installed.output.contains("linger is off") ? "\(NodeNames.name(alias)) stops kore-host when you log out · sudo loginctl enable-linger" : nil
         return Done(machine: found, warning: warning)
     }
 
     /// `kore-host start`: the daemon started again, however it was installed there.
     package func start() async throws(Failure) {
         let started = await shell.run(alias, "\(Self.target) start")
-        guard started.ok else { throw fail(started, "kore-host didn't start on \(alias)", .tryAgain) }
+        guard started.ok else { throw fail(started, "kore-host didn't start on \(NodeNames.name(alias))", .tryAgain) }
     }
 
     /// The box's own last words when it said any, else `fallback`; ssh's own failure, plainly.

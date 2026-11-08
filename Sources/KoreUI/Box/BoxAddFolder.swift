@@ -23,7 +23,7 @@ struct BoxAddFolderField: View {
                 .onSubmit(submit)
                 .onExitCommand(perform: close)
                 .onAppear { focused = true }
-            Text(failed.value ?? "A folder already on \(alias)")
+            Text(failed.value ?? "A folder already on \(NodeNames.name(alias))")
                 .font(Chrome.caption)
                 .foregroundStyle(failed.value == nil ? Theme.tertiary : Theme.danger)
         }

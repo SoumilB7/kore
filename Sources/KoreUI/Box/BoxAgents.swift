@@ -91,7 +91,7 @@ struct BoxAgentsView: View {
         let machine = box?.machine
         VStack(alignment: .leading, spacing: Space.sm) {
             // The one essential line: what the machine is.
-            Text(machine?.kind ?? alias).font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+            Text(machine?.kind ?? NodeNames.name(alias)).font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
             ForEach(BoxAgent.allCases, id: \.self) { agent in agentLine(agent, machine: machine) }
             let rest = differences(box?.parity)
             if !rest.isEmpty {

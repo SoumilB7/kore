@@ -11,6 +11,8 @@ final class FakeHost {
     private var inbox: [[String: Any]] = []
     private var pump: Task<Void, Never>?
     private(set) var closed = false
+    /// Told once the client's side ends the link.
+    let ended = Feed<Int>()
 
     init(transport: PipeTransport) {
         self.transport = transport
@@ -20,9 +22,10 @@ final class FakeHost {
                 switch event {
                 case .frame(let data):
                     let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-                    self?.inbox.append(object)
+                    self?.arrived(object)
                 case .closed:
                     self?.closed = true
+                    self?.ended.send(0)
                 }
             }
         }
@@ -50,6 +53,22 @@ final class FakeHost {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return nil
+    }
+
+    private var takers: [(type: String, wake: CheckedContinuation<Got, Never>)] = []
+
+    private func arrived(_ object: [String: Any]) {
+        if let i = takers.firstIndex(where: { $0.type == object["t"] as? String }) {
+            takers.remove(at: i).wake.resume(returning: Got(session: 0, object: object))
+        } else {
+            inbox.append(object)
+        }
+    }
+
+    /// The next message of that type the client sent: when it comes, no polling and no clock.
+    func take(_ type: String) async -> [String: Any] {
+        if let i = inbox.firstIndex(where: { $0["t"] as? String == type }) { return inbox.remove(at: i) }
+        return await withCheckedContinuation { takers.append((type, $0)) }.object
     }
 
     /// Everything the client sent that wasn't taken yet.

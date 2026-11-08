@@ -246,7 +246,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             return .remoteControlUnavailable(Self.remoteOnBox)
         case .approvalRequested(let approval):
             // Always allow is set on the box itself: the card doesn't offer it.
-            let shown = approval.withoutAlwaysAllow(note: "Always allow is set on \(connection.alias) itself")
+            let shown = approval.withoutAlwaysAllow(note: "Always allow is set on \(NodeNames.name(connection.alias)) itself")
             asked[approval.id] = shown
             return .approvalRequested(shown)
         case .turnChanges(let turn, let changes) where localPath != nil:
@@ -336,7 +336,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// The chat's id once it's on the box (a new chat's, after `chat.new`).
     private func ready() async throws -> String {
         try await start()
-        guard let chatId else { throw HostRefusal(message: "This chat isn't on \(connection.alias) yet") }
+        guard let chatId else { throw HostRefusal(message: "This chat isn't on \(NodeNames.name(connection.alias)) yet") }
         return chatId
     }
 
@@ -378,7 +378,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         guard let data = await Task.detached(operation: { try? Data(contentsOf: url) }).value else {
             throw HostRefusal(message: "\(file.name) couldn't be read")
         }
-        guard data.count <= LinkUploads.maxSize else { throw HostRefusal(message: "\(file.name) is over 12 MB, too large to send to \(connection.alias)") }
+        guard data.count <= LinkUploads.maxSize else { throw HostRefusal(message: "\(file.name) is over 12 MB, too large to send to \(NodeNames.name(connection.alias))") }
         switch await connection.upload(data, name: file.name, mime: Self.mime(data)) {
         case .success(let blob): return CallFile(blob: blob, name: file.name, kind: file.kind)
         case .failure(let refusal): throw refusal
@@ -574,7 +574,7 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
 
     /// The box's own words only where no code says it better.
     init(_ result: LinkMessage.Result, alias: String) {
-        message = Self.words(result.code, alias: alias) ?? result.message ?? "\(alias) refused it"
+        message = Self.words(result.code, alias: alias) ?? result.message ?? "\(NodeNames.name(alias)) refused it"
     }
 
     /// A forwarded call the box refused: its policy's refusals in the box's own words ("mybox
@@ -582,15 +582,15 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
     init(_ result: ChatCallResult, command: ChatCommand, alias: String, modes: [ModeOption]) {
         switch (result.code, command) {
         case (.raiseMode?, .setMode(let id)):
-            message = "\(alias) doesn't allow \(modes.first { $0.id == id }?.label ?? id) from here"
+            message = "\(NodeNames.name(alias)) doesn't allow \(modes.first { $0.id == id }?.label ?? id) from here"
         case (.command?, .send(let text, _, _, _)):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = String(trimmed.dropFirst().prefix { !$0.isWhitespace })
             message =
-                trimmed.hasPrefix("!") ? "\(alias) doesn't run ! lines from here"
-                : trimmed.hasPrefix("/") ? "/\(name) isn't offered in this chat on \(alias)" : "\(alias) doesn't take that here"
+                trimmed.hasPrefix("!") ? "\(NodeNames.name(alias)) doesn't run ! lines from here"
+                : trimmed.hasPrefix("/") ? "/\(name) isn't offered in this chat on \(NodeNames.name(alias))" : "\(NodeNames.name(alias)) doesn't take that here"
         case (.command?, .setRemoteControl): message = "Not in a chat on a box"
-        default: message = Self.words(result.code, alias: alias) ?? result.message ?? "\(alias) refused it"
+        default: message = Self.words(result.code, alias: alias) ?? result.message ?? "\(NodeNames.name(alias)) refused it"
         }
     }
 
@@ -602,19 +602,19 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
     /// (an invalid argument).
     static func words(_ code: ResultCode?, alias: String) -> String? {
         switch code {
-        case .busy: "the chat on \(alias) is busy"
-        case .goneChat: "the chat is no longer on \(alias)"
-        case .goneCard: "that was answered or withdrawn on \(alias)"
-        case .goneFolder: "that folder isn't on \(alias)"
-        case .goneBlob: "the file didn't reach \(alias)"
-        case .raiseMode: "\(alias) doesn't allow that mode from here"
-        case .alwaysAllow: "Always allow is set on \(alias) itself"
-        case .signIn: "sign-ins are answered on \(alias) itself"
-        case .deniedControl: "\(alias) lets this Mac only watch"
+        case .busy: "the chat on \(NodeNames.name(alias)) is busy"
+        case .goneChat: "the chat is no longer on \(NodeNames.name(alias))"
+        case .goneCard: "that was answered or withdrawn on \(NodeNames.name(alias))"
+        case .goneFolder: "that folder isn't on \(NodeNames.name(alias))"
+        case .goneBlob: "the file didn't reach \(NodeNames.name(alias))"
+        case .raiseMode: "\(NodeNames.name(alias)) doesn't allow that mode from here"
+        case .alwaysAllow: "Always allow is set on \(NodeNames.name(alias)) itself"
+        case .signIn: "sign-ins are answered on \(NodeNames.name(alias)) itself"
+        case .deniedControl: "\(NodeNames.name(alias)) lets this Mac only watch"
         case .rateLimited: "too many at once; try again in a moment"
-        case .staleCard: "the card changed on \(alias)"
-        case .command: "\(alias) doesn't take that here"
-        case .tooLarge: "too large for \(alias)"
+        case .staleCard: "the card changed on \(NodeNames.name(alias))"
+        case .command: "\(NodeNames.name(alias)) doesn't take that here"
+        case .tooLarge: "too large for \(NodeNames.name(alias))"
         default: nil
         }
     }

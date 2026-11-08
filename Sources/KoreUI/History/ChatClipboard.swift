@@ -28,7 +28,7 @@ enum ChatSpot: Hashable {
     var shown: String {
         switch self {
         case .mac: folderName
-        case .box(let alias, _): "\(folderName) on \(alias)"
+        case .box(let alias, _): "\(folderName) on \(NodeNames.name(alias))"
         }
     }
 
@@ -36,7 +36,7 @@ enum ChatSpot: Hashable {
     var destination: String {
         switch self {
         case .mac: folderName
-        case .box(let alias, _): alias
+        case .box(let alias, _): NodeNames.name(alias)
         }
     }
 }
@@ -130,7 +130,7 @@ enum ChatPastePlan: Equatable {
         switch (clip.spot, target) {
         case (.mac, _) where held != nil:
             guard let held, target == .box(alias: held.alias, folder: held.boxFolder) else {
-                return .refuse("“\(clip.title)” belongs to \(held?.alias ?? "its box") · send it back there, or copy it")
+                return .refuse("“\(clip.title)” belongs to \(held.map { NodeNames.name($0.alias) } ?? "its box") · send it back there, or copy it")
             }
             return .sendBack
         case (.mac, .mac): return .copyThenRemove
@@ -250,8 +250,8 @@ enum ChatPasting {
                 let link = connection(alias)
                 link.retain()
                 held.append(link)
-                guard await ChatMoving.online(link) else { return .failure(MoveFailure("Can't reach \(alias) · nothing changed")) }
-                guard var moves = ChatMoving.engine(link) else { return .failure(MoveFailure("\(alias) isn't an SSH alias Kore can use")) }
+                guard await ChatMoving.online(link) else { return .failure(MoveFailure("Can't reach \(NodeNames.name(alias)) · nothing changed")) }
+                guard var moves = ChatMoving.engine(link) else { return .failure(MoveFailure("\(NodeNames.name(alias)) isn't an SSH alias Kore can use")) }
                 // 1.10's moves (bring, send back, adopt) on the same bar.
                 moves.stopper = stopper
                 moves.progress = { bytes, total in TransferProgress.shared.update(transfer, bytes: bytes, total: total) }
@@ -328,7 +328,7 @@ enum ChatPasting {
                 }
             switch result {
             case .failure(var failure):
-                if failure.code == .staleGen { failure.line = "\(moves.connection.alias) has that chat already · nothing changed" }
+                if failure.code == .staleGen { failure.line = "\(NodeNames.name(moves.connection.alias)) has that chat already · nothing changed" }
                 if let window = shown?.0 {
                     window.open(SessionSummary(id: clip.id, agent: provider.historyAgent, title: settings.title, updated: .now))
                 }

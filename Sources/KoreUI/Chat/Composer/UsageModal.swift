@@ -1,4 +1,5 @@
 import AppKit
+import HostClient
 import KoreCore
 import src
 import SwiftUI
@@ -232,7 +233,7 @@ struct UsageModal: View {
                         UsageChatRow(
                             name: current ? "This chat" : name,
                             folder: showFolders
-                                ? chatShare.box ?? (UsageChats.folder(chatShare.id) ?? chatShare.folder).map { ($0 as NSString).lastPathComponent } : nil,
+                                ? chatShare.box.map(NodeNames.name) ?? (UsageChats.folder(chatShare.id) ?? chatShare.folder).map { ($0 as NSString).lastPathComponent } : nil,
                             box: chatShare.box != nil, share: chatShare, used: limit.used, bar: bar, current: current, go: go
                         )
                         .storyID(StoryID.UsageModal.chat(chatShare.id), press: current ? nil : go)

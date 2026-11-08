@@ -124,11 +124,11 @@ extension BoxFileSource {
 
     /// A stand-in that doesn't copy: as a box from before 1.11 answers.
     package func copy(_ from: String, to: String, run: BoxCopyRun?, resume: Bool) async -> Result<String, HostRefusal> {
-        .failure(HostRefusal(message: "\(alias) needs an update to copy files"))
+        .failure(HostRefusal(message: "\(NodeNames.name(alias)) needs an update to copy files"))
     }
 
     package func count(_ path: String) async -> Result<CarryCount, HostRefusal> {
-        .failure(HostRefusal(message: "\(alias) needs an update to copy files"))
+        .failure(HostRefusal(message: "\(NodeNames.name(alias)) needs an update to copy files"))
     }
 
     /// A stand-in from before 1.12: its callers use the shell.
@@ -138,7 +138,7 @@ extension BoxFileSource {
     package func find(_ path: String) async -> Result<Set<String>?, HostRefusal> { .failure(Self.olderBox(alias)) }
     package func trashLanding(_ path: String) async -> Result<Void, HostRefusal> { .failure(Self.olderBox(alias)) }
 
-    static func olderBox(_ alias: String) -> HostRefusal { HostRefusal(message: "\(alias) needs an update for that") }
+    static func olderBox(_ alias: String) -> HostRefusal { HostRefusal(message: "\(NodeNames.name(alias)) needs an update for that") }
 }
 
 /// A copy on a box under way (`fs.copy`): its bytes as the box says them, and its Cancel
@@ -351,7 +351,7 @@ extension HostConnection: BoxFileSource {
     ) async -> FilesResult {
         switch phase {
         case .refused(let why): return .refused("", .unknown, why.line(alias))
-        case .offline, .idle: return .refused("", .unknown, "\(alias) can't be reached")
+        case .offline, .idle: return .refused("", .unknown, "\(NodeNames.name(alias)) can't be reached")
         case .connecting, .online: break
         }
         var asked = ""
@@ -376,12 +376,12 @@ extension HostConnection: BoxFileSource {
 
     /// The box's words, or what's wrong in Kore's: a box from before 1.7 doesn't know the command.
     private func refusal(_ result: FilesResult, copying: Bool = false) -> HostRefusal {
-        if result.ok { return HostRefusal(message: copying ? "\(alias) needs an update to copy files" : "\(alias) sent nothing") }
+        if result.ok { return HostRefusal(message: copying ? "\(NodeNames.name(alias)) needs an update to copy files" : "\(NodeNames.name(alias)) sent nothing") }
         if result.code == .invalid, ["Unknown command.", "Not taken here."].contains(result.message) {
-            return HostRefusal(message: "\(alias) needs an update to \(copying ? "copy" : "show") files")
+            return HostRefusal(message: "\(NodeNames.name(alias)) needs an update to \(copying ? "copy" : "show") files")
         }
-        if result.code == .deniedControl { return HostRefusal(message: "Files need a grant with full control on \(alias)") }
-        return HostRefusal(message: result.message ?? "\(alias) refused it")
+        if result.code == .deniedControl { return HostRefusal(message: "Files need a grant with full control on \(NodeNames.name(alias))") }
+        return HostRefusal(message: result.message ?? "\(NodeNames.name(alias)) refused it")
     }
 }
 

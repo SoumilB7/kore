@@ -57,7 +57,7 @@ final class BoxBinding {
 
     /// A stand-in path whose last part is the folder's name: the window's title and the chats'
     /// folder. Nothing on this Mac is read or written there.
-    var folderURL: URL { URL(fileURLWithPath: "/" + alias + "/" + folder.replacingOccurrences(of: "~", with: "home")) }
+    var folderURL: URL { URL(fileURLWithPath: "/" + NodeNames.name(alias) + "/" + folder.replacingOccurrences(of: "~", with: "home")) }
 
     /// The folder's files as the window's explorer shows them (made when it first shows).
     private(set) lazy var files: BoxExplorerStore = {
@@ -210,7 +210,7 @@ final class BoxBinding {
     }
 
     /// The folder label's hover line: "mybox · ~/Code/app · synced locally to ~/Desktop/app".
-    var label: String { alias + " · " + shownFolder + (syncedTo.map { " · synced locally to " + $0 } ?? "") }
+    var label: String { NodeNames.name(alias) + " · " + shownFolder + (syncedTo.map { " · synced locally to " + $0 } ?? "") }
 
     static func when(_ date: Date) -> String {
         Calendar.current.isDateInToday(date)
@@ -299,7 +299,7 @@ final class BoxBinding {
     }
 
     /// Why the History popup can't rename or archive here: a box older than 1.9. Nil when it can.
-    var historyLocked: String? { connection.keepsHistory ? nil : "Update kore-host on \(alias) to rename or archive here" }
+    var historyLocked: String? { connection.keepsHistory ? nil : "Update kore-host on \(NodeNames.name(alias)) to rename or archive here" }
 
     /// A past chat back as a box chat (a closed one, or a session its CLI keeps), for a tab here.
     func openSession(_ session: SessionSummary) async -> Chat? {
@@ -434,7 +434,7 @@ final class BoxChatServices: ChatServices {
         chat.ownPopups()
         // Modes above Auto are set on the box itself: the picker doesn't offer them.
         chat.controls.levelCap = LinkPolicy.raiseCap.rawValue
-        chat.controls.levelCapNote = "Set on \(connection.alias) itself"
+        chat.controls.levelCapNote = "Set on \(NodeNames.name(connection.alias)) itself"
     }
     func closed(_ chat: Chat) { app.closed(chat) }
     func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}

@@ -125,7 +125,7 @@ package struct ChatCopies {
                     settings: ChatCopy(provider: source.provider, session: new, title: title), line: line)
             }
         case .box(let moves, let folder):
-            guard moves.connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(moves.connection.alias) to copy chats")) }
+            guard moves.connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(NodeNames.name(moves.connection.alias)) to copy chats")) }
             var cost = MoveCost()
             let said = await moves.connection.move(
                 .chatCopy,
@@ -176,7 +176,7 @@ package struct ChatCopies {
         settings: ChatCopy, line: String?
     ) async -> Result<ChatCopy, MoveFailure> {
         let connection = moves.connection
-        guard connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(connection.alias) to copy chats")) }
+        guard connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(NodeNames.name(connection.alias)) to copy chats")) }
         var made = settings
         let moveId = UUID().uuidString.lowercased()
         let prepared = await connection.move(.chatAdoptCopy, ControlArgs(provider: provider, sessionId: new, phase: MovePhase.prepare.rawValue, moveId: moveId))
@@ -197,7 +197,7 @@ package struct ChatCopies {
             folder: folder, folders: folders, phase: MovePhase.commit.rawValue, moveId: moveId, copiedFrom: line)
         let adopted = await connection.move(.chatAdoptCopy, commit)
         made.cost.linkBytes += connection.lastMoveBytes
-        guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(connection.alias) didn't take it", adopted.code)) }
+        guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(NodeNames.name(connection.alias)) didn't take it", adopted.code)) }
         made.chatId = chatId
         HostLog.note(connection.alias, "copy there", "chat \(chatId) files \(found.files.count) rsync \(made.cost.rsyncSent)B")
         return .success(made)
@@ -234,7 +234,7 @@ package struct ChatCopies {
         case .box(let moves, let folder):
             let said = await moves.connection.move(
                 .chatCopy, ControlArgs(sourceId: source.id, provider: source.provider, folder: folder, phase: MovePhase.commit.rawValue))
-            return said.ok ? .success(()) : .failure(MoveFailure("The copy is made; the original stays on \(moves.connection.alias)", said.code))
+            return said.ok ? .success(()) : .failure(MoveFailure("The copy is made; the original stays on \(NodeNames.name(moves.connection.alias))", said.code))
         }
     }
 

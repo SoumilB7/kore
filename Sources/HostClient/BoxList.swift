@@ -70,19 +70,19 @@ package final class BoxList {
             case .working(let step): return Note(line: step)
             case .notSetUp:
                 if let why = machine?.unsupported(alias) { return Note(line: why) }
-                return Note(line: "Not set up on \(alias)", action: .setUp)
-            case .stopped: return Note(line: "Stopped on \(alias)", action: .start)
-            case .noGrant: return Note(line: "\(alias) doesn't know this Mac", action: .setUp)
-            case .stale: return Note(line: "\(alias) needs an update", action: .update)
+                return Note(line: "Not set up on \(NodeNames.name(alias))", action: .setUp)
+            case .stopped: return Note(line: "Stopped on \(NodeNames.name(alias))", action: .start)
+            case .noGrant: return Note(line: "\(NodeNames.name(alias)) doesn't know this Mac", action: .setUp)
+            case .stale: return Note(line: "\(NodeNames.name(alias)) needs an update", action: .update)
             case .failed(let why, let action): return Note(line: why, action: action)
             case .unreachable(let why, let action): return Note(line: why, action: action)
             case .ready:
-                if older { return Note(line: "\(alias) needs an update", action: .update) }
+                if older { return Note(line: "\(NodeNames.name(alias)) needs an update", action: .update) }
                 if let warning { return Note(line: warning) }
                 if fresh { return Note(line: "Ready") }
                 if let machine {
                     if ![BoxAgent.claude, .codex].contains(where: { machine.has($0.rawValue) }) {
-                        return Note(line: "No agents on \(alias) yet", action: .setUpAgents)
+                        return Note(line: "No agents on \(NodeNames.name(alias)) yet", action: .setUpAgents)
                     }
                     if let missing = machine.missing(alias) {
                         return Note(line: missing.line, action: missing.command.map { machine.installsWithoutPassword(missing.tool) ? .install(missing.tool) : .copy($0) })
@@ -91,7 +91,7 @@ package final class BoxList {
                 if let count = parity?.differences.count, count > 0 {
                     return Note(line: count == 1 ? "1 difference from this Mac" : "\(count) differences from this Mac", action: .differences(count))
                 }
-                return folders.isEmpty ? Note(line: "No folders on \(alias)") : nil
+                return folders.isEmpty ? Note(line: "No folders on \(NodeNames.name(alias))") : nil
             case .unknown, .probing: return nil
             }
         }
@@ -209,7 +209,7 @@ package final class BoxList {
             let result = await connection.addFolder(path)
             if case .success = result { self.update(alias) { $0.folders = connection.folders } }
             return result
-        } ?? .failure(HostRefusal(message: "Can't reach \(alias)"))
+        } ?? .failure(HostRefusal(message: "Can't reach \(NodeNames.name(alias))"))
     }
 
     private func run(_ alias: String) async {
@@ -265,7 +265,7 @@ package final class BoxList {
 
     /// Installs or updates a CLI there, then finds the machine again. The failure's line, or nil.
     package func install(_ agent: BoxAgent, on alias: String) async -> BoxSetup.Failure? {
-        guard let machine = box(alias)?.machine else { return BoxSetup.Failure(message: "Check \(alias) first", fix: .tryAgain) }
+        guard let machine = box(alias)?.machine else { return BoxSetup.Failure(message: "Check \(NodeNames.name(alias)) first", fix: .tryAgain) }
         switch agent.install(on: machine, name: alias) {
         case .failure(let why): return why
         case .success(let script):
@@ -291,7 +291,7 @@ package final class BoxList {
     package func setGitIdentity(name: String?, email: String?, on alias: String) async -> BoxSetup.Failure? {
         let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.script(alias, BoxParity.gitScript(name: name, email: email))
         await detect(alias, deep: false)
-        return ran.ok ? nil : BoxSetup.Failure(message: "git on \(alias) didn't take it: \(ran.lastLine)")
+        return ran.ok ? nil : BoxSetup.Failure(message: "git on \(NodeNames.name(alias)) didn't take it: \(ran.lastLine)")
     }
 
     // MARK: Setting a box up
@@ -305,7 +305,7 @@ package final class BoxList {
             // Restarting it ends the turns running there: asked once first.
             let working = HostConnection.live(alias)?.chats.values.filter(\.running).count ?? 0
             if working > 0 {
-                let line = working == 1 ? "1 chat is working on \(alias)" : "\(working) chats are working on \(alias)"
+                let line = working == 1 ? "1 chat is working on \(NodeNames.name(alias))" : "\(working) chats are working on \(NodeNames.name(alias))"
                 update(alias) { $0.status = .failed(line, action == .setUp ? .setUpAnyway : .updateAnyway) }
                 return
             }
@@ -314,12 +314,12 @@ package final class BoxList {
         case .start: await perform(alias, grant: nil, retry: .start) { setup, _ in try await setup.start(); return nil }
         case .updateAnyway: await perform(alias, grant: nil, retry: .update) { setup, step in try await setup.run(allow: false, step: step) }
         case .tryAgain:
-            update(alias) { $0.status = .working("Checking \(alias)…") }
+            update(alias) { $0.status = .working("Checking \(NodeNames.name(alias))…") }
             guard await detect(alias) != nil else { return }
             update(alias) { $0.status = .unknown }
             await probe(alias)
         case .install(let tool):
-            update(alias) { $0.status = .working("Installing \(tool) on \(alias)…") }
+            update(alias) { $0.status = .working("Installing \(tool) on \(NodeNames.name(alias))…") }
             let failed = await installTool(tool, on: alias)
             update(alias) { $0.status = failed.map { .failed($0.message, $0.fix) } ?? .ready }
         case .installLinuxKit(let update):
@@ -345,7 +345,7 @@ package final class BoxList {
         defer { busy.remove(alias) }
         var setup = makeSetup(alias, grant ?? BoxSetup.grant(for: alias, defaults: defaults))
         setup.mayInstallKit = kitConsent
-        update(alias) { $0.status = .working(retry == .start ? "Starting…" : "Checking \(alias)…") }
+        update(alias) { $0.status = .working(retry == .start ? "Starting…" : "Checking \(NodeNames.name(alias))…") }
         do {
             let done = try await work(setup) { [weak self] line in self?.update(alias) { $0.status = .working(line) } }
             if let done {
@@ -356,7 +356,7 @@ package final class BoxList {
                 }
             }
         } catch {
-            let why = (error as? BoxSetup.Failure) ?? BoxSetup.Failure(message: "Couldn't reach \(alias)", fix: .tryAgain)
+            let why = (error as? BoxSetup.Failure) ?? BoxSetup.Failure(message: "Couldn't reach \(NodeNames.name(alias))", fix: .tryAgain)
             HostLog.note(alias, "setup failed", why.message)
             update(alias) { $0.status = .failed(why.message, why.fix ?? retry) }
             return
@@ -400,7 +400,7 @@ package final class BoxList {
     /// Why a box didn't link, from how its link ended: ssh's exit status (attach's own codes, the
     /// shell's 126 and 127, ssh's 255) or the box's refusal.
     package static func status(_ alias: String, phase: HostConnection.Phase, reason: String?, lateHello: Bool = false) -> Status {
-        if lateHello { return .unreachable("\(alias) waited too long for this Mac", .tryAgain) }
+        if lateHello { return .unreachable("\(NodeNames.name(alias)) waited too long for this Mac", .tryAgain) }
         if case .refused(let why) = phase {
             switch why {
             case .version: return .stale
@@ -409,7 +409,7 @@ package final class BoxList {
             case .replaced: return .unreachable(why.line(alias), nil)
             }
         }
-        let unreachable = Status.unreachable("Can't reach \(alias)", .tryAgain)
+        let unreachable = Status.unreachable("Can't reach \(NodeNames.name(alias))", .tryAgain)
         guard let ended = SSHTransport.exit(of: reason) else {
             // A link that ended without ssh's status: what it said.
             let said = reason?.lowercased() ?? ""
@@ -419,7 +419,7 @@ package final class BoxList {
         case AttachExit.cantRun, AttachExit.notFound: return .notSetUp
         case AttachExit.notRunning.rawValue: return .stopped
         case AttachExit.noGrant.rawValue: return .noGrant
-        case AttachExit.noRuntime.rawValue: return .unreachable("\(alias) stops kore-host when you log out · sudo loginctl enable-linger", nil)
+        case AttachExit.noRuntime.rawValue: return .unreachable("\(NodeNames.name(alias)) stops kore-host when you log out · sudo loginctl enable-linger", nil)
         case AttachExit.sshFailed:
             let why = BoxSetup.sshFailure(alias, ended.line)
             return .unreachable(why.message, why.fix)
