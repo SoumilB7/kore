@@ -102,9 +102,7 @@ extension StoryID {
 
     package enum Composer {
         /// In the Account popup.
-        package static let arsenalSwitch = StoryID(.composer, "arsenal.switch")
         package static let refusalSwitch = StoryID(.composer, "refusal.switch")
-        package static let arsenalStop = StoryID(.composer, "arsenal.stop")
         package static let field = StoryID(.composer, "field")
         package static let send = StoryID(.composer, "send")
         /// The ring beside Send at a plan's limit: the draft goes when the limit resets.

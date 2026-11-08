@@ -50,34 +50,7 @@ struct ArsenalTitlebarButton: View {
     }
 }
 
-/// "Let chats use Arsenal", and Stop agent control while a chat has it on, in the Account popup
-/// (⌘,): where everything turns off. The tab's right-click or ⌥⌘K turns the switch on with a chat.
-struct ArsenalSettings: View {
-    var body: some View {
-        let arsenal = Arsenal.shared
-        VStack(alignment: .leading, spacing: Space.sm) {
-            HStack(spacing: Space.md) {
-                Text("Let chats use Arsenal").font(TextStyle.body).foregroundStyle(Theme.text).lineLimit(1)
-                Spacer(minLength: Space.xl)
-                Toggle("", isOn: Binding(get: { arsenal.allowed }, set: { arsenal.setAllowed($0) }))
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .tint(Theme.accent)
-                    .accessibilityLabel("Let chats use Arsenal")
-                    .storyID(StoryID.Composer.arsenalSwitch, press: { arsenal.setAllowed(!arsenal.allowed) })
-            }
-            .help("Off: no chat can have it, and any that do go off at once")
-            if arsenal.anyOn {
-                Button("Stop agent control") { arsenal.stopAll() }
-                    .smallButton(danger: true)
-                    .storyID(StoryID.Composer.arsenalStop)
-            }
-        }
-    }
-}
-
-/// "Switch models when flagged", in the Account popup (⌘,), under Arsenal: a Claude turn its
+/// "Switch models when flagged", at the foot of a Claude chat's model picker: a Claude turn its
 /// model's safeguards refuse goes again on the CLI's fallback model. A chat's CLI takes it when
 /// it next starts.
 struct RefusalSettings: View {

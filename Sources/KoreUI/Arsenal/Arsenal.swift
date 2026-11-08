@@ -68,13 +68,13 @@ package final class Arsenal {
     }
 
     /// The tab's right-click and ⌥⌘K. With the switch off, the first use turns it on, and the chat
-    /// says in one line where everything turns off.
+    /// says so in one line.
     package func flip(_ chat: Chat) {
         if chat.arsenal != nil { return turnOff(chat) }
         guard Self.unavailable(chat) == nil else { return }
         if !allowed {
             setAllowed(true)
-            chat.note("Chats can use Arsenal now · Account (⌘,) turns it off")
+            chat.note("Chats can use Arsenal now")
         }
         turnOn(chat)
     }

@@ -42,7 +42,8 @@ final class PickerState {
 
 /// The model chip's popup (model-picker.html, A): one row per family, its versions newest first
 /// as chips, the current model the one accent chip; a rule, then effort as a slider, and fast
-/// mode's switch where the account and the model can have it. A pick applies at once and the
+/// mode's switch where the account and the model can have it; in a Claude chat, a rule and
+/// "Switch models when flagged" last. A pick applies at once and the
 /// popup stays, so effort can follow; Return picks and closes, Space picks and stays, Esc, a
 /// click outside or typing closes it. Chips that don't fit fold into a "…" chip, which wraps the
 /// row when pressed.
@@ -105,6 +106,12 @@ struct ModelPicker: View {
                             }
                         }
                     }
+                }
+                if chat.provider.id == "claude" {
+                    Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
+                        .gridCellColumns(2)
+                        .padding(.vertical, Space.sm)
+                    RefusalSettings().gridCellColumns(2).frame(minHeight: Size.Picker.row)
                 }
             }
         }

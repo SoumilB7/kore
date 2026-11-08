@@ -91,6 +91,13 @@ final class RefusedTurnChoices: ChatStoryline {
     override func steps() -> [any Step] {
         super.steps() + [
             Expect("Switch models when flagged starts on") { _ in RefusalFallback.saved },
+            // Its switch sits at the foot of a Claude chat's model picker.
+            Press(.id(StoryID.Composer.model)), WaitForElement(.id(StoryID.Composer.models)),
+            Press(.id(StoryID.Composer.refusalSwitch)),
+            Expect("off from the model picker") { _ in !RefusalFallback.saved },
+            Press(.id(StoryID.Composer.refusalSwitch)),
+            Expect("and on again") { _ in RefusalFallback.saved },
+            Key(.escape),
             Send(Self.message), TurnFinished(1),
             PressRefused(\.addContext),
             Expect("the message is back in the composer, the context line first") { story in

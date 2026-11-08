@@ -104,13 +104,9 @@ final class ArsenalButton: ChatStoryline {
         }
     }
 
-    /// Opens Account and flips "Let chats use Arsenal".
-    private func flipSwitch() -> [any Step] {
-        [
-            Do("open Account") { story in try story.activeChat().storyOpenAccount() },
-            Press(.id(StoryID.Composer.arsenalSwitch)),
-            Key(.escape),
-        ]
+    /// Turns the switch off, as nothing in the window does now: Account has no Arsenal row.
+    private func switchOff() -> [any Step] {
+        [Do("the switch off, inside Kore") { _ in Arsenal.shared.setAllowed(false) }]
     }
 
     private func tier(_ role: String, _ wanted: ArsenalTier?, _ what: String) -> Expect {
@@ -161,7 +157,7 @@ final class ArsenalButton: ChatStoryline {
             TabRow(role: "a", title: "Arsenal"),
             Expect("the switch is on") { _ in Arsenal.shared.allowed },
             tier("a", .watch, "right-click"),
-            Expect.rows("the chat says so once") { rows in rows.filter { $0.kind == "notice" && $0.text.hasPrefix("Chats can use Arsenal") }.count == 1 },
+            Expect.rows("the chat says so once") { rows in rows.filter { $0.kind == "notice" && $0.text == "Chats can use Arsenal now" }.count == 1 },
             open,
             icon,
             Snapshot("titlebar-arsenal-watch"),
@@ -224,19 +220,11 @@ final class ArsenalButton: ChatStoryline {
             Expect("the switch stays on") { _ in Arsenal.shared.allowed },
             closed("stop all from the icon"),
             noIcon,
-            key, Front(role: "a"), key,
-            tier("a", .watch, "on for Account's stop"), tier("b", .watch, "on for Account's stop"),
-            Do("Account, from the chat in front") { story in try story.activeChat().storyOpenAccount() },
-            Press(.id(StoryID.Composer.arsenalStop)),
-            Key(.escape),
-            tier("a", nil, "stop all"), tier("b", nil, "stop all"),
-            Expect("the switch is still on") { _ in Arsenal.shared.allowed },
-            closed("stop all"),
 
             // The switch off clears every chat, and the icon goes.
-            key, Front(role: "b"), key,
+            Front(role: "a"), key, Front(role: "b"), key,
             tier("a", .watch, "on"), tier("b", .watch, "on"),
-        ] + flipSwitch() + [
+        ] + switchOff() + [
             tier("a", nil, "switch off"), tier("b", nil, "switch off"),
             closed("switch off again"),
             noIcon,
