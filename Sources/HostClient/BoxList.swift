@@ -132,7 +132,8 @@ package final class BoxList {
         reload()
     }
 
-    private var listed: [String] { defaults?.stringArray(forKey: Self.listedKey) ?? [] }
+    /// The kept aliases that are aliases (`SyncBox.validAlias`): any other is left out on load.
+    private var listed: [String] { (defaults?.stringArray(forKey: Self.listedKey) ?? []).filter(SyncBox.validAlias) }
 
     /// The list again from what's kept; what's known of each box stays.
     package func reload() {
@@ -156,7 +157,7 @@ package final class BoxList {
     /// never an option (`-…`).
     package func add(_ alias: String) {
         let alias = alias.trimmingCharacters(in: .whitespaces)
-        guard !alias.isEmpty, !alias.hasPrefix("-"), !alias.contains(where: { $0.isWhitespace }) else { return }
+        guard SyncBox.validAlias(alias) else { return }
         if !listed.contains(alias) { defaults?.set(listed + [alias], forKey: Self.listedKey) }
         if box(alias) == nil { boxes.append(Box(alias: alias)) }
     }

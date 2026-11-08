@@ -53,33 +53,47 @@ package enum SyncPairs {
 
 // MARK: - The box's end
 
-/// How the sync reaches the box's files: rsync's name for a path there, and a shell there.
+/// How the sync reaches the box's files: over SSH, rsync's name for a path there, and a shell
+/// there. No name ever becomes part of a remote command's text: paths and names go as separate
+/// words, each quoted by `ShellQuote.single` (the box's shell reads rsync's remote paths too).
 package struct SyncBox: Sendable {
     package let alias: String
-    /// Where new copies go: `$HOME/Code` on a box.
-    package let base: String
-    let spec: @Sendable (String) -> String
-    let rsyncOptions: @Sendable (_ low: Bool) -> [String]
-    package let shell: @Sendable (_ script: String, _ input: Data?, _ low: Bool) async -> SyncProcess.Output
+    /// Where new copies go; nil: `~/Code` on the box.
+    package let base: String?
+    /// The ssh program and its options, before `--` and the alias.
+    let ssh: [String]
 
-    package static let sshOptions = ["-T", "-o", "BatchMode=yes"]
+    package static let sshOptions = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
-    /// Over SSH (`ssh <alias>`, the user's own config and agent). Low priority runs under `nice`.
-    package static func ssh(_ alias: String) -> SyncBox {
-        SyncBox(
-            alias: alias, base: "$HOME/Code", spec: { alias + ":" + $0 },
-            rsyncOptions: { low in ["-e", "ssh " + sshOptions.joined(separator: " ")] + (low ? ["--rsync-path=nice -n 10 rsync"] : []) },
-            shell: { script, input, low in
-                let command = (low ? "nice -n 10 " : "") + "sh -c " + SyncProcess.quoted(script)
-                return await SyncProcess.run("/usr/bin/ssh", sshOptions + [alias, command], input: input, low: low)
-            })
+    /// `ssh <alias>`, the user's own config and agent. Nil for an alias that isn't one.
+    package static func ssh(_ alias: String) -> SyncBox? {
+        guard validAlias(alias) else { return nil }
+        return SyncBox(alias: alias, base: nil, ssh: ["/usr/bin/ssh"] + sshOptions)
     }
 
-    /// The box's files on this Mac (tests): `base` stands for `~/Code`.
-    package static func local(alias: String, base: String) -> SyncBox {
-        SyncBox(
-            alias: alias, base: base, spec: { $0 }, rsyncOptions: { _ in [] },
-            shell: { script, input, low in await SyncProcess.run("/bin/sh", ["-c", script], input: input, low: low) })
+    /// Through another ssh program (tests: one that runs the command here, as sshd's shell would).
+    package static func via(_ program: String, alias: String, base: String?) -> SyncBox {
+        SyncBox(alias: alias, base: base, ssh: [program])
+    }
+
+    /// An SSH alias: letters, digits, `.`, `_`, `-`, not starting with `-`.
+    package static func validAlias(_ alias: String) -> Bool {
+        !alias.isEmpty && !alias.hasPrefix("-") && alias.unicodeScalars.allSatisfy {
+            ("a"..."z").contains($0) || ("A"..."Z").contains($0) || ("0"..."9").contains($0) || "._-".unicodeScalars.contains($0)
+        }
+    }
+
+    /// rsync's name for a path on the box: the alias, then the path quoted for the box's shell.
+    func spec(_ path: String) -> String { alias + ":" + ShellQuote.single(path) }
+
+    func rsyncOptions(_ low: Bool) -> [String] {
+        ["-e", (ssh + ["--"]).joined(separator: " ")] + (low ? ["--rsync-path=nice -n 10 rsync"] : [])
+    }
+
+    /// Runs `script` under sh on the box, `args` as `$1`…, `input` on its stdin.
+    package func shell(_ script: String, _ args: [String] = [], input: Data? = nil, low: Bool = false) async -> SyncProcess.Output {
+        let command = (low ? "nice -n 10 " : "") + "sh -c " + ShellQuote.single(script) + " sh" + args.map { " " + ShellQuote.single($0) }.joined()
+        return await SyncProcess.run(ssh[0], Array(ssh.dropFirst()) + ["--", alias, command], input: input, low: low)
     }
 }
 
@@ -130,8 +144,6 @@ package enum SyncProcess {
         return Output(status: status, out: text(outURL), err: text(errURL))
     }
 
-    /// One word for sh.
-    package static func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 }
 
 // MARK: - Line files
@@ -147,14 +159,21 @@ package enum SyncLines {
         return (String(parts[0]), SyncStat(size: size, mtime: mtime))
     }
 
-    /// A name a line can carry.
-    static func carried(_ path: String) -> Bool { !path.contains("\t") && !path.contains("\n") && !path.contains("\r") }
 
     static func before(_ a: String, _ b: String) -> Bool { a.utf8.lexicographicallyPrecedes(b.utf8) }
     static func same(_ a: String, _ b: String) -> Bool { a.utf8.elementsEqual(b.utf8) }
 
-    static func sort(_ file: URL) async {
-        _ = await SyncProcess.run("/usr/bin/sort", ["-o", file.path, file.path], low: true, environment: ["LC_ALL": "C"])
+    /// sort(1) under LC_ALL=C, waited for here (off the main thread).
+    static func sortNow(_ file: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sort")
+        process.arguments = ["-o", file.path, file.path]
+        process.environment = ["LC_ALL": "C", "PATH": "/usr/bin:/bin"]
+        process.qualityOfService = .utility
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return }
+        process.waitUntilExit()
     }
 
     /// Reads a line file in pieces.
@@ -225,16 +244,30 @@ package final class SyncManifest: @unchecked Sendable {
 
     package var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
 
-    /// The entries for these paths and anything under them (as folders).
-    func lookup(_ paths: Set<String>) -> [String: SyncStat] {
-        guard !paths.isEmpty else { return [:] }
-        let prefixes = paths.map { $0 + "/" }
+    /// The entries for these paths and anything under them (as folders), and how many entries
+    /// there are in all: one pass, each line checked against the set by its own path and its
+    /// folders (hashed, never against every path).
+    func lookup(_ paths: Set<String>) -> (found: [String: SyncStat], count: Int) {
         var found: [String: SyncStat] = [:]
+        var count = 0
         let reader = SyncLines.Reader(url)
         while let (path, stat) = reader.next() {
-            if paths.contains(path) || prefixes.contains(where: { path.hasPrefix($0) }) { found[path] = stat }
+            count += 1
+            guard !paths.isEmpty else { continue }
+            if paths.contains(path) {
+                found[path] = stat
+                continue
+            }
+            var folder = Substring(path)
+            while let slash = folder.lastIndex(of: "/") {
+                folder = folder[..<slash]
+                if paths.contains(String(folder)) {
+                    found[path] = stat
+                    break
+                }
+            }
         }
-        return found
+        return (found, count)
     }
 
     /// Writes changes in as a stream: a stat, or nil to drop the path.
@@ -273,7 +306,14 @@ package final class SyncManifest: @unchecked Sendable {
 
 // MARK: - A pair's sync
 
-/// One pair's sync while its box window is open: nothing of it runs otherwise.
+/// One pair's sync while its box window is open: nothing of it runs otherwise. Rounds are decided
+/// off the main thread; only their outcome comes back to it.
+///
+/// It never deletes in bulk on its own: a side that's missing or empty, or a round that would
+/// delete more than half of what was agreed (10 files or more), stops with one line and waits for
+/// `allowDeletes()`. A path one side leaves out because of an ignore rule is never deleted on the
+/// other. On a Mac volume that ignores case, names are compared as it does: a rename that changes
+/// only case is a rename, and two box names that differ only by case are left alone.
 @MainActor @Observable
 package final class HostSync {
     package let pair: SyncPair
@@ -281,13 +321,17 @@ package final class HostSync {
     package private(set) var notice: String?
     /// The box watches its copy; when it can't, it lists again on `refresh()`.
     package private(set) var boxWatches = true
+    /// A round stopped before deleting this many files: `allowDeletes()` lets it go on.
+    package private(set) var askDeletes: Int?
 
     @ObservationIgnored private let connection: HostConnection
     @ObservationIgnored private let box: SyncBox
     @ObservationIgnored private let tree: SyncTree
     @ObservationIgnored private let manifest: SyncManifest
+    @ObservationIgnored private let folder: URL
     @ObservationIgnored private let scratch: URL
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let caseless: Bool
     @ObservationIgnored private var watcher: FolderWatcher?
     @ObservationIgnored private var macPending: Set<String> = []
     /// The box's changes: a file's stat, or nil once it's gone.
@@ -299,7 +343,8 @@ package final class HostSync {
     @ObservationIgnored private var started = false
     /// The whole lists were compared on this link: changes may go one by one.
     @ObservationIgnored private var compared = false
-    @ObservationIgnored private var serial = 0
+    /// The next round may delete in bulk (the user said so).
+    @ObservationIgnored private var deletesAllowed = false
     /// Files moved either way so far, and rounds run (tests: an echo would add to them).
     @ObservationIgnored package private(set) var carried = 0
     @ObservationIgnored package private(set) var rounds = 0
@@ -308,13 +353,19 @@ package final class HostSync {
     /// The Mac's watch latency: changes gathered for this long go together.
     @ObservationIgnored package var settle: TimeInterval = 0.3
 
-    package init(pair: SyncPair, connection: HostConnection, box: SyncBox? = nil, root: URL = HostCache.root(), defaults: UserDefaults = .standard) {
+    /// The pairs syncing now, by Mac folder: one sync per pair, however its windows come and go.
+    private static var live: [String: HostSync] = [:]
+
+    /// Nil for a pair whose alias isn't one (`SyncBox.validAlias`).
+    package init?(pair: SyncPair, connection: HostConnection, box: SyncBox? = nil, root: URL = HostCache.root(), defaults: UserDefaults = .standard) {
+        guard let box = box ?? .ssh(pair.alias) else { return nil }
         self.pair = pair
         self.connection = connection
-        self.box = box ?? .ssh(pair.alias)
+        self.box = box
         self.defaults = defaults
         tree = SyncTree(root: URL(fileURLWithPath: pair.mac))
-        let folder = HostCache(alias: pair.alias, root: root).folder.appendingPathComponent("sync", isDirectory: true)
+        caseless = tree.caseless
+        folder = HostCache(alias: pair.alias, root: root).folder.appendingPathComponent("sync", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let name = HostCache.safe(StableID.of(pair.mac + "\n" + pair.box, prefix: "p_"))
         manifest = SyncManifest(url: folder.appendingPathComponent(name + ".tsv"))
@@ -325,13 +376,23 @@ package final class HostSync {
 
     package func start() {
         guard !started else { return }
+        // Another sync of this pair (a window closed and opened again quickly) ends first.
+        Self.live[pair.mac]?.stop()
+        Self.live[pair.mac] = self
         started = true
+        // A round cut short (Kore quit) leaves its scratch files: none of them is used again.
+        try? FileManager.default.removeItem(at: scratch)
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let real = realPath(pair.mac)
         let base = real.hasSuffix("/") ? real : real + "/"
         watcher = FolderWatcher(URL(fileURLWithPath: pair.mac), latency: settle) { [weak self] paths in
             guard let self else { return }
-            for path in paths where path.hasPrefix(base) { self.macPending.insert(String(path.dropFirst(base.count))) }
+            for path in paths where path.hasPrefix(base) {
+                let relative = String(path.dropFirst(base.count))
+                // A changed `.gitignore` is read again before the next round decides anything.
+                self.tree.forget(relative)
+                self.macPending.insert(relative)
+            }
             self.kick()
         }
         connection.onSync(pair.box) { [weak self] raw in self?.received(raw) }
@@ -339,10 +400,12 @@ package final class HostSync {
         if connection.isOnline { watch() }
     }
 
-    /// Everything stops: the Mac's watch, the box's, and what was waiting.
+    /// Everything stops: the Mac's watch, the box's, and what was waiting. A round under way
+    /// finishes its copy but changes nothing after.
     package func stop() {
         guard started else { return }
         started = false
+        if Self.live[pair.mac] === self { Self.live[pair.mac] = nil }
         watcher?.stop()
         watcher = nil
         connection.onSync(pair.box, nil)
@@ -356,12 +419,21 @@ package final class HostSync {
         listing?.close()
         listing = nil
         listed = nil
-        try? FileManager.default.removeItem(at: scratch)
     }
 
     /// The box can't watch its copy: it lists it again now (the window came forward, a turn ended).
     package func refresh() {
         guard started, !boxWatches, listing == nil, listed == nil, connection.isOnline else { return }
+        watch()
+    }
+
+    /// The user's OK for the bulk delete a round stopped at: the lists are compared again, and
+    /// that round may delete.
+    package func allowDeletes() {
+        guard started, askDeletes != nil else { return }
+        askDeletes = nil
+        deletesAllowed = true
+        notice = nil
         watch()
     }
 
@@ -379,19 +451,42 @@ package final class HostSync {
         }
     }
 
+    /// `~/Code/x` as the box window shows it.
+    private var shownBox: String {
+        let home = pair.box.range(of: "/home/").map { range in pair.box[range.upperBound...].split(separator: "/", maxSplits: 1) }
+        return home.flatMap { $0.count == 2 ? "~/" + $0[1] : nil } ?? pair.box
+    }
+
+    private var shownMac: String { (pair.mac as NSString).abbreviatingWithTildeInPath }
+
     private func received(_ raw: Data) {
         guard started, let changed = HostWire.syncChanged(raw) else { return }
+        // Every path the box names is checked here: relative, plain parts, no control characters.
+        // One that isn't is dropped and said once.
+        let paths = changed.paths.filter { SyncPath.valid($0.p) }
+        if paths.count < changed.paths.count { notice = "\(pair.alias) sent a path outside the folder" }
         if changed.all == true {
-            if listing == nil {
-                serial += 1
-                listing = SyncLines.Writer(scratch.appendingPathComponent("box-\(serial).tsv"))
+            if changed.missing == true {
+                listing?.close()
+                listing = nil
+                notice = "Sync paused: \(shownBox) is missing on \(pair.alias)"
+                return
             }
-            for path in changed.paths where !(path.gone ?? false) && SyncLines.carried(path.p) {
+            if let capped = changed.capped {
+                // Too many files to list: no round runs on part of a list.
+                listing?.close()
+                listing = nil
+                notice = "Sync paused: over \(capped.formatted()) files on \(pair.alias)"
+                return
+            }
+            if listing == nil { listing = SyncLines.Writer(scratch.appendingPathComponent("box-\(UUID().uuidString).tsv")) }
+            for path in paths where !(path.gone ?? false) {
                 listing?.write(path.p, SyncStat(size: path.s ?? 0, mtime: path.m ?? 0))
             }
             guard changed.more != true, let writer = listing else { return }
             writer.close()
             listing = nil
+            if let old = listed { try? FileManager.default.removeItem(at: old) }
             listed = writer.url
             boxWatches = changed.watching ?? true
             if !boxWatches {
@@ -399,20 +494,20 @@ package final class HostSync {
                 notice = "\(pair.alias) can't watch \((changed.folders ?? 0).formatted())+ folders (limit \(limit)) · syncs on focus"
             }
         } else {
-            for path in changed.paths where SyncLines.carried(path.p) {
+            for path in paths {
                 boxPending[path.p] = path.gone == true ? .some(nil) : .some(SyncStat(size: path.s ?? 0, mtime: path.m ?? 0))
             }
         }
         kick()
     }
 
-    /// One round at a time: the whole lists when they're due, else what changed.
+    /// One round at a time: the whole lists when they're due, else what changed. Box changes that
+    /// came while a whole round waited stay for the round after it.
     private func kick() {
         guard started, !running, listing == nil, connection.isOnline else { return }
         if let file = listed {
             listed = nil
             macPending = []
-            boxPending = [:]
             running = true
             Task {
                 await self.whole(file)
@@ -440,11 +535,11 @@ package final class HostSync {
 
     // MARK: Deciding
 
-    package enum Act: Equatable { case agree, push, pull, deleteMac, deleteBox, both }
+    nonisolated package enum Act: Equatable, Sendable { case agree, push, pull, deleteMac, deleteBox, both }
 
     /// What to do with a path: `mac` and `box` as they are, `agreed` as they last agreed.
     /// `seed`: a fresh box copy, made the Mac's exactly.
-    package static func decide(mac: SyncStat?, box: SyncStat?, agreed: SyncStat?, seed: Bool = false) -> Act {
+    nonisolated package static func decide(mac: SyncStat?, box: SyncStat?, agreed: SyncStat?, seed: Bool = false) -> Act {
         if mac == box { return .agree }
         if seed { return mac != nil ? .push : .deleteBox }
         if mac == agreed { return box != nil ? .pull : .deleteMac }
@@ -454,164 +549,78 @@ package final class HostSync {
         return .both
     }
 
-    /// What a round does, built as it decides.
-    private final class Round {
-        let push: SyncLines.Writer
-        let pull: SyncLines.Writer
-        var pushes = 0, pulls = 0
-        var deleteMac: [String] = []
-        var deleteBox: [String] = []
-        /// A path changed on both sides, and where the box's copy goes on the Mac.
-        var both: [(path: String, copy: String)] = []
-
-        init(_ scratch: URL, _ n: Int) {
-            push = SyncLines.Writer(scratch.appendingPathComponent("push-\(n).txt"))
-            pull = SyncLines.Writer(scratch.appendingPathComponent("pull-\(n).txt"))
-        }
-    }
-
-    /// Records a decision; the path's agreed state after the round, if any.
-    private func take(_ act: Act, _ path: String, mac: SyncStat?, box: SyncStat?, into round: Round, taken: inout Set<String>) -> [(String, SyncStat?)] {
-        switch act {
-        case .agree:
-            return [(path, mac)]
-        case .push:
-            round.push.raw(path + "\n")
-            round.pushes += 1
-            return [(path, mac)]
-        case .pull:
-            round.pull.raw(path + "\n")
-            round.pulls += 1
-            return [(path, box)]
-        case .deleteMac:
-            round.deleteMac.append(path)
-            return [(path, nil)]
-        case .deleteBox:
-            round.deleteBox.append(path)
-            return [(path, nil)]
-        case .both:
-            let copy = conflictName(path, taken: &taken)
-            round.both.append((path, copy))
-            round.push.raw(path + "\n" + copy + "\n")
-            round.pushes += 2
-            return [(path, mac), (copy, box)]
-        }
-    }
-
-    /// `notes (mybox).md` beside `notes.md`, numbered when that's taken too.
-    private func conflictName(_ path: String, taken: inout Set<String>) -> String {
-        let name = path.split(separator: "/").last.map(String.init) ?? path
-        let dot = name.lastIndex(of: ".").flatMap { $0 == name.startIndex ? nil : $0 }
-        let stem = dot.map { String(name[..<$0]) } ?? name
-        let ext = dot.map { String(name[$0...]) } ?? ""
-        let folder = path.contains("/") ? String(path[..<path.lastIndex(of: "/")!]) + "/" : ""
-        var n = 1
-        while true {
-            let mark = n == 1 ? pair.alias : "\(pair.alias) \(n)"
-            let name = folder + "\(stem) (\(mark))\(ext)"
-            if !taken.contains(name), tree.stat(name) == nil, !FileManager.default.fileExists(atPath: tree.url(name).path) {
-                taken.insert(name)
-                return name
-            }
-            n += 1
-        }
-    }
-
     // MARK: Rounds
 
-    /// The whole lists, compared as three sorted streams (the Mac's, the box's, the agreed), at low
-    /// priority: on opening and after the link was down.
+    /// The whole lists, compared as three sorted streams (the Mac's, the box's, the agreed), off
+    /// the main thread at low priority: on opening and after the link was down.
     private func whole(_ boxFile: URL) async {
-        serial += 1
-        let n = serial
-        let macFile = scratch.appendingPathComponent("mac-\(n).tsv")
-        let tree = tree
-        await Task.detached(priority: .utility) {
-            let writer = SyncLines.Writer(macFile)
-            tree.each { path, stat in if SyncLines.carried(path) { writer.write(path, stat) } }
-            writer.close()
-        }.value
-        await SyncLines.sort(macFile)
-        await SyncLines.sort(boxFile)
+        defer { try? FileManager.default.removeItem(at: boxFile) }
+        guard tree.rootExists else {
+            notice = "Sync paused: \(shownMac) is missing on this Mac"
+            return
+        }
         let seed = pair.fresh == true && !manifest.exists
-        let round = Round(scratch, n)
-        let agreedFile = scratch.appendingPathComponent("agreed-\(n).tsv")
-        let agreed = SyncLines.Writer(agreedFile)
-        var taken: Set<String> = []
-        let macs = SyncLines.Reader(macFile), boxes = SyncLines.Reader(boxFile), olds = SyncLines.Reader(manifest.url)
-        var m = macs.next(), b = boxes.next(), o = olds.next()
-        while m != nil || b != nil || o != nil {
-            // The least path of the three, and each stream's entry for it.
-            var path: String?
-            for candidate in [m?.0, b?.0, o?.0].compactMap({ $0 }) where path.map({ SyncLines.before(candidate, $0) }) ?? true { path = candidate }
-            guard let path else { break }
-            let mac = m.flatMap { SyncLines.same($0.0, path) ? $0.1 : nil }
-            let boxStat = b.flatMap { SyncLines.same($0.0, path) ? $0.1 : nil }
-            let old = o.flatMap { SyncLines.same($0.0, path) ? $0.1 : nil }
-            if mac != nil { m = macs.next() }
-            if boxStat != nil { b = boxes.next() }
-            if old != nil { o = olds.next() }
-            let act = Self.decide(mac: mac, box: boxStat, agreed: old, seed: seed)
-            for (p, stat) in take(act, path, mac: mac, box: boxStat, into: round, taken: &taken) {
-                if let stat { agreed.write(p, stat) }
-            }
+        if seed {
+            // Seed mode lasts one listing: a retry after a failed first round treats the box's
+            // files as its own (new ones come here, conflicts keep both).
+            var settled = pair
+            settled.fresh = nil
+            SyncPairs.save(settled, defaults)
         }
-        agreed.close()
-        await SyncLines.sort(agreedFile)
-        if await carry(round, low: true) {
-            manifest.replace(with: agreedFile)
-            if seed {
-                var settled = pair
-                settled.fresh = nil
-                SyncPairs.save(settled, defaults)
-            }
-        }
-        for file in [macFile, boxFile, agreedFile] { try? FileManager.default.removeItem(at: file) }
+        tree.forgetAll()
+        let work = SyncRound(tree: tree, manifest: manifest, scratch: scratch, alias: pair.alias, caseless: caseless)
+        let plan = await Task.detached(priority: .utility) { work.whole(boxFile: boxFile, seed: seed) }.value
+        defer { try? FileManager.default.removeItem(at: plan.agreedFile) }
+        guard started, allowed(plan, whole: true), await carry(plan, low: true) else { return }
+        manifest.replace(with: plan.agreedFile)
     }
 
     /// The changes since the last round: each changed path against its agreed state, the other
     /// side taken as agreed unless it said otherwise.
     private func changes(mac: Set<String>, box boxSide: [String: SyncStat?]) async {
-        serial += 1
-        let round = Round(scratch, serial)
-        let touched = Set(mac.filter { !tree.ignored($0) }).union(boxSide.keys)
-        var paths = Set<String>()
-        for path in mac where !tree.ignored(path) {
-            paths.insert(path)
-            paths.formUnion(tree.list(at: path).keys)
-        }
-        for (path, stat) in boxSide where stat != nil { paths.insert(path) }
-        let agreed = manifest.lookup(touched)
-        paths.formUnion(agreed.keys)
-        func boxNow(_ path: String) -> SyncStat? {
-            if let said = boxSide[path] { return said }
-            // Under a folder the box said is gone.
-            var folder = path
-            while let slash = folder.lastIndex(of: "/") {
-                folder = String(folder[..<slash])
-                if let said = boxSide[folder], said == nil { return nil }
-            }
-            return agreed[path]
-        }
-        var updates: [String: SyncStat?] = [:]
-        var taken: Set<String> = []
-        for path in paths.sorted(by: SyncLines.before) where SyncLines.carried(path) {
-            let macStat = tree.stat(path), boxStat = boxNow(path)
-            let act = Self.decide(mac: macStat, box: boxStat, agreed: agreed[path])
-            if act == .agree, macStat == agreed[path] { continue }
-            for (p, stat) in take(act, path, mac: macStat, box: boxStat, into: round, taken: &taken) { updates[p] = .some(stat) }
-        }
-        if await carry(round, low: false) { manifest.apply(updates) }
+        let work = SyncRound(tree: tree, manifest: manifest, scratch: scratch, alias: pair.alias, caseless: caseless)
+        let plan = await Task.detached(priority: .utility) { work.changes(mac: mac, box: boxSide) }.value
+        guard started, allowed(plan, whole: false), await carry(plan, low: false) else { return }
+        let manifest = manifest, updates = plan.updates
+        await Task.detached(priority: .utility) { manifest.apply(updates) }.value
     }
 
-    /// Moves the files a round decided on: the box's copies of files changed on both sides first,
-    /// then pulls, deletes, pushes. False when something failed (the agreed list stays as it was).
-    private func carry(_ round: Round, low: Bool) async -> Bool {
-        round.push.close()
-        round.pull.close()
+    /// Whether a round may go ahead: never on an empty side, never a bulk delete without the
+    /// user's OK.
+    private func allowed(_ plan: SyncPlan, whole: Bool) -> Bool {
+        if plan.skippedLinks { notice = "Skipped a path through a link" }
+        if let clash = plan.clash { notice = "Can't sync \(clash) to a Mac that ignores case" }
+        if whole, plan.agreedBefore > 0 {
+            if plan.boxFiles == 0 {
+                notice = "Sync paused: \(shownBox) is empty on \(pair.alias)"
+                return false
+            }
+            if plan.macFiles == 0 {
+                notice = "Sync paused: \(shownMac) is empty on this Mac"
+                return false
+            }
+        }
+        let deletes = max(plan.deleteMac.count, plan.deleteBox.count)
+        if !deletesAllowed, deletes >= Self.bulk, deletes * 2 > plan.agreedBefore {
+            let side = plan.deleteMac.count >= plan.deleteBox.count ? "this Mac" : pair.alias
+            askDeletes = deletes
+            notice = "Sync paused: \(deletes.formatted()) files would be deleted on \(side)"
+            return false
+        }
+        deletesAllowed = false
+        return true
+    }
+
+    /// Deletes from this many files on ask first, when they're over half of what was agreed.
+    package static let bulk = 10
+
+    /// Moves the files a round decided on: case-only renames on the Mac first, then the box's
+    /// copies of files changed on both, pulls, deletes, pushes. False when something failed (the
+    /// agreed list stays as it was).
+    private func carry(_ plan: SyncPlan, low: Bool) async -> Bool {
         defer {
-            try? FileManager.default.removeItem(at: round.push.url)
-            try? FileManager.default.removeItem(at: round.pull.url)
+            try? FileManager.default.removeItem(at: plan.pushList)
+            try? FileManager.default.removeItem(at: plan.pullList)
         }
         let mac = tree.root.path + "/", remote = box.spec(pair.box + "/")
         let rsync = ["-a"] + box.rsyncOptions(low)
@@ -623,34 +632,55 @@ package final class HostSync {
             }
             return true
         }
-        for (path, copy) in round.both {
-            guard ok(await SyncProcess.run("/usr/bin/rsync", rsync + [box.spec(pair.box + "/" + path), mac + copy], low: low)) else { return false }
+        // rename(2): a case-only rename on a volume that ignores case.
+        for (from, to) in plan.renames where tree.plain(from) && tree.plain(to) { _ = rename(tree.url(from).path, tree.url(to).path) }
+        // The box's side of files changed on both: pulled by the same list form into a scratch
+        // folder, then moved beside the Mac's own. No box path becomes an argument or a
+        // destination of its own.
+        if !plan.both.isEmpty {
+            let landing = scratch.appendingPathComponent("both-\(UUID().uuidString)", isDirectory: true)
+            let list = landing.appendingPathExtension("txt")
+            defer {
+                try? FileManager.default.removeItem(at: landing)
+                try? FileManager.default.removeItem(at: list)
+            }
+            try? FileManager.default.createDirectory(at: landing, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: list.path, contents: Data(plan.both.map { $0.path + "\n" }.joined().utf8))
+            guard ok(await SyncProcess.run("/usr/bin/rsync", rsync + ["--files-from=" + list.path, remote, landing.path + "/"], low: low)) else { return false }
+            for (path, copy) in plan.both where tree.plain(copy) {
+                let into = tree.url(copy)
+                try? FileManager.default.createDirectory(at: into.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? FileManager.default.moveItem(at: landing.appendingPathComponent(path), to: into)
+            }
         }
-        if round.pulls > 0 {
-            guard ok(await SyncProcess.run("/usr/bin/rsync", rsync + ["--files-from=" + round.pull.url.path, remote, mac], low: low)) else { return false }
+        if plan.pulls > 0 {
+            guard ok(await SyncProcess.run("/usr/bin/rsync", rsync + ["--files-from=" + plan.pullList.path, remote, mac], low: low)) else { return false }
         }
-        for path in round.deleteMac {
+        for path in plan.deleteMac where tree.plain(path) {
             try? FileManager.default.removeItem(at: tree.url(path))
             removeEmptyFolders(above: path)
         }
-        if !round.deleteBox.isEmpty {
-            let list = Data(round.deleteBox.joined(separator: "\0").utf8)
-            let script = "cd " + SyncProcess.quoted(pair.box) + " && xargs -0 rm -f -- && true"
-            guard ok(await box.shell(script, list, low)) else { return false }
-            let folders = Set(round.deleteBox.compactMap { path in path.lastIndex(of: "/").map { String(path[..<$0]) } })
+        if !plan.deleteBox.isEmpty {
+            // On the box, a path with a link among its folders is left alone.
+            let script = """
+                cd -- "$1" || exit 1
+                xargs -0 sh -c 'for f; do d=$(dirname -- "$f"); ok=1; while [ "$d" != . ]; do if [ -L "$d" ]; then ok=0; break; fi; d=$(dirname -- "$d"); done; if [ $ok = 1 ] && [ ! -d "$f" ]; then rm -f -- "$f"; fi; done' sh
+                """
+            guard ok(await box.shell(script, [pair.box], input: Data(plan.deleteBox.joined(separator: "\0").utf8), low: low)) else { return false }
+            let folders = Set(plan.deleteBox.compactMap { path in path.lastIndex(of: "/").map { String(path[..<$0]) } })
             if !folders.isEmpty {
-                let script = "cd " + SyncProcess.quoted(pair.box) + " && xargs -0 rmdir -p 2>/dev/null; true"
-                _ = await box.shell(script, Data(folders.sorted().joined(separator: "\0").utf8), low)
+                let script = "cd -- \"$1\" && xargs -0 rmdir -p -- 2>/dev/null; true"
+                _ = await box.shell(script, [pair.box], input: Data(folders.sorted().joined(separator: "\0").utf8), low: low)
             }
         }
-        if round.pushes > 0 {
-            guard ok(await SyncProcess.run("/usr/bin/rsync", rsync + ["--files-from=" + round.push.url.path, mac, remote], low: low)) else { return false }
+        if plan.pushes > 0 {
+            guard ok(await SyncProcess.run("/usr/bin/rsync", rsync + ["--files-from=" + plan.pushList.path, mac, remote], low: low)) else { return false }
         }
-        carried += round.pushes + round.pulls + round.both.count + round.deleteMac.count + round.deleteBox.count
-        if let first = round.both.first {
-            notice = round.both.count == 1
+        carried += plan.pushes + plan.pulls + plan.both.count + plan.deleteMac.count + plan.deleteBox.count + plan.renames.count
+        if let first = plan.both.first {
+            notice = plan.both.count == 1
                 ? "Kept both: \(URL(fileURLWithPath: first.copy).lastPathComponent)"
-                : "Kept both copies of \(round.both.count) files"
+                : "Kept both copies of \(plan.both.count) files"
         } else if notice?.hasPrefix("Sync paused") == true {
             notice = nil
         }
@@ -668,7 +698,239 @@ package final class HostSync {
     }
 }
 
+/// A round's decisions, made off the main thread: the lists to copy each way, the deletes, the
+/// files kept twice, the Mac's case-only renames, and the agreed state after.
+package final class SyncPlan: @unchecked Sendable {
+    let pushList: URL
+    let pullList: URL
+    let push: SyncLines.Writer
+    let pull: SyncLines.Writer
+    package var pushes = 0, pulls = 0
+    package var deleteMac: [String] = []
+    package var deleteBox: [String] = []
+    /// A path changed on both sides, and where the box's copy goes on the Mac.
+    package var both: [(path: String, copy: String)] = []
+    /// Mac names whose case the box changed: from, to.
+    package var renames: [(from: String, to: String)] = []
+    /// The whole round's agreed list (sorted when done); the changes round's updates.
+    let agreedFile: URL
+    var updates: [String: SyncStat?] = [:]
+    /// What was agreed before, and what each side listed (a whole round).
+    var agreedBefore = 0
+    var macFiles = 0, boxFiles = 0
+    package var skippedLinks = false
+    /// Two box names that differ only by case ("Foo.swift and foo.swift").
+    package var clash: String?
+
+    init(scratch: URL) {
+        let id = UUID().uuidString
+        pushList = scratch.appendingPathComponent("push-\(id).txt")
+        pullList = scratch.appendingPathComponent("pull-\(id).txt")
+        agreedFile = scratch.appendingPathComponent("agreed-\(id).tsv")
+        push = SyncLines.Writer(pushList)
+        pull = SyncLines.Writer(pullList)
+    }
+}
+
+/// One round's work, off the main thread.
+package struct SyncRound: Sendable {
+    let tree: SyncTree
+    let manifest: SyncManifest
+    let scratch: URL
+    let alias: String
+    let caseless: Bool
+
+    package init(tree: SyncTree, manifest: SyncManifest, scratch: URL, alias: String, caseless: Bool) {
+        self.tree = tree
+        self.manifest = manifest
+        self.scratch = scratch
+        self.alias = alias
+        self.caseless = caseless
+    }
+
+    /// A name as a case-insensitive Mac volume compares it.
+    func fold(_ path: String) -> String {
+        caseless ? path.precomposedStringWithCanonicalMapping.folding(options: [.caseInsensitive], locale: nil) : path
+    }
+
+    package func whole(boxFile: URL, seed: Bool) -> SyncPlan {
+        let plan = SyncPlan(scratch: scratch)
+        let macFile = scratch.appendingPathComponent("mac-\(UUID().uuidString).tsv")
+        defer { try? FileManager.default.removeItem(at: macFile) }
+        let writer = SyncLines.Writer(macFile)
+        tree.each { path, stat in
+            guard SyncPath.valid(path) else { return }
+            writer.write(path, stat)
+            plan.macFiles += 1
+        }
+        writer.close()
+        SyncLines.sortNow(macFile)
+        SyncLines.sortNow(boxFile)
+        // The box's names that fold together on this Mac: neither is synced.
+        var folds: [String: String] = [:]
+        var clashing: Set<String> = []
+        let scan = SyncLines.Reader(boxFile)
+        while let (path, _) = scan.next() {
+            plan.boxFiles += 1
+            guard caseless else { continue }
+            let folded = fold(path)
+            if let other = folds[folded], other != path {
+                clashing.insert(folded)
+                if plan.clash == nil { plan.clash = "\(other) and \(path)" }
+            } else {
+                folds[folded] = path
+            }
+        }
+        let agreed = SyncLines.Writer(plan.agreedFile)
+        var taken: Set<String> = []
+        var pulled: [String: String] = [:]
+        let macs = SyncLines.Reader(macFile), boxes = SyncLines.Reader(boxFile), olds = SyncLines.Reader(manifest.url)
+        var m = macs.next(), b = boxes.next(), o = olds.next()
+        while m != nil || b != nil || o != nil {
+            // The least path of the three, and each stream's entry for it.
+            var path: String?
+            for candidate in [m?.0, b?.0, o?.0].compactMap({ $0 }) where path.map({ SyncLines.before(candidate, $0) }) ?? true { path = candidate }
+            guard let path else { break }
+            let mac = m.flatMap { SyncLines.same($0.0, path) ? $0.1 : nil }
+            let boxStat = b.flatMap { SyncLines.same($0.0, path) ? $0.1 : nil }
+            let old = o.flatMap { SyncLines.same($0.0, path) ? $0.1 : nil }
+            if mac != nil { m = macs.next() }
+            if boxStat != nil { b = boxes.next() }
+            if old != nil {
+                o = olds.next()
+                plan.agreedBefore += 1
+            }
+            // A path through a link on this Mac, or one of two box names that fold together, is
+            // left alone, its agreed state kept.
+            guard tree.plain(path), !clashing.contains(fold(path)) else {
+                if let old { agreed.write(path, old) }
+                if !tree.plain(path) { plan.skippedLinks = true }
+                continue
+            }
+            let act = HostSync.decide(mac: mac, box: boxStat, agreed: old, seed: seed)
+            if act == .pull { pulled[fold(path)] = path }
+            for (p, stat) in take(act, path, mac: mac, box: boxStat, into: plan, taken: &taken) {
+                if let stat { agreed.write(p, stat) }
+            }
+        }
+        caseRenames(plan, pulled: pulled)
+        agreed.close()
+        SyncLines.sortNow(plan.agreedFile)
+        plan.push.close()
+        plan.pull.close()
+        return plan
+    }
+
+    package func changes(mac: Set<String>, box boxSide: [String: SyncStat?]) -> SyncPlan {
+        let plan = SyncPlan(scratch: scratch)
+        defer {
+            plan.push.close()
+            plan.pull.close()
+        }
+        let macTouched = mac.filter { SyncPath.valid($0) && !tree.ignored($0) }
+        let touched = macTouched.union(boxSide.keys)
+        var paths = Set<String>()
+        for path in macTouched {
+            paths.insert(path)
+            paths.formUnion(tree.list(at: path).keys)
+        }
+        for (path, stat) in boxSide where stat != nil { paths.insert(path) }
+        let (agreed, count) = manifest.lookup(touched)
+        plan.agreedBefore = count
+        paths.formUnion(agreed.keys)
+        func boxNow(_ path: String) -> SyncStat? {
+            if let said = boxSide[path] { return said }
+            // Under a folder the box said is gone.
+            var folder = path
+            while let slash = folder.lastIndex(of: "/") {
+                folder = String(folder[..<slash])
+                if let said = boxSide[folder], said == nil { return nil }
+            }
+            return agreed[path]
+        }
+        var taken: Set<String> = []
+        var pulled: [String: String] = [:]
+        for path in paths.sorted(by: SyncLines.before) where SyncPath.valid(path) {
+            guard tree.plain(path) else {
+                plan.skippedLinks = true
+                continue
+            }
+            let macNow = tree.stat(path), boxStat = boxNow(path)
+            let act = HostSync.decide(mac: macNow, box: boxStat, agreed: agreed[path])
+            if act == .agree, macNow == agreed[path] { continue }
+            if act == .pull { pulled[fold(path)] = path }
+            for (p, stat) in take(act, path, mac: macNow, box: boxStat, into: plan, taken: &taken) { plan.updates[p] = .some(stat) }
+        }
+        caseRenames(plan, pulled: pulled)
+        return plan
+    }
+
+    /// On a Mac that ignores case, a delete of a name whose other-case twin is pulled in the same
+    /// round is the box renaming it: the Mac renames its file instead of deleting it.
+    private func caseRenames(_ plan: SyncPlan, pulled: [String: String]) {
+        guard caseless, !pulled.isEmpty else { return }
+        plan.deleteMac.removeAll { path in
+            guard let to = pulled[fold(path)], to != path else { return false }
+            plan.renames.append((path, to))
+            return true
+        }
+    }
+
+    /// Records a decision; the path's agreed state after the round, if any. A path one side left
+    /// out because the folder's rules ignore it is never deleted on the other: it leaves the sync.
+    private func take(_ act: HostSync.Act, _ path: String, mac: SyncStat?, box: SyncStat?, into plan: SyncPlan, taken: inout Set<String>) -> [(String, SyncStat?)] {
+        switch act {
+        case .agree:
+            return [(path, mac)]
+        case .push:
+            plan.push.raw(path + "\n")
+            plan.pushes += 1
+            return [(path, mac)]
+        case .pull:
+            plan.pull.raw(path + "\n")
+            plan.pulls += 1
+            return [(path, box)]
+        case .deleteMac:
+            if !tree.ignored(path) { plan.deleteMac.append(path) }
+            return [(path, nil)]
+        case .deleteBox:
+            if !tree.ignored(path) { plan.deleteBox.append(path) }
+            return [(path, nil)]
+        case .both:
+            let copy = conflictName(path, taken: &taken)
+            plan.both.append((path, copy))
+            plan.push.raw(path + "\n" + copy + "\n")
+            plan.pushes += 2
+            return [(path, mac), (copy, box)]
+        }
+    }
+
+    /// `notes (mybox).md` beside `notes.md`, numbered when that's taken too.
+    private func conflictName(_ path: String, taken: inout Set<String>) -> String {
+        let name = path.split(separator: "/").last.map(String.init) ?? path
+        let dot = name.lastIndex(of: ".").flatMap { $0 == name.startIndex ? nil : $0 }
+        let stem = dot.map { String(name[..<$0]) } ?? name
+        let ext = dot.map { String(name[$0...]) } ?? ""
+        let folder = path.contains("/") ? String(path[..<path.lastIndex(of: "/")!]) + "/" : ""
+        var n = 1
+        while true {
+            let mark = n == 1 ? alias : "\(alias) \(n)"
+            let name = folder + "\(stem) (\(mark))\(ext)"
+            if !taken.contains(fold(name)), tree.stat(name) == nil, !FileManager.default.fileExists(atPath: tree.url(name).path) {
+                taken.insert(fold(name))
+                return name
+            }
+            n += 1
+        }
+    }
+}
+
 // MARK: - The first copy
+
+/// Set once, on the main actor: which of two racing answers came first.
+final class SyncOnce: @unchecked Sendable {
+    var done = false
+}
 
 extension HostSync {
     /// What a first copy would carry, and whether it fits the box.
@@ -693,7 +955,7 @@ extension HostSync {
             }
             return (files, bytes)
         }.value
-        let df = await box.shell("df -Pk \"$HOME\" | tail -1", nil, false)
+        let df = await box.shell("df -Pk \"$HOME\" | tail -1")
         let free = df.out.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).first.flatMap { Int64($0) }.map { $0 * 1024 }
         let size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         if let free, bytes + bytes / 10 > free {
@@ -704,42 +966,100 @@ extension HostSync {
         return .ask("\(size) · \(count) files — copy to \(box.alias)?")
     }
 
-    /// The box copy's name: the folder's, spaces as dashes.
+    /// The box copy's name: the folder's, each character outside `[A-Za-z0-9._-]` a dash, never
+    /// starting with `.` or `-`.
     package static func boxName(_ mac: URL) -> String {
-        let name = mac.lastPathComponent.replacingOccurrences(of: " ", with: "-")
-        return name.isEmpty || name.hasPrefix(".") ? "folder" + name : name
+        let name = String(mac.lastPathComponent.unicodeScalars.map { scalar -> Character in
+            let plain = ("a"..."z").contains(scalar) || ("A"..."Z").contains(scalar) || ("0"..."9").contains(scalar) || "._-".unicodeScalars.contains(scalar)
+            return plain ? Character(scalar) : "-"
+        })
+        return name.isEmpty || name.hasPrefix(".") || name.hasPrefix("-") ? "folder" + name : name
     }
 
-    /// Makes the box copy at `<base>/<name>`: `git clone` of the folder's origin at its branch and
+    /// Why a first copy didn't happen.
+    package enum CopyFailure: Error, Equatable, Sendable {
+        /// kore-host on the box didn't answer in time.
+        case unreachable
+        case refused(String)
+    }
+
+    /// How long a first copy waits for the box.
+    package static let reachWithin: Duration = .seconds(20)
+
+    /// The box copy, made by one script whose names go as its arguments, never in its text.
+    static let copyScript = """
+        set -e
+        base=${1:-"$HOME/Code"}
+        mkdir -p -- "$base"
+        d="$base/$2"
+        n=1
+        while [ -e "$d" ] || [ -L "$d" ]; do n=$((n + 1)); d="$base/$2-$n"; done
+        if [ -n "$3" ] && GIT_TERMINAL_PROMPT=0 GIT_ALLOW_PROTOCOL=https:ssh GIT_SSH_COMMAND='ssh -o BatchMode=yes' git clone -q -- "$3" "$d" >/dev/null 2>&1; then
+          cd -- "$d"
+          if [ -n "$4" ] && [ -n "$5" ]; then git checkout -q -B "$4" "$5" -- 2>/dev/null || git checkout -q "$4" -- 2>/dev/null || true; fi
+        elif [ -n "$3" ]; then
+          mkdir -p -- "$d"; cd -- "$d"; git init -q; git remote add origin "$3" 2>/dev/null || true
+        elif [ -n "$6" ]; then
+          mkdir -p -- "$d"; cd -- "$d"; git init -q
+        else
+          mkdir -p -- "$d"
+        fi
+        echo fresh
+        cd -- "$d" && pwd
+        """
+
+    /// Makes the box copy at `~/Code/<name>` (`<name>-2`, … when that's taken: a copy is never
+    /// shared by two Mac folders): `git clone` of the folder's origin at its branch and
     /// commit (`git init` for a repo without one), then has the box serve it, and keeps the pair.
     /// The files themselves go once its window opens (a fresh copy is made the Mac's exactly).
-    package static func firstCopy(mac: URL, connection: HostConnection, box: SyncBox, defaults: UserDefaults = .standard) async -> Result<SyncPair, HostRefusal> {
+    /// Gives up after `reachWithin` when kore-host doesn't answer.
+    package static func firstCopy(mac: URL, connection: HostConnection, box: SyncBox, defaults: UserDefaults = .standard) async -> Result<SyncPair, CopyFailure> {
+        guard await reach(connection, within: reachWithin) else { return .failure(.unreachable) }
         let git = await gitState(mac)
-        var script = "set -e\nmkdir -p \"\(box.base)\"\nd=\"\(box.base)/\(boxName(mac))\"\n"
-        script += "if [ -e \"$d\" ]; then echo existed; else\n"
-        if let origin = git.origin {
-            let q = SyncProcess.quoted(origin)
-            script += "if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git clone -q \(q) \"$d\" >/dev/null 2>&1; then\n"
-            script += "cd \"$d\"\n"
-            if let branch = git.branch, let commit = git.commit {
-                script += "git checkout -q -B \(SyncProcess.quoted(branch)) \(commit) 2>/dev/null || git checkout -q \(SyncProcess.quoted(branch)) 2>/dev/null || true\n"
-            }
-            script += "else mkdir -p \"$d\"; cd \"$d\"; git init -q; git remote add origin \(q); fi\n"
-        } else if git.repo {
-            script += "mkdir -p \"$d\"; cd \"$d\"; git init -q\n"
-        } else {
-            script += "mkdir -p \"$d\"\n"
-        }
-        script += "echo fresh\nfi\ncd \"$d\" && pwd\n"
-        let made = await box.shell(script, nil, false)
+        let args = [box.base ?? "", boxName(mac), git.origin ?? "", git.branch ?? "", git.commit ?? "", git.repo ? "repo" : ""]
+        let made = await box.shell(copyScript, args)
+        guard !Task.isCancelled else { return .failure(.unreachable) }
         let lines = made.out.split(whereSeparator: \.isNewline).map(String.init)
-        guard made.status == 0, lines.count >= 2, let path = lines.last, path.hasPrefix("/") else {
-            return .failure(HostRefusal(message: "Couldn't make the copy on \(box.alias): " + made.said))
-        }
-        if case .failure(let refusal) = await connection.addFolder(path) { return .failure(refusal) }
+        guard made.status == 0, lines.count >= 2, let path = lines.last, path.hasPrefix("/"),
+            !path.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f })
+        else { return .failure(.refused("Couldn't make the copy on \(box.alias): " + made.said)) }
+        guard let added = await within(reachWithin, { await connection.addFolder(path) }) else { return .failure(.unreachable) }
+        if case .failure(let refusal) = added { return .failure(.refused(refusal.message)) }
         let pair = SyncPair(mac: mac.standardizedFileURL.path, alias: box.alias, box: path, fresh: lines.first == "fresh" ? true : nil)
         SyncPairs.save(pair, defaults)
         return .success(pair)
+    }
+
+    /// Waits for the connection to be online, up to `limit`; false on a timeout, a refusal or a cancel.
+    static func reach(_ connection: HostConnection, within limit: Duration) async -> Bool {
+        let end = ContinuousClock.now + limit
+        while !connection.isOnline {
+            if case .refused = connection.phase { return false }
+            guard ContinuousClock.now < end, !Task.isCancelled else { return false }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return true
+    }
+
+    /// `work`'s answer, or nil when it hasn't come by `limit`.
+    static func within<T: Sendable>(_ limit: Duration, _ work: @escaping @MainActor () async -> T) async -> T? {
+        let once = SyncOnce()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+            Task { @MainActor in
+                let value = await work()
+                if !once.done {
+                    once.done = true
+                    continuation.resume(returning: value)
+                }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: limit)
+                if !once.done {
+                    once.done = true
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
     }
 
     struct GitState: Sendable {
@@ -757,8 +1077,16 @@ extension HostSync {
         }
         guard await git(["rev-parse", "--show-toplevel"]).map({ realPath($0) == realPath(mac.path) }) == true else { return GitState() }
         let branch = await git(["rev-parse", "--abbrev-ref", "HEAD"])
+        let origin = await git(["remote", "get-url", "origin"])
+        let commit = await git(["rev-parse", "HEAD"])
         return GitState(
-            repo: true, origin: await git(["remote", "get-url", "origin"]), branch: branch == "HEAD" ? nil : branch,
-            commit: await git(["rev-parse", "HEAD"]))
+            repo: true, origin: origin.flatMap { safeOrigin($0) ? $0 : nil },
+            branch: branch.flatMap { $0 == "HEAD" || $0.hasPrefix("-") || !SyncPath.valid($0) ? nil : $0 },
+            commit: commit.flatMap { $0.count >= 40 && $0.allSatisfy(\.isHexDigit) ? $0 : nil })
+    }
+
+    /// An origin the box may clone: not an option, no `ext::`-style transport, one line.
+    package static func safeOrigin(_ origin: String) -> Bool {
+        !origin.isEmpty && !origin.hasPrefix("-") && !origin.contains("::") && !origin.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f }
     }
 }

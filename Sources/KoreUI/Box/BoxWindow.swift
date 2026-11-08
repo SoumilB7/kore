@@ -65,8 +65,7 @@ final class BoxBinding {
     func windowOpened() {
         connection.onSnapshot(key) { [weak self] in self?.adoptChats() }
         connection.retain()
-        if let pair = SyncPairs.pair(alias: alias, box: folder) {
-            let sync = HostSync(pair: pair, connection: connection)
+        if let pair = SyncPairs.pair(alias: alias, box: folder), let sync = HostSync(pair: pair, connection: connection) {
             self.sync = sync
             sync.start()
             // A box that can't watch its copy lists it again as the window comes forward.

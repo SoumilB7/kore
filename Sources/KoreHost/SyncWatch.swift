@@ -37,7 +37,12 @@ final class SyncWatch {
         tree = SyncTree(root: URL(fileURLWithPath: folder))
     }
 
-    /// Starts watching, then sends the whole list.
+    /// How many files the whole list carries at most: past it the list isn't sent (`capped`).
+    nonisolated static let fileCap = 200_000
+    private var stopped = false
+
+    /// Starts watching, then sends the whole list. The walks run off the main thread, so a big
+    /// folder never holds up the box's chats.
     func start() {
         #if canImport(Darwin)
         let real = realPath(folder)
@@ -47,24 +52,55 @@ final class SyncWatch {
                 if path == real { self?.noted("") } else if path.hasPrefix(base) { self?.noted(String(path.dropFirst(base.count))) }
             }
         }
-        #else
-        // A watch per folder, under the user's inotify limit: past half of it, none, and the
-        // client asks for the list again when it wants it.
-        let limit = Inotify.limit()
-        let count = Inotify.folders(tree, upTo: limit.map { $0 / 2 + 1 } ?? Int.max)
-        if let limit, count > limit / 2 {
-            watching = (false, limit, count)
-        } else {
-            inotify = Inotify(tree: tree) { [weak self] relative in self?.noted(relative) }
-        }
         #endif
-        send(all: tree.list())
+        let tree = tree
+        Task.detached(priority: .utility) { [weak self] in
+            // A missing folder is said as such: never an empty list, which would read as every
+            // file deleted.
+            guard tree.rootExists else {
+                await self?.missing()
+                return
+            }
+            #if canImport(Darwin)
+            let files = tree.list(cap: Self.fileCap)
+            await self?.begin(files)
+            #else
+            // One walk: the files and the folders. A watch per folder, under the user's inotify
+            // limit: past half of it, none, and the client asks for the list again when it wants it.
+            let limit = Inotify.limit()
+            let half = limit.map { $0 / 2 } ?? Inotify.defaultCap
+            let scan = tree.scan(fileCap: Self.fileCap, folderCap: half + 1)
+            let inotify = scan.folderCount > half ? nil : Inotify(tree: tree, folders: scan.folders, cap: half)
+            await self?.begin(scan.files, inotify: inotify, unwatched: inotify == nil ? (limit, scan.folderCount) : nil)
+            #endif
+        }
     }
+
+    private func missing() {
+        guard !stopped else { return }
+        push(message([], all: true, more: false, extra: ["missing": true]))
+    }
+
+    #if canImport(Darwin)
+    private func begin(_ files: [String: SyncStat]?) {
+        guard !stopped else { return }
+        send(all: files)
+    }
+    #else
+    private func begin(_ files: [String: SyncStat]?, inotify: Inotify?, unwatched: (limit: Int?, folders: Int)?) {
+        guard !stopped else { return inotify?.stop() ?? () }
+        if let unwatched { watching = (false, unwatched.limit, unwatched.folders) }
+        self.inotify = inotify
+        inotify?.resume { [weak self] relative in self?.noted(relative) }
+        send(all: files)
+    }
+    #endif
 
     /// Whether the folder is watched, and if not, inotify's limit and the folders counted.
     private(set) var watching: (on: Bool, limit: Int?, folders: Int?) = (true, nil, nil)
 
     func stop() {
+        stopped = true
         flush?.cancel()
         flush = nil
         pending = []
@@ -92,13 +128,22 @@ final class SyncWatch {
         if everything {
             everything = false
             pending = []
-            return send(all: tree.list())
+            let tree = tree
+            Task.detached(priority: .utility) { [weak self] in
+                guard tree.rootExists else {
+                    await self?.missing()
+                    return
+                }
+                let files = tree.list(cap: Self.fileCap)
+                await self?.relisted(files)
+            }
+            return
         }
         var entries: [[String: Any]] = []
         var seen: Set<String> = []
         for relative in pending.sorted() where !tree.ignored(relative) {
             let now = tree.list(at: relative)
-            if now.isEmpty, !FileManager.default.fileExists(atPath: tree.url(relative).path) {
+            if now.isEmpty, !(FileManager.default.fileExists(atPath: tree.url(relative).path) && tree.exact(relative)) {
                 if seen.insert(relative).inserted { entries.append(["p": relative, "gone": true]) }
             }
             for (path, stat) in now where seen.insert(path).inserted { entries.append(Self.entry(path, stat)) }
@@ -109,7 +154,14 @@ final class SyncWatch {
         }
     }
 
-    private func send(all files: [String: SyncStat]) {
+    private func relisted(_ files: [String: SyncStat]?) {
+        guard !stopped else { return }
+        send(all: files)
+    }
+
+    /// The whole list, in pieces; past the cap, one empty piece saying so.
+    private func send(all files: [String: SyncStat]?) {
+        guard let files else { return push(message([], all: true, more: false, extra: ["capped": Self.fileCap])) }
         let entries = files.keys.sorted().map { Self.entry($0, files[$0]!) }
         var start = 0
         repeat {
@@ -121,8 +173,9 @@ final class SyncWatch {
 
     private static func entry(_ path: String, _ stat: SyncStat) -> [String: Any] { ["p": path, "s": stat.size, "m": stat.mtime] }
 
-    private func message(_ paths: [[String: Any]], all: Bool, more: Bool) -> Data {
+    private func message(_ paths: [[String: Any]], all: Bool, more: Bool, extra: [String: Any] = [:]) -> Data {
         var object: [String: Any] = ["t": "sync.changed", "folder": folder, "paths": paths]
+        object.merge(extra) { _, new in new }
         if all {
             object["all"] = true
             if !watching.on {
@@ -137,28 +190,43 @@ final class SyncWatch {
 }
 
 #if !canImport(Darwin)
-/// inotify over a carried tree: a watch on each folder sync carries, one more as each appears.
-@MainActor
-private final class Inotify {
+/// inotify over a carried tree: a watch on each real folder sync carries (never through a link),
+/// one more as each appears, up to `cap`. Made off the main thread; its events are read on it.
+private final class Inotify: @unchecked Sendable {
     private let fd: Int32
     private let tree: SyncTree
-    private let changed: @MainActor (String) -> Void
+    private let cap: Int
+    private var changed: (@MainActor (String) -> Void)?
     private var folders: [Int32: String] = [:]
     private var source: DispatchSourceRead?
+
+    /// Watches made when the limit can't be read.
+    static let defaultCap = 4096
 
     // <sys/inotify.h>
     private static let attrib: UInt32 = 0x4, closeWrite: UInt32 = 0x8, movedFrom: UInt32 = 0x40, movedTo: UInt32 = 0x80
     private static let create: UInt32 = 0x100, delete: UInt32 = 0x200, deleteSelf: UInt32 = 0x400, moveSelf: UInt32 = 0x800
     private static let overflow: UInt32 = 0x4000, ignored: UInt32 = 0x8000, isDir: UInt32 = 0x4000_0000
-    private static let mask = attrib | closeWrite | movedFrom | movedTo | create | delete | deleteSelf | moveSelf
+    private static let onlyDir: UInt32 = 0x0100_0000, dontFollow: UInt32 = 0x0200_0000
+    private static let mask = attrib | closeWrite | movedFrom | movedTo | create | delete | deleteSelf | moveSelf | onlyDir | dontFollow
 
-    init?(tree: SyncTree, changed: @escaping @MainActor (String) -> Void) {
+    /// `folders`: the scan's real folders, watched as they are (no second walk).
+    init?(tree: SyncTree, folders list: [String], cap: Int) {
         let fd = inotify_init1(Int32(O_NONBLOCK | O_CLOEXEC))
         guard fd >= 0 else { return nil }
         self.fd = fd
         self.tree = tree
+        self.cap = cap
+        for folder in list.prefix(cap) {
+            let wd = inotify_add_watch(fd, tree.url(folder).path, Self.mask)
+            if wd >= 0 { folders[wd] = folder }
+        }
+    }
+
+    /// Starts reading its events on the main thread.
+    @MainActor func resume(_ changed: @escaping @MainActor (String) -> Void) {
         self.changed = changed
-        add("")
+        let fd = fd
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.read() } }
         source.setCancelHandler { _ = close(fd) }
@@ -167,7 +235,11 @@ private final class Inotify {
     }
 
     func stop() {
-        source?.cancel()
+        if let source {
+            source.cancel()
+        } else {
+            _ = close(fd)
+        }
         source = nil
         folders = [:]
     }
@@ -178,39 +250,20 @@ private final class Inotify {
             .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
-    /// The carried folders (the root too), counted up to `cap`.
-    static func folders(_ tree: SyncTree, upTo cap: Int) -> Int {
-        var count = 0
-        var queue = [""]
-        while let folder = queue.popLast(), count < cap {
-            count += 1
-            let names = (try? FileManager.default.contentsOfDirectory(atPath: tree.url(folder).path)) ?? []
-            for name in names {
-                let child = folder.isEmpty ? name : folder + "/" + name
-                var dir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: tree.url(child).path, isDirectory: &dir), dir.boolValue, !tree.ignored(child) {
-                    queue.append(child)
-                }
-            }
-        }
-        return count
-    }
-
-    /// Watches a folder and the carried folders under it.
+    /// Watches a real folder and the carried real folders under it, up to the cap.
     private func add(_ relative: String) {
-        guard relative.isEmpty || !tree.ignored(relative) else { return }
-        let wd = inotify_add_watch(fd, tree.url(relative).path, Self.mask)
-        guard wd >= 0 else { return }
-        folders[wd] = relative
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: tree.url(relative).path)) ?? []
-        for name in names {
-            let child = relative.isEmpty ? name : relative + "/" + name
-            var dir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: tree.url(child).path, isDirectory: &dir), dir.boolValue { add(child) }
+        var queue = [relative]
+        while let folder = queue.popLast(), folders.count < cap {
+            guard folder.isEmpty || (tree.plain(folder) && !tree.ignored(folder)) else { continue }
+            let wd = inotify_add_watch(fd, tree.url(folder).path, Self.mask)
+            guard wd >= 0 else { continue }
+            folders[wd] = folder
+            queue += tree.subfolders(folder)
         }
     }
 
-    private func read() {
+    @MainActor private func read() {
+        guard let changed else { return }
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
             let count = buffer.withUnsafeMutableBytes { raw in Glibc_read(fd, raw.baseAddress, raw.count) }

@@ -30,7 +30,10 @@ final class LinkClient {
 
     func begin() {
         socket.start(max: LinkFrame.inboundMax, frame: { [weak self] data in self?.received(data) }, ended: { [weak self] in self?.gone() })
-        socket.drained = { [weak self] in self?.sendCatchUps() }
+        socket.drained = { [weak self] in
+            self?.sendCatchUps()
+            self?.sendSyncPieces()
+        }
         send(.challenge(nonce: nonce))
         // A client that hasn't proven itself in 10 s is closed: the one wait while it connects.
         let wait = DispatchWorkItem { [weak self] in
@@ -57,6 +60,7 @@ final class LinkClient {
         helloWait?.cancel()
         for watch in syncs.values { watch.stop() }
         syncs = [:]
+        syncPieces = []
         host.ended(self)
         for chatId in streaming { host.unfollowed(chatId) }
         streaming = []
@@ -230,13 +234,36 @@ final class LinkClient {
     /// `sync.watch` / `sync.unwatch` for a folder the box serves (or one inside it). A watch
     /// starts after its result goes, so the list follows the result.
     private func sync(_ kind: ControlKind, folder: String?, id: String) -> LinkMessage.Result {
-        guard grant?.control != .watch else { return .init(id: id, ok: false, code: .deniedControl, message: "This grant only watches.") }
+        guard let control = grant?.control, control != .watch else { return .init(id: id, ok: false, code: .deniedControl, message: "This grant only watches.") }
+        if case .deny(let code, let message) = LinkPolicy.checkBox(kind, ControlArgs(folder: folder), nil, control: control == .full ? .full : .standard) {
+            return .init(id: id, ok: false, code: code, message: message)
+        }
         guard let folder = folder.map(HostDaemon.standard), host.serves(folder) else {
             return .init(id: id, ok: false, code: .goneFolder, message: "That folder isn't on this box.")
         }
         syncs.removeValue(forKey: folder)?.stop()
-        if kind == .syncWatch { syncs[folder] = SyncWatch(folder: folder) { [weak self] data in self?.socket.send(data) } }
+        guard kind == .syncWatch else { return .init(id: id, ok: true) }
+        guard syncs.count < Self.maxWatches else {
+            return .init(id: id, ok: false, code: .busy, message: "Too many folders are syncing on this connection.")
+        }
+        syncs[folder] = SyncWatch(folder: folder) { [weak self] data in self?.sendSync(data) }
         return .init(id: id, ok: true)
+    }
+
+    /// `sync.watch`es one connection may hold at once.
+    static let maxWatches = 4
+
+    /// `sync.changed` pieces waiting: a big folder's list goes a piece at a time, each once the
+    /// socket has drained, so it never passes the socket's cap.
+    private var syncPieces: [Data] = []
+
+    private func sendSync(_ data: Data) {
+        syncPieces.append(data)
+        sendSyncPieces()
+    }
+
+    private func sendSyncPieces() {
+        while !syncPieces.isEmpty, socket.backlog < HostSocket.lowWater { socket.send(syncPieces.removeFirst()) }
     }
 
     // MARK: Out

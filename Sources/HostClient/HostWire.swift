@@ -136,6 +136,10 @@ package enum HostWire {
         package var watching: Bool?
         package var limit: Int?
         package var folders: Int?
+        /// With the whole list: the folder has more files than this, and no list was sent.
+        package var capped: Int?
+        /// With the whole list: the folder isn't there on the box (no list was sent).
+        package var missing: Bool?
     }
 
     package static func syncChanged(_ raw: Data) -> SyncChanged? { try? JSONDecoder().decode(SyncChanged.self, from: raw) }

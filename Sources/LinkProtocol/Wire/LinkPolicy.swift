@@ -268,6 +268,10 @@ package enum LinkPolicy {
             return args.on != nil ? .allow : .deny(.invalid, "Name the chat and on or off.")
         case .chatClose, .foldersList, .folderAdd:
             return .allow
+        case .syncWatch, .syncUnwatch:
+            // The box also checks it serves the folder.
+            guard let folder = args.folder, folder.hasPrefix("/"), !folder.contains("\0") else { return .deny(.invalid, "Name the folder.") }
+            return .allow
         case .authGh:
             return full()
         case .accountSignIn:
