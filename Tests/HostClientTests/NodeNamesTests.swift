@@ -19,7 +19,8 @@ struct NodeNamesTests {
         let rules: [(String, NSRegularExpression)] = try [
             ("interpolated key", NSRegularExpression(pattern: #"\\\((?:[\w$]+(?:\??\.\w+)*\??\.)?alias\)"#)),
             ("interpolated optional key", NSRegularExpression(pattern: #"\\\([\w$.?]*alias \?\?"#)),
-            ("key shown as text", NSRegularExpression(pattern: #"\b(?:Text|Button|OptionItem)\((?:[\w$]+\.)*alias\b"#)),
+            // `place`: the Welcome's box key (2026-11-15, its title showed the id).
+            ("key shown as text", NSRegularExpression(pattern: #"\b(?:Text|Button|OptionItem)\((?:[\w$]+\.)*(?:alias|place)\b"#)),
             ("key joined to words", NSRegularExpression(pattern: #"\b(?:[\w$]+\.)*alias \+ "[ ·]"#)),
             // `"box:" + alias`: a workspace or cache key, not words.
             ("words joined to key", NSRegularExpression(pattern: #""(?!box:")[^"]*[ ·:]" \+ (?:[\w$]+\.)*alias\b"#)),

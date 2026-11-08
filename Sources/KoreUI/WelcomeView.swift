@@ -23,6 +23,9 @@ struct WelcomeView: View {
     @StateObject private var held = Held<HostConnection?>(nil)
 
     private var place: String? { switcher.value.place }
+
+    /// The big title: "Kore" on this Mac, the box's name on a box (its key may be its KoreNet id).
+    static func title(_ place: String?) -> String { place.map(NodeNames.name) ?? "Kore" }
     private var showsBoxes: Bool { !BoxList.shared.boxes.isEmpty || sshHosts.value }
 
     var body: some View {
@@ -34,7 +37,7 @@ struct WelcomeView: View {
                     .padding(.bottom, Space.lg)
                 // This Mac ⇄ a box: the name, its line and its list cross-fade.
                 Group {
-                    Text(place ?? "Kore")
+                    Text(Self.title(place))
                         .font(Chrome.display)
                         .foregroundStyle(Theme.text)
                     if let place {
