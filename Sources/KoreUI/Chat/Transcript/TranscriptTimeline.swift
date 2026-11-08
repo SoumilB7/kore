@@ -491,6 +491,7 @@ struct TranscriptTimeline: View, Equatable {
                 }
             }
             .onAppear {
+                shift.onMagnified = { [sticky] in sticky.magnified.set($0) }
                 shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop, following, zoomFollowing, zoomRejoining, zoomBegan] native in
                     zoomFollowing.value = following.value
                     zoomBegan.value = native
@@ -599,6 +600,7 @@ struct TranscriptTimeline: View, Equatable {
                 }
             }
             .onDisappear {
+                shift.onMagnified = nil
                 shift.onZoomBegin = nil
                 shift.onZoomEnd = nil
                 shift.onZoomInput = nil
@@ -1051,7 +1053,22 @@ private struct BandInset: ViewModifier {
                 Band(sections: sections, reveal: reveal, tracker: tracker)
             }
         } else {
-            content
+            // A pinch magnifies the page and all that's in it; the pinned message stays its size
+            // by being outside it for as long as the page is larger.
+            content.overlay(alignment: .top) {
+                MagnifiedBand(magnified: tracker.magnified, sections: sections, reveal: reveal, tracker: tracker)
+            }
+        }
+    }
+
+    private struct MagnifiedBand: View {
+        let magnified: PageMagnified
+        let sections: [TranscriptStore.SectionModel]
+        let reveal: TranscriptActions
+        let tracker: StickyTracker
+
+        var body: some View {
+            if magnified.on { Band(sections: sections, reveal: reveal, tracker: tracker) }
         }
     }
 
@@ -1092,7 +1109,7 @@ private struct TimelineSection: View, Equatable {
             }
         } header: {
             if let header {
-                StickyMessage(entry: header, open: open, actions: reveal, tracker: sticky).equatable()
+                StickyMessage(entry: header, open: open, actions: reveal, tracker: sticky, magnified: sticky.magnified).equatable()
             }
         }
     }

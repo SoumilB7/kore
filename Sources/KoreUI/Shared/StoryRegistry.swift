@@ -60,6 +60,11 @@ package enum StoryRegistry {
         entries[id]?.last { $0.window?.isVisible == true }
     }
 
+    /// All of that name in `window`: a hidden copy goes by its name too.
+    package static func entries(_ id: String, in window: NSWindow) -> [Entry] {
+        (entries[id] ?? []).filter { $0.window === window }
+    }
+
     /// The one in `window`: with two folder windows open, each has its own of the same name.
     package static func entry(_ id: String, in window: NSWindow) -> Entry? {
         entries[id]?.last { $0.window === window }

@@ -243,6 +243,7 @@ package final class PinchZoom {
             clip.scroll(to: clip.constrainBoundsRect(CGRect(origin: origin, size: clip.bounds.size)).origin)
             scroll.reflectScrolledClipView(clip)
         }
+        ScrollShift.magnified(scroll)
     }
 
     private func deactivate(_ page: Page) {
@@ -255,6 +256,7 @@ package final class PinchZoom {
         scroll.allowsMagnification = original.allows
         scroll.horizontalScrollElasticity = original.horizontalElasticity
         page.original = nil
+        ScrollShift.magnified(scroll)
     }
 
     private func magnify(_ session: Session, to scale: CGFloat) {
@@ -279,6 +281,7 @@ package final class PinchZoom {
         session.scale = scroll.magnification
         session.heldOrigin = scroll.contentView.bounds.origin
         counts.previews += 1
+        ScrollShift.magnified(scroll)
     }
 
     private func finish(_ session: Session) {
@@ -306,6 +309,7 @@ package final class PinchZoom {
         releaseViewport(session)
         if let scroll = session.scroll {
             scroll.magnification = session.base
+            ScrollShift.magnified(scroll)
             let clip = scroll.contentView
             clip.scroll(to: clip.constrainBoundsRect(CGRect(origin: session.baseOrigin, size: clip.bounds.size)).origin)
             scroll.reflectScrolledClipView(clip)

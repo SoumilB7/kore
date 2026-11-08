@@ -664,6 +664,7 @@ struct StickyMessage: View, Equatable {
     var open: Bool
     let actions: TranscriptActions
     @ObservedObject var tracker: StickyTracker
+    let magnified: PageMagnified
     @Environment(\.transcriptSelection) private var selection
     /// The pinned copy is the transcript's band (`PinnedBand`), not a copy hanging from here.
     @Environment(\.pinnedBand) private var band
@@ -700,11 +701,36 @@ struct StickyMessage: View, Equatable {
                             return [f.minX, f.minY, f.width, f.height, proxy.frame(in: .scrollView).minY]
                         } action: { [tracker] v in
                             if v[4] >= 0.5 { return tracker.header(id, v[4]) }
-                            selection?.blocker(id, CGRect(x: v[0], y: v[1], width: v[2], height: v[3]))
+                            selection?.blocker(id, magnified.on ? nil : CGRect(x: v[0], y: v[1], width: v[2], height: v[3]))
                         }
                         .onDisappear { selection?.blocker(id, nil) }
+                        // On a magnified page it's pinned outside the page instead (`BandInset`).
+                        // Hidden rather than removed: nothing is rebuilt in the middle of a pinch.
+                        .opacity(magnified.on ? 0 : 1)
+                        .allowsHitTesting(!magnified.on)
                 }
             }
+    }
+}
+
+/// A pinch has the page larger than its normal size. Set on the next turn of the main thread: a
+/// pinch sets it in the middle of an update, and a view drawn there during the assignment would
+/// read the old value and not be told again.
+@MainActor @Observable
+final class PageMagnified {
+    private(set) var on = false
+
+    @ObservationIgnored private var wanted = false
+    @ObservationIgnored private var coming = false
+
+    func set(_ on: Bool) {
+        wanted = on
+        guard !coming else { return }
+        coming = true
+        DispatchQueue.main.async { [self] in
+            coming = false
+            if self.on != wanted { self.on = wanted }
+        }
     }
 }
 
@@ -712,6 +738,8 @@ struct StickyMessage: View, Equatable {
 /// tops and rows their bottoms as they move; `stuck` changes only when one crosses.
 @MainActor
 final class StickyTracker: ObservableObject {
+    /// Its own object: only the pinned message's views watch it, never the transcript's.
+    let magnified = PageMagnified()
     @Published private(set) var stuck: Set<String> = []
     /// The pinned band's height, where the transcript has one (a board tile).
     var bandHeight: CGFloat = 0

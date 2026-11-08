@@ -378,3 +378,48 @@ private struct PinchFile: Step {
         }
     }
 }
+
+/// The message pinned at the top keeps its size through a pinch, the page under it growing; let
+/// back down, it's the page's own again.
+final class PinchLeavesStickyMessage: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(PinchZoomGesture.answer + "\n\n" + PinchZoomGesture.answer)]) }
+    override func steps() -> [any Step] {
+        super.steps() + [Send("Show some text"), TurnFinished(1), Exercise(), Snapshot("pinch-sticky")]
+    }
+
+    private struct Exercise: Step {
+        var label: String { "Pinch with a message pinned at the top" }
+        var timeout: Duration? { .seconds(15) }
+
+        func run(_ story: StoryContext) async throws {
+            let chat = try story.activeChat()
+            guard let message = chat.storyTranscript.entries.first(where: { $0.kind == .user }) else { throw StoryFailure.modelMissing("the message") }
+            let id = StoryID.Transcript.pinned(message.id)
+            let before = try await story.wait("the message pinned") { story.window.flatMap { StoryElement(id, in: $0)?.frame } }
+            guard let window = story.window, let scroll = chat.storyTranscript.scrollView else { throw StoryFailure.modelMissing("the transcript") }
+            // A copy where it was, its size: the one in the page, hidden, goes by the same name.
+            func held() -> Bool {
+                return StoryRegistry.entries(id.raw, in: window).contains { entry in
+                    entry.frame.map { abs($0.height - before.height) < 1 && abs($0.maxY - before.maxY) < 2 && abs($0.minX - before.minX) < 2 } ?? false
+                }
+            }
+            let clip = scroll.contentView
+            let point = clip.convert(CGPoint(x: clip.bounds.midX, y: clip.bounds.midY), to: nil)
+            defer { _ = PinchZoom.storySample(in: window, amount: 0, phase: .cancelled, at: point) }
+            guard PinchZoom.storySample(in: window, amount: 0, phase: .began, at: point),
+                PinchZoom.storySample(in: window, amount: 0.5, phase: .changed, at: point),
+                let scale = PinchZoom.storyPageScale(in: window), scale > 1.2
+            else { throw StoryFailure.other("the transcript did not take the pinch") }
+            try await story.until("the pinned message its own size, at the top, on a page \(scale)×", timeout: .seconds(3)) { held() }
+            // It stays through a pinch that goes on: there every time it's looked at.
+            for _ in 0..<20 {
+                try await Task.sleep(for: .milliseconds(25))
+                guard held() else { throw StoryFailure.other("the pinned message left or grew") }
+            }
+            try await Snapshot("pinch-sticky-held").run(story)
+            _ = PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point)
+            try await story.until("still its size with the fingers up", timeout: .seconds(2)) { held() }
+        }
+    }
+}

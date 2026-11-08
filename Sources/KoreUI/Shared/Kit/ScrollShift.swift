@@ -16,6 +16,8 @@ final class ScrollShift: ObservableObject {
     var onZoomBegin: ((CGPoint) -> Void)?
     var onZoomEnd: ((Bool) -> Void)?
     var onZoomInput: (() -> Void)?
+    /// Whether the page is magnified now.
+    var onMagnified: ((Bool) -> Void)?
     /// A file preview's column takes a pinch as the transcript does. The transcript is found by
     /// its selection responder instead, which knows when its tab is hidden.
     var pinches = false
@@ -36,6 +38,10 @@ final class ScrollShift: ObservableObject {
 
     static func endZoom(in scroll: NSScrollView, resumeFollowing: Bool) {
         known.object(forKey: scroll)?.onZoomEnd?(resumeFollowing)
+    }
+
+    static func magnified(_ scroll: NSScrollView) {
+        known.object(forKey: scroll)?.onMagnified?(scroll.magnification > 1.001)
     }
 
     static func pinches(_ scroll: NSScrollView) -> Bool { known.object(forKey: scroll)?.pinches == true }
