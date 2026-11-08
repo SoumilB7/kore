@@ -46,4 +46,18 @@ struct NetSidecarTests {
         // The state on disk is sealed: a wrong key is refused.
         #expect(throws: (any Error).self) { try NetSidecar.start(helper: URL(fileURLWithPath: Self.binary!), folder: root.appendingPathComponent("t"), key: Data(repeating: 1, count: 32)) }
     }
+
+    /// The e2e run's node: ephemeral and named, signed out at the end while the program runs on.
+    @Test(.enabled(if: binary != nil)) func anEphemeralNodeSignsOutAndRunsOn() throws {
+        let root = netScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        let sidecar = try NetSidecar.start(
+            helper: URL(fileURLWithPath: try #require(Self.binary)), folder: root.appendingPathComponent("t"), key: key, arguments: ["-hostname", "kore-test", "-ephemeral"])
+        defer { sidecar.stop() }
+        #expect([.noState, .needsLogin, .starting].contains(try sidecar.tailnet.status().backendState))
+        try sidecar.tailnet.logout()
+        #expect(sidecar.running)
+        #expect([.noState, .needsLogin, .starting].contains(try sidecar.tailnet.status().backendState))
+    }
 }

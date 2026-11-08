@@ -18,12 +18,12 @@ type tsNode struct {
 	lc  *local.Client
 }
 
-func startTSNet(dir, hostname string, key []byte, logf logger.Logf) (node, error) {
+func startTSNet(dir, hostname string, ephemeral bool, key []byte, logf logger.Logf) (node, error) {
 	store, err := openStore(dir+"/state.sealed", key)
 	if err != nil {
 		return nil, err
 	}
-	srv := &tsnet.Server{Dir: dir, Hostname: hostname, Store: store, Logf: logf, UserLogf: quiet(logf)}
+	srv := &tsnet.Server{Dir: dir, Hostname: hostname, Ephemeral: ephemeral, Store: store, Logf: logf, UserLogf: quiet(logf)}
 	if err := srv.Start(); err != nil {
 		srv.Close()
 		return nil, fmt.Errorf("tsnet: %w", err)
@@ -74,5 +74,7 @@ func (n *tsNode) Listen(port int) (net.Listener, error) {
 func (n *tsNode) Dial(ctx context.Context, addr string, port int) (net.Conn, error) {
 	return n.srv.Dial(ctx, "tcp", net.JoinHostPort(addr, strconv.Itoa(port)))
 }
+
+func (n *tsNode) Logout(ctx context.Context) error { return n.lc.Logout(ctx) }
 
 func (n *tsNode) Close() error { return n.srv.Close() }

@@ -22,6 +22,7 @@ import KoreTrust
 ///   `{"conn":{"remote":"<ip>:<port>"}}` + its descriptor, which the client acks with
 ///   `{"v":1,"op":"ack"}`
 /// - `{"v":1,"op":"dial","addr":"<ip>","port":<n>}` → `{"ok":true}` + the connection's descriptor
+/// - `{"v":1,"op":"logout"}` → `{"ok":true}` once the node signed out (it stays up, NeedsLogin)
 /// Any refusal: `{"ok":false,"error":"<why>"}`; a client of another uid gets "not this user".
 /// Before `start` every other request is refused with "not started". The program prints
 /// `ready` on stdout once its socket listens (`tools/kore-tailnet`).
@@ -56,6 +57,12 @@ package final class TailnetSidecar: Tailnet {
             Sockets.closeFD(fd)
             throw error
         }
+    }
+
+    /// Signs the node out (its key expires on the control plane; an ephemeral node is deleted
+    /// there). The program keeps running, waiting for a sign-in.
+    package func logout() throws {
+        _ = try ask(["op": .string("logout")])
     }
 
     /// Takes the node down and ends the program.

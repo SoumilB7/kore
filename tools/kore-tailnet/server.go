@@ -21,6 +21,9 @@ type node interface {
 	Watch(ctx context.Context, mask uint64, each func(any) error) error
 	Listen(port int) (net.Listener, error)
 	Dial(ctx context.Context, addr string, port int) (net.Conn, error)
+	// Logout signs the node out: its key expires on the control plane (an ephemeral node is
+	// deleted there at once). The program keeps running, NeedsLogin.
+	Logout(ctx context.Context) error
 	Close() error
 }
 
@@ -151,6 +154,14 @@ func (s *server) handle(c *net.UnixConn) {
 		s.handleListen(c, n, req.Port)
 	case "dial":
 		s.handleDial(c, n, req.Addr, req.Port)
+	case "logout":
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := n.Logout(ctx); err != nil {
+			writeMsg(c, refusal(err.Error()), -1)
+			return
+		}
+		writeMsg(c, okReply, -1)
 	default:
 		writeMsg(c, refusal("unknown op"), -1)
 	}

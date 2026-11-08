@@ -1,6 +1,5 @@
 import Foundation
 import KoreTrust
-import Tailnet
 
 /// Kore's own `kore-tailnet` (phase 18 step 5a): started only while KoreNet is on and installed
 /// Tailscale is absent or its LocalAPI unreadable, stopped when KoreNet turns off. Its state is
@@ -45,14 +44,15 @@ package final class NetSidecar: @unchecked Sendable {
 
     /// Runs the helper with its socket and state under `folder` (0700), waits for its `ready`,
     /// and brings the node up with `key`. Blocks up to `within`: call it off the main actor.
-    package static func start(helper: URL, folder: URL, key: Data, within: TimeInterval = 10) throws -> NetSidecar {
+    /// `arguments` go after the socket and state (`-hostname`, `-ephemeral`: the e2e run's node).
+    package static func start(helper: URL, folder: URL, key: Data, arguments: [String] = [], within: TimeInterval = 10) throws -> NetSidecar {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // A Unix socket's path is at most 104 bytes.
         let socket = folder.appendingPathComponent("kt.sock").path
         guard socket.utf8.count < 100 else { throw TailnetError.sidecar("socket path too long") }
         let process = Process()
         process.executableURL = helper
-        process.arguments = ["-socket", socket, "-state", folder.appendingPathComponent("state").path]
+        process.arguments = ["-socket", socket, "-state", folder.appendingPathComponent("state").path] + arguments
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice

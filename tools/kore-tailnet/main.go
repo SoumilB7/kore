@@ -2,7 +2,7 @@
 // usable installed Tailscale exists (phase 18 §1). It serves the TailnetSidecar protocol on a
 // Unix socket for this user alone and hands tailnet connections over as descriptors.
 //
-//	kore-tailnet -socket <path> -state <dir> [-hostname <name>] [-v]
+//	kore-tailnet -socket <path> -state <dir> [-hostname <name>] [-ephemeral] [-v]
 //
 // It prints "ready" once the socket listens, waits for a `start` carrying the 32-byte state key
 // (never argv or env), and ends when the connection that sent it closes, on `stop`, or on
@@ -34,6 +34,7 @@ func main() {
 	uid := flag.Int("uid", os.Getuid(), "the only uid allowed on the socket")
 	within := flag.Duration("start-within", 30*time.Second, "give up when no start comes this soon")
 	verbose := flag.Bool("v", false, "tsnet logs on stderr, auth URL left out")
+	ephemeral := flag.Bool("ephemeral", false, "register as an ephemeral node (tests: gone from the tailnet once it logs out or stays offline)")
 	flag.Parse()
 	if *socket == "" || *state == "" {
 		fmt.Fprintln(os.Stderr, "usage: kore-tailnet -socket <path> -state <dir>")
@@ -64,7 +65,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	srv := newServer(*uid, func(key []byte) (node, error) { return startTSNet(*state, name, key, logf) })
+	srv := newServer(*uid, func(key []byte) (node, error) { return startTSNet(*state, name, *ephemeral, key, logf) })
 	go srv.serve(ln)
 	deadline := time.AfterFunc(*within, func() {
 		srv.mu.Lock()

@@ -17,6 +17,19 @@
 #
 # KORE_E2E_BOX (mybox), KORE_E2E_IDLE (30), KORE_E2E_HOST_BIN (a kore-host already built for the
 # box: skips the Linux build), KORE_LINUX_SWIFT (the swift.org toolchain).
+#
+# EMBEDDED mode (KORE_E2E_EMBEDDED=1): this Mac's tailnet is Kore's own `kore-tailnet` (built by
+# scripts/build-tailnet.sh, or KORE_TAILNET_BIN), as after uninstalling the Tailscale app: an
+# ephemeral node named kore-e2e-…, its state in the run's temp folder under a random key (no
+# Keychain, no Kore data, no defaults). Installed Tailscale isn't needed (left alone either way;
+# when it runs, the box meets this Mac on it first, so the embedded dial is a real node-key
+# rotation). SSH enroll first (KORE_E2E_SSH_HOST=<LAN ip> reaches the box there with
+# `-o HostName`, ~/.ssh/config untouched), then link-up over Kore's own tailnet, the box keeping
+# this Mac's new node key, pings, a chat call, a resume, and the box connecting to this Mac's own
+# node on the phones' port. The one manual step: the sign-in page it prints, opened once. The
+# node signs out (and is deleted) at the end, pass, fail or ^C.
+#
+#   KORE_E2E_TAILNET=1 KORE_E2E_EMBEDDED=1 KORE_E2E_SSH_HOST=192.168.1.11 scripts/tests/korenet-e2e.sh
 set -u
 zmodload zsh/datetime
 [[ ${KORE_E2E_TAILNET:-} == 1 ]] || { print "korenet-e2e: skipped (KORE_E2E_TAILNET=1 runs it)"; exit 0; }
@@ -28,7 +41,12 @@ port=47571
 dir=/tmp/kore-e2e
 tailscale=/usr/local/bin/tailscale
 swift_linux=${KORE_LINUX_SWIFT:-$HOME/Library/Developer/Toolchains/swift-6.4.2-RELEASE.xctoolchain/usr/bin/swift}
-ssh_box=(ssh -o BatchMode=yes -o ConnectTimeout=5 "$box")
+embedded=${KORE_E2E_EMBEDDED:-}
+lan=${KORE_E2E_SSH_HOST:-}
+# The box over its LAN address when given: the alias's own known-hosts entry, ~/.ssh/config as is.
+ssh_opts=(-o BatchMode=yes -o ConnectTimeout=5)
+[[ -n $lan ]] && ssh_opts+=(-o "HostName=$lan" -o "HostKeyAlias=$box")
+ssh_box=(ssh "${ssh_opts[@]}" "$box")
 # Everything the test daemon sees: its own folders and port, no CLI on PATH, nothing inherited.
 remote="env -i HOME=$dir/home XDG_STATE_HOME=$dir/state XDG_RUNTIME_DIR=$dir/run XDG_CONFIG_HOME=$dir/config KORE_NET_PORT=$port PATH=/usr/bin:/bin $dir/kore-host"
 
@@ -36,12 +54,18 @@ t0=$EPOCHREALTIME
 lap() { printf '[%5.1fs] %s\n' $(( EPOCHREALTIME - t0 )) "$1"; }
 
 # 1. Preconditions: never started or changed here.
-if ! "$tailscale" status --json 2>/dev/null | grep -q '"BackendState": *"Running"'; then
+if [[ $embedded == 1 ]]; then
+    helper=${KORE_TAILNET_BIN:-$root/build/release/kore-tailnet-macos-arm64}
+    if [[ ! -x $helper ]]; then
+        "$root/scripts/build-tailnet.sh" macos-arm64 || exit 1
+        [[ -x $helper ]] || { print -u2 "korenet-e2e: no kore-tailnet (needs Go: brew install go, or KORE_TAILNET_BIN=<path>)"; exit 1; }
+    fi
+elif ! "$tailscale" status --json 2>/dev/null | grep -q '"BackendState": *"Running"'; then
     print -u2 "korenet-e2e: this Mac's Tailscale isn't Running: start Tailscale on this Mac, then run it again"
     exit 2
 fi
 if ! "${ssh_box[@]}" true 2>/dev/null; then
-    print -u2 "korenet-e2e: ssh -o BatchMode=yes $box true failed: check the box is up and the ssh alias works"
+    print -u2 "korenet-e2e: ${ssh_box[*]} true failed: check the box is up and the ssh alias works"
     exit 2
 fi
 
@@ -83,7 +107,7 @@ t0=$EPOCHREALTIME
 lap "client built; the timed part starts"
 
 "${ssh_box[@]}" "mkdir -m 700 $dir" || exit 1
-scp -q -o BatchMode=yes "$host_bin" "$box:$dir/kore-host" || exit 1
+scp -q "${ssh_opts[@]}" "$host_bin" "$box:$dir/kore-host" || exit 1
 lap "copied to $box:$dir"
 
 # 3. The test daemon: served folder $dir, a full grant for the SSH upgrade, KoreNet on, joined.
@@ -106,8 +130,11 @@ for k in device key pid ip; do [[ -n ${got[$k]:-} ]] || { print -u2 "korenet-e2e
 lap "test daemon up on $box (pid ${got[pid]}, ${got[ip]}:$port)"
 
 # 4–5. The Mac end, with the round trips, resume, dedupe and the idle numbers.
+extra=()
+[[ -n $lan ]] && extra+=(--ssh-host "$lan")
+[[ $embedded == 1 ]] && extra+=(--embedded "$helper" --state "$dir/state")
 "$client" --ssh "$box" --remote "$remote" --grant e2e --box-ip "${got[ip]}" --port $port --box-device "${got[device]}" \
-    --box-key "${got[key]}" --folder "$dir" --pid "${got[pid]}" --idle "$idle"
+    --box-key "${got[key]}" --folder "$dir" --pid "${got[pid]}" --idle "$idle" "${extra[@]}"
 code=$?
 lap "client done"
 exit $code

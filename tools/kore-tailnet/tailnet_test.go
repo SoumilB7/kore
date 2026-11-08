@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -194,6 +195,8 @@ type fakeNode struct {
 	masks  chan uint64
 	dialed chan net.Conn
 	closed chan struct{}
+	// Set by logout (read after its reply).
+	loggedOut atomic.Bool
 }
 
 func newFake() *fakeNode {
@@ -225,7 +228,8 @@ func (f *fakeNode) Dial(_ context.Context, addr string, port int) (net.Conn, err
 	f.dialed <- theirs
 	return mine, nil
 }
-func (f *fakeNode) Close() error { close(f.closed); return nil }
+func (f *fakeNode) Logout(context.Context) error { f.loggedOut.Store(true); return nil }
+func (f *fakeNode) Close() error                 { close(f.closed); return nil }
 
 type oneListener struct {
 	conns chan net.Conn
@@ -431,5 +435,28 @@ func TestListenHandsOffEachConnectionUntilAcked(t *testing.T) {
 	got := make([]byte, 2)
 	if _, err := syscall.Read(fd, got); err != nil || string(got) != "hi" {
 		t.Fatalf("%q %v", got, err)
+	}
+}
+
+func TestLogoutSignsOutAndKeepsRunning(t *testing.T) {
+	h := serveFake(t, os.Getuid(), nil)
+	if _, m, _ := h.ask(map[string]any{"op": "logout"}); m["error"] != "not started" {
+		t.Fatalf("logout before start: %v", m)
+	}
+	h.start()
+	if _, m, _ := h.ask(map[string]any{"op": "logout"}); m["ok"] != true {
+		t.Fatalf("logout: %v", m)
+	}
+	if !h.node.loggedOut.Load() {
+		t.Fatal("node not logged out")
+	}
+	// Still serving: a status after it answers.
+	if _, m, _ := h.ask(map[string]any{"op": "status"}); m["ok"] != true {
+		t.Fatalf("status after logout: %v", m)
+	}
+	select {
+	case code := <-h.srv.exit:
+		t.Fatalf("exited %d", code)
+	default:
 	}
 }
