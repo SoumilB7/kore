@@ -4,7 +4,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
         <receiver android:name=".debug.Hooks" android:exported="true" android:permission="android.permission.DUMP">
-            <intent-filter><action android:name="dev.kore.android.debug.STATE" /></intent-filter>
+            <intent-filter>
+                <action android:name="dev.kore.android.debug.STATE" />
+                <action android:name="dev.kore.android.debug.ASK_LOGS" />
+                <action android:name="dev.kore.android.debug.CLIP_IMAGE" />
+            </intent-filter>
         </receiver>
         <!-- The demo (no Mac, box or Tailscale), on with files/demo: set up before the app starts. -->
         <provider android:name=".debug.DemoStart" android:authorities="dev.kore.android.demo" android:exported="false" android:initOrder="100" />

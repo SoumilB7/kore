@@ -69,14 +69,22 @@ class Demo(private val context: Context) : StandIn {
         override fun logout() = Unit
     }
 
-    override val dialer = NodeDialer { device, _, _ -> DemoLink(device, if (device.kind == NodeKind.MAC) "mac" else "box") }
+    /** The live links by kind ("mac", "box"): the debug hooks reach them (`Hooks`). */
+    val links = java.util.concurrent.ConcurrentHashMap<String, DemoLink>()
+    /** The Mac's answer to the last log ask: its length in characters, or -1 before one. */
+    @Volatile var logsRead = -1
+
+    override val dialer = NodeDialer { device, _, _ ->
+        val dir = if (device.kind == NodeKind.MAC) "mac" else "box"
+        DemoLink(device, dir).also { links[dir] = it }
+    }
 
     private fun asset(path: String): JsonObject? = runCatching {
         Json.parseToJsonElement(context.assets.open("demo/$path").bufferedReader().readText()).jsonObject
     }.getOrNull()
 
     /** One device's link: its welcome, snapshot and attention at once; a transcript when asked; every command ok. */
-    private inner class DemoLink(device: Device, private val dir: String) : LinkSession {
+    inner class DemoLink(device: Device, private val dir: String) : LinkSession {
         private val channel = Channel<ByteArray>(Channel.UNLIMITED)
         private val end = CompletableDeferred<String>()
         override val incoming get() = channel
@@ -85,11 +93,19 @@ class Demo(private val context: Context) : StandIn {
         override val peer = NetClientSession.State.Established.Peer(device, listOf("read", "ask", "run"), false, byteArrayOf(4, 2), null, null)
         override var lastInbound = System.currentTimeMillis()
 
+        /** The snapshot as it stands: a send to a working chat queues behind its turn (`queued`). */
+        private var snapshot: JsonObject? = asset("$dir/snapshot.json")
+
         init {
-            for (name in listOf("welcome", "snapshot", "attn.state")) asset("$dir/$name.json")?.let(::push)
+            asset("$dir/welcome.json")?.let(::push)
+            snapshot?.let(::push)
+            asset("$dir/attn.state.json")?.let(::push)
         }
 
-        private fun push(m: JsonObject) {
+        /** As a Mac would: ask for the phone's log (`logs.get`), from the start. */
+        fun askLogs() = push(buildJsonObject { put("t", "logs.get"); put("id", "demo-logs"); put("offset", 0) })
+
+        fun push(m: JsonObject) {
             lastInbound = System.currentTimeMillis()
             channel.trySend(m.toString().toByteArray())
         }
@@ -106,9 +122,31 @@ class Demo(private val context: Context) : StandIn {
                         put("entries", kotlinx.serialization.json.JsonArray(emptyList())); put("turns", kotlinx.serialization.json.JsonArray(emptyList()))
                     })
                 }
-                "cmd" -> if (id != null) push(buildJsonObject { put("t", "result"); put("id", id); put("ok", true) })
+                "cmd" -> if (id != null) {
+                    val cmd = m["cmd"] as? JsonObject
+                    if ((cmd?.get("type") as? JsonPrimitive)?.content == "chat.send") queueIfWorking((cmd["chatId"] as? JsonPrimitive)?.content)
+                    push(buildJsonObject { put("t", "result"); put("id", id); put("ok", true) })
+                }
+                // An upload: taken, as the Mac's would be.
+                "blob.put.end" -> (m["uploadId"] as? JsonPrimitive)?.content?.let { upload ->
+                    push(buildJsonObject { put("t", "result"); put("id", "blob.put:$upload"); put("ok", true); put("blobId", "demo-$upload") })
+                }
+                "logs.chunk" -> logsRead = (m["total"] as? JsonPrimitive)?.content?.toIntOrNull() ?: -1
             }
             return true
+        }
+
+        /** A message to a chat whose turn runs waits behind it: its `queued` goes up by one, as a delta. */
+        private fun queueIfWorking(chatId: String?) {
+            val snap = snapshot ?: return
+            val chats = (snap["chats"] as? kotlinx.serialization.json.JsonArray)?.map { it as JsonObject } ?: return
+            val chat = chats.firstOrNull { (it["id"] as? JsonPrimitive)?.content == chatId } ?: return
+            if ((chat["running"] as? JsonPrimitive)?.content != "true") return
+            val queued = ((chat["queued"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0) + 1
+            val updated = JsonObject(chat + ("queued" to JsonPrimitive(queued)))
+            val rev = ((snap["rev"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 1) + 1
+            snapshot = JsonObject(snap + mapOf("rev" to JsonPrimitive(rev), "chats" to kotlinx.serialization.json.JsonArray(chats.map { if (it === chat) updated else it })))
+            push(buildJsonObject { put("t", "delta"); put("rev", rev); put("chats", kotlinx.serialization.json.JsonArray(listOf(updated))) })
         }
 
         override fun ping(): Deferred<Unit> = CompletableDeferred(Unit)
