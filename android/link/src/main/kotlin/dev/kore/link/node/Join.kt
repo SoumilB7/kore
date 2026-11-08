@@ -150,8 +150,8 @@ class JoinFlow(
                     null
                 }
                 if (link != null) {
-                    stepFlow.value = Step.Joined(link.peer.record)
                     joined(link)
+                    stepFlow.value = Step.Joined(link.peer.record)
                     return
                 }
             }
