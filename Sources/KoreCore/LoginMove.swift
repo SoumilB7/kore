@@ -211,11 +211,116 @@ public enum LoginMove {
         } catch { return .abortImport(moveId: moveId) }
     }
 
+    /// A Keep there that stopped after staging: the staged copy goes, and theirs runs again.
+    /// What's owed first, if either couldn't be told.
+    private static func abortBoth(_ remote: some Remote, _ moveId: String) async -> Pending? {
+        let staged = await abortImport(remote, moveId)
+        let paused = await abortExport(remote, moveId)
+        return staged ?? paused
+    }
+
     private static func abortExport(_ remote: some Remote, _ moveId: String) async -> Pending? {
         do {
             try await remote.abortExport(moveId: moveId)
             return nil
         } catch { return .abortExport(moveId: moveId) }
+    }
+
+    // MARK: One sign-in on both devices: Keep
+
+    /// The same sign-in is here and on the other device: it stays here. The live copy (the one
+    /// refreshed last) is the one kept, written here if it's the other's; the other's copy goes.
+    /// Nothing is logged out.
+    public static func keepHere(_ local: some Local, _ remote: some Remote, cli: String, moveId: String = newID()) async -> Outcome {
+        guard await local.lock() else { return .failed(.busy) }
+        let outcome = await keepHereLocked(local, remote, cli, moveId)
+        await local.unlock()
+        return outcome
+    }
+
+    private static func keepHereLocked(_ local: some Local, _ remote: some Remote, _ cli: String, _ moveId: String) async -> Outcome {
+        let mine: Data
+        do {
+            guard let read = try await local.read() else { return .failed(.notThere) }
+            mine = read
+        } catch { return .failed(failure(error)) }
+        let theirs: (data: Data, sha: String)
+        do {
+            theirs = try await remote.prepareExport(moveId: moveId)
+        } catch {
+            return .failed(failure(error), pending: await abortExport(remote, moveId))
+        }
+        guard sha(theirs.data) == theirs.sha else { return .failed(.sentWrong, pending: await abortExport(remote, moveId)) }
+        if (LoginCredential.freshness(theirs.data, cli: cli) ?? 0) > (LoginCredential.freshness(mine, cli: cli) ?? 0) {
+            // Theirs refreshed last: it's the live one, and replaces this device's.
+            do { try await local.write(theirs.data) } catch {
+                try? await local.write(mine)
+                return .failed(failure(error), pending: await abortExport(remote, moveId))
+            }
+            let written = try? await local.read()
+            guard written.map(sha) == theirs.sha, await local.signedIn() else {
+                try? await local.write(mine)
+                return .failed(.notSignedIn, pending: await abortExport(remote, moveId))
+            }
+        }
+        do {
+            try await remote.commitExport(moveId: moveId)
+            return .moved()
+        } catch {
+            return .moved(pending: .commitExport(moveId: moveId))
+        }
+    }
+
+    /// The same sign-in is here and on the other device: it stays there. If this device's copy
+    /// is the live one, it replaces the other's first; then this device's goes.
+    public static func keepThere(_ local: some Local, _ remote: some Remote, cli: String, moveId: String = newID()) async -> Outcome {
+        guard await local.lock() else { return .failed(.busy) }
+        let outcome = await keepThereLocked(local, remote, cli, moveId)
+        await local.unlock()
+        return outcome
+    }
+
+    private static func keepThereLocked(_ local: some Local, _ remote: some Remote, _ cli: String, _ moveId: String) async -> Outcome {
+        let using = await local.chatsUsing()
+        guard using == 0 else { return .failed(.inUse(using)) }
+        let mine: Data
+        do {
+            guard let read = try await local.read() else { return .failed(.notThere) }
+            mine = read
+        } catch { return .failed(failure(error)) }
+        // The other's copy, paused while this runs: nothing refreshes it meanwhile.
+        let theirs: (data: Data, sha: String)
+        do {
+            theirs = try await remote.prepareExport(moveId: moveId)
+        } catch {
+            return .failed(failure(error), pending: await abortExport(remote, moveId))
+        }
+        if (LoginCredential.freshness(mine, cli: cli) ?? 0) > (LoginCredential.freshness(theirs.data, cli: cli) ?? 0) {
+            // This device's is the live one: it replaces theirs (staged, checked) before this one goes.
+            do {
+                try await remote.prepareImport(moveId: moveId, data: mine, sha: sha(mine))
+            } catch {
+                return .failed(failure(error), pending: await abortBoth(remote, moveId))
+            }
+            guard let again = try? await local.read(), sha(again) == sha(mine) else {
+                return .failed(.changedMeanwhile, pending: await abortBoth(remote, moveId))
+            }
+            do { try await local.delete() } catch {
+                return .failed(failure(error), pending: await abortBoth(remote, moveId))
+            }
+            do { try await remote.commitImport(moveId: moveId) } catch { return .moved(pending: .commitImport(moveId: moveId)) }
+        } else {
+            do { try await local.delete() } catch {
+                return .failed(failure(error), pending: await abortExport(remote, moveId))
+            }
+        }
+        // Theirs runs again.
+        do {
+            try await remote.abortExport(moveId: moveId)
+            return .moved()
+        } catch {
+            return .moved(pending: .abortExport(moveId: moveId))
+        }
     }
 
     /// Sends a kept `Pending` again; true once the other side took it.

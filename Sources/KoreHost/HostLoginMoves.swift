@@ -85,8 +85,9 @@ package final class HostLoginMoves {
         guard let moveId = args.moveId, let data = args.data.flatMap({ Data(base64Encoded: $0) }), let sha = args.sha else {
             return .refused(id, .invalid, "Name the move and send the login.")
         }
-        // The same sign-in already here: two copies would log one out.
-        if let held = sameSignIn(data) { return .refused(id, .invalid, "This login is already on this box as “\(held)”.") }
+        // The same sign-in already here: two copies would log one out. A Keep (`force`) replaces
+        // the box's copy of it, named.
+        if args.force != true, let held = sameSignIn(data) { return .refused(id, .invalid, "This login is already on this box as “\(held)”.") }
         let dir = staging(moveId)
         let creds = dir.appendingPathComponent(".credentials.json")
         do {
@@ -123,6 +124,17 @@ package final class HostLoginMoves {
         if !FileManager.default.fileExists(atPath: dir.path) {
             if let placed = placed(moveId) { return LoginMoveResult(id: id, ok: true, login: placed) }
             return .refused(id, .invalid, "No such move here.")
+        }
+        // A Keep: the staged login replaces the named account's credentials, its folder kept.
+        if args.force == true, let login = args.login, let url = credentials(login), FileManager.default.fileExists(atPath: url.path) {
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent(".credentials.json")) else {
+                return .refused(id, .invalid, "Couldn't read the staged login.")
+            }
+            do { try LoginVault.writePrivate(data, to: url) } catch { return .refused(id, .invalid, "Couldn't replace the login.") }
+            try? FileManager.default.removeItem(at: dir)
+            accounts.forget()
+            HostJournal.note("login import", ["move": moveId, "outcome": "replaced", "login": login])
+            return LoginMoveResult(id: id, ok: true, login: login)
         }
         let name = freeName(args.login ?? "moved")
         do {

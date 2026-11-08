@@ -182,6 +182,33 @@ package final class AccountStore {
     /// The logins last read signed out, by CLI: "main" or an added one's id.
     private(set) var lapsed: [String: Set<String>] = [:]
 
+    // MARK: Moving
+
+    /// Logins moving to or from another device (`LoginMoves`), by "cli/login": while one is, no
+    /// status, usage or file-change read runs its CLI, and nothing switches to it.
+    private(set) var moving: Set<String> = []
+
+    func isMoving(_ provider: String, _ id: String?) -> Bool { moving.contains(provider + "/" + Self.loginKey(id)) }
+
+    /// Locks a login for a move; false when it's moving already.
+    func lockMove(_ provider: String, _ id: String?) -> Bool { moving.insert(provider + "/" + Self.loginKey(id)).inserted }
+
+    func unlockMove(_ provider: String, _ id: String?) { moving.remove(provider + "/" + Self.loginKey(id)) }
+
+    /// Whether the CLI reads a login signed in, in its own folder (a move's check here).
+    func readsSignedIn(_ provider: String, _ id: String?) async -> Bool {
+        guard let ops = ops(provider) else { return false }
+        let reply = await CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: provider, id: id)) { try? await ops.calls.status() }
+        guard let reply, case .signedIn = ops.parse(reply) else { return false }
+        return true
+    }
+
+    /// The login list changed outside a read (a login moved).
+    func loginsChanged(_ provider: String) {
+        loginsVersion += 1
+        rewatch(provider)
+    }
+
     // MARK: Reading
 
     package func status(_ provider: String) -> Status { statuses[provider] ?? .unknown }
@@ -253,6 +280,7 @@ package final class AccountStore {
         }
         if let read = reads[provider] { return await read.value }
         guard let ops = ops(provider) else { return }
+        if !onBox, isMoving(provider, CLIProfiles.active(provider)) { return }
         reading.insert(provider)
         let epoch = epoch
         let read = Task {
@@ -656,13 +684,15 @@ package final class AccountStore {
         /// This Mac's login whose owner moved it to a box: signed in there, not here. Never shown
         /// as signed out, never switched to, read or signed out here.
         package var onBox: String?
+        /// A box's login moved there from that device and not used there yet ("from MacBook").
+        package var from: String?
 
         package init(
             id: String?, email: String?, active: Bool, workspace: String? = nil, signedOut: Bool = false, duplicate: Bool = false,
-            onBox: String? = nil
+            onBox: String? = nil, from: String? = nil
         ) {
             (self.id, self.email, self.active, self.workspace) = (id, email, active, workspace)
-            (self.signedOut, self.duplicate, self.onBox) = (signedOut, duplicate, onBox)
+            (self.signedOut, self.duplicate, self.onBox, self.from) = (signedOut, duplicate, onBox, from)
         }
     }
 
@@ -735,8 +765,8 @@ package final class AccountStore {
     func switchLogin(_ provider: String, to id: String?, _ pick: LoginPick) {
         if onBox { return switchBox(provider, to: id) }
         guard flows[provider]?.step.live != true, CLIProfiles.active(provider) != id else { return }
-        // A login on a box isn't this Mac's to run.
-        guard logins(provider).first(where: { $0.id == id })?.onBox == nil else { return }
+        // A login on a box isn't this Mac's to run, nor one moving.
+        guard logins(provider).first(where: { $0.id == id })?.onBox == nil, !isMoving(provider, id) else { return }
         UILog.event("account-switch", ["cli": provider, "login": Self.loginKey(id)])
         stopWork(provider)
         CLIProfiles.activate(provider, id)
@@ -933,6 +963,8 @@ package final class AccountStore {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, let self else { return }
             self.settling[key] = nil
+            // A move changes the file itself: it reads its own result.
+            guard !self.isMoving(provider, id) else { return }
             guard await self.accountMoved(provider, login: id) else { return }
             if CLIProfiles.active(provider) == id {
                 await self.refresh(provider)
@@ -944,7 +976,7 @@ package final class AccountStore {
 
     /// Reads a login that isn't active, in its own folder.
     private func readLogin(_ provider: String, _ id: String?) async {
-        guard let ops = ops(provider) else { return }
+        guard let ops = ops(provider), !isMoving(provider, id) else { return }
         let reply = await CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: provider, id: id)) { try? await ops.calls.status() }
         guard let reply, CLIProfiles.active(provider) != id else { return }
         noteLogin(provider, id, ops.parse(reply))

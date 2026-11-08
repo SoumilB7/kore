@@ -333,3 +333,52 @@ struct LoginVaultTests {
         #expect(try vault.read(place, prompt: false) == nil)
     }
 }
+
+/// One sign-in on both devices: Keep leaves one copy, the live one (refreshed last), nothing logged out.
+@Suite("Login keep")
+struct LoginKeepTests {
+    typealias Device = LoginMoveTests.Device
+    typealias Other = LoginMoveTests.Other
+    let older = Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r1","expiresAt":1}}"#.utf8)
+    let newer = Data(#"{"claudeAiOauth":{"accessToken":"b","refreshToken":"r2","expiresAt":2}}"#.utf8)
+
+    @Test func keepHereTakesTheirsWhenTheirsIsLive() async {
+        let here = Device(older), there = Other(placed: newer)
+        #expect(await LoginMove.keepHere(here, there, cli: "claude") == .moved())
+        #expect(here.held == newer && there.placed == nil && !there.paused)
+    }
+
+    @Test func keepHereKeepsMineWhenMineIsLive() async {
+        let here = Device(newer), there = Other(placed: older)
+        #expect(await LoginMove.keepHere(here, there, cli: "claude") == .moved())
+        #expect(here.held == newer && there.placed == nil)
+        #expect(!here.steps.contains("write"))
+    }
+
+    @Test func keepHereThatTheCLIDoesntReadPutsMineBack() async {
+        let here = Device(older), there = Other(placed: newer)
+        here.set(signedIn: false)
+        #expect(await LoginMove.keepHere(here, there, cli: "claude") == .failed(.notSignedIn))
+        #expect(here.held == older && there.placed == newer && !there.paused)
+    }
+
+    @Test func keepThereSendsMineFirstWhenMineIsLive() async {
+        let here = Device(newer), there = Other(placed: older)
+        #expect(await LoginMove.keepThere(here, there, cli: "claude", moveId: "k") == .moved())
+        #expect(here.held == nil && there.placed == newer && !there.paused)
+    }
+
+    @Test func keepThereJustDropsMineWhenTheirsIsLive() async {
+        let here = Device(older), there = Other(placed: newer)
+        #expect(await LoginMove.keepThere(here, there, cli: "claude", moveId: "k") == .moved())
+        #expect(here.held == nil && there.placed == newer && !there.paused)
+        #expect(!there.calls.contains("prepareImport"))
+    }
+
+    @Test func keepThereWithChatsUsingItHereStops() async {
+        let here = Device(newer), there = Other(placed: older)
+        here.set(chats: 1)
+        #expect(await LoginMove.keepThere(here, there, cli: "claude") == .failed(.inUse(1)))
+        #expect(here.held == newer && there.placed == older && there.calls.isEmpty)
+    }
+}

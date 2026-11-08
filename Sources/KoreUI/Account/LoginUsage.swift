@@ -78,6 +78,8 @@ final class LoginUsage {
                 guard let read = StorylineSeams.loginUsage else { throw UsageUnavailable() }
                 return try await read(provider, login)
             }
+            // A login moving to or from another device: nothing of Kore's runs its CLI.
+            if AccountStore.shared.isMoving(provider, login) { throw UsageUnavailable() }
             return try await CLIProfiles.$pinned.withValue(.init(cli: provider, id: login)) {
                 switch provider {
                 case "claude": try await PlanUsage.claude()

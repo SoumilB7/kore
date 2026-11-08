@@ -32,6 +32,12 @@ final class AccountState {
     private(set) var isOpen = false
     /// Sign out asked; the row is the question until it's answered.
     private(set) var askingSignOut = false
+    /// Moving the only login here asked (that login, and where to): its row is the question.
+    struct MoveAsk: Equatable {
+        let login: String?
+        let box: String
+    }
+    private(set) var askingMove: MoveAsk?
     /// Copy link (or code) was just pressed: it reads "Copied" for a moment.
     private(set) var copied = false
     /// The methods unfolded in the card, and the groups disclosed in them, by title.
@@ -67,8 +73,15 @@ final class AccountState {
         self.store = store
         isOpen = true
         (askingSignOut, copied, palette, editor, formPicker, formError, filled) = (false, false, nil, nil, nil, nil, [])
+        askingMove = nil
         store.dismissOutcome(provider)
         if store.flow(provider)?.step.live != true { Task { await store.refresh(provider) } }
+        // A move's failed line clears; what a box is owed goes; one sign-in on two devices is looked for.
+        if !store.onBox {
+            LoginMoves.shared.clearFailures()
+            LoginMoves.shared.settle()
+            LoginMoves.shared.check()
+        }
     }
 
     /// Closing never stops a sign-in; an outcome goes, and the next open shows rest. A field or
@@ -204,14 +217,18 @@ final class AccountState {
     }
 
     /// The ⋯'s Remove, under its methods: an added login not in use, and whether it's a duplicate.
+    /// Not for one that lives on a box: it isn't this Mac's to remove.
     var removable: AccountStore.Login? {
         guard !store.onBox, case .login(let id?) = palette else { return nil }
-        return store.logins(provider).first { $0.id == id && !$0.active }
+        return store.logins(provider).first { $0.id == id && !$0.active && $0.onBox == nil }
     }
 
-    /// A login's ⋯ has something in it: its methods, or Remove.
+    /// A login's ⋯ has something in it: its methods, a move, or Remove. Nothing while it moves.
     func hasLoginMenu(_ login: AccountStore.Login) -> Bool {
-        !store.loginMenu(provider, login.id).isEmpty || (!store.onBox && login.id != nil && !login.active)
+        if !store.onBox, case .moving = LoginMoves.shared.line(provider, login.id) { return false }
+        if !store.onBox, login.onBox != nil || LoginMoves.shared.alsoOn(provider, login.id) != nil { return true }
+        return !store.loginMenu(provider, login.id).isEmpty || (!store.onBox && login.id != nil && !login.active)
+            || (!store.onBox && !LoginMoves.shared.targets(provider).isEmpty)
     }
 
     func switchLogin(_ id: String?, _ pick: LoginPick) {
@@ -327,9 +344,74 @@ final class AccountState {
         switch palette {
         case .methods: store.menu(provider)
         case .add: store.addMenu(provider)
-        case .login(let id): store.loginMenu(provider, id)
+        case .login(let id):
+            // A login on a box, or one held twice, holds only where it goes (`moveRows`).
+            if !store.onBox, store.logins(provider).first(where: { $0.id == id })?.onBox != nil || LoginMoves.shared.alsoOn(provider, id) != nil { [] }
+            else { store.loginMenu(provider, id) }
         case nil: nil
         }
+    }
+
+    // MARK: Moving a login
+
+    /// One of a login's ⋯ rows for moving it: where, and why it can't now.
+    struct MoveRow {
+        let title: String
+        var hint: String?
+        var enabled = true
+        let action: @MainActor () -> Void
+    }
+
+    /// A login's ⋯ for moving it: "Move to {box}" per box (dimmed with the reason when it can't
+    /// take one now), "Move back here" for a login on a box, "Keep here" and "Keep on {box}" for
+    /// one held on both. Nothing while it moves; never on a box's own list.
+    var moveRows: [MoveRow] {
+        guard !store.onBox, case .login(let id) = palette, let login = store.logins(provider).first(where: { $0.id == id }) else { return [] }
+        let moves = LoginMoves.shared
+        if case .moving = moves.line(provider, id) { return [] }
+        if login.onBox != nil { return [MoveRow(title: "Move back here") { [weak self] in self?.moveBack(id) }] }
+        if let box = moves.alsoOn(provider, id) {
+            let name = NodeNames.name(box)
+            return [
+                MoveRow(title: "Keep here") { [weak self] in self?.keep(id, here: true) },
+                MoveRow(title: "Keep on \(name)") { [weak self] in self?.keep(id, here: false) },
+            ]
+        }
+        return moves.targets(provider).map { target in
+            MoveRow(title: "Move to \(target.name)", hint: target.why, enabled: target.why == nil) { [weak self] in self?.move(id, to: target.key) }
+        }
+    }
+
+    /// The logins this one's chats could go to: signed in here, not on a box, not itself.
+    private func others(_ id: String?) -> [AccountStore.Login] {
+        store.logins(provider).filter { $0.id != id && $0.onBox == nil && !$0.signedOut }
+    }
+
+    func move(_ id: String?, to box: String) {
+        palette = nil
+        let active = CLIProfiles.active(provider) == id
+        // The only login here: asked once, in the row, the way Sign out asks.
+        if active, others(id).isEmpty { return askingMove = MoveAsk(login: id, box: box) }
+        LoginMoves.shared.move(provider, id, to: box, fallback: active ? .some(others(id).first?.id) : nil)
+    }
+
+    /// "Move" answered for the only login: chats here sign in again.
+    func confirmMove() {
+        guard let ask = askingMove else { return }
+        askingMove = nil
+        LoginMoves.shared.move(provider, ask.login, to: ask.box, fallback: .some(nil))
+    }
+
+    func cancelMove() { askingMove = nil }
+
+    func moveBack(_ id: String?) {
+        palette = nil
+        LoginMoves.shared.moveBack(provider, id)
+    }
+
+    func keep(_ id: String?, here: Bool) {
+        palette = nil
+        LoginMoves.shared.keep(provider, id, here: here)
     }
 
     /// The identity signed in now, when there is one.
@@ -823,6 +905,14 @@ private struct MethodList: View {
                     }
                 }
             }
+            ForEach(Array(state.moveRows.enumerated()), id: \.offset) { _, row in
+                let press: @MainActor @Sendable () -> Void = { if row.enabled { row.action() } }
+                MethodRow(title: row.title, hint: row.hint, action: press)
+                    .opacity(row.enabled ? 1 : 0.45)
+                    .help(row.hint ?? "")
+                    .storyID(StoryID.Composer.accountMethod(row.title))
+                    .tabStop(StoryID.Composer.accountMethod(row.title), action: press)
+            }
             if let login = state.removable, let id = login.id {
                 let title = login.duplicate ? AccountText.removeDuplicate : AccountText.remove
                 let press: @MainActor @Sendable () -> Void = { state.removeLogin(id) }
@@ -852,7 +942,7 @@ private struct MethodRow: View {
         checked = item.checked && item.method != nil
     }
 
-    init(title: String, action: @escaping () -> Void) { (self.title, self.action) = (title, action) }
+    init(title: String, hint: String? = nil, action: @escaping () -> Void) { (self.title, self.hint, self.action) = (title, hint, action) }
 
     var body: some View {
         Button(action: action) {
@@ -923,8 +1013,9 @@ private struct LoginList: View {
             VStack(alignment: .leading, spacing: Space.md) {
                 ForEach(Array(logins.enumerated()), id: \.element.id) { index, login in
                     let key = AccountStore.loginKey(login.id)
+                    let line = caption(login)
                     LoginRow(
-                        state: state, login: login, caption: caption(login), plan: login.active ? identity?.plan : nil,
+                        state: state, login: login, caption: line.text, warn: line.warn, point: line.point, plan: login.active ? identity?.plan : nil,
                         reading: login.active && identity == nil && store.status(provider) == .unknown,
                         usage: usages[index], usageKey: keys[index], now: context.date, labelWidth: labelWidth,
                         hovered: hovered.value == key) { on in
@@ -937,12 +1028,26 @@ private struct LoginList: View {
         .task(id: keys) { await store.loginUsage.show(keys) }
     }
 
-    private func caption(_ login: AccountStore.Login) -> String? {
+    /// The row's caption: one state at a time. A move under way or that didn't happen, and one
+    /// sign-in held on two devices (amber, with its point), come before what the login is to Kore.
+    private func caption(_ login: AccountStore.Login) -> (text: String?, warn: Bool, point: Bool) {
+        if !store.onBox {
+            switch LoginMoves.shared.line(provider, login.id) {
+            case .moving(let box): return (login.onBox != nil ? "Moving back here…" : "Moving to \(box)…", false, false)
+            case .failed(let words): return (words, true, false)
+            case nil: break
+            }
+            if let box = LoginMoves.shared.alsoOn(provider, login.id) {
+                return ("Also on \(NodeNames.name(box)): one will be logged out", true, true)
+            }
+        }
         // The plan is the row's pill: the caption keeps only what the login is to Kore.
         let main = login.id == nil ? (store.onBox ? "Default" : "Main") : nil
-        let state = login.onBox.map { "On " + NodeNames.name($0) } ?? (login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil)
+        let state =
+            login.onBox.map { "On " + NodeNames.name($0) } ?? login.from.map { "from " + $0 }
+            ?? (login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil)
         let words = [main, state].compactMap { $0 }
-        return words.isEmpty ? nil : words.joined(separator: " · ")
+        return (words.isEmpty ? nil : words.joined(separator: " · "), false, false)
     }
 }
 
@@ -956,12 +1061,19 @@ extension LoginPick {
     /// A login picked by hand on a companion granted full control (link 1.2's `account.switch`):
     /// still the user's own pick, made on another screen.
     static func byHandOnLink() -> LoginPick { LoginPick() }
+
+    /// The owner moved the active login to another device: its chats go to the one they picked
+    /// (or come back to it when it didn't move).
+    static func byMove() -> LoginPick { LoginPick() }
 }
 
 struct LoginRow: View {
     let state: AccountState
     let login: AccountStore.Login
     let caption: String?
+    /// The caption is amber (a move that didn't happen, a login held twice), with a point.
+    var warn = false
+    var point = false
     /// The active login's plan, as its account reads; a row's own usage reading says it first.
     let plan: String?
     /// Its account being read, just switched to: the spinner in the ✓'s place.
@@ -983,7 +1095,8 @@ struct LoginRow: View {
         let id = StoryID.Composer.accountLogin(AccountStore.loginKey(login.id))
         let title = login.email.map(AccountPrivacy.shared.shown) ?? (login.id == nil ? "Main account" : "Account")
         let menuOpen = state.palette == .login(login.id)
-        Button { if !login.active, login.onBox == nil { state.switchLogin(login.id, LoginPick()) } } label: {
+        let moving: Bool = if !state.store.onBox, case .moving = LoginMoves.shared.line(state.provider, login.id) { true } else { false }
+        Button { if !login.active, login.onBox == nil, !moving { state.switchLogin(login.id, LoginPick()) } } label: {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: Space.sm) {
                     Text(title)
@@ -1007,7 +1120,21 @@ struct LoginRow: View {
                     .frame(width: Size.MessageActions.button, height: Size.MessageActions.button)
                 }
                 if let caption {
-                    Text(caption).font(TextStyle.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
+                    HStack(spacing: Space.xs) {
+                        if point { Circle().fill(Theme.warning).frame(width: 6, height: 6) }
+                        Text(caption).font(TextStyle.caption).foregroundStyle(warn ? Theme.warning : Theme.tertiary).lineLimit(1).truncationMode(.tail)
+                    }
+                }
+                // Moving the only login here: the row asks once.
+                if state.askingMove?.login == login.id, state.askingMove != nil {
+                    HStack(spacing: Space.sm) {
+                        Text("It's the only login here: chats here sign in again.").font(TextStyle.caption).foregroundStyle(Theme.secondary)
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: Space.sm)
+                        Button("No") { state.cancelMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.secondary)
+                        Button("Move") { state.confirmMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.accent)
+                    }
+                    .padding(.top, Space.xs)
                 }
                 // Under the slot too: the bars run to the card's edge.
                 LoginMeters(state: usage, signedOut: login.signedOut, now: now, labelWidth: labelWidth, onBox: login.onBox != nil)

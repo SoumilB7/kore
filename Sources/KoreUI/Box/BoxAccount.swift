@@ -45,7 +45,7 @@ enum BoxAccountStores {
         accounts.map {
             AccountStore.Login(
                 id: $0.id == LinkAccount.main ? nil : $0.id, email: $0.email, active: $0.id == active,
-                workspace: $0.signedIn == true ? $0.organization ?? $0.plan ?? "" : nil, signedOut: $0.signedIn == false)
+                workspace: $0.signedIn == true ? $0.organization ?? $0.plan ?? "" : nil, signedOut: $0.signedIn == false, from: $0.from)
         }
     }
 

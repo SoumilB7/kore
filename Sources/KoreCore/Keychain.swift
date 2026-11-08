@@ -11,6 +11,8 @@ package protocol SecretStore: Sendable {
     func set(_ secret: String, service: String) throws
     func remove(service: String) throws
     func contains(service: String) -> Bool
+    /// What an item of Kore's own holds (never another program's); nil when there's none.
+    func get(service: String) throws -> String?
 }
 
 package enum Keychain {
@@ -71,6 +73,19 @@ package struct LoginKeychain: SecretStore {
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
+    package func get(service: String) throws -> String? {
+        var query = Self.query(service)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        // Kore's own item trusts Kore: never a prompt.
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &out)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = out as? Data else { throw Keychain.Failure(status) }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     private static func query(_ service: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
     }
@@ -110,6 +125,7 @@ package struct LoginKeychain: SecretStore {
     package func set(_ secret: String, service: String) throws { throw CocoaError(.featureUnsupported) }
     package func remove(service: String) throws {}
     package func contains(service: String) -> Bool { false }
+    package func get(service: String) throws -> String? { nil }
 }
 #endif
 
@@ -135,6 +151,8 @@ package final class MemoryKeychain: SecretStore, @unchecked Sendable {
     package func remove(service: String) throws { _ = lock.withLock { items.removeValue(forKey: service) } }
 
     package func contains(service: String) -> Bool { lock.withLock { items[service] != nil } }
+
+    package func get(service: String) throws -> String? { lock.withLock { items[service] } }
 
     /// What a service holds, for a test's check.
     package func secret(_ service: String) -> String? { lock.withLock { items[service] } }

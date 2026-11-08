@@ -100,6 +100,16 @@ public enum CLIProfiles {
         return true
     }
 
+    /// A login Kore just moved to `box`: on that box from now on, until it's back.
+    public static func markMoved(_ cli: String, email: String?, box: String) {
+        guard let email = email?.lowercased(), !email.isEmpty else { return }
+        change {
+            var moved = $0.moved ?? [:]
+            moved[cli, default: [:]][email] = box
+            $0.moved = moved
+        }
+    }
+
     /// The login is back on this Mac (read signed in here): no longer said to be on a box.
     @discardableResult
     public static func noteBack(_ cli: String, email: String?) -> Bool {

@@ -260,7 +260,7 @@ package final class HostConnection {
     // MARK: Shared, per alias
 
     /// Held now: what `existing` and `live` give.
-    private static var open: [String: HostConnection] = [:]
+    static var open: [String: HostConnection] = [:]
     /// Every alias's one connection, held or asleep. Kept after the last release, so a holder that
     /// took it before then (a window made while the Welcome held the box) and retains it after
     /// links the same one everyone else gets: one `attach` per alias, never a second Kore here
