@@ -630,8 +630,11 @@ package struct LinkAccount: Codable, Sendable, Equatable, Identifiable {
     package var plan: String?
     /// Nil: its status couldn't be read.
     package var signedIn: Bool?
+    /// 1.14: moved here from that device and not used here yet ("from MacBook").
+    package var from: String?
 
-    package init(id: String, email: String? = nil, organization: String? = nil, plan: String? = nil, signedIn: Bool? = nil) {
+    package init(id: String, email: String? = nil, organization: String? = nil, plan: String? = nil, signedIn: Bool? = nil, from: String? = nil) {
+        self.from = from
         self.id = id
         self.email = email
         self.organization = organization

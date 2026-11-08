@@ -106,7 +106,21 @@ package final class HostDaemon {
     package private(set) lazy var usage = UsageLedger(url: paths.usageLedger, now: { [weak self] in self?.now() ?? Date() })
     /// The box's Claude accounts, under this user's home as `sessionEnv` names it (tests set
     /// their own before the first use).
-    package lazy var accounts = HostAccounts(home: HostPaths.home(sessionEnv), environment: sessionEnv, state: paths.state)
+    package lazy var accounts: HostAccounts = {
+        let made = HostAccounts(home: HostPaths.home(sessionEnv), environment: sessionEnv, state: paths.state)
+        // A login paused for a move (1.14) is read from its file, so it stays paused through a restart.
+        let state = paths.state
+        made.paused = { HostLoginMoves.isPaused($0, state: state) }
+        return made
+    }()
+    /// 1.14: logins moved in and out by the owner's Mac.
+    package lazy var loginMoves: HostLoginMoves = {
+        let moves = HostLoginMoves(accounts: accounts, state: paths.state)
+        moves.chatsOn = { [weak self] login in
+            self?.chats.filter { $0.cliRunning && $0.record.provider == "claude" && ($0.record.account ?? LinkAccount.main) == login }.count ?? 0
+        }
+        return moves
+    }()
 
     package init(paths: HostPaths) {
         self.paths = paths
@@ -571,7 +585,7 @@ package final class HostDaemon {
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : [])
-                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap] : []))
+                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap] : []))
     }
 
     var windows: [LinkWindow] {

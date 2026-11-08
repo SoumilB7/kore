@@ -403,6 +403,10 @@ package enum LinkPolicy {
             if kind == .accountSwitch, args.chatId == nil, args.folder == nil { return .deny(.invalid, "Name the chat or the folder.") }
             if let folder = args.folder, !folder.hasPrefix("/") || folder.contains("\0") { return .deny(.invalid, "Name the folder.") }
             return .allow
+        // 1.14: a login moved, full grants only (`LinkClient` also requires the owner Mac on KoreNet).
+        case .accountImport, .accountExport, .accountFingerprints:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            return LinkLogins.check(kind, args)
         // 1.10: a chat's move between the box and a Mac, full grants only. The box also checks
         // the chat's owner and gen, and where the files lead (its own staging folder only).
         case .chatRelease:

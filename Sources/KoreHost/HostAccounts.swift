@@ -36,6 +36,20 @@ package final class HostAccounts {
     private var defaults: [String: String]
     private var read: (at: Date, accounts: [LinkAccount])?
     private var reading: Task<[LinkAccount], Never>?
+    /// A login paused for a move (`HostLoginMoves`): nothing starts on it.
+    package var paused: (String) -> Bool = { _ in false }
+
+    /// The accounts as last listed (none before a list).
+    package var lastListed: [LinkAccount] { read?.accounts ?? [] }
+
+    /// The next list reads every account again (one came, or went).
+    package func forget() { read = nil }
+
+    /// Whether `claude auth status` reads the login in `folder` signed in.
+    package func signedIn(folder: URL) async -> Bool {
+        guard let reply = try? await status(folder) else { return false }
+        return ClaudeAuth.Status(reply).loggedIn
+    }
 
     package init(home: URL, environment: [String: String], state: URL) {
         root = home.appendingPathComponent(".config/claude-accounts", isDirectory: true)
@@ -92,7 +106,12 @@ package final class HostAccounts {
             for chunk in stride(from: 0, to: folders.count, by: 3).map({ Array(folders[$0..<min($0 + 3, folders.count)]) }) {
                 await withTaskGroup(of: LinkAccount.self) { group in
                     for (id, dir) in chunk {
-                        group.addTask { Self.account(id, reply: try? await status(dir)) }
+                        group.addTask {
+                            var account = Self.account(id, reply: try? await status(dir))
+                            // Moved here and not used yet: where it came from.
+                            if let dir, let from = HostLoginMoves.from(dir), from.used != true { account.from = from.host }
+                            return account
+                        }
                     }
                     for await account in group { out[account.id] = account }
                 }
@@ -119,9 +138,11 @@ package final class HostAccounts {
 
     package enum Failure: LocalizedError {
         case gone(String)
+        case moving(String)
         package var errorDescription: String? {
             switch self {
             case .gone(let id): "The Claude account “\(id)” isn't on this machine any more. Pick another in Account."
+            case .moving(let id): "The Claude account “\(id)” is moving to another device. Pick another in Account."
             }
         }
     }
@@ -130,9 +151,11 @@ package final class HostAccounts {
     /// folder, its shared entries linked first. Throws when its folder is gone: the chat never
     /// falls back to another account by itself.
     package func environment(_ id: String?) throws -> [String: String] {
+        if paused(id ?? LinkAccount.main) { throw Failure.moving(id ?? LinkAccount.main) }
         guard let id, id != LinkAccount.main else { return [:] }
         guard let dir = folder(id) else { throw Failure.gone(id) }
         prepare(dir)
+        HostLoginMoves.markUsed(dir)
         return ["CLAUDE_CONFIG_DIR": dir.path]
     }
 
@@ -145,6 +168,7 @@ package final class HostAccounts {
     /// One account's plan and limits.
     package func usage(_ id: String) async throws -> PlanReading {
         guard exists(id) else { throw Failure.gone(id) }
+        if paused(id) { throw Failure.moving(id) }
         let dir = folder(id)
         if let dir { prepare(dir) }
         return try await usage(dir)

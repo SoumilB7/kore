@@ -105,6 +105,11 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case syncApply = "sync.apply"
     case fsStat = "fs.stat"
     case fsFind = "fs.find"
+    /// 1.14: a CLI login moved between the owner's devices, and its fingerprints
+    /// (`LinkLogins.swift`). The owner's Mac over KoreNet only.
+    case accountImport = "account.import"
+    case accountExport = "account.export"
+    case accountFingerprints = "account.fingerprints"
 
     /// A file command (1.7, 1.8, 1.12's `sync.apply`): answered with a `FilesResult`, full grants only.
     package var onFiles: Bool { rawValue.hasPrefix("fs.") || self == .syncApply }
@@ -220,6 +225,9 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var deletes: [String]?
     package var mkdirs: [String]?
     package var landing: Bool?
+    /// 1.14: a login's sha256 (`account.import`), and the fingerprints' key (base64).
+    package var sha: String?
+    package var key: String?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -234,8 +242,10 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         base: FileStamp? = nil, dir: Bool? = nil, from: String? = nil, to: String? = nil, root: String? = nil, query: String? = nil,
         folders: [String]? = nil, phase: String? = nil, gen: Int? = nil, moveId: String? = nil, stop: Bool? = nil, host: String? = nil,
         seq: Int? = nil, events: MirrorItems? = nil, copiedFrom: String? = nil, resume: Bool? = nil, deletes: [String]? = nil,
-        mkdirs: [String]? = nil, landing: Bool? = nil
+        mkdirs: [String]? = nil, landing: Bool? = nil, sha: String? = nil, key: String? = nil
     ) {
+        self.sha = sha
+        self.key = key
         self.deletes = deletes
         self.mkdirs = mkdirs
         self.landing = landing

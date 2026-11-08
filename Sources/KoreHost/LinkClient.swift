@@ -449,6 +449,8 @@ final class LinkClient {
             if kind == .syncWatch, let folder = args.folder.map(HostDaemon.standard) { syncs[folder]?.start() }
         case .cmd(let id, .control(let kind, let args)) where [.chatRelease, .chatAdopt, .chatMirror, .syncFlush, .chatCopy, .chatAdoptCopy].contains(kind):
             moves(kind, args, id: id)
+        case .cmd(let id, .control(let kind, let args)) where [.accountImport, .accountExport, .accountFingerprints].contains(kind):
+            logins(kind, args, id: id)
         case .cmd(let id, .control(let kind, let args)) where kind.onFiles:
             files(kind, args, id: id)
         case .cmd(let id, let command):
@@ -699,6 +701,37 @@ final class LinkClient {
         }
         self.watches = watches
         return FilesResult(id: id, ok: true, watching: watches.set(wanted))
+    }
+
+    // MARK: Logins (1.14)
+
+    /// `account.import`, `account.export`, `account.fingerprints`: the owner's Mac over KoreNet
+    /// with the run ability only, each checked by the box's rules; the answer is a `LoginMoveResult`.
+    private func logins(_ kind: ControlKind, _ args: ControlArgs, id: String) {
+        guard let control = current() else { return }
+        guard ownerMac else {
+            denied(kind.rawValue)
+            return sendRaw(StreamWire.encode(LoginMoveResult.refused(id, .deniedControl, LinkLogins.ownerOnly)))
+        }
+        if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, nil, control: control == .full ? .full : .standard) {
+            if code == .deniedControl { denied(kind.rawValue) }
+            return sendRaw(StreamWire.encode(LoginMoveResult.refused(id, code, message)))
+        }
+        let moves = host.loginMoves
+        let phase = args.phase.flatMap(MovePhase.init(rawValue:))
+        switch (kind, phase) {
+        case (.accountImport, .prepare?):
+            Task { [weak self] in
+                let result = await moves.importPrepare(args, id: id)
+                self?.sendRaw(StreamWire.encode(result))
+            }
+        case (.accountImport, .commit?): sendRaw(StreamWire.encode(moves.importCommit(args, id: id)))
+        case (.accountImport, .abort?): sendRaw(StreamWire.encode(moves.importAbort(args, id: id)))
+        case (.accountExport, .prepare?): sendRaw(StreamWire.encode(moves.exportPrepare(args, id: id)))
+        case (.accountExport, .commit?): sendRaw(StreamWire.encode(moves.exportCommit(args, id: id)))
+        case (.accountExport, .abort?): sendRaw(StreamWire.encode(moves.exportAbort(args, id: id)))
+        default: sendRaw(StreamWire.encode(moves.fingerprints(args, id: id)))
+        }
     }
 
     // MARK: Moves (1.10)

@@ -300,6 +300,8 @@ package final class LinkHost {
         case .foldersList, .folderAdd, .authGh, .syncWatch, .syncUnwatch, .fsList, .fsRead, .fsMkdir, .fsWrite, .fsCreate, .fsRename, .fsDelete, .fsSearch, .fsWatch, .fsCopy, .fsCount, .fsCancel,
             .chatRelease, .chatAdopt, .chatMirror, .syncFlush, .chatCopy, .chatAdoptCopy, .syncApply, .fsStat, .fsFind:
             "Acted"
+        case .accountImport, .accountExport: "Moved a login"
+        case .accountFingerprints: "Read the logins"
         }
     }
 
