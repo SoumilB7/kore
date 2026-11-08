@@ -8,7 +8,7 @@ package enum HostStatus {
     package static func lines(
         paths: HostPaths, home: String = HostPaths.home().path, environment: [String: String] = ProcessInfo.processInfo.environment,
         run: HostRunner = HostService.system, tailnet: () -> (any Tailnet)? = { TailnetLocal() },
-        portHolder: () -> UInt32? = { PortHolder.uid(port: HostNet.port) }
+        portHolder: () -> UInt32? = { PortHolder.uid(port: HostNet.port) }, now: Date = Date()
     ) -> [String] {
         var lines = ["kore-host \(HostVersion.string) (link \(HostVersion.link))"]
         func row(_ name: String, _ value: String) { lines.append(name.padding(toLength: 9, withPad: " ", startingAt: 0) + value) }
@@ -32,6 +32,8 @@ package enum HostStatus {
             if linger.ok { row("linger", linger.lastLine) }
         }
         #endif
+        // What's known already (the last check, what a Mac said): never a network call here.
+        for (name, value) in UpdateState.load(paths).rows(current: HostVersion.string, now: now) { row(name, value) }
 
         lines += net(paths: paths, on: HostConfig.load(paths.config, home: home).netOn, tailnet: tailnet, portHolder: portHolder)
 

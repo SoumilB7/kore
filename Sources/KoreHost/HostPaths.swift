@@ -55,6 +55,12 @@ package struct HostPaths: Sendable {
     package var netState: URL { runtime.appendingPathComponent("net.state") }
     /// Left by whatever restarts the daemon (an update): its next stop says `restart`.
     package var restarting: URL { runtime.appendingPathComponent("restarting") }
+    /// The running daemon's chats, `<working> <open>`, for `kore-host update` to restart only an
+    /// idle box: rewritten when a chat starts or ends a turn, or its CLI starts or stops.
+    package var chatsState: URL { runtime.appendingPathComponent("chats.state") }
+    /// What this box knows about releases (`UpdateState`): the last check, the Mac that keeps it
+    /// current, the last update a Mac made. `status` reads only this.
+    package var updateState: URL { state.appendingPathComponent("update.json") }
 
     /// How kore-host was installed here when it isn't a systemd unit: `launchd` or `on-demand`
     /// (`HostService.Kind`), in `state/service`. Nothing there for systemd.

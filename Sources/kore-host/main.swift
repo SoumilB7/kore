@@ -29,7 +29,7 @@ let usage = """
            kore-host start
            kore-host uninstall [--purge]
            kore-host facts
-           kore-host update [--file <kore-host-linux-ARCH.xz>] [--force]
+           kore-host update [--check | --file <kore-host-linux-ARCH.xz>] [--now] [--force]
            kore-host verify <file>
            kore-host --version
     """
@@ -48,6 +48,22 @@ let paths = HostPaths()
 let grants = GrantStore(paths.grants)
 let home = HostPaths.home()
 var keep: [Any] = []
+
+/// `update` and `verify`'s checker for this binary.
+func releaseUpdater() -> HostUpdate {
+    #if DEBUG
+    // Release rehearsals only (scripts/tests/release-rehearsal.sh): a debug build takes a
+    // throwaway key, version and platform. A release build has none of this.
+    var updater = HostUpdate(target: URL(fileURLWithPath: HostService.executable()))
+    let test = ProcessInfo.processInfo.environment
+    if let key = test["KORE_TEST_RELEASE_KEY"] { updater.key = key }
+    if let version = test["KORE_TEST_VERSION"] { updater.current = version }
+    if let platform = test["KORE_TEST_PLATFORM"] { updater.platform = platform }
+    return updater
+    #else
+    return HostUpdate(target: URL(fileURLWithPath: HostService.executable()))
+    #endif
+}
 
 /// KoreNet on or off in config.json, and the running daemon told (SIGHUP).
 func setNet(_ on: Bool) {
@@ -281,32 +297,44 @@ case "uninstall":
     for line in lines { print(line) }
     print("the binary stays at \(HostService.executable()): delete it to finish")
 case "update":
-    // The file's SHA256SUMS and SHA256SUMS.sig are beside it; without one, the latest release's.
-    let updater = HostUpdate(target: URL(fileURLWithPath: HostService.executable()))
-    var file: URL?
-    if let at = arguments.firstIndex(of: "--file") {
+    // From the latest release (KORE_RELEASE_URL for another), or a file with SHA256SUMS and its
+    // .sig beside it; `--by <Mac>` is a Mac's push (host.update), run by the daemon.
+    let updater = releaseUpdater()
+    func value(_ flag: String) -> String? {
+        guard let at = arguments.firstIndex(of: flag) else { return nil }
         guard at + 1 < arguments.count else { fail(usage) }
-        file = URL(fileURLWithPath: arguments[at + 1])
+        return arguments[at + 1]
     }
     let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("kore-host-update-\(getpid())")
-    defer { try? FileManager.default.removeItem(at: scratch) }
-    do {
-        if file == nil {
-            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
-            file = try updater.download(into: scratch)
-        }
-        switch try updater.apply(file!, force: arguments.contains("--force")) {
-        case .same(let version):
-            print("kore-host \(version) is this release already")
-        case .updated(let from, let to):
-            print("kore-host \(from) → \(to) (\(updater.target.path))")
-            print(HostUpdate.restart(paths: paths, home: home))
-        }
-    } catch { try? FileManager.default.removeItem(at: scratch); fail("kore-host: \(error)") }
+    try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    let oldPid = (try? String(contentsOf: paths.pid, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let flow = UpdateFlow(
+        updater: updater, paths: paths, base: ProcessInfo.processInfo.environment["KORE_RELEASE_URL"] ?? HostUpdate.latest,
+        scratch: scratch, tty: isatty(1) == 1, say: { print($0) }, chats: { HostUpdate.chats(paths) },
+        restart: {
+            let wasRunning = HostLock.held(paths.lock)
+            let said = HostUpdate.restart(paths: paths, home: home)
+            let kind = HostService.installed(paths)
+            if kind == .onDemand { return (false, "kore-host starts on the new one when Kore connects") }
+            // No service and no daemon: nothing to wait for.
+            if !wasRunning, kind == nil, !FileManager.default.fileExists(atPath: HostService.unitFile(home: home).path) { return (false, said) }
+            // Up again: a new daemon holds the lock.
+            for _ in 0..<100 {
+                let pid = (try? String(contentsOf: paths.pid, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if HostLock.held(paths.lock), pid != oldPid { return (true, "") }
+                usleep(100_000)
+            }
+            return (false, said.split(separator: "\n").last.map(String.init) ?? "restart it: kore-host start")
+        })
+    let code = arguments.contains("--check")
+        ? flow.check()
+        : flow.update(file: value("--file").map { URL(fileURLWithPath: $0) }, now: arguments.contains("--now"), force: arguments.contains("--force"), by: value("--by"))
+    try? FileManager.default.removeItem(at: scratch)
+    exit(code)
 case "verify":
     guard arguments.count == 2 else { fail(usage) }
     do {
-        for line in try HostUpdate(target: URL(fileURLWithPath: HostService.executable())).verify(URL(fileURLWithPath: arguments[1])) { print(line) }
+        for line in try releaseUpdater().verify(URL(fileURLWithPath: arguments[1])) { print(line) }
     } catch { fail("kore-host: \(error)", code: 1) }
 case "--version", "-v", "version":
     print("kore-host \(HostVersion.string) (link \(HostVersion.link))")
