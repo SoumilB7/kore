@@ -222,23 +222,30 @@ final class World {
     }
 
     /// Lets the world run: real work first; when nothing happens, virtual time moves to the next
-    /// timer. Stops once `done` holds, or the budget (virtual) or 6 s (wall) runs out.
+    /// timer. Stops once `done` holds, or the budget (virtual) or 60 s (wall) runs out: the wall
+    /// bound only ends a runaway (6 s ran out on a busy Mac with the world still settling).
     func settle(budget: Duration = .seconds(300), _ done: @MainActor () -> Bool) async -> Bool {
         let end = clock.now + budget
-        let wallEnd = ContinuousClock.now + .seconds(6)
+        let wallEnd = ContinuousClock.now + .seconds(60)
         // Quiet windows in a row with nothing left to advance: work off the main actor (a WhoIs, a
         // bind) may still be under way, so a few go by before the world counts as settled.
         var idle = 0
         var dialing = 0
+        var dialSince: ContinuousClock.Instant?
         while ContinuousClock.now < wallEnd {
             if await pulse.quiet(.milliseconds(10)) {
                 await drainMain()
                 if done() { return true }
-                // A box link mid-dial (its handshake is real work): time waits for it, a while
-                // at most (a box that never answers ends on the link's own virtual limit).
-                let linking = mac.links.contains { $0.inUse && $0.phase == .connecting }
-                dialing = linking ? dialing + 1 : 0
-                if pulse.busy || (linking && dialing < 30) {
+                // A box link mid-dial (its handshake is real work): time waits for it, a while at
+                // most (a box that never answers ends on the link's own virtual limit). While the
+                // box's kore-host runs, the while is 5 s of the machine's time, not 30 quiet
+                // windows: a busy Mac's handshake takes longer than those.
+                let dials = mac.links.filter { $0.inUse && $0.phase == .connecting }
+                let toUp = dials.contains { link in boxes.contains { $0.alias == link.alias && $0.up } }
+                dialing = dials.isEmpty ? 0 : dialing + 1
+                if dials.isEmpty { dialSince = nil } else if dialSince == nil { dialSince = .now }
+                let waiting = toUp ? ContinuousClock.now - (dialSince ?? .now) < .seconds(5) : dialing < 30
+                if pulse.busy || (!dials.isEmpty && waiting) {
                     idle = 0
                 } else if clock.advanceToNext(limit: end - clock.now) != nil {
                     idle = 0

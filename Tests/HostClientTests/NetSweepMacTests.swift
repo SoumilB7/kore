@@ -10,15 +10,16 @@ import Tailnet
 import Testing
 import src
 
-/// Whether `feed` gives a value matching `match` within 5 s. The wait runs in a task of its own:
-/// a feed that never gives one fails the test instead of hanging the run (the 5 s only bounds a
+/// Whether `feed` gives a value matching `match` within 30 s. The wait runs in a task of its own:
+/// a feed that never gives one fails the test instead of hanging the run (the 30 s only bounds a
 /// failure; a pass is the event itself).
 @MainActor
 func arrives<T: Sendable>(_ feed: Feed<T>, _ match: @escaping @Sendable (T) -> Bool = { _ in true }) async -> Bool {
     let done = Feed<Bool>()
     let waiter = Task { _ = await feed.next(match); done.send(true) }
     let bound = Task {
-        try? await Task.sleep(for: .seconds(5))
+        // Only ends a wait that never would: a busy Mac (a gate's parallel run) took over 5 s.
+        try? await Task.sleep(for: .seconds(30))
         done.send(false)
     }
     let arrived = await done.next()
@@ -27,7 +28,7 @@ func arrives<T: Sendable>(_ feed: Feed<T>, _ match: @escaping @Sendable (T) -> B
     return arrived
 }
 
-/// Whether `condition` holds (now, or once what it reads changes) within 5 s: woken by
+/// Whether `condition` holds (now, or once what it reads changes) within 30 s: woken by
 /// observation, never polled.
 @MainActor
 func holds(_ condition: @escaping @MainActor () -> Bool) async -> Bool {

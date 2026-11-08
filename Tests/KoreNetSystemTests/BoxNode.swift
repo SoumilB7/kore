@@ -31,6 +31,9 @@ final class BoxNode {
     private let pulse: Pulse
     /// Restarts so far.
     private(set) var starts = 0
+    /// Its kore-host is running (a link to it that's dialing is real work under way, not a box
+    /// that will never answer).
+    private(set) var up = false
 
     init(alias: String, root: URL, ip: String, net: SharedTailnet, pulse: Pulse, tailscale: BackendState = .running) throws {
         self.alias = alias
@@ -79,6 +82,7 @@ final class BoxNode {
         try host.start()
         self.host = host
         starts += 1
+        up = true
         pulse.beat()
     }
 
@@ -93,6 +97,7 @@ final class BoxNode {
     }
 
     func stop() {
+        up = false
         host?.stop()
         if let journal { HostJournal.unwatch(journal) }
         journal = nil
