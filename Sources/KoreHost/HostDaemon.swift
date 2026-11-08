@@ -724,6 +724,15 @@ package final class HostDaemon {
             guard let hc = args.chatId.flatMap(chat) else { return fail(.goneChat, "No such chat on this box.") }
             close(hc)
             return .init(id: id, ok: true)
+        case .windowClose:
+            // Every chat of the window's folder closes, as its tabs closing would (kept, reopenable).
+            guard let folder = args.windowId.flatMap(self.folder(windowId:)) else { return fail(.goneWindow, "That window isn't on this box any more.") }
+            let closing = chats.filter { $0.record.folder == folder }
+            if args.force != true, closing.contains(where: \.running) {
+                return fail(.confirmClose, "A chat in it is working; closing stops it. Send again with force.")
+            }
+            closing.forEach(close)
+            return .init(id: id, ok: true)
         case .tabReopen:
             guard let hc = args.sourceId.flatMap(reopen) else { return fail(.goneChat, "That chat isn't kept any more.") }
             return .init(id: id, ok: true, chatId: hc.id, windowId: Self.windowID(hc.record.folder))

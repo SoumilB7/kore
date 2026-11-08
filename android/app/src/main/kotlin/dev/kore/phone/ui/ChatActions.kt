@@ -15,7 +15,6 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -97,9 +96,10 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         textSize = 15f
         background = null
         setPadding(activity.dp(14), activity.dp(10), activity.dp(14), activity.dp(4))
-        // No learning or suggestions from what is typed here.
-        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+        // A normal text field: the keyboard's suggestions, learning and voice typing all work (an
+        // incognito flag turned Gboard's mic off). Nothing typed here is a secret.
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
+            InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
         importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         minLines = 1
         maxLines = 6
@@ -107,6 +107,21 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         isFocusable = true
         isFocusableInTouchMode = true
         contentDescription = "Message"
+        // A pasted image or file (the clipboard, the keyboard's image insert, a drop) attaches
+        // like 📎: a chip, uploaded to the Mac or box. Text pastes as text.
+        setOnReceiveContentListener(PASTE_TYPES, android.view.OnReceiveContentListener { _, payload: android.view.ContentInfo ->
+            val clip = payload.clip
+            val items = (0 until clip.itemCount).map { clip.getItemAt(it) }
+            val (files, rest) = items.partition { it.uri != null }
+            files.forEach { add(it.uri) }
+            when {
+                files.isEmpty() -> payload
+                rest.isEmpty() -> null
+                // Text with the files: the text pastes as text.
+                else -> android.view.ContentInfo.Builder(payload)
+                    .setClip(android.content.ClipData(clip.description, rest.first()).apply { rest.drop(1).forEach(::addItem) }).build()
+            }
+        })
         addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
@@ -123,7 +138,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     private val action = activity.label("↑", 18f, K.bg, bold = true).apply {
         gravity = Gravity.CENTER
         contentDescription = "Send"
-        setOnClickListener { if (running) stop() else send() }
+        // While a turn runs (or a compaction): Send with something typed or attached (it queues
+        // behind the turn, as on the Mac), Stop with an empty box.
+        setOnClickListener { if (running && !hasSomething) stop() else send() }
     }
 
     private val attach = ImageView(activity).apply {
@@ -285,6 +302,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         showStatus()
     }
 
+    /** Something to send: typed text, or an attachment. */
+    private val hasSomething: Boolean get() = this.field.text.isNotBlank() || attachments.isNotEmpty()
+
     /** What Send/Stop shows now (0 at rest, 1 ready, 2 Stop): its ground is drawn again only on a change. */
     private var actionLook = -1
 
@@ -294,11 +314,11 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         ring.alpha = if (field.text.isNotBlank()) 1f else 0.45f
         // As the full-control mockup: Stop a raised square with a light ■; Send at rest raised with
         // a dim arrow, lit once there is something to send.
-        val ready = canSend && field.text.isNotBlank()
-        val look = if (running) 2 else if (ready) 1 else 0
+        val ready = canSend && hasSomething
+        val look = if (running && !hasSomething) 2 else if (ready) 1 else 0
         if (look == actionLook) return
         actionLook = look
-        if (running) {
+        if (look == 2) {
             action.text = "■"
             action.textSize = 11f
             action.setTextColor(STOP_INK)
@@ -347,7 +367,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 
     private fun send() {
         val text = field.text.toString().trim()
-        if (text.isEmpty() || !canSend) return
+        if ((text.isEmpty() && attachments.isEmpty()) || !canSend) return
         val l = link() ?: return quiet("Not connected")
         if (attachments.any { it.blobId == null && !it.failed }) return quiet("Waiting for the attachments to upload…")
         val blobs = attachments.mapNotNull { it.blobId }
@@ -473,6 +493,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             chips.addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = activity.dp(6) })
         }
         chipsRow.visibility = if (attachments.isEmpty()) View.GONE else View.VISIBLE
+        refreshAction()
     }
 
     // The "/" menu: the chat's commands, filtered by what follows the slash.
@@ -650,6 +671,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 "close" -> activity.finish()
                 "select" -> quiet("Shown on the Mac")
                 "compact" -> quiet("Compacting…")
+                "revert" -> quiet("Went back")
                 "sendAtReset" -> quiet("")
                 "rename" -> quiet("")
                 else -> Unit
@@ -798,6 +820,26 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         run("fork", dev.kore.link.node.Control.fork(chatId, entryId, after))
     }
 
+    /** Whether a turn runs now: going back waits for it to stop (the Mac's rule). */
+    val turnRunning: Boolean get() = running
+
+    /**
+     * "Revert to here", the Mac's rollback: asks first (what follows leaves the chat; files stay
+     * as they are), never under a running turn.
+     */
+    fun revert(entryId: String, after: Boolean) {
+        if (running) return quiet("Stop the turn first, then go back.")
+        lateinit var s: Sheet
+        s = Sheet(activity, K.err).show {
+            title("Go back to here?", if (after) "Everything after this answer leaves the chat. Files aren't changed."
+                else "This message and everything after it leave the chat; its text comes back to the message field. Files aren't changed.")
+            buttons("Go back", danger = true) {
+                s.dismiss()
+                run("revert", dev.kore.link.node.Control.rollback(chatId, entryId, after))
+            }
+        }
+    }
+
 
     // Cards
 
@@ -885,10 +927,12 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         /** The highest mode level a raise from the phone asks for (Auto); Bypass and Full access never. */
         const val RAISE_CAP = 3
         const val PICK = 41
+        /** What a paste attaches rather than inserts: any file but plain text. */
+        val PASTE_TYPES = arrayOf("image/*", "video/*", "audio/*", "application/*")
         const val CAMERA = 42
         /** Commands of KoreLink 1.2 sent from a chat; their results go to [controlResult]. */
         val CONTROL = setOf("mode", "plan", "model", "effort", "fast", "autoCompact", "compact", "rename", "close", "select", "fork",
-            "retry", "continue", "cancelContinue", "sendAtReset", "arsenal", "arsenalStop")
+            "retry", "continue", "cancelContinue", "sendAtReset", "arsenal", "arsenalStop", "revert")
     }
 
     /** A scroll that grows with its content up to a cap, so a long card never pushes the composer away. */

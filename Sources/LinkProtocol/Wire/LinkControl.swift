@@ -20,6 +20,9 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case chatCompact = "chat.compact"
     case chatSetAutoCompact = "chat.setAutoCompact"
     case chatFork = "chat.fork"
+    /// 1.13: the conversation back to a message (the Mac's rollback): from a user message (it and
+    /// what follows leave, its text back in the draft), or `after` an answer (what follows leaves).
+    case chatRollback = "chat.rollback"
     case chatRetry = "chat.retry"
     case chatContinue = "chat.continue"
     case chatSendAtReset = "chat.sendAtReset"
@@ -113,7 +116,7 @@ package enum ControlKind: String, Sendable, CaseIterable {
     package var onChat: Bool {
         switch self {
         case .chatRename, .chatClose, .chatSelect, .chatSetModel, .chatSetEffort, .chatSetFast, .chatCompact, .chatSetAutoCompact,
-            .chatFork, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue, .chatSetDraft, .chatSetArsenal:
+            .chatFork, .chatRollback, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue, .chatSetDraft, .chatSetArsenal:
             true
         default: false
         }

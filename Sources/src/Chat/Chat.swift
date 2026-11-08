@@ -859,13 +859,7 @@ package final class Chat: Identifiable {
             draft = ""
             command = nil
             attachments = []
-            cancelContinue()
-            // The owner said something: it goes instead of Kore's own "Continue".
-            continueAfterCompaction = false
-            let id = UUID().uuidString.lowercased()
-            heldForCompaction.append((id, text, sent))
-            let message = ChatEvent.messageQueued(id: id, text: text, attachments: sent.map(SentAttachment.init))
-            if awaitingHistory { hold(message) } else { dispatch(message) }
+            holdForCompaction(text, sent)
             return
         }
         // A typed /compact compacts as the context wheel does, shown as the user's message (the
@@ -892,8 +886,14 @@ package final class Chat: Identifiable {
     /// False when it can't go now (a compaction, an account switch, a chat closed).
     @discardableResult
     package func sendFromLink(_ text: String, files: [URL] = []) -> Bool {
-        guard !closed, !accountRestartPending, !context.compacting else { return false }
+        guard !closed, !accountRestartPending else { return false }
         let sent = services.attachments(files)
+        // During a compaction a phone's message waits for it, shown queued, as the composer's does.
+        if context.compacting {
+            guard !sent.isEmpty || Self.compactCommand(text) == nil else { return false }
+            holdForCompaction(text, sent)
+            return true
+        }
         if sent.isEmpty, let instructions = Self.compactCommand(text) {
             guard canCompact else { return false }
             showCompactRow(text)
@@ -1412,6 +1412,17 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var heldForRollback: [(text: String, files: [Attachment])] = []
     /// Sent while a compaction ran, in order: they go as it ends and no turn runs.
     @ObservationIgnored private var heldForCompaction: [(id: String, text: String, files: [Attachment])] = []
+
+    /// A message sent during a compaction: it waits, shown queued, and goes as the compaction ends.
+    private func holdForCompaction(_ text: String, _ sent: [Attachment]) {
+        cancelContinue()
+        // The owner said something: it goes instead of Kore's own "Continue".
+        continueAfterCompaction = false
+        let id = UUID().uuidString.lowercased()
+        heldForCompaction.append((id, text, sent))
+        let message = ChatEvent.messageQueued(id: id, text: text, attachments: sent.map(SentAttachment.init))
+        if awaitingHistory { hold(message) } else { dispatch(message) }
+    }
 
     /// Messages sent during a compaction waiting for it to end.
     package var heldForCompactionCount: Int { heldForCompaction.count }

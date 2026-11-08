@@ -17,7 +17,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
-import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -362,9 +361,9 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
             setSelection(this.text.length)
             background = a.rounded(KS.field, 10, K.line)
             setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10))
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
-                (if (lines > 1) InputType.TYPE_TEXT_FLAG_MULTI_LINE else InputType.TYPE_TEXT_FLAG_CAP_SENTENCES)
-            imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            // Titles, names, compact notes: never a secret, so voice typing and suggestions stay on.
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
+                (if (lines > 1) InputType.TYPE_TEXT_FLAG_MULTI_LINE else 0)
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             maxLines = lines
             contentDescription = hint

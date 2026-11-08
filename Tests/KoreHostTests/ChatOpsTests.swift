@@ -76,6 +76,49 @@ struct ChatOpsTests {
         #expect(again.record.autoCompact == 0 && HostMeta.meta(again, raise: true).controls?.autoCompactAt == nil)
     }
 
+    /// 1.13: a phone closes a box window: its chats close (kept, reopenable), asked first while one works.
+    @Test func aWindowClosesItsChatsAskingWhileOneWorks() async throws {
+        let backend = StreamStandIn()
+        let (rig, hc) = try rig(backend)
+        defer { rig.finish() }
+        let window = HostDaemon.windowID(hc.record.folder)
+        #expect(try await apply(rig, .windowClose, ControlArgs(windowId: window), .watch).code == .deniedControl)
+        #expect(try await apply(rig, .windowClose, ControlArgs(), .act).code == .invalid)
+        #expect(try await apply(rig, .windowClose, ControlArgs(windowId: "w_gone"), .act).code == .goneWindow)
+        #expect(LinkPolicy.checkBox(.windowClose, ControlArgs(windowId: window), nil, control: .standard) == .allow)
+        #expect(try await apply(rig, .windowClose, ControlArgs(windowId: window), .act).ok)
+        #expect(rig.host.chat(hc.id) == nil)
+        // Kept, as a closed tab is: it comes back.
+        #expect(try await apply(rig, .tabReopen, ControlArgs(sourceId: hc.id), .act).ok)
+    }
+
+    /// A phone's message sent while the chat compacts waits, queued, and goes when the compaction ends (not refused).
+    @Test func aPhonesMessageDuringACompactionWaitsThenGoes() async throws {
+        let backend = StreamStandIn()
+        let (rig, hc) = try rig(backend)
+        defer { rig.finish() }
+        #expect(rig.host.apply(.send(chatId: hc.id, text: "first"), id: "s1", control: .act) { _ in }?.ok == true)
+        try await until { hc.chat?.transcriptView.entries.contains { $0.kind == .answer } == true && hc.chat?.isBusy == false }
+        let chat = try #require(hc.chat)
+        backend.sink.yield(.compactionStarted(auto: false))
+        try await until { chat.context.compacting }
+        #expect(rig.host.apply(.send(chatId: hc.id, text: "after it"), id: "s2", control: .act) { _ in }?.ok == true)
+        #expect(chat.heldForCompactionCount == 1 && !backend.calls.contains { $0.hasPrefix("send after it") })
+        backend.sink.yield(.compacted(at: .now, from: 1000, auto: false))
+        try await until { backend.calls.contains { $0.hasPrefix("send after it") } }
+        #expect(chat.heldForCompactionCount == 0)
+    }
+
+    /// 1.13: back to a message from a phone: named by its entry, refused under a running turn or with no message.
+    @Test func rollbackNeedsAMessageAndAnIdleChat() async throws {
+        let backend = StreamStandIn()
+        let (rig, hc) = try rig(backend)
+        defer { rig.finish() }
+        #expect(try await apply(rig, .chatRollback, ControlArgs(chatId: hc.id), .act).code == .invalid)
+        #expect(try await apply(rig, .chatRollback, ControlArgs(chatId: hc.id, entryId: "nope"), .act).code == .invalid)
+        #expect(try await apply(rig, .chatRollback, ControlArgs(chatId: hc.id, entryId: "x"), .watch).code == .deniedControl)
+    }
+
     @Test func clientsDoTheSameUnderTheirGrant() async throws {
         let backend = StreamStandIn()
         let (rig, hc) = try rig(backend)

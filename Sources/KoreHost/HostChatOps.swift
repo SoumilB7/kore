@@ -70,6 +70,16 @@ extension HostDaemon {
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
             Task { reply(await fork(hc, chat, args, id: id)) }
             return nil
+        case .chatRollback:
+            guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
+            guard !chat.isBusy else { return fail(.busy, "A turn is running. Stop it, then go back.") }
+            Task {
+                await chat.startOnce()
+                guard let entry = entry(args.entryId ?? "", in: hc, chat) else { return reply(fail(.invalid, "No message to go back to there.")) }
+                if args.after == true { chat.rollBack(after: entry) } else { chat.rollBack(entry) }
+                reply(done)
+            }
+            return nil
         default:
             return fail(.invalid, "Not taken here.")
         }

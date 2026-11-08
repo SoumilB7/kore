@@ -45,8 +45,8 @@ class HistoryActivity : NodeActivity() {
             background = rounded(android.graphics.Color.TRANSPARENT, 10, K.line)
             setPadding(dp(12), dp(9), dp(12), dp(9))
             isSingleLine = true
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or EditorInfo.IME_ACTION_SEARCH
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             contentDescription = "Search chats"
             addTextChangedListener(object : TextWatcher {

@@ -267,6 +267,7 @@ package final class LinkHost {
         case .chatCompact: "Compacted"
         case .chatSetAutoCompact: "Changed auto-compact"
         case .chatFork: "Forked"
+        case .chatRollback: "Went back to a message"
         case .chatRetry: "Retried"
         case .chatContinue: "Continued"
         case .chatSendAtReset: "Set a message for the reset"

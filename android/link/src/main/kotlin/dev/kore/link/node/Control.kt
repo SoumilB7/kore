@@ -44,6 +44,8 @@ object Control {
     /** [at] is a percentage, or null for off (sent as an explicit null). */
     fun setAutoCompact(chatId: String, at: Int?) = cmd("chat.setAutoCompact") { put("chatId", chatId); put("at", at?.let(::JsonPrimitive) ?: JsonNull) }
     fun fork(chatId: String, entryId: String, after: Boolean) = cmd("chat.fork") { put("chatId", chatId); put("entryId", entryId); put("after", after) }
+    /** 1.13: the conversation back to a message: a prompt leaves with what follows (its text back in the draft); `after` an answer, what follows it leaves. */
+    fun rollback(chatId: String, entryId: String, after: Boolean) = cmd("chat.rollback") { put("chatId", chatId); put("entryId", entryId); put("after", after) }
     /** Without [turnId], the stalled turn; with it, the retryable ended turn. */
     fun retry(chatId: String, turnId: String? = null) = cmd("chat.retry") { put("chatId", chatId); putOpt("turnId", turnId) }
     fun continueTurn(chatId: String) = cmd("chat.continue") { put("chatId", chatId) }

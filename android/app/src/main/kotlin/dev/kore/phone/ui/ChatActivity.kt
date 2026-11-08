@@ -171,6 +171,7 @@ class ChatActivity : NodeActivity() {
         chat?.let { kore.seen.opened(chatId, (it["lastAt"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()) }
         actions.render(chat, snapshot)
         adapter.running = chat?.bool("running") == true
+        adapter.queued = (chat?.get("queued") as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() ?: 0
         adapter.canFork = chat?.obj("can")?.let { if (it.containsKey("fork")) it.bool("fork") else null }
         adapter.rescue = ControlModel.rescue(chat?.obj("rescue")) { at -> whenText(at) }
         menuButton?.visibility = if (chat != null && (chat.containsKey("controls") || link.hasControl(snapshot))) View.VISIBLE else View.GONE
@@ -201,7 +202,7 @@ class ChatActivity : NodeActivity() {
         list.postDelayed({ if (askedEarlier) { askedEarlier = false; adapter.earlier = transcript.hasEarlier; adapter.submit(transcript.entries) } }, 8_000)
     }
 
-    /** Long-press a message: Copy, and Fork from here (a prompt) or Fork after this (an answer). */
+    /** Long-press a message: Copy, Fork from here / Fork after this, and Revert to here (the Mac's rollback). */
     private fun messageMenu(anchor: View, e: JsonObject) {
         val id = e.str("id") ?: return
         val after = e.str("kind") != "user"
@@ -211,6 +212,7 @@ class ChatActivity : NodeActivity() {
             clip.setPrimaryClip(android.content.ClipData.newPlainText("Message", text))
         })
         adapter.canFork?.let { can -> items += PopMenu.Item(if (after) "Fork after this" else "Fork from here", enabled = can) { actions.fork(id, after) } }
+        adapter.canFork?.let { can -> items += PopMenu.Item("Revert to here", danger = true, enabled = can && !actions.turnRunning) { actions.revert(id, after) } }
         PopMenu(this).show(anchor, items)
     }
 
@@ -244,6 +246,8 @@ class ChatActivity : NodeActivity() {
         data class Work(val key: String, val steps: List<JsonObject>, val open: Boolean) : Item()
         /** The turn still runs: a spinner under the last row. */
         object Running : Item()
+        /** Messages waiting behind the running turn or a compaction (the Mac's queued rows), counted. */
+        data class Queued(val count: Int) : Item()
     }
 
     private inner class Entries : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
@@ -252,6 +256,8 @@ class ChatActivity : NodeActivity() {
         private val open = HashSet<String>()
         private val openTools = HashSet<String>()
         var running = false
+            set(value) { if (field != value) { field = value; rebuild() } }
+        var queued = 0
             set(value) { if (field != value) { field = value; rebuild() } }
         var earlier = false
         /** Null when the Mac doesn't offer forks; false while it can't fork now. */
@@ -284,6 +290,7 @@ class ChatActivity : NodeActivity() {
             }
             flush(true)
             if (running) out.add(Item.Running)
+            if (queued > 0) out.add(Item.Queued(queued))
             rescue.forEach { out.add(Item.Rescue(it)) }
             // Only what changed is drawn again: a streaming answer rebinds its own row, not the page.
             val old = items
@@ -302,6 +309,7 @@ class ChatActivity : NodeActivity() {
             is Item.Rescue -> "r:" + item.line.key
             Item.Earlier -> "earlier"
             Item.Running -> "running"
+            is Item.Queued -> "queued"
         }
 
         /** The few cheap rows (Earlier, the spinner) are always drawn again; an entry only when it changed. */
@@ -409,6 +417,12 @@ class ChatActivity : NodeActivity() {
                 }
                 is Item.Rescue -> { bindRescue(v, item.line); return }
                 Item.Running -> { v.visibility = View.GONE; spinner.visibility = View.VISIBLE }
+                is Item.Queued -> {
+                    v.text = if (item.count == 1) "⟳ 1 message queued · goes when the turn ends" else "⟳ ${item.count} messages queued · go when the turn ends"
+                    v.setTextColor(K.faint)
+                    v.textSize = 13f
+                    (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
+                }
             }
         }
 

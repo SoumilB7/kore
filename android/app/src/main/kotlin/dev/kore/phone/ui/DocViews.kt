@@ -22,6 +22,8 @@ import kotlinx.serialization.json.JsonObject
  */
 object DocViews {
     private const val BODY = 15f
+    /** A table cell wraps past this many dp rather than widening its column. */
+    private const val CELL_MAX = 260
     private const val LINE = 1.4f
     private val CODE = android.graphics.Color.parseColor("#E8C08A")
 
@@ -100,31 +102,37 @@ object DocViews {
         }
     }
 
-    /** A grid in its own box that scrolls sideways; the header row is bold. */
+    /**
+     * A grid in its own box: columns line up (a TableLayout), a long cell wraps at [CELL_MAX] dp
+     * rather than stretching its column, and a table wider than the screen scrolls sideways with
+     * a scrollbar and a fading edge saying there's more. The header row is bold.
+     */
     private fun table(ctx: Context, b: JsonObject): View {
         val header = (b["header"] as? JsonArray)?.map { cellSpans(it) }.orEmpty()
         val rows = (b["rows"] as? JsonArray)?.map { row -> (row as? JsonArray)?.map { cellSpans(it) }.orEmpty() }.orEmpty()
-        val grid = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        val grid = android.widget.TableLayout(ctx)
         fun addRow(cells: List<List<JsonObject>>, bold: Boolean, last: Boolean) {
-            grid.addView(LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
+            grid.addView(android.widget.TableRow(ctx).apply {
                 cells.forEach { cell ->
                     addView(TextView(ctx).apply {
                         text = spans(cell)
                         textSize = 14f
                         setTextColor(if (bold) K.text else K.dim)
                         if (bold) setTypeface(typeface, Typeface.BOLD)
-                        minWidth = ctx.dp(96)
+                        maxWidth = ctx.dp(CELL_MAX)
                         setPadding(ctx.dp(10), ctx.dp(7), ctx.dp(10), ctx.dp(7))
                     })
                 }
             })
-            if (!last) grid.addView(View(ctx).apply { setBackgroundColor(K.line) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1))
+            if (!last) grid.addView(View(ctx).apply { setBackgroundColor(K.line) }, android.widget.TableLayout.LayoutParams(android.widget.TableLayout.LayoutParams.MATCH_PARENT, 1))
         }
         addRow(header, true, rows.isEmpty())
         rows.forEachIndexed { i, r -> addRow(r, false, i == rows.lastIndex) }
         return HorizontalScrollView(ctx).apply {
-            isHorizontalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = true
+            isScrollbarFadingEnabled = true
+            isHorizontalFadingEdgeEnabled = true
+            setFadingEdgeLength(ctx.dp(28))
             background = ctx.rounded(K.surface, 8, K.line)
             addView(grid)
         }

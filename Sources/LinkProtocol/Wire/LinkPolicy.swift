@@ -346,6 +346,10 @@ package enum LinkPolicy {
         case .tabReopen:
             // A closed chat back: named by `sourceId` (it isn't one of the box's chats until then).
             return args.sourceId != nil ? .allow : .deny(.invalid, "Name the chat.")
+        case .windowClose:
+            // 1.13: a folder's window on the box closes, its chats as tabs closing (kept, reopenable).
+            // The box asks (`confirm.close`) when one is working, unless `force`, as a Mac does.
+            return args.windowId != nil ? .allow : .deny(.invalid, "Name the window.")
         // 1.9: a chat's own operations, as a Mac window offers them. An act grant does the
         // ordinary ones; a full grant also what raises (an Arsenal tier on) or acts at a plan's
         // limit (Continue, a message at the reset). Always allow, `!` lines and keys stay refused.
@@ -361,6 +365,9 @@ package enum LinkPolicy {
             return check(kind, args, chat, control: .full)
         case .chatRetry, .chatCancelContinue, .arsenalStopAll:
             return .allow
+        case .chatRollback:
+            // Destructive: the client confirms first; the box refuses while a turn runs.
+            return args.entryId != nil ? .allow : .deny(.invalid, "Name the message to go back to.")
         case .chatContinue:
             return full()
         case .chatSendAtReset:
