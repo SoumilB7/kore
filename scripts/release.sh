@@ -105,6 +105,12 @@ else
     swift scripts/sign/sign.swift sign "$OUT/SHA256SUMS" --expect "$KEY"
 fi
 swift scripts/sign/sign.swift verify "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$KEY" >/dev/null
+# This Mac offers the release's phone app to linked phones (the Mac-copy update): the signed
+# SUMS and the APK go where Kore serves them from. Real releases only.
+if [[ -z $DRY && -f "$OUT/kore.apk" ]]; then
+    phone="$HOME/Library/Application Support/Kore/phone-app"
+    mkdir -p "$phone" && cp "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$OUT/kore.apk" "$phone/"
+fi
 files=("$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "${assets[@]/#/$OUT/}")
 
 title="Kore $VERSION"
