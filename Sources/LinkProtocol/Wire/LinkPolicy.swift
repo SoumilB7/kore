@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 import src
 
@@ -26,9 +27,18 @@ package enum LinkPolicy {
         package struct Card: Sendable, Equatable {
             package var kind: LinkCard.Kind
             package var digest: String
-            package init(kind: LinkCard.Kind, digest: String) {
+            /// The card offers Always allow of its own (`Approval.canAlwaysAllow`), and the shell
+            /// command and folder it asks about, where it carries them: what a full grant's Always
+            /// allow is checked against.
+            package var canAlwaysAllow: Bool
+            package var command: String?
+            package var cwd: String?
+            package init(kind: LinkCard.Kind, digest: String, canAlwaysAllow: Bool = false, command: String? = nil, cwd: String? = nil) {
                 self.kind = kind
                 self.digest = digest
+                self.canAlwaysAllow = canAlwaysAllow
+                self.command = command
+                self.cwd = cwd
             }
         }
 
@@ -190,8 +200,10 @@ package enum LinkPolicy {
     }
 
     /// A forwarded backend call (1.5 `chat.call`): full control only, each case decided here, so a
-    /// new one can't compile without its rule. Raises stop at Auto, `!` lines and Always allow are
-    /// refused, and no call carries a key. `card` is the approval's card when it has one.
+    /// new one can't compile without its rule. Raises stop at Auto and `!` lines are refused, and
+    /// no call carries a key. Always allow (owner, 2026-11-21) is a full grant's on a permission
+    /// card that offers it, never on a critical removal (`KoreAlwaysRule.critical`); phones and act
+    /// grants never set it.
     package static func check(_ command: ChatCommand, _ chat: ChatFacts?, control: LinkControlLevel) -> Verdict {
         guard control == .full else { return .deny(.deniedControl, "Driving a chat needs a grant with full control.") }
         if case .unknown(let tag) = command { return .deny(.invalid, "Unknown call: \(tag.isEmpty ? "?" : tag).") }
@@ -202,7 +214,7 @@ package enum LinkPolicy {
         case .respond(let approval, let decision):
             if chat.cards[approval]?.kind == .signIn { return .deny(.signIn, boxSignInLine) }
             switch decision {
-            case .allowAlways: return .deny(.alwaysAllow, boxAlwaysAllowLine)
+            case .allowAlways: return mayAlwaysAllow(chat.cards[approval])
             // Into the chat's own mode: leaving plan's rule. Into Accept edits: under Auto.
             case .approvePlan(let acceptEdits):
                 return acceptEdits || mayLeavePlan(chat, control: control) ? .allow : .deny(.raiseMode, boxCapLine)
@@ -238,6 +250,13 @@ package enum LinkPolicy {
         case .unknown:
             return .deny(.invalid, "Unknown call.")
         }
+    }
+
+    /// A full grant's Always allow on `card`: a permission that offers it, not a critical removal.
+    package static func mayAlwaysAllow(_ card: ChatFacts.Card?) -> Verdict {
+        guard let card, card.kind == .permission, card.canAlwaysAllow else { return .deny(.alwaysAllow, boxNoAlwaysLine) }
+        if let command = card.command, KoreAlwaysRule.critical(command, cwd: card.cwd) { return .deny(.alwaysAllow, boxCriticalAlwaysLine) }
+        return .allow
     }
 
     /// The calls a full grant may make (1.5): every one but those this policy always refuses.
@@ -524,8 +543,17 @@ package enum LinkPolicy {
     package static let raiseCap = ModeLevel.auto
     /// What a box chat's picker and refusals say of the cap.
     package static let boxCapLine = "Box chats go up to Auto"
-    /// Always allow from here: the box refuses it, and its cards don't offer it.
-    package static let boxAlwaysAllowLine = "Always allow isn't offered for box chats yet"
+    /// What a box says in its welcome when a full grant may Always allow its chats' cards.
+    package static let alwaysAllowCap = "alwaysAllow"
+    /// Always allow on a box chat whose kore-host doesn't take it (before `alwaysAllowCap`): its
+    /// cards don't offer it here.
+    package static let boxAlwaysAllowOld = "Always allow needs a newer kore-host on this box"
+    /// Always allow on a box chat this Mac only watches or acts in: a full grant's.
+    package static let boxAlwaysAllowFull = "Always allow needs full control of this box"
+    /// Always allow on a card that has none of its own (or is gone).
+    package static let boxNoAlwaysLine = "That card doesn't offer Always allow"
+    /// Always allow on a forced removal of the folder, a parent, a home or a system path.
+    package static let boxCriticalAlwaysLine = "Always allow never covers a removal like this"
     /// A CLI's sign-in in a box chat: not answered from here.
     package static let boxSignInLine = "Sign-ins in box chats aren't answered from here yet"
 

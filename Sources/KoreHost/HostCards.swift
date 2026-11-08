@@ -33,7 +33,17 @@ enum HostMeta {
         let provider = hc.provider
         let modes = Dictionary(provider.modes.map { ($0.id, level($0)) }, uniquingKeysWith: { a, _ in a })
         let current = modes[modeID(hc)] ?? .danger
-        let cards = Dictionary(self.cards(hc, raise: raise).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest)) }, uniquingKeysWith: { a, _ in a })
+        let asked = Dictionary((hc.chat?.approvals.pending ?? []).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let cards = Dictionary(
+            self.cards(hc, raise: raise).map { card in
+                let approval = asked[card.id]
+                return (
+                    card.id,
+                    LinkPolicy.ChatFacts.Card(
+                        kind: card.kind, digest: card.digest, canAlwaysAllow: approval?.canAlwaysAllow ?? false, command: approval?.command,
+                        cwd: approval?.cwd)
+                )
+            }, uniquingKeysWith: { a, _ in a })
         let commands = hc.commands
         return LinkPolicy.ChatFacts(
             level: current, planOn: planOn(hc), modes: modes, cards: cards,

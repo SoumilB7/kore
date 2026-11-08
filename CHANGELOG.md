@@ -11,6 +11,8 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 ### Fixed
 - Switching tabs no longer redraws every chat kept open in the background; switches are a
   little faster.
+- Always allow works in box chats: the rule lands in the box project's settings and the box
+  stops asking for that kind of command. Not for removals of the folder, home or system paths.
 
 ## [0.3.5] - 2026-11-21
 

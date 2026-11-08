@@ -47,7 +47,14 @@ final class BoxCLI: ChatBackend {
         return true
     }
     func interrupt() async { calls.append("interrupt") }
-    func respond(to approvalID: String, _ decision: Decision) async { calls.append("respond \(approvalID)") }
+    /// Each answer with its decision (`ap1 allowAlways`), and what a test's CLI does with one.
+    var answers: [String] = []
+    var answered: ((String, Decision) -> Void)?
+    func respond(to approvalID: String, _ decision: Decision) async {
+        calls.append("respond \(approvalID)")
+        answers.append("\(approvalID) \(decision)")
+        answered?(approvalID, decision)
+    }
     func setMode(_ id: String) async throws { calls.append("mode \(id)") }
     func setPlanMode(_ on: Bool) async {}
     func setModel(_ id: String) async throws { calls.append("model \(id)") }
@@ -617,11 +624,11 @@ struct BoxParityTests {
         let link = try #require(backend())
         let hc = try #require(link.chatId.flatMap(rig.host.chat))
 
-        // Always allow: offered by the box's CLI, dim here with where it's set.
+        // Always allow: offered by the box's CLI, and here as on a Mac chat (a full grant).
         rig.cli.sink.yield(.approvalRequested(Approval(id: "ap9", title: "Run ls", detail: nil, body: nil, canAlwaysAllow: true, questions: [])))
         #expect(await until { chat.approvals.pending.first?.id == "ap9" })
-        #expect(chat.approvals.pending.first?.canAlwaysAllow == false)
-        #expect(chat.approvals.pending.first?.alwaysAllowNote == "Always allow isn't offered for box chats yet")
+        #expect(chat.approvals.pending.first?.canAlwaysAllow == true)
+        #expect(chat.approvals.pending.first?.alwaysAllowNote == nil)
 
         // Rename: through `chat.call`, kept on the box (its list and other Macs read it there).
         chat.rename("Release plan")

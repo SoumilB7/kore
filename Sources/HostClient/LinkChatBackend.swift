@@ -394,8 +394,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         case .remoteControlUnavailable where !offers("setRemoteControl"):
             return .remoteControlUnavailable(Self.remoteOnBox)
         case .approvalRequested(let approval):
-            // The box refuses Always allow from here (`LinkPolicy`): the card doesn't offer it.
-            let shown = approval.withoutAlwaysAllow(note: LinkPolicy.boxAlwaysAllowLine)
+            // Always allow as on a Mac chat where the box takes it from here (a full grant on a
+            // kore-host that says `alwaysAllow`); else the card doesn't offer it, and says why.
+            let shown = alwaysRefused.map { approval.withoutAlwaysAllow(note: $0) } ?? approval
             asked[approval.id] = shown
             return .approvalRequested(shown)
         case .turnChanges(let turn, let changes) where localPath != nil:
@@ -408,6 +409,12 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     }
 
     static let remoteOnBox = "Not in a chat on a box"
+
+    /// Why this box doesn't take Always allow from here; nil when it does.
+    package var alwaysRefused: String? {
+        if connection.control != .full { return LinkPolicy.boxAlwaysAllowFull }
+        return connection.caps.contains(LinkPolicy.alwaysAllowCap) ? nil : LinkPolicy.boxAlwaysAllowOld
+    }
 
     /// A call the box takes for this chat's CLI (its provider's `calls` capabilities).
     package func offers(_ call: String) -> Bool {
@@ -805,7 +812,8 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
         case .goneFolder: "that folder isn't on \(NodeNames.name(alias))"
         case .goneBlob: "the file didn't reach \(NodeNames.name(alias))"
         case .raiseMode: "\(NodeNames.name(alias)) doesn't allow that mode from here"
-        case .alwaysAllow: LinkPolicy.boxAlwaysAllowLine
+        // The box's own words: no Always allow on that card, a critical removal, or an old box.
+        case .alwaysAllow: nil
         case .signIn: LinkPolicy.boxSignInLine
         case .deniedControl: "\(NodeNames.name(alias)) lets this Mac only watch"
         case .rateLimited: "too many at once; try again in a moment"

@@ -724,14 +724,18 @@ package final class CodexBackend: ChatBackend {
             return
         }
         guard let request = translator.request(approvalID), let session else { return }
-        let mapped: CodexDecision =
-            switch decision {
-            case .allow, .approvePlan: .accept
-            case .allowAlways: request.kind == .command ? request.proposedAmendment.map { .acceptWithAmendment($0) } ?? .acceptForSession : .acceptForSession
-            case .deny, .keepPlanning: .decline
-            case .answers(let answers): .answers(answers)
-            }
-        try? await session.respond(to: request, mapped)
+        try? await session.respond(to: request, Self.decision(decision, for: request))
+    }
+
+    /// What an answer tells Codex. Always allow is Codex's own: its proposed prefix rule for a
+    /// command, else the session's.
+    package static func decision(_ decision: Decision, for request: CodexApproval) -> CodexDecision {
+        switch decision {
+        case .allow, .approvePlan: .accept
+        case .allowAlways: request.kind == .command ? request.proposedAmendment.map { .acceptWithAmendment($0) } ?? .acceptForSession : .acceptForSession
+        case .deny, .keepPlanning: .decline
+        case .answers(let answers): .answers(answers)
+        }
     }
 
     /// `thread/compact/start`: Codex runs it as a turn of its own (a `contextCompaction` item).

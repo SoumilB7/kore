@@ -1134,20 +1134,24 @@ package final class ClaudeBackend: ChatBackend {
             return await answerHeld(allow: true, by: nil)
         }
         guard let request = translator.request(approvalID), let session else { return }
-        let mapped: PermissionDecision =
-            switch decision {
-            case .allow: .allow
-            // A person-only ask keeps the kind its card showed (`ClaudeTranslator.alwaysRule`).
-            case .allowAlways where request.personOnly:
-                ClaudeTranslator.alwaysRule(request, in: options.folder).map { .allowRule($0) } ?? .allow
-            case .allowAlways: .allowAlways
-            case .deny: .deny(message: ClaudeTranslator.deniedCall)
-            // Several picked go as one line, as Claude Code's own picker sends them.
-            case .answers(let answers): .answers(answers.mapValues { $0.joined(separator: ", ") })
-            case .approvePlan(let autoAcceptEdits): autoAcceptEdits ? .allowSettingMode("acceptEdits") : .allow
-            case .keepPlanning: .deny(message: "The user wants to keep planning. Ask what to change.")
-            }
-        try? await session.respond(to: request, mapped)
+        try? await session.respond(to: request, Self.decision(decision, for: request, in: options.folder))
+    }
+
+    /// What an answer tells the CLI. Always allow hands the CLI its rule, which the CLI keeps in
+    /// the project's `.claude/settings.local.json` (its folder: the box's on a box chat).
+    package static func decision(_ decision: Decision, for request: PermissionRequest, in folder: URL) -> PermissionDecision {
+        switch decision {
+        case .allow: .allow
+        // A person-only ask keeps the kind its card showed (`ClaudeTranslator.alwaysRule`).
+        case .allowAlways where request.personOnly:
+            ClaudeTranslator.alwaysRule(request, in: folder).map { .allowRule($0) } ?? .allow
+        case .allowAlways: .allowAlways
+        case .deny: .deny(message: ClaudeTranslator.deniedCall)
+        // Several picked go as one line, as Claude Code's own picker sends them.
+        case .answers(let answers): .answers(answers.mapValues { $0.joined(separator: ", ") })
+        case .approvePlan(let autoAcceptEdits): autoAcceptEdits ? .allowSettingMode("acceptEdits") : .allow
+        case .keepPlanning: .deny(message: "The user wants to keep planning. Ask what to change.")
+        }
     }
 
     package func setMode(_ id: String) async throws {
