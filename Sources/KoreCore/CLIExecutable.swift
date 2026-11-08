@@ -377,11 +377,20 @@ public enum CLIExecutable {
     /// The process environment with a CLI-ready PATH and without the variables above.
     private static func cleaned(path: String?) -> [String: String] {
         var env = withoutHostSession(ProcessInfo.processInfo.environment)
-        if let path { env["PATH"] = path }
+        // The shell's PATH first, then the folders this process had that it lacks: a box's service
+        // names the CLIs' usual folders (`Environment=PATH`), which a login profile can reset.
+        if let path { env["PATH"] = joined(path, env["PATH"]) }
         for name in env.keys where isForeignAuth(name) { env[name] = nil }
         // A login folder inherited from a chat Kore was started in: main means the CLI's default.
         for name in CLIProfiles.variables.values where env[name].map(CLIProfiles.isLoginFolder) == true { env[name] = nil }
         return env
+    }
+
+    /// `first`'s folders, then `rest`'s not in it, each once.
+    package static func joined(_ first: String, _ rest: String?) -> String {
+        var seen = Set<Substring>()
+        let parts = (first.split(separator: ":") + (rest?.split(separator: ":") ?? [])).filter { !$0.isEmpty && seen.insert($0).inserted }
+        return parts.joined(separator: ":")
     }
 
     /// This run's shell answer, once it's in: from then on every start uses it.

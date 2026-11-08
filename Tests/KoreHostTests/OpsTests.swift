@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import Testing
 
 @testable import KoreHost
@@ -69,6 +70,14 @@ struct OpsTests {
         let said = try String(contentsOfFile: calls, encoding: .utf8)
         #expect(said.contains("systemctl --user restart kore-host.service"))
         #expect(said.contains("systemctl --user disable --now kore-host.service"))
+    }
+
+    @Test func theServicesFoldersStayOnTheCLIsPathAfterTheLoginShells() {
+        // A login profile that resets PATH keeps the unit's folders after its own.
+        let service = HostService.searchPath.replacingOccurrences(of: "%h", with: "/home/u")
+        let path = CLIExecutable.joined("/usr/local/bin:/usr/bin:/bin:/usr/games", service)
+        #expect(path == "/usr/local/bin:/usr/bin:/bin:/usr/games:/home/u/.local/bin:/home/u/.npm-global/bin:/home/u/.bun/bin")
+        #expect(CLIExecutable.joined("/a::/b", nil) == "/a:/b")
     }
 
     @Test func privateFilesAreWholeAndOnlyTheUsers() throws {
