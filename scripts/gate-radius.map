@@ -52,4 +52,4 @@ Sources/kore-command/	AgentChannel AgentChannelChecks Arsenal ArsenalDrive Arsen
 Sources/kore-storylines/	ALL
 Sources/Kore/	ALL
 # Always, whatever changed: about 20 short gate storylines across the app, and the two replays.
-smoke	ReplayDumpClaude ReplayDumpCodex SendAndStream StopMidTurn QueuedMessage ApproveAndDeny QuestionCardSubmit SlashMenuCaret TabSwitching TabKeys EscStops OnePopup ThemedOptions ModelPicker ExplorerFileOps EditorFindReplace AccountPopup UsagePopup WindowTerminal DevicesAddPhone LinkRingAndAct BoardCreate UpdateCueOnNewTab
+smoke	ReplayDumpClaude ReplayDumpCodex SendAndStream StopMidTurn ApproveAndDeny QuestionCardSubmit CommandBoxFocus TabSwitching TabGroupMake TabDragToEnds ThemedOptions ExplorerFileOps EditorFindReplace QuickOpenAndSearch AccountUsageMeters WindowTerminal LinkRingAndAct LinkFullControl ArsenalOpen BoardCreate UnloadLoadsBack SashHoldsChatAtEnd UpdateCueOnNewTab

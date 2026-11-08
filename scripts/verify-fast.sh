@@ -132,6 +132,9 @@ plan_shards() {
   $rel/kore-storylines --list 2>/dev/null | grep -E '\[[^]]*\bgate\b' | awk '{print $1}' | sort -u > $out/stories-gate.txt
   if (( ! all_stories )); then
     print -l ${(s:,:)story_names} | sort -u | comm -12 - $out/stories-gate.txt > $out/stories-run.txt
+    # A name the map asks for that isn't a gate storyline (renamed, untagged) is a hole: it says so.
+    unknown=(${(f)"$(print -l ${(s:,:)story_names} | sort -u | comm -23 - $out/stories-gate.txt)"})
+    (( ${#unknown} )) && print "✘ radius-unknown-storylines ${(j:,:)unknown}" >> $out/r-radius.txt
   else
     cp $out/stories-gate.txt $out/stories-run.txt
   fi
