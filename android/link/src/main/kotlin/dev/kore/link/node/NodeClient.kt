@@ -170,10 +170,15 @@ class NodeClient(
     /**
      * The Mac's directory named this node: one that turned this phone away (a box waiting for the
      * Mac's push) or couldn't be reached dials again now. One the tailnet says is asleep, or that
-     * was taken offline, waits for its own trigger.
+     * was taken offline, waits for its own trigger. A box that removed this phone is named only
+     * once the Mac allowed it again (a removed phone gets no directory): it starts over.
      */
     fun named() {
         val s = stateFlow.value
+        if (s is NodeMachine.State.Removed && deviceFlow.value.kind == dev.kore.link.trust.NodeKind.BOX) {
+            events.trySend(Internal.Allowed(deviceFlow.value))
+            return
+        }
         val retry = s is NodeMachine.State.Denied ||
             (s is NodeMachine.State.Away && (s.why == NodeMachine.AwayWhy.WAITING || s.why == NodeMachine.AwayWhy.UNREACHABLE))
         if (retry) post(NodeMachine.Event.Trigger)

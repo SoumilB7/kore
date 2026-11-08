@@ -68,6 +68,18 @@ class NodeClientTest {
         assertEquals(listOf(0L, 100L), rig.dials)
     }
 
+    @Test fun aBoxThatRemovedThisPhoneStartsOverWhenTheMacNamesItAgain() = runTest {
+        val link = FakeLink(box(), { testScheduler.currentTime })
+        val rig = Rig(this, listOf({ NetFailure("bye revoked") }, { link }), device = box())
+        rig.client.start()
+        runCurrent()
+        assertEquals(State.Removed, rig.client.state.value)
+        rig.client.named()
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(2, rig.dials.size)
+    }
+
     @Test fun aNamedBoxTheTailnetSaysIsAsleepIsLeftAlone() = runTest {
         val rig = Rig(this, listOf({ PeerOffline() }), device = box())
         rig.client.start()
