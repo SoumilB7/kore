@@ -370,7 +370,7 @@ package final class LinkHost {
             let (hunks, more) = LinkSnapshot.hunks(change)
             send(.diffHunks(id: id, path: path, hunks: hunks, more: more))
         case .challenge, .hello, .welcome, .command, .snapshot, .delta, .txPage, .txDelta, .txReset, .entryChunk, .cardChunk, .result, .attnState,
-            .attnEvent, .blobChunk, .policy, .historyPage, .diffHunks, .unknown:
+            .attnEvent, .blobChunk, .policy, .historyPage, .diffHunks, .presence, .unknown:
             // Kore's own messages, or a type from a newer client: skipped.
             break
         }
@@ -528,7 +528,7 @@ package final class LinkHost {
         case .chatSetArsenal: "Changed Arsenal"
         case .arsenalStopAll: "Stopped agent control"
         case .foldersList, .folderAdd, .authGh, .syncWatch, .syncUnwatch, .fsList, .fsRead, .fsMkdir, .fsWrite, .fsCreate, .fsRename, .fsDelete, .fsSearch, .fsWatch, .fsCopy, .fsCount, .fsCancel,
-            .chatRelease, .chatAdopt, .chatMirror, .syncFlush, .chatCopy, .chatAdoptCopy:
+            .chatRelease, .chatAdopt, .chatMirror, .syncFlush, .chatCopy, .chatAdoptCopy, .syncApply, .fsStat, .fsFind:
             "Acted"
         }
     }

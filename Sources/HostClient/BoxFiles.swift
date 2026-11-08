@@ -69,6 +69,41 @@ package protocol BoxFileSource: AnyObject {
     /// same `to` left is kept and finished (`LinkFiles.copyLanding`).
     func copy(_ from: String, to: String, run: BoxCopyRun?, resume: Bool) async -> Result<String, HostRefusal>
     func count(_ path: String) async -> Result<CarryCount, HostRefusal>
+    // 1.12 (`LinkFsOps`): what the Mac ran in a shell over SSH, done by the box; only when it
+    // says it can (`fsOps2`), else the shell as before.
+    var fsOps2: Bool { get }
+    /// A sync round's deletes and new folders inside `root`, sent in turns of `LinkFsOps.applyMax`.
+    func syncApply(root: String, deletes: [String], mkdirs: [String]) async -> Result<BoxApplied, HostRefusal>
+    /// A folder's carried files, their bytes and the room left on its disk; nil when it isn't there.
+    func stat(_ path: String) async -> Result<BoxStat?, HostRefusal>
+    /// The files and links under a folder, by path inside it; nil past the box's cap.
+    func find(_ path: String) async -> Result<Set<String>?, HostRefusal>
+    /// A carry's landing (`LinkFsOps.isLanding`) to the box's trash.
+    func trashLanding(_ path: String) async -> Result<Void, HostRefusal>
+}
+
+/// What a `sync.apply` did on the box, all its turns together.
+package struct BoxApplied: Sendable, Equatable {
+    package var deleted = 0
+    package var made = 0
+    package var skipped = 0
+    package init(deleted: Int = 0, made: Int = 0, skipped: Int = 0) {
+        self.deleted = deleted
+        self.made = made
+        self.skipped = skipped
+    }
+}
+
+/// A box folder as `fs.stat` found it.
+package struct BoxStat: Sendable, Equatable {
+    package var files: Int
+    package var bytes: Int64
+    package var free: Int64
+    package init(files: Int, bytes: Int64, free: Int64) {
+        self.files = files
+        self.bytes = bytes
+        self.free = free
+    }
 }
 
 /// What the box said changed: folders, and in each the entries' names when it said them.
@@ -95,6 +130,15 @@ extension BoxFileSource {
     package func count(_ path: String) async -> Result<CarryCount, HostRefusal> {
         .failure(HostRefusal(message: "\(alias) needs an update to copy files"))
     }
+
+    /// A stand-in from before 1.12: its callers use the shell.
+    package var fsOps2: Bool { false }
+    package func syncApply(root: String, deletes: [String], mkdirs: [String]) async -> Result<BoxApplied, HostRefusal> { .failure(Self.olderBox(alias)) }
+    package func stat(_ path: String) async -> Result<BoxStat?, HostRefusal> { .failure(Self.olderBox(alias)) }
+    package func find(_ path: String) async -> Result<Set<String>?, HostRefusal> { .failure(Self.olderBox(alias)) }
+    package func trashLanding(_ path: String) async -> Result<Void, HostRefusal> { .failure(Self.olderBox(alias)) }
+
+    static func olderBox(_ alias: String) -> HostRefusal { HostRefusal(message: "\(alias) needs an update for that") }
 }
 
 /// A copy on a box under way (`fs.copy`): its bytes as the box says them, and its Cancel
@@ -236,6 +280,64 @@ extension HostConnection: BoxFileSource {
         fileHits[page.id]?(page.hits)
     }
 
+    // MARK: 1.12
+
+    /// Only while linked: a box that isn't reached right now is asked by SSH, as before.
+    package var fsOps2: Bool { isOnline && caps.contains(LinkFsOps.cap) }
+
+    /// In turns: each at most `LinkFsOps.applyMax` paths and `applyBytes` of them, so it stays
+    /// under a frame from the client. The first turn the box refuses stops the rest.
+    package func syncApply(root: String, deletes: [String], mkdirs: [String]) async -> Result<BoxApplied, HostRefusal> {
+        var total = BoxApplied()
+        for turn in Self.turns(deletes.map { (true, $0) } + mkdirs.map { (false, $0) }) {
+            let args = ControlArgs(
+                root: root, deletes: turn.filter(\.0).map(\.1).nilIfEmpty, mkdirs: turn.filter { !$0.0 }.map(\.1).nilIfEmpty)
+            let result = await files(.syncApply, args)
+            guard result.ok else { return .failure(refusal(result)) }
+            total.deleted += result.deleted ?? 0
+            total.made += result.made ?? 0
+            total.skipped += result.skipped ?? 0
+        }
+        return .success(total)
+    }
+
+    nonisolated static func turns<T>(_ paths: [(T, String)]) -> [[(T, String)]] {
+        var turns: [[(T, String)]] = []
+        var turn: [(T, String)] = []
+        var bytes = 0
+        for path in paths {
+            // As JSON carries it: quotes and commas, and a `"` or `\` escaped.
+            let size = path.1.utf8.reduce(4) { $0 + ($1 == 0x22 || $1 == 0x5c ? 2 : 1) }
+            if !turn.isEmpty, turn.count >= LinkFsOps.applyMax || bytes + size > LinkFsOps.applyBytes {
+                turns.append(turn)
+                turn = []
+                bytes = 0
+            }
+            turn.append(path)
+            bytes += size
+        }
+        if !turn.isEmpty { turns.append(turn) }
+        return turns
+    }
+
+    package func stat(_ path: String) async -> Result<BoxStat?, HostRefusal> {
+        let result = await files(.fsStat, ControlArgs(path: path))
+        if result.code == .goneFile { return .success(nil) }
+        guard result.ok, let count = result.files else { return .failure(refusal(result)) }
+        return .success(BoxStat(files: count, bytes: result.size ?? 0, free: result.free ?? 0))
+    }
+
+    package func find(_ path: String) async -> Result<Set<String>?, HostRefusal> {
+        let result = await files(.fsFind, ControlArgs(path: path))
+        guard result.ok, let paths = result.paths else { return .failure(refusal(result)) }
+        return .success(result.more == true ? nil : Set(paths))
+    }
+
+    package func trashLanding(_ path: String) async -> Result<Void, HostRefusal> {
+        let result = await files(.fsDelete, ControlArgs(path: path, landing: true))
+        return result.ok ? .success(()) : .failure(refusal(result))
+    }
+
     package func makeFolder(_ path: String) async -> Result<String, HostRefusal> {
         let result = await files(.fsMkdir, ControlArgs(path: path))
         guard result.ok else { return .failure(refusal(result)) }
@@ -281,4 +383,8 @@ extension HostConnection: BoxFileSource {
         if result.code == .deniedControl { return HostRefusal(message: "Files need a grant with full control on \(alias)") }
         return HostRefusal(message: result.message ?? "\(alias) refused it")
     }
+}
+
+extension Array {
+    fileprivate var nilIfEmpty: Self? { isEmpty ? nil : self }
 }

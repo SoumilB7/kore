@@ -179,7 +179,7 @@ enum ChatMoving {
             if box.sync == nil { box.followPair() }
             sheet.checks = Task { [weak box] in await settle(sheet, connection: connection, folder: pair.box) { box?.sync } }
         }
-        sheet.onPair = { startPairing(sheet, alias: box.alias, boxFolder: box.folder, then: check) }
+        sheet.onPair = { startPairing(sheet, alias: box.alias, boxFolder: box.folder, link: connection, then: check) }
         sheet.onAnswer = {
             guard let ask = sheet.ask else { return }
             sheet.ask = nil
@@ -393,7 +393,7 @@ enum ChatMoving {
 
     /// Sync with a Mac folder…: the open panel, the pair checked (asked once when both sides have
     /// files), and kept; then the checks again.
-    static func startPairing(_ sheet: MoveSheet, alias: String, boxFolder: String, then: @escaping () -> Void) {
+    static func startPairing(_ sheet: MoveSheet, alias: String, boxFolder: String, link: HostConnection? = nil, then: @escaping () -> Void) {
         guard let mac = AppModel.shared?.chooseFolder(prompt: "Sync", message: "Sync \(BoxFolder.lastPart(boxFolder)) on \(alias) with a folder on this Mac")
         else { return }
         let pairs = SyncPairList.shared
@@ -401,7 +401,7 @@ enum ChatMoving {
         guard let ssh = SyncBox.ssh(alias) else { return sheet.sync = .failed("\(alias) isn't an SSH alias Kore can use") }
         sheet.sync = .checking
         Task {
-            switch await pairs.check(mac: mac, alias: alias, box: boxFolder, via: ssh) {
+            switch await pairs.check(mac: mac, alias: alias, box: boxFolder, via: ssh, link: link) {
             case .go:
                 pairs.pair(mac: mac, alias: alias, box: boxFolder)
                 BoxBinding.pairsChanged()

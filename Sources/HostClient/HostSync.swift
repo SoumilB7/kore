@@ -740,16 +740,9 @@ package final class HostSync {
             removeEmptyFolders(above: path)
         }
         if !plan.deleteBox.isEmpty {
-            // On the box, a path with a link among its folders is left alone.
-            let script = """
-                cd -- "$1" || exit 1
-                xargs -0 sh -c 'for f; do d=$(dirname -- "$f"); ok=1; while [ "$d" != . ]; do if [ -L "$d" ]; then ok=0; break; fi; d=$(dirname -- "$d"); done; if [ $ok = 1 ] && [ ! -d "$f" ]; then rm -f -- "$f"; fi; done' sh
-                """
-            guard ok(await box.shell(script, [pair.box], input: Data(plan.deleteBox.joined(separator: "\0").utf8), low: low)) else { return false }
-            let folders = Set(plan.deleteBox.compactMap { path in path.lastIndex(of: "/").map { String(path[..<$0]) } })
-            if !folders.isEmpty {
-                let script = "cd -- \"$1\" && xargs -0 rmdir -p -- 2>/dev/null; true"
-                _ = await box.shell(script, [pair.box], input: Data(folders.sorted().joined(separator: "\0").utf8), low: low)
+            if let why = await Self.deleteOnBox(plan.deleteBox, in: pair.box, files: connection, box: box, low: low) {
+                notice = "Sync paused: " + why
+                return false
             }
         }
         if plan.pushes > 0 {
@@ -764,6 +757,32 @@ package final class HostSync {
             notice = nil
         }
         return true
+    }
+
+    /// Deletes files in the box's copy (paths inside `folder`): a path with a link among its
+    /// folders is left alone, a folder is never deleted, and folders left empty go. A 1.12 box
+    /// does it itself (`sync.apply`); an older one by a shell over SSH. Nil when done, else what
+    /// went wrong.
+    package static func deleteOnBox(_ paths: [String], in folder: String, files: any BoxFileSource, box: SyncBox, low: Bool) async -> String? {
+        if files.fsOps2 {
+            switch await files.syncApply(root: folder, deletes: paths, mkdirs: []) {
+            case .success: return nil
+            case .failure(let why): return why.message
+            }
+        }
+        let script = """
+            cd -- "$1" || exit 1
+            xargs -0 sh -c 'for f; do d=$(dirname -- "$f"); ok=1; while [ "$d" != . ]; do if [ -L "$d" ]; then ok=0; break; fi; d=$(dirname -- "$d"); done; if [ $ok = 1 ] && [ ! -d "$f" ]; then rm -f -- "$f"; fi; done' sh
+            """
+        let output = await box.shell(script, [folder], input: Data(paths.joined(separator: "\0").utf8), low: low)
+        // 23/24 are rsync's; a shell says 0.
+        guard [0, 23, 24].contains(output.status) else { return output.said }
+        let folders = Set(paths.compactMap { path in path.lastIndex(of: "/").map { String(path[..<$0]) } })
+        if !folders.isEmpty {
+            let script = "cd -- \"$1\" && xargs -0 rmdir -p -- 2>/dev/null; true"
+            _ = await box.shell(script, [folder], input: Data(folders.sorted().joined(separator: "\0").utf8), low: low)
+        }
+        return nil
     }
 
     private func removeEmptyFolders(above path: String) {
@@ -1041,6 +1060,19 @@ extension HostSync {
         echo "$n ${k:-0} ${f:-0}"
         """
 
+    /// The box folder's files, bytes and room: `fs.stat` on a 1.12 box, else `boxCountScript`.
+    /// Nil when it's missing.
+    package static func boxSide(_ path: String, via box: SyncBox, link: (any BoxFileSource)?) async -> Result<BoxStat?, HostRefusal> {
+        if let link, link.fsOps2 { return await link.stat(path) }
+        let said = await box.shell(boxCountScript, [path])
+        let words = said.out.split(whereSeparator: \.isWhitespace)
+        if words.first == "missing" { return .success(nil) }
+        guard said.status == 0, words.count == 3, let files = Int(words[0]), let kb = Int64(words[1]), let freeKB = Int64(words[2]) else {
+            return .failure(HostRefusal(message: said.said))
+        }
+        return .success(BoxStat(files: files, bytes: kb * 1024, free: freeKB * 1024))
+    }
+
     /// The Mac folder's carried files and bytes.
     static func count(_ mac: URL) async -> (files: Int, bytes: Int64) {
         await Task.detached(priority: .userInitiated) {
@@ -1055,17 +1087,20 @@ extension HostSync {
 
     /// Looks at both folders: which way the first round goes, whether each side has the room, and
     /// the one question when it's big (over `askBytes` or `askFiles`) or both have files.
-    package static func check(mac: URL, alias: String, box path: String, via box: SyncBox, pairs: [SyncPair]) async -> Check {
+    /// `link`: the box's link; a 1.12 box says its side itself (`fs.stat`), an older one by a
+    /// shell over SSH.
+    package static func check(
+        mac: URL, alias: String, box path: String, via box: SyncBox, link: (any BoxFileSource)? = nil, pairs: [SyncPair]
+    ) async -> Check {
         if let why = SyncPairs.refusal(mac: mac, alias: alias, box: path, in: pairs) { return .refuse(why) }
         guard SyncTree(root: mac).rootExists else { return .refuse("\(SyncPairs.shown(mac: mac.path)) isn't a folder on this Mac") }
-        let said = await box.shell(boxCountScript, [path])
-        let words = said.out.split(whereSeparator: \.isWhitespace)
-        if words.first == "missing" { return .refuse("\(SyncPairs.shown(box: path)) is missing on \(alias)") }
-        guard said.status == 0, words.count == 3, let boxFiles = Int(words[0]), let boxKB = Int64(words[1]), let boxFreeKB = Int64(words[2]) else {
-            return .refuse("Can't reach \(alias): " + said.said)
+        let boxFiles: Int, boxBytes: Int64, boxFree: Int64
+        switch await boxSide(path, via: box, link: link) {
+        case .failure(let why): return .refuse("Can't reach \(alias): " + why.message)
+        case .success(nil): return .refuse("\(SyncPairs.shown(box: path)) is missing on \(alias)")
+        case .success(let stat?): (boxFiles, boxBytes, boxFree) = (stat.files, stat.bytes, stat.free)
         }
         let (macFiles, macBytes) = await count(mac)
-        let boxBytes = boxKB * 1024, boxFree = boxFreeKB * 1024
         let macFree = (try? mac.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?.volumeAvailableCapacityForImportantUsage
         func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
         func big(_ files: Int, _ bytes: Int64) -> Bool { bytes > askBytes || files > askFiles }
@@ -1141,8 +1176,8 @@ package final class SyncPairList {
 
     package func refusal(mac: URL, alias: String, box: String) -> String? { SyncPairs.refusal(mac: mac, alias: alias, box: box, in: pairs) }
 
-    package func check(mac: URL, alias: String, box: String, via sync: SyncBox) async -> HostSync.Check {
-        await HostSync.check(mac: mac, alias: alias, box: box, via: sync, pairs: pairs)
+    package func check(mac: URL, alias: String, box: String, via sync: SyncBox, link: (any BoxFileSource)? = nil) async -> HostSync.Check {
+        await HostSync.check(mac: mac, alias: alias, box: box, via: sync, link: link, pairs: pairs)
     }
 
     package func pair(mac: URL, alias: String, box: String) {

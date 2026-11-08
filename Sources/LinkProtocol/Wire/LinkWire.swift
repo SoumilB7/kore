@@ -13,10 +13,11 @@ import src
 package enum LinkProto {
     package static let major = 1
     package static let minor = 3
-    /// A box (`kore-host`) speaks 1.9: the Mac's 1.3, the box's additions (1.4), box parity (1.5),
+    /// A box (`kore-host`) speaks 1.12: the Mac's 1.3, the box's additions (1.4), box parity (1.5),
     /// Arsenal on a box (1.6), its files read (1.7) and edited (1.8), a chat's own operations (1.9),
-    /// a chat's move to a Mac (1.10), a chat copied (1.11).
-    package static let boxMinor = 11
+    /// a chat's move to a Mac (1.10), a chat copied (1.11), its file operations in place of a
+    /// remote shell, rate limits, attention and presence (1.12).
+    package static let boxMinor = 12
     package static var version: LinkVersion { LinkVersion(major: major, minor: minor) }
 }
 

@@ -85,3 +85,7 @@ int kore_pty_resize(int master, unsigned short cols, unsigned short rows) {
     size.ws_row = rows;
     return ioctl(master, TIOCSWINSZ, &size);
 }
+
+int kore_open_folder(int dirfd, const char *name) {
+    return openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+}

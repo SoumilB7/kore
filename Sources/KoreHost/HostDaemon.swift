@@ -62,6 +62,10 @@ package final class HostDaemon {
     /// started it (one that ends aborts it).
     package var sessionEnv = ProcessInfo.processInfo.environment
     var moveClients: [String: ObjectIdentifier] = [:]
+    /// 1.12: what in the chats needs the user, for every client's alerts.
+    let attention = HostAttention()
+    /// 1.12: the time a client's limits are counted against (tests set their own).
+    package var now: () -> Date = { Date() }
 
     package init(paths: HostPaths) {
         self.paths = paths
@@ -186,7 +190,8 @@ package final class HostDaemon {
             closedChats.removeFirst()
             oldest.remove()
         }
-        for connection in connections where connection.proven {
+        noteAttention([hc])
+        for connection in connections where connection.proven && connection.takesPushes() {
             connection.send(.delta(rev: connection.nextRev(), windows: windows, chats: nil, removed: [hc.id]))
         }
     }
@@ -277,7 +282,10 @@ package final class HostDaemon {
     private func noted(_ chat: Chat, _ event: ChatEvent) {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return }
         streamRow(hc, event)
-        if case .turnFinished = event { git.touched(hc.record.folder) }
+        if case .turnFinished(let turn, let outcome, _) = event {
+            git.touched(hc.record.folder)
+            if let ended = attention.turnEnded(hc, turn: turn, outcome: outcome, at: now()) { sendAttention([ended]) }
+        }
         hc.noted(chat)
         armIdle(hc)
         broadcast(chats: [hc])
@@ -295,7 +303,7 @@ package final class HostDaemon {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(clis) { try? HostPaths.privateFile(data, to: paths.models) }
-        for connection in connections where connection.proven && connection.grant?.control == .full {
+        for connection in connections where connection.proven && connection.grant?.control == .full && connection.takesPushes() {
             connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: clis)))
         }
     }
@@ -340,7 +348,8 @@ package final class HostDaemon {
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : []) + (control == .full ? ["stream", "pty", "git", "move", "copy", "chatCopy"] : []))
+            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : [])
+                + (control == .full ? ["stream", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap] : []))
     }
 
     var windows: [LinkWindow] {
@@ -355,6 +364,7 @@ package final class HostDaemon {
     private func broadcastWindows() { broadcast(windows: true, chats: []) }
 
     func broadcast(windows: Bool = false, chats changed: [HostChat]) {
+        noteAttention(changed)
         guard !connections.isEmpty else { return }
         let windows = windows ? self.windows : nil
         guard !changed.isEmpty || windows != nil else { return }
@@ -373,8 +383,24 @@ package final class HostDaemon {
         }
     }
 
+    /// 1.12: the chats' cards looked at again (kept even with no client connected), and what
+    /// opened or cleared sent to every client.
+    func noteAttention(_ changed: [HostChat]) {
+        var out: [LinkMessage] = []
+        for hc in changed { out += attention.changed(hc, present: chats.contains { $0 === hc }) }
+        sendAttention(out)
+    }
+
+    /// Attention goes to every client, on screen or not.
+    private func sendAttention(_ messages: [LinkMessage]) {
+        guard !messages.isEmpty else { return }
+        for connection in connections where connection.proven {
+            for message in messages { connection.send(message) }
+        }
+    }
+
     private func transcriptChanged(_ hc: HostChat, upserts: [LinkEntry], removed: [String], order: [String]?, turns: [LinkTurn], reset: Bool) {
-        for connection in connections where connection.proven && connection.follows(hc.id) {
+        for connection in connections where connection.proven && connection.follows(hc.id) && connection.takesPushes() {
             if reset {
                 connection.send(.txReset(chatId: hc.id))
                 connection.page(hc, last: nil)

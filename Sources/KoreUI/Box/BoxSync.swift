@@ -149,9 +149,9 @@ struct BoxSyncButton: View {
             return
         }
         pairing.value = BoxPairing(place: place, state: .checking(SyncPairs.shown(mac: mac.path)))
-        let (alias, folder) = (box.alias, box.folder)
+        let (alias, folder, link) = (box.alias, box.folder, box.connection)
         checking.value = Task {
-            let check = await pairs.check(mac: mac, alias: alias, box: folder, via: ssh)
+            let check = await pairs.check(mac: mac, alias: alias, box: folder, via: ssh, link: link)
             guard !Task.isCancelled, pairing.value?.place == place else { return }
             switch check {
             case .go: finishPairing(mac)

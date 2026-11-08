@@ -123,6 +123,13 @@ package struct FilesResult: Codable, Sendable, Equatable {
     /// of the copy.
     package var files: Int?
     package var dir: Bool?
+    /// 1.12: `fs.stat`: the free bytes on the folder's disk; `fs.find`: the paths under it (`more`:
+    /// it stopped at a cap); `sync.apply`: what it deleted, made, and left alone.
+    package var free: Int64?
+    package var paths: [String]?
+    package var deleted: Int?
+    package var made: Int?
+    package var skipped: Int?
 
     package init(
         id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, path: String? = nil, entries: [FileEntry]? = nil,

@@ -159,6 +159,31 @@ package struct CarryBox {
     /// Its link is up (a stand-in's always is): a step that failed while it wasn't is gone on
     /// from once it is.
     package var reachable: Bool { (files as? HostConnection)?.isOnline ?? true }
+
+    /// The files and links under a folder, by path inside it: `fs.find` on a 1.12 box, else `find`
+    /// over SSH. Nil when it can't be listed (or has more than the box lists).
+    package func listing(_ root: String) async -> Set<String>? {
+        if files.fsOps2 { return (try? await files.find(root).get()) ?? nil }
+        guard let ssh else { return nil }
+        let output = await ssh.shell(#"cd "$1" && exec find . \( -type f -o -type l \) -print"#, [root])
+        guard output.status == 0 else { return nil }
+        return Set(output.out.split(separator: "\n").map { $0.hasPrefix("./") ? String($0.dropFirst(2)) : String($0) })
+    }
+
+    /// A carry's own partial copy (a landing) gone: to the box's trash on a 1.12 box
+    /// (`fs.delete {landing}`); else `rm -rf` over SSH, and the trash when that didn't go.
+    /// `there`: whether it's still there.
+    package func removeLanding(_ path: String, there: () async -> Bool) async {
+        if files.fsOps2 {
+            _ = await files.trashLanding(path)
+            return
+        }
+        if let ssh, FileCarry.plain(path) {
+            _ = await Spawn().run([ssh.shellArgv(#"exec rm -rf -- "$1""#, [path])])
+        }
+        // No SSH, or it didn't go: to the box's trash.
+        if await there() { _ = await files.trash(path) }
+    }
 }
 
 /// One entry to carry, and the name it takes in the folder; `replace`: what has that name there
@@ -735,8 +760,8 @@ package final class FileCarry {
         log("carry-missing", "\(want.count - have.intersection(want).count) missing [\(missing.joined(separator: ", "))] extra [\(extra.joined(separator: ", "))]")
     }
 
-    /// The files and links under a folder, by path inside it: a walk here, `find` over SSH on a
-    /// box. Nil when it can't be listed.
+    /// The files and links under a folder, by path inside it: a walk here, the box's own
+    /// (`CarryBox.listing`) on a box. Nil when it can't be listed.
     private func listing(_ place: FilePlace) async -> Set<String>? {
         switch place {
         case .mac(let root):
@@ -752,10 +777,7 @@ package final class FileCarry {
                 return found
             }.value
         case .box(let alias, let root):
-            guard let ssh = boxes[alias]?.ssh else { return nil }
-            let output = await ssh.shell(#"cd "$1" && exec find . \( -type f -o -type l \) -print"#, [root])
-            guard output.status == 0 else { return nil }
-            return Set(output.out.split(separator: "\n").map { $0.hasPrefix("./") ? String($0.dropFirst(2)) : String($0) })
+            return await boxes[alias]?.listing(root)
         }
     }
 
@@ -836,22 +858,12 @@ package final class FileCarry {
             await Task.detached { try? FileManager.default.removeItem(atPath: path) }.value
         case .box(let alias, let path):
             guard let box = boxes[alias], (try? await count(place).get()) != nil else { return }
-            if let ssh = box.ssh, Self.plain(path) {
-                _ = await Spawn().run([ssh.shellArgv(#"exec rm -rf -- "$1""#, [path])])
-            }
-            // No SSH, or it didn't go: to the box's trash.
-            if (try? await count(place).get()) != nil { _ = await box.files.trash(path) }
+            await box.removeLanding(path) { (try? await self.count(place).get()) != nil }
         }
     }
 
     /// A name a carry gives a copy on its way (hidden; trees don't show it).
-    nonisolated package static func isStaging(_ name: String) -> Bool {
-        guard name.hasPrefix(".") else { return false }
-        if name.hasPrefix(".kore-copy-") { return true }
-        guard let range = name.range(of: ".kore-", options: .backwards) else { return false }
-        let token = name[range.upperBound...]
-        return token.count == 8 && token.allSatisfy(\.isHexDigit)
-    }
+    nonisolated package static func isStaging(_ name: String) -> Bool { LinkFsOps.isLanding(name) }
 
     /// A hidden name in the same folder, for an entry on its way.
     private static func hidden(_ name: String) -> String { "." + name + ".kore-" + CarryJournal.token() }

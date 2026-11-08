@@ -37,6 +37,14 @@ final class LinkClient {
     private var copies: [String: CopyRun] = [:]
     /// `sync.watch`es, by folder; they end with the link.
     private var syncs: [String: SyncWatch] = [:]
+    /// 1.12: a watch or act grant's rate limits (a full grant has none).
+    private var limits = HostLimits()
+    /// 1.12 `presence`: whether the client's user is looking at it, and at which chat. Off screen,
+    /// it's sent attention only; what it missed comes as a snapshot (and its followed chats' pages)
+    /// once it's back. A client that never says is on screen.
+    private(set) var onScreen = true
+    private(set) var lookingAt: String?
+    private var missed = false
 
     init(socket: HostSocket, host: HostDaemon) {
         self.socket = socket
@@ -203,6 +211,16 @@ final class LinkClient {
     private func received(_ data: Data) {
         guard let message = try? LinkMessage.decode(data) else { return end(.invalid) }
         guard proven else { return hello(message) }
+        if let control = grant?.control, control != .full {
+            switch limits.admit(message, at: host.now()) {
+            case .ok: break
+            case .drop: return
+            case .refuse(let id): return send(.result(.init(id: id, ok: false, code: .rateLimited)))
+            case .end:
+                HostJournal.note("rate limited", ["grant": grant?.name])
+                return end(.rateLimited)
+            }
+        }
         switch message {
         case .bye:
             host.terminals.closeAll(of: self)
@@ -228,6 +246,8 @@ final class LinkClient {
             let text = host.chat(chatId)?.chat?.approvals.pending.first { $0.id == cardId }.flatMap(HostMeta.fullContent) ?? ""
             let piece = LinkProjection.piece(text, from: offset)
             send(.cardChunk(id: id, text: piece.text, offset: piece.offset, total: piece.total))
+        case .presence(let onScreen, let chatId):
+            presence(onScreen, chatId: chatId)
         case .unknown(let type) where BoxAsk.types.contains(type):
             boxAsk(type, data)
         case .unknown(let type):
@@ -296,7 +316,29 @@ final class LinkClient {
         let full = grant.control == .full
         let clis = full && !host.clis.isEmpty ? host.clis : nil
         send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
-        send(.attnState(aid: 0, open: [], recent: []))
+        send(host.attention.ledger.state(after: 0))
+    }
+
+    // MARK: Presence (1.12)
+
+    /// Whether this client takes deltas now: off screen it doesn't, and what it missed is sent
+    /// whole once it's back.
+    func takesPushes() -> Bool {
+        if !onScreen { missed = true }
+        return onScreen
+    }
+
+    private func presence(_ onScreen: Bool, chatId: String?) {
+        lookingAt = chatId
+        let back = onScreen && !self.onScreen
+        self.onScreen = onScreen
+        guard back, missed, let grant = current() else { return }
+        missed = false
+        rev += 1
+        let full = grant.control == .full
+        let clis = full && !host.clis.isEmpty ? host.clis : nil
+        send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
+        for chatId in following.keys.sorted() { if let hc = host.chat(chatId) { page(hc, last: nil) } }
     }
 
     // MARK: Files (1.7)
@@ -350,7 +392,11 @@ final class LinkClient {
                     return files.write(id: id, path: args.path ?? "", bytes: bytes, base: args.base)
                 case .fsCreate: return files.create(id: id, path: args.path ?? "", dir: args.dir == true)
                 case .fsRename: return files.rename(id: id, from: args.from ?? "", to: args.to ?? "")
+                case .fsDelete where args.landing == true: return files.trashLanding(id: id, path: args.path ?? "", trash: trash)
                 case .fsDelete: return files.delete(id: id, path: args.path ?? "", trash: trash)
+                case .fsStat: return files.statFolder(id: id, path: args.path ?? "")
+                case .fsFind: return files.find(id: id, path: args.path ?? "")
+                case .syncApply: return files.apply(id: id, root: args.root ?? "", deletes: args.deletes ?? [], mkdirs: args.mkdirs ?? [])
                 case .fsCopy: return files.copy(id: id, from: args.from ?? "", to: args.to ?? "", run: copying, resume: args.resume == true)
                 case .fsCount: return files.count(id: id, path: args.path ?? "")
                 case .fsSearch:
@@ -360,10 +406,19 @@ final class LinkClient {
             }.value
             if kind == .fsCopy { self?.copies[id] = nil }
             self?.sendRaw(StreamWire.encode(result))
+            if kind == .syncApply {
+                HostJournal.note("sync.apply", [
+                    "folder": args.root, "ok": result.ok ? "1" : "0", "deleted": result.deleted.map(String.init), "made": result.made.map(String.init),
+                    "skipped": result.skipped.map(String.init), "code": result.code?.rawValue,
+                ])
+            } else if kind == .fsDelete, args.landing == true {
+                HostJournal.note("landing trashed", ["ok": result.ok ? "1" : "0", "code": result.code?.rawValue])
+            }
             // A file changed over the link: git's states there may have too (1.8).
             if result.ok, let self {
                 switch kind {
                 case .fsWrite, .fsCreate, .fsDelete: if let path = args.path { self.host.git.touched(path) }
+                case .syncApply: if let root = args.root { self.host.git.touched(root) }
                 case .fsRename: for path in [args.from, args.to].compactMap({ $0 }) { self.host.git.touched(path) }
                 case .fsCopy: if let path = args.to { self.host.git.touched(path) }
                 default: break
@@ -476,6 +531,7 @@ final class LinkClient {
     }
 
     func delta(windows: [LinkWindow]?, chats: [ChatMeta]) {
+        guard takesPushes() else { return }
         rev += 1
         send(.delta(rev: rev, windows: windows, chats: chats.isEmpty ? nil : chats, removed: nil))
     }
@@ -503,7 +559,7 @@ final class LinkClient {
     static let pageBudget = 900 * 1024
 
     func txDelta(_ hc: HostChat, upserts: [LinkEntry], removed: [String], order: [String]?, turns: [LinkTurn]) {
-        guard var follow = following[hc.id] else { return }
+        guard takesPushes(), var follow = following[hc.id] else { return }
         follow.txRev += 1
         following[hc.id] = follow
         send(.txDelta(.init(chatId: hc.id, txRev: follow.txRev, upserts: upserts, removed: removed, order: order, turns: turns.isEmpty ? nil : turns)))

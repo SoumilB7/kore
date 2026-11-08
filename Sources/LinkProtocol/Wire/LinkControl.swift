@@ -93,9 +93,14 @@ package enum ControlKind: String, Sendable, CaseIterable {
     /// adopted here under a new session id.
     case chatCopy = "chat.copy"
     case chatAdoptCopy = "chat.adoptCopy"
+    /// 1.12: what the Mac ran in a shell over SSH (`LinkFsOps.swift`): a sync round's deletes and
+    /// folders, a folder's files and the room left, and the files under a folder.
+    case syncApply = "sync.apply"
+    case fsStat = "fs.stat"
+    case fsFind = "fs.find"
 
-    /// A file command (1.7, 1.8): answered with a `FilesResult`, full grants only.
-    package var onFiles: Bool { rawValue.hasPrefix("fs.") }
+    /// A file command (1.7, 1.8, 1.12's `sync.apply`): answered with a `FilesResult`, full grants only.
+    package var onFiles: Bool { rawValue.hasPrefix("fs.") || self == .syncApply }
 
     /// It acts on a CLI's account.
     package var onAccount: Bool { rawValue.hasPrefix("account.") }
@@ -203,6 +208,11 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var resume: Bool?
     /// 1.11: `chat.adoptCopy`'s line above the copy's history ("copied from “Repos” · MacBook").
     package var copiedFrom: String?
+    /// 1.12: `sync.apply`'s files to delete and folders to make, by path inside `root`;
+    /// `fs.delete`'s entry is a carry's landing (`LinkFsOps.isLanding`).
+    package var deletes: [String]?
+    package var mkdirs: [String]?
+    package var landing: Bool?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -216,8 +226,12 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         folder: String? = nil, path: String? = nil, hidden: Bool? = nil, max: Int? = nil, data: String? = nil, blob: String? = nil,
         base: FileStamp? = nil, dir: Bool? = nil, from: String? = nil, to: String? = nil, root: String? = nil, query: String? = nil,
         folders: [String]? = nil, phase: String? = nil, gen: Int? = nil, moveId: String? = nil, stop: Bool? = nil, host: String? = nil,
-        seq: Int? = nil, events: MirrorItems? = nil, copiedFrom: String? = nil, resume: Bool? = nil
+        seq: Int? = nil, events: MirrorItems? = nil, copiedFrom: String? = nil, resume: Bool? = nil, deletes: [String]? = nil,
+        mkdirs: [String]? = nil, landing: Bool? = nil
     ) {
+        self.deletes = deletes
+        self.mkdirs = mkdirs
+        self.landing = landing
         self.copiedFrom = copiedFrom
         self.resume = resume
         self.phase = phase

@@ -246,6 +246,30 @@
     {
       "file": "delta.arsenal.json",
       "type": "delta"
+    },
+    {
+      "file": "cmd.sync.apply.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.fs.stat.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.fs.find.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.fs.delete.landing.json",
+      "type": "cmd"
+    },
+    {
+      "file": "presence.json",
+      "type": "presence"
+    },
+    {
+      "file": "presence.background.json",
+      "type": "presence"
     }
   ],
   "proto": {

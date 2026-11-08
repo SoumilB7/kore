@@ -21,4 +21,9 @@ int kore_pty_resize(int master, unsigned short cols, unsigned short rows);
 /// kernel can't.
 int kore_pidfd_open(pid_t pid);
 
+/// A folder `name` inside the folder open at `dirfd` (or `AT_FDCWD`), opened to read and never
+/// through a link (`O_DIRECTORY | O_NOFOLLOW`, close-on-exec): -1 with `errno` when it's a link,
+/// a file, or not there.
+int kore_open_folder(int dirfd, const char *name);
+
 #endif

@@ -209,6 +209,9 @@ package enum LinkMessage: Sendable, Equatable {
     // Attention
     case attnState(aid: Int, open: [AttnItem], recent: [AttnTurn])
     case attnEvent(aid: Int, op: AttnOp, item: AttnItem?, key: String?, turn: AttnTurn?)
+    /// Box 1.12, client to box: whether the client's user is looking at it (and at which chat). A
+    /// client that isn't (`onScreen: false`) is sent attention only; one that never says is.
+    case presence(onScreen: Bool, chatId: String?)
     /// A type from a newer peer: skipped.
     case unknown(String)
 
@@ -247,6 +250,7 @@ package enum LinkMessage: Sendable, Equatable {
         case .result: "result"
         case .attnState: "attn.state"
         case .attnEvent: "attn.event"
+        case .presence: "presence"
         case .unknown(let t): t
         }
     }
@@ -256,7 +260,7 @@ package enum LinkMessage: Sendable, Equatable {
         "challenge", "hello", "welcome", "bye", "command", "snapshot", "delta", "tx.open", "tx.more", "tx.close", "tx.page", "tx.delta", "tx.reset",
         "entry.more", "entry.chunk", "card.more", "card.chunk", "cmd", "result", "attn.state", "attn.event",
         "blob.put.begin", "blob.put.chunk", "blob.put.end", "blob.get", "blob.chunk",
-        "tx.earlier", "policy", "history.list", "history.page", "diff.get", "diff.hunks",
+        "tx.earlier", "policy", "history.list", "history.page", "diff.get", "diff.hunks", "presence",
     ]
 }
 
@@ -265,7 +269,7 @@ extension LinkMessage: Codable {
         case t, nonce, proto, client, proof, commands, epoch, host, providers, policy, caps, reason, rev, windows, chats, removed, chatId, last,
             count, txRev, entries, turns, hasEarlier, upserts, order, id, entryId, field, offset, text, total, cardId, cmd, ok, code,
             message, windowId, aid, open, recent, op, item, key, turn, uploadId, name, mime, size, sha256, index, data, ref, variant, blobId,
-            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders, ghSignedIn, url, authCode, signedIn, account
+            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders, ghSignedIn, url, authCode, signedIn, account, onScreen
     }
 
     package init(from decoder: any Decoder) throws {
@@ -332,6 +336,7 @@ extension LinkMessage: Codable {
                     authCode: try o(.authCode), signedIn: try o(.signedIn), account: try? o(.account)))
         case "attn.state": self = .attnState(aid: try d(.aid), open: try d(.open), recent: try d(.recent))
         case "attn.event": self = .attnEvent(aid: try d(.aid), op: try d(.op), item: try o(.item), key: try o(.key), turn: try o(.turn))
+        case "presence": self = .presence(onScreen: try d(.onScreen), chatId: try o(.chatId))
         default: self = .unknown(t)
         }
     }
@@ -483,6 +488,9 @@ extension LinkMessage: Codable {
             try c.encodeIfPresent(item, forKey: .item)
             try c.encodeIfPresent(key, forKey: .key)
             try c.encodeIfPresent(turn, forKey: .turn)
+        case .presence(let onScreen, let chatId):
+            try c.encode(onScreen, forKey: .onScreen)
+            try c.encodeIfPresent(chatId, forKey: .chatId)
         case .unknown:
             break
         }

@@ -294,6 +294,26 @@ package enum LinkPolicy {
             if kind == .fsWrite, [args.text != nil, args.data != nil, args.blob != nil].filter({ $0 }).count != 1 {
                 return .deny(.invalid, "One of text, data or blob.")
             }
+            // 1.12: a carry's landing only (the box checks the name again).
+            if kind == .fsDelete, args.landing == true, !LinkFsOps.isLanding((LinkFiles.normalised(args.path ?? "") as NSString).lastPathComponent) {
+                return .deny(.invalid, "Only a carry's landing.")
+            }
+            return .allow
+        case .fsStat, .fsFind:
+            // 1.12: a folder's files and room (its home or a served folder), the paths under a
+            // served folder. The box checks where the path leads.
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard LinkFiles.plainPath(args.path) else { return .deny(.invalid, "An absolute path.") }
+            return .allow
+        case .syncApply:
+            // 1.12: a sync round's deletes and folders, each relative to a served folder, a few
+            // thousand at most a call. The box opens each folder above a path without following a
+            // link, and deletes files only.
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard LinkFiles.plainPath(args.root) else { return .deny(.invalid, "An absolute root.") }
+            let paths = (args.deletes ?? []) + (args.mkdirs ?? [])
+            guard paths.count <= LinkFsOps.applyMax else { return .deny(.invalid, "At most \(LinkFsOps.applyMax) paths at once.") }
+            guard paths.allSatisfy(LinkFsOps.plainRelative) else { return .deny(.invalid, "Relative paths inside the folder.") }
             return .allow
         case .fsRename, .fsCopy:
             if case .deny(let code, let message) = full() { return .deny(code, message) }

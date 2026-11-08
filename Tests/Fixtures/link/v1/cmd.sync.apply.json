@@ -1,0 +1,1 @@
+{"cmd":{"deletes":["src/old.swift","notes/a.md"],"mkdirs":["src/new"],"root":"/home/me/acme-api","type":"sync.apply"},"id":"f1","t":"cmd"}
