@@ -65,6 +65,8 @@ struct HostNetTests {
         rig.clock.advance(DeviceStore.coolDown)
         let later = try rig.dial(phone, enroll: enroll)
         try await later.until { later.closed != nil }
+        // Its note is written beside the close (a busy Mac's journal lands a moment after the bye).
+        try await later.until { journal.audit("pending").count >= 2 }
         #expect(journal.audit("pending").count == 2)
         // Another user's node (shared in): closed, nothing kept.
         let stranger = Device("other")
