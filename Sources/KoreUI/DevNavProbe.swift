@@ -262,6 +262,18 @@ package enum DevNavProbe {
                 // of them after this wait: a busy one's late frames, or a stall in the middle,
                 // don't read as the view leaving its place.
                 await pacer.frames(max(1, 2 - (pacer.ticks - ticked)))
+                // Spread out as a slow Mac lays them out: read once what it reads holds still
+                // from one frame to the next (a busy Mac lays a new width out over several), not
+                // mid-way through it. Where it comes to rest is where the reader is left.
+                if pause >= .seconds(1) {
+                    var last = step()
+                    for _ in 0..<30 {
+                        await pacer.frames(1)
+                        let now = step()
+                        if now.row == last.row, abs(now.fromEnd - last.fromEnd) < 0.5 { break }
+                        last = now
+                    }
+                }
             }
             steps.append(step())
         }
