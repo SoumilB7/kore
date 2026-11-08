@@ -365,10 +365,24 @@ extension View {
         overlay { ContextOptions(items: items, source: source, modal: modal).accessibilityHidden(true) }
     }
 
+    /// A hover tooltip that steps aside while a Kore popup is open: AppKit's tooltip areas
+    /// don't know the popup covers them, so a row under it would show its tip over the popup.
+    func popupAwareHelp(_ text: String) -> some View {
+        modifier(PopupAwareHelp(text: text))
+    }
+
     /// A secondary click (right or ⌃-click) that opens the view's own popup: the same routing as
     /// `koreContextMenu`, so it wins over the views under it.
     func koreSecondaryClick(_ source: String, perform: @escaping () -> Void) -> some View {
         overlay { ContextOptions(items: { [] }, source: source, perform: perform).accessibilityHidden(true) }
+    }
+}
+
+/// Its own view, so only the tip, not the row, follows the popup opening and closing.
+private struct PopupAwareHelp: ViewModifier {
+    let text: String
+    func body(content: Content) -> some View {
+        content.help(OptionsMenu.shared.items.isEmpty ? text : "")
     }
 }
 

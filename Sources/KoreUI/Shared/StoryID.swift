@@ -362,6 +362,9 @@ extension StoryID {
         package static func result(_ relativePath: String, line: Int) -> StoryID {
             StoryID(.search, "result", key: "\(relativePath):\(line)")
         }
+        /// A file's row in the results, and its chevron.
+        package static func file(_ relativePath: String) -> StoryID { StoryID(.search, "file", key: relativePath) }
+        package static func chevron(_ relativePath: String) -> StoryID { StoryID(.search, "chevron", key: relativePath) }
     }
 
     package enum Changes {

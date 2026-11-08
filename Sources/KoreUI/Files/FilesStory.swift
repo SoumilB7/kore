@@ -98,6 +98,7 @@ extension Workspace {
         let find = editor.find
         return StoryEditor(
             path: relativePath(file.path), text: file.storage.string, isDirty: file.isDirty, caretLine: file.caret.line,
+            selectedText: (file.storage.string as NSString).substring(with: editor.textView.selectedRange()),
             caretShown: Self.storyCaretShown(editor),
             hiddenLines: hidden, foldCount: editor.folds.count, changedLines: editor.changes.marks.keys.sorted().map { $0 + 1 },
             find: find.isOpen
@@ -234,6 +235,8 @@ package struct StoryEditor: Sendable, Equatable {
     package let text: String
     package let isDirty: Bool
     package let caretLine: Int
+    /// The selected text; empty with a bare caret.
+    package let selectedText: String
     /// The caret is where it's seen: the editor has the keyboard, and the caret's spot is on
     /// screen, not under the gutter.
     package let caretShown: Bool

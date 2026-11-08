@@ -4,7 +4,8 @@ import SwiftUI
 
 /// The sidebar's Search (VS Code's Search view, phase 10 §3): a query with match case, whole
 /// word and regex, files to include and exclude, and the results grouped by file as they
-/// stream in. A click opens the file at the match (preview tab); a double click keeps it.
+/// stream in. A click on a match or a file opens the file at the match (preview tab); a double
+/// click keeps it. A file's chevron alone folds its matches.
 struct SearchView: View {
     let workspace: Workspace
     let store: SearchStore
@@ -123,7 +124,11 @@ struct SearchView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(store.results) { file in
-                        SearchFileRow(file: file, store: store, focused: listFocused, gitState: workspace.files?.state(of: file.path)) {
+                        SearchFileRow(file: file, store: store, focused: listFocused, gitState: workspace.files?.state(of: file.path)) { double in
+                            listFocused = true
+                            store.selection = .file(file.path)
+                            open(file, keep: double)
+                        } toggle: {
                             listFocused = true
                             store.selection = .file(file.path)
                             store.toggle(file.path)
@@ -159,7 +164,7 @@ struct SearchView: View {
         case .upArrow: moveSelection(-1)
         case .return:
             switch store.selection {
-            case .file(let path): store.toggle(path)
+            case .file(let path): if let file = store.results.first(where: { $0.path == path }) { open(file, keep: true) }
             case .hit(let path, let line): if let hit = store.hit(path, line: line) { open(hit, keep: true) }
             case nil: return .ignored
             }
@@ -184,6 +189,13 @@ struct SearchView: View {
         if case .hit(let path, let line) = next, let hit = store.hit(path, line: line) { open(hit, keep: false) }
     }
 
+    /// A file opens at its first match, as VS Code's does.
+    private func open(_ file: SearchStore.FileResult, keep: Bool) {
+        if let hit = file.hits.first { return open(hit, keep: keep) }
+        workspace.openFile(URL(fileURLWithPath: file.path), preview: !keep)
+        if keep { workspace.activeFile?.editor.focus() }
+    }
+
     private func open(_ hit: SearchHit, keep: Bool) {
         let start = hit.textOffset + (hit.matches.first?.lowerBound ?? 0)
         let length = hit.matches.first?.count ?? 0
@@ -201,7 +213,8 @@ private struct SearchFileRow: View {
     let store: SearchStore
     let focused: Bool
     let gitState: GitStatus.State?
-    let action: () -> Void
+    let action: (_ double: Bool) -> Void
+    let toggle: () -> Void
     @StateObject private var hovered = Local(false)
     @Environment(\.listGround) private var ground
 
@@ -217,6 +230,10 @@ private struct SearchFileRow: View {
                 .rotationEffect(.degrees(open ? 90 : 0))
                 .animation(Motion.fade, value: open)
                 .frame(width: Size.Tree.chevronBox, height: Size.Tree.chevronBox)
+                .contentShape(Rectangle())
+                // The chevron folds; the rest of the row opens the file.
+                .onTapGesture(perform: toggle)
+                .storyAction(StoryID.Search.chevron(relative)) { toggle() }
             FileIconView(name: file.path, color: gitState.map(Theme.Git.color) ?? (selected ? Theme.text : Theme.secondary))
             Spacer().frame(width: Size.Tree.iconGap)
             Text((file.path as NSString).lastPathComponent)
@@ -242,13 +259,18 @@ private struct SearchFileRow: View {
         .frame(height: Size.Tree.row)
         .background(fill(selected), in: RoundedRectangle(cornerRadius: Radius.chip))
         .padding(.horizontal, Size.Tree.rowInset)
+        .popupAwareHelp(relative)
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
-        .onTapGesture(perform: action)
+        .onTapGesture { action(NSApp.mouseClickCount >= 2) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityAction { action() }
-        .help(relative)
+        .accessibilityAction { action(false) }
+        .accessibilityAction(named: open ? "Collapse" : "Expand") { toggle() }
+        .storyID(StoryID.Search.file(relative), press: { action(false) })
+        // The file drags out, as from the tree. A drag source also takes the click that
+        // brings the window forward, so one click opens the file there too.
+        .onDrag { NSItemProvider(object: URL(fileURLWithPath: file.path) as NSURL) }
         .koreContextMenu("search") {
             [OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) },
              OptionItem("Copy Path") { TreeActions.copy(file.path) }, OptionItem("Copy Relative Path") { TreeActions.copy(relative) }]
@@ -284,15 +306,16 @@ private struct SearchHitRow: View {
         .frame(height: Size.Tree.row)
         .background(fill(selected), in: RoundedRectangle(cornerRadius: Radius.chip))
         .padding(.horizontal, Size.Tree.rowInset)
+        .popupAwareHelp("Line \(hit.line)")
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
         .onTapGesture { action(NSApp.mouseClickCount >= 2) }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { action(false) }
-        .help("Line \(hit.line)")
         // Keyed by the 0-based line, like every storyline line.
         .storyID(StoryID.Search.result(store.relative(hit.path), line: hit.line - 1), press: { action(false) })
+        .onDrag { NSItemProvider(object: URL(fileURLWithPath: hit.path) as NSURL) }
     }
 
     /// The line from just before its first match, the matches on the find fill.
@@ -399,3 +422,4 @@ private struct SearchToggle: View {
         .help(help)
     }
 }
+

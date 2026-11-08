@@ -70,6 +70,18 @@ extension Locator {
         }
     }
 
+    /// Search's row for a file that has results.
+    package static func searchFile(_ path: String) -> Locator {
+        Locator("the search file row “\(path)”") { app in
+            guard let workspace = app.workspace else { return .failure(LocatorMiss("no workspace")) }
+            guard workspace.storySearchShown, let search = workspace.storySearch else {
+                return .failure(LocatorMiss("the search file row “\(path)”: Search isn't showing"))
+            }
+            if search.hits.contains(where: { $0.path == path }) { return .success(StoryID.Search.file(path)) }
+            return .failure(LocatorMiss("the search file row “\(path)”: no results in it", pending: !search.finished))
+        }
+    }
+
     /// Search's result row for a line (1-based) of a file. Waits while the search runs; once it's
     /// done, a missing hit fails with the hits there are.
     package static func searchResult(_ path: String, line: Int) -> Locator {

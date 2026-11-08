@@ -549,7 +549,7 @@ private struct TreeRow: View, Equatable {
                         .background(dropSegment == path ? Theme.Tree.dropTarget : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
                         .contentShape(Rectangle())
                         .pointerStyle(.link)
-                        .help(store.relative(path))
+                        .popupAwareHelp(store.relative(path))
                     if i == paths.count - 1 {
                         // The last name is the row's: its clicks, menu and drops are the row's.
                         text.storyID(StoryID.Explorer.segment(store.relative(path)), press: click)

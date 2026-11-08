@@ -190,6 +190,55 @@ final class QuickOpenAndSearch: FilesStoryline {
     }
 }
 
+/// Search's results open what they show, as VS Code's do: a click on a match line opens its
+/// file at that line with the match selected (a preview tab), a click on a file's row opens it at
+/// its first match, the chevron alone folds the matches, and Enter on a result keeps its tab.
+final class SearchOpensResults: FilesStoryline {
+    override class var tags: Set<Tag> { [.files, .gate] }
+    override class var files: [(path: String, text: String)] {
+        [
+            ("Sources/Greet.swift", "func greet() {\n    // TODO: say hello\n    print(\"Hello\")\n}\n"),
+            // The match far down, so opening it has to scroll.
+            ("Long.txt", (1...69).map { "line \($0)" }.joined(separator: "\n") + "\nthe TODO at the end\n"),
+        ]
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.search),
+            WaitForFocus(.id(StoryID.Search.field)),
+            TypeText("TODO"),
+            Expect.search("a TODO in each file") { search in
+                search.finished && Set(search.hits) == [StorySearch.Hit(path: "Sources/Greet.swift", line: 2), StorySearch.Hit(path: "Long.txt", line: 70)]
+            },
+
+            Click(.searchResult("Long.txt", line: 70)),
+            Expect.fileTabs("Long.txt in a preview tab") { $0 == [StoryFileTab(path: "Long.txt", preview: true, active: true)] },
+            Expect.editor("line 70's TODO selected") { $0.path == "Long.txt" && $0.caretLine == 70 && $0.selectedText == "TODO" },
+            Snapshot("search-open-match"),
+
+            Click(.searchFile("Sources/Greet.swift")),
+            Expect.fileTabs("Greet.swift in the preview tab") { $0 == [StoryFileTab(path: "Sources/Greet.swift", preview: true, active: true)] },
+            Expect.editor("its first TODO selected") { $0.path == "Sources/Greet.swift" && $0.caretLine == 2 && $0.selectedText == "TODO" },
+            ExpectElement(.id(StoryID.Search.result("Sources/Greet.swift", line: 1))),
+
+            Click(.id(StoryID.Search.chevron("Sources/Greet.swift"))),
+            ExpectElement(.id(StoryID.Search.result("Sources/Greet.swift", line: 1)), .absent),
+            Expect.fileTabs("the chevron opened nothing") { $0 == [StoryFileTab(path: "Sources/Greet.swift", preview: true, active: true)] },
+            Snapshot("search-open-file"),
+
+            // ↓ from the query onto the first result, then Enter keeps its file.
+            Command(.search),
+            WaitForFocus(.id(StoryID.Search.field)),
+            Key(.down),
+            Key(.returnKey),
+            Expect.fileTabs("the result's file kept and active") { tabs in tabs.contains { $0.active && !$0.preview } },
+            Expect.editor("its TODO selected") { $0.selectedText == "TODO" },
+            WaitForFocus(.editor),
+        ]
+    }
+}
+
 /// A double click on a file in the explorer keeps its tab and puts the caret in it, though both
 /// clicks come before the file's editor is built.
 final class ExplorerDoubleClick: FilesStoryline {
