@@ -486,6 +486,13 @@ package final class HostSync {
         listed = nil
     }
 
+    /// 1.10: changes this Mac's side still has to carry (waiting, a round under way, a list
+    /// coming): 0 once it has caught up with all it was told. A move waits for 0 (`ChatMoves.flush`).
+    package var unsettled: Int {
+        guard started else { return 0 }
+        return macPending.count + boxPending.count + (running ? 1 : 0) + (listing != nil || listed != nil ? 1 : 0)
+    }
+
     /// The box can't watch its copy: it lists it again now (the window came forward, a turn ended).
     package func refresh() {
         guard started, !boxWatches, listing == nil, listed == nil, connection.isOnline else { return }

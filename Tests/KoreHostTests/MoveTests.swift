@@ -170,6 +170,27 @@ struct MoveTests {
         try await until { !rig.hc.isFrozen }
     }
 
+    @Test func syncFlushAnswersAfterTheBoxHasSaidItsChanges() async throws {
+        let rig = try Rig()
+        defer { rig.host.finish() }
+        let client = try await StreamClient(rig.host, grant: rig.grant)
+        let folder = rig.host.folder.path
+        // Not watched on this link: settled, and it says so.
+        let unwatched = try await command(client, .syncFlush, ControlArgs(folder: folder))
+        #expect(unwatched.settled == true && unwatched.watching == false)
+        client.socket.send(.cmd(id: "w", .control(.syncWatch, ControlArgs(folder: folder))))
+        try await until { client.frames.contains { StreamWire.type($0) == "sync.changed" } }
+        try Data("new".utf8).write(to: rig.host.folder.appendingPathComponent("fresh.txt"))
+        try await Task.sleep(for: .milliseconds(120))
+        let flushed = try await command(client, .syncFlush, ControlArgs(folder: folder))
+        #expect(flushed.settled == true && flushed.watching == true && flushed.pending == 0)
+        // Its change went before the answer.
+        let answer = try #require(client.frames.firstIndex { (try? JSONDecoder().decode(MoveResult.self, from: $0))?.id == flushed.id })
+        #expect(client.frames[..<answer].contains { StreamWire.type($0) == "sync.changed" && String(decoding: $0, as: UTF8.self).contains("fresh.txt") })
+        // A watch grant can't.
+        #expect(LinkPolicy.checkBox(.syncFlush, ControlArgs(folder: folder), nil, control: .standard) != .allow)
+    }
+
     @Test func aReplicaRefusesAndAReturnFastForwardsOrComesInNew() async throws {
         let rig = try Rig()
         defer { rig.host.finish() }

@@ -168,6 +168,28 @@ package struct ChatMoves {
             : SessionFiles.claudeProjects(env).appendingPathComponent(ClaudeHistory.projectKey(for: URL(fileURLWithPath: folder)))
     }
 
+    // MARK: The folder in sync
+
+    /// Waits for the folder's sync to settle on both ends: the box says what it gathered (its
+    /// `sync.changed` comes first), then this Mac's rounds carry it. `progress` hears how many
+    /// changes are still on their way ("3 changes still syncing…"). True once settled; false
+    /// after `wait` seconds, or when the folder isn't syncing (`sync` nil: the box window is closed).
+    package func flush(folder: String, sync: HostSync?, wait: TimeInterval = 30, progress: (@MainActor (Int) -> Void)? = nil) async -> Bool {
+        guard let sync else { return false }
+        let end = Date().addingTimeInterval(wait)
+        let box = await connection.move(.syncFlush, ControlArgs(folder: folder))
+        if box.watching == false { return false }
+        var left = (box.pending ?? 0) + sync.unsettled
+        while left > 0 || box.settled != true, Date() < end {
+            progress?(left)
+            try? await Task.sleep(for: .milliseconds(100))
+            left = sync.unsettled
+            if left == 0 { break }
+        }
+        progress?(left)
+        return left == 0 && box.settled == true
+    }
+
     // MARK: Bring to this Mac
 
     /// What a chat brought here is, to resume it in its local window.
