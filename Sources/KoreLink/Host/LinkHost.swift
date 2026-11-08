@@ -118,6 +118,7 @@ package final class LinkHost {
         session = nil
         listener.close()
         feed.layoutChanged = nil
+        feed.swept = nil
         Workspace.showLinkMark(nil)
         LinkPanel.closePopup()
         UILog.event("link-ended", ["reason": reason.rawValue])
@@ -205,7 +206,7 @@ package final class LinkHost {
         guard LinkProof.check(proof, secret: secret, nonce: session.nonce) else { return refuse(.auth) }
         let connection = session.connection
         let sink = LinkSink(queue: sinkQueue) { data in connection.send(data) }
-        let feedClient = LinkFeed.Client(sink: sink, full: run.fullControl, phone: false)
+        let feedClient = LinkFeed.Client(sink: sink, full: run.fullControl, phone: false, sweeps: true)
         let peer = LinkPeer(grant: .companion(run.control), feed: feed, client: feedClient)
         let mark = mark
         peer.did = { mark.record($0) }
@@ -215,6 +216,7 @@ package final class LinkHost {
         run.offer(commands)
         Workspace.showLinkMark(mark)
         feed.layoutChanged = { Workspace.showLinkMark(mark) }
+        feed.swept = { Workspace.showLinkMark(mark) }
         UILog.event("link-linked", ["build": String(client.build.prefix(32)), "commands": "\(run.commands.count)"])
         send(
             .welcome(

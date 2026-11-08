@@ -21,9 +21,15 @@ final class CountingSource: LinkFeedSource {
         windowReads += 1
         return windowsList
     }
+    /// A field that changes with no event and nothing Observation sees (as elapsed time or
+    /// context % do): the meta's title, by chat id.
+    var unobserved: [String: String] = [:]
+
     func meta(_ chat: Chat, full: Bool) -> ChatMeta {
         metaReads += 1
-        return LinkSnapshot.meta(chat, full: full)
+        var made = LinkSnapshot.meta(chat, full: full)
+        if let title = unobserved[chat.id.uuidString] { made.title = title }
+        return made
     }
     func extras(_ chats: [Chat]) -> LinkExtras { LinkExtras(mac: nil, clis: nil) }
 
@@ -46,12 +52,12 @@ final class KeptClient: Sendable {
     var onMain: [Bool] { queue.sync {}; return threads.withLock { $0 } }
 
     @MainActor
-    func make(full: Bool = false, phone: Bool = true) -> LinkFeed.Client {
+    func make(full: Bool = false, phone: Bool = true, sweeps: Bool = false) -> LinkFeed.Client {
         let sink = LinkSink(queue: queue) { [self] data in
             if let message = try? LinkMessage.decode(data) { kept.withLock { $0.append(message) } }
         }
         sink.applied = { [self] main, _ in threads.withLock { $0.append(main) } }
-        return LinkFeed.Client(sink: sink, full: full, phone: phone)
+        return LinkFeed.Client(sink: sink, full: full, phone: phone, sweeps: sweeps)
     }
 
     func clear() {
@@ -159,6 +165,32 @@ struct LinkFeedTests {
         feed.noted(chat, .approvalRequested(Approval(id: "k", title: "Allow Bash?", detail: nil, body: "ls", canAlwaysAllow: false, questions: [])))
         #expect(feed.due)
         feed.detach(client)
+    }
+
+    /// The doorbell's companion is served as it always was: once a second every chat is read
+    /// again, so a field that changes with no event still reaches it within that second. A phone
+    /// beside it gets only what was marked.
+    @Test func theDoorbellsCompanionStillGetsAnUnobservedChangeWithinASecond() throws {
+        let source = CountingSource()
+        let feed = LinkFeed(source: source, taps: false)
+        let chat = try source.add()
+        let door = KeptClient(), phone = KeptClient()
+        let doorClient = door.make(phone: false, sweeps: true), phoneClient = phone.make()
+        feed.attach(doorClient)
+        feed.attach(phoneClient)
+        feed.tick()
+        #expect(door.types == ["snapshot"] && phone.types == ["snapshot"])
+        source.unobserved[chat.id.uuidString] = "elapsed 2m"
+        // Three quarter-second ticks: nothing marked it.
+        for _ in 0..<3 { feed.sweepTick() }
+        #expect(door.types == ["snapshot"])
+        // The fourth is the companion's second: it reads everything again.
+        feed.sweepTick()
+        #expect(door.types == ["snapshot", "delta"])
+        if case .delta(_, _, let chats?, _, _)? = door.messages.last { #expect(chats.map(\.title) == ["elapsed 2m"]) }
+        #expect(phone.types == ["snapshot"])
+        feed.detach(doorClient)
+        feed.detach(phoneClient)
     }
 
     @Test func aHeldClientGetsNothingUntilReleased() throws {

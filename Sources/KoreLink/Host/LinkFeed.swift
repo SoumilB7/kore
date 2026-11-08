@@ -101,6 +101,10 @@ package final class LinkFeed {
         /// Full control (the doorbell's grant): windows' groups, chats' controls, the Mac's state.
         package let full: Bool
         package let phone: Bool
+        /// The local link's companion (the doorbell): served as it always was, a tick four times a
+        /// second and every window, chat and the Mac's state read again once a second, so fields
+        /// that change without an event (elapsed time, context %) keep coming.
+        package let sweeps: Bool
         /// Its user is looking at it (`presence`); a client that never says is on screen.
         package fileprivate(set) var onScreen = true
         /// It has nothing yet, or came back on screen: every chat's meta at the next tick.
@@ -118,7 +122,8 @@ package final class LinkFeed {
             var known = Set<String>()
         }
 
-        package init(sink: LinkSink, full: Bool, phone: Bool) {
+        package init(sink: LinkSink, full: Bool, phone: Bool, sweeps: Bool = false) {
+            self.sweeps = sweeps
             self.sink = sink
             self.full = full
             self.phone = phone
@@ -142,6 +147,12 @@ package final class LinkFeed {
     private var attentionObserved = Set<String>()
     private var scheduled: Timer?
     private var keepTimer: Timer?
+    /// The companion's repeating tick, while one is attached.
+    private var sweepTimer: Timer?
+    private var sweepCount = 0
+    private var sweepNow = false
+    /// The companion's once-a-second look (its mark shown in new windows).
+    package var swept: (() -> Void)?
     /// The taps are on (a client is attached, or a phone left less than `keepAfterPhones` ago).
     package private(set) var live = false
     /// How long each tick took on the main actor (the last 2000), for the navigation budget.
@@ -168,13 +179,32 @@ package final class LinkFeed {
         keepTimer?.invalidate()
         keepTimer = nil
         turnOn()
+        if client.sweeps, sweepTimer == nil {
+            let timer = Timer(timeInterval: Self.rate, repeats: true) { _ in MainActor.assumeIsolated { [weak self] in self?.sweepTick() } }
+            // The default mode only: it waits while a window resizes, a menu is open or a scroller is dragged.
+            RunLoop.main.add(timer, forMode: .default)
+            sweepTimer = timer
+        }
         schedule(now: true)
+    }
+
+    /// The companion's tick (four a second); every fourth reads everything again.
+    package func sweepTick() {
+        sweepCount += 1
+        sweepNow = sweepCount % Int(1 / Self.rate) == 0
+        if sweepNow { swept?() }
+        tick()
     }
 
     /// A client went. With no client left the taps go (after `keepAfterPhones` when a phone left,
     /// so its resume still hears what finished meanwhile).
     package func detach(_ client: Client) {
         clients.removeAll { $0 === client }
+        if !clients.contains(where: \.sweeps) {
+            sweepTimer?.invalidate()
+            sweepTimer = nil
+            sweepCount = 0
+        }
         guard clients.isEmpty else { return }
         scheduled?.invalidate()
         scheduled = nil
@@ -390,7 +420,11 @@ package final class LinkFeed {
             if tickTimes.count > 2000 { tickTimes.removeFirst(tickTimes.count - 2000) }
         }
         ticks += 1
+        let sweeping = sweepNow
+        sweepNow = false
         let chats = source.chats()
+        // The companion's cards are looked at every tick, as they always were.
+        if serving.contains(where: \.sweeps) { for id in attention.withItems { attention.mark(id) } }
         // A chat with a card open that closed: its items clear.
         for id in attention.withItems where chats[id] == nil { attention.mark(id) }
         let opened = attention.look(chats, everything: false)
@@ -408,10 +442,12 @@ package final class LinkFeed {
         var windows: [Bool: [LinkWindow]] = [:]
         var metas: [Bool: [ChatMeta]] = [:]
         var extras: LinkExtras?
+        /// Whether a client gets every chat this tick: it has nothing yet, or it's the companion's second.
+        func wantsAll(_ client: Client) -> Bool { client.needsAll || (sweeping && client.sweeps) }
         for full in [false, true] {
             let group = watching.filter { $0.full == full }
             guard !group.isEmpty else { continue }
-            let all = group.contains(where: \.needsAll)
+            let all = group.contains(where: wantsAll)
             if layoutDirty || all { windows[full] = observedWindows(full: full) }
             let ids = all ? chatIds : dirtyChats.intersection(chatIds)
             metas[full] = ids.sorted().compactMap { id in chats[id].map { observedMeta($0, id: id, full: full) } }
@@ -434,8 +470,10 @@ package final class LinkFeed {
                 client.subs[id]?.known = Set(slice.order)
                 tx.append(slice)
             }
-            let batch = LinkBatch(
-                windows: windows[client.full], chats: metas[client.full] ?? [], chatIds: chatIds, tx: tx, extras: client.full ? extras : nil)
+            // A phone takes the chats that changed; the companion's second (or a first batch) takes them all.
+            var chatsFor = metas[client.full] ?? []
+            if !wantsAll(client) { chatsFor = chatsFor.filter { dirtyChats.contains($0.id) } }
+            let batch = LinkBatch(windows: windows[client.full], chats: chatsFor, chatIds: chatIds, tx: tx, extras: client.full ? extras : nil)
             client.needsAll = false
             client.batches += 1
             client.sink.apply(batch)
