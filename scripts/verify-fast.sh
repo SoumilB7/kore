@@ -384,6 +384,7 @@ if [[ -n $fixtures && -x $rel/kore-storylines ]]; then
 import glob, json, os, sys
 root, times = sys.argv[1], sys.argv[2]
 passed = failed = skipped = 0
+names = []
 lines, took = [], {}
 for path in sorted(glob.glob(os.path.join(root, "s*", "report.json")), key=lambda p: int(p.split("/s")[-1].split("/")[0])):
     for story in json.load(open(path)).get("stories", []):
@@ -391,6 +392,7 @@ for path in sorted(glob.glob(os.path.join(root, "s*", "report.json")), key=lambd
         steps = [s.get("outcome") for s in story.get("steps", [])]
         if any(o == "fail" for o in steps):
             failed += 1
+            names.append(story["name"])
         elif all(o == "skip" for o in steps):
             skipped += 1
         else:
@@ -403,6 +405,9 @@ reports = len(glob.glob(os.path.join(root, "s*", "report.json")))
 for l in lines[-19:]:
     print(l)
 print(f"{passed} passed, {failed} failed" + (f", {skipped} skipped" if skipped else ""))
+# Each failed storyline is a ✘ of its own, so one ✘ count over the report covers storylines too.
+for name in names:
+    print(f"✘ storyline {name}")
 if reports < shards:
     print(f"✘ storylines-INCOMPLETE: {reports} of {shards} shards reported")
 old = {}
