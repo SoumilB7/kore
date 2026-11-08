@@ -1,5 +1,6 @@
 import AppKit
 import HostClient
+import KoreCore
 import LinkProtocol
 import SwiftUI
 import UniformTypeIdentifiers
@@ -112,6 +113,7 @@ struct BoxExplorer: View {
                     ForEach(store.rows) { row in
                         BoxTreeRow(
                             row: row, store: store, workspace: workspace, relative: store.relative(row.id), selected: store.isChosen(row.id),
+                            state: row.kind == .node ? box.git.state(of: row.id) : nil,
                             focused: focused && store.isChosen(row.id), typed: store.selection == row.id ? typed.value : "",
                             editing: row.kind == .newFile || row.kind == .newFolder || store.edit == .rename(row.id),
                             inDrop: store.dropTarget.map { row.id == $0 || row.id.hasPrefix($0 + "/") } ?? false
@@ -246,6 +248,8 @@ private struct BoxTreeRow: View {
     /// From the folder, for storylines.
     let relative: String
     let selected: Bool
+    /// The box's git state (link 1.8, `BoxGitStatus`), as the Files explorer colours a row.
+    let state: GitStatus.State?
     let focused: Bool
     let typed: String
     let editing: Bool
@@ -262,7 +266,8 @@ private struct BoxTreeRow: View {
                 Text(line).font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
             } else {
-                FileIconView(name: editing ? "" : row.name, color: selected ? Theme.text : Theme.secondary, isFolder: row.isFolder)
+                FileIconView(
+                    name: editing ? "" : row.name, color: state.map(Theme.Git.color) ?? (selected ? Theme.text : Theme.secondary), isFolder: row.isFolder)
                 Spacer().frame(width: Size.Tree.iconGap)
                 if editing {
                     BoxNameField(row: row, store: store, workspace: workspace)
@@ -273,6 +278,7 @@ private struct BoxTreeRow: View {
                         Image(systemName: "arrow.turn.up.right").font(Chrome.caption).foregroundStyle(Theme.tertiary).padding(.leading, Space.xs)
                     }
                     Spacer(minLength: Space.md)
+                    gitMark
                 }
             }
         }
@@ -296,8 +302,15 @@ private struct BoxTreeRow: View {
         .onDrag {
             // A chosen row carries the whole choice; the others only themselves.
             BoxDrag.paths = store.isChosen(row.id) && !store.picked.isEmpty ? store.chosenTops : [row.id]
-            // As text, the box paths: dropped on a chat's composer, they name the files there.
-            return NSItemProvider(object: BoxDrag.paths.joined(separator: " ") as NSString)
+            // As text, the box paths (a terminal or another app takes them so); and as box files,
+            // which a box chat's composer attaches as chips, sent by their paths.
+            let provider = NSItemProvider(object: BoxDrag.paths.joined(separator: " ") as NSString)
+            let lines = Data(BoxDrag.paths.joined(separator: "\n").utf8)
+            provider.registerDataRepresentation(forTypeIdentifier: BoxFileRef.dragType, visibility: .ownProcess) { done in
+                done(lines, nil)
+                return nil
+            }
+            return provider
         }
         .onDrop(of: BoxDrop.types, delegate: BoxDrop(folder: row.isFolder ? row.id : store.parent(of: row.id), store: store, workspace: workspace))
         .koreContextMenu("explorer") {
@@ -308,19 +321,31 @@ private struct BoxTreeRow: View {
     }
 
     private var name: AttributedString {
+        let tint = state.map(Theme.Git.color)
         var text: AttributedString
         if !typed.isEmpty, row.name.lowercased().hasPrefix(typed.lowercased()) {
             var matched = AttributedString(String(row.name.prefix(typed.count)))
-            matched.foregroundColor = Theme.accent
+            matched.foregroundColor = tint ?? Theme.accent
             matched.font = Chrome.bodySemibold
             var rest = AttributedString(String(row.name.dropFirst(typed.count)))
-            rest.foregroundColor = Theme.text
+            rest.foregroundColor = tint ?? Theme.text
             text = matched + rest
         } else {
             text = AttributedString(row.name)
-            text.foregroundColor = Theme.text
+            text.foregroundColor = tint ?? Theme.text
         }
         return text
+    }
+
+    /// The Files explorer's git mark: a folder's dot, a file's letter; none for ignored.
+    @ViewBuilder private var gitMark: some View {
+        if let state, state != .ignored {
+            if row.isFolder {
+                Circle().fill(Theme.Git.color(state)).frame(width: Size.Tree.point, height: Size.Tree.point)
+            } else if let letter = Theme.Git.letter(state) {
+                Text(letter).font(Chrome.captionStrong).foregroundStyle(Theme.Git.color(state)).frame(width: Size.Tree.letterBox)
+            }
+        }
     }
 
     private var fill: Color {

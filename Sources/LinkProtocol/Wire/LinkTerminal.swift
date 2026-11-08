@@ -153,6 +153,21 @@ package struct PtyExit: Codable, Sendable, Equatable {
     }
 }
 
+/// Box to client: whether the shell is running a job in the foreground (the terminal's
+/// foreground process group isn't the shell's), said when it changes: as output goes, and once
+/// a command's output settles. A close or quit asks first while it's true.
+package struct PtyState: Codable, Sendable, Equatable {
+    package static let type = "pty.state"
+    package var t = PtyState.type
+    package var ptyId: String
+    package var busy: Bool
+
+    package init(ptyId: String, busy: Bool) {
+        self.ptyId = ptyId
+        self.busy = busy
+    }
+}
+
 package enum PtyWire {
     /// Live ptys one grant may hold.
     package static let maxPerGrant = 8

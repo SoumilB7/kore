@@ -104,6 +104,12 @@ final class HostTerminals {
         for pty in ptys.values where pty.client === client { pty.resume() }
     }
 
+    /// The client said goodbye (a window closed, Kore quit): its shells end with it, as a Mac's
+    /// do. A link that only dropped never says it.
+    func closeAll(of client: LinkClient) {
+        for pty in ptys.values where pty.client === client { close(pty.id) }
+    }
+
     func stopAll() {
         for id in Array(ptys.keys) { close(id) }
     }
@@ -192,6 +198,8 @@ final class HostPty {
     /// A line was entered: once output settles, git may look again.
     private var ranCommand = false
     private var settle: DispatchWorkItem?
+    /// Whether the client was last told a job runs in the foreground.
+    private var saidBusy: Bool?
 
     var onExit: ((HostPty) -> Void)?
     var onRan: ((String) -> Void)?
@@ -233,7 +241,20 @@ final class HostPty {
             send(reset: true)
         }
         if let code = exitCode { client.sendRaw(StreamWire.encode(PtyExit(ptyId: id, code: code))) }
+        saidBusy = nil
+        tellBusy()
         resume()
+    }
+
+    /// Tells the client when a foreground job starts or ends: sampled as output goes and when a
+    /// command's output settles, never on a timer.
+    private func tellBusy() {
+        guard let client, exitCode == nil, fd >= 0 else { return }
+        let group = tcgetpgrp(fd)
+        let busy = group > 0 && group != pid
+        guard busy != saidBusy else { return }
+        saidBusy = busy
+        client.sendRaw(StreamWire.encode(PtyState(ptyId: id, busy: busy)))
     }
 
     func detach() {
@@ -381,6 +402,7 @@ final class HostPty {
             first = false
             if piece.isEmpty { break }
         }
+        tellBusy()
         resume()
     }
 
@@ -391,6 +413,7 @@ final class HostPty {
                 guard let self else { return }
                 self.settle = nil
                 self.ranCommand = false
+                self.tellBusy()
                 self.onRan?(self.cwd)
             }
         }

@@ -441,6 +441,14 @@ extension HostDaemon {
             case .send(let text, let files, let queued, let id):
                 var urls: [URL] = []
                 for file in files {
+                    // A file on the box, by its path (1.8): only in a folder this box serves.
+                    if let path = file.path {
+                        guard let place = ServedPath.inside(path, served: config.folders) else {
+                            return fail("\(file.name) isn't in a folder this box serves.", .deniedPath)
+                        }
+                        urls.append(URL(fileURLWithPath: place))
+                        continue
+                    }
                     guard let url = blobs[file.blob] else { return fail("That file isn't on the box any more.", .goneBlob) }
                     urls.append(url)
                 }

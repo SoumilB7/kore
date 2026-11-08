@@ -1,3 +1,4 @@
+import LinkProtocol
 import SwiftUI
 
 /// A file tab's content: the file's renderer when one matches and the tab isn't showing raw,
@@ -53,7 +54,14 @@ struct RendererHost<Fallback: View>: View {
         let rendererID = rendering.renderer?.id
         return RendererContext(
             reloadToken: document.revision, folder: workspace.folder,
-            openURL: { workspace.openFile($0, preview: true) }, zoom: Zoom.shared.scale, memory: rendering.memory,
+            openURL: { url in
+                // A box file's link: the box file it names, in its tab.
+                if document.box != nil {
+                    if let path = Self.boxPath(url, near: document, in: workspace) { workspace.openBoxFile(path, preview: true) }
+                    return
+                }
+                workspace.openFile(url, preview: true)
+            }, zoom: Zoom.shared.scale, memory: rendering.memory,
             setFacts: { facts in if rendering.facts != facts { rendering.facts = facts } },
             failed: { reason, line in
                 rendering.showsRaw = true
@@ -73,7 +81,36 @@ struct RendererHost<Fallback: View>: View {
                 else { return false }
                 defer { rendering.focusPending = false }
                 return rendering.focusPending
-            })
+            },
+            readNear: Self.boxReader(document, in: workspace))
+    }
+
+    /// A box file's renderer reads what it names over the link; nil for a file here.
+    static func boxReader(_ document: FileDocument, in workspace: Workspace) -> (@MainActor (URL) async -> Data?)? {
+        guard let box = document.box else { return nil }
+        let read = box.read
+        return { [weak workspace, weak document] (url: URL) async -> Data? in
+            guard let workspace, let document, let path = boxPath(url, near: document, in: workspace) else { return nil }
+            guard case .success(let file) = await read(path, nil) else { return nil }
+            return file.image ?? file.text.map { Data($0.utf8) }
+        }
+    }
+
+    /// The box path a renderer's URL names: beside the box file (its preview copy's folder, or
+    /// its stand-in's), or a box path; nil outside the window's box folder.
+    static func boxPath(_ url: URL, near document: FileDocument, in workspace: Workspace) -> String? {
+        guard let file = document.box, let box = workspace.box else { return nil }
+        let path = url.standardizedFileURL.path
+        let folder = (file.path as NSString).deletingLastPathComponent
+        let found: String
+        if let copy = document.preview?.deletingLastPathComponent().standardizedFileURL.path, path.hasPrefix(copy + "/") {
+            found = LinkFiles.normalised(folder + "/" + path.dropFirst(copy.count + 1))
+        } else if path.hasPrefix(box.folderURL.standardizedFileURL.path + "/") {
+            found = box.boxPath(url)
+        } else {
+            found = LinkFiles.normalised(path)
+        }
+        return found.hasPrefix(box.folder + "/") ? found : nil
     }
 
     /// The caret on the line the parser stopped at, once the editor is in the window.

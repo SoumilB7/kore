@@ -1,3 +1,5 @@
+import UniformTypeIdentifiers
+import HostClient
 import AppKit
 import Combine
 import src
@@ -240,11 +242,24 @@ struct ComposerView: View {
         }
         .modeOutline(chat.controls.activeMode.rung, focused: focused.wrappedValue, highlighted: dropTargeted.value)
         // Only the box takes drops; the rest of the chat ignores them.
-        .onDrop(of: [.fileURL, .image], isTargeted: Binding(get: { dropTargeted.value }, set: { dropTargeted.value = $0 })) { providers in
-            Attachments.load(providers) { chat.attach($0) }
+        .onDrop(of: Self.dropped(onBox: chat.services.onBox), isTargeted: Binding(get: { dropTargeted.value }, set: { dropTargeted.value = $0 })) { providers in
+            // Rows from a box window's explorer: chips for those box files, sent by their paths.
+            let boxFiles = providers.filter { $0.hasItemConformingToTypeIdentifier(BoxFileRef.dragType) }
+            for provider in boxFiles {
+                _ = provider.loadDataRepresentation(forTypeIdentifier: BoxFileRef.dragType) { data, _ in
+                    let paths = data.map { String(decoding: $0, as: UTF8.self).split(separator: "\n").map(String.init) } ?? []
+                    Task { @MainActor in chat.attach(paths.map(BoxFileRef.url)) }
+                }
+            }
+            Attachments.load(providers.filter { !boxFiles.contains($0) }) { chat.attach($0) }
             focused.wrappedValue = true
             return true
         }
+    }
+
+    /// What the composer takes: files and pictures; a box chat's also its box's files.
+    private static func dropped(onBox: Bool) -> [UTType] {
+        onBox ? [.fileURL, .image, UTType(importedAs: BoxFileRef.dragType)] : [.fileURL, .image]
     }
 
     /// The command chip, then the text: one row, so the command reads as the message's start.

@@ -373,6 +373,10 @@ Box to client:
   `seq` is how many bytes it wrote before these, so each frame starts where the last ended.
   `reset: true`: the client clears the screen, then shows these (the start of what the box kept).
 - `pty.exit {ptyId, code}`: the shell ended; `code` is its exit status, or 128 + the signal.
+- `pty.state {ptyId, busy}`: the shell runs a job in its foreground (the terminal's foreground
+  process group isn't the shell's), said when that changes: sampled as output goes and once a
+  command's output settles, never on a timer. While it's true, closing the tab or quitting Kore
+  asks first, as for a shell on the Mac.
 
 How output goes:
 
@@ -386,6 +390,8 @@ How output goes:
   position sends what it missed; with no `after`, or one older than what was kept, it sends the
   scrollback with `reset`. A shell that ended while no client showed it is kept until one
   attaches, which gets its last output and `pty.exit`.
+- A client's `bye` (its last box window closed, or Kore quit) ends the ptys it shows, as a Mac's
+  shells end with it; a link that only dropped never says `bye`, so its shells wait for it.
 - A grant holds 8 live ptys. Opening a ninth closes the one no client has shown longest, else it
   is `busy`. A pty no client has shown for 24 hours is closed (one timer, armed only while it
   is detached).
@@ -396,6 +402,13 @@ How output goes:
 
 Where `cwd` may lead: absolute, normalised before any check, inside a served folder, and its real
 place (links resolved) still inside it: else `denied.path`. A `ptyId` of another grant is `gone`.
+
+### Files by path
+
+A box chat's message may name a file already on the box: `chat.call`'s `send` file
+`{blob: "", name, kind, path}` (a row dragged from the box window's explorer to the composer).
+Nothing is uploaded; the CLI gets the file where it is. `path` has to be in a served folder, its
+real place too, else the call is `denied.path`.
 
 ### Git
 

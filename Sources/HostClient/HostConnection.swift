@@ -185,6 +185,16 @@ package final class HostConnection {
         return connection
     }
 
+    /// Kore is quitting: each linked box is told goodbye (its shells end with it, as a Mac's do)
+    /// and the words are written before Kore goes. SSH carries them on after.
+    package static func quitAll() {
+        for connection in open.values {
+            guard connection.ready, let transport = connection.transport else { continue }
+            transport.send(HostWire.bye())
+            transport.drain(timeout: 0.5)
+        }
+    }
+
     /// The alias's connection while a window holds it; nil otherwise (nothing is made).
     package static func live(_ alias: String) -> HostConnection? { open[alias] }
 

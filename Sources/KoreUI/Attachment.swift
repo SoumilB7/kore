@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import HostClient
 import ImageIO
 import KoreCore
 import UniformTypeIdentifiers
@@ -20,6 +21,11 @@ final class AttachmentLook {
 extension Attachment {
     init(url: URL) {
         let kind = Attachments.kind(of: url)
+        // A box file (`BoxFileRef`): its chip names it; its bytes stay on the box.
+        if BoxFileRef.path(url) != nil {
+            self.init(name: url.lastPathComponent, kind: kind, url: url, imageData: nil, look: AttachmentLook(preview: nil, poster: nil))
+            return
+        }
         let preview: Thumbnail?, poster: Poster?
         if AttachedMedia.kind(of: url).video {
             preview = nil

@@ -104,7 +104,7 @@ private struct MarkdownFileView: View {
                             Group {
                                 switch segment.kind {
                                 case .text(let text): MarkdownView(text: text)
-                                case .image(let source, let alt): MarkdownImage(source: source, alt: alt, base: base)
+                                case .image(let source, let alt): MarkdownImage(source: source, alt: alt, base: base, read: context.readNear)
                                 case .diagram(let source): MermaidBlock(source: source, page: state.diagram(segment.id))
                                 }
                             }
@@ -317,6 +317,8 @@ private struct MarkdownImage: View {
     let source: String
     let alt: String
     let base: URL
+    /// Where it's read from when not this Mac's disk (a box file's folder).
+    var read: (@MainActor (URL) async -> Data?)? = nil
     @StateObject private var image = Local<NSImage?>(nil)
     @StateObject private var tried = Local(false)
 
@@ -339,7 +341,7 @@ private struct MarkdownImage: View {
         .task(id: source) {
             defer { tried.value = true }
             guard let url = localURL else { return }
-            let data = await Task.detached { try? Data(contentsOf: url) }.value
+            let data: Data? = if let read { await read(url) } else { await Task.detached { try? Data(contentsOf: url) }.value }
             image.value = data.flatMap(NSImage.init(data:))
         }
     }

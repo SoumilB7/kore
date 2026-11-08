@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import LinkProtocol
 
 /// Where a link clicked in a chat goes. A file that's there opens in a Kore tab (an HTML page in
 /// its web view), at the line the link names (`path:42`, `#L42`); a folder shows in the
@@ -83,9 +84,16 @@ extension Workspace {
     /// system gets nothing: each link is noted in `TranscriptSelection.opened`, and one Kore
     /// opened itself in `openedInKore` too.
     func openLink(_ url: URL, from chatFolder: URL?) {
-        // A box's paths are on the box: only web links open from its window.
-        if box != nil {
-            if ["http", "https", "mailto"].contains(url.scheme?.lowercased()) { NSWorkspace.shared.open(url) }
+        // A box's paths are on the box: a file there opens in its tab, read over the link; a web
+        // link opens here; nothing else does.
+        if let box {
+            if ["http", "https", "mailto"].contains(url.scheme?.lowercased()) {
+                NSWorkspace.shared.open(url)
+                return
+            }
+            guard let (path, line) = Self.boxFile(url, box: box) else { return }
+            openBoxFile(path, preview: true)
+            if let line { activeFile?.reveal(FileDocument.Place(line: line, columns: 0..<0)) }
             return
         }
         let story = StoryHost.installed
@@ -107,6 +115,39 @@ extension Workspace {
         default:
             if !story { NSWorkspace.shared.open(url) }
         }
+    }
+
+    /// A link's box file and line: a stand-in under the window's folder (a change's path), a
+    /// box path in its folder, or a path relative to it; a `:line` or `#L` names the line.
+    static func boxFile(_ url: URL, box: BoxBinding) -> (String, Int?)? {
+        let scheme = url.scheme?.lowercased()
+        var text: String
+        var line: Int?
+        if scheme == "file" || scheme == nil {
+            text = url.path(percentEncoded: false)
+            line = ChatLink.line(fragment: url.fragment(percentEncoded: false))
+        } else {
+            let whole = url.absoluteString.removingPercentEncoding ?? url.absoluteString
+            let parts = whole.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            text = String(parts[0])
+            line = parts.count > 1 ? ChatLink.line(fragment: String(parts[1])) : nil
+        }
+        if let (bare, named) = ChatLink.trailingLine(text) {
+            text = bare
+            line = named
+        }
+        guard !text.isEmpty else { return nil }
+        let standIn = box.folderURL.standardizedFileURL.path
+        let path: String
+        if text == standIn || text.hasPrefix(standIn + "/") {
+            path = box.boxPath(URL(fileURLWithPath: text))
+        } else if text.hasPrefix("/") {
+            path = LinkFiles.normalised(text)
+        } else {
+            path = LinkFiles.normalised(box.folder + "/" + text)
+        }
+        guard path.hasPrefix(box.folder + "/") else { return nil }
+        return (path, line)
     }
 
     /// Inside the folder the explorer shows.

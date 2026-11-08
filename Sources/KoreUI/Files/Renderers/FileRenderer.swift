@@ -80,6 +80,9 @@ struct RendererContext {
     /// True once when the tab was asked for the keyboard (opened from Quick Open, a double
     /// click) while the renderer shows: the renderer takes it.
     var takeFocus: () -> Bool = { false }
+    /// A file the shown one names (a Markdown image), read where it lives: a box file's over the
+    /// link (`fs.read`); nil reads this Mac's disk.
+    var readNear: (@MainActor (URL) async -> Data?)? = nil
 }
 
 /// What a renderer keeps with its tab, since its view is made again each time the tab shows:

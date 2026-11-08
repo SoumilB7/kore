@@ -7,7 +7,7 @@ import LinkProtocol
 
 /// 1.8's pushes, and the reader each goes to.
 package enum BoxStreams {
-    package static let pushed: Set<String> = [PtyOutput.type, PtyExit.type, GitChanged.type]
+    package static let pushed: Set<String> = [PtyOutput.type, PtyExit.type, PtyState.type, GitChanged.type]
 
     /// The reader's key: its pty's, or its git root's.
     package static func key(_ type: String, _ data: Data) -> String? {
@@ -36,6 +36,8 @@ package final class BoxPty {
     /// The shell's name ("bash"), as the box says.
     package private(set) var shell: String?
     package private(set) var exitCode: Int32?
+    /// The shell runs a job in the foreground, as the box last said.
+    package private(set) var busy = false
     /// Bytes the shell wrote that this side has: where it stands to the box.
     package private(set) var stood: Int64 = 0
 
@@ -160,9 +162,13 @@ package final class BoxPty {
             stood = max(stood, out.seq) + Int64(bytes.count)
             if reset { stood = out.seq + Int64(bytes.count) }
             output?(bytes, reset)
+        case PtyState.type:
+            guard let state = try? decoder.decode(PtyState.self, from: data) else { return }
+            busy = state.busy
         case PtyExit.type:
             guard let end = try? decoder.decode(PtyExit.self, from: data), exitCode == nil else { return }
             exitCode = end.code
+            busy = false
             if let ptyId {
                 connection.boxReaders[BoxStreams.pty(ptyId)] = nil
                 connection.onSnapshot(BoxStreams.pty(ptyId), nil)

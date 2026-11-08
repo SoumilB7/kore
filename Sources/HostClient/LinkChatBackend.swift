@@ -285,6 +285,8 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// A file to the box by the link's upload: the blob its message names it by there, which the
     /// box saves and attaches by its path.
     private func upload(_ file: Attachments.File) async throws -> CallFile {
+        // A file on the box already goes as its path.
+        if let path = BoxFileRef.path(file.url) { return CallFile(blob: "", name: file.name, kind: file.kind, path: path) }
         let url = file.url
         guard let data = await Task.detached(operation: { try? Data(contentsOf: url) }).value else {
             throw HostRefusal(message: "\(file.name) couldn't be read")

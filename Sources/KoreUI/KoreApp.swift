@@ -1,3 +1,4 @@
+import HostClient
 import KoreCore
 import SwiftUI
 
@@ -128,6 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         LinkTaps.quit?()
         for workspace in Workspace.all.allObjects { workspace.terminals.shutdown(immediately: true) }
+        // Box shells end with Kore too: their closes and a goodbye reach each box before it goes.
+        HostConnection.quitAll()
         ProcessChild.finishClosing()
         StdioProcess.closeAll()
     }

@@ -18,6 +18,12 @@ package protocol HostTransport: AnyObject, Sendable {
     func send(_ payload: Data)
     /// Ends it. `events` ends with `.closed`.
     func close()
+    /// Waits, at most `timeout`, until what was sent is written (Kore quitting).
+    func drain(timeout: TimeInterval)
+}
+
+extension HostTransport {
+    package func drain(timeout: TimeInterval) {}
 }
 
 /// Frames over a pair of file handles: a pipe pair, a socketpair, or a process's stdio.
@@ -82,6 +88,12 @@ package final class PipeTransport: HostTransport, @unchecked Sendable {
     }
 
     package func close() { end(nil) }
+
+    package func drain(timeout: TimeInterval) {
+        let done = DispatchSemaphore(value: 0)
+        writes.async { done.signal() }
+        _ = done.wait(timeout: .now() + timeout)
+    }
 
     /// Touched on `writes` only.
     private var outputClosed = false
@@ -165,6 +177,8 @@ package final class SSHTransport: HostTransport, @unchecked Sendable {
     }
 
     package func send(_ payload: Data) { pipe.send(payload) }
+
+    package func drain(timeout: TimeInterval) { pipe.drain(timeout: timeout) }
 
     package func close() {
         pipe.close()

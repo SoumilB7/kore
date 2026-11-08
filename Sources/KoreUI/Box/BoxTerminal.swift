@@ -58,8 +58,8 @@ final class BoxTerminalShell: NSObject, TerminalSession, TerminalViewDelegate {
 
     var terminalView: TerminalView { view }
 
-    /// The box doesn't say what its shell is running; a close never asks.
-    var hasWork: Bool { false }
+    /// A job in the shell's foreground on the box, as it last said: a close or quit asks first.
+    var hasWork: Bool { !ended && pty.busy }
 
     func start() {
         guard !started, !closed else { return }

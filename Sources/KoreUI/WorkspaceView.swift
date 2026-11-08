@@ -1433,6 +1433,7 @@ private struct TabMark: View {
     static func fileTint(_ tab: ChatTab, in files: FilesStore?) -> Color? {
         guard let file = tab.file else { return nil }
         if file.notice == .deleted { return Theme.Git.deleted }
+        if file.box != nil { return BoxGitHook.state(of: file).map(Theme.Git.color) }
         return files?.state(of: file.path).map(Theme.Git.color)
     }
 

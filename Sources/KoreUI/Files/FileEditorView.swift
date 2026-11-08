@@ -156,7 +156,7 @@ private struct PathRow: View {
                 let path = base + parts[0...index].joined(separator: "/")
                 Crumb(
                     name: part, isFile: index == parts.count - 1, path: path,
-                    gitState: index == parts.count - 1 && document.notice == .deleted ? .deleted : workspace.files?.state(of: path), open: menu?.current == path || menu?.folder == path && menu?.current == nil,
+                    gitState: index == parts.count - 1 && document.notice == .deleted ? .deleted : workspace.gitState(of: path), open: menu?.current == path || menu?.folder == path && menu?.current == nil,
                     openMenu: openMenu)
             }
             Spacer(minLength: Space.md)

@@ -1,3 +1,4 @@
+import HostClient
 import AppKit
 import Foundation
 import KoreCore
@@ -139,7 +140,7 @@ extension Chat {
     /// they were sent (a past message's), saved again. Others can't be sent again.
     static func reattach(_ sent: [Attachment]) -> [Attachment] {
         sent.compactMap { file in
-            if let url = file.url, FileManager.default.fileExists(atPath: url.path) { return Attachment(url: url) }
+            if let url = file.url, BoxFileRef.path(url) != nil || FileManager.default.fileExists(atPath: url.path) { return Attachment(url: url) }
             if file.kind == .image, let data = file.imageData, let url = Attachments.saveImage(data) { return Attachment(url: url) }
             return nil
         }

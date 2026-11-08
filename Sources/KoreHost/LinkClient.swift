@@ -200,6 +200,7 @@ final class LinkClient {
         guard proven else { return hello(message) }
         switch message {
         case .bye:
+            host.terminals.closeAll(of: self)
             socket.close()
             gone()
         case .txOpen(let chatId, let last):
@@ -333,6 +334,14 @@ final class LinkClient {
                 }
             }.value
             self?.sendRaw(StreamWire.encode(result))
+            // A file changed over the link: git's states there may have too (1.8).
+            if result.ok, let self {
+                switch kind {
+                case .fsWrite, .fsCreate, .fsDelete: if let path = args.path { self.host.git.touched(path) }
+                case .fsRename: for path in [args.from, args.to].compactMap({ $0 }) { self.host.git.touched(path) }
+                default: break
+                }
+            }
         }
     }
 
@@ -349,7 +358,11 @@ final class LinkClient {
             watches = nil
             return FilesResult(id: id, ok: true, watching: true)
         }
-        let watches = self.watches ?? FolderWatches { [weak self] changed in self?.sendRaw(StreamWire.encode(changed)) }
+        let watches = self.watches ?? FolderWatches { [weak self] changed in
+            self?.sendRaw(StreamWire.encode(changed))
+            // An open folder's entries changed (any process's doing): git may say so too.
+            for folder in changed.folders { self?.host.git.touched(folder) }
+        }
         self.watches = watches
         return FilesResult(id: id, ok: true, watching: watches.set(wanted))
     }

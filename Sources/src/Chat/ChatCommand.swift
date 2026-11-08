@@ -103,11 +103,15 @@ package struct CallFile: Sendable, Codable, Equatable {
     package var blob: String
     package var name: String
     package var kind: AttachmentKind
+    /// 1.8: a file already on the box, by its path (in a served folder), in place of an upload;
+    /// `blob` is empty then.
+    package var path: String?
 
-    package init(blob: String, name: String, kind: AttachmentKind) {
+    package init(blob: String, name: String, kind: AttachmentKind, path: String? = nil) {
         self.blob = blob
         self.name = name
         self.kind = kind
+        self.path = path
     }
 }
 
