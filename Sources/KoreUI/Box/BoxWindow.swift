@@ -107,12 +107,18 @@ final class BoxBinding {
     func windowOpened() {
         BoxBinding.opened(alias: alias, folder: folder)
         connection.onSnapshot(key) { [weak self] in self?.adoptChats() }
+        // 1.10: where each chat lives (a replica's dimmed tab and pill).
+        let alias = alias
+        connection.onChatMeta(key) { [weak connection] ids in
+            for id in ids { if let meta = connection?.chats[id] { ChatPlaces.shared.heard(alias, meta) } }
+        }
         connection.retain()
         followPair()
     }
 
     func windowClosed() {
         connection.onSnapshot(key, nil)
+        connection.onChatMeta(key, nil)
         if filesMade { files.stop() }
         stopSync()
         connection.release()
@@ -153,7 +159,7 @@ final class BoxBinding {
 
     /// Chats in this folder the window doesn't show yet (opened on the box or elsewhere, or none
     /// known when the window opened) get tabs at the end; a lone empty tab gives way to them.
-    private func adoptChats() {
+    func adoptChats() {
         guard let workspace, !workspace.isClosed else { return }
         let shown = Set(workspace.tabs.compactMap { ($0.chat?.services as? BoxChatServices)?.chatId })
         let tabs: [ChatTab] = connection.chats(in: folder).filter { !shown.contains($0.id) && !closedIds.contains($0.id) }.compactMap { meta in
@@ -169,6 +175,14 @@ final class BoxBinding {
         } else {
             workspace.tabs += tabs
         }
+    }
+
+    /// A box chat in front here: its tab, made when the window doesn't show it yet (a chat that
+    /// came back from this Mac as a new one).
+    func show(_ chatId: String) {
+        adoptChats()
+        guard let workspace, let tab = workspace.tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == chatId }) else { return }
+        workspace.select(tab)
     }
 
     /// The folder label's hover line: "mybox · ~/Code/app · synced locally to ~/Desktop/app".
@@ -390,6 +404,7 @@ final class BoxChatServices: ChatServices {
 
     func register(_ chat: Chat) {
         self.chat = chat
+        if let chatId, let line = ChatPlaces.shared.takeNote(connection.alias, chatId) { chat.note(line) }
         chat.ownPopups()
         // Modes above Auto are set on the box itself: the picker doesn't offer them.
         chat.controls.levelCap = LinkPolicy.raiseCap.rawValue

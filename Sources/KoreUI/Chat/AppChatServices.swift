@@ -1,4 +1,5 @@
 import Foundation
+import HostClient
 import KoreCore
 import src
 
@@ -51,6 +52,8 @@ final class AppChatServices: ChatServices {
         StorylineSeams.events?(chat, event)
         if LinkTaps.on { LinkTaps.event?(chat, event) }
         if AgentTaps.on { AgentTaps.event?(chat, event) }
+        // A chat brought here from a box: its events go to the box's replica (1.10).
+        if !(chat.services is BoxChatServices) { ChatMirrors.shared.event(session: chat.sessionId, event) }
     }
 
     func log(_ name: String, _ fields: KeyValuePairs<String, String?>) { UILog.event(name, fields) }

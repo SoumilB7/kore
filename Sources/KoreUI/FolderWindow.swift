@@ -67,6 +67,8 @@ struct FolderWindow: View {
                     TerminalWorkspace(workspace: workspace)
                         // A box that can't be reached: one card over the window's chats.
                         .overlay { if let box = workspace.box { BoxOfflineDialog(box: box) } }
+                        // A chat move's sheet (Bring to this Mac, Send back).
+                        .overlay { MoveSheetLayer(workspace: workspace) }
                         // The columns follow the content's width: the window less a docked sidebar.
                         .environment(\.chatColumn, column)
                         // Widths follow the drag frame by frame; nothing animates them.

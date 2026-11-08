@@ -61,6 +61,13 @@ package final class AppModel {
     /// Opens (or focuses) a folder's window, the way a folder from outside the app is.
     package func openFolder(_ folder: URL) { openFromOutside([folder]) }
 
+    /// Opens (or focuses) a box folder's window, a chat of it in front.
+    func openBox(_ place: BoxPlace, chat: String?) {
+        guard let openWindow = windowActions?.0 else { return }
+        NSApp.activate()
+        BoxBinding.open(place, chat: chat, openWindow: openWindow)
+    }
+
     /// The Welcome window, where a folder (or a recent one) opens its window: the Dock menu's
     /// New Window.
     func showWelcome() {

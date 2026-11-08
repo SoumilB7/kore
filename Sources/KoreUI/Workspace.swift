@@ -65,6 +65,8 @@ package final class Workspace {
     package var linkMark: LinkMark?
     /// A window whose chats live on a box (`BoxBinding`); nil for a folder on this Mac.
     @ObservationIgnored let box: BoxBinding?
+    /// A chat move's sheet (Bring to this Mac, Send back), over the window while it's open.
+    var moveSheet: MoveSheet?
     /// The group whose popup is open, and whether its name field takes the keys.
     package internal(set) var groupEdit: TabGroupEdit?
     /// The folder's window, once it's on screen (a storyline host sizes and snapshots it). Its
@@ -102,6 +104,8 @@ package final class Workspace {
         if let workspace = open[key], !workspace.isClosed { return workspace }
         let workspace = Workspace(folder: folder, restore: restore)
         open[key] = workspace
+        // A chat brought from a box, waiting for this window.
+        workspace.landPending()
         SessionLog.shared.window("opened", folder: folder, tabs: workspace.tabs.count)
         return workspace
     }

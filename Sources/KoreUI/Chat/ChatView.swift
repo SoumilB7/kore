@@ -55,6 +55,14 @@ struct ChatView: View {
         }
     }
 
+    /// A replica this Mac holds: Send back, from its line.
+    static func sendBack(_ chat: Chat, in workspace: Workspace) -> (() -> Void)? {
+        guard let services = chat.services as? BoxChatServices, let id = services.chatId,
+            let moved = ChatPlaces.shared.moved(alias: services.connection.alias, chatId: id)
+        else { return nil }
+        return { ChatMoving.sendBack(moved, from: workspace) }
+    }
+
     private func content(_ chat: Chat, chats: [Chat]) -> some View {
         VStack(spacing: 0) {
             ZStack {
@@ -95,9 +103,15 @@ struct ChatView: View {
                 if chat.controls.planning {
                     PlanAllowLine(chat: chat)
                 }
-                ComposerView(chat: chat, workspace: workspace, focused: $composerFocused) { view($0, of: chat, pending: true) }
-                    // Hidden under another tab, it takes no focus.
-                    .disabled(active == nil)
+                if let replica = ChatPlaces.shared.replica(chat) {
+                    // A box chat that lives elsewhere: one line where the composer was.
+                    ReplicaLine(replica: replica, sendBack: Self.sendBack(chat, in: workspace))
+                        .transition(.opacity)
+                } else {
+                    ComposerView(chat: chat, workspace: workspace, focused: $composerFocused) { view($0, of: chat, pending: true) }
+                        // Hidden under another tab, it takes no focus.
+                        .disabled(active == nil)
+                }
             }
             .padding(.horizontal, column.composerPadding)
             .padding(.bottom, Space.xxxl)

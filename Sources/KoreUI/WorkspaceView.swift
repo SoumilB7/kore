@@ -1171,7 +1171,17 @@ private struct TabItem: View {
         return StoryID.Tabs.tab(tab.id)
     }
 
+    /// A chat brought here from a box: the box's alias, for the tab's quiet mark.
+    private var movedFrom: String? { tab.agent == nil ? tab.chat.flatMap { ChatPlaces.shared.moved($0)?.alias } : nil }
+
+    /// A box chat that lives elsewhere now.
+    private var isReplica: Bool { tab.chat.map { ChatPlaces.shared.replica($0) != nil } ?? false }
+
     private var help: String {
+        if let replica = tab.chat.flatMap({ ChatPlaces.shared.replica($0) }) {
+            return "\(tab.title) · on \(replica.name)"
+        }
+        if let from = movedFrom { return "\(tab.title) · from \(from)" }
         if let file = tab.file {
             if file.notice == .deleted { return "\(tab.title)\nDeleted on disk\n\(file.path)" }
             return "\(tab.title)\n\(file.path)"
@@ -1289,6 +1299,9 @@ private struct TabItem: View {
                         .lineLimit(1)
                         // A fork's title is cut in the middle, so " (fork)" always shows.
                         .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
+                    if let from = movedFrom {
+                        Text("from \(from)").font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).layoutPriority(-1)
+                    }
                     if let parent = duplicateParent {
                         Text(parent).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
                     }
@@ -1298,6 +1311,9 @@ private struct TabItem: View {
             .padding(.leading, label == .name ? Space.xl : label == .letters ? Space.md : Space.sm)
             .padding(.trailing, label == .letters ? Space.md : 0)
             .frame(maxHeight: .infinity)
+            // A replica: dimmed, it lives elsewhere.
+            .opacity(isReplica ? 0.5 : 1)
+            .animation(Motion.fade, value: isReplica)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1728,6 +1744,8 @@ enum TabMenu {
         if tab.isPreview { items.append(OptionItem("Keep Open") { workspace.keep(tab) }) }
         items += [OptionItem("Rename…", enabled: tab.chat != nil && tab.agent == nil) { startRename() }]
         if let chat = tab.chat, tab.agent == nil { items.append(Arsenal.shared.row(chat)) }
+        // 1.10: a box chat comes here, a chat brought here goes back.
+        items += ChatMoving.menuItems(tab, in: workspace)
         // A chat moves onto a board: into one of its sections, or a new one.
         if tab.chat != nil, tab.agent == nil {
             for boardTab in workspace.boardTabs {
