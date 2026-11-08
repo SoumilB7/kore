@@ -528,7 +528,7 @@ package final class LinkHost {
         case .chatSetArsenal: "Changed Arsenal"
         case .arsenalStopAll: "Stopped agent control"
         case .foldersList, .folderAdd, .authGh, .syncWatch, .syncUnwatch, .fsList, .fsRead, .fsMkdir, .fsWrite, .fsCreate, .fsRename, .fsDelete, .fsSearch, .fsWatch, .fsCopy, .fsCount, .fsCancel,
-            .chatRelease, .chatAdopt, .chatMirror, .syncFlush:
+            .chatRelease, .chatAdopt, .chatMirror, .syncFlush, .chatCopy, .chatAdoptCopy:
             "Acted"
         }
     }

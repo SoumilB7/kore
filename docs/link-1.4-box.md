@@ -1,4 +1,4 @@
-# Link 1.4 to 1.10: the box (`kore-host`)
+# Link 1.4 to 1.11: the box (`kore-host`)
 
 A box is a headless machine running `kore-host`: the Mac reaches it with
 `ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Everything in link 1.0–1.3 holds unless this page says
@@ -35,7 +35,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 - `attach` exits 3 when no daemon listens, 4 when there's no such grant, 5 when there's no
   runtime folder, 2 on bad arguments; over ssh, 255 is ssh's own failure and 126/127 the shell's
   (kore-host can't run there, or isn't there).
-- `welcome`: `proto {1,10}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
+- `welcome`: `proto {1,11}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
   `policy {sendMaxLevel: 4, control: "full"|"standard"}` (`full` for a full grant),
   `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5), `"move"`
   for a full grant (1.10) and
@@ -639,7 +639,9 @@ reads and writes a file a piece at a time (256 KiB), so a large rollout never si
 `chat.mirror` goes at most every 2 s, merged (a streamed answer is one event), and only while the
 replica is `followed`; missed events go from `mirrored` when the link is back.
 
-## Link 1.11: files copied and moved between places
+## Link 1.11: files and chats copied between places
+
+### Files
 
 The Mac copies and moves files and folders between any two explorers in any window: a folder on
 the Mac, one on a box, one on another box. Three commands and one pushed frame, additive, full grants only
@@ -658,7 +660,7 @@ While an `fs.copy` runs, the box pushes `fs.progress {id, bytes, total}` (`id` t
 `total` the source's bytes, counted first; `bytes` copied so far), the first at once and then at
 most every 250 ms, before the result. Files are copied a MiB at a time.
 
-### How a carry goes
+#### How a carry goes
 
 Each Kore window's explorer has Copy, Cut, Paste and Duplicate (⌘C, ⌘X, ⌘V) and takes drops from
 any other. One file clipboard serves the whole app; the Mac's items are also on the pasteboard as
@@ -687,3 +689,47 @@ files (Finder pastes them; Kore pastes Finder's, as copies), a box's as their pa
   `fs.progress`, read four times a second. Several carries share the bar ("2 transfers · 38%",
   each listed under the pointer). Done, it says "Copied to mybox · 3.4 GB" for 2 s and fades; a
   failure stays, with Retry (what hadn't landed) and a close.
+
+### Chats
+
+A chat in any window's History can be copied or cut and pasted in any other: a folder on the
+Mac, or a box folder, on the same box or another. A copy is a new chat with a new session id;
+the source is untouched (a working chat is copied as far as it has got). The Mac starts every
+copy and carries the CLI's session files itself: from a box to a staging folder on the Mac, and
+on to the other side, by rsync over each box's SSH alias, never over the link. The files are
+rewritten once, where they land (`SessionCopy`, in src): each row's `cwd` (and Claude's
+project-key folder) to the new folder, and every JSON value that is exactly the old session id
+(Claude's `sessionId`, Codex's thread `id`) to the new one; the files take the new id in their
+names (`<id>.jsonl` and `<id>/`, `rollout-<time>-<id>.jsonl`). A row the CLI was still writing
+(the last, with no newline, not yet JSON) is left out. Nothing else changes. Both commands need a
+full grant (`denied.control` otherwise); a 1.10 box answers them `invalid`. The welcome's `caps`
+say `chatCopy` to a full grant (beside the files' `copy`).
+
+#### Commands
+
+Each is a `cmd` checked by `LinkPolicy.checkBox`, answered with a `MoveResult` (1.10).
+
+| `type` | fields | |
+|---|---|---|
+| `chat.copy` | `phase: "prepare", sourceId, provider?, folder?, title?, stop?` | Names a chat's files for a copy. `sourceId` is a box chat's id (open or closed) or its session's, else a past session of `folder`'s CLI `provider`. Result `move`: `root`, `files`, `folders`, `sessionId` (the source's), and a box chat's title, model, effort and mode, as `chat.release` answers them; nothing freezes. `stop: true` (a cut) ends a working chat's CLI first. A replica or a moving chat: `elsewhere`, `moving`; no files: `gone.session`. |
+| `chat.copy` | `phase: "commit", sourceId, provider?, folder?` | A cut's copy is placed elsewhere: the source leaves the box's history. Its CLI ends, its session files go to `state/trash/chats/<time>-<session>/` (paths kept, never deleted), and a box chat's record goes. |
+| `chat.adoptCopy` | `phase: "prepare", moveId, provider, sessionId` | The box makes `state/staging/<moveId>/` (0700) and answers it as `move.root`; the Mac rsyncs the files there as they are. |
+| `chat.adoptCopy` | `phase: "commit", moveId, provider, sessionId, sourceId, folder, folders, title?, modelId?, level?, mode?, copiedFrom?` | Places what's in staging under session `sessionId` (from `sourceId`, the id in the files) in `folder` (from `folders`, the source's folder as kept and as its real path), checks it came out whole, and makes it a new box chat with those settings. `copiedFrom` is the one line above its history ("Copied from “Repos” · app on mybox"), kept in its `meta.json` (`copied`). An id the box has already: `stale.gen`, nothing placed. A folder it doesn't serve: `gone.folder`. Result `chatId`. |
+| `chat.adoptCopy` | `phase: "abort", moveId` | Staging goes. A link that ends between prepare and commit aborts the same way. |
+
+#### How a paste goes
+
+| From → to | Copy | Cut |
+|---|---|---|
+| Mac folder → Mac folder | `SessionCopy` on the Mac | Copy, checked whole (every row), then the original into Kore's trash (`Application Support/Kore/trash/chats`) |
+| Same folder | A duplicate, "<title> (copy)" | Nothing moves; it opens |
+| Mac → box | `chat.adoptCopy` | A chat the Mac holds from that box folder: 1.10's send back. Else 1.10's `chat.adopt` as a new chat, then the Mac's original into Kore's trash. One held from another box: refused (send it back, or copy it) |
+| Box → Mac | `chat.copy`, then `SessionCopy` on the Mac | An open box chat: 1.10's `chat.release` into the pasted folder (owner, gen). A closed one or a past session: copy, then `chat.copy` commit |
+| Box → box | `chat.copy`, then `chat.adoptCopy` on the other | Copy, then `chat.copy` commit on the source |
+
+A cut of a working chat asks first ("Stop and move"). A paste shows on the window's transfer bar,
+as a carry does ("Copying chat to mybox · 1.2 MB of 3.4 MB", Cancel; at the top of the window
+while its explorer is closed): `chat.copy` and `chat.release` prepare say the files' `bytes`
+(`MoveInfo.bytes`), rsync's `--progress` lines say how far it has got. Any failure before the
+last step, or a cancel, leaves everything as it was; a source that can't be put aside after its
+copy is placed stays, and the bar says so.

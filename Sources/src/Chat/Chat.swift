@@ -65,6 +65,9 @@ package final class Chat: Identifiable {
     @ObservationIgnored package let fork: ForkPoint?
     /// The chat this one was forked from, for the line after its history.
     @ObservationIgnored private var forkedFrom: String?
+    /// A pasted copy's line above its history ("copied from “Repos” · mybox"), set before the
+    /// history comes; shown once.
+    @ObservationIgnored package var copiedFrom: String?
     /// An imported chat's carried part (`ImportedHistory`), shown above its own history, and
     /// its events once read.
     @ObservationIgnored package let imported: ImportedHistory?
@@ -245,6 +248,10 @@ package final class Chat: Identifiable {
         }
         let start = services.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
         noteHeard(event)
+        if case .replayed = event, let line = copiedFrom {
+            copiedFrom = nil
+            transcriptView.carriedFrom(line, help: line)
+        }
         if case .replayed = event { showImported(in: transcriptView) }
         transcriptView.apply(event, preserving: backend?.observedAgents ?? [])
         commands.apply(event)

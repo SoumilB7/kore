@@ -259,7 +259,7 @@ final class LinkClient {
             guard current() != nil else { return }
             send(.result(sync(kind, folder: args.folder, id: id)))
             if kind == .syncWatch, let folder = args.folder.map(HostDaemon.standard) { syncs[folder]?.start() }
-        case .cmd(let id, .control(let kind, let args)) where [.chatRelease, .chatAdopt, .chatMirror, .syncFlush].contains(kind):
+        case .cmd(let id, .control(let kind, let args)) where [.chatRelease, .chatAdopt, .chatMirror, .syncFlush, .chatCopy, .chatAdoptCopy].contains(kind):
             moves(kind, args, id: id)
         case .cmd(let id, .control(let kind, let args)) where kind.onFiles:
             files(kind, args, id: id)
@@ -396,8 +396,8 @@ final class LinkClient {
 
     // MARK: Moves (1.10)
 
-    /// `chat.release`, `chat.adopt`, `chat.mirror`, `sync.flush`: full grants only, each checked by
-    /// the box's rules; the answer is a `MoveResult`.
+    /// `chat.release`, `chat.adopt`, `chat.mirror`, `sync.flush` (and 1.11's `chat.copy`,
+    /// `chat.adoptCopy`): full grants only, each checked by the box's rules; the answer is a `MoveResult`.
     private func moves(_ kind: ControlKind, _ args: ControlArgs, id: String) {
         guard let control = current()?.control else { return }
         if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, nil, control: control == .full ? .full : .standard) {
@@ -407,6 +407,8 @@ final class LinkClient {
         case .chatRelease: sendRaw(StreamWire.encode(host.release(args, id: id, from: self)))
         case .chatAdopt: sendRaw(StreamWire.encode(host.adopt(args, id: id, from: self)))
         case .chatMirror: sendRaw(StreamWire.encode(host.mirror(args, id: id, from: self)))
+        case .chatCopy: sendRaw(StreamWire.encode(host.copyOut(args, id: id, from: self)))
+        case .chatAdoptCopy: sendRaw(StreamWire.encode(host.adoptCopy(args, id: id, from: self)))
         default: flushSync(args.folder.map(HostDaemon.standard) ?? "", id: id)
         }
     }

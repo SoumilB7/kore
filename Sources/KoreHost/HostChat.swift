@@ -40,6 +40,8 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     package var moving: MoveHold?
     package var transcript: String?
     package var from: String?
+    /// 1.11: a pasted copy's line above its history ("copied from “Repos” · MacBook").
+    package var copied: String?
 }
 
 /// A chat frozen for a move (`chat.release` prepare): which move, the grant it goes to, and since
@@ -239,6 +241,7 @@ package final class HostChat {
             provider: provider, folder: folderURL, resume: session, fork: fork, modeMemory: ModeMemory(defaults: nil),
             compactMemory: AutoCompactMemory(defaults: nil), services: services)
         if let mode = record.mode { chat.controls.mode = mode }
+        chat.copiedFrom = record.copied
         // Its name as kept (a rename, a fork's), before its CLI says one.
         if let title = record.title, !title.isEmpty { chat.adoptName(title) }
         chat.backendTap = { [weak self] event in self?.stream.raw(event) }
@@ -423,6 +426,13 @@ package final class HostChat {
     func adoptedNew(from host: String, transcript: String?) {
         record.from = host
         record.transcript = transcript
+        try? saveRecord()
+    }
+
+    /// A copy adopted here (1.11): its transcript, and the line above its history.
+    func adoptedCopy(transcript: String?, line: String?) {
+        record.transcript = transcript
+        record.copied = line
         try? saveRecord()
     }
 

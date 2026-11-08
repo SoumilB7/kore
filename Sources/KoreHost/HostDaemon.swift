@@ -194,6 +194,14 @@ package final class HostDaemon {
     /// Closed chats kept for reopening.
     static let keptClosed = 50
 
+    /// 1.11: a cut's source, once its copy is placed elsewhere: out of the box's chats and the
+    /// closed ones it keeps, its record and log gone (its session files went to the box's trash).
+    func forget(_ hc: HostChat) {
+        if chats.contains(where: { $0 === hc }) { close(hc) }
+        closedChats.removeAll { $0 === hc }
+        hc.remove()
+    }
+
     /// A closed chat back among the box's chats (a client's ⇧⌘T, or its History).
     func reopen(_ id: String) -> HostChat? {
         guard let at = closedChats.firstIndex(where: { $0.id == id }) else { return nil }
@@ -332,7 +340,7 @@ package final class HostDaemon {
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : []) + (control == .full ? ["stream", "pty", "git", "move", "copy"] : []))
+            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : []) + (control == .full ? ["stream", "pty", "git", "move", "copy", "chatCopy"] : []))
     }
 
     var windows: [LinkWindow] {

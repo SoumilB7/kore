@@ -95,7 +95,9 @@ struct HistoryPanel: View {
                                     Task { chat.archived ? await workspace.unarchive(chat) : await workspace.archive(chat) }
                                 },
                                 locked: workspace.historyLocked(chat),
-                                elsewhere: workspace.boxRowPlace(chat.id))
+                                elsewhere: workspace.boxRowPlace(chat.id),
+                                clip: { cut in ChatPasting.clip(chat, in: workspace, cut: cut) },
+                                paste: ChatClipboard.shared.clip == nil ? nil : { paste() })
                             .highlightRow(StoryID.History.row(chat.id), lit: (lit.value ?? 0) == index) { lit.value = index }
                         }
                     }
@@ -226,12 +228,40 @@ struct HistoryPanel: View {
         }
     }
 
+    /// The held chat into this window: History closes, the chat opens in a tab.
+    private func paste() {
+        close()
+        ChatPasting.paste(into: workspace)
+    }
+
+    /// ⌘C / ⌘X the lit row's chat, ⌘V the held one here. Text selected in the search field, or
+    /// text copied since the chat, keeps the keys for the field.
+    private func clipKeys(_ event: NSEvent, in window: NSWindow) -> Bool {
+        guard renaming.value == nil, window === self.window.value, event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command
+        else { return false }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "c", "x":
+            if let editor = window.firstResponder as? NSTextView, editor.selectedRange().length > 0 { return false }
+            let list = matches
+            guard list.indices.contains(lit.value ?? 0) else { return false }
+            ChatPasting.clip(list[lit.value ?? 0], in: workspace, cut: event.charactersIgnoringModifiers?.lowercased() == "x")
+            return true
+        case "v":
+            guard ChatClipboard.shared.pastesChat else { return false }
+            paste()
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Esc closes (or cancels a rename first); ↑ ↓ and Return go to the list, whatever has
     /// focus in the panel. A click outside the panel and the clock closes the panel and is passed
     /// on, so it lands on whatever it was aimed at.
     private func handle(_ event: NSEvent) -> NSEvent? {
         guard let window = event.window, let content = window.contentView else { return event }
         if event.type == .keyDown {
+            if clipKeys(event, in: window) { return nil }
             // The row's field has the keys during a rename: it cancels on Esc.
             guard renaming.value == nil, window === self.window.value,
                 event.modifierFlags.intersection([.command, .control, .option]).isEmpty
@@ -276,6 +306,9 @@ private struct HistoryRow: View {
     var locked: String? = nil
     /// A paired box's chat: the box it's on.
     var elsewhere: String? = nil
+    /// Copy (false) or Cut (true) the row's chat; Paste the held one into this window.
+    var clip: (Bool) -> Void = { _ in }
+    var paste: (() -> Void)? = nil
     @StateObject private var draft = Local("")
     /// Return and the focus loss that follows it both end a rename; only the first counts.
     @StateObject private var finished = Local(false)
@@ -294,7 +327,9 @@ private struct HistoryRow: View {
         // Archive is built only on hover: pressed through its action meanwhile.
         .storyAction(StoryID.History.row(session.id).part(.archive)) { if locked == nil { toggleArchive() } }
         .hoverFill(lit || isRenaming, Theme.Row.selected(.surface))
-        .koreContextMenu("history") { HistoryMenu.items(session, locked: locked, open: open, rename: startRename, archive: toggleArchive) }
+        .koreContextMenu("history") {
+            HistoryMenu.items(session, locked: locked, open: open, rename: startRename, archive: toggleArchive, clip: clip, paste: paste)
+        }
         // Built only on the lit row: VoiceOver and the keyboard reach them on any row.
         .accessibilityAction(named: "Rename", startRename)
         .accessibilityAction(named: session.archived ? "Unarchive" : "Archive", toggleArchive)
@@ -418,11 +453,16 @@ extension Date {
 @MainActor
 enum HistoryMenu {
     /// The row's right-click: Open, Rename, Archive; dim with why when they can't be done here.
-    static func items(_ session: SessionSummary, locked: String?, open: @escaping () -> Void, rename: @escaping () -> Void, archive: @escaping () -> Void) -> [OptionItem] {
+    static func items(
+        _ session: SessionSummary, locked: String?, open: @escaping () -> Void, rename: @escaping () -> Void, archive: @escaping () -> Void,
+        clip: @escaping (Bool) -> Void = { _ in }, paste: (() -> Void)? = nil
+    ) -> [OptionItem] {
         var items = [
             OptionItem("Open", action: open), OptionItem("Rename…", enabled: locked == nil, action: rename),
-            OptionItem(session.archived ? "Unarchive" : "Archive", enabled: locked == nil, action: archive),
+            OptionItem(session.archived ? "Unarchive" : "Archive", enabled: locked == nil, action: archive), .rule,
+            OptionItem("Copy", key: "⌘C") { clip(false) }, OptionItem("Cut", key: "⌘X") { clip(true) },
         ]
+        if let paste { items.append(OptionItem("Paste Chat", key: "⌘V", action: paste)) }
         if let locked { items += [.rule, OptionItem(locked, enabled: false)] }
         return items
     }

@@ -88,6 +88,11 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case chatAdopt = "chat.adopt"
     case chatMirror = "chat.mirror"
     case syncFlush = "sync.flush"
+    /// 1.11: a chat copied to another place (`LinkMoves.swift`): a chat's or past session's files
+    /// named for a copy (and, for a cut, the source gone once the copy is placed), and a copy
+    /// adopted here under a new session id.
+    case chatCopy = "chat.copy"
+    case chatAdoptCopy = "chat.adoptCopy"
 
     /// A file command (1.7, 1.8): answered with a `FilesResult`, full grants only.
     package var onFiles: Bool { rawValue.hasPrefix("fs.") }
@@ -193,6 +198,8 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var events: MirrorItems?
     /// 1.11: `fs.cancel`'s copy: the `fs.copy` command's id.
     package var copyId: String?
+    /// 1.11: `chat.adoptCopy`'s line above the copy's history ("copied from “Repos” · MacBook").
+    package var copiedFrom: String?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -206,8 +213,9 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         folder: String? = nil, path: String? = nil, hidden: Bool? = nil, max: Int? = nil, data: String? = nil, blob: String? = nil,
         base: FileStamp? = nil, dir: Bool? = nil, from: String? = nil, to: String? = nil, root: String? = nil, query: String? = nil,
         folders: [String]? = nil, phase: String? = nil, gen: Int? = nil, moveId: String? = nil, stop: Bool? = nil, host: String? = nil,
-        seq: Int? = nil, events: MirrorItems? = nil
+        seq: Int? = nil, events: MirrorItems? = nil, copiedFrom: String? = nil
     ) {
+        self.copiedFrom = copiedFrom
         self.phase = phase
         self.gen = gen
         self.moveId = moveId

@@ -97,6 +97,13 @@ package enum SessionFiles {
         return files.sorted()
     }
 
+    /// The bytes of a session's files together.
+    package static func bytes(_ found: Found) -> Int64 {
+        found.files.reduce(Int64(0)) { sum, path in
+            sum + (((try? FileManager.default.attributesOfItem(atPath: found.root.appendingPathComponent(path).path)[.size]) as? NSNumber)?.int64Value ?? 0)
+        }
+    }
+
     /// Whether a file of a session is one of its transcripts (rows with `cwd`): the rest is copied as it is.
     package static func rewrites(_ path: String) -> Bool { path.hasSuffix(".jsonl") }
 
@@ -111,9 +118,22 @@ package enum SessionFiles {
 /// `from` or inside it gets `to` in its place; every other byte stays.
 package struct FolderRewrite: Sendable, Equatable {
     package let pairs: [(from: [UInt8], to: [UInt8])]
+    /// A copy's session ids (`SessionCopy`): every value that is exactly the old id
+    /// (`:"<old>"`, Claude's `sessionId`, Codex's thread `id`) becomes the new one.
+    package private(set) var ids: (from: [UInt8], to: [UInt8])?
+    /// A copy of a running chat: a last row the CLI is still writing (no newline, not JSON yet)
+    /// is left out rather than copied torn.
+    package var dropsPartial = false
 
     package static func == (a: FolderRewrite, b: FolderRewrite) -> Bool {
-        a.pairs.map(\.from) == b.pairs.map(\.from) && a.pairs.map(\.to) == b.pairs.map(\.to)
+        a.pairs.map(\.from) == b.pairs.map(\.from) && a.pairs.map(\.to) == b.pairs.map(\.to) && a.ids?.from == b.ids?.from
+            && a.ids?.to == b.ids?.to && a.dropsPartial == b.dropsPartial
+    }
+
+    /// The folder as before, and the session's id `old` as `new` in every row.
+    package init(from: [String], to: String, session old: String, as new: String) {
+        self.init(from: from, to: to)
+        if old != new { ids = (Array(("\"" + old + "\"").utf8), Array(("\"" + new + "\"").utf8)) }
     }
 
     /// `from` may be said several ways (as given and as its real path): each goes to `to`.
@@ -141,8 +161,33 @@ package struct FolderRewrite: Sendable, Equatable {
 
     private static let key = Array(#""cwd":""#.utf8)
 
-    /// One row with its `cwd` values moved; the same bytes when none matches.
+    /// One row with its `cwd` values moved (and a copy's session id); the same bytes when none matches.
     package func line(_ line: Data) -> Data {
+        let moved = folders(line)
+        guard let ids else { return moved }
+        return Self.values(moved, ids.from, ids.to)
+    }
+
+    /// Each `:"<from>"` (a JSON value that is exactly it) as `:"<to>"`.
+    static func values(_ line: Data, _ from: [UInt8], _ to: [UInt8]) -> Data {
+        let bytes = [UInt8](line)
+        var out: [UInt8] = []
+        var copied = 0
+        var at = 0
+        while let found = find(from, in: bytes, from: at) {
+            at = found + from.count
+            guard found > 0, bytes[found - 1] == UInt8(ascii: ":") else { continue }
+            if out.isEmpty { out.reserveCapacity(bytes.count + 16) }
+            out += bytes[copied..<found]
+            out += to
+            copied = at
+        }
+        guard copied > 0 else { return line }
+        out += bytes[copied...]
+        return Data(out)
+    }
+
+    private func folders(_ line: Data) -> Data {
         guard !pairs.isEmpty else { return line }
         let bytes = [UInt8](line)
         var out: [UInt8] = []
@@ -171,7 +216,7 @@ package struct FolderRewrite: Sendable, Equatable {
     }
 
     private static func find(_ needle: [UInt8], in bytes: [UInt8], from: Int) -> Int? {
-        guard needle.count <= bytes.count - from else { return nil }
+        guard from <= bytes.count, needle.count <= bytes.count - from else { return nil }
         return bytes.withUnsafeBufferPointer { buffer -> Int? in
             needle.withUnsafeBufferPointer { pattern -> Int? in
                 guard let base = buffer.baseAddress, let p = pattern.baseAddress,
@@ -228,8 +273,8 @@ package struct FolderRewrite: Sendable, Equatable {
                     carry = Data(carry[start...])
                 }
             }
-            // A last row with no newline after it stays without one.
-            if !carry.isEmpty { out.append(line(carry)) }
+            // A last row with no newline after it stays without one (a copy's torn row goes).
+            if !carry.isEmpty, !(dropsPartial && (try? JSONSerialization.jsonObject(with: carry)) == nil) { out.append(line(carry)) }
             try flush(true)
             try output.close()
         } catch {
@@ -257,11 +302,12 @@ package struct FolderRewrite: Sendable, Equatable {
 
     /// A session's files from `source` to `target` (each its root): the transcripts rewritten,
     /// the rest copied. Files already the same at `target` are left alone. The bytes written.
+    /// `renamed`: each file's path at `target` (a copy's, under its new session id).
     @discardableResult
-    package func files(_ files: [String], from source: URL, to target: URL) throws -> Int {
+    package func files(_ files: [String], from source: URL, to target: URL, renamed: (String) -> String = { $0 }) throws -> Int {
         var written = 0
         for path in files where SessionFiles.plain(path) {
-            let from = source.appendingPathComponent(path), to = target.appendingPathComponent(path)
+            let from = source.appendingPathComponent(path), to = target.appendingPathComponent(renamed(path))
             if SessionFiles.rewrites(path) {
                 written += try file(from, to: to)
             } else {

@@ -38,7 +38,7 @@ struct BoxChatOpsUITests {
     @Test func historyRowsAreEnabledOnABoxThatKeepsItsHistoryAndDimWithWhyOnAnOlderOne() {
         let session = SessionSummary(id: "s1", agent: .claude, title: "Old work", updated: .now)
         let open = HistoryMenu.items(session, locked: nil, open: {}, rename: {}, archive: {})
-        #expect(open.map(\.title) == ["Open", "Rename…", "Archive"] && open.allSatisfy(\.enabled))
+        #expect(open.map(\.title) == ["Open", "Rename…", "Archive", "", "Copy", "Cut"] && open.allSatisfy(\.enabled))
         // A box not linked yet (or older than 1.9) says why, and Open still works.
         let (_, _, box) = boxTab()
         let why = try? #require(box.historyLocked)

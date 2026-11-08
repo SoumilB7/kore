@@ -385,6 +385,32 @@ package enum LinkPolicy {
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             guard let folder = args.folder, folder.hasPrefix("/"), !folder.contains("\0") else { return .deny(.invalid, "Name the folder.") }
             return .allow
+        // 1.11: a chat copied, full grants only. `chat.copy` reads a chat's or past session's files
+        // (prepare) or, for a cut, sends the source to the box's trash (commit); `chat.adoptCopy`
+        // places a copy under a new session id. The box checks the folder and its staging.
+        case .chatCopy:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard let phase = args.phase.flatMap(MovePhase.init(rawValue:)), phase != .abort, LinkMoves.plainSession(args.sourceId) else {
+                return .deny(.invalid, "Name the chat and the phase.")
+            }
+            if let folder = args.folder, !folder.hasPrefix("/") || folder.contains("\0") { return .deny(.invalid, "Name the folder.") }
+            return .allow
+        case .chatAdoptCopy:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard let phase = args.phase.flatMap(MovePhase.init(rawValue:)), LinkMoves.plainMoveID(args.moveId) else { return .deny(.invalid, "Name the move and the phase.") }
+            guard phase != .commit else {
+                guard LinkMoves.plainSession(args.sessionId), LinkMoves.plainSession(args.sourceId), args.provider != nil else {
+                    return .deny(.invalid, "Name both sessions and the CLI.")
+                }
+                guard let folder = args.folder, folder.hasPrefix("/"), !folder.contains("\0") else { return .deny(.invalid, "Name the folder.") }
+                if args.modelId != nil, !plainID(args.modelId) { return .deny(.invalid, "That isn't a model.") }
+                if args.level != nil, !plainID(args.level) { return .deny(.invalid, "That isn't an effort.") }
+                for line in [args.title, args.copiedFrom].compactMap({ $0 }) where line.count > maxTitle * 2 || line.contains(where: \.isNewline) {
+                    return .deny(.invalid, "A title is one line.")
+                }
+                return .allow
+            }
+            return .allow
         default:
             return .deny(.invalid, "Not taken here.")
         }

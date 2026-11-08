@@ -220,12 +220,20 @@ enum ChatMoving {
     static func release(_ moves: ChatMoves, alias: String, chatId: String, boxFolder: String, pair: SyncPair, stop: Bool)
         async -> Result<ChatMoves.Brought, MoveFailure>
     {
+        guard let mac = ChatMoves.macFolder(boxFolder, pair: pair) else { return .failure(MoveFailure("No folder pair")) }
+        return await release(moves, alias: alias, chatId: chatId, boxFolder: boxFolder, macFolder: mac, stop: stop)
+    }
+
+    /// The same into any Mac folder (a cut pasted in its window, 1.11).
+    static func release(_ moves: ChatMoves, alias: String, chatId: String, boxFolder: String, macFolder: String, stop: Bool)
+        async -> Result<ChatMoves.Brought, MoveFailure>
+    {
         let known = places.gen(alias, chatId)
-        var result = await moves.bring(chatId: chatId, gen: known, boxFolder: boxFolder, pair: pair, stop: stop)
+        var result = await moves.bring(chatId: chatId, gen: known, boxFolder: boxFolder, macFolder: macFolder, stop: stop)
         // A box that doesn't say a box-held chat's gen: the next few after the one known.
         for gen in (known + 1)...(known + 8) {
             guard case .failure(let failure) = result, failure.code == .staleGen else { break }
-            result = await moves.bring(chatId: chatId, gen: gen, boxFolder: boxFolder, pair: pair, stop: stop)
+            result = await moves.bring(chatId: chatId, gen: gen, boxFolder: boxFolder, macFolder: macFolder, stop: stop)
         }
         if case .success(let brought) = result { places.noteGen(alias, chatId, brought.moved.gen) }
         return result

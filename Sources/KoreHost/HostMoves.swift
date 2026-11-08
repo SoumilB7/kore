@@ -71,12 +71,14 @@ extension HostDaemon {
             HostJournal.note("move prepare", ["chat": hc.id, "move": moveId, "grant": grant, "files": "\(found.files.count)"])
             broadcast(chats: [hc])
             let settings = hc.record
-            return MoveResult(
+            var answer = MoveResult(
                 id: id, ok: true, chatId: hc.id,
                 move: MoveInfo(
                     moveId: moveId, chatId: hc.id, provider: settings.provider, sessionId: session, folders: Self.spellings(settings.folder),
                     root: found.root.path, files: found.files, gen: hc.gen, title: hc.title, modelId: settings.controls?.modelId ?? settings.modelId,
                     effort: settings.controls?.effort ?? settings.effort, mode: settings.mode))
+            answer.move?.bytes = SessionFiles.bytes(found)
+            return answer
         case .commit:
             guard let hold = hc.record.moving, hold.moveId == args.moveId, hold.grant == grant else { return refused(.staleGen, "That move isn't under way.") }
             let owner = ChatOwner(host: grant, gen: hc.gen + 1, since: Int64(Date().timeIntervalSince1970 * 1000), name: args.host, mirrored: 0)

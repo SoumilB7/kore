@@ -412,7 +412,7 @@ struct TabBar: View {
             }
             NewTabButton(size: tabHeight) { workspace.newTab() }
                 .koreContextMenu("newtab") {
-                    [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }]
+                    [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }] + ChatPasting.menuItems(workspace)
                 }
                 .storyID(StoryID.Titlebar.newtab)
             Spacer(minLength: Space.xl)
@@ -1778,6 +1778,9 @@ enum TabMenu {
             }
         }
         items.append(.rule)
+        // 1.11: a chat copied or cut from any window's History, as a new tab here.
+        let paste = ChatPasting.menuItems(workspace)
+        if !paste.isEmpty { items += paste + [.rule] }
         items.append(OptionItem("Close Tab") { workspace.requestClose(tab) })
         return items
     }

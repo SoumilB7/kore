@@ -67,6 +67,8 @@ package final class Workspace {
     @ObservationIgnored let box: BoxBinding?
     /// A chat move's sheet (Bring to this Mac, Send back), over the window while it's open.
     var moveSheet: MoveSheet?
+    /// A chat paste's one line (1.11): copying, its one ask, or why it failed.
+    var chatPaste: ChatPasteLine?
     /// The group whose popup is open, and whether its name field takes the keys.
     package internal(set) var groupEdit: TabGroupEdit?
     /// The folder's window, once it's on screen (a storyline host sizes and snapshots it). Its
@@ -1507,7 +1509,10 @@ package final class Workspace {
     /// history from the original), one it has made under its CLI's id.
     private static func chat(_ session: SessionSummary, provider: Provider, in folder: URL) -> Chat {
         guard let fork = KoreForks.shared.find(cli: provider.id, id: session.id) else {
-            return Chat(provider: provider, folder: folder, resume: session)
+            let chat = Chat(provider: provider, folder: folder, resume: session)
+            // A pasted copy: where it came from, above its history.
+            chat.copiedFrom = ChatCopyMarks.shared.line(provider.id, session.id)
+            return chat
         }
         guard !fork.made else {
             let own = SessionSummary(id: fork.id, agent: session.agent, title: session.title, updated: session.updated, file: session.file)

@@ -134,6 +134,11 @@ package struct ChatMoves {
     /// This Mac's name, as the box's replica says it ("on MacBook").
     package var name: String
     package var store: MovedChats
+    /// Told as a move's or copy's files cross: the bytes so far, and (once known) all of them,
+    /// a few times a second (the transfer bar). Nil: nothing is metered.
+    package var progress: (@MainActor (_ bytes: Int64, _ total: Int64?) -> Void)?
+    /// Stops a running rsync (the bar's Cancel): the move fails before its commit, nothing changes.
+    package var stopper: Spawn?
 
     package init(connection: HostConnection, box: SyncBox, staging: URL? = nil, name: String? = nil, store: MovedChats? = nil) {
         self.connection = connection
@@ -206,6 +211,11 @@ package struct ChatMoves {
     /// stops first ("Stop and move"). The folder's sync should have settled first (`flush`).
     package func bring(chatId: String, gen: Int, boxFolder: String, pair: SyncPair, stop: Bool = false) async -> Result<Brought, MoveFailure> {
         guard let mac = Self.macFolder(boxFolder, pair: pair) else { return .failure(MoveFailure("No folder pair")) }
+        return await bring(chatId: chatId, gen: gen, boxFolder: boxFolder, macFolder: mac, stop: stop)
+    }
+
+    /// The same, into any folder on this Mac (a chat cut from a box and pasted in a Mac window, 1.11).
+    package func bring(chatId: String, gen: Int, boxFolder: String, macFolder mac: String, stop: Bool = false) async -> Result<Brought, MoveFailure> {
         var cost = MoveCost()
         let prepared = await connection.move(.chatRelease, ControlArgs(chatId: chatId, phase: MovePhase.prepare.rawValue, gen: gen, stop: stop ? true : nil))
         cost.linkBytes += connection.lastMoveBytes
@@ -217,6 +227,7 @@ package struct ChatMoves {
         }
         let files = info.files.filter(SessionFiles.plain)
         guard !files.isEmpty else { return await abort("Nothing to move") }
+        progress?(0, info.bytes)
         let stage = staging.appendingPathComponent(info.moveId, isDirectory: true)
         try? FileManager.default.createDirectory(at: stage, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stage) }
@@ -276,6 +287,7 @@ package struct ChatMoves {
         }
         let found = local(moved.provider, session: moved.session, folder: moved.macFolder)
         guard !found.files.isEmpty else { return await abort("The session isn't on this Mac") }
+        progress?(0, SessionFiles.bytes(found))
         let pushed = await rsync(files: found.files, from: found.root.path + "/", to: box.spec(info.root + "/"))
         cost.rsyncSent += pushed.sent
         cost.rsyncReceived += pushed.received
@@ -299,6 +311,15 @@ package struct ChatMoves {
         return .success((chatId, cost))
     }
 
+    /// A chat of this Mac's (never on a box) to box folder `boxFolder`: 1.10's `chat.adopt`, as a
+    /// new chat there under the same session. The Mac's copy stays until the caller puts it aside.
+    package func send(
+        session: String, provider: String, from macFolder: String, to boxFolder: String, title: String?, modelId: String?, effort: String?, mode: String?
+    ) async -> Result<(chatId: String, cost: MoveCost), MoveFailure> {
+        let moved = MovedChat(alias: connection.alias, boxChat: "", boxFolder: boxFolder, macFolder: macFolder, provider: provider, session: session, gen: 0, title: title)
+        return await sendBack(moved, title: title, modelId: modelId, effort: effort, mode: mode, mirrored: nil)
+    }
+
     // MARK: rsync
 
     struct Copied {
@@ -315,10 +336,41 @@ package struct ChatMoves {
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: list.path, contents: Data(files.map { $0 + "\n" }.joined().utf8))
         defer { try? FileManager.default.removeItem(at: list) }
-        let output = await SyncProcess.run("/usr/bin/rsync", ["-az", "--stats", "--files-from=" + list.path] + box.rsyncOptions(false) + [from, to])
-        var copied = Copied(ok: [0, 24].contains(output.status), said: output.said)
+        let arguments = ["-az", "--stats", "--files-from=" + list.path] + box.rsyncOptions(false) + [from, to]
+        var copied: Copied
+        var out: String
+        if progress != nil || stopper != nil {
+            // Metered (and stoppable): its `--progress` lines read as they come, the bytes told every 250 ms.
+            let (spawn, reader, meter, tail) = (stopper ?? Spawn(), RsyncReader(), CarryMeter(), OutputTail())
+            let progress = progress
+            let ticker = Task { @MainActor in
+                var last: Int64 = -1
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    let now = meter.value
+                    if now != last, !Task.isCancelled {
+                        last = now
+                        progress?(now, nil)
+                    }
+                }
+            }
+            let said = await spawn.run(
+                [["/usr/bin/rsync", "--progress"] + arguments],
+                output: {
+                    meter.set(reader.feed($0))
+                    tail.append($0)
+                })
+            ticker.cancel()
+            progress?(meter.value, nil)
+            copied = Copied(ok: said == nil, said: said ?? "")
+            out = tail.text
+        } else {
+            let output = await SyncProcess.run("/usr/bin/rsync", arguments)
+            copied = Copied(ok: [0, 24].contains(output.status), said: output.said)
+            out = output.out
+        }
         // Both rsyncs end with "sent N bytes  received M bytes  …" (this side's view).
-        for line in output.out.split(whereSeparator: \.isNewline) where line.hasPrefix("sent ") {
+        for line in out.split(whereSeparator: \.isNewline) where line.hasPrefix("sent ") {
             let words = line.split(separator: " ").map { $0.replacingOccurrences(of: ",", with: "") }
             if words.count > 4 {
                 copied.sent = Int(words[1]) ?? 0
@@ -327,4 +379,17 @@ package struct ChatMoves {
         }
         return copied
     }
+}
+
+/// The last few KiB of a process's output (rsync's `--stats` lines come at its end).
+final class OutputTail: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    func append(_ piece: Data) {
+        lock.withLock {
+            data.append(piece)
+            if data.count > 16 * 1024 { data = Data(data.suffix(8 * 1024)) }
+        }
+    }
+    var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
 }

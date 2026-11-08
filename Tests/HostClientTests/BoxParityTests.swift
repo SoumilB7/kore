@@ -131,7 +131,15 @@ final class BoxRig {
     var sessions: [String: [SessionSummary]] = [:]
     /// Where the Mac's chats count the box's requests; nil keeps them out.
     var usage: KoreUsage?
-    var cli: BoxCLI { made.last! }
+    /// The box's latest CLI stand-in. Before the box has made one (it starts a chat's CLI only
+    /// when it needs it), the test records it rather than crash: wait on `made` first.
+    var cli: BoxCLI {
+        guard let last = made.last else {
+            Issue.record("The box hasn't started a CLI yet")
+            return BoxCLI()
+        }
+        return last
+    }
 
     init(control: GrantControl = .full) throws {
         folder = root.appendingPathComponent("work")
@@ -317,7 +325,8 @@ struct BoxParityTests {
         await #expect(throws: HostRefusal.self) { _ = try await link.send("!ls", files: [], queued: nil, id: "x1") }
         await #expect(throws: HostRefusal.self) { try await link.setRemoteControl(true) }
         await link.respond(to: "nope", .allowAlways)
-        #expect(!rig.cli.calls.contains { $0.hasPrefix("send") || $0.hasPrefix("respond") || $0 == "mode bypassPermissions" })
+        // Nothing refused reached a CLI on the box (it may not have started one at all).
+        #expect(!rig.made.flatMap(\.calls).contains { $0.hasPrefix("send") || $0.hasPrefix("respond") || $0 == "mode bypassPermissions" })
         // Remote control shows unavailable here, as the box's capabilities say.
         #expect(!link.offers("setRemoteControl") && link.offers("rollback"))
         chat.close()

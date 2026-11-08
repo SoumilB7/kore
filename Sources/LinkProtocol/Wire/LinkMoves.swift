@@ -61,6 +61,8 @@ package struct MoveInfo: Codable, Sendable, Equatable {
     /// `chat.adopt` (prepare): the box still holds the chat at this gen, so a return
     /// fast-forwards it; false: it comes in as a new chat.
     package var fastForward: Bool?
+    /// 1.11: the files' bytes together (`chat.copy`, `chat.release` prepare), for a transfer's bar.
+    package var bytes: Int64?
 
     package init(
         moveId: String, chatId: String? = nil, provider: String, sessionId: String, folders: [String], root: String, files: [String], gen: Int,

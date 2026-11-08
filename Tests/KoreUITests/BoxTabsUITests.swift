@@ -32,7 +32,7 @@ struct BoxTabsUITests {
         func send(_ message: LinkMessage) { transport.send((try? message.encoded()) ?? Data()) }
 
         func next(_ type: String) async -> [String: Any]? {
-            let end = Date().addingTimeInterval(3)
+            let end = Date().addingTimeInterval(BoxTabsUITests.patience)
             while Date() < end {
                 if let i = got.firstIndex(where: { $0["t"] as? String == type }) { return got.remove(at: i) }
                 try? await Task.sleep(for: .milliseconds(10))
@@ -42,7 +42,7 @@ struct BoxTabsUITests {
 
         /// The command of that type the Mac sent, waiting for it.
         func command(_ type: String) async -> [String: Any]? {
-            let end = Date().addingTimeInterval(3)
+            let end = Date().addingTimeInterval(BoxTabsUITests.patience)
             while Date() < end {
                 if let i = got.firstIndex(where: { $0["t"] as? String == "cmd" && ($0["cmd"] as? [String: Any])?["type"] as? String == type }) {
                     return got.remove(at: i)
@@ -53,6 +53,9 @@ struct BoxTabsUITests {
         }
     }
 
+    /// How long a wait waits: long, so a loaded machine (parallel suites) never fails it; a
+    /// passing run returns as soon as the condition holds.
+    static let patience: TimeInterval = 15
     static let folder = "/home/me/app"
     static let window = BoxFolder.windowId(folder)
 
@@ -73,7 +76,7 @@ struct BoxTabsUITests {
     func ids(_ workspace: Workspace) -> [String] { workspace.tabs.compactMap { ($0.chat?.services as? BoxChatServices)?.chatId } }
 
     func until(_ condition: () -> Bool) async -> Bool {
-        let end = Date().addingTimeInterval(3)
+        let end = Date().addingTimeInterval(BoxTabsUITests.patience)
         while Date() < end {
             if condition() { return true }
             try? await Task.sleep(for: .milliseconds(10))
