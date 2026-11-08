@@ -7,7 +7,9 @@ import Glibc
 import Musl
 #endif
 import KoreHost
+import KoreTrust
 import LinkProtocol
+import Tailnet
 
 // Small pages only, before anything is allocated (`run` and `attach` alike): a huge page touched
 // once stays resident whole.
@@ -16,11 +18,11 @@ HostMemory.smallPages()
 /// kore-host: Kore's chats on a headless machine, served over the link (`docs/kore-host.md`).
 let usage = """
     usage: kore-host run
-           kore-host allow <name> [--control watch|act|full]
-           kore-host revoke <name>
-           kore-host grants
+           kore-host join
+           kore-host net on|off
+           kore-host devices [allow <id|code> | remove <id|code|name>]
            kore-host status
-           kore-host attach --as <name>
+           kore-host attach --as <name> [--proto 2]
            kore-host mcp
            kore-host install-service
            kore-host start
@@ -45,6 +47,17 @@ let paths = HostPaths()
 let grants = GrantStore(paths.grants)
 let home = HostPaths.home()
 var keep: [Any] = []
+
+/// KoreNet on or off in config.json, and the running daemon told (SIGHUP).
+func setNet(_ on: Bool) {
+    var config = HostConfig.load(paths.config, home: home.path)
+    config.net = on
+    do { try config.save(paths.config) } catch { fail("kore-host: \(error)") }
+    if HostLock.held(paths.lock), let text = try? String(contentsOf: paths.pid, encoding: .utf8),
+       let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        kill(pid, SIGHUP)
+    }
+}
 
 /// The running daemon's pid, for "already running".
 func runningPid() -> String {
@@ -78,6 +91,12 @@ case "run":
         source.resume()
         keep.append(source)
     }
+    // `kore-host net on|off` (and `join`) change config.json and signal: KoreNet follows at once.
+    signal(SIGHUP, SIG_IGN)
+    let reload = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
+    reload.setEventHandler { MainActor.assumeIsolated { host.reloadNet() } }
+    reload.resume()
+    keep.append(reload)
     keep.append(host)
     dispatchMain()
 case "allow":
@@ -101,12 +120,104 @@ case "grants":
     for grant in grants.all() { print("\(grant.name)\t\(grant.control.rawValue)") }
 case "status":
     for line in HostStatus.lines(paths: paths, home: home.path) { print(line) }
+case "join":
+    // System Tailscale only for now: Kore's own tailnet (`kore-tailnet`) comes in a later release.
+    do {
+        let status = try TailnetLocal().status()
+        guard status.backendState == .running else {
+            fail("Tailscale is \(status.backendState.rawValue) on this box: run `sudo tailscale up`, then `kore-host join` again.")
+        }
+        print("Using Tailscale on this box" + (status.selfNode.map { " (" + $0.tailscaleIPs.joined(separator: ", ") + ")" } ?? ""))
+    } catch {
+        print("Tailscale isn't reachable here (\(error)).")
+        print("Kore's own tailnet (kore-tailnet) comes in a later release; for now install Tailscale and run `sudo tailscale up`.")
+    }
+    do {
+        let me = try BoxIdentity.loadOrCreate(paths)
+        setNet(true)
+        print("KoreNet is on for this box (kore-host net off turns it off)")
+        print("device  \(me.device.uuidString.lowercased())")
+        print("code    \(me.code)")
+        print("Open Devices in Kore on your Mac and check the code matches before you Allow this box.")
+    } catch { fail("kore-host: \(error)") }
+case "net":
+    switch arguments.dropFirst().first {
+    case "on":
+        setNet(true)
+        print("KoreNet on: kore-host listens on this box's Tailscale addresses (port \(HostNet.port))")
+    case "off":
+        setNet(false)
+        print("KoreNet off: no port, no Tailscale watching; SSH attach keeps working")
+    case nil:
+        print(HostConfig.load(paths.config, home: home.path).netOn ? "on" : "off")
+    default:
+        fail(usage)
+    }
+case "devices":
+    let store = DeviceStore(paths: paths)
+    switch arguments.dropFirst().first {
+    case nil:
+        let devices = store.all()
+        if devices.isEmpty { print("no devices yet") }
+        for device in devices {
+            print([DeviceRecord.code(device.id), device.name, device.kind.rawValue, device.abilities.names.joined(separator: "+"), device.owner ? "owner" : ""]
+                .filter { !$0.isEmpty }.joined(separator: "\t"))
+        }
+        for waiting in store.pending() {
+            print(["pending", waiting.code ?? "-", waiting.name, waiting.kind?.rawValue ?? "?", waiting.login, waiting.claim ? "claim" : ""]
+                .filter { !$0.isEmpty }.joined(separator: "\t"))
+        }
+    case "allow":
+        guard arguments.count >= 3 else { fail(usage) }
+        do {
+            let record = try store.allow(arguments[2], at: Date())
+            HostJournal.audit("allow", ["device": record.id.uuidString.lowercased(), "kind": record.kind.rawValue, "how": "cli"])
+            print("allowed \(record.name) (\(record.kind.rawValue), \(record.abilities.names.joined(separator: "+")))")
+        } catch { fail("kore-host: \(error)") }
+    case "remove":
+        guard arguments.count >= 3 else { fail(usage) }
+        do {
+            switch try store.remove(arguments[2]) {
+            case .device(let record, let dropped):
+                HostJournal.audit("revoke", ["device": record.id.uuidString.lowercased(), "kind": record.kind.rawValue, "how": "cli"])
+                // The daemon reads the book on each command: its links end at their next one.
+                print("removed \(record.name)" + (dropped.isEmpty ? "" : " and what it added: " + dropped.map(\.name).joined(separator: ", ")))
+            case .pending(let entry):
+                HostJournal.audit("deny", ["node": entry.nodeKey, "device": entry.device.map { $0.uuidString.lowercased() }, "how": "cli"])
+                print("denied \(entry.name)")
+            }
+        } catch { fail("kore-host: \(error)") }
+    default:
+        fail(usage)
+    }
 case "attach":
     guard arguments.count >= 3, arguments[1] == "--as" else { fail(usage, code: AttachExit.usage.rawValue) }
     if let problem = paths.runtimeProblem { fail("kore-host: \(problem)", code: AttachExit.noRuntime.rawValue) }
-    guard let grant = grants.load(arguments[2]) else { fail("kore-host: no grant named \(arguments[2])", code: AttachExit.noGrant.rawValue) }
+    guard let grant = grants.load(arguments[2]), !grant.expired(at: Date()) else {
+        fail("kore-host: no grant named \(arguments[2])", code: AttachExit.noGrant.rawValue)
+    }
+    // `--proto 2`: link 2.0 over SSH (the KoreNet upgrade); 1.11 stays the default.
+    let proto2: Bool
+    if let at = arguments.firstIndex(of: "--proto") {
+        guard at + 1 < arguments.count, ["1", "2"].contains(arguments[at + 1]) else { fail(usage, code: AttachExit.usage.rawValue) }
+        proto2 = arguments[at + 1] == "2"
+    } else {
+        proto2 = false
+    }
     signal(SIGPIPE, SIG_IGN)
     MainActor.assumeIsolated {
+        if proto2 {
+            @MainActor func dial() -> NetAttach? { try? NetAttach(grant: grant, socket: paths.netSocket) { code in exit(code) } }
+            var net = dial()
+            if net == nil, let kind = HostService.installed(paths) {
+                HostService.start(kind, executable: HostService.executable(), home: home, paths: paths)
+                if HostService.waitForDaemon(paths) { net = dial() }
+            }
+            guard let net else { fail("kore-host isn't running", code: AttachExit.notRunning.rawValue) }
+            net.start()
+            keep.append(net)
+            return
+        }
         @MainActor func connect() -> Attach? { try? Attach(grant: grant, socket: paths.socket) { code in exit(code) } }
         var attach = connect()
         // Without systemd, nothing else starts the daemon: the first attach does, and it stays.

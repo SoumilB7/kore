@@ -43,7 +43,7 @@ package enum HostService {
         guard !executable.contains(where: \.isNewline), executable.hasPrefix("/") else { throw HostServiceError.badPath(executable) }
         return """
             [Unit]
-            Description=kore-host: Kore's chats on this machine, for the Mac over SSH
+            Description=kore-host: Kore's chats on this machine, for your devices on Tailscale
 
             [Service]
             Type=notify
@@ -54,7 +54,8 @@ package enum HostService {
             SyslogIdentifier=kore-host
             # libdispatch can't raise a thread's priority without CAP_SYS_NICE, and says so each time.
             LogFilterPatterns=~Failed to set thread priority
-            Restart=on-failure
+            # Up again whatever ended it (a host.update swap exits 0 under systemd).
+            Restart=always
             RestartSec=2
 
             [Install]

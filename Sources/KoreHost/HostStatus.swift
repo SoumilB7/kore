@@ -1,11 +1,14 @@
 import Foundation
+import KoreTrust
 import LinkProtocol
+import Tailnet
 
 /// `kore-host status`: what's installed and running on this box, a line each. Reads only.
 package enum HostStatus {
     package static func lines(
         paths: HostPaths, home: String = HostPaths.home().path, environment: [String: String] = ProcessInfo.processInfo.environment,
-        run: HostRunner = HostService.system
+        run: HostRunner = HostService.system, tailnet: () -> (any Tailnet)? = { TailnetLocal() },
+        portHolder: () -> UInt32? = { PortHolder.uid(port: HostNet.port) }
     ) -> [String] {
         var lines = ["kore-host \(HostVersion.string) (link \(HostVersion.link))"]
         func row(_ name: String, _ value: String) { lines.append(name.padding(toLength: 9, withPad: " ", startingAt: 0) + value) }
@@ -30,8 +33,21 @@ package enum HostStatus {
         }
         #endif
 
+        lines += net(paths: paths, on: HostConfig.load(paths.config, home: home).netOn, tailnet: tailnet, portHolder: portHolder)
+
+        // Legacy grants: the SSH route's, kept until their Mac has upgraded (then 30 days).
         let grants = GrantStore(paths.grants).all()
-        row("grants", grants.isEmpty ? "none (kore-host allow <name> --control full)" : grants.map { "\($0.name) (\($0.control.rawValue))" }.joined(separator: ", "))
+        if !grants.isEmpty {
+            let day = DateFormatter()
+            day.dateFormat = "yyyy-MM-dd"
+            day.timeZone = TimeZone(identifier: "UTC")
+            row("grants", grants.map { grant in
+                var said = grant.control.rawValue
+                if let device = grant.device { said += ", upgraded to " + DeviceRecord.code(device) }
+                if let expires = grant.expires { said += ", expires " + day.string(from: Date(timeIntervalSince1970: Double(expires))) }
+                return "\(grant.name) (\(said))"
+            }.joined(separator: ", "))
+        }
 
         let config = HostConfig.load(paths.config, home: home)
         if let why = config.unreadable { row("config", "\(paths.config.path) couldn't be read: \(why)") }
@@ -53,5 +69,42 @@ package enum HostStatus {
             if FileManager.default.isExecutableFile(atPath: path) { return path }
         }
         return nil
+    }
+
+    /// KoreNet's rows: this box's device id, the tailnet, who holds the port, its devices and
+    /// those waiting.
+    static func net(paths: HostPaths, on: Bool, tailnet: () -> (any Tailnet)?, portHolder: () -> UInt32?) -> [String] {
+        var lines: [String] = []
+        func row(_ name: String, _ value: String) { lines.append(name.padding(toLength: 9, withPad: " ", startingAt: 0) + value) }
+        row("net", on ? "on" : "off (kore-host net on)")
+        if let me = BoxIdentity.load(paths) {
+            row("device", "\(me.device.uuidString.lowercased()) (code \(me.code))")
+        } else {
+            row("device", "none yet (kore-host join)")
+        }
+        if on, let tailnet = tailnet() {
+            do {
+                let status = try tailnet.status()
+                let ips = status.selfNode?.tailscaleIPs ?? []
+                row("tailnet", status.backendState.rawValue + (ips.isEmpty ? "" : " · " + ips.joined(separator: ", ")))
+                if status.backendState == .running {
+                    if let uid = portHolder(), uid != getuid() {
+                        row("port", "\(HostNet.port) held by uid \(uid)")
+                    } else {
+                        row("port", "\(HostNet.port)")
+                    }
+                }
+            } catch {
+                row("tailnet", "not reachable (\(error))")
+            }
+        }
+        let store = DeviceStore(paths: paths)
+        let devices = store.all()
+        row("devices", devices.isEmpty ? "none" : devices.map { "\($0.name) (\($0.kind.rawValue), \(DeviceRecord.code($0.id)))" }.joined(separator: ", "))
+        for (i, waiting) in store.pending().enumerated() {
+            let code = waiting.code.map { " " + $0 } ?? ""
+            row(i == 0 ? "pending" : "", "\(waiting.name)\(code) · \(waiting.login)" + (waiting.claim ? " · wants to own this box" : ""))
+        }
+        return lines
     }
 }
