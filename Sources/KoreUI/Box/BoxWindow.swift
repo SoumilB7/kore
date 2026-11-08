@@ -22,11 +22,14 @@ final class BoxBinding {
     /// As the box names it.
     let folder: String
     let connection: HostConnection
+    /// When the window's link-down card shows (`BoxOfflineDialog`).
+    let linkCard: LinkDownCard
 
     init(alias: String, folder: String) {
         self.alias = alias
         self.folder = folder
         connection = Self.connection(alias)
+        linkCard = LinkDownCard(stableAfter: connection.stableAfter)
     }
 
     static func connection(_ alias: String) -> HostConnection {

@@ -276,26 +276,31 @@ struct BoxSyncPopup<Content: View>: View {
 /// Over a box window while its box can't be reached (after 2 s, so a blip shows nothing): one
 /// card in the middle, the chats dimmed but readable under it, the composer still taking
 /// messages ("Sends when mybox is back"). Reconnecting… with Try again while it dials; the
-/// box's own action (Start, Set up, Update) when it's set up wrong. It goes when the link is back.
+/// box's own action (Start, Set up, Update) when it's set up wrong. It stays through a link that
+/// comes and goes, and goes once the link has stayed back (`LinkDownCard`).
 struct BoxOfflineDialog: View {
     let box: BoxBinding
-    @StateObject private var shown = Local(false)
 
     var body: some View {
+        let model = box.linkCard
         let down = !box.connection.isOnline
         ZStack {
-            if shown.value, down {
+            if model.shown {
                 Theme.background.opacity(0.45).allowsHitTesting(false).transition(.opacity)
                 card.storyID(StoryID.Boxes.offline).transition(.opacity)
             }
         }
-        .animation(Motion.fade, value: shown.value && down)
+        .animation(Motion.fade, value: model.shown)
+        // The link's each change, then a sleep to the card's next change: nothing runs while it's
+        // hidden and the link is up.
         .task(id: down) {
-            shown.value = false
-            guard down else { return }
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled, !box.connection.isOnline else { return }
-            shown.value = true
+            model.stableAfter = box.connection.stableAfter
+            model.linked(!down, at: .now, heard: box.connection.lastHeard)
+            while let wake = model.wake {
+                try? await Task.sleep(until: wake, clock: .continuous)
+                guard !Task.isCancelled else { return }
+                model.tick(at: .now)
+            }
         }
     }
 
@@ -310,7 +315,7 @@ struct BoxOfflineDialog: View {
                 HStack(spacing: Space.sm) {
                     Circle().fill(Theme.accent).frame(width: Size.statusPoint, height: Size.statusPoint)
                         .pulse(low: Motion.blinkLow, period: Motion.blinkPeriod)
-                    Text(note.map { $0.action == .tryAgain && $0.line == "Can't reach \(box.alias)" ? "Reconnecting…" : $0.line } ?? "Reconnecting…").font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(2)
+                    Text(Self.status(box, note: note)).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(2)
                     Spacer(minLength: Space.sm)
                     Button("Try again") { connection.retry() }.smallButton()
                 }
@@ -325,7 +330,14 @@ struct BoxOfflineDialog: View {
 
     /// "mybox disconnected · last update 14:32".
     @MainActor static func line(_ box: BoxBinding) -> String {
-        box.alias + " disconnected" + (box.connection.lastHeard.map { " · last update " + BoxBinding.when($0) } ?? "")
+        box.alias + " disconnected" + ((box.connection.lastHeard ?? box.linkCard.lastHeard).map { " · last update " + BoxBinding.when($0) } ?? "")
+    }
+
+    /// The line by the pulsing dot: "Reconnecting…", or that the box keeps dropping.
+    @MainActor static func status(_ box: BoxBinding, note: BoxList.Note?) -> String {
+        if box.linkCard.keepsDropping { return box.alias + " keeps dropping · Reconnecting…" }
+        guard let note, !(note.action == .tryAgain && note.line == "Can't reach \(box.alias)") else { return "Reconnecting…" }
+        return note.line
     }
 
     /// What the box's state says to do, from how the link ended; nil while it only dials again.

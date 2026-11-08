@@ -57,7 +57,7 @@ struct HistoryPanel: View {
     /// Chats named by the query, then those whose words hold it, each newest first.
     private var matches: [SessionSummary] {
         let q = query.value.trimmingCharacters(in: .whitespaces).lowercased()
-        let listed = workspace.chats.filter { $0.archived == showArchived.value }
+        let listed = workspace.historyChats.filter { $0.archived == showArchived.value }
         guard !q.isEmpty else { return listed }
         let hits = search.value.hits
         let named = listed.filter { $0.title.lowercased().contains(q) }
@@ -66,7 +66,7 @@ struct HistoryPanel: View {
 
     /// What the search reads: the panel's list, whatever the query.
     private func searchChats() {
-        search.value.update(query: query.value, chats: workspace.chats.filter { $0.archived == showArchived.value })
+        search.value.update(query: query.value, chats: workspace.historyChats.filter { $0.archived == showArchived.value })
     }
 
     private var archivedCount: Int { workspace.chats.count { $0.archived } }

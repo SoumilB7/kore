@@ -1053,8 +1053,13 @@ package final class Workspace {
             let old = chats[index]
             chats[index] = SessionSummary(id: old.id, agent: old.agent, title: name, updated: old.updated, archived: old.archived)
         }
-        // A box keeps its folder's history (1.9): renamed there.
+        // A box keeps its folder's history (1.9): renamed there. An open tab of it takes the name
+        // at once, and its chat on the box through its own call (`chat.call rename`).
         if let box {
+            if let chat = openTab(for: session.id)?.chat {
+                chat.adoptName(name)
+                Task { await chat.applyRename(name) }
+            }
             if !(await box.renameSession(session.id, to: name)) { await refresh() }
             return
         }
@@ -1086,6 +1091,32 @@ package final class Workspace {
     private func setArchived(_ id: String, _ archived: Bool) {
         guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
         chats[index].archived = archived
+    }
+
+    /// The open tab showing a History row's chat: by the id its CLI lists it under, or on a box
+    /// by its box chat id (a chat the box lists as closed while a tab here still shows it).
+    func openTab(for id: String) -> ChatTab? {
+        if let tab = tab(for: id) { return tab }
+        guard box != nil else { return nil }
+        return tabs.first { $0.agent == nil && ($0.chat?.services as? BoxChatServices)?.chatId == id }
+    }
+
+    /// The History's rows, an open chat's under the name its tab shows: a rename in the tab shows
+    /// there at once, before the CLI's (or the box's) list is read again.
+    var historyChats: [SessionSummary] { historyTitles(chats) }
+
+    func historyTitles(_ rows: [SessionSummary]) -> [SessionSummary] {
+        var names: [String: String] = [:]
+        for tab in tabs where tab.agent == nil {
+            guard let chat = tab.chat, let name = chat.status.name, !name.isEmpty else { continue }
+            if let id = chat.listedId { names[id] = name }
+            if box != nil, let id = (chat.services as? BoxChatServices)?.chatId { names[id] = name }
+        }
+        guard !names.isEmpty else { return rows }
+        return rows.map { row in
+            guard let name = names[row.id], name != row.title else { return row }
+            return SessionSummary(id: row.id, agent: row.agent, title: name, updated: row.updated, archived: row.archived, file: row.file)
+        }
     }
 
     private func tab(for sessionId: String, provider: String? = nil) -> ChatTab? {
