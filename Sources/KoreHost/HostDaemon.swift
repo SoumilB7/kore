@@ -55,6 +55,11 @@ package final class HostDaemon {
     /// Link 1.8: the grants' terminals, and git for the explorer, editor and diffs.
     let terminals = HostTerminals()
     let git = HostGit()
+    /// 1.10: the environment the CLIs' session folders are read from (`CLAUDE_CONFIG_DIR`,
+    /// `CODEX_HOME`, `HOME`; tests set their own), and each move under way by the link that
+    /// started it (one that ends aborts it).
+    package var sessionEnv = ProcessInfo.processInfo.environment
+    var moveClients: [String: ObjectIdentifier] = [:]
 
     package init(paths: HostPaths) {
         self.paths = paths
@@ -73,6 +78,7 @@ package final class HostDaemon {
         closedChats = all.filter { $0.record.closed == true }
         for chat in chats { watch(chat) }
         terminals.ran = { [weak self] folder in self?.git.touched(folder) }
+        sweepStaging()
     }
 
     /// Starts listening; the socket exists when this returns. Throws `HostLockError.held`, and
@@ -221,6 +227,8 @@ package final class HostDaemon {
     /// The chat's live `Chat`, its CLI let in under the cap: an idle one stops to make room.
     package func live(_ hc: HostChat) -> Chat? {
         if let chat = hc.chat { return chat }
+        // 1.10: a replica or a chat being moved runs no CLI here.
+        guard hc.ownedHere else { return nil }
         let running = chats.filter(\.cliRunning)
         if running.count >= maxRunning {
             guard let quiet = running.filter(\.idle).min(by: { $0.lastUsed < $1.lastUsed }) else { return nil }
@@ -294,7 +302,15 @@ package final class HostDaemon {
         connection.begin()
     }
 
+    /// 1.10: why a chat takes nothing now: it's being moved, or it lives elsewhere (a replica).
+    static func held(_ hc: HostChat) -> (code: ResultCode, message: String)? {
+        if let moving = hc.record.moving { return (.moving, "Moving to \(moving.grant)") }
+        if hc.isReplica, let owner = hc.record.owner { return (.elsewhere, "On \(owner.name ?? owner.host) · read-only here") }
+        return nil
+    }
+
     func ended(_ connection: LinkClient) {
+        movesEnded(connection)
         if connections.contains(where: { $0 === connection }), let grant = connection.grant { HostJournal.note("disconnect", ["grant": grant.name]) }
         connections.removeAll { $0 === connection }
         toolCallsEnded(connection)
@@ -314,7 +330,7 @@ package final class HostDaemon {
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : []) + (control == .full ? ["stream", "pty", "git"] : []))
+            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : []) + (control == .full ? ["stream", "pty", "git", "move"] : []))
     }
 
     var windows: [LinkWindow] {
@@ -367,6 +383,7 @@ package final class HostDaemon {
         guard control != .watch else { return fail(.deniedControl, "This grant only watches.") }
         let hc = command.chatId.flatMap(chat)
         if command.chatId != nil, hc == nil { return fail(.goneChat, "No such chat on this box.") }
+        if let hc, let refusal = Self.held(hc) { return fail(refusal.code, refusal.message) }
         switch command {
         case .send(_, let text, let blobs):
             guard let hc else { return fail(.goneChat, "") }

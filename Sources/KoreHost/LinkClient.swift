@@ -254,6 +254,8 @@ final class LinkClient {
             guard current() != nil else { return }
             send(.result(sync(kind, folder: args.folder, id: id)))
             if kind == .syncWatch, let folder = args.folder.map(HostDaemon.standard) { syncs[folder]?.start() }
+        case .cmd(let id, .control(let kind, let args)) where [.chatRelease, .chatAdopt, .chatMirror, .syncFlush].contains(kind):
+            moves(kind, args, id: id)
         case .cmd(let id, .control(let kind, let args)) where kind.onFiles:
             files(kind, args, id: id)
         case .cmd(let id, let command):
@@ -371,6 +373,41 @@ final class LinkClient {
         self.watches = watches
         return FilesResult(id: id, ok: true, watching: watches.set(wanted))
     }
+
+    // MARK: Moves (1.10)
+
+    /// `chat.release`, `chat.adopt`, `chat.mirror`, `sync.flush`: full grants only, each checked by
+    /// the box's rules; the answer is a `MoveResult`.
+    private func moves(_ kind: ControlKind, _ args: ControlArgs, id: String) {
+        guard let control = current()?.control else { return }
+        if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, nil, control: control == .full ? .full : .standard) {
+            return sendRaw(StreamWire.encode(MoveResult.refused(id, code, message)))
+        }
+        switch kind {
+        case .chatRelease: sendRaw(StreamWire.encode(host.release(args, id: id, from: self)))
+        case .chatAdopt: sendRaw(StreamWire.encode(host.adopt(args, id: id, from: self)))
+        case .chatMirror: sendRaw(StreamWire.encode(host.mirror(args, id: id, from: self)))
+        default: flushSync(args.folder.map(HostDaemon.standard) ?? "", id: id)
+        }
+    }
+
+    /// `sync.flush`: this link's watch of the folder says what it has gathered now, and the answer
+    /// goes once it has nothing left (its changes went before it), or after `flushWait` with how
+    /// much is left. A folder this link doesn't watch is settled, `watching: false`.
+    private func flushSync(_ folder: String, id: String) {
+        guard let watch = syncs[folder] else { return sendRaw(StreamWire.encode(MoveResult(id: id, ok: true, settled: true, watching: false))) }
+        Task { [weak self] in
+            let end = Date().addingTimeInterval(Self.flushWait)
+            while watch.unsettled > 0, Date() < end {
+                watch.flushNow()
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            let left = watch.unsettled
+            self?.sendRaw(StreamWire.encode(MoveResult(id: id, ok: true, settled: left == 0, pending: left, watching: true)))
+        }
+    }
+
+    static let flushWait: TimeInterval = 10
 
     // MARK: Sync
 

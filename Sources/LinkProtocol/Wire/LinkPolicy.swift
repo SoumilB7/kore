@@ -351,6 +351,37 @@ package enum LinkPolicy {
         case .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             return check(kind, args, chat, control: control)
+        // 1.10: a chat's move between the box and a Mac, full grants only. The box also checks
+        // the chat's owner and gen, and where the files lead (its own staging folder only).
+        case .chatRelease:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard args.chatId != nil, let phase = args.phase.flatMap(MovePhase.init(rawValue:)) else { return .deny(.invalid, "Name the chat and the phase.") }
+            guard (args.gen ?? -1) >= 0 else { return .deny(.invalid, "Say the gen the move starts from.") }
+            if phase != .prepare || args.moveId != nil, !LinkMoves.plainMoveID(args.moveId) { return .deny(.invalid, "Name the move.") }
+            return .allow
+        case .chatAdopt:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard let phase = args.phase.flatMap(MovePhase.init(rawValue:)), LinkMoves.plainMoveID(args.moveId) else { return .deny(.invalid, "Name the move and the phase.") }
+            guard phase == .abort || (LinkMoves.plainSession(args.sessionId) && args.provider != nil && (args.gen ?? -1) >= 0) else {
+                return .deny(.invalid, "Name the session, its CLI and the gen.")
+            }
+            if phase == .commit {
+                guard let folder = args.folder, folder.hasPrefix("/"), !folder.contains("\0") else { return .deny(.invalid, "Name the folder.") }
+                if args.modelId != nil, !plainID(args.modelId) { return .deny(.invalid, "That isn't a model.") }
+                if args.level != nil, !plainID(args.level) { return .deny(.invalid, "That isn't an effort.") }
+                if let title = args.title, title.count > maxTitle || title.contains(where: \.isNewline) { return .deny(.invalid, "A title is one line, up to 200 characters.") }
+            }
+            if let host = args.host, host.count > 100 || host.contains(where: \.isNewline) { return .deny(.invalid, "A name is one line.") }
+            return .allow
+        case .chatMirror:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard args.chatId != nil, (args.gen ?? -1) >= 0, (args.seq ?? -1) >= 0 else { return .deny(.invalid, "Name the chat, its gen and the first seq.") }
+            guard (args.events?.items ?? []).count <= LinkMoves.mirrorMax else { return .deny(.invalid, "Too many events at once.") }
+            return .allow
+        case .syncFlush:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard let folder = args.folder, folder.hasPrefix("/"), !folder.contains("\0") else { return .deny(.invalid, "Name the folder.") }
+            return .allow
         default:
             return .deny(.invalid, "Not taken here.")
         }

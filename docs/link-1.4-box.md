@@ -1,4 +1,4 @@
-# Link 1.4 to 1.9: the box (`kore-host`)
+# Link 1.4 to 1.10: the box (`kore-host`)
 
 A box is a headless machine running `kore-host`: the Mac reaches it with
 `ssh <box> ~/.local/bin/kore-host attach --as <grant>`. Everything in link 1.0–1.3 holds unless this page says
@@ -35,9 +35,10 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 - `attach` exits 3 when no daemon listens, 4 when there's no such grant, 5 when there's no
   runtime folder, 2 on bad arguments; over ssh, 255 is ssh's own failure and 126/127 the shell's
   (kore-host can't run there, or isn't there).
-- `welcome`: `proto {1,9}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
+- `welcome`: `proto {1,10}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
   `policy {sendMaxLevel: 4, control: "full"|"standard"}` (`full` for a full grant),
-  `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5) and
+  `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5), `"move"`
+  for a full grant (1.10) and
   `"history"` for an act or full grant (1.9). For a
   full grant each of `providers[]` carries `calls`: the `chat.call` types the box takes for that
   CLI. Then `snapshot` and an empty `attn.state`.
@@ -569,3 +570,71 @@ The Mac shows these dim, with a line saying why:
 - Remote control: "Not in a chat on a box" (1.5).
 - Rename and archive in History on a 1.8 box: "Update kore-host on <box> to rename or archive here".
 
+
+## Link 1.10: a chat moves between the box and a Mac
+
+A chat lives on one host at a time, the box or a Mac linked to it, and only that host runs its CLI.
+Everywhere else it's a replica: read-only, saying where it lives. The Mac starts every move, in
+both directions. The CLI's own session files go by rsync over the folder pair's SSH alias, never
+over the link; the link hands ownership over around that copy. Each side's folder is rewritten
+in the files (each row's `cwd`, and Claude's project-key folder), nothing else. All of it is
+additive and needs a full grant (`denied.control` otherwise); a 1.9 box answers it `invalid`.
+The welcome's `caps` say `move` to a full grant.
+
+### What a chat says
+
+`ChatMeta` gains two fields, absent while the box runs the chat:
+
+- `owner {host, gen, since, name?, mirrored?, followed?}`: the chat lives elsewhere. `host` is the
+  grant of the Mac that holds it; `gen` goes up by one on every move (a chat never moved is gen 0
+  on the box); `since` is ms since 1970; `name` is that Mac's own name ("MacBook"), for the
+  replica's pill; `mirrored` is how many of its events the Mac has mirrored here
+  (`chat.mirror`); `followed` is true while any client follows the replica (`chat.follow` or
+  `tx.open`), so the Mac mirrors only then.
+- `moving: true`: a move is under way (prepare to commit or abort).
+
+Either way `can.send` is false. A replica or a moving chat refuses every `chat.send`, `chat.call`
+and control kind on it, and starts no CLI: code `elsewhere` ("On MacBook · read-only here") or
+`moving` ("Moving to <grant>"). The box keeps the record (`meta.json`: `owner`, `moving`, and
+`transcript`, the CLI transcript's path), and never prunes a chat a Mac holds.
+
+### Commands
+
+Each is a `cmd` checked by `LinkPolicy.checkBox`. The answer is a `result` with these fields
+besides `{id, ok, code?, message?}`: `chatId?, owner?, move?, settled?, pending?, watching?,
+mirrored?` (`MoveResult`). `move` is `MoveInfo {moveId, chatId?, provider, sessionId, folders,
+root, files, gen, title?, modelId?, effort?, mode?, fastForward?}`.
+
+| `type` | fields | |
+|---|---|---|
+| `chat.release` | `chatId, phase: "prepare", gen, stop?` | The box's chat at `gen` goes to this grant. It must be idle; `stop: true` stops a working one first ("Stop and move"; its cron jobs end with its CLI), else `busy`. The chat freezes (`moving`), its CLI stops. Result `move`: `root` (the folder the session's files are in on the box), `files` (paths from `root`: Claude's `<session>.jsonl` and everything under `<session>/`; Codex's rollout as `YYYY/MM/DD/rollout-….jsonl` under `sessions/`), `folders` (the box folder as kept and as its real path: the `cwd`s to rewrite), the chat's title, model, effort and mode. A stale `gen`: `stale.gen`. No session yet, or no file: `gone.session`. |
+| `chat.release` | `chatId, phase: "commit", gen, moveId, host?` | The box records `owner {host: <grant>, gen: gen + 1, name: host, mirrored: 0}`; its copy is a replica now. Result `owner`. Another move, or another grant's: `stale.gen`. |
+| `chat.release` | `chatId, phase: "abort", gen, moveId` | The chat un-freezes; nothing changed. A link that ends between prepare and commit aborts the same way. |
+| `chat.adopt` | `phase: "prepare", moveId, chatId?, provider, sessionId, gen, from` | A return. The box makes `state/staging/<moveId>/` (0700) and answers it as `move.root`. While it still holds the chat `chatId` as the replica of this grant at `gen`, with that session (`fastForward: true`), it seeds staging with its own copy rewritten into `from` (the Mac's folder), so the Mac's rsync sends only what's new; `files` names them. |
+| `chat.adopt` | `phase: "commit", moveId, chatId?, provider, sessionId, gen, folder, folders, title?, modelId?, level?, mode?, host?, seq?` | The box rewrites what's in staging from `folders` (the Mac's folder, its spellings) to `folder` (the box's), places it in its CLI's folders and removes staging. A fast-forward: the same chat, `owner {host: "box", gen: gen + 1}`, its settings from the fields; when `seq` (the Mac's mirror count) isn't what the replica holds, its event log starts again and the CLI's next history fills it. Else a new chat (`from`: `host`), never merged; but while the box keeps that session for a chat of its own, `stale.gen` and nothing is placed (the copy stays on the Mac). Result `chatId`, `owner`. |
+| `chat.adopt` | `phase: "abort", moveId` | Staging goes. |
+| `chat.mirror` | `chatId, gen, seq, events` | The holding Mac's new events, best effort, into the replica's event log, so a follower (`chat.follow`) sees them live. `events` is `[{s, e}]`, `s` from `seq` on (the Mac's own count, from 0 at the move); at most 400 events and 192 KiB. A repeat is skipped; a gap (`seq` past what the replica holds) is `invalid` with `mirrored`, where to send from. Another grant or gen: `stale.gen`. Result `mirrored`. |
+| `sync.flush` | `folder` | The folder's two-way sync on this link says everything it has gathered now (`sync.changed` goes before the result), and answers `settled: true` once it has nothing left, else after 10 s `settled: false, pending`. A folder this link doesn't `sync.watch`: `settled: true, watching: false`. |
+
+### How a move goes
+
+Bring to this Mac:
+1. `sync.flush` for the chat's folder, and the Mac's own side of the sync idle.
+2. `chat.release` prepare.
+3. The Mac seeds a staging folder with its own last copy (rewritten into the box's folder), then
+   `rsync -az --files-from=<files> <box>:<root>/ <staging>/`, then rewrites into its CLI's folder
+   (`FolderRewrite`, in src).
+4. `chat.release` commit. Any failure before it: `chat.release` abort.
+
+Send back:
+1. The Mac's CLI stops; `sync.flush`.
+2. `chat.adopt` prepare, `rsync -az --files-from=<files> <mac root>/ <box>:<staging>/`.
+3. `chat.adopt` commit (with `seq`, the mirror's count). Any failure before it: `chat.adopt` abort.
+
+### What it costs
+
+The link carries a few hundred bytes per command; the session never crosses it. rsync sends a
+first move compressed, and later ones only what changed since the copy each side kept. The rewrite
+reads and writes a file a piece at a time (256 KiB), so a large rollout never sits in memory.
+`chat.mirror` goes at most every 2 s, merged (a streamed answer is one event), and only while the
+replica is `followed`; missed events go from `mirrored` when the link is back.

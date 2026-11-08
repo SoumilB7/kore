@@ -76,6 +76,12 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case fsDelete = "fs.delete"
     case fsSearch = "fs.search"
     case fsWatch = "fs.watch"
+    /// 1.10: a chat moves between the box and a Mac (`LinkMoves.swift`), and the sync says when
+    /// both ends have settled.
+    case chatRelease = "chat.release"
+    case chatAdopt = "chat.adopt"
+    case chatMirror = "chat.mirror"
+    case syncFlush = "sync.flush"
 
     /// A file command (1.7, 1.8): answered with a `FilesResult`, full grants only.
     package var onFiles: Bool { rawValue.hasPrefix("fs.") }
@@ -169,6 +175,16 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var root: String?
     package var query: String?
     package var folders: [String]?
+    /// 1.10: a move's phase (`prepare`, `commit`, `abort`), the owner's gen it expects, its id,
+    /// stopping a working chat to move it, the sending side's folders, the holder's name, and a
+    /// mirror's first seq and events.
+    package var phase: String?
+    package var gen: Int?
+    package var moveId: String?
+    package var stop: Bool?
+    package var host: String?
+    package var seq: Int?
+    package var events: MirrorItems?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -181,8 +197,16 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         login: String? = nil, serial: Int? = nil, input: String? = nil, tier: String? = nil,
         folder: String? = nil, path: String? = nil, hidden: Bool? = nil, max: Int? = nil, data: String? = nil, blob: String? = nil,
         base: FileStamp? = nil, dir: Bool? = nil, from: String? = nil, to: String? = nil, root: String? = nil, query: String? = nil,
-        folders: [String]? = nil
+        folders: [String]? = nil, phase: String? = nil, gen: Int? = nil, moveId: String? = nil, stop: Bool? = nil, host: String? = nil,
+        seq: Int? = nil, events: MirrorItems? = nil
     ) {
+        self.phase = phase
+        self.gen = gen
+        self.moveId = moveId
+        self.stop = stop
+        self.host = host
+        self.seq = seq
+        self.events = events
         self.data = data
         self.blob = blob
         self.base = base

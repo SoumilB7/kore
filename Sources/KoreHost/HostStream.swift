@@ -396,7 +396,8 @@ extension HostDaemon {
         guard let hc = chat(request.chatId) else {
             return client.send(.result(.init(id: "chat.follow:" + request.chatId, ok: false, code: .goneChat, message: "No such chat on this box.")))
         }
-        let fresh = hc.stream.isEmpty
+        let fresh = hc.stream.isEmpty && hc.ownedHere
+        followersChanged(hc)
         // Its CLI starts with the tier the Mac has for it (1.6), not again at its first message.
         if fresh, !hc.cliRunning { arsenalSaid(request.arsenal, hc) }
         client.catchUpStarts(hc.id, log: hc.stream.id)
@@ -419,6 +420,7 @@ extension HostDaemon {
 
     func unfollowed(_ chatId: String) {
         guard let hc = chat(chatId) else { return }
+        followersChanged(hc)
         hc.chat?.automatic = !drivenByFull(hc)
     }
 
@@ -449,6 +451,8 @@ extension HostDaemon {
         }
         func answer(_ result: ChatCallResult) { client.sendRaw(StreamWire.encode(result)) }
         guard let hc = chat(call.chatId) else { return answer(ChatCallResult(id: call.id, ok: false, code: .goneChat, message: "No such chat on this box.")) }
+        // 1.10: a chat being moved, or living elsewhere, takes no call.
+        if let refusal = Self.held(hc) { return answer(ChatCallResult(id: call.id, ok: false, code: refusal.code, message: refusal.message)) }
         // Answers are kept per grant: one grant's id never reads another's answer.
         let key = "\(client.grant?.name ?? "")|\(call.id)"
         if let done = hc.answered.first(where: { $0.id == key }) { return client.sendRaw(done.data) }

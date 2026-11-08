@@ -15,7 +15,7 @@ package enum LinkProto {
     package static let minor = 3
     /// A box (`kore-host`) speaks 1.9: the Mac's 1.3, the box's additions (1.4), box parity (1.5),
     /// Arsenal on a box (1.6), its files read (1.7) and edited (1.8), a chat's own operations (1.9).
-    package static let boxMinor = 9
+    package static let boxMinor = 10
     package static var version: LinkVersion { LinkVersion(major: major, minor: minor) }
 }
 
@@ -513,6 +513,10 @@ package struct ChatMeta: Codable, Sendable, Equatable {
     /// full control).
     package var arsenal: String?
     package var arsenalUnavailable: String?
+    /// 1.10 (a box): where the chat lives when it isn't the box (a replica here, read-only), and
+    /// that it's being moved now (it refuses sends).
+    package var owner: ChatOwner?
+    package var moving: Bool?
 
     package init(
         id: String, provider: String, title: String, state: State, mode: Mode, modeIds: [String], allowedModeIds: [String],
@@ -887,5 +891,9 @@ package enum ResultCode: String, LenientEnum {
     case busy
     case invalid
     case rateLimited
+    /// 1.10: the chat is being moved, or lives elsewhere (a replica); and a stale move.
+    case moving
+    case elsewhere
+    case staleGen = "stale.gen"
     case unknown
 }

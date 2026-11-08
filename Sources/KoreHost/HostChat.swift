@@ -33,6 +33,21 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     package var draftRev: Int?
     package var autoCompact: Int?
     package var archived: Bool?
+    /// 1.10: where the chat lives when it isn't the box (nil: the box, never moved), a move under
+    /// way (frozen: it refuses sends), the CLI transcript's path, and the Mac a return that came
+    /// in as a new chat came from.
+    package var owner: ChatOwner?
+    package var moving: MoveHold?
+    package var transcript: String?
+    package var from: String?
+}
+
+/// A chat frozen for a move (`chat.release` prepare): which move, the grant it goes to, and since
+/// when (seconds since 1970).
+package struct MoveHold: Codable, Sendable, Equatable {
+    package var moveId: String
+    package var grant: String
+    package var at: Double
 }
 
 /// One line of a chat's log (`log.jsonl`): an entry as it went on the wire, a turn, or the start
@@ -104,6 +119,15 @@ package final class HostChat {
     package var provider: ProviderDescriptor { Registry.provider(record.provider) ?? Registry.all[0] }
     package var title: String { chat?.title ?? record.title ?? provider.name }
     package var running: Bool { chat?.isBusy ?? false }
+    /// 1.10: the owner's gen (0 for a chat never moved), and whether it lives elsewhere (a
+    /// replica: read-only here) or is being moved now.
+    package var gen: Int { record.owner?.gen ?? 0 }
+    package var isReplica: Bool { record.owner.map { !$0.onBox } ?? false }
+    package var isFrozen: Bool { record.moving != nil }
+    /// Neither: the box runs it.
+    package var ownedHere: Bool { !isReplica && !isFrozen }
+    /// Whether a client other than the holder follows this replica (the holder mirrors only then).
+    var followedByOthers = false
     package var cliRunning: Bool { chat != nil }
     /// Nothing to do: no turn, queue or card, and no live command or armed job (its CLI runs them).
     package var idle: Bool {
@@ -364,6 +388,59 @@ package final class HostChat {
         record.controls?.autoCompactAt = point
         chat?.setAutoCompact(point)
         try? saveRecord()
+    }
+
+    /// 1.10: the move's hold, the owner after one, and its transcript's path.
+    func setMoving(_ hold: MoveHold?) {
+        record.moving = hold
+        try? saveRecord()
+    }
+
+    func setOwner(_ owner: ChatOwner?) {
+        record.owner = owner
+        try? saveRecord()
+    }
+
+    /// A return's settings and session, kept before its CLI starts on them.
+    func adopted(session: String, transcript: String?, title: String?, modelId: String?, effort: String?, mode: String?) {
+        record.session = session
+        record.transcript = transcript
+        (record.forkFrom, record.forkAt) = (nil, nil)
+        if let title, !title.isEmpty { record.title = title }
+        if let modelId {
+            record.modelId = modelId
+            record.controls?.modelId = modelId
+        }
+        if let effort {
+            record.effort = effort
+            record.controls?.effort = effort
+        }
+        if let mode { record.mode = mode }
+        try? saveRecord()
+    }
+
+    /// A return that came in as a new chat: where from, and its transcript.
+    func adoptedNew(from host: String, transcript: String?) {
+        record.from = host
+        record.transcript = transcript
+        try? saveRecord()
+    }
+
+    func setTranscript(_ path: String?) {
+        guard record.transcript != path else { return }
+        record.transcript = path
+        try? saveRecord()
+    }
+
+    /// The projected log goes: the CLI's history, read in at its next start, is projected whole
+    /// (a return brings turns the box's log never saw).
+    func forgetLog() {
+        try? log?.close()
+        log = nil
+        try? FileManager.default.removeItem(at: logURL)
+        (stored, index, storedTurns) = ([], [:], [:])
+        logRead = true
+        expectingWake = false
     }
 
     func setArchived(_ on: Bool) {

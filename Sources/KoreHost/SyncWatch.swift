@@ -81,6 +81,7 @@ final class SyncWatch {
     }
 
     private func missing() {
+        listed = true
         guard !stopped else { return }
         push(message([], all: true, more: false, extra: ["missing": true]))
     }
@@ -159,9 +160,23 @@ final class SyncWatch {
         }
     }
 
+    /// 1.10 `sync.flush`: what this watch still has to say (changes gathered, a batch being read,
+    /// the first whole list); 0 once it has said everything it knows.
+    var unsettled: Int { pending.count + (working || everything || !listed ? 1 : 0) }
+    private var listed = false
+
+    /// Gathered changes go now rather than after `settle`.
+    func flushNow() {
+        guard let flush, !working else { return }
+        flush.cancel()
+        self.flush = nil
+        send()
+    }
+
     /// A batch read: its messages go, and the next starts if more came meanwhile.
     private func done(_ messages: [Data], missing: Bool = false) {
         working = false
+        listed = true
         guard !stopped else { return }
         if missing { self.missing() }
         messages.forEach(push)
