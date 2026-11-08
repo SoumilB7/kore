@@ -84,7 +84,7 @@ package struct LoginKeychain: SecretStore {
     private typealias AccessCreate = @convention(c) (CFString, CFArray, UnsafeMutablePointer<UnsafeMutableRawPointer?>) -> OSStatus
 
     /// An access list trusting Kore and `/usr/bin/security`; nil when it can't be made.
-    private static func access(_ label: String) -> AnyObject? {
+    static func access(_ label: String) -> AnyObject? {
         guard let trustedSymbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "SecTrustedApplicationCreateFromPath"),
             let accessSymbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "SecAccessCreate")
         else { return nil }
