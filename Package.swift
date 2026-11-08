@@ -21,12 +21,12 @@ let package = Package(
     ],
     targets: [
         .target(name: "KoreCore", swiftSettings: releaseForSize),
-        // The chat engine with no UI: providers, translators, chat and transcript state, saved
-        // sessions. Foundation and KoreCore only (no SwiftUI, AppKit or Combine), so a headless
-        // host can build it; nothing here imports KoreUI.
+        // The chat engine without UI: the CLIs' backends and translators, chat events, account
+        // calls and the chat state that has no view code. No SwiftUI, AppKit or Combine, so a
+        // headless host can build on it; nothing here imports KoreUI.
         .target(name: "src", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
-        // The app's views, stores and providers; `Kore` is its launcher. Other targets in this
-        // package reach its `package` declarations.
+        // The app's views and the stores they show, over `src`; `Kore` is its launcher. Other
+        // targets in this package reach its `package` declarations.
         .target(
             name: "KoreUI", dependencies: ["src", "KoreCore", .product(name: "SwiftTerm", package: "SwiftTerm")],
             // mermaid.js for the diagram preview: bundled, so it never loads from the network.

@@ -6,30 +6,30 @@ import KoreCore
 /// "Continue" once; still limited, it moves to the next reset and sends nothing. The ×, the owner
 /// sending, and Stay awake turned off cancel it.
 @MainActor
-final class LimitContinuation {
-    struct Pending: Equatable {
-        let turn: String
-        var at: Date
+package final class LimitContinuation {
+    package struct Pending: Equatable {
+        package let turn: String
+        package var at: Date
     }
 
-    private(set) var pending: Pending? {
+    package private(set) var pending: Pending? {
         didSet { if pending != oldValue { changed(pending) } }
     }
 
     /// Reads the plan's limits; nil when they couldn't be read.
-    var read: () async -> PlanReading? = { nil }
-    var send: () -> Void = {}
-    var changed: (Pending?) -> Void = { _ in }
+    package var read: () async -> PlanReading? = { nil }
+    package var send: () -> Void = {}
+    package var changed: (Pending?) -> Void = { _ in }
 
     /// A limit still spent but saying no reset is looked at again after this, then after twice
     /// as long each time it still says none, up to `recheckCap`: each look reads the plan's limits,
     /// a CLI started for it when the chat's own isn't running.
-    static let recheck: TimeInterval = 30 * 60
-    static let recheckCap: TimeInterval = 4 * 60 * 60
+    package static let recheck: TimeInterval = 30 * 60
+    package static let recheckCap: TimeInterval = 4 * 60 * 60
     /// Limits that can't be read (the network not back after a wake) are tried again after this,
     /// up to `retries` times; then it continues anyway, and a new limit failure starts it over.
-    static let retry: TimeInterval = 60
-    static let retries = 3
+    package static let retry: TimeInterval = 60
+    package static let retries = 3
 
     private let clock: any AwakeClock
     private var timer: AwakeTimer?
@@ -39,13 +39,13 @@ final class LimitContinuation {
     /// Bumped by every schedule and cancel, so a read that comes back late is dropped.
     private var generation = 0
 
-    init(clock: any AwakeClock) {
+    package init(clock: any AwakeClock) {
         self.clock = clock
     }
 
     /// The turn ended on the plan's limit, which resets `at`; nil when the CLI didn't say, and
     /// the plan's limits tell.
-    func schedule(turn: String, at: Date?) {
+    package func schedule(turn: String, at: Date?) {
         generation &+= 1
         attempt = 0
         rechecks = 0
@@ -65,7 +65,7 @@ final class LimitContinuation {
         arm(Pending(turn: turn, at: at))
     }
 
-    func cancel() {
+    package func cancel() {
         generation &+= 1
         timer = nil
         pending = nil
@@ -81,7 +81,7 @@ final class LimitContinuation {
     }
 
     /// The reset came: read the limits, then continue or wait for the next reset.
-    func due() async {
+    package func due() async {
         guard let current = pending else { return }
         let generation = generation
         let reading = await read()

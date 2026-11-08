@@ -2,6 +2,7 @@ import AppKit
 import IOKit.ps
 import KoreCore
 import Observation
+import src
 
 /// Stay awake (caffeinated mode): while on, Kore keeps the Mac from idle sleep so agents keep
 /// working. The display may still sleep. One per app, made as the app starts (`start()`); the
@@ -369,41 +370,6 @@ package final class RecordedHold: AwakeHold {
     package init() {}
 
     func hold(_ reason: String?) { reasons.append(reason) }
-}
-
-// MARK: - The clock
-
-/// When things happen: the system's, or a test's that moves by hand.
-@MainActor
-protocol AwakeClock: AnyObject {
-    var now: Date { get }
-    /// Runs `action` at `date`, or as soon as it can when that's past; until the timer is let go.
-    func at(_ date: Date, _ action: @escaping @MainActor () -> Void) -> AwakeTimer
-}
-
-/// A scheduled action, cancelled when it's let go.
-final class AwakeTimer: Sendable {
-    private let cancel: @Sendable () -> Void
-
-    init(cancel: @escaping @Sendable () -> Void) { self.cancel = cancel }
-
-    deinit { cancel() }
-}
-
-/// Wall time. A task's sleep counts time the Mac spent asleep, so one that came due during a
-/// sleep runs at the wake.
-final class SystemClock: AwakeClock {
-    var now: Date { Date() }
-
-    func at(_ date: Date, _ action: @escaping @MainActor () -> Void) -> AwakeTimer {
-        let task = Task { @MainActor in
-            let wait = max(0, date.timeIntervalSinceNow)
-            try? await Task.sleep(for: .milliseconds(Int(min(wait, 365 * 86_400) * 1000)))
-            guard !Task.isCancelled else { return }
-            action()
-        }
-        return AwakeTimer { task.cancel() }
-    }
 }
 
 // MARK: - The battery
