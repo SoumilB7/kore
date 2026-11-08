@@ -210,16 +210,20 @@ package struct ProviderInfo: Codable, Sendable, Equatable {
     package var modes: [ModeInfo]
     package var planToggle: PlanToggleInfo?
     package var features: ProviderFeatures
+    /// 1.5 (a box, to a full grant): the `chat.call`s it takes for this CLI's chats. The client
+    /// shows what isn't listed as unavailable rather than offering it to fail.
+    package var relay: [String]?
 
-    package init(id: String, name: String, modes: [ModeInfo], planToggle: PlanToggleInfo?, features: ProviderFeatures) {
+    package init(id: String, name: String, modes: [ModeInfo], planToggle: PlanToggleInfo?, features: ProviderFeatures, relay: [String]? = nil) {
         self.id = id
         self.name = name
         self.modes = modes
         self.planToggle = planToggle
         self.features = features
+        self.relay = relay
     }
 
-    private enum Key: String, CodingKey { case id, name, modes, planToggle, features }
+    private enum Key: String, CodingKey { case id, name, modes, planToggle, features, relay }
 
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
@@ -228,6 +232,7 @@ package struct ProviderInfo: Codable, Sendable, Equatable {
         modes = try c.decode([ModeInfo].self, forKey: .modes)
         planToggle = try c.decodeIfPresent(PlanToggleInfo.self, forKey: .planToggle)
         features = try c.decode(ProviderFeatures.self, forKey: .features)
+        relay = try c.decodeIfPresent([String].self, forKey: .relay)
     }
 
     /// `planToggle` is null, not omitted, when there's none.
@@ -238,6 +243,7 @@ package struct ProviderInfo: Codable, Sendable, Equatable {
         try c.encode(modes, forKey: .modes)
         try c.encode(planToggle, forKey: .planToggle)
         try c.encode(features, forKey: .features)
+        try c.encodeIfPresent(relay, forKey: .relay)
     }
 }
 

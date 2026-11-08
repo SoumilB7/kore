@@ -1,3 +1,6 @@
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 import Foundation
 import LinkProtocol
 
@@ -10,8 +13,8 @@ import LinkProtocol
 // - `chat.new` takes `folder` (an absolute path the box serves) in place of `windowId`.
 // - `folders.list` is a command; its `result` carries `folders: [{windowId, path}]`. A folder's
 //   window (its chats) is the one with that `windowId`.
-// - Catch-up: `tx.open` answers from the chat's log with a page, which the client merges with its
-//   copy; a resumed CLI replaces the log (`tx.reset`, then a page with new ids).
+// - A chat (1.5, box parity, `LinkRelay.swift`): `chat.follow` from where the copy stands, its
+//   `chat.events` back; every backend call as one `chat.call`. Full grants only.
 // - Sign-in on the box (§11.x's account commands): `account.signIn`'s result carries the page to
 //   open and any device code in `message`, space-separated ("https://… code ABCD-1234"); how it
 //   ended comes later as a result whose id is the command's plus `:done`. `account.submit` takes
@@ -43,27 +46,21 @@ package struct BoxFolder: Codable, Sendable, Equatable, Hashable {
 
 /// A message read from the box: a link message, or one of the box's own.
 package enum HostInbound: Sendable {
-    /// `seq`: the position in the box's log a page or delta brings the client to; the box doesn't
-    /// say one yet, so it's nil.
-    case link(LinkMessage, seq: Int?)
+    case link(LinkMessage)
     case folders(id: String, [BoxFolder])
+    /// 1.5: a chat's events.
+    case events(ChatEvents)
 }
 
 package enum HostWire {
     /// The link version the client speaks.
-    package static let proto = LinkVersion(major: 1, minor: 4)
-    /// `tx.open`'s window: what the box sends of a chat it hasn't been asked about before.
-    package static let followLast = 200
+    package static let proto = LinkVersion(major: 1, minor: 5)
 
     // MARK: Out
 
     package static func hello(build: String) -> Data {
         encode(.hello(proto: proto, client: .init(name: "Kore", build: build), proof: "", commands: nil))
     }
-
-    package static func txOpen(chatId: String) -> Data { encode(.txOpen(chatId: chatId, last: followLast)) }
-
-    package static func txClose(chatId: String) -> Data { encode(.txClose(chatId: chatId)) }
 
     package static func command(id: String, _ command: LinkCommand) -> Data { encode(.cmd(id: id, command)) }
 
@@ -74,9 +71,18 @@ package enum HostWire {
         return json(["t": "cmd", "id": id, "cmd": cmd])
     }
 
-    package static func newChat(id: String, folder: String, provider: String, model: String? = nil) -> Data {
+    /// `chat.new` in a folder; a fork (1.5) names the session and message it starts from
+    /// (`sessionId`, `entryId`), its title, mode and effort.
+    package static func newChat(
+        id: String, folder: String, provider: String, model: String? = nil, fork: (from: String, at: String)? = nil, title: String? = nil,
+        mode: String? = nil, effort: String? = nil
+    ) -> Data {
         var fields: [String: Any] = ["folder": folder, "provider": provider]
         if let model { fields["modelId"] = model }
+        if let fork { (fields["sessionId"], fields["entryId"]) = (fork.from, fork.at) }
+        if let title { fields["title"] = title }
+        if let mode { fields["mode"] = mode }
+        if let effort { fields["level"] = effort }
         return command(id: id, type: "chat.new", fields)
     }
 
@@ -161,11 +167,12 @@ package enum HostWire {
     // MARK: In
 
     package static func decode(_ data: Data) throws -> HostInbound {
+        if RelayWire.type(data) == "chat.events" { return .events(try JSONDecoder().decode(ChatEvents.self, from: data)) }
         let message = try LinkMessage.decode(data)
         if case .result(let result) = message, result.ok, let folders = try? JSONDecoder().decode(FoldersPeek.self, from: data).folders {
             return .folders(id: result.id, folders.map { BoxFolder(path: $0.path, windowId: $0.windowId) })
         }
-        return .link(message, seq: nil)
+        return .link(message)
     }
 
     /// The welcome's `host.kind` ("box" for kore-host); nil from a host that doesn't say.
@@ -187,7 +194,9 @@ package enum HostWire {
 
     // MARK: Bytes
 
-    private static func encode(_ message: LinkMessage) -> Data { (try? message.encoded()) ?? Data() }
+    package static func encode(_ message: LinkMessage) -> Data { (try? message.encoded()) ?? Data() }
+
+    package static func sha256(_ data: Data) -> String { LinkUploads.hex(SHA256.hash(data: data)) }
 
     private static func json(_ object: [String: Any]) -> Data {
         (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()

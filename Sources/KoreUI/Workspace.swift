@@ -309,6 +309,15 @@ package final class Workspace {
     func fork(_ chat: Chat, _ start: ForkStart, text: String) -> Chat? {
         let title = "\(chat.title) (fork)"
         let fork: Chat
+        // A box's chat forks on the box: its fork is a new chat there, made from the same point.
+        if let box {
+            switch start {
+            case .pending(let point): fork = box.forkChat(of: chat, from: point.from, at: point.at, title: title)
+            case .fresh: fork = box.newChat(chat.provider)
+            }
+            open(fork, of: chat, text: text)
+            return fork
+        }
         switch start {
         case .pending(var point):
             // Listed in the history at once, under an id of its own, though its CLI may make it

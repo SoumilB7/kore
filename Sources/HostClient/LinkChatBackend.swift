@@ -3,15 +3,39 @@ import KoreCore
 import LinkProtocol
 import src
 
-/// A chat that runs on a box: a normal `Chat` whose backend is the link. The box's entries and
-/// state come in as `ChatEvent`s (`LinkTranscript`), so the transcript, composer, cards and
-/// pickers work as they do for a chat on this Mac; sends, Stop, answers, mode, model and effort go
-/// back as link commands.
+/// A chat that runs on a box: a normal `Chat` whose backend is the box's own (link 1.5, box
+/// parity). Each call crosses as one `chat.call` to the chat's real backend there; its events come
+/// back unchanged (`chat.events`), so this Mac's chat, transcript and stores take them as they
+/// take a local CLI's: model chip, context wheel, compaction, agents, approvals, everything.
 ///
 /// It shows the local copy first, and stays readable offline. A chat new from this Mac is made on
-/// the box at its first start (`chat.new` in the window's folder).
+/// the box at its first start (`chat.new` in the window's folder, or a fork's start).
 @MainActor
 package final class LinkChatBackend: ChatBackend, HostFollower {
+    /// What a chat new from this Mac is made with on the box.
+    package struct Making: Sendable {
+        package var model: String?
+        /// A fork's start: the session and the message it forks at.
+        package var forkFrom: String?
+        package var forkAt: String?
+        package var title: String?
+        package var mode: String?
+        package var effort: String?
+
+        package init(
+            model: String? = nil, forkFrom: String? = nil, forkAt: String? = nil, title: String? = nil, mode: String? = nil, effort: String? = nil
+        ) {
+            self.model = model
+            self.forkFrom = forkFrom
+            self.forkAt = forkAt
+            self.title = title
+            self.mode = mode
+            self.effort = effort
+        }
+
+        var fork: (from: String, at: String)? { forkFrom.flatMap { from in forkAt.map { (from, $0) } } }
+    }
+
     package let events: AsyncStream<ChatEvent>
     private let continuation: AsyncStream<ChatEvent>.Continuation
     package private(set) var chatId: String?
@@ -19,38 +43,35 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     private let provider: ProviderDescriptor
     /// The box's folder, as it names it.
     private let folder: String
-    /// A new chat's model on the box (`chat.new`'s `modelId`); nil for the CLI's default.
-    private let model: String?
+    private let making: Making
 
-    private var transcript = LinkTranscript()
-    /// The chat has been shown its transcript once (a replay); after that, changes.
-    private var opened = false
-    /// The next page replaces the transcript (`tx.reset` came).
-    private var resetting = false
-    private var deltasSinceBase = 0
-    private var meta: ChatMeta?
-    private var cards: [String: LinkCard] = [:]
-    private var mode: String?
-    private var planOn: Bool?
-    private var controlsSaid: String?
-    private var fastSaid: Bool?
-    private var contextSaid: ContextUsage?
+    /// The box's log this copy follows, and the last seq it holds.
+    private var log: String?
+    private var seq: Int?
+    private var assembler = RelayAssembler()
+    /// Something was shown: a history from the box from now on rebuilds it.
+    private var shown = false
     private var connectionSaid = Connection.ok
     private var starting: Task<Void, Error>?
     private var closed = false
+    private var titleSaid: String?
 
     /// The box's title for the chat changed (a rename there, or its first title).
     package var onTitle: ((String) -> Void)?
     /// A chat made from this Mac has its id on the box.
     package var onCreated: ((String) -> Void)?
 
-    package init(connection: HostConnection, provider: ProviderDescriptor, folder: String, chatId: String?, model: String? = nil) {
+    package init(connection: HostConnection, provider: ProviderDescriptor, folder: String, chatId: String?, making: Making = Making()) {
         self.connection = connection
         self.provider = provider
         self.folder = folder
-        self.model = model
+        self.making = making
         self.chatId = chatId
         (events, continuation) = AsyncStream.makeStream(of: ChatEvent.self)
+    }
+
+    package convenience init(connection: HostConnection, provider: ProviderDescriptor, folder: String, chatId: String?, model: String?) {
+        self.init(connection: connection, provider: provider, folder: folder, chatId: chatId, making: Making(model: model))
     }
 
     package var sessionId: String? { chatId }
@@ -71,129 +92,90 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     private func begin() async throws {
         if chatId == nil {
-            let result = await connection.command { HostWire.newChat(id: $0, folder: self.folder, provider: self.provider.id, model: self.model) }
+            let m = making
+            let (folder, provider) = (folder, provider.id)
+            let result = await connection.command {
+                HostWire.newChat(id: $0, folder: folder, provider: provider, model: m.model, fork: m.fork, title: m.title, mode: m.mode, effort: m.effort)
+            }
             guard result.ok, let id = result.chatId else { throw HostRefusal(result, alias: connection.alias) }
             chatId = id
             onCreated?(id)
         }
         guard let chatId, !closed else { return }
-        yield([.sessionIdentified(chatId)])
+        // The copy first: its history and what followed, as they came.
         let cache = connection.cache
-        let log = await Task.detached { cache.read(chat: chatId) }.value
-        if let base = log.base {
-            transcript = LinkTranscript(base: base)
-            for (delta, seq) in log.deltas { transcript.delta(delta, seq: seq) }
-            deltasSinceBase = log.deltas.count
+        let copy = await Task.detached { cache.events(chat: chatId) }.value
+        if let id = copy.log {
+            log = id
+            seq = copy.items.last?.s
+            show(assembler.take(copy.items))
         }
-        if !transcript.isEmpty { open() }
         if let meta = connection.chats[chatId] { self.meta(meta) }
         connection.follow(self)
         if !connection.isOnline { linked(false) }
     }
 
-    /// The first showing: the settled part as one replay, what runs as live events.
-    private func open() {
-        opened = true
-        let (replayed, live) = transcript.opening()
-        yield([.replayed(replayed), .earlierHistory(false)] + live)
-    }
-
     // MARK: From the box
 
-    package func received(_ message: LinkMessage, raw: Data, seq: Int?) {
+    package var following: ChatFollow? { chatId.map { ChatFollow(chatId: $0, after: seq, log: log) } }
+
+    package func relayed(_ frame: ChatEvents) {
         guard let chatId, !closed else { return }
-        switch message {
-        case .txReset:
-            resetting = true
-        case .txPage(_, _, let entries, let turns, let hasEarlier):
-            transcript.page(entries: entries, turns: turns, hasEarlier: hasEarlier, seq: seq, replacing: resetting)
-            resetting = false
-            connection.cache.write(base: transcript.base, chat: chatId)
-            deltasSinceBase = 0
-            show()
-        case .txDelta(let delta):
-            transcript.delta(delta, seq: seq)
-            deltasSinceBase += 1
-            if deltasSinceBase > Self.deltasPerBase {
-                connection.cache.write(base: transcript.base, chat: chatId)
-                deltasSinceBase = 0
-            } else {
-                connection.cache.append(delta: raw, chat: chatId)
+        if frame.reset == true {
+            // The box's log started again, or this copy was behind it: what it holds replaces
+            // what's shown. A history already shown comes as a rebuild of it.
+            assembler.reset()
+            var list = assembler.take(frame.items)
+            if shown, let at = list.firstIndex(where: ChatEngine.isReplay), case .replayed(let history) = list[at] {
+                list[at] = .historyReplaced(history)
             }
-            show()
-        case .result(let result) where !result.ok:
-            yield([.notice("This chat isn't on \(connection.alias) any more", isError: true)])
-        default:
-            break
+            log = frame.log
+            seq = frame.seq ?? seq
+            connection.cache.restart(log: frame.log, items: frame.items, chat: chatId)
+            show(list)
+            return
         }
+        guard frame.log == log else { return }
+        seq = frame.seq ?? seq
+        connection.cache.append(frame.items, chat: chatId)
+        // This grant's own rows (its message, its answer) are shown already, by this Mac's chat.
+        var list: [ChatEvent] = []
+        for item in frame.items {
+            if item.by == connection.grant, item.e != nil { continue }
+            if let event = assembler.take(item) { list.append(event) }
+        }
+        show(list)
     }
 
-    /// Past this many deltas, the log starts again from a base.
-    static let deltasPerBase = 400
+    package func refused(_ message: String) {
+        guard !closed else { return }
+        emit([.notice(message, isError: true)])
+    }
 
-    private func show() {
-        if opened { yield(transcript.changes()) } else { open() }
+    private func show(_ list: [ChatEvent]) {
+        guard !list.isEmpty else { return }
+        shown = true
+        emit(list.map(boxed))
+    }
+
+    /// What the box doesn't take from here (its provider's capabilities don't list it) is said as
+    /// a CLI says what it can't do, so the control shows it unavailable instead of failing.
+    private func boxed(_ event: ChatEvent) -> ChatEvent {
+        if case .remoteControlUnavailable = event, !offers("setRemoteControl") { return .remoteControlUnavailable(Self.remoteOnBox) }
+        return event
+    }
+
+    static let remoteOnBox = "Remote control of a chat on a box is turned on on the box"
+
+    /// A call the box takes for this chat's CLI (its provider's `relay` capabilities).
+    package func offers(_ call: String) -> Bool {
+        connection.providers.first { $0.id == provider.id }?.relay?.contains(call) ?? false
     }
 
     package func meta(_ meta: ChatMeta?) {
-        guard let meta, !closed else { return }
-        self.meta = meta
-        var out: [ChatEvent] = []
-        if !meta.title.isEmpty, meta.title != titleSaid {
-            titleSaid = meta.title
-            out.append(.titleChanged(meta.title))
-            onTitle?(meta.title)
-        }
-        if meta.mode.id != mode {
-            out.append(.modeChanged(ModeChange(mode: meta.mode.id, previous: mode, source: mode == nil ? .session : .user, at: Date())))
-            mode = meta.mode.id
-        }
-        if provider.planToggle != nil, let on = meta.mode.planOn, on != planOn {
-            out.append(.planModeChanged(PlanModeChange(on: on, source: planOn == nil ? .session : .user, at: Date())))
-            planOn = on
-        }
-        // The box's own model list (`clis`), never this Mac's: the picker, model chip and effort
-        // render as a local chat's do. A new list or a model the box confirmed says them again.
-        let controls = ChatControls(
-            models: connection.models(provider.id), model: meta.controls?.modelId, effort: meta.controls?.effort,
-            commands: (meta.commands ?? []).map { SlashCommand(name: $0.name, description: $0.description, hint: "", kind: $0.kind == .skill ? .skill : .command) })
-        let said = "\(controls.models)|\(controls.model ?? "")|\(controls.effort ?? "")|\(controls.commands.map(\.name))"
-        if said != controlsSaid {
-            controlsSaid = said
-            out.append(.controlsLoaded(controls))
-            // A load clears fast mode's report: it's said again below.
-            fastSaid = nil
-        }
-        if let fast = meta.controls?.fast, fast != fastSaid {
-            fastSaid = fast
-            out.append(.fastModeChanged(FastModeReport(on: fast, offered: meta.controls?.fastOffered)))
-        }
-        if let usage = Self.context(meta.controls), usage.used != contextSaid?.used || usage.window != contextSaid?.window {
-            contextSaid = usage
-            out.append(.contextUsage(usage))
-        }
-        if meta.running, let state = meta.rescue?.connection {
-            let now: Connection = state == .stalled ? .stalled : state == .offline ? .offline : .ok
-            if now != connectionSaid {
-                connectionSaid = now
-                out.append(.connection(now))
-            }
-        }
-        yield(out)
-        syncCards()
-    }
-
-    private var titleSaid: String?
-
-    /// The wheel's reading from the box: its tokens and window, else its percentage alone (a
-    /// window of 100).
-    static func context(_ controls: LinkProtocol.ChatControls?) -> ContextUsage? {
-        guard let controls else { return nil }
-        if let used = controls.contextUsed {
-            return ContextUsage(used: used, window: controls.contextWindow, autoCompacts: nil, at: Date())
-        }
-        guard let pct = controls.contextPct else { return nil }
-        return ContextUsage(used: pct, window: 100, autoCompacts: nil, at: Date())
+        guard let meta, !closed, !meta.title.isEmpty, meta.title != titleSaid else { return }
+        titleSaid = meta.title
+        onTitle?(meta.title)
     }
 
     package func linked(_ up: Bool) {
@@ -202,78 +184,11 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         let now: Connection = up ? .ok : .offline
         guard now != connectionSaid else { return }
         connectionSaid = now
-        yield([.connection(now)])
-    }
-
-    /// The cards the box shows, as approvals: new ones asked, gone ones withdrawn. A replay or a
-    /// turn's end clears the chat's own list, so they're asked again after one.
-    private func syncCards() {
-        let now = meta?.cards ?? []
-        var out: [ChatEvent] = []
-        for card in now where cards[card.id] == nil {
-            cards[card.id] = card
-            out.append(card.kind == .planReady ? .planReady : .approvalRequested(Self.approval(card)))
-        }
-        let ids = Set(now.map(\.id))
-        for (id, card) in cards where !ids.contains(id) {
-            cards[id] = nil
-            if card.kind != .planReady { out.append(.approvalWithdrawn(id)) }
-        }
-        if !out.isEmpty { emit(out) }
-    }
-
-    static func approval(_ card: LinkCard) -> Approval {
-        let questions = (card.questions ?? []).map { q in
-            Approval.Question(
-                id: q.id, text: q.text, header: q.header,
-                options: q.options.map { .init(label: $0.label, description: $0.description, preview: $0.preview) }, multiple: q.multiple,
-                secret: q.secret, other: q.other)
-        }
-        let isPlan = card.kind == .plan
-        var approval = Approval(
-            id: card.id, title: card.title, detail: card.detail, body: isPlan ? nil : card.body, canAlwaysAllow: false, questions: questions,
-            plan: isPlan ? (card.body ?? planText(card.plan ?? [])) : nil)
-        approval.signIn = card.kind == .signIn
-        return approval
-    }
-
-    /// A plan sent as a render tree, back to plain text.
-    static func planText(_ blocks: [Block]) -> String {
-        func spans(_ list: [Span]) -> String { list.map(\.text).joined() }
-        return blocks.map { block -> String in
-            switch block {
-            case .heading(let level, let s): String(repeating: "#", count: max(1, level)) + " " + spans(s)
-            case .paragraph(let s): spans(s)
-            case .code(let lang, let text, _): "```\(lang)\n\(text)\n```"
-            case .list(let ordered, let start, let items):
-                items.enumerated().map { i, item in (ordered ? "\(start + i)." : "-") + " " + planText(item.blocks) }.joined(separator: "\n")
-            case .quote(let inner): planText(inner).split(separator: "\n").map { "> " + $0 }.joined(separator: "\n")
-            case .table(let header, let rows): ([header] + rows).map { "| " + $0.map(spans).joined(separator: " | ") + " |" }.joined(separator: "\n")
-            case .rule: "---"
-            case .unknown: ""
-            }
-        }.joined(separator: "\n\n")
-    }
-
-    private func yield(_ list: [ChatEvent]) {
-        guard !list.isEmpty else { return }
-        emit(list)
-        // A replay, a rebuild or a turn's end empties the chat's cards: the box's are asked again.
-        if list.contains(where: Self.clearsCards) {
-            cards = [:]
-            syncCards()
-        }
+        emit([.connection(now)])
     }
 
     private func emit(_ list: [ChatEvent]) {
         for event in list { continuation.yield(event) }
-    }
-
-    private static func clearsCards(_ event: ChatEvent) -> Bool {
-        switch event {
-        case .replayed, .historyReplaced, .turnFinished: true
-        default: false
-        }
     }
 
     // MARK: To the box
@@ -285,113 +200,142 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         return chatId
     }
 
-    package func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
-        guard files.isEmpty else { throw HostRefusal(message: "Files can't go to a chat on \(connection.alias) yet") }
+    /// One call on the box's backend: its value, or the box's reason.
+    @discardableResult
+    private func call(_ command: ChatCommand) async throws -> RelayValue {
         let chatId = try await ready()
-        transcript.sending(text, queued: queued)
-        if !connection.isOnline { linked(false) }
-        Task {
-            let result = await connection.command { HostWire.command(id: $0, .send(chatId: chatId, text: text)) }
-            guard !result.ok, !closed else { return }
-            var out: [ChatEvent] = [.notice("Not sent: \(HostRefusal(result, alias: connection.alias).message)", isError: true)]
-            if let queued { out.append(.queuedMessage(id: queued, .dropped)) } else { out.append(.turnFinished(nil, .interrupted, duration: nil)) }
-            yield(out)
-        }
-        return true
+        let result = await connection.call(chatId, command)
+        guard result.ok else { throw HostRefusal(message: result.message ?? HostRefusal.words(result.code, alias: connection.alias)) }
+        return result.value ?? RelayValue()
     }
 
-    package func interrupt() async {
-        guard let chatId else { return }
-        _ = await connection.command { HostWire.command(id: $0, .stop(chatId: chatId)) }
+    package func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
+        _ = try await ready()
+        if !connection.isOnline { linked(false) }
+        var sent: [RelayFile] = []
+        for file in files { sent.append(try await upload(file)) }
+        return try await call(.send(text: text, files: sent, queued: queued, id: id)).bool ?? true
     }
+
+    /// A file to the box by the link's upload: the blob its message names it by there, which the
+    /// box saves and attaches by its path.
+    private func upload(_ file: Attachments.File) async throws -> RelayFile {
+        let url = file.url
+        guard let data = await Task.detached(operation: { try? Data(contentsOf: url) }).value else {
+            throw HostRefusal(message: "\(file.name) couldn't be read")
+        }
+        guard data.count <= LinkUploads.maxSize else { throw HostRefusal(message: "\(file.name) is over 12 MB, too large to send to \(connection.alias)") }
+        switch await connection.upload(data, name: file.name, mime: Self.mime(data)) {
+        case .success(let blob): return RelayFile(blob: blob, name: file.name, kind: file.kind)
+        case .failure(let refusal): throw refusal
+        }
+    }
+
+    /// The type an upload declares: what its bytes are, as the box checks them.
+    static func mime(_ data: Data) -> String {
+        switch LinkUploads.sniff(data) {
+        case .image:
+            let b = [UInt8](data.prefix(4))
+            if b.starts(with: [0x89, 0x50]) { return "image/png" }
+            if b.starts(with: [0xFF, 0xD8]) { return "image/jpeg" }
+            if b.starts(with: Array("GIF8".utf8)) { return "image/gif" }
+            return "image/webp"
+        case .pdf: return "application/pdf"
+        case .text: return "text/plain"
+        case .other: return "application/octet-stream"
+        }
+    }
+
+    package func interrupt() async { _ = try? await call(.interrupt) }
 
     package func respond(to approvalID: String, _ decision: Decision) async {
-        guard let chatId, let card = cards[approvalID] ?? meta?.cards.first(where: { $0.id == approvalID }) else { return }
-        let action: CardAction.ID
-        var answers: [String: [String]]?
-        switch decision {
-        case .allow, .allowAlways: action = .allow
-        case .deny: action = .deny
-        case .approvePlan(let acceptEdits): action = acceptEdits ? .approvePlanAcceptEdits : .approvePlan
-        case .keepPlanning: action = .keepPlanning
-        case .answers(let picked):
-            action = .submitAnswers
-            answers = picked
-        }
-        let result = await connection.command {
-            HostWire.command(id: $0, .answer(chatId: chatId, cardId: card.id, action: action, digest: card.digest, answers: answers))
-        }
-        if !result.ok { yield([.notice("Couldn't answer: \(HostRefusal(result, alias: connection.alias).message)", isError: true)]) }
-    }
-
-    package func setMode(_ id: String) async throws {
-        try await act(.setMode(chatId: try await ready(), modeId: id))
-    }
-
-    package func setPlanMode(_ on: Bool) async {
-        guard let chatId = try? await ready() else { return }
-        try? await act(.setPlan(chatId: chatId, on: on))
-    }
-
-    package func setModel(_ id: String) async throws {
         do {
-            try await act(.control(.chatSetModel, ControlArgs(chatId: try await ready(), modelId: id)))
+            try await call(.respond(approval: approvalID, decision: decision))
         } catch {
-            sayControlsAgain()
-            throw error
+            emit([.notice("Couldn't answer: \(error)", isError: true)])
         }
     }
+
+    package func setMode(_ id: String) async throws { try await call(.setMode(id)) }
+    package func setPlanMode(_ on: Bool) async { _ = try? await call(.setPlanMode(on)) }
+    package func setModel(_ id: String) async throws { try await call(.setModel(id)) }
 
     package func setEffort(_ level: String) async {
-        guard let chatId = try? await ready() else { return }
         do {
-            try await act(.control(.chatSetEffort, ControlArgs(chatId: chatId, level: level)))
+            try await call(.setEffort(level))
         } catch {
-            sayControlsAgain()
-            yield([.notice("Couldn't set the effort: \(error)", isError: true)])
+            emit([.notice("Couldn't set the effort: \(error)", isError: true)])
         }
     }
 
-    /// A model or effort the box refused: the picker goes back to what the box last said.
-    private func sayControlsAgain() {
-        controlsSaid = nil
-        self.meta(self.meta)
+    package func setFastMode(_ on: Bool) async throws { try await call(.setFastMode(on)) }
+    package func rename(_ title: String) async throws { try await call(.rename(title)) }
+    package func stopAgent(_ id: String) async { _ = try? await call(.stopAgent(id)) }
+    package func stopCommand(_ id: String) async throws { try await call(.stopCommand(id)) }
+    package func backgroundCommand(_ id: String) async throws { try await call(.backgroundCommand(id)) }
+    package func commandOutput(_ id: String) async -> String? { (try? await call(.commandOutput(id)))?.text }
+    package func watchCommands(_ closely: Bool) async { _ = try? await call(.watchCommands(closely)) }
+    package func agentHistory(_ id: String) async -> [ChatEvent] { (try? await call(.agentHistory(id)))?.events ?? [] }
+
+    package func fork(message id: String?, text: String) async throws -> ForkStart {
+        Self.start(try await call(.fork(message: id, text: text)))
     }
 
-    package func setFastMode(_ on: Bool) async throws {
-        try await act(.control(.chatSetFast, ControlArgs(chatId: try await ready(), on: on)))
+    package func forkAtEnd() async throws -> ForkStart { Self.start(try await call(.forkAtEnd)) }
+
+    private static func start(_ value: RelayValue) -> ForkStart {
+        guard let from = value.forkFrom, let at = value.forkAt else { return .fresh }
+        return .pending(ForkPoint(from: from, at: at))
     }
 
-    package func rename(_ title: String) async throws {
-        try await act(.control(.chatRename, ControlArgs(chatId: try await ready(), title: title)))
+    package func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        let value = try await call(.rollback(message: id, text: text))
+        return (value.events ?? [], value.more ?? false)
     }
 
-    package func compact(instructions: String) async throws {
-        try await act(.control(.chatCompact, ControlArgs(chatId: try await ready(), instructions: instructions.isEmpty ? nil : instructions)))
+    package func earlier() async -> (events: [ChatEvent], more: Bool)? { page(try? await call(.earlier(turns: nil))) }
+    package func earlier(turns: Int) async -> (events: [ChatEvent], more: Bool)? { page(try? await call(.earlier(turns: turns))) }
+
+    private func page(_ value: RelayValue?) -> (events: [ChatEvent], more: Bool)? {
+        guard let value, let events = value.events else { return nil }
+        return (events, value.more ?? false)
     }
 
-    private func act(_ command: LinkCommand) async throws {
-        let result = await connection.command { HostWire.command(id: $0, command) }
-        if !result.ok { throw HostRefusal(result, alias: connection.alias) }
+    package func earlierMessages() async -> [EarlierMessage] { (try? await call(.earlierMessages))?.messages ?? [] }
+
+    package func unloadPoint(message id: String?, text: String) async -> UnloadPoint? {
+        guard let value = try? await call(.unloadPoint(message: id, text: text)), let earlier = value.unloadEarlier else { return nil }
+        return UnloadPoint(earlier: earlier, messages: value.messages ?? [])
     }
+
+    package func unloaded(to earlier: String) {
+        Task { _ = try? await call(.unloaded(to: earlier)) }
+    }
+
+    package func compact(instructions: String) async throws { try await call(.compact(instructions: instructions)) }
+
+    package func usage() async throws -> PlanReading {
+        guard let reading = try await call(.usage).reading else { throw UsageUnavailable() }
+        return reading
+    }
+
+    package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome {
+        guard let outcome = try await call(.useReset(credit: credit, attempt: attempt)).outcome else { throw UsageUnavailable() }
+        return outcome
+    }
+
+    package func setRemoteControl(_ on: Bool) async throws { try await call(.setRemoteControl(on)) }
+
+    /// The box's CLI runs as the box's login: this Mac's account changing doesn't touch it.
+    package func relaunchAfterAccountChange() async -> Bool { true }
+
+    package func relaunch(reason: String) async { _ = try? await call(.relaunch(reason: reason)) }
 
     package func listModels() async -> [ModelOption]? {
-        let models = connection.models(provider.id)
-        return models.isEmpty ? nil : models
+        if let models = (try? await call(.listModels))?.models, !models.isEmpty { return models }
+        let kept = connection.models(provider.id)
+        return kept.isEmpty ? nil : kept
     }
-
-    // MARK: Not on a box yet
-
-    package func stopAgent(_ id: String) async {}
-    package func agentHistory(_ id: String) async -> [ChatEvent] { [] }
-    package func fork(message id: String?, text: String) async throws -> ForkStart { throw HostRefusal(message: Self.notYet) }
-    package func forkAtEnd() async throws -> ForkStart { throw HostRefusal(message: Self.notYet) }
-    package func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
-        throw HostRefusal(message: Self.notYet)
-    }
-    package func earlier() async -> (events: [ChatEvent], more: Bool)? { nil }
-
-    static let notYet = "A chat on a box can't do that yet"
 
     /// The tab closed or the window went: the box stops sending this chat. It runs on there.
     package func close() async {
@@ -400,11 +344,6 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         connection.unfollow(self)
         continuation.finish()
     }
-
-    // MARK: Moving a chat (later)
-
-    /// Where "Continue on this Mac" plugs in: the transcript as the box last sent it, to carry over.
-    package var carried: LinkTranscript { transcript }
 }
 
 /// A command the box (or the link) refused, in its words.
@@ -430,6 +369,7 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
         case .deniedControl: "this Mac's grant on \(alias) doesn't allow it"
         case .rateLimited: "too many at once; try again in a moment"
         case .staleCard: "the card changed on \(alias)"
+        case .command: "\(alias) doesn't take that here"
         default: "\(alias) refused it"
         }
     }

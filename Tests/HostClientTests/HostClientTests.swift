@@ -33,9 +33,9 @@ struct HostClientTests {
         #expect(await until { dials.hosts.count == 1 })
         let host = dials.hosts[0]
         let hello = try #require(await host.handshake(windows: [Fixture.window(["c1"])], chats: [Fixture.meta("c1")]))
-        // attach fills in the proof: the Mac sends it empty, at link 1.4.
+        // attach fills in the proof: the Mac sends it empty, at link 1.5.
         #expect(hello["proof"] as? String == "")
-        #expect((hello["proto"] as? [String: Int])?["minor"] == 4)
+        #expect((hello["proto"] as? [String: Int])?["minor"] == 5)
         #expect(await until { connection.isOnline })
         #expect(connection.hostKind == "box")
         #expect(connection.chats(in: "~/app").map(\.id) == ["c1"])
@@ -44,124 +44,7 @@ struct HostClientTests {
         #expect(connection.phase == .idle)
     }
 
-    @Test func transcriptPageAndDeltas() async throws {
-        let dials = Dials()
-        let connection = makeConnection(root: Fixture.scratch(), dials: dials)
-        connection.retain()
-        #expect(await until { dials.hosts.count == 1 })
-        let host = dials.hosts[0]
-        _ = await host.handshake(windows: [Fixture.window(["c1"])], chats: [Fixture.meta("c1", mode: "plan")])
-        #expect(await until { connection.isOnline })
-
-        let backend = LinkChatBackend(connection: connection, provider: .claude, folder: "~/app", chatId: "c1")
-        let log = EventLog(backend.events)
-        try await backend.start()
-        let open = try #require(await host.next("tx.open"))
-        #expect(open["chatId"] as? String == "c1")
-        #expect(open["last"] as? Int == HostWire.followLast)
-
-        host.send(.txPage(
-            chatId: "c1", txRev: 1, entries: [Fixture.user("u1", "add totals"), Fixture.answer("a1", "Done", turn: "T1")],
-            turns: [Fixture.turn("T1", finished: true)], hasEarlier: false))
-        #expect(await until { log.events.contains { if case .replayed = $0 { true } else { false } } })
-        let replayed = log.flat
-        #expect(replayed.contains { if case .userMessage(let text, _, _) = $0 { text == "add totals" } else { false } })
-        #expect(replayed.contains { if case .turnStarted("T1", _, _) = $0 { true } else { false } })
-        #expect(replayed.contains { if case .turnFinished("T1", .completed, _) = $0 { true } else { false } })
-        #expect(log.texts == ["Done"])
-        // The chat's state: its mode as the box has it.
-        #expect(log.events.contains { if case .modeChanged(let change) = $0 { change.mode == "plan" } else { false } })
-
-        // A new turn streams: its start, then its text in pieces.
-        host.send(.txDelta(.init(
-            chatId: "c1", txRev: 2, upserts: [Fixture.user("u2", "and tax"), Fixture.answer("a2", "Add", turn: "T2", done: false)],
-            removed: [], turns: [Fixture.turn("T2", finished: false)])))
-        host.send(.txDelta(.init(chatId: "c1", txRev: 3, upserts: [Fixture.answer("a2", "Adding tax", turn: "T2", done: false)], removed: [])))
-        #expect(await until { log.texts == ["Done", "Add", "ing tax"] })
-        #expect(log.events.contains { if case .turnStarted("T2", _, _) = $0 { true } else { false } })
-        host.send(.txDelta(.init(chatId: "c1", txRev: 4, upserts: [], removed: [], turns: [Fixture.turn("T2", finished: true)])))
-        #expect(await until { log.events.contains { if case .turnFinished("T2", _, _) = $0 { true } else { false } } })
-
-        // An entry gone: the transcript is built again from the whole.
-        host.send(.txDelta(.init(chatId: "c1", txRev: 5, upserts: [], removed: ["a1"])))
-        #expect(await until { log.events.contains { if case .historyReplaced = $0 { true } else { false } } })
-
-        // A card on the box is asked here; the answer goes back with its digest.
-        let card = LinkCard(id: "k1", kind: .permission, title: "Run ls", body: "ls", actions: [.init(id: .allow, label: "Allow", style: .primary)], digest: "d1")
-        host.send(.delta(rev: 2, windows: nil, chats: [Fixture.meta("c1", mode: "plan", running: true, cards: [card])], removed: nil))
-        #expect(await until { log.events.contains { if case .approvalRequested(let a) = $0 { a.id == "k1" } else { false } } })
-        Task { await backend.respond(to: "k1", .allow) }
-        let answer = try #require(await host.next("cmd"))
-        let cmd = try #require(answer["cmd"] as? [String: Any])
-        #expect(cmd["type"] as? String == "chat.answer")
-        #expect(cmd["digest"] as? String == "d1")
-        #expect(cmd["action"] as? String == "allow")
-        host.send(.result(.init(id: answer["id"] as! String, ok: true)))
-        connection.release()
-    }
-
-    @Test func boxControlsAndModelsBecomeThePickers() async throws {
-        let dials = Dials()
-        let connection = makeConnection(root: Fixture.scratch(), dials: dials)
-        connection.retain()
-        #expect(await until { dials.hosts.count == 1 })
-        let host = dials.hosts[0]
-        var meta = Fixture.meta("c1")
-        meta.controls = LinkProtocol.ChatControls(
-            modelId: "haiku", effort: "low", fast: nil, fastOffered: false, planAllow: false, contextPct: 12, autoCompactAt: nil,
-            compacting: false, remote: .off, contextUsed: 24_000, contextWindow: 200_000)
-        _ = await host.handshake(windows: [Fixture.window(["c1"])], chats: [meta])
-        #expect(await until { connection.isOnline })
-        let backend = LinkChatBackend(connection: connection, provider: .claude, folder: "~/app", chatId: "c1")
-        let log = EventLog(backend.events)
-        try await backend.start()
-        func loaded() -> [src.ChatControls] { log.events.compactMap { if case .controlsLoaded(let c) = $0 { c } else { nil } } }
-        func usages() -> [ContextUsage] { log.events.compactMap { if case .contextUsage(let u) = $0 { u } else { nil } } }
-        // The box's model and effort, before it has listed its models; the wheel from its tokens.
-        #expect(await until { loaded().last?.model == "haiku" && loaded().last?.effort == "low" })
-        #expect(loaded().last?.models.isEmpty == true)
-        #expect(usages().last.map { [$0.used, $0.window ?? 0] } == [24_000, 200_000])
-
-        // The box's list comes in a delta: the picker takes it, never this Mac's.
-        let clis = [
-            CLIState(
-                provider: "claude",
-                models: [
-                    .init(id: "haiku", name: "Haiku", efforts: ["low", "high"], fast: false, auto: false),
-                    .init(id: "box-only", name: "Box only", efforts: ["low"], fast: true, auto: true),
-                ], effortScale: ["low", "high"])
-        ]
-        host.send(.delta(rev: 2, windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: clis)))
-        #expect(await until { loaded().last?.models.map(\.id) == ["haiku", "box-only"] })
-        #expect(loaded().last?.models.last?.supportsFastMode == true)
-        #expect(connection.models("claude").map(\.id) == ["haiku", "box-only"])
-        #expect(connection.models("codex").isEmpty)
-
-        // A pick goes to the box as chat.setModel; the picker moves when the box confirms it.
-        Task { try? await backend.setModel("box-only") }
-        let pick = try #require(await host.next("cmd"))
-        let cmd = try #require(pick["cmd"] as? [String: Any])
-        #expect(cmd["type"] as? String == "chat.setModel")
-        #expect(cmd["modelId"] as? String == "box-only")
-        host.send(.result(.init(id: pick["id"] as! String, ok: true)))
-        meta.controls?.modelId = "box-only"
-        meta.controls?.contextUsed = nil
-        meta.controls?.contextPct = 40
-        host.send(.delta(rev: 3, windows: nil, chats: [meta], removed: nil))
-        #expect(await until { loaded().last?.model == "box-only" })
-        // Only a percentage: the wheel reads it against 100.
-        #expect(await until { usages().last.map { [$0.used, $0.window ?? 0] } == [40, 100] })
-
-        Task { await backend.setEffort("high") }
-        let effort = try #require(await host.next("cmd"))
-        let set = try #require(effort["cmd"] as? [String: Any])
-        #expect(set["type"] as? String == "chat.setEffort")
-        #expect(set["level"] as? String == "high")
-        host.send(.result(.init(id: effort["id"] as! String, ok: true)))
-        connection.release()
-    }
-
-    @Test func sendsWaitWhileOffline() async throws {
+    @Test func callsWaitWhileOfflineAndGoOnce() async throws {
         let dials = Dials()
         let connection = makeConnection(root: Fixture.scratch(), dials: dials)
         connection.retain()
@@ -171,7 +54,8 @@ struct HostClientTests {
         let backend = LinkChatBackend(connection: connection, provider: .claude, folder: "~/app", chatId: "c1")
         let log = EventLog(backend.events)
         try await backend.start()
-        _ = await dials.hosts[0].next("tx.open")
+        let follow = try #require(await dials.hosts[0].next("chat.follow"))
+        #expect(follow["chatId"] as? String == "c1" && follow["after"] == nil)
 
         // The box goes away; the client says so and dials again.
         dials.refuse = true
@@ -180,83 +64,38 @@ struct HostClientTests {
         #expect(connection.lastHeard != nil)
         #expect(await until { log.events.contains { if case .connection(.offline) = $0 { true } else { false } } })
 
-        let turn = try await backend.send("are you there", files: [], queued: nil, id: "m1")
-        #expect(turn)
+        let sending = Task { try await backend.send("are you there", files: [], queued: nil, id: "m1") }
 
-        // Back: the follow is opened again, then the send goes, once.
+        // Back: the follow goes again, then the call, once.
         dials.refuse = false
         let back = dials.hosts.count
         #expect(await until(5) { dials.hosts.count > back })
         let host = dials.hosts[dials.hosts.count - 1]
         _ = await host.handshake(windows: [Fixture.window(["c1"])], chats: [Fixture.meta("c1")])
-        #expect(await host.next("tx.open") != nil)
-        let send = try #require(await host.next("cmd"))
-        let cmd = try #require(send["cmd"] as? [String: Any])
-        #expect(cmd["type"] as? String == "chat.send")
-        #expect(cmd["text"] as? String == "are you there")
-        host.send(.result(.init(id: send["id"] as! String, ok: true)))
+        #expect(await host.next("chat.follow") != nil)
+        let call = try #require(await host.next("chat.call"))
+        let send = try #require((call["command"] as? [String: Any])?["send"] as? [String: Any])
+        #expect(send["text"] as? String == "are you there" && send["id"] as? String == "m1")
+        host.send(json: ["t": "result", "id": call["id"] ?? "", "ok": true, "value": ["bool": true]])
+        #expect(try await sending.value)
         #expect(await until { log.events.contains { if case .connection(.ok) = $0 { true } else { false } } })
 
-        // The box's copy of a message sent from here isn't shown twice.
-        host.send(.txPage(chatId: "c1", txRev: 1, entries: [Fixture.user("u9", "are you there")], turns: [], hasEarlier: false))
-        try await Task.sleep(for: .milliseconds(200))
-        #expect(!log.flat.contains { if case .userMessage(let text, _, _) = $0 { text == "are you there" } else { false } })
-        #expect(await host.next("cmd", within: 0.3) == nil)
-        connection.release()
-    }
-
-    @Test func localCopyAndCatchUp() async throws {
-        let root = Fixture.scratch()
-        do {
-            let dials = Dials()
-            let connection = makeConnection(root: root, dials: dials)
-            connection.retain()
-            #expect(await until { dials.hosts.count == 1 })
-            let host = dials.hosts[0]
-            _ = await host.handshake(windows: [Fixture.window(["c1"])], chats: [Fixture.meta("c1")])
-            let backend = LinkChatBackend(connection: connection, provider: .claude, folder: "~/app", chatId: "c1")
-            try await backend.start()
-            _ = await host.next("tx.open")
-            host.send(json: [
-                "t": "tx.page", "chatId": "c1", "txRev": 1, "hasEarlier": false,
-                "entries": [entryJSON(Fixture.user("u1", "hello"))], "turns": [],
-            ])
-            host.send(json: [
-                "t": "tx.delta", "chatId": "c1", "txRev": 2, "removed": [],
-                "upserts": [entryJSON(Fixture.answer("a1", "Hi there", turn: "T1"))], "turns": [turnJSON(Fixture.turn("T1", finished: true))],
-            ])
-            try await Task.sleep(for: .milliseconds(1300))
-            connection.cache.flush()
-            connection.release()
-        }
-
-        // Kore again, the box out of reach: the chat shows from the local copy.
-        let dials = Dials()
-        dials.refuse = true
-        let connection = makeConnection(root: root, dials: dials)
-        #expect(connection.chats(in: "~/app").map(\.id) == ["c1"])
-        #expect(connection.lastHeard != nil)
-        connection.retain()
-        let backend = LinkChatBackend(connection: connection, provider: .claude, folder: "~/app", chatId: "c1")
-        let log = EventLog(backend.events)
-        try await backend.start()
-        #expect(await until { log.texts == ["Hi there"] })
-        #expect(log.flat.contains { if case .userMessage(let text, _, _) = $0 { text == "hello" } else { false } })
-
-        // Reachable: it asks for what came after the copy.
-        dials.refuse = false
-        let before = dials.hosts.count
-        #expect(await until(5) { dials.hosts.count > before })
-        let host = dials.hosts[dials.hosts.count - 1]
-        _ = await host.handshake(windows: [Fixture.window(["c1"])], chats: [Fixture.meta("c1")])
-        #expect(await host.next("tx.open") != nil)
-        // A page that ends where the copy did, plus one more: only the new entry is shown.
-        host.send(.txPage(
-            chatId: "c1", txRev: 1, entries: [Fixture.answer("a1", "Hi there", turn: "T1"), Fixture.user("u2", "next")],
-            turns: [Fixture.turn("T1", finished: true)], hasEarlier: true))
-        #expect(await until { log.flat.contains { if case .userMessage(let text, _, _) = $0 { text == "next" } else { false } } })
-        #expect(!log.events.contains { if case .historyReplaced = $0 { true } else { false } })
-        #expect(log.texts == ["Hi there"])
+        // The box's copy of a message sent from here isn't shown twice; another client's is.
+        host.send(json: [
+            "t": "chat.events", "chatId": "c1", "log": "L1", "reset": true,
+            "items": [["s": 1, "by": "laptop", "e": ["userMessage": ["text": "are you there", "attachments": [], "id": "m1"]]]],
+        ])
+        host.send(json: [
+            "t": "chat.events", "chatId": "c1", "log": "L1",
+            "items": [
+                ["s": 2, "by": "laptop", "e": ["userMessage": ["text": "are you there", "attachments": [], "id": "m1"]]],
+                ["s": 3, "e": ["userMessage": ["text": "from the phone", "attachments": [], "id": "p1"]]],
+            ],
+        ])
+        #expect(await until { log.flat.contains { if case .userMessage("from the phone", _, _) = $0 { true } else { false } } })
+        // The reset shows the log whole (a copy holds the box's rows); live, its own row is skipped.
+        #expect(log.flat.filter { if case .userMessage("are you there", _, _) = $0 { true } else { false } }.count == 1)
+        #expect(await host.next("chat.call", within: 0.3) == nil)
         connection.release()
     }
 
@@ -332,7 +171,7 @@ struct HostClientTests {
         }
         try await backend.start()
         #expect(backend.chatId == "c7")
-        #expect((await host.next("tx.open"))?["chatId"] as? String == "c7")
+        #expect((await host.next("chat.follow"))?["chatId"] as? String == "c7")
         connection.release()
     }
 
@@ -431,47 +270,4 @@ struct HostClientTests {
         #expect(SSHTransport.arguments(alias: "mybox", grant: "laptop") == ["-T", "-o", "BatchMode=yes", "mybox", "~/.local/bin/kore-host", "attach", "--as", "laptop"])
     }
 
-    private func entryJSON(_ entry: LinkEntry) -> Any {
-        try! JSONSerialization.jsonObject(with: JSONEncoder().encode(entry))
-    }
-
-    private func turnJSON(_ turn: LinkTurn) -> Any {
-        try! JSONSerialization.jsonObject(with: JSONEncoder().encode(turn))
-    }
-}
-
-/// The transcript's translation alone, without a link.
-@MainActor
-struct LinkTranscriptTests {
-    @Test func runningTurnOpensLive() {
-        var transcript = LinkTranscript()
-        transcript.page(
-            entries: [Fixture.user("u1", "go"), Fixture.answer("a1", "Working", turn: "T1", done: false)], turns: [Fixture.turn("T1", finished: false)],
-            hasEarlier: false, seq: nil, replacing: true)
-        let (replayed, live) = transcript.opening()
-        // The settled part is the user's message; the running turn comes live, so the chat shows it working.
-        #expect(replayed.count == 1)
-        #expect(live.contains { if case .turnStarted("T1", _, _) = $0 { true } else { false } })
-        #expect(live.contains { if case .text("a1", .answer, "Working", _) = $0 { true } else { false } })
-    }
-
-    @Test func rewrittenTextRebuilds() {
-        var transcript = LinkTranscript()
-        transcript.page(entries: [Fixture.answer("a1", "One", turn: "T1")], turns: [Fixture.turn("T1", finished: true)], hasEarlier: false, seq: nil, replacing: true)
-        _ = transcript.opening()
-        transcript.delta(.init(chatId: "c", txRev: 2, upserts: [Fixture.answer("a1", "Two", turn: "T1")], removed: []), seq: nil)
-        let changes = transcript.changes()
-        #expect(changes.first.map { if case .historyReplaced = $0 { true } else { false } } == true)
-    }
-
-    @Test func queuedSendFindsItsPlace() {
-        var transcript = LinkTranscript()
-        transcript.page(entries: [Fixture.user("u1", "go")], turns: [Fixture.turn("T1", finished: false)], hasEarlier: false, seq: nil, replacing: true)
-        _ = transcript.opening()
-        transcript.sending("also this", queued: "q1")
-        transcript.delta(.init(chatId: "c", txRev: 2, upserts: [Fixture.user("u2", "also this")], removed: []), seq: nil)
-        let changes = transcript.changes()
-        #expect(changes.contains { if case .queuedMessage("q1", .nextTurn) = $0 { true } else { false } })
-        #expect(!changes.contains { if case .userMessage = $0 { true } else { false } })
-    }
 }

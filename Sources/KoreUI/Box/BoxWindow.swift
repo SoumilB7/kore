@@ -129,11 +129,20 @@ final class BoxBinding {
     /// A new chat, made on the box when its tab first starts it.
     func newChat(_ provider: Provider) -> Chat { chat(provider, id: nil, title: nil) }
 
-    private func chat(_ provider: Provider, id: String?, title: String?) -> Chat {
-        let services = BoxChatServices(binding: self, chatId: id)
+    /// A fork of a chat here, made on the box from where it starts: its CLI shows the history
+    /// before that point, as a fork on this Mac does.
+    func forkChat(of original: Chat, from: String, at: String, title: String) -> Chat {
+        let making = LinkChatBackend.Making(
+            model: original.controls.modelId ?? original.launchModel, forkFrom: from, forkAt: at, title: title, mode: original.controls.mode,
+            effort: original.controls.effort)
+        return chat(original.provider, id: nil, title: title, making: making, forkedFrom: original.title)
+    }
+
+    private func chat(_ provider: Provider, id: String?, title: String?, making: LinkChatBackend.Making? = nil, forkedFrom: String? = nil) -> Chat {
+        let services = BoxChatServices(binding: self, chatId: id, making: making)
         let chat = Chat(
-            provider: provider, folder: folderURL, modeMemory: ModeMemory(defaults: nil), compactMemory: AutoCompactMemory(defaults: nil),
-            services: services)
+            provider: provider, folder: folderURL, forkedFrom: forkedFrom, modeMemory: ModeMemory(defaults: nil),
+            compactMemory: AutoCompactMemory(defaults: nil), services: services)
         if let title, !title.isEmpty { chat.adoptName(title) }
         return chat
     }
@@ -158,19 +167,24 @@ final class BoxChatServices: ChatServices {
     let connection: HostConnection
     private let folder: String
     private(set) var chatId: String?
+    /// What a chat new from here is made with on the box (a fork's start).
+    private let making: LinkChatBackend.Making?
     /// The CLI runs on the box, which sets its own instructions; nothing of this Mac's reaches it.
     var agentTools: Bool { false }
     var instructions: URL? { nil }
 
-    init(binding: BoxBinding, chatId: String?) {
+    init(binding: BoxBinding, chatId: String?, making: LinkChatBackend.Making? = nil) {
         self.binding = binding
         connection = binding.connection
         folder = binding.folder
         self.chatId = chatId
+        self.making = making
     }
 
     func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend {
-        let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId, model: options.model)
+        var making = making ?? LinkChatBackend.Making(mode: options.mode, effort: options.effort)
+        making.model = making.model ?? options.model
+        let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId, making: making)
         backend.onCreated = { [weak self] in self?.chatId = $0 }
         return backend
     }

@@ -213,6 +213,9 @@ package enum LinkPolicy {
         }
     }
 
+    /// The calls a full grant may make (1.5): every one but those this policy always refuses.
+    package static let relayed = ChatCommand.tags.filter { $0 != "setRemoteControl" }
+
     /// The answers each kind of card takes over the link. `approvePlan` starts the work in Manual.
     package static func actions(_ kind: LinkCard.Kind) -> Set<CardAction.ID> {
         switch kind {

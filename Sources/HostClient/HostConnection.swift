@@ -4,12 +4,16 @@ import LinkProtocol
 import Observation
 import src
 
-/// A chat on the box that follows its transcript and state: the link's chat backend.
+/// A chat on the box that follows its events and state: the link's chat backend.
 @MainActor
 package protocol HostFollower: AnyObject {
     var chatId: String? { get }
-    /// `tx.page`, `tx.delta` and `tx.reset` for its chat, its `tx.open`'s refusal, and the frame's bytes.
-    func received(_ message: LinkMessage, raw: Data, seq: Int?)
+    /// Where its copy stands: what `chat.follow` asks for.
+    var following: ChatFollow? { get }
+    /// Its chat's events (1.5 `chat.events`).
+    func relayed(_ events: ChatEvents)
+    /// The box can't send them: the chat is gone, or the grant or the box can't relay.
+    func refused(_ message: String)
     /// Its chat's state from a snapshot or delta; nil once the box closed it.
     func meta(_ meta: ChatMeta?)
     /// The link came up (true) or went (false).
@@ -55,6 +59,10 @@ package final class HostConnection {
     @ObservationIgnored package private(set) var providers: [ProviderInfo] = []
     /// `welcome.host.kind`: "box" for kore-host.
     @ObservationIgnored package private(set) var hostKind: String?
+    /// The welcome's: what the box offers this grant (1.5's "relay" with full control), and the
+    /// grant's control.
+    @ObservationIgnored package private(set) var caps: [String] = []
+    @ObservationIgnored package private(set) var control: LinkControlLevel?
     @ObservationIgnored package let cache: HostCache
 
     /// How often a ping goes, and how many may go unanswered.
@@ -77,12 +85,18 @@ package final class HostConnection {
     @ObservationIgnored private var heard = false
     @ObservationIgnored private var heardAt: Date?
     @ObservationIgnored private var serial = 0
+    /// Commands' ids end with this run's own tag: a box keeps recent `chat.call` ids, so ids
+    /// never repeat across runs.
+    @ObservationIgnored private let tag = String(UUID().uuidString.prefix(8)).lowercased()
+    /// Commands a dropped link sends again (relayed calls: the box answers a repeat once).
+    @ObservationIgnored private var resend: [String: Data] = [:]
     @ObservationIgnored private var outbox: [(id: String, payload: Data)] = []
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var waiting: [String: CheckedContinuation<LinkMessage.Result, Never>] = [:]
     @ObservationIgnored private var folderAsks: [String: CheckedContinuation<[BoxFolder], Never>] = [:]
     @ObservationIgnored private var followers: [String: Weak] = [:]
     @ObservationIgnored private var wantRaw: Set<String> = []
+    @ObservationIgnored private var uploadWaits: [String: CheckedContinuation<LinkMessage.Result, Never>] = [:]
     @ObservationIgnored private var raws: [String: Data] = [:]
     @ObservationIgnored private var early: [String: LinkMessage.Result] = [:]
     @ObservationIgnored private var saveQueued = false
@@ -161,13 +175,26 @@ package final class HostConnection {
     package func follow(_ follower: any HostFollower) {
         guard let id = follower.chatId else { return }
         followers[id] = Weak(follower: follower)
-        if ready { transport?.send(HostWire.txOpen(chatId: id)) }
+        if ready { askEvents(follower) }
     }
 
     package func unfollow(_ follower: any HostFollower) {
         guard let id = follower.chatId, followers[id]?.follower === follower else { return }
         followers[id] = nil
-        if ready { transport?.send(HostWire.txClose(chatId: id)) }
+        if ready, relays { transport?.send(RelayWire.encode(ChatUnfollow(chatId: id))) }
+    }
+
+    /// The box relays chats to this grant (1.5, full control).
+    package var relays: Bool { caps.contains("relay") }
+
+    private func askEvents(_ follower: any HostFollower) {
+        guard relays else {
+            return follower.refused(
+                control == .full
+                    ? "kore-host on \(alias) is older than this Kore: update it to open its chats"
+                    : "This Mac's grant on \(alias) needs full control (kore-host allow \(grant) --control full)")
+        }
+        if let ask = follower.following { transport?.send(RelayWire.encode(ask)) }
     }
 
     // MARK: Commands
@@ -175,10 +202,18 @@ package final class HostConnection {
     /// Sends a command (`payload` gets its id) and waits for its result: at once while linked,
     /// else when the link is back.
     package func command(_ payload: (String) -> Data) async -> LinkMessage.Result {
+        await command(payload, resending: false)
+    }
+
+    /// `resending`: a link that drops before the answer sends it again once it's back (a relayed
+    /// call, which the box runs once per id).
+    private func command(_ payload: (String) -> Data, resending: Bool) async -> LinkMessage.Result {
         serial += 1
-        let id = "c\(serial)"
+        let id = "c\(serial).\(tag)"
         let data = payload(id)
         if case .refused(let why) = phase { return LinkMessage.Result(id: id, ok: false, code: .unknown, message: why) }
+        if resending { resend[id] = data }
+        defer { resend[id] = nil }
         return await withCheckedContinuation { continuation in
             waiting[id] = continuation
             if ready, let transport {
@@ -192,11 +227,45 @@ package final class HostConnection {
 
     /// A command whose result's own bytes are wanted too (fields 1.4's types don't read).
     package func commandRaw(_ payload: (String) -> Data) async -> (LinkMessage.Result, Data?) {
-        let id = "c\(serial + 1)"
-        wantRaw.insert(id)
-        let result = await command(payload)
-        wantRaw.remove(id)
+        await commandRaw(payload, resending: false)
+    }
+
+    private func commandRaw(_ payload: (String) -> Data, resending: Bool) async -> (LinkMessage.Result, Data?) {
+        var asked = ""
+        let result = await command({ id in
+            asked = id
+            wantRaw.insert(id)
+            return payload(id)
+        }, resending: resending)
+        wantRaw.remove(asked)
         return (result, raws.removeValue(forKey: result.id))
+    }
+
+    /// One relayed backend call on a chat (1.5 `chat.call`): its answer, sent again after a drop.
+    package func call(_ chatId: String, _ command: ChatCommand) async -> ChatCallResult {
+        let (result, raw) = await commandRaw({ RelayWire.encode(ChatCall(id: $0, chatId: chatId, command: command)) }, resending: true)
+        if let raw, let full = try? JSONDecoder().decode(ChatCallResult.self, from: raw) { return full }
+        return ChatCallResult(id: result.id, ok: result.ok, code: result.code, message: result.message)
+    }
+
+    /// Uploads a file to the box (1.1's `blob.put.*`): its blob id, or why not.
+    package func upload(_ data: Data, name: String, mime: String) async -> Result<String, HostRefusal> {
+        guard ready, let transport else { return .failure(HostRefusal(message: "\(alias) can't be reached")) }
+        serial += 1
+        let uploadId = "u\(serial).\(tag)"
+        transport.send(HostWire.encode(.blobPutBegin(uploadId: uploadId, name: name, mime: mime, size: data.count, sha256: HostWire.sha256(data))))
+        var index = 0
+        var offset = 0
+        while offset < data.count {
+            let piece = data[offset..<min(offset + LinkUploads.chunkMax, data.count)]
+            transport.send(HostWire.encode(.blobPutChunk(uploadId: uploadId, index: index, data: piece.base64EncodedString())))
+            index += 1
+            offset += piece.count
+        }
+        transport.send(HostWire.encode(.blobPutEnd(uploadId: uploadId)))
+        let result = await withCheckedContinuation { uploadWaits["blob.put:" + uploadId] = $0 }
+        guard result.ok, let blob = result.blobId else { return .failure(HostRefusal(result, alias: alias)) }
+        return .success(blob)
     }
 
     /// A later result for a command already answered (`<id>:done`, a sign-in's end): at once when
@@ -309,6 +378,12 @@ package final class HostConnection {
         for (id, _) in outbox { finish(id, ok: false, message: "\(alias) closed") }
         outbox = []
         for id in Array(waiting.keys) { finish(id, ok: false, message: "\(alias) closed") }
+        endUploads("\(alias) closed")
+    }
+
+    private func endUploads(_ why: String) {
+        for (id, wait) in uploadWaits { wait.resume(returning: LinkMessage.Result(id: id, ok: false, code: .unknown, message: why)) }
+        uploadWaits = [:]
     }
 
     private func teardown() {
@@ -326,9 +401,13 @@ package final class HostConnection {
     private func dropped(_ reason: String?) {
         guard transport != nil || pump != nil else { return }
         teardown()
-        // Sent, never answered: the box may or may not have it.
-        for id in inFlight { finish(id, ok: false, message: "The link to \(alias) dropped before it answered") }
+        // Sent, never answered: the box may or may not have it. A relayed call goes again (the box
+        // runs it once); anything else says so.
+        for id in inFlight.sorted() {
+            if let data = resend[id] { outbox.append((id, data)) } else { finish(id, ok: false, message: "The link to \(alias) dropped before it answered") }
+        }
         inFlight = []
+        endUploads("The link to \(alias) dropped")
         if case .refused = phase { return }
         if phase == .online || lastHeard == nil { lastHeard = heardAt ?? lastHeard }
         phase = .offline
@@ -355,25 +434,29 @@ package final class HostConnection {
             return
         }
         switch inbound {
+        case .events(let events):
+            followers[events.chatId]?.follower?.relayed(events)
         case .folders(let id, let list):
             // `folders.list`'s own answer; any other result with folders (`folder.add`) is a result.
             if folderAsks[id] != nil {
                 answerFolders(id, list)
             } else if let message = try? LinkMessage.decode(data) {
-                handle(message, raw: data, seq: nil)
+                handle(message, raw: data)
             }
-        case .link(let message, let seq):
-            handle(message, raw: data, seq: seq)
+        case .link(let message):
+            handle(message, raw: data)
         }
     }
 
-    private func handle(_ message: LinkMessage, raw: Data, seq: Int?) {
+    private func handle(_ message: LinkMessage, raw: Data) {
         switch message {
         case .challenge:
             transport?.send(HostWire.hello(build: HostLog.build))
         case .welcome(let welcome):
             hostKind = HostWire.hostKind(raw)
             providers = welcome.providers
+            caps = welcome.caps
+            control = welcome.policy.control
         case .bye(let reason):
             switch reason {
             case .auth: refuse("\(alias) didn't accept this Mac's grant \"\(grant)\"")
@@ -409,13 +492,11 @@ package final class HostConnection {
                 followers[id]?.follower?.meta(nil)
             }
             saveSoon()
-        case .txPage(let chatId, _, _, _, _), .txReset(let chatId):
-            followers[chatId]?.follower?.received(message, raw: raw, seq: seq)
-        case .txDelta(let delta):
-            followers[delta.chatId]?.follower?.received(message, raw: raw, seq: seq)
         case .result(let result):
-            if result.id.hasPrefix("tx.open:") {
-                followers[String(result.id.dropFirst("tx.open:".count))]?.follower?.received(message, raw: raw, seq: nil)
+            if result.id.hasPrefix("chat.follow:") {
+                followers[String(result.id.dropFirst("chat.follow:".count))]?.follower?.refused(result.message ?? "This chat isn't on \(alias) any more")
+            } else if let wait = uploadWaits.removeValue(forKey: result.id) {
+                wait.resume(returning: result)
             } else if inFlight.remove(result.id) != nil || waiting[result.id] != nil {
                 if wantRaw.remove(result.id) != nil { raws[result.id] = raw }
                 waiting.removeValue(forKey: result.id)?.resume(returning: result)
@@ -437,7 +518,7 @@ package final class HostConnection {
         attempts = 0
         lastHeard = nil
         for follower in liveFollowers {
-            if let id = follower.chatId { transport?.send(HostWire.txOpen(chatId: id)) }
+            askEvents(follower)
             follower.linked(true)
         }
         let queued = outbox

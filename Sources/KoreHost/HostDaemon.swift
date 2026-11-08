@@ -198,7 +198,7 @@ package final class HostDaemon {
         ghSignedIn = GitHubLogin.signedIn()
         return LinkMessage.Welcome(
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
-            host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(),
+            host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(relay: control == .full),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box"] + (control == .full ? ["relay"] : []))
     }
@@ -240,7 +240,7 @@ package final class HostDaemon {
 
     /// What a grant may do: `watch` reads, `act` works in chats and folders, `full` also the accounts.
     /// The command's result; nil when it comes later, through `reply` (an account's call).
-    func apply(_ command: LinkCommand, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+    package func apply(_ command: LinkCommand, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         guard control != .watch else { return fail(.deniedControl, "This grant only watches.") }
         let hc = command.chatId.flatMap(chat)

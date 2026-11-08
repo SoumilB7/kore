@@ -77,6 +77,13 @@ package enum ChatCommand: Sendable, Codable {
         }
     }
 
+    /// Every call's tag (what a box lists as its capabilities, less what its policy refuses).
+    package static let tags = [
+        "send", "interrupt", "respond", "setMode", "setPlanMode", "setModel", "setEffort", "setFastMode", "rename", "stopAgent", "stopCommand",
+        "backgroundCommand", "commandOutput", "watchCommands", "agentHistory", "fork", "forkAtEnd", "rollback", "earlier", "earlierMessages",
+        "unloadPoint", "unloaded", "compact", "usage", "useReset", "setRemoteControl", "relaunch", "listModels",
+    ]
+
     /// Reads a command; one whose tag (or shape) this side doesn't know is `.unknown`, never a
     /// failure.
     package static func decode(_ decoder: any Decoder) -> ChatCommand {

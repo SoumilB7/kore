@@ -62,9 +62,9 @@ final class FakeHost {
         send(.challenge(nonce: "bm9uY2U="))
         guard let hello = await next("hello") else { return nil }
         send(json: [
-            "t": "welcome", "proto": ["major": 1, "minor": 4], "epoch": "e1",
+            "t": "welcome", "proto": ["major": 1, "minor": 5], "epoch": "e1",
             "host": ["name": "mybox", "koreVersion": "1", "kind": "box"], "providers": [],
-            "policy": ["sendMaxLevel": 4, "control": "full"], "caps": ["tx", "control"],
+            "policy": ["sendMaxLevel": 4, "control": "full"], "caps": ["tx", "control", "relay"],
         ])
         send(.snapshot(rev: 1, windows: windows, chats: chats, extras: nil))
         return hello

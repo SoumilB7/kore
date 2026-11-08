@@ -73,7 +73,7 @@ let package = Package(
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "src", "KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "LinkProtocol", "KoreUI", "src", "KoreCore"]),
         .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "LinkProtocol", "src", "KoreCore"]),
-        .testTarget(name: "HostClientTests", dependencies: ["HostClient", "LinkProtocol", "src", "KoreCore"]),
+        .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "src", "KoreCore"]),
     ]
 )
