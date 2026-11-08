@@ -97,8 +97,11 @@ class FakeTailnet(var state: String = Tailnet.NEEDS_LOGIN) : Tailnet {
     override fun peers() = others
     override fun whois(ip: String) = others.firstOrNull { ip in it.ips }
     override fun online() = online
+    /** A connection for a dial to an address (a node serving the session), when it gives one. */
+    var answer: (String) -> ByteConn? = { null }
     override fun dial(address: String, port: Int, timeoutMs: Long): ByteConn {
         dials += address
+        answer(address)?.let { return it }
         if (!listening(address)) throw java.io.IOException("connection refused")
         error("the tests enroll through a fake")
     }

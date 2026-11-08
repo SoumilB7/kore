@@ -92,7 +92,9 @@ final class SharedTailnet: Sendable {
                 publicKey: me.nodeKey, tailscaleIPs: me.state == .running ? [me.bindIP] : [], userID: me.user, dnsName: me.name + ".tail.ts.net.")
             selfNode.hostName = me.name
             let peers = me.state == .running ? s.nodes.values.filter { $0.ip != ip }.sorted { $0.ip < $1.ip }.map(Self.peer) : []
-            return TailnetStatus(backendState: me.state, selfNode: selfNode, peers: peers)
+            // Waiting for its sign-in: the page, as tsnet's status carries it.
+            let page = me.state == .needsLogin ? "https://login.example/a/\(me.name)" : nil
+            return TailnetStatus(backendState: me.state, selfNode: selfNode, peers: peers, authURL: page)
         }
     }
 

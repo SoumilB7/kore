@@ -264,6 +264,54 @@ struct KoreNetSystemTests {
         }
     }
 
+    /// The owner's plan: Tailscale quit and uninstalled on the Mac while Kore runs. Kore's own
+    /// tailnet takes over with one sign-in (one page opened, never a loop); the box link moves to
+    /// the Mac's new node (the box appends its node key after the proof and a same-user WhoIs),
+    /// the phone finds the Mac on its new node and keeps its key the same way: no Allow card, no
+    /// re-Join, no Removed, one row each.
+    @Test func tailscaleUninstalledKoresOwnTailnetTakesOver() async throws {
+        try await play("Tailscale uninstalled, Kore's own tailnet · I1 I11 ID2") { w in
+            var opened: [URL] = []
+            let openURL = Devices.shared.openURL
+            Devices.shared.openURL = { opened.append($0) }
+            defer { Devices.shared.openURL = openURL }
+            await w.koreNetOn()
+            let box = try await w.sshBox("mybox")
+            await w.onKoreNet(box)
+            await w.plus()
+            let pixel = w.phone("Pixel 9")
+            await w.joinPhone(pixel)
+            await w.expectSettled(boxes: [box], phones: [pixel], "on installed Tailscale")
+            // A mybox window is open throughout: its link is the one that moves.
+            await w.step("a mybox window opens", .event("window"), until: { w.mac.link(box)?.route == .net }) { w.mac.openWindow(box) }
+            let cards = w.mac.cards.count
+            await w.step("Tailscale quit on the Mac", .event("Tailscale quit"), until: {
+                Devices.shared.look().line == "Tailscale is off on this Mac" && w.mac.link(box)?.route != .net
+            }) { w.net.setState(w.mac.installedIP, .stopped) }
+            await w.step("Tailscale uninstalled", .event("Tailscale uninstalled"), until: {
+                w.mac.switcher.state == .sidecar && Devices.shared.look().line == DevicesWords.signIn
+            }) { w.mac.uninstallTailscale() }
+            await w.step("Sign in pressed twice", .event("sign in"), until: { opened.count == 1 && Devices.shared.signingIn }) {
+                Devices.shared.signIn()
+                Devices.shared.signIn()
+            }
+            await w.step("the browser sign-in finishes", .event("signed in"), until: {
+                !Devices.shared.signingIn && w.mac.link(box)?.route == .net && pixel.rows.first?.glyph == "●"
+            }) { w.mac.signInOwnTailnet() }
+            await w.expectSettled(boxes: [box], phones: [pixel], "on Kore's own tailnet")
+            w.mac.closeWindow(box)
+            #expect(opened.count == 1, "\(opened)")
+            #expect(w.mac.cards.count == cards, "an Allow card came back")
+            #expect(pixel.step.isJoined && pixel.rows.count == 2, "\(pixel.rows)")
+            // The box took the Mac's new node key (kept with the old one), after its proof.
+            let me = w.mac.identity.device
+            let atBox = box.devices.first { $0.id == me }
+            #expect(atBox?.nodeKeys.contains(w.mac.ownKey) == true && atBox?.nodeKeys.contains(w.mac.installedKey) == true, "\(String(describing: atBox?.nodeKeys))")
+            // The phone kept the Mac's new node key.
+            #expect(pixel.record(of: me)?.nodeKeys.contains(w.mac.ownKey) == true)
+        }
+    }
+
     // MARK: The listener heals (2026-11-15)
 
     /// KoreNet off and on with a phone allowed (S35): the switch's choice and the bus's first

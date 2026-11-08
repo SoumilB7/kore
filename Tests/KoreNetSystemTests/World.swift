@@ -322,7 +322,7 @@ final class World {
         // I2·E2: every running, joined, allowed phone reaches every owned box the Mac lists.
         for phone in phones where phone.running && phone.step.isJoined {
             guard let record = issued.first(where: { $0.id == phone.device }), !record.isPaused else { continue }
-            if phone.state(of: mac.identity.device) != .up, net.node(mac.ip)?.online == true, mac.switcher.state == .installed {
+            if phone.state(of: mac.identity.device) != .up, net.node(mac.ip)?.online == true, mac.switcher.state.reaches {
                 out.append(("I2·E2", "\(phone.label) doesn't reach the Mac: \(phone.rows)"))
             }
             for listed in mac.listedBoxes {

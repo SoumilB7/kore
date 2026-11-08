@@ -30,8 +30,17 @@ final class SSHRoutes: Sendable {
 /// drops every object and makes them again from what was kept.
 @MainActor
 final class MacNode {
-    let ip = "100.64.0.1"
-    let nodeKey = "nodekey:mac"
+    /// Installed Tailscale's node, and Kore's own (`kore-tailnet`) once the app is gone: a new
+    /// node key and address for the same Mac, signed in as the same user.
+    let installedIP = "100.64.0.1"
+    let installedKey = "nodekey:mac"
+    let ownIP = "100.64.0.11"
+    let ownKey = "nodekey:mac-kore"
+    /// The node this Mac is on now.
+    var ip: String { switcher?.state == .sidecar ? ownIP : installedIP }
+    var nodeKey: String { switcher?.state == .sidecar ? ownKey : installedKey }
+    /// Installed Tailscale's app is in /Applications (an uninstall takes it away).
+    private let app = TailscaleApp()
     let root: URL
     let support: URL
     let defaults = UserDefaults.standard
@@ -79,23 +88,37 @@ final class MacNode {
         self.net = net
         self.pulse = pulse
         self.clock = clock
-        net.add(SharedTailnet.Node(name: "macbook", kind: .mac, ip: ip, nodeKey: nodeKey, bindIP: ip))
+        net.add(SharedTailnet.Node(name: "macbook", kind: .mac, ip: installedIP, nodeKey: installedKey, bindIP: installedIP))
     }
 
     /// Kore launches: as `NetLiveness.start`, KoreNet on as it was left.
     func launch() {
         starts += 1
-        let tailnet = NodeNet(net, ip: ip)
+        let tailnet = NodeNet(net, ip: installedIP)
         let shared = net
-        let ip = ip
+        let (ip, ownIP, ownKey) = (installedIP, ownIP, ownKey)
         let ssh = ssh
+        let app = app
         let env = NetEnvironment(
             installed: {
+                // Uninstalled: what it left behind reads absent (`LocalAPIDiscovery`).
+                guard app.present else { return (.missing(.absent), nil) }
                 let state = shared.node(ip)?.state ?? .noState
                 return (.state(state), tailnet)
             },
-            sidecar: { _ in throw TailnetError.sidecar("no helper in tests") }, secrets: secrets, defaults: defaults, support: support,
-            upgradeDial: { alias, _, _ in try ssh.dial(alias) }, macName: { "MacBook" })
+            sidecar: { _ in
+                // Kore's own node: new the first time (waiting for its one sign-in), as it was
+                // left after that (its state sealed under the Keychain's key).
+                if shared.node(ownIP) == nil {
+                    shared.add(SharedTailnet.Node(name: "macbook-1", kind: .mac, ip: ownIP, nodeKey: ownKey, state: .needsLogin, bindIP: ownIP))
+                } else {
+                    shared.setState(ownIP, app.ownSignedIn ? .running : .needsLogin)
+                }
+                return (NodeNet(shared, ip: ownIP), { shared.setState(ownIP, .stopped) })
+            },
+            secrets: secrets, defaults: defaults, support: support,
+            upgradeDial: { alias, _, _ in try ssh.dial(alias) }, macName: { "MacBook" },
+            watchApp: { app.watch($0) })
         directory = NodeDirectory(defaults: defaults)
         NodeDirectory.shared = directory
         let rekeyer = NodeRekeyer(migration: NodeMigration(root: support, defaults: defaults), center: NotificationCenter())
@@ -231,6 +254,16 @@ final class MacNode {
         launch()
     }
 
+    /// The owner quits installed Tailscale, then drags it to the Trash: what's left of it reads
+    /// absent, and the app's watch fires.
+    func uninstallTailscale() { app.uninstall() }
+
+    /// The one browser sign-in of Kore's own tailnet.
+    func signInOwnTailnet() {
+        app.ownSignedIn = true
+        net.setState(ownIP, .running)
+    }
+
     /// The Mac wakes from sleep.
     func wakeUp() { wakeCenter.post(name: Self.woke, object: nil) }
 
@@ -359,5 +392,36 @@ final class MacNode {
     /// The boxes a phone's welcome lists now: boxes in the book with a tailnet node key.
     var listedBoxes: [DeviceRecord] {
         book.filter { $0.kind == .box && !$0.isPaused && $0.nodeKeys.contains { $0 != Binding.Route.sshNodeKey } }
+    }
+}
+
+/// Installed Tailscale's app on the test Mac, and its watch (`AppWatch` in Kore).
+final class TailscaleApp: @unchecked Sendable {
+    private let lock = NSLock()
+    private var installed = true
+    private var signedIn = false
+    private var changed: (@Sendable () -> Void)?
+
+    var present: Bool { lock.withLock { installed } }
+    var ownSignedIn: Bool {
+        get { lock.withLock { signedIn } }
+        set { lock.withLock { signedIn = newValue } }
+    }
+
+    func watch(_ changed: @escaping @Sendable () -> Void) -> (@Sendable () -> Void)? {
+        lock.withLock {
+            guard installed else { return nil }
+            self.changed = changed
+            return { [weak self] in self?.lock.withLock { self?.changed = nil } }
+        }
+    }
+
+    func uninstall() {
+        let fire = lock.withLock { () -> (@Sendable () -> Void)? in
+            installed = false
+            defer { changed = nil }
+            return changed
+        }
+        fire?()
     }
 }

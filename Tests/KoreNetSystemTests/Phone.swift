@@ -279,6 +279,8 @@ final class PhoneEmu {
         var wake: Task<Void, Never>?
         /// Taken offline on the Mac: the link stays, parked, until its `bye online`.
         var parked = false
+        /// The last dial's book: a node key its welcome appended is kept from it.
+        var book: DeviceBook?
         init(_ record: DeviceRecord) {
             self.record = record
             machine.box = record.kind == .box
@@ -542,10 +544,19 @@ final class PhoneEmu {
         pulse.beat()
     }
 
-    /// `NetDialer.dial`: the node's address by its node key, WhoIs of it, the session.
+    /// `NetDialer.dial`: the node's address by its node key, WhoIs of it, the session. A Mac whose
+    /// known node is gone or offline is looked for among this phone's user's online Macs
+    /// (`NetDialer.movedMacs`; here the first, as a world has one Mac): its proof decides.
     private func dial(_ c: Client) {
         let status = net.status(of: ip)
-        guard let peer = status.peers.first(where: { c.record.nodeKeys.contains($0.publicKey) }) else {
+        var found = status.peers.first(where: { c.record.nodeKeys.contains($0.publicKey) })
+        if c.record.kind == .mac, found?.online != true, let user = status.selfNode?.userID,
+           let moved = status.peers.first(where: {
+               $0.os == "macOS" && $0.online && $0.tags.isEmpty && $0.userID == user && !c.record.nodeKeys.contains($0.publicKey)
+           }) {
+            found = moved
+        }
+        guard let peer = found else {
             c.machine.on(.peerOffline, now: clock.nowMS)
             return drive(c)
         }
@@ -582,6 +593,7 @@ final class PhoneEmu {
         }
         slot.wire = wire
         c.wire = wire
+        c.book = book
     }
 
     private func heard(_ event: Wire.Event, id: UUID, generation mine: Int, wire: Wire?) {
@@ -596,7 +608,11 @@ final class PhoneEmu {
         case .up(let peer, let directory):
             c.dialing = false
             c.ticket = peer.ticket
-            if peer.record != c.record { c.record = peer.record }
+            var record = peer.record
+            // The Mac's new node key, appended after its proof and a same-user WhoIs (ID2), is
+            // kept, as the app keeps `NetClientSession`'s pinned record.
+            if let kept = (try? c.book?.record(record.id)) ?? nil { record.nodeKeys = kept.nodeKeys }
+            if record != c.record { c.record = record }
             if c.record.kind == .mac, let directory { keepDirectory(directory) }
             c.machine.on(.connected, now: now)
             c.wire?.send(#"{"t":"presence","onScreen":true}"#)
@@ -634,7 +650,12 @@ final class PhoneEmu {
             for await event in events {
                 guard let self, !Task.isCancelled else { return }
                 if case .peer(_, let key?, let online?) = event, online {
-                    for c in self.clients.values where c.record.nodeKeys.contains(key) && !c.parked {
+                    // A node of this user's coming online may be its Mac on a new node (Kore's own
+                    // tailnet after Tailscale's app went): an away Mac is tried, as the app's own
+                    // retries (backoff, the app opening) do on the phone.
+                    let node = self.net.status(of: self.ip).peers.first { $0.publicKey == key }
+                    let movedMac = node.map { $0.os == "macOS" && $0.userID == self.net.status(of: self.ip).selfNode?.userID } ?? false
+                    for c in self.clients.values where !c.parked && (c.record.nodeKeys.contains(key) || movedMac && c.record.kind == .mac) {
                         c.machine.on(.peerOnline, now: self.clock.nowMS)
                         self.drive(c)
                     }
@@ -662,6 +683,8 @@ final class PhoneEmu {
     }
 
     func state(of id: UUID) -> NodeMachine.State? { clients[id]?.machine.state }
+    /// A node as this phone keeps it (its node keys among it).
+    func record(of id: UUID) -> DeviceRecord? { clients[id]?.record }
 }
 
 extension PhoneEmu.JoinStep {
