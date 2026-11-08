@@ -393,7 +393,13 @@ package final class HostConnection {
             saveSoon()
         case .delta(_, let windows, let chats, let removed, let extras):
             if let windows { self.windows = windows }
-            if let clis = extras?.clis { self.clis = clis }
+            if let clis = extras?.clis, clis != self.clis {
+                self.clis = clis
+                // The box's model lists changed: open chats' pickers take them.
+                for (id, entry) in followers where chats?.contains(where: { $0.id == id }) != true {
+                    entry.follower?.meta(self.chats[id])
+                }
+            }
             for chat in chats ?? [] {
                 self.chats[chat.id] = chat
                 followers[chat.id]?.follower?.meta(chat)

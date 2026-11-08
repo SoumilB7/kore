@@ -34,6 +34,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     private var planOn: Bool?
     private var controlsSaid: String?
     private var fastSaid: Bool?
+    private var contextSaid: ContextUsage?
     private var connectionSaid = Connection.ok
     private var starting: Task<Void, Error>?
     private var closed = false
@@ -151,17 +152,25 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             out.append(.planModeChanged(PlanModeChange(on: on, source: planOn == nil ? .session : .user, at: Date())))
             planOn = on
         }
+        // The box's own model list (`clis`), never this Mac's: the picker, model chip and effort
+        // render as a local chat's do. A new list or a model the box confirmed says them again.
         let controls = ChatControls(
             models: connection.models(provider.id), model: meta.controls?.modelId, effort: meta.controls?.effort,
             commands: (meta.commands ?? []).map { SlashCommand(name: $0.name, description: $0.description, hint: "", kind: $0.kind == .skill ? .skill : .command) })
-        let said = "\(controls.models.map(\.id))|\(controls.model ?? "")|\(controls.effort ?? "")|\(controls.commands.map(\.name))"
+        let said = "\(controls.models)|\(controls.model ?? "")|\(controls.effort ?? "")|\(controls.commands.map(\.name))"
         if said != controlsSaid {
             controlsSaid = said
             out.append(.controlsLoaded(controls))
+            // A load clears fast mode's report: it's said again below.
+            fastSaid = nil
         }
         if let fast = meta.controls?.fast, fast != fastSaid {
             fastSaid = fast
             out.append(.fastModeChanged(FastModeReport(on: fast, offered: meta.controls?.fastOffered)))
+        }
+        if let usage = Self.context(meta.controls), usage.used != contextSaid?.used || usage.window != contextSaid?.window {
+            contextSaid = usage
+            out.append(.contextUsage(usage))
         }
         if meta.running, let state = meta.rescue?.connection {
             let now: Connection = state == .stalled ? .stalled : state == .offline ? .offline : .ok
@@ -175,6 +184,17 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     }
 
     private var titleSaid: String?
+
+    /// The wheel's reading from the box: its tokens and window, else its percentage alone (a
+    /// window of 100).
+    static func context(_ controls: LinkProtocol.ChatControls?) -> ContextUsage? {
+        guard let controls else { return nil }
+        if let used = controls.contextUsed {
+            return ContextUsage(used: used, window: controls.contextWindow, autoCompacts: nil, at: Date())
+        }
+        guard let pct = controls.contextPct else { return nil }
+        return ContextUsage(used: pct, window: 100, autoCompacts: nil, at: Date())
+    }
 
     package func linked(_ up: Bool) {
         guard !closed else { return }
@@ -314,12 +334,28 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     }
 
     package func setModel(_ id: String) async throws {
-        try await act(.control(.chatSetModel, ControlArgs(chatId: try await ready(), modelId: id)))
+        do {
+            try await act(.control(.chatSetModel, ControlArgs(chatId: try await ready(), modelId: id)))
+        } catch {
+            sayControlsAgain()
+            throw error
+        }
     }
 
     package func setEffort(_ level: String) async {
         guard let chatId = try? await ready() else { return }
-        try? await act(.control(.chatSetEffort, ControlArgs(chatId: chatId, level: level)))
+        do {
+            try await act(.control(.chatSetEffort, ControlArgs(chatId: chatId, level: level)))
+        } catch {
+            sayControlsAgain()
+            yield([.notice("Couldn't set the effort: \(error)", isError: true)])
+        }
+    }
+
+    /// A model or effort the box refused: the picker goes back to what the box last said.
+    private func sayControlsAgain() {
+        controlsSaid = nil
+        self.meta(self.meta)
     }
 
     package func setFastMode(_ on: Bool) async throws {

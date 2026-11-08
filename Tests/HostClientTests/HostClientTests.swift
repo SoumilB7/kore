@@ -100,6 +100,67 @@ struct HostClientTests {
         connection.release()
     }
 
+    @Test func boxControlsAndModelsBecomeThePickers() async throws {
+        let dials = Dials()
+        let connection = makeConnection(root: Fixture.scratch(), dials: dials)
+        connection.retain()
+        #expect(await until { dials.hosts.count == 1 })
+        let host = dials.hosts[0]
+        var meta = Fixture.meta("c1")
+        meta.controls = LinkProtocol.ChatControls(
+            modelId: "haiku", effort: "low", fast: nil, fastOffered: false, planAllow: false, contextPct: 12, autoCompactAt: nil,
+            compacting: false, remote: .off, contextUsed: 24_000, contextWindow: 200_000)
+        _ = await host.handshake(windows: [Fixture.window(["c1"])], chats: [meta])
+        #expect(await until { connection.isOnline })
+        let backend = LinkChatBackend(connection: connection, provider: .claude, folder: "~/app", chatId: "c1")
+        let log = EventLog(backend.events)
+        try await backend.start()
+        func loaded() -> [src.ChatControls] { log.events.compactMap { if case .controlsLoaded(let c) = $0 { c } else { nil } } }
+        func usages() -> [ContextUsage] { log.events.compactMap { if case .contextUsage(let u) = $0 { u } else { nil } } }
+        // The box's model and effort, before it has listed its models; the wheel from its tokens.
+        #expect(await until { loaded().last?.model == "haiku" && loaded().last?.effort == "low" })
+        #expect(loaded().last?.models.isEmpty == true)
+        #expect(usages().last.map { [$0.used, $0.window ?? 0] } == [24_000, 200_000])
+
+        // The box's list comes in a delta: the picker takes it, never this Mac's.
+        let clis = [
+            CLIState(
+                provider: "claude",
+                models: [
+                    .init(id: "haiku", name: "Haiku", efforts: ["low", "high"], fast: false, auto: false),
+                    .init(id: "box-only", name: "Box only", efforts: ["low"], fast: true, auto: true),
+                ], effortScale: ["low", "high"])
+        ]
+        host.send(.delta(rev: 2, windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: clis)))
+        #expect(await until { loaded().last?.models.map(\.id) == ["haiku", "box-only"] })
+        #expect(loaded().last?.models.last?.supportsFastMode == true)
+        #expect(connection.models("claude").map(\.id) == ["haiku", "box-only"])
+        #expect(connection.models("codex").isEmpty)
+
+        // A pick goes to the box as chat.setModel; the picker moves when the box confirms it.
+        Task { try? await backend.setModel("box-only") }
+        let pick = try #require(await host.next("cmd"))
+        let cmd = try #require(pick["cmd"] as? [String: Any])
+        #expect(cmd["type"] as? String == "chat.setModel")
+        #expect(cmd["modelId"] as? String == "box-only")
+        host.send(.result(.init(id: pick["id"] as! String, ok: true)))
+        meta.controls?.modelId = "box-only"
+        meta.controls?.contextUsed = nil
+        meta.controls?.contextPct = 40
+        host.send(.delta(rev: 3, windows: nil, chats: [meta], removed: nil))
+        #expect(await until { loaded().last?.model == "box-only" })
+        // Only a percentage: the wheel reads it against 100.
+        #expect(await until { usages().last.map { [$0.used, $0.window ?? 0] } == [40, 100] })
+
+        Task { await backend.setEffort("high") }
+        let effort = try #require(await host.next("cmd"))
+        let set = try #require(effort["cmd"] as? [String: Any])
+        #expect(set["type"] as? String == "chat.setEffort")
+        #expect(set["level"] as? String == "high")
+        host.send(.result(.init(id: effort["id"] as! String, ok: true)))
+        connection.release()
+    }
+
     @Test func sendsWaitWhileOffline() async throws {
         let dials = Dials()
         let connection = makeConnection(root: Fixture.scratch(), dials: dials)

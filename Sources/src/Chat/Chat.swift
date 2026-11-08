@@ -1577,10 +1577,10 @@ package final class Chat: Identifiable {
     private func noteModelList(_ event: ChatEvent) {
         switch event {
         case .controlsLoaded(let loaded):
-            ModelCatalog.shared.started(self, cli: provider.id, models: loaded.models)
+            ModelCatalog.shared.started(self, cli: modelCLI, models: loaded.models)
         case .turnFinished:
             guard let backend else { return }
-            ModelCatalog.shared.turnEnded(self, cli: provider.id) { [weak backend] in await backend?.listModels() }
+            ModelCatalog.shared.turnEnded(self, cli: modelCLI) { [weak backend] in await backend?.listModels() }
         default: break
         }
     }
@@ -1686,6 +1686,7 @@ extension SentAttachment {
 }
 
 extension Chat: ModelListHolder {
-    package var modelCLI: String { provider.id }
+    /// The CLI's id, with the box's for a chat on one: lists from different machines never mix.
+    package var modelCLI: String { services.modelScope.map { provider.id + "@" + $0 } ?? provider.id }
     package func listModels(_ models: [ModelOption]) { controls.listModels(models) }
 }

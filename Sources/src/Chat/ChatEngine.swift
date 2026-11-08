@@ -27,6 +27,9 @@ package protocol ChatServices: AnyObject {
     func refreshAccount(_ cli: String)
     /// A CLI's model list came (Arsenal keeps one per CLI).
     func modelsListed(_ cli: String, _ models: [ModelOption])
+    /// Where the chat's CLI runs, for sharing model lists (`ModelCatalog`): nil for this
+    /// machine's own CLIs; a box's chats share only that box's lists.
+    var modelScope: String? { get }
     /// The chat's mode changed: an Arsenal it can't keep goes off.
     func arsenalFollowMode(_ chat: Chat)
     /// Every event, after the chat took it: storylines, the local link, the agent channel.
@@ -62,6 +65,10 @@ package protocol ChatServices: AnyObject {
     /// A sent message's files, to attach again: those still on disk, and pictures known only as
     /// they were sent, saved again.
     func reattach(_ sent: [Attachment]) -> [Attachment]
+}
+
+extension ChatServices {
+    package var modelScope: String? { nil }
 }
 
 /// What a chat asks of its transcript beyond the log: the rows' side of sending, drawing,

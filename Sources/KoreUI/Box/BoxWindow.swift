@@ -182,6 +182,8 @@ final class BoxChatServices: ChatServices {
     func makeViewState() -> AnyObject { app.makeViewState() }
     func refreshAccount(_ cli: String) {}
     func modelsListed(_ cli: String, _ models: [ModelOption]) {}
+    /// The box's own lists: its chats' pickers never take this Mac's, nor give it theirs.
+    var modelScope: String? { connection.alias }
     func arsenalFollowMode(_ chat: Chat) { app.arsenalFollowMode(chat) }
     func tap(_ chat: Chat, _ event: ChatEvent) { app.tap(chat, event) }
     func log(_ name: String, _ fields: KeyValuePairs<String, String?>) { app.log(name, fields) }
