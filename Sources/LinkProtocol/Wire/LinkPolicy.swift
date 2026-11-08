@@ -203,12 +203,12 @@ package enum LinkPolicy {
         case .send(let text, let files, _, _):
             return check(.send(chatId: "", text: text, blobs: files.map(\.blob)), chat, control: control)
         case .respond(let approval, let decision):
-            if chat.cards[approval]?.kind == .signIn { return .deny(.signIn, "Sign-ins are answered on the box itself.") }
+            if chat.cards[approval]?.kind == .signIn { return .deny(.signIn, boxSignInLine) }
             switch decision {
-            case .allowAlways: return .deny(.alwaysAllow, "Always allow is set on the box itself.")
+            case .allowAlways: return .deny(.alwaysAllow, boxAlwaysAllowLine)
             // Into the chat's own mode: leaving plan's rule. Into Accept edits: under Auto.
             case .approvePlan(let acceptEdits):
-                return acceptEdits || mayLeavePlan(chat, control: control) ? .allow : .deny(.raiseMode, "Leaving plan into that mode is set on the box itself.")
+                return acceptEdits || mayLeavePlan(chat, control: control) ? .allow : .deny(.raiseMode, boxCapLine)
             case .allow, .deny, .keepPlanning, .answers: return .allow
             }
         case .setMode(let mode):
@@ -225,8 +225,8 @@ package enum LinkPolicy {
             // Only the row of a typed /compact, the one a chat shows without sending.
             return Chat.compactCommand(text) != nil && text.utf8.count <= maxText ? .allow : .deny(.invalid, "Only a /compact row is kept that way.")
         case .setRemoteControl:
-            // The CLI's own remote hands the chat to another service: only on the box itself.
-            return .deny(.command, "Remote control of a box's chat is turned on on the box.")
+            // The CLI's own remote hands the chat to another service: not from here.
+            return .deny(.command, "Remote control isn't offered for box chats.")
         case .setAutoCompact(let at):
             return at.map { (1...100).contains($0) } ?? true ? .allow : .deny(.invalid, "A percentage from 1 to 100, or off.")
         case .setDraft(let text):
@@ -496,6 +496,12 @@ package enum LinkPolicy {
     /// The highest a full-control client may raise a mode (owner, 2026-11-10: Auto, not Bypass or
     /// Full access).
     package static let raiseCap = ModeLevel.auto
+    /// What a box chat's picker and refusals say of the cap.
+    package static let boxCapLine = "Box chats go up to Auto"
+    /// Always allow from here: the box refuses it, and its cards don't offer it.
+    package static let boxAlwaysAllowLine = "Always allow isn't offered for box chats yet"
+    /// A CLI's sign-in in a box chat: not answered from here.
+    package static let boxSignInLine = "Sign-ins in box chats aren't answered from here yet"
 
     /// The modes the link may switch a chat to: its own level and below; with full control, also
     /// up to Auto.

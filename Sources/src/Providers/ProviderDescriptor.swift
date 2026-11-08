@@ -32,6 +32,8 @@ package struct ProviderDescriptor: Identifiable, Sendable {
     package let account: AccountOps
     /// What New tab's install card says of its official installer.
     package var install = InstallWording(maker: "", source: "")
+    /// It has a fast mode (some of its models): what the link advertises (`ProviderFeatures`).
+    package var fastMode = false
 }
 
 /// The install card's words for one CLI's official installer.

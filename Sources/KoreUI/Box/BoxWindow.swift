@@ -480,9 +480,9 @@ final class BoxChatServices: ChatServices {
         self.chat = chat
         if let chatId, let line = ChatPlaces.shared.takeNote(connection.alias, chatId) { chat.note(line) }
         chat.ownPopups()
-        // Modes above Auto are set on the box itself: the picker doesn't offer them.
+        // Box chats go up to Auto (`LinkPolicy.raiseCap`): the picker doesn't offer the modes above.
         chat.controls.levelCap = LinkPolicy.raiseCap.rawValue
-        chat.controls.levelCapNote = "Set on \(NodeNames.name(connection.alias)) itself"
+        chat.controls.levelCapNote = LinkPolicy.boxCapLine
     }
     func closed(_ chat: Chat) { app.closed(chat) }
     func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}

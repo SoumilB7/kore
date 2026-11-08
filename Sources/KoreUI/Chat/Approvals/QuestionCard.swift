@@ -8,7 +8,8 @@ import SwiftUI
 /// question, so a switch never moves the card or the composer; past half the window it scrolls
 /// under soft edges. A pick is its radio or checkbox and a thin accent line round its row; Other
 /// is the last row, the row its field. Nothing goes until Submit, which waits for every answer;
-/// until then, an answered question's button is Next, to the next one unanswered.
+/// until then, an answered question's button is Next, to the next one unanswered. Skip, beside
+/// it, turns the questions down unanswered.
 ///
 /// The card has the keys as it arrives over an empty composer, and once clicked (its corner
 /// marks say so): ↑ ↓ move the current row, as the pointer does; Space picks; ↩ picks and goes
@@ -22,6 +23,8 @@ struct QuestionCard: View {
     var composerEmpty: () -> Bool = { true }
     /// Gives the keys to the composer (true), or takes them from it (false).
     var composerKeys: (Bool) -> Void = { _ in }
+    /// Skip: the questions turned down unanswered, as the link's Skip does (`.deny`).
+    let skip: () -> Void
     let submit: ([String: [String]]) -> Void
     /// The options picked, Other's and what's typed under it.
     @StateObject private var picks = Local(QuestionPicks())
@@ -357,17 +360,20 @@ struct QuestionCard: View {
             .allowsHitTesting(false)
     }
 
-    /// Next while the shown question is answered and another isn't (it goes there, as ↩ does);
-    /// else Submit, an outline with tertiary words until a press would send.
+    /// Skip, then Next while the shown question is answered and another isn't (it goes there, as ↩
+    /// does); else Submit, an outline with tertiary words until a press would send.
     private var footer: some View {
         let next = answered(questions[shownIndex]) ? nextUnanswered : nil
         let live = ready || next != nil
         return HStack {
             Spacer(minLength: 0)
+            Button(CardLabels.Question.skip, action: skip)
+                .buttonStyle(SubtleButtonStyle())
+                .storyID(card.part(.deny))
             Button {
                 if let next { go(to: next) } else { send() }
             } label: {
-                Text(next != nil ? "Next" : "Submit").foregroundStyle(live ? Theme.background : Theme.tertiary)
+                Text(next != nil ? "Next" : CardLabels.Question.submit).foregroundStyle(live ? Theme.background : Theme.tertiary)
             }
             .buttonStyle(SubtleButtonStyle(prominent: live))
             .disabled(!live)

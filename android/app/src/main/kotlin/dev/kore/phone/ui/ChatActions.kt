@@ -106,7 +106,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     }
     /**
      * Arsenal, only while it's on: the Mac's mark (a bolt in a ring) in the tier's colour, 20 dp in
-     * a 28×36 dp target. A tap opens the options sheet, whose Arsenal part shows the tier and Stop all.
+     * a 28×36 dp target. A tap opens the options sheet, whose Arsenal part shows the tier and Stop agent control.
      */
     private val arsenalMark = android.widget.ImageView(activity).apply {
         setImageResource(dev.kore.phone.R.drawable.ic_arsenal)
@@ -844,7 +844,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         segmented(tiers.map { it to arsenalShort(it) }, current, marked = tiers.filter { C.arsenalRaises(current, it) }.toSet()) { t ->
             if (C.arsenalRaises(current, t)) { dismiss(); raisePrompt(C.arsenalName(t), "arsenal.$t") } else run("arsenal", C.setArsenal(chatId, t))
         }
-        if (current != "off") item("Stop all", glyph = "■", danger = true, tag = "arsenal stop") { run("arsenalStop", C.arsenalStopAll()) }
+        if (current != "off") item("Stop agent control", glyph = "■", danger = true, tag = "arsenal stop") { run("arsenalStop", C.arsenalStopAll()) }
     }
 
     /** A tier's name short enough for a quarter of the segment; the raise sheet says it in full. */
@@ -883,11 +883,11 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             when (kind) {
                 "fork" -> r.str("chatId")?.let { id ->
                     activity.startActivity(Intent(activity, ChatActivity::class.java).putExtra("chat", id))
-                } ?: quiet("Forked on the Mac")
+                } ?: quiet("Forked on ${link()?.name ?: "the Mac"}")
                 "close" -> activity.finish()
                 "select" -> quiet("Shown on the Mac")
                 "compact" -> quiet("Compacting…")
-                "revert" -> quiet("Reverted")
+                "revert" -> quiet("Rolled back")
                 "sendAtReset" -> quiet("")
                 "rename" -> quiet("")
                 else -> Unit
@@ -1040,15 +1040,15 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     val turnRunning: Boolean get() = running
 
     /**
-     * "Revert to here", the Mac's rollback: asks first (what follows leaves the chat; files stay
+     * "Roll back to here", the Mac's rollback: asks first (what follows leaves the chat; files stay
      * as they are), never under a running turn.
      */
     fun revert(entryId: String, after: Boolean) {
-        if (running) return quiet("Stop the turn first, then revert.")
+        if (running) return quiet("Stop the turn first, then roll back.")
         lateinit var s: Sheet
         s = Sheet(activity, K.err).show {
-            title("Revert to here?", revertLine(prompt = !after))
-            buttons("Revert", danger = true) {
+            title("Roll back to here?", revertLine(prompt = !after))
+            buttons("Roll back, files stay", danger = true) {
                 s.dismiss()
                 run("revert", dev.kore.link.node.Control.rollback(chatId, entryId, after))
             }
@@ -1293,7 +1293,7 @@ fun arsenalTint(tier: String?): Int = when (tier) {
 }
 
 /**
- * The Revert sheet's line (design spec §8), as this revert does it: the chat goes back, and on a
+ * The Roll back sheet's line (design spec §8), as this rollback does it: the chat goes back, and on a
  * prompt its text returns to the field. Files aren't touched by it, so the spec's files line never shows.
  */
 fun revertLine(prompt: Boolean): String =

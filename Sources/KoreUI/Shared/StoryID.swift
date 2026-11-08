@@ -262,7 +262,7 @@ extension StoryID {
 
     package enum Approval {
         /// `.part(.allow)`, `.always`, `.deny`; a plan card's `.approveplan` (edits approved by hand),
-        /// `.autoaccept` and `.keepplanning`; a question card's `.submit`.
+        /// `.autoaccept` and `.keepplanning`; a question card's `.submit` and `.deny` (its Skip).
         package static func card(_ id: String) -> StoryID { StoryID(.approval, key: id) }
         /// A question's Other, by the question's id; `.part(.field)` is what's typed under it.
         package static func other(_ question: String) -> StoryID { StoryID(.approval, "other", key: question) }

@@ -35,7 +35,7 @@ private struct Gallery: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PermissionCard(approval: permission) { _ in }
-            QuestionCard(approval: question) { _ in }
+            QuestionCard(approval: question, skip: {}) { _ in }
             PlanApprovalCard(plan: "Move the views onto tokens, then apply the snaps.") { _ in }
             ImplementPlanCard(implement: {}, stay: {})
             HStack(spacing: 8) {

@@ -567,7 +567,7 @@ struct BoxParityTests {
         rig.cli.sink.yield(.approvalRequested(Approval(id: "ap9", title: "Run ls", detail: nil, body: nil, canAlwaysAllow: true, questions: [])))
         #expect(await until { chat.approvals.pending.first?.id == "ap9" })
         #expect(chat.approvals.pending.first?.canAlwaysAllow == false)
-        #expect(chat.approvals.pending.first?.alwaysAllowNote == "Always allow is set on local itself")
+        #expect(chat.approvals.pending.first?.alwaysAllowNote == "Always allow isn't offered for box chats yet")
 
         // Rename: through `chat.call`, kept on the box (its list and other Macs read it there).
         chat.rename("Release plan")

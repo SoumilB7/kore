@@ -25,7 +25,7 @@ enum MCPServer {
 
     /// No socket: agent control is off in Kore (or, outside its chats, Kore may not be running).
     static var unreachableLine: String {
-        inChat ? "Kore's agent control is off, so Arsenal is off for this chat. The user turns it on: right-click its tab → Arsenal, or ⌥⌘K."
+        inChat ? "Kore's agent control is off, so Arsenal is off for this chat. " + AgentTools.howLine
             : "Kore isn't running, or agent control is off."
     }
 

@@ -123,13 +123,13 @@ struct PlanApprovalCard: View {
             .fixedSize(horizontal: false, vertical: true)
             .panel(.well)
             AdaptiveButtons {
-                Button("No, keep planning") { decide(.keepPlanning) }
+                Button(CardLabels.Plan.keepPlanning) { decide(.keepPlanning) }
                     .buttonStyle(SubtleButtonStyle())
                     .storyID(StoryID.Approval.card(id).part(.keepplanning))
-                Button("Yes, manually approve edits") { decide(.approvePlan(autoAcceptEdits: false)) }
+                Button(CardLabels.Plan.approve) { decide(.approvePlan(autoAcceptEdits: false)) }
                     .buttonStyle(SubtleButtonStyle())
                     .storyID(StoryID.Approval.card(id).part(.approveplan))
-                Button("Yes, auto-accept edits") { decide(.approvePlan(autoAcceptEdits: true)) }
+                Button(CardLabels.Plan.autoAccept) { decide(.approvePlan(autoAcceptEdits: true)) }
                     .buttonStyle(SubtleButtonStyle(prominent: true))
                     .storyID(StoryID.Approval.card(id).part(.autoaccept))
             }
@@ -146,15 +146,15 @@ struct ImplementPlanCard: View {
     let stay: () -> Void
 
     private var title: some View {
-        Text("Implement this plan?")
+        Text(CardLabels.Implement.title)
             .font(TextStyle.title)
             .foregroundStyle(Theme.text)
     }
 
     @ViewBuilder private var buttons: some View {
-        Button("No, stay in Plan mode", action: stay)
+        Button(CardLabels.Implement.stay, action: stay)
             .buttonStyle(SubtleButtonStyle())
-        Button("Yes, implement this plan", action: implement)
+        Button(CardLabels.Implement.implement, action: implement)
             .buttonStyle(SubtleButtonStyle(prominent: true))
     }
 

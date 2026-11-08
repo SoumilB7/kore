@@ -18,7 +18,7 @@ enum HostMeta {
                 id: p.id, name: p.name,
                 modes: p.modes.map { ModeInfo(id: $0.id, label: $0.label, level: level($0), listed: $0.listed) },
                 planToggle: p.planToggle.map { PlanToggleInfo(id: $0.id, label: $0.label) },
-                features: ProviderFeatures(effort: true, fastMode: p.id == "claude"), calls: calls ? LinkPolicy.callable : nil)
+                features: ProviderFeatures(effort: true, fastMode: p.fastMode), calls: calls ? LinkPolicy.callable : nil)
             info.installed = installed[p.id]
             return info
         }
@@ -135,14 +135,17 @@ enum HostMeta {
         return .permission
     }
 
+    /// The "Implement this plan?" card's answers, in the Mac card's words.
+    static let implementActions: [CardAction] = [
+        .init(id: .implement, label: CardLabels.Implement.implement, style: .primary), .init(id: .stay, label: CardLabels.Implement.stay, style: .neutral),
+    ]
+
     static func cards(_ hc: HostChat, raise: Bool = false) -> [LinkCard] {
         guard let chat = hc.chat else { return [] }
         var out = chat.approvals.pending.map { card($0, in: chat, raise: raise) }
         if chat.approvals.offerImplementPlan {
-            let actions: [CardAction] = [
-                .init(id: .implement, label: "Yes, implement it", style: .primary), .init(id: .stay, label: "Stay in Plan", style: .neutral),
-            ]
-            let title = "Implement this plan?"
+            let actions = implementActions
+            let title = CardLabels.Implement.title
             let digest = LinkCardDigest(kind: .planReady, title: title, detail: nil, body: nil, plan: nil, questions: nil, actions: actions).digest
             out.append(LinkCard(id: planReadyID, kind: .planReady, title: title, actions: actions, digest: digest))
         }
@@ -167,9 +170,9 @@ enum HostMeta {
             actions = []
         case .plan:
             actions = [
-                .init(id: .approvePlan, label: "Yes, manually approve edits", style: .primary),
-                .init(id: .approvePlanAcceptEdits, label: "Yes, and auto-accept edits", style: .neutral, refused: raise ? nil : true),
-                .init(id: .keepPlanning, label: "No, keep planning", style: .neutral),
+                .init(id: .approvePlan, label: CardLabels.Plan.approve, style: .primary),
+                .init(id: .approvePlanAcceptEdits, label: CardLabels.Plan.autoAccept, style: .neutral, refused: raise ? nil : true),
+                .init(id: .keepPlanning, label: CardLabels.Plan.keepPlanning, style: .neutral),
             ]
         case .questions:
             questions = approval.questions.map { q in
@@ -178,7 +181,7 @@ enum HostMeta {
                     options: q.options.map { .init(label: $0.label, description: $0.description, preview: $0.preview) }, multiple: q.multiple,
                     secret: q.secret, other: q.other)
             }
-            actions = [.init(id: .submitAnswers, label: "Submit", style: .primary), .init(id: .deny, label: "Skip", style: .neutral)]
+            actions = [.init(id: .submitAnswers, label: CardLabels.Question.submit, style: .primary), .init(id: .deny, label: CardLabels.Question.skip, style: .neutral)]
         case .permission, .planReady:
             actions =
                 [.init(id: .allow, label: "Allow", style: .primary)]

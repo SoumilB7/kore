@@ -1060,7 +1060,7 @@ package final class AgentChannel {
     }
 
     /// A chat's caller refused for having no grant: what the agent tells the user.
-    static let offLine = "Arsenal is off for this chat. The user turns it on: right-click its tab → Arsenal, or ⌥⌘K (a Codex chat needs Full access)."
+    static let offLine = AgentTools.offLine()
 
     static func message(_ code: AgentCode) -> String {
         switch code {

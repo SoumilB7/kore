@@ -247,7 +247,7 @@ class ChatActivity : NodeActivity() {
     }
 
     /**
-     * Long-press a message: Copy, Fork from here / Fork after this, and Revert to here (the Mac's
+     * Long-press a message: Copy, Fork from here / Fork after this, and Roll back to here (the Mac's
      * rollback); on a table, Copy table first, as the Mac's table Copy copies it ([TableCopy]).
      */
     private fun messageMenu(anchor: View, e: JsonObject, table: String? = null) {
@@ -259,7 +259,7 @@ class ChatActivity : NodeActivity() {
         if (table != null) items += PopMenu.Item("Copy table") { clip.setPrimaryClip(android.content.ClipData.newPlainText("Table", table)) }
         items += PopMenu.Item("Copy") { clip.setPrimaryClip(android.content.ClipData.newPlainText("Message", text)) }
         adapter.canFork?.let { can -> items += PopMenu.Item(if (after) "Fork after this" else "Fork from here", enabled = can) { actions.fork(id, after) } }
-        adapter.canFork?.let { can -> items += PopMenu.Item("Revert to here", danger = true, enabled = can && !actions.turnRunning) { actions.revert(id, after) } }
+        adapter.canFork?.let { can -> items += PopMenu.Item("Roll back to here", danger = true, enabled = can && !actions.turnRunning) { actions.revert(id, after) } }
         PopMenu(this).show(anchor, items)
     }
 

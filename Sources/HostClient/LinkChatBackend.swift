@@ -377,8 +377,8 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         case .remoteControlUnavailable where !offers("setRemoteControl"):
             return .remoteControlUnavailable(Self.remoteOnBox)
         case .approvalRequested(let approval):
-            // Always allow is set on the box itself: the card doesn't offer it.
-            let shown = approval.withoutAlwaysAllow(note: "Always allow is set on \(NodeNames.name(connection.alias)) itself")
+            // The box refuses Always allow from here (`LinkPolicy`): the card doesn't offer it.
+            let shown = approval.withoutAlwaysAllow(note: LinkPolicy.boxAlwaysAllowLine)
             asked[approval.id] = shown
             return .approvalRequested(shown)
         case .turnChanges(let turn, let changes) where localPath != nil:
@@ -750,8 +750,8 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
         case .goneFolder: "that folder isn't on \(NodeNames.name(alias))"
         case .goneBlob: "the file didn't reach \(NodeNames.name(alias))"
         case .raiseMode: "\(NodeNames.name(alias)) doesn't allow that mode from here"
-        case .alwaysAllow: "Always allow is set on \(NodeNames.name(alias)) itself"
-        case .signIn: "sign-ins are answered on \(NodeNames.name(alias)) itself"
+        case .alwaysAllow: LinkPolicy.boxAlwaysAllowLine
+        case .signIn: LinkPolicy.boxSignInLine
         case .deniedControl: "\(NodeNames.name(alias)) lets this Mac only watch"
         case .rateLimited: "too many at once; try again in a moment"
         case .staleCard: "the card changed on \(NodeNames.name(alias))"

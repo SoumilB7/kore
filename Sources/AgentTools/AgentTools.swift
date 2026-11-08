@@ -205,15 +205,17 @@ package enum AgentTools {
     /// Kore's off, or this chat's Arsenal is: what the agent tells the user. A chat on a box
     /// reaches Kore through this server alone, so Codex's sandbox doesn't come into it.
     package static func offLine(box: Bool = false) -> String {
-        box
-            ? "Arsenal is off for this chat. The user turns it on: right-click its tab → Arsenal, or ⌥⌘K."
-            : "Arsenal is off for this chat. The user turns it on: right-click its tab → Arsenal, or ⌥⌘K (a Codex chat needs Full access)."
+        "Arsenal is off for this chat. " + howLine + (box ? "" : " A Codex chat needs Full access.")
     }
+
+    /// How the user sets a chat's Arsenal, said the same wherever it's said: on from the tab, its
+    /// tier from the icon that shows in the window's top row while it's on.
+    package static let howLine =
+        "The user turns it on from the chat's tab (right-click → Arsenal, or ⌥⌘K) and picks a tier from the Arsenal icon at the top right of Kore's window."
 
     /// A command above the chat's tier: which one it needs.
     package static func tierLine(_ command: String, has tier: String) -> String {
-        "This needs Arsenal's \(tierName(tierNeeded(command))) tier; this chat has \(tierName(tier)). "
-            + "The user picks a tier from the Arsenal icon at the top right of Kore's window."
+        "This needs Arsenal's \(tierName(tierNeeded(command))) tier; this chat has \(tierName(tier)). " + howLine
     }
 
     /// Kore's line for a call (its result, or a `bye`) as the agent reads it, the same from

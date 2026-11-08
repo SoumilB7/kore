@@ -112,7 +112,7 @@ package final class ControlsStore {
     /// The most permissive level the picker offers: a box's chat stops at Auto (3), the most a
     /// box takes from a Mac. Nil: every mode.
     @ObservationIgnored package var levelCap: Int?
-    /// Why the modes past `levelCap` can't be picked here ("Set on mybox itself"): the picker
+    /// Why the modes past `levelCap` can't be picked here ("Box chats go up to Auto"): the picker
     /// shows them dim, saying so.
     @ObservationIgnored package var levelCapNote: String?
 
