@@ -354,6 +354,29 @@ struct BusNotify: Decodable {
     /// or the netmap (spike 0h).
     static let mask = 49154
 
+    /// Whether a bus line names a field read here: the `Engine` lines Tailscale sends every 2 s
+    /// regardless of the mask are skipped without decoding.
+    static func mayCarry(_ line: [UInt8]) -> Bool {
+        keys.contains { key in line.withUnsafeBufferPointer { contains($0, key) } }
+    }
+
+    private static let keys: [[UInt8]] = ["\"State\"", "\"InitialStatus\"", "\"PeerChangedPatch\"", "\"ErrMessage\""].map { Array($0.utf8) }
+
+    private static func contains(_ hay: UnsafeBufferPointer<UInt8>, _ needle: [UInt8]) -> Bool {
+        guard hay.count >= needle.count, let first = needle.first else { return false }
+        var i = 0
+        let last = hay.count - needle.count
+        while i <= last {
+            if hay[i] == first {
+                var j = 1
+                while j < needle.count, hay[i + j] == needle[j] { j += 1 }
+                if j == needle.count { return true }
+            }
+            i += 1
+        }
+        return false
+    }
+
     var events: [TailnetEvent] {
         var out: [TailnetEvent] = []
         if let state { out.append(.state(BackendState(bus: state))) }

@@ -27,6 +27,7 @@ abstract class NodeActivity : Activity() {
     protected lateinit var root: LinearLayout
     protected lateinit var content: LinearLayout
     private lateinit var banner: TextView
+    private lateinit var titleColumn: LinearLayout
     /** The top bar's title: the device's, the window's or the chat's name. */
     protected lateinit var barTitle: TextView
     /** A small state dot at the end of the top bar; screens that have a state show it. */
@@ -63,17 +64,23 @@ abstract class NodeActivity : Activity() {
             setOnClickListener { finish() }
         }, LinearLayout.LayoutParams(dp(48), dp(48))) else addView(android.view.View(this@NodeActivity), LinearLayout.LayoutParams(dp(12), 1))
         barTitle = label("", 17f, bold = true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
-        addView(barTitle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        barDot = android.view.View(this@NodeActivity).apply { visibility = android.view.View.GONE }
-        addView(barDot, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginStart = dp(10) })
+        // The link's state is one quiet line under the title, so the name keeps its width.
         banner = label("", 12f, K.dim).apply {
-            setPadding(dp(10), dp(4), dp(10), dp(4))
-            background = rounded(K.surface, 12, K.line)
             maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             visibility = android.view.View.GONE
         }
-        addView(banner, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(10) })
-        if (showsGear) addView(label("⚙", 20f, K.dim).apply {
+        titleColumn = LinearLayout(this@NodeActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            minimumHeight = dp(48)
+            addView(barTitle)
+            addView(banner)
+        }
+        addView(titleColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        barDot = android.view.View(this@NodeActivity).apply { visibility = android.view.View.GONE }
+        addView(barDot, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginStart = dp(10) })
+        if (showsGear) addView(label("⚙\uFE0E", 20f, K.dim).apply {
             gravity = android.view.Gravity.CENTER
             contentDescription = "Settings"
             isClickable = true
@@ -127,8 +134,8 @@ abstract class NodeActivity : Activity() {
         banner.text = text
         banner.setTextColor(color)
         val action = trouble?.action
-        banner.setOnClickListener(action?.let { a -> android.view.View.OnClickListener { rowAction(link, a) } })
-        banner.isClickable = action != null
+        titleColumn.setOnClickListener(action?.let { a -> android.view.View.OnClickListener { rowAction(link, a) } })
+        titleColumn.isClickable = action != null
         banner.contentDescription = "$name: ${text.removePrefix("● ")}"
         banner.visibility = if (text.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
         macName = name
@@ -228,7 +235,6 @@ fun troubleWords(s: State, isMac: Boolean, name: String, mac: String): Trouble? 
     s == State.Removed -> Trouble("Removed on ${if (isMac) name else mac} · Join again", "● Removed · Join again", RowAction.JOIN_AGAIN)
     s !is State.Denied -> null
     !isMac -> Trouble("waiting for $mac", "● Waiting for $mac", null)
-    s.reason == "refused" -> Trouble("KoreNet is off on $name · Try again", "● KoreNet is off · Try again", RowAction.TRY_AGAIN)
     else -> Trouble("Not allowed · Ask again", "● Not allowed · Ask again", RowAction.ASK_AGAIN)
 }
 

@@ -36,7 +36,7 @@ package final class TailnetLocal: Tailnet {
                     var reader = opened
                     let decoder = JSONDecoder()
                     while let line = try reader.line(limit: HTTP1.maxBody) {
-                        guard !line.isEmpty else { continue }
+                        guard !line.isEmpty, BusNotify.mayCarry(line) else { continue }
                         guard let notify = try? decoder.decode(BusNotify.self, from: Data(line)) else {
                             continuation.yield(.error("bad bus message"))
                             continue

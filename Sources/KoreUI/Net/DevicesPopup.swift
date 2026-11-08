@@ -116,14 +116,17 @@ struct DevicesPopup: View {
             Text(adding ? "Adding devices" : "Devices").font(Theme.Net.line).fontWeight(.medium).foregroundStyle(Theme.text)
             if adding, let until = picture.addUntil { Countdown(until: until) }
             Spacer(minLength: Space.md)
-            Toggle("", isOn: Binding(get: { picture.net != .off }, set: { devices.setOn($0) }))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .labelsHidden()
-                .tint(Theme.accent)
-                .help(picture.net == .off ? "KoreNet is off" : "KoreNet is on")
-                .accessibilityLabel("KoreNet")
-                .storyID(StoryID.Net.toggle, press: { devices.setOn(picture.net == .off) })
+            // While adding, the header is the window's (mockup C): its countdown and ×.
+            if !adding {
+                Toggle("", isOn: Binding(get: { picture.net != .off }, set: { devices.setOn($0) }))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .tint(Theme.accent)
+                    .help(picture.net == .off ? "KoreNet is off" : "KoreNet is on")
+                    .accessibilityLabel("KoreNet")
+                    .storyID(StoryID.Net.toggle, press: { devices.setOn(picture.net == .off) })
+            }
             if adding {
                 NetHeaderButton(glyph: .close, lit: true, help: "Stop adding") { devices.closeAddWindow() }
                     .storyID(StoryID.Net.closeAdd, press: { devices.closeAddWindow() })
@@ -152,7 +155,8 @@ struct DevicesPopup: View {
     }
 
     private func deviceRow(_ row: DeviceRow, now: Date) -> some View {
-        let dimmed = row.paused || row.needsTailscale || row.status != .connected && row.status != .unknown
+        // Dimmed when it can't be reached; one that only needs an update is still there.
+        let dimmed = row.paused || row.needsTailscale || row.status != .connected && row.status != .unknown && row.status != .needsUpdate
         let lit = hoveredRow.value == row.id || menuFor.value == row.id
         let detail = DevicesWords.detail(row, now: now)
         return NetRowFrame(lit: lit) {
@@ -170,14 +174,15 @@ struct DevicesPopup: View {
                     }
                     .onExitCommand { renaming.value = nil }
                     .onAppear { renameFocused = true }
+                    .accessibilityLabel(Text("Name"))
                     .storyID(StoryID.Net.rename(row.id))
             } else {
-                Text(row.name).font(Theme.Net.name).foregroundStyle(dimmed ? Theme.tertiary : Theme.text).lineLimit(1)
+                Text(row.name).font(Theme.Net.name).foregroundStyle(dimmed ? Theme.tertiary : Theme.text).lineLimit(1).layoutPriority(1)
             }
             if let detail { Text(detail).font(Theme.Net.detail).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail) }
             Spacer(minLength: 0)
             if lit {
-                NetMoreButton(lit: menuFor.value == row.id) { openMenu(row) }
+                NetMoreButton(lit: menuFor.value == row.id, name: row.name) { openMenu(row) }
                     .background(BoxAnchor { [anchors] view in anchors.value[row.id] = view })
             } else if let dot = rowDot(row) {
                 NetDot(fill: dot)
@@ -283,9 +288,9 @@ struct DevicesPopup: View {
             if picture.signingIn {
                 NetLine {
                     NetSpinner()
-                    Text("Finish signing in in your browser")
+                    Text("Finish signing in in the browser")
                     Text("·")
-                    Button("Cancel") { devices.cancelSignIn() }.buttonStyle(.plain).foregroundStyle(Theme.accent)
+                    Button("Cancel") { devices.cancelSignIn() }.buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
                         .storyID(StoryID.Net.lineAction, press: { devices.cancelSignIn() })
                 }
                 .storyID(StoryID.Net.line)
@@ -299,7 +304,7 @@ struct DevicesPopup: View {
             NetLine {
                 Text(picture.net == .stopped ? "Tailscale is off on this Mac" : "Tailscale is signed out")
                 Text("·")
-                Button("Open Tailscale") { devices.openTailscale() }.buttonStyle(.plain).foregroundStyle(Theme.accent)
+                Button("Open Tailscale") { devices.openTailscale() }.buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
                     .storyID(StoryID.Net.lineAction, press: { devices.openTailscale() })
             }
             .storyID(StoryID.Net.line)
@@ -315,7 +320,7 @@ struct DevicesPopup: View {
                         if action == .installTailscale { NetGlyph(kind: .external, size: Size.Net.smallGlyph) }
                     }
                 }
-                .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                .buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
                 .storyID(StoryID.Net.lineAction, press: { devices.unavailableAction(why) })
             }
             .help(why)
@@ -344,7 +349,7 @@ struct DevicesPopup: View {
             NetLine {
                 Text("This Mac's Tailscale key expires " + DevicesWords.expiresIn(expiry, now: now))
                 Text("·")
-                Button("Renew") { devices.renew() }.buttonStyle(.plain).foregroundStyle(Theme.accent)
+                Button("Renew") { devices.renew() }.buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
                     .storyID(StoryID.Net.lineAction, press: { devices.renew() })
             }
             .storyID(StoryID.Net.line)
@@ -353,7 +358,7 @@ struct DevicesPopup: View {
                 NetLine {
                     Text("On your tailnet")
                     Text("·")
-                    Button("Add a device") { devices.openAddWindow() }.buttonStyle(.plain).foregroundStyle(Theme.accent)
+                    Button("Add a device") { devices.openAddWindow() }.buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
                         .storyID(StoryID.Net.lineAction, press: { devices.openAddWindow() })
                 }
                 .storyID(StoryID.Net.line)
@@ -579,6 +584,7 @@ private struct NetHeaderButton: View {
 /// A row's ⋯, in the dot's place on hover.
 private struct NetMoreButton: View {
     let lit: Bool
+    let name: String
     let action: () -> Void
 
     var body: some View {
@@ -591,7 +597,7 @@ private struct NetMoreButton: View {
         }
         .buttonStyle(.plain)
         .padding(.trailing, -Space.sm)
-        .accessibilityLabel(Text("More"))
+        .accessibilityLabel(Text("More for \(name)"))
     }
 }
 
@@ -607,6 +613,7 @@ struct Countdown: View {
                 .monospacedDigit()
                 .foregroundStyle(Theme.accent)
                 .onChange(of: left == 0) { _, over in if over { Devices.shared.changed() } }
+                .accessibilityLabel(Text("\(left / 60) min \(left % 60) s left"))
                 .storyID(StoryID.Net.countdown)
         }
     }
@@ -626,4 +633,9 @@ package enum DevicesPopupPlace {
         let below = content.isFlipped ? popup.minY >= under.maxY : popup.maxY <= under.minY
         return lined && below
     }
+}
+
+extension View {
+    /// An inline text action's hit area: the line's height, with nothing drawn bigger.
+    func netHit() -> some View { frame(minHeight: Size.Net.line).contentShape(Rectangle()) }
 }

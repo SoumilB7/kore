@@ -160,7 +160,8 @@ class NodeClient(
         get() {
             val d = deviceFlow.value
             if (d.kind == dev.kore.link.trust.NodeKind.BOX && d.name.isNotBlank()) return d.name
-            return (welcomeFlow.value?.get("host") as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull ?: d.shortName
+            // Before a welcome: the record's name, not the host name, so it doesn't change on connect.
+            return (welcomeFlow.value?.get("host") as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull ?: d.name.ifBlank { d.shortName }
         }
 
     /** Starts following the node (the app came on screen, or KoreNet turned on). */

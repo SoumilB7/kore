@@ -283,7 +283,10 @@ extension DevicesPicture {
             if row.tailscaleOff, row.upgradeFix == nil { row.upgradeFix = .copy(BoxNetJoin.sudoLine) }
             if box.online {
                 switch box.route {
-                case .net?: row.route = tailnetPeer?.relayed == true ? .relayed : .tailnet
+                case .net?:
+                    row.route = tailnetPeer?.relayed == true ? .relayed : .tailnet
+                    // A box powered off holds its link open until a probe fails: Tailscale knows first.
+                    if tailnetPeer?.online == false, row.status == .connected { row.status = .offline }
                 case .ssh?: row.route = .ssh
                 case nil: row.route = nil
                 }
@@ -466,8 +469,9 @@ package enum DevicesWords {
         }
     }
 
-    /// "MacBook, mybox and Pixel 9".
-    package static func list(_ names: [String]) -> String {
+    /// "MacBook, mybox and Pixel 9"; past `cap` names, "MacBook, mybox, Pixel 9 and 4 more".
+    package static func list(_ names: [String], cap: Int = 3) -> String {
+        if names.count > cap { return names.prefix(cap).joined(separator: ", ") + " and \(names.count - cap) more" }
         switch names.count {
         case 0: return ""
         case 1: return names[0]
@@ -525,7 +529,7 @@ package struct NetIconLook: Equatable, Sendable {
         case .stopped: return NetIconLook(dimmed: true, dot: .ring, line: "Tailscale is off on this Mac")
         case .signedOut: return NetIconLook(dimmed: true, dot: .ring, line: "Tailscale is signed out on this Mac")
         case .unavailable: return NetIconLook(dimmed: true, dot: .ring, line: "Kore's tailnet couldn't start")
-        case .notJoined: return NetIconLook(dimmed: true, dot: nil, line: picture.signingIn ? "Finish signing in in your browser" : "Sign in to join your tailnet")
+        case .notJoined: return NetIconLook(dimmed: true, dot: nil, line: picture.signingIn ? "Finish signing in — it's open in your browser" : "Sign in to join your tailnet")
         default: break
         }
         if picture.lockedOut { return NetIconLook(dimmed: false, dot: .ring, line: "This Mac waits for a Tailnet Lock signature") }

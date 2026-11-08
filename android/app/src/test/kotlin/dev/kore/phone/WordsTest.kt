@@ -46,9 +46,8 @@ class WordsTest {
         assertEquals(Trouble("Not allowed · Ask again", "● Not allowed · Ask again", RowAction.ASK_AGAIN), troubleWords(State.Denied("unknown"), true, "MacBook", "MacBook"))
     }
 
-    @Test fun aMacWhoseKoreNetWentOffOffersTryAgain() {
-        assertEquals(RowAction.TRY_AGAIN, troubleWords(State.Denied("refused"), true, "MacBook", "MacBook")?.action)
-        assertEquals("KoreNet is off on MacBook · Try again", troubleWords(State.Denied("refused"), true, "MacBook", "MacBook")?.fact)
+    @Test fun aDenyOnTheAllowCardIsNotAllowedNotKoreNetOff() {
+        assertEquals(RowAction.ASK_AGAIN, troubleWords(State.Denied("refused"), true, "MacBook", "MacBook")?.action)
     }
 
     @Test fun aBoxThatDoesntHoldThisPhoneYetWaitsForTheMac() {

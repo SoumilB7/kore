@@ -124,6 +124,8 @@ struct BoxAddChoicesList: View {
     var asked: @MainActor () -> Void = {}
     @StateObject private var peers = Local<[ClaimPeer]>([])
     @StateObject private var refused = Local<[String: String]>([:])
+    /// While the tailnet is probed (once, as the rows show): one quiet line, so boxes don't just pop in.
+    @StateObject private var looking = Local(false)
 
     var body: some View {
         let choices = BoxAddChoices.make(net: net, found: peers.value, release: HostRelease.shared.hasScript)
@@ -133,7 +135,16 @@ struct BoxAddChoicesList: View {
                     claim(peer)
                 }
             }
-            if !choices.found.isEmpty { Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.xs + 1) }
+            if looking.value, choices.found.isEmpty {
+                HStack(spacing: Space.md) {
+                    NetSpinner().frame(width: Size.Net.mark, height: Size.Net.mark)
+                    Text("Looking on your tailnet").font(Theme.Net.detail).foregroundStyle(Theme.tertiary).lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, Space.xl)
+                .frame(maxWidth: .infinity, minHeight: Size.Net.line, alignment: .leading)
+            }
+            if !choices.found.isEmpty || looking.value { Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.xs + 1) }
             BoxAddRow(glyph: nil, title: "Use SSH…", detail: nil, story: StoryID.Net.useSSH, action: useSSH)
             if choices.newBox {
                 BoxAddRow(glyph: nil, title: "New box…", detail: nil, story: StoryID.Net.newBox, action: newBox)
@@ -141,7 +152,11 @@ struct BoxAddChoicesList: View {
         }
         .task(id: net == .running) {
             async let release: Void = HostRelease.shared.check()
-            if net == .running { peers.value = await Devices.shared.claims?.peers() ?? [] }
+            if net == .running {
+                looking.value = true
+                peers.value = await Devices.shared.claims?.peers() ?? []
+                looking.value = false
+            }
             await release
         }
     }

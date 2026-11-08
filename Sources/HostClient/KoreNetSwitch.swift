@@ -58,6 +58,10 @@ package struct NetEnvironment: @unchecked Sendable {
         self.macName = macName
     }
 
+    /// Why Kore's own tailnet can't start in a copy built without it (`Contents/Helpers` has no
+    /// `kore-tailnet`: built without Go, or not a signed release): the hover's words.
+    package static let noHelper = "This copy of Kore has no tailnet of its own"
+
     /// The Mac's own: LocalAPI discovery, `Contents/Helpers/kore-tailnet`, the Keychain, ssh.
     package static func standard(defaults: UserDefaults = .standard) -> NetEnvironment {
         let support = NodeMigration.standardRoot()
@@ -65,7 +69,7 @@ package struct NetEnvironment: @unchecked Sendable {
             installed: { installedTailscale(LocalAPIClient()) },
             sidecar: { key in
                 guard let helper = NetSidecar.helper() else {
-                    throw TailnetError.sidecar("no helper in Kore.app/Contents/Helpers (built without Go or a signed release copy)")
+                    throw TailnetError.sidecar(NetEnvironment.noHelper)
                 }
                 let sidecar = try NetSidecar.start(helper: helper, folder: support.appendingPathComponent("net/tailnet", isDirectory: true), key: key)
                 return (sidecar.tailnet, { sidecar.stop() })
@@ -382,6 +386,8 @@ package final class KoreNetSwitch: NetRouter {
                 self.reading = false
                 guard self.generation == mine, self.env != nil, let read else { return }
                 if read != self.status { self.status = read }
+                // A read is as good as the bus: Tailscale stopped or signed out shows without one.
+                self.follow(read.backendState)
             }
         }
     }
@@ -396,18 +402,23 @@ package final class KoreNetSwitch: NetRouter {
             // Kore's own tailnet signed in: its addresses and peers come with a fresh read.
             readStatus()
         case .state(let backend):
-            guard state != .sidecar, state != .off else { return }
-            let next: NetState = switch TailnetChooser.choose(.state(backend)) {
-            case .installed: .installed
-            case .stopped: .stopped
-            case .signedOut, .sidecar: .signedOut
-            }
-            guard next != state else { return }
-            state = next
-            if next.reaches { for connection in connections() { connection.peerOnline() } }
+            follow(backend)
         default:
             break
         }
+    }
+
+    /// The installed Tailscale's backend now (the bus, or a read): KoreNet's state follows.
+    private func follow(_ backend: BackendState) {
+        guard state == .installed || state == .stopped || state == .signedOut else { return }
+        let next: NetState = switch TailnetChooser.choose(.state(backend)) {
+        case .installed: .installed
+        case .stopped: .stopped
+        case .signedOut, .sidecar: .signedOut
+        }
+        guard next != state else { return }
+        state = next
+        if next.reaches { for connection in connections() { connection.peerOnline() } }
     }
 
     /// What the bus says, kept in the cached status: a peer's online flag, the backend's state,

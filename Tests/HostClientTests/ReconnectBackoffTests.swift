@@ -43,6 +43,28 @@ struct ReconnectBackoffTests {
         connection.release()
     }
 
+    @Test func anUnreachableBoxStopsDiallingAfterTheLongestWaitsUntilAnEvent() async throws {
+        let dials = Dials()
+        let connection = HostConnection(alias: "mybox", cache: HostCache(alias: "mybox", root: Fixture.scratch())) {
+            let (client, host) = FakeHost.pair()
+            dials.hosts.append(host)
+            host.close()
+            return client
+        }
+        connection.backoff = [.milliseconds(5), .milliseconds(10)]
+        connection.retain()
+        // The first dial, one at 5 ms, then `triesAtLongest` at 10 ms: then nothing.
+        let tries = 2 + HostConnection.triesAtLongest
+        #expect(await until { connection.parked })
+        #expect(dials.hosts.count == tries)
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(dials.hosts.count == tries)
+        // A wake (or a network change) dials it again.
+        connection.probe("wake")
+        #expect(await until { dials.hosts.count == tries + 1 })
+        connection.release()
+    }
+
     @Test func aLinkThatStayedUpDialsAgainFromTheShortestWait() async throws {
         let dials = Dials()
         let connection = connection(dials, stable: .milliseconds(100))

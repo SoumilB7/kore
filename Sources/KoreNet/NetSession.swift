@@ -504,7 +504,11 @@ package final class NetSession {
             guard client.route == .tailnet, client.enroll != nil, let key = challenge.identityKey, !key.isEmpty else { return fail(NetControl.Reason.proof) }
             learned = (challenge.device, key)
         } else {
-            guard let pinned = try? client.book.record(client.server) else { return fail(NetControl.Reason.unknown) }
+            // A book that can't be read now isn't a server this side never knew: try again.
+            let read: DeviceRecord??
+            do { read = try client.book.record(client.server) } catch { read = nil }
+            guard let found = read else { return fail(NetControl.Reason.limit) }
+            guard let pinned = found else { return fail(NetControl.Reason.unknown) }
             record = pinned
         }
         let nonceC = random(Binding.nonceSize)

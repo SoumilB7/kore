@@ -326,6 +326,48 @@ struct MacNetTests {
         #expect((later["recent"] as? [Any])?.isEmpty == true)
     }
 
+    @Test func koreNetOffSaysOffNotADeny() async throws {
+        let rig = try MacRig()
+        defer { rig.finish() }
+        let pixel = Phone()
+        try rig.allow(pixel)
+        let phone = try rig.dial(pixel)
+        await phone.next("attn.state")
+        rig.net.stop()
+        #expect(await phone.closed() == "bye off")
+    }
+
+    @Test func aMacGoingToSleepSaysSleepAndThePhonesLastSeenIsThen() async throws {
+        let rig = try MacRig()
+        defer { rig.finish() }
+        let pixel = Phone()
+        try rig.allow(pixel)
+        let phone = try rig.dial(pixel)
+        await phone.next("attn.state")
+        rig.clock.advance(90)
+        rig.net.sleeps()
+        #expect(await phone.closed() == "bye sleep")
+        await rig.change("gone \(pixel.id.uuidString)")
+        #expect(rig.net.linkWent[pixel.id] == rig.clock.now)
+        #expect(MacNetDevices(net: { rig.net }).phones.first?.lastSeen == rig.clock.now)
+    }
+
+    @Test func whatAGonePhoneWasSentIsLetGoOnceItsResumeCantCome() async throws {
+        let rig = try MacRig()
+        defer { rig.finish() }
+        let pixel = Phone()
+        try rig.allow(pixel)
+        let phone = try rig.dial(pixel)
+        await phone.next("snapshot")
+        await phone.next("attn.state")
+        phone.close("quit")
+        await rig.change("kept \(pixel.id.uuidString)")
+        #expect(rig.net.keeps(pixel.id))
+        rig.clock.advance(MacNet.keepProjectors)
+        rig.timers.advance(MacNet.keepProjectors)
+        #expect(!rig.net.keeps(pixel.id))
+    }
+
     @Test func aNewerLinkOfThePhoneReplacesTheOlder() async throws {
         let rig = try MacRig()
         defer { rig.finish() }

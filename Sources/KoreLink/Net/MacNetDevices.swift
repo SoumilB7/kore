@@ -15,14 +15,9 @@ package final class MacNetDevices: PhoneDevices {
 
     package init(net: @escaping @MainActor () -> MacNet? = { MacNet.shared }) { self.net = net }
 
-    /// The book as the rows read it: from memory until its file changes (the title-row icon asks
-    /// on every look), and a read that fails shows the last good one.
-    private var cache: DeviceBookCache?
-
-    package func allowedPhones(_ mac: MacNet) -> [DeviceRecord] {
-        if cache?.book.url != mac.host.book.url { cache = DeviceBookCache(mac.host.book) }
-        return (cache?.read().devices ?? []).filter { $0.kind == .phone }
-    }
+    /// The book as the rows read it (`MacNet.allowedPhones`: from memory until its file changes,
+    /// since the title-row icon asks on every look; a read that fails shows the last good one).
+    package func allowedPhones(_ mac: MacNet) -> [DeviceRecord] { mac.allowedPhones() }
 
     /// At launch: Devices reads phones through this.
     package static func install() {
@@ -37,7 +32,7 @@ package final class MacNetDevices: PhoneDevices {
             let link = mac.phones[record.id].flatMap { $0.ended ? nil : $0 }
             let presence = link?.client.watching.flatMap { titles[$0]?.title }.flatMap { $0.isEmpty ? nil : $0 }
             return PhoneFacts(
-                id: record.id, name: record.name, connected: link != nil && !record.isPaused, presence: presence, lastSeen: record.lastSeen,
+                id: record.id, name: record.name, connected: link != nil && !record.isPaused, presence: presence, lastSeen: mac.linkWent[record.id] ?? record.lastSeen,
                 paused: record.isPaused, nodeKeys: record.nodeKeys)
         }
     }

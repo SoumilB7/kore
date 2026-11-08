@@ -167,7 +167,9 @@ struct NetLinkTests {
         var entry = NodeDirectory.Entry(device: box.device, name: "box-1", ssh: "route-box", nodeKey: box.nodeKey, identityKey: box.identity.publicKey)
         directory.upsert(entry)
         let (switcher, settled) = netSwitch(defaults, root: root, directory: directory) {
-            fakeEnv(installed, local: FakeTailnet(), sidecar: FakeTailnet(), root: root, defaults: defaults, calls: calls)
+            // The installed Tailscale's own status says what its state does (a read follows it).
+            let local: FakeTailnet = if case .state(let backend) = installed { FakeTailnet(backend) } else { FakeTailnet() }
+            return fakeEnv(installed, local: local, sidecar: FakeTailnet(), root: root, defaults: defaults, calls: calls)
         }
         switcher.set(true)
         await settled.next { $0 == "chose" }
@@ -181,6 +183,24 @@ struct NetLinkTests {
         directory.upsert(entry)
         try switcher.book(try #require(switcher.env)).update { $0 = [box.pinned] }
         #expect((switcher.transport(for: connection) != nil) == net)
+        switcher.set(false)
+    }
+
+    /// A read is as good as the bus: Tailscale stopped while nothing held the bus shows on the next read.
+    @Test func aStatusReadMovesTheStateWithoutTheBus() async throws {
+        let root = netScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = suite()
+        let local = FakeTailnet()
+        let (switcher, settled) = netSwitch(defaults, root: root, directory: NodeDirectory(defaults: defaults)) {
+            fakeEnv(.state(.running), local: local, sidecar: FakeTailnet(), root: root, defaults: defaults, calls: EnvCalls())
+        }
+        switcher.set(true)
+        await settled.next { $0 == "chose" }
+        #expect(switcher.state == .installed)
+        local.held.withLock { $0.status.backendState = .stopped }
+        switcher.readStatus()
+        #expect(await until { switcher.state == .stopped })
         switcher.set(false)
     }
 

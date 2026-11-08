@@ -163,7 +163,7 @@ package final class HostNet {
         selfNode = nil
         for (key, shake) in handshakes where shake.route == .tailnet {
             shake.cancel()
-            shake.session.close(NetControl.Reason.refused)
+            shake.session.close(NetControl.Reason.off)
             handshakes[key] = nil
         }
     }
@@ -182,7 +182,7 @@ package final class HostNet {
         unlink(host.paths.netSocket.path)
         for shake in handshakes.values {
             shake.cancel()
-            shake.session.close(NetControl.Reason.refused)
+            shake.session.close(NetControl.Reason.off)
         }
         handshakes = [:]
     }

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import HostClient
 import KoreTrust
@@ -31,7 +32,13 @@ package enum MacNetSwitch {
         // Every box link that comes up is caught up on the phones this Mac issued.
         HostConnection.devicesCatchUp = { MacNet.shared?.catchUp($0) }
         HostConnection.devicesResult = { _, result in MacNet.shared?.took(result) }
+        // Phones hear the Mac is going to sleep (shown asleep, dialled again on its wake).
+        sleepWatch = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { MacNet.shared?.sleeps() }
+        }
     }
+
+    private static var sleepWatch: NSObjectProtocol?
 
     /// A listener for `net`, following its state from now on.
     @discardableResult

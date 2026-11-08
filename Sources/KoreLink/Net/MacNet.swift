@@ -100,6 +100,8 @@ package final class MacNet {
     package static let maxHandshakes = 16
     /// What a phone was sent, kept this long for its resume.
     package static var keepProjectors: TimeInterval = 120
+    /// Nodes whose first knock is remembered (a card's "first seen").
+    package static let firstSeenCap = 64
 
     package let host: any MacNetHost
     package let feed: LinkFeed
@@ -218,7 +220,12 @@ package final class MacNet {
     package var addOpen: Bool { addUntil.map { clock() < $0 } ?? false }
 
     /// Phones this Mac allowed (its book's; paused ones too: they're refused, not forgotten).
-    package func allowedPhones() -> [DeviceRecord] { ((try? host.book.read().devices) ?? []).filter { $0.kind == .phone } }
+    /// Read from memory until the book's file changes; a read that fails keeps the last good one.
+    package func allowedPhones() -> [DeviceRecord] {
+        if bookCache?.book.url != host.book.url { bookCache = DeviceBookCache(host.book) }
+        return (bookCache?.read().devices ?? []).filter { $0.kind == .phone }
+    }
+    private var bookCache: DeviceBookCache?
 
     /// Opens the Add device window for 10 minutes (step 7's "+" drives it): the port opens, and a
     /// phone's enroll is taken while it's open.
@@ -547,6 +554,13 @@ package final class MacNet {
         shared.withLock { $0.handshakes = 0 }
     }
 
+    /// The Mac is going to sleep: each phone hears `bye sleep` (shown asleep, not unreachable),
+    /// and dials again when the Mac is back. The port stays as it is.
+    package func sleeps() {
+        for phone in Array(phones.values) { phone.end(NetControl.Reason.sleep) }
+        for connection in shaking.values { connection.end(NetControl.Reason.sleep) }
+    }
+
     private func watch(_ socket: TailnetListenSocket, _ listener: NetListener) {
         if case .tcp(let fd) = socket { _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) }
         let source = DispatchSource.makeReadSource(fileDescriptor: socket.fd, queue: acceptQueue)
@@ -670,7 +684,8 @@ package final class MacNet {
         setup.directory = { record in record.kind == .phone ? MacNet.directory(state: shared.withLock { $0 }, book: book) : nil }
         let seen = firstSeen[whois.node.key] ?? clock()
         if firstSeen[whois.node.key] == nil {
-            if firstSeen.count > 256 { firstSeen = [:] }
+            // Bounded: the oldest goes first.
+            if firstSeen.count >= Self.firstSeenCap, let oldest = firstSeen.min(by: { $0.value < $1.value })?.key { firstSeen[oldest] = nil }
             firstSeen[whois.node.key] = seen
         }
         let box = WeakNet(self)
@@ -926,7 +941,11 @@ package final class MacNet {
     func phoneParked() { StayAwakePhones.connected(awakePhones) }
 
     func phoneGone(_ phone: PhoneLink) {
-        if phones[phone.id] === phone { phones[phone.id] = nil }
+        if phones[phone.id] === phone {
+            phones[phone.id] = nil
+            // Last seen is when its link went (in memory: no book write per disconnect).
+            linkWent[phone.id] = clock()
+        }
         StayAwakePhones.connected(awakePhones)
         changed?("gone \(phone.id.uuidString)")
         Devices.shared.changed()
@@ -938,7 +957,17 @@ package final class MacNet {
         guard projector.started else { return }
         kept[id] = (projector, clock())
         changed?("kept \(id.uuidString)")
+        // Let go once its resume can't come any more (nothing else would free it).
+        _ = schedule(Self.keepProjectors) { [weak self] in self?.dropStaleKept() }
     }
+
+    private func dropStaleKept() {
+        let now = clock()
+        kept = kept.filter { now.timeIntervalSince($0.value.at) < Self.keepProjectors }
+    }
+
+    /// When each phone's link last went, since launch (`MacNetDevices`: a row's "last seen").
+    package private(set) var linkWent: [UUID: Date] = [:]
 
     /// What `id` was last sent, when it's still kept and at `rev`.
     func retained(_ id: UUID, rev: Int) -> LinkProjector? {

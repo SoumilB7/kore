@@ -167,7 +167,7 @@ struct DevicesUITests {
     }
 
     @Test func aKoreWithoutItsOwnTailnetOffersInstallTailscale() {
-        let why = "kore-tailnet: no helper in Kore.app/Contents/Helpers (built without Go or a signed release copy)"
+        let why = "kore-tailnet: " + NetEnvironment.noHelper
         let sides = Sides(ScriptedNet(on: true, state: .unavailable(why)))
         let devices = devices(sides)
         #expect(Devices.unavailable(why) == .installTailscale && Devices.Unavailable.installTailscale.title == "Install Tailscale")

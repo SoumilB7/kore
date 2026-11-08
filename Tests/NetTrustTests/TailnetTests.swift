@@ -50,6 +50,14 @@ final class Script: Sendable {
 
 @Suite("tailnet local api")
 struct LocalAPITests {
+    @Test func engineLinesAreSkippedBeforeDecoding() {
+        #expect(!BusNotify.mayCarry(Array(#"{"Version":"","Engine":{"RBytes":10,"WBytes":20,"NumLive":2}}"#.utf8)))
+        #expect(BusNotify.mayCarry(Array(#"{"State":6}"#.utf8)))
+        #expect(BusNotify.mayCarry(Array(#"{"PeerChangedPatch":[{"NodeID":1,"Online":false}]}"#.utf8)))
+        #expect(BusNotify.mayCarry(Array(#"{"ErrMessage":"x"}"#.utf8)))
+        #expect(!BusNotify.mayCarry([]))
+    }
+
     @Test func statusDecodesOnlyWhatsUsed() throws {
         let script = Script(answers: [FakeHTTPServer.ok(statusJSON)])
         let status = try TailnetLocal(api: script.client).status()

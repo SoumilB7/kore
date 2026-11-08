@@ -201,7 +201,7 @@ struct DevicesPictureTests {
         #expect(a.net == .notJoined && !a.net.adds)
         #expect(Self.look(a) == NetIconLook(dimmed: true, dot: nil, line: "Sign in to join your tailnet"))
         let b = Self.picture(state: .sidecar, status: needsLogin, signingIn: true)
-        #expect(b.signingIn && Self.look(b).line == "Finish signing in in your browser")
+        #expect(b.signingIn && Self.look(b).line == "Finish signing in — it's open in your browser")
         let c = Self.picture(state: .sidecar, status: Self.status(), signingIn: true, nudge: true)
         #expect(c.net == .running && !c.signingIn && c.nudge)
         #expect(Self.picture(state: .sidecar, status: nil).net == .starting)
@@ -238,6 +238,7 @@ struct DevicesPictureTests {
         #expect(DevicesWords.ago(now.addingTimeInterval(-7300), now: now, calendar: calendar) == "2 h ago")
         #expect(DevicesWords.ago(now.addingTimeInterval(-86400 * 3), now: now, calendar: calendar).split(separator: " ").count == 2)
         #expect(DevicesWords.list(["a"]) == "a" && DevicesWords.list(["a", "b", "c"]) == "a, b and c")
+        #expect(DevicesWords.list(["a", "b", "c", "d", "e"]) == "a, b, c and 2 more")
         #expect(DevicesWords.expiresIn(now.addingTimeInterval(86400 + 10), now: now) == "in 1 day")
     }
 

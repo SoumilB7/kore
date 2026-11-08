@@ -136,6 +136,9 @@ package final class HostConnection {
     @ObservationIgnored private var netHeldOff = false
     @ObservationIgnored package var netRetryAfter: Duration = .seconds(30)
     @ObservationIgnored private var redialNow = false
+    /// Done backing off (`triesAtLongest` at the longest wait): only an event dials again.
+    @ObservationIgnored package private(set) var parked = false
+    package static let triesAtLongest = 3
     @ObservationIgnored private var wantsNet = false
     @ObservationIgnored private var switching = false
     @ObservationIgnored private var dials = 0
@@ -615,6 +618,7 @@ package final class HostConnection {
     private func dial() {
         guard users > 0, transport == nil, !forgotten else { return }
         redial = nil
+        parked = false
         if isPaused(alias) { return refuse(.paused) }
         if phase != .offline { phase = .connecting }
         let useNet = !skipNet
@@ -763,6 +767,13 @@ package final class HostConnection {
         HostLog.note(alias, "dropped", reason)
         guard users > 0 else { return }
         if now { return dial() }
+        // Tried at the longest wait a few times: no timer any more; a wake, a network change or
+        // the box coming online on the tailnet (`probe`, `peerOnline`) dials it again.
+        if attempts >= backoff.count - 1 + Self.triesAtLongest {
+            parked = true
+            HostLog.note(alias, "waiting", "for a wake, a network change or the box online")
+            return
+        }
         let wait = backoff[min(attempts, backoff.count - 1)]
         attempts += 1
         let sleep = sleep
@@ -1090,9 +1101,10 @@ package final class HostConnection {
     package func probe(_ why: String) {
         guard users > 0 else { return }
         guard let transport else {
-            if redial != nil {
+            if redial != nil || parked {
                 redial?.cancel()
                 redial = nil
+                if parked { attempts = 0 }
                 dial()
             }
             return
@@ -1216,6 +1228,12 @@ package final class HostConnection {
         guard transport != nil else { return }
         // A KoreNet dial under way hears `net.node` anew on its welcome (on SSH too, should it fail).
         if route == .net, !ready { return }
+        // Up over SSH: it moves the way a tailnet coming back moves it, once nothing is in
+        // flight and without showing offline in between (`preferNet`).
+        if case .ssh? = route, ready, activeRouter != nil {
+            HostLog.note(alias, "relink", why)
+            return preferNet()
+        }
         redialNow = true
         drop(why)
     }

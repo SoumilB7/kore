@@ -105,6 +105,8 @@ package final class Devices {
     package private(set) var revision = 0
     /// Kore's own tailnet waits for the browser's sign-in.
     package private(set) var signingIn = false
+    /// Sign in was clicked before Tailscale had its page: it opens when the page comes (a while).
+    private var signInWanted = false
     /// Just joined Kore's own tailnet: the empty line offers "Add a device" this once.
     package private(set) var nudge = false
     /// The join sheet up now, by box.
@@ -227,7 +229,20 @@ package final class Devices {
     /// until the tailnet runs (closing the popup doesn't cancel).
     package func signIn() {
         guard let net, let page = net.authURL.flatMap(URL.init(string:)) else {
-            net?.readStatus()
+            // The page isn't there yet: the click isn't lost, it opens once a read brings it.
+            guard let net, !signInWanted else { return }
+            signInWanted = true
+            net.readStatus()
+            Task {
+                await Observed.until { !self.signInWanted || self.net?.authURL != nil }
+                guard signInWanted else { return }
+                signInWanted = false
+                signIn()
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(15))
+                signInWanted = false
+            }
             return
         }
         openURL(page)
@@ -289,7 +304,7 @@ package final class Devices {
 
     /// A missing helper never comes back by trying again; anything else might.
     package static func unavailable(_ why: String) -> Unavailable {
-        why.contains("no helper") ? .installTailscale : .tryAgain
+        why.contains(NetEnvironment.noHelper) ? .installTailscale : .tryAgain
     }
 
     /// Does the unavailable line's action: KoreNet off and on again, or Tailscale's download page.
