@@ -407,6 +407,9 @@ package final class HostConnection {
         if ready { askEvents(follower) }
     }
 
+    /// Something follows the chat now (its tab is open): its copy here keeps up live.
+    package func isFollowed(_ chatId: String) -> Bool { followers[chatId]?.follower != nil }
+
     package func unfollow(_ follower: any HostFollower) {
         guard let id = follower.chatId, followers[id]?.follower === follower else { return }
         followers[id] = nil

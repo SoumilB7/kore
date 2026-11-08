@@ -25,14 +25,21 @@ package struct SyncPair: Codable, Equatable, Hashable, Sendable {
     package var fresh: Bool?
     /// Keeps syncing with no window open (`SyncPairList.keep`); nil is on.
     package var background: Bool?
+    /// Level 2, "Files + chats": the box's chats show here too, as mirrors (`ChatMirrorBatches`).
+    /// Nil is files only.
+    package var chats: Bool?
 
-    package init(mac: String, alias: String, box: String, fresh: Bool? = nil, background: Bool? = nil) {
+    package init(mac: String, alias: String, box: String, fresh: Bool? = nil, background: Bool? = nil, chats: Bool? = nil) {
         self.mac = mac
         self.alias = alias
         self.box = box
         self.fresh = fresh
         self.background = background
+        self.chats = chats
     }
+
+    /// Files + chats.
+    package var syncsChats: Bool { chats == true }
 
     /// Syncs while no window is open.
     package var keepsSyncing: Bool { background != false }
@@ -510,6 +517,8 @@ package final class HostSync {
     package private(set) var askDeletes: Int?
 
     @ObservationIgnored private let connection: HostConnection
+    /// The box's link the sync runs on.
+    package var link: HostConnection { connection }
     @ObservationIgnored private let box: SyncBox
     @ObservationIgnored private let tree: SyncTree
     @ObservationIgnored private let manifest: SyncManifest
@@ -1412,7 +1421,7 @@ package final class SyncPairList {
     package func reload() {
         let now = SyncPairs.all(defaults)
         if now != pairs { pairs = now }
-        if keeping { keep() }
+        if keeping { keep() } else { followMirrors() }
     }
 
     // MARK: Syncs, shared and kept
@@ -1441,6 +1450,7 @@ package final class SyncPairList {
         guard let sync = makeSync(pair, connection) else { return nil }
         sync.start()
         holders[ObjectIdentifier(sync)] = 1
+        followMirrors()
         return sync
     }
 
@@ -1449,7 +1459,10 @@ package final class SyncPairList {
         let id = ObjectIdentifier(sync)
         let left = max(0, (holders[id] ?? 0) - 1)
         holders[id] = left == 0 ? nil : left
-        if left == 0 { sync.stop() }
+        if left == 0 {
+            sync.stop()
+            followMirrors()
+        }
     }
 
     /// From launch on: pairs that keep syncing run with no window, each holding its box's link;
@@ -1476,6 +1489,69 @@ package final class SyncPairList {
                 continue
             }
             kept[mac] = (pair, sync, connection)
+        }
+        followMirrors()
+    }
+
+    // MARK: Files + chats
+
+    /// Each chat's own "Sync this chat", by `alias/chatId`: what it says over the folder's level.
+    static let chatsKey = "syncChats"
+    /// The mirrors of each running level-2 pair, by Mac folder.
+    @ObservationIgnored private var mirrors: [String: ChatMirrorBatches] = [:]
+    /// Bumped as levels and chats' toggles change (the menus read it).
+    package private(set) var chatToggles = 0
+
+    private func toggles() -> [String: Bool] { defaults.dictionary(forKey: Self.chatsKey) as? [String: Bool] ?? [:] }
+
+    /// Whether a box chat in a pair syncs: its own toggle, else the folder's level.
+    package func syncs(_ pair: SyncPair, chatId: String) -> Bool {
+        _ = chatToggles
+        return toggles()[pair.alias + "/" + chatId] ?? pair.syncsChats
+    }
+
+    /// "Sync this chat" on or off.
+    package func setSyncs(_ on: Bool, pair: SyncPair, chatId: String) {
+        var all = toggles()
+        all[pair.alias + "/" + chatId] = on
+        defaults.set(all, forKey: Self.chatsKey)
+        chatToggles &+= 1
+        mirrors[pair.mac]?.refresh()
+    }
+
+    /// The folder's level: Files, or Files + chats. It sets the default for new chats only: the
+    /// chats there now keep what they had.
+    package func setSyncsChats(_ on: Bool, mac: String) {
+        guard var pair = pairs.first(where: { $0.mac == mac }), pair.syncsChats != on else { return }
+        var all = toggles()
+        for meta in link(pair.alias).chats(in: pair.box) where all[pair.alias + "/" + meta.id] == nil {
+            all[pair.alias + "/" + meta.id] = pair.syncsChats
+        }
+        defaults.set(all, forKey: Self.chatsKey)
+        pair.chats = on ? true : nil
+        SyncPairs.save(pair, defaults)
+        chatToggles &+= 1
+        reload()
+        followMirrors()
+    }
+
+    /// A level-2 pair's mirrors, while its sync runs.
+    package func mirrors(mac: String) -> ChatMirrorBatches? { mirrors[mac] }
+
+    /// Mirrors run for each running sync of a level-2 pair, and stop with it.
+    package func followMirrors() {
+        for (mac, mirror) in mirrors {
+            let pair = pairs.first { $0.mac == mac }
+            if pair?.syncsChats != true || HostSync.live[mac]?.isRunning != true || pair.map({ HostSync.live[mac]?.pair.sameFolders($0) != true }) ?? true {
+                mirror.stop()
+                mirrors[mac] = nil
+            }
+        }
+        for pair in pairs where pair.syncsChats && mirrors[pair.mac] == nil {
+            guard let sync = HostSync.live[pair.mac], sync.isRunning, sync.pair.sameFolders(pair) else { continue }
+            let mirror = ChatMirrorBatches(link: sync.link, folder: pair.box) { [weak self] id in self?.syncs(pair, chatId: id) ?? false }
+            mirrors[pair.mac] = mirror
+            mirror.start()
         }
     }
 
