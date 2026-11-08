@@ -9,7 +9,7 @@ import src
 /// One message on the link: its type in `t`, then its fields.
 package enum LinkMessage: Sendable, Equatable {
     /// `replaced` (a box): a newer connection of the same grant took over.
-    package enum ByeReason: String, LenientEnum { case quit, disconnected, slow, auth, version, invalid, rateLimited, replaced, unknown }
+    package enum ByeReason: String, LenientEnum { case quit, disconnected, slow, auth, version, invalid, rateLimited, replaced, revoked, paused, unknown }
     package enum Field: String, LenientEnum { case text, input, result, unknown }
     package enum AttnOp: String, LenientEnum { case open, clear, turn, unknown }
     package enum Variant: String, LenientEnum { case thumb, full, unknown }

@@ -139,6 +139,27 @@ package enum HostSocketError: Error, CustomStringConvertible {
     }
 }
 
+/// What a client's link runs over: the box's Unix socket (`attach`, link 1.x frames) or a KoreNet
+/// session (`HostNet`, link 2.0 frames). Whole messages in and out; `backlog` is what waits for
+/// the peer, `drained` says it fell below `HostSocket.lowWater`.
+@MainActor
+package protocol LinkWire: AnyObject {
+    var drained: (@MainActor () -> Void)? { get set }
+    var backlog: Int { get }
+    func start(max: Int, frame: @escaping @MainActor (Data) -> Void, ended: @escaping @MainActor () -> Void)
+    @discardableResult func send(_ payload: Data) -> Bool
+    func close()
+}
+
+extension LinkWire {
+    package func send(_ message: LinkMessage) {
+        guard let data = try? message.encoded() else { return }
+        send(data)
+    }
+}
+
+extension HostSocket: LinkWire {}
+
 /// One connected socket: whole frames in, whole frames out. Reads are woken by the socket;
 /// writes never block: what the peer hasn't taken yet waits in this socket's own queue, drained
 /// as the peer reads. A peer that falls `outboundCap` behind is dropped (a client catches up by
@@ -209,11 +230,6 @@ package final class HostSocket {
             return false
         }
         return !closed
-    }
-
-    package func send(_ message: LinkMessage) {
-        guard let data = try? message.encoded() else { return }
-        send(data)
     }
 
     /// Writes what the peer takes now; the rest waits for it to be writable again.

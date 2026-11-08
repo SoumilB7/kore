@@ -18,7 +18,7 @@ extension HostDaemon {
 
     func copyOut(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
         func refused(_ code: ResultCode, _ message: String) -> MoveResult { .refused(id, code, message) }
-        guard client.grant?.name != nil, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let source = args.sourceId else {
+        guard client.holder != nil, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let source = args.sourceId else {
             return refused(.invalid, "Name the chat and the phase.")
         }
         // A box chat (open or closed) by its id or its session's; else a past session of the folder's CLI.
@@ -80,7 +80,7 @@ extension HostDaemon {
 
     func adoptCopy(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
         func refused(_ code: ResultCode, _ message: String) -> MoveResult { .refused(id, code, message) }
-        guard client.grant?.name != nil, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let moveId = args.moveId, LinkMoves.plainMoveID(moveId)
+        guard client.holder != nil, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let moveId = args.moveId, LinkMoves.plainMoveID(moveId)
         else { return refused(.invalid, "Name the move.") }
         let dir = staging.appendingPathComponent(moveId, isDirectory: true)
         switch phase {

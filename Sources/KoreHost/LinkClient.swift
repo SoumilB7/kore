@@ -1,15 +1,22 @@
 import Foundation
+import KoreTrust
 import LinkProtocol
 import src
 
-/// One client on the box's socket: the challenge, a hello proven with its grant's secret, then
+/// One client of the box: on the box's socket (`attach`), the challenge and a hello proven with
+/// its grant's secret; over KoreNet (`HostNet`), a device whose identity proof already held. Then
 /// the snapshot, followed transcripts and commands. Nothing of it runs between messages.
 @MainActor
 final class LinkClient {
-    private let socket: HostSocket
+    private let socket: any LinkWire
     unowned let host: HostDaemon
     private let nonce = LinkProof.random(32)
     private(set) var grant: Grant?
+    /// Phase 18: the device as its record says now (a KoreNet session's), and its proof.
+    private(set) var device: DeviceRecord?
+    private(set) var peer: VerifiedPeer?
+    /// How it came: KoreNet over the tailnet, or SSH (`attach`, either link).
+    let route: Binding.Route
     private(set) var proven = false
     private var rev = 0
     /// Followed chats: the window (entries from the end) and the transcript's revision.
@@ -37,8 +44,6 @@ final class LinkClient {
     private var copies: [String: CopyRun] = [:]
     /// `sync.watch`es, by folder; they end with the link.
     private var syncs: [String: SyncWatch] = [:]
-    /// 1.12: a watch or act grant's rate limits (a full grant has none).
-    private var limits = HostLimits()
     /// 1.12 `presence`: whether the client's user is looking at it, and at which chat. Off screen,
     /// it's sent attention only; what it missed comes as a snapshot (and its followed chats' pages)
     /// once it's back. A client that never says is on screen.
@@ -46,9 +51,53 @@ final class LinkClient {
     private(set) var lookingAt: String?
     private var missed = false
 
-    init(socket: HostSocket, host: HostDaemon) {
+    init(socket: any LinkWire, host: HostDaemon) {
         self.socket = socket
         self.host = host
+        route = .ssh
+    }
+
+    /// A KoreNet session's device: proven before the link starts.
+    init(wire: any LinkWire, host: HostDaemon, device: DeviceRecord, peer: VerifiedPeer, route: Binding.Route) {
+        socket = wire
+        self.host = host
+        self.device = device
+        self.peer = peer
+        self.route = route
+    }
+
+    // MARK: Who
+
+    /// The device this link counts as: its session's, or the one its grant's Mac enrolled as.
+    var deviceId: UUID? { device?.id ?? grant?.device }
+
+    /// Who holds what this link does (a chat's owner, a shell, a call's answer): the device's id,
+    /// else the grant's name.
+    var holder: String? { deviceId.map { $0.uuidString.lowercased() } ?? grant?.name }
+
+    /// Answers kept per device (a resend over another route reads the same one), per grant
+    /// before a Mac has enrolled.
+    var callKey: String? {
+        if let deviceId { return "device|" + deviceId.uuidString.lowercased() }
+        return grant.map { "grant|" + $0.name }
+    }
+
+    /// The mark on the rows its calls send (`StreamItem.by`), which it skips live: the grant's
+    /// name on the SSH link a 1.x Mac reads, the device's id over KoreNet.
+    var rowMark: String? { device != nil ? holder : grant?.name }
+
+    /// What it may do, as last read.
+    var control: GrantControl? {
+        if let device { return GrantControl(device.abilities) }
+        return grant?.control
+    }
+
+    /// An owner Mac proven over KoreNet: may set the box's devices.
+    var ownerMac: Bool { peer != nil && device?.kind == .mac && device?.owner == true }
+
+    /// The journal's names for it.
+    var said: KeyValuePairs<String, String?> {
+        ["device": deviceId.map { $0.uuidString.lowercased() }, "grant": grant?.name, "route": device != nil ? route.rawValue : nil]
     }
 
     func begin() {
@@ -57,6 +106,14 @@ final class LinkClient {
             self?.sendCatchUps()
             self?.sendSyncPieces()
             if let self { self.host.terminals.drained(self) }
+        }
+        if let device {
+            proven = true
+            host.replace(self)
+            HostJournal.audit("connect", ["device": device.id.uuidString.lowercased(), "name": device.name, "route": route.rawValue, "control": control?.rawValue])
+            welcomed()
+            if ownerMac { host.sendPending(to: self) }
+            return
         }
         send(.challenge(nonce: nonce))
         // A client that hasn't proven itself in 10 s is closed: the one wait while it connects.
@@ -75,6 +132,7 @@ final class LinkClient {
 
     func end(_ reason: LinkMessage.ByeReason) {
         helloWait?.cancel()
+        (socket as? NetLinkWire)?.reason = reason.rawValue
         send(.bye(reason))
         socket.close()
         gone()
@@ -166,23 +224,61 @@ final class LinkClient {
         }
     }
 
-    /// The grant as its file says now: a revoked or changed one ends the connection, a lowered one
-    /// takes effect at once.
-    func current() -> Grant? {
+    /// What the link may do as its grant's file or its device's record says now (read on every
+    /// command): a revoked or changed one ends the connection, a lowered one takes effect at once.
+    func current() -> GrantControl? {
+        if let device {
+            guard let now = try? host.devices.book.record(device.id), now.identityKey == device.identityKey, let control = GrantControl(now.abilities) else {
+                HostJournal.audit("revoke", ["device": device.id.uuidString.lowercased(), "name": device.name])
+                end(.revoked)
+                return nil
+            }
+            guard !now.isPaused else {
+                HostJournal.audit("paused", ["device": device.id.uuidString.lowercased()])
+                end(.paused)
+                return nil
+            }
+            self.device = now
+            return control
+        }
         guard let grant else { return nil }
-        guard let now = GrantStore(host.paths.grants).current(grant.name, secret: grant.secret) else {
+        guard let now = GrantStore(host.paths.grants).current(grant.name, secret: grant.secret, at: host.now()) else {
             HostJournal.note("revoked", ["grant": grant.name])
             end(.auth)
             return nil
         }
+        // An upgraded grant is its device's: removing the device ends it as well.
+        if let id = now.device {
+            guard let record = try? host.devices.book.record(id), let control = GrantControl(record.abilities) else {
+                HostJournal.audit("revoke", ["device": id.uuidString.lowercased(), "grant": now.name])
+                end(.revoked)
+                return nil
+            }
+            guard !record.isPaused else {
+                end(.paused)
+                return nil
+            }
+            self.grant = now
+            return min(control, now.control)
+        }
         self.grant = now
-        return now
+        return now.control
+    }
+
+    /// A command refused for what the link may do: the journal says the command's kind, never
+    /// what it carried.
+    func denied(_ kind: String) {
+        HostJournal.audit("denied", ["device": deviceId.map { $0.uuidString.lowercased() }, "grant": grant?.name, "kind": kind])
     }
 
     /// 1.5's messages, read by their type: full grants only.
     private func stream(_ type: String, _ data: Data) {
-        guard let grant = current() else { return }
-        guard grant.control == .full else {
+        if type == DevicesWire.set { return host.devicesSet(data, from: self) }
+        if type == NetSwitchWire.set { return host.netSet(data, from: self) }
+        if type == UsageWire.since { return host.usageSince(data, from: self) }
+        guard let control = current() else { return }
+        guard control == .full else {
+            denied(type)
             if type == "chat.call" {
                 sendRaw(StreamWire.encode(ChatCallResult(id: "", ok: false, code: .deniedControl, message: "Driving a chat needs a grant with full control.")))
             }
@@ -211,13 +307,13 @@ final class LinkClient {
     private func received(_ data: Data) {
         guard let message = try? LinkMessage.decode(data) else { return end(.invalid) }
         guard proven else { return hello(message) }
-        if let control = grant?.control, control != .full {
-            switch limits.admit(message, at: host.now()) {
+        if let control, control != .full, let holder {
+            switch host.rateLimits[holder, default: HostLimits()].admit(message, at: host.now()) {
             case .ok: break
             case .drop: return
             case .refuse(let id): return send(.result(.init(id: id, ok: false, code: .rateLimited)))
             case .end:
-                HostJournal.note("rate limited", ["grant": grant?.name])
+                HostJournal.note("rate limited", said)
                 return end(.rateLimited)
             }
         }
@@ -253,7 +349,10 @@ final class LinkClient {
         case .unknown(let type):
             stream(type, data)
         case .blobPutBegin(let uploadId, let name, let mime, let size, let sha256):
-            guard current()?.control == .full else { return uploadFailed(uploadId, .init(.deniedControl, "Uploads need a grant with full control.")) }
+            guard current() == .full else {
+                denied("blob.put")
+                return uploadFailed(uploadId, .init(.deniedControl, "Uploads need a grant with full control."))
+            }
             if let failure = uploads.begin(uploadId, name: name, mime: mime, size: size, sha256: sha256) { uploadFailed(uploadId, failure) }
         case .blobPutChunk(let uploadId, let index, let data):
             if let failure = uploads.chunk(uploadId, index: index, base64: data) { uploadFailed(uploadId, failure) }
@@ -266,7 +365,9 @@ final class LinkClient {
             }
         case .historyList(let id, let windowId, let query, let archived, let offset):
             // A folder's closed chats and its CLIs' past sessions (1.9: act and full grants).
-            guard let control = current()?.control, control != .watch else {
+            guard let control = current() else { return }
+            guard control != .watch else {
+                denied("history.list")
                 return send(.result(.init(id: "history.list:" + id, ok: false, code: .deniedControl, message: "This grant only watches.")))
             }
             Task { [weak self] in
@@ -276,7 +377,6 @@ final class LinkClient {
                 send(.historyPage(id: id, windowId: windowId, sessions: page, more: all.count > max(offset, 0) + page.count))
             }
         case .cmd(let id, .control(let kind, let args)) where kind == .syncWatch || kind == .syncUnwatch:
-            guard current() != nil else { return }
             send(.result(sync(kind, folder: args.folder, id: id)))
             if kind == .syncWatch, let folder = args.folder.map(HostDaemon.standard) { syncs[folder]?.start() }
         case .cmd(let id, .control(let kind, let args)) where [.chatRelease, .chatAdopt, .chatMirror, .syncFlush, .chatCopy, .chatAdoptCopy].contains(kind):
@@ -284,9 +384,12 @@ final class LinkClient {
         case .cmd(let id, .control(let kind, let args)) where kind.onFiles:
             files(kind, args, id: id)
         case .cmd(let id, let command):
-            guard let grant = current() else { return }
-            let result = host.apply(command, id: id, control: grant.control) { [weak self] result in self?.send(.result(result)) }
-            if let result { send(.result(result)) }
+            guard let control = current() else { return }
+            let result = host.apply(command, id: id, control: control) { [weak self] result in self?.send(.result(result)) }
+            if let result {
+                if result.code == .deniedControl { denied(command.type) }
+                send(.result(result))
+            }
         default:
             break
         }
@@ -299,21 +402,29 @@ final class LinkClient {
             return end(.version)
         }
         guard let name, let grant = GrantStore(host.paths.grants).load(name), let secret = Data(base64Encoded: grant.secret),
-            LinkProof.check(proof, secret: secret, nonce: nonce)
+            LinkProof.check(proof, secret: secret, nonce: nonce), !grant.expired(at: host.now())
         else {
             HostJournal.note("refused", ["grant": name, "reason": "auth"])
             return end(.auth)
         }
-        // The newest proven connection of a grant wins: the older one (a link that died while the
-        // Mac slept) is told it was replaced.
-        host.replace(self, grant: grant)
-        helloWait?.cancel()
         self.grant = grant
+        // An upgraded grant's device must still be allowed.
+        guard current() != nil else { return }
+        // The newest proven connection of a device (or grant) wins: the older one (a link that
+        // died while the Mac slept) is told it was replaced.
+        host.replace(self)
+        helloWait?.cancel()
         proven = true
-        HostJournal.note("connect", ["grant": grant.name, "control": grant.control.rawValue])
-        send(.welcome(host.welcome(control: grant.control)))
+        HostJournal.note("connect", ["grant": grant.name, "control": control?.rawValue, "device": grant.device.map { $0.uuidString.lowercased() }])
+        welcomed()
+    }
+
+    /// The link's welcome, snapshot and attention, once it's proven.
+    private func welcomed() {
+        let control = control ?? .watch
+        send(.welcome(host.welcome(control: control)))
         rev += 1
-        let full = grant.control == .full
+        let full = control == .full
         let clis = full && !host.clis.isEmpty ? host.clis : nil
         send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
         send(host.attention.ledger.state(after: 0))
@@ -332,10 +443,10 @@ final class LinkClient {
         lookingAt = chatId
         let back = onScreen && !self.onScreen
         self.onScreen = onScreen
-        guard back, missed, let grant = current() else { return }
+        guard back, missed, let control = current() else { return }
         missed = false
         rev += 1
-        let full = grant.control == .full
+        let full = control == .full
         let clis = full && !host.clis.isEmpty ? host.clis : nil
         send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
         for chatId in following.keys.sorted() { if let hc = host.chat(chatId) { page(hc, last: nil) } }
@@ -346,8 +457,9 @@ final class LinkClient {
     /// `fs.list`, `fs.read`, `fs.mkdir`: full grants only, each checked by the box's rules, then
     /// done off the main thread; the answer is a `FilesResult`.
     private func files(_ kind: ControlKind, _ args: ControlArgs, id: String) {
-        guard let control = current()?.control else { return }
+        guard let control = current() else { return }
         if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, nil, control: control == .full ? .full : .standard) {
+            if code == .deniedControl { denied(kind.rawValue) }
             return sendRaw(StreamWire.encode(FilesResult.refused(id, code, message)))
         }
         let home = HostPaths.home().path
@@ -454,8 +566,9 @@ final class LinkClient {
     /// `chat.release`, `chat.adopt`, `chat.mirror`, `sync.flush` (and 1.11's `chat.copy`,
     /// `chat.adoptCopy`): full grants only, each checked by the box's rules; the answer is a `MoveResult`.
     private func moves(_ kind: ControlKind, _ args: ControlArgs, id: String) {
-        guard let control = current()?.control else { return }
+        guard let control = current() else { return }
         if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, nil, control: control == .full ? .full : .standard) {
+            if code == .deniedControl { denied(kind.rawValue) }
             return sendRaw(StreamWire.encode(MoveResult.refused(id, code, message)))
         }
         switch kind {
@@ -491,7 +604,11 @@ final class LinkClient {
     /// `sync.watch` / `sync.unwatch` for a folder the box serves (or one inside it). A watch
     /// starts after its result goes, so the list follows the result.
     private func sync(_ kind: ControlKind, folder: String?, id: String) -> LinkMessage.Result {
-        guard let control = grant?.control, control != .watch else { return .init(id: id, ok: false, code: .deniedControl, message: "This grant only watches.") }
+        guard let control = current() else { return .init(id: id, ok: false, code: .deniedControl, message: "This link has ended.") }
+        guard control != .watch else {
+            denied(kind.rawValue)
+            return .init(id: id, ok: false, code: .deniedControl, message: "This grant only watches.")
+        }
         if case .deny(let code, let message) = LinkPolicy.checkBox(kind, ControlArgs(folder: folder), nil, control: control == .full ? .full : .standard) {
             return .init(id: id, ok: false, code: code, message: message)
         }

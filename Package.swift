@@ -65,7 +65,7 @@ let package = Package(
         // never links KoreUI or KoreLink, and the Mac app never links it.
         // `VERSION` links to the package's own: the version kore-host says (`--version`, the welcome).
         .target(
-            name: "KoreHost", dependencies: ["src", "LinkProtocol", "KoreCore", "KoreHostSys", "AgentTools"], resources: [.embedInCode("VERSION")],
+            name: "KoreHost", dependencies: ["src", "LinkProtocol", "KoreCore", "KoreHostSys", "AgentTools", "KoreTrust", "Tailnet", "KoreNet"], resources: [.embedInCode("VERSION")],
             swiftSettings: releaseForSize),
         // kore-host's calls Swift can't make (variadic ones): huge pages off on Linux,
         // and its pseudo-terminals (`forkpty`, `TIOCSWINSZ`, `pidfd_open`).
@@ -92,7 +92,7 @@ let package = Package(
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "src", "KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "LinkProtocol", "HostClient", "KoreHost", "AgentTools", "KoreUI", "src", "KoreCore", "kore-host"]),
-        .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "LinkProtocol", "src", "KoreCore", "kore-host"]),
+        .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "LinkProtocol", "src", "KoreCore", "kore-host", "KoreTrust", "Tailnet", "KoreNet"]),
         .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore"]),
         .testTarget(name: "NetTrustTests", dependencies: ["KoreNet", "Tailnet", "KoreTrust", "KoreHostSys"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "src", "KoreCore"]),

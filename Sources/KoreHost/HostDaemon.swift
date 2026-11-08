@@ -1,6 +1,9 @@
 import Foundation
 import KoreCore
+import KoreNet
+import KoreTrust
 import LinkProtocol
+import Tailnet
 import src
 
 /// kore-host's daemon: the folders from `config.json`, their chats (restored from disk), and the
@@ -66,9 +69,23 @@ package final class HostDaemon {
     let attention = HostAttention()
     /// 1.12: the time a client's limits are counted against (tests set their own).
     package var now: () -> Date = { Date() }
+    /// 1.12 limits, per device (per grant before its Mac enrolled): a reconnect doesn't reset them.
+    var rateLimits: [String: HostLimits] = [:]
+    /// Phase 18: the devices this box trusts and those waiting (`devices/`).
+    package let devices: DeviceStore
+    /// The KoreNet listener (`HostNet`), while Tailscale is up; nil in tests that don't ask.
+    package private(set) var net: HostNet?
+    /// The tailnet KoreNet listens on, made only while the box is on KoreNet (`config.net`):
+    /// installed Tailscale's; tests make a fake, or none.
+    package var makeTailnet: () -> (any Tailnet)? = { KoreLog.isTestProcess ? nil : TailnetLocal() }
+    /// KoreNet's port (tests take the kernel's pick, 0).
+    package var netPort = HostNet.port
+    /// Phase 18 §4: what this box's chats spent, a week of it (`usage/ledger.jsonl`).
+    package private(set) lazy var usage = UsageLedger(url: paths.usageLedger, now: { [weak self] in self?.now() ?? Date() })
 
     package init(paths: HostPaths) {
         self.paths = paths
+        devices = DeviceStore(paths: paths)
         config = HostConfig.load(paths.config)
         services.onEvent = { [weak self] chat, event in self?.noted(chat, event) }
         services.onModels = { [weak self] cli, models in self?.listed(cli, models) }
@@ -95,6 +112,7 @@ package final class HostDaemon {
         try HostPaths.privateFolder(paths.state)
         listener = try HostListener(path: paths.socket) { [weak self] socket in self?.accepted(socket) }
         openAgentSocket()
+        startNet()
         sweepUploads()
         findCLIs()
         try? HostPaths.privateFile(Data("\(getpid())\n".utf8), to: paths.pid)
@@ -103,6 +121,8 @@ package final class HostDaemon {
 
     package func stop() {
         for connection in connections { connection.end(.quit) }
+        net?.stop()
+        net = nil
         terminals.stopAll()
         for chat in chats { chat.sleep() }
         guard let lock else { return }
@@ -282,6 +302,7 @@ package final class HostDaemon {
     private func noted(_ chat: Chat, _ event: ChatEvent) {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return }
         streamRow(hc, event)
+        if case .requestUsage(let spent) = event { usage.append(chat: hc.id, provider: hc.record.provider, spent) }
         if case .turnFinished(let turn, let outcome, _) = event {
             git.touched(hc.record.folder)
             if let ended = attention.turnEnded(hc, turn: turn, outcome: outcome, at: now()) { sendAttention([ended]) }
@@ -303,7 +324,7 @@ package final class HostDaemon {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(clis) { try? HostPaths.privateFile(data, to: paths.models) }
-        for connection in connections where connection.proven && connection.grant?.control == .full && connection.takesPushes() {
+        for connection in connections where connection.proven && connection.control == .full && connection.takesPushes() {
             connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: clis)))
         }
     }
@@ -312,12 +333,56 @@ package final class HostDaemon {
 
     var provenClients: [LinkClient] { connections.filter(\.proven) }
 
-    var fullClients: [LinkClient] { connections.filter { $0.proven && $0.grant?.control == .full } }
+    var fullClients: [LinkClient] { connections.filter { $0.proven && $0.control == .full } }
 
     private func accepted(_ socket: HostSocket) {
         let connection = LinkClient(socket: socket, host: self)
         connections.append(connection)
         connection.begin()
+    }
+
+    /// Phase 18: a KoreNet session whose identity proof held (`HostNet`): the device's link,
+    /// proven from the start.
+    package func accepted(_ wire: any LinkWire, device: DeviceRecord, peer: VerifiedPeer, route: Binding.Route) {
+        let connection = LinkClient(wire: wire, host: self, device: device, peer: peer, route: route)
+        connections.append(connection)
+        connection.begin()
+    }
+
+    /// `net.sock` for `attach --proto 2` always; the tailnet port while the box is on KoreNet.
+    private func startNet() {
+        if net == nil, let identity = try? BoxIdentity.loadOrCreate(paths) {
+            let net = HostNet(host: self, identity: identity)
+            self.net = net
+            net.start()
+        }
+        guard config.netOn, let net, net.tailnet == nil, let tailnet = makeTailnet() else { return }
+        net.port = netPort
+        net.join(tailnet)
+        HostJournal.note("korenet on")
+    }
+
+    /// Off: the port, the watching and every tailnet link go (SSH, both links, stays).
+    private func stopNet() {
+        guard let net, net.tailnet != nil else { return }
+        net.leave()
+        for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.quit) }
+        HostJournal.note("korenet off")
+    }
+
+    /// `kore-host net on|off` (or a Mac's `net.set`): kept in `config.json`, applied now.
+    package func setNet(_ on: Bool) throws {
+        var next = config
+        next.net = on
+        try next.save(paths.config)
+        config.net = on
+        on ? startNet() : stopNet()
+    }
+
+    /// The CLI changed `config.json`'s `net` (it signals the daemon, SIGHUP): applied now.
+    package func reloadNet() {
+        config.net = HostConfig.load(paths.config).net
+        config.netOn ? startNet() : stopNet()
     }
 
     /// 1.10: why a chat takes nothing now: it's being moved, or it lives elsewhere (a replica).
@@ -329,16 +394,24 @@ package final class HostDaemon {
 
     func ended(_ connection: LinkClient) {
         movesEnded(connection)
-        if connections.contains(where: { $0 === connection }), let grant = connection.grant { HostJournal.note("disconnect", ["grant": grant.name]) }
+        if connections.contains(where: { $0 === connection }), connection.proven { HostJournal.note("disconnect", connection.said) }
         connections.removeAll { $0 === connection }
         toolCallsEnded(connection)
         HostMemory.releaseSoon()
     }
 
-    /// One connection per grant: a newer one for a grant already connected is turned away.
-    /// A newer proven connection of a grant takes over from the older ones.
-    func replace(_ connection: LinkClient, grant: Grant) {
-        for old in connections where old !== connection && old.grant?.name == grant.name { old.end(.replaced) }
+    /// One link per device (per grant before its Mac enrolled): a newer proven one takes over
+    /// from the older ones, which are told `replaced`. Across routes a tailnet link replaces a
+    /// zombie SSH attach, never the reverse: an SSH link beside a live tailnet one stays too.
+    func replace(_ connection: LinkClient) {
+        for old in connections where old !== connection && old.proven {
+            if let id = connection.deviceId {
+                guard old.deviceId == id, NetPaths.replaces(incoming: connection.route, existing: old.route) else { continue }
+                old.end(.replaced)
+            } else if old.deviceId == nil, let name = connection.grant?.name, old.grant?.name == name {
+                old.end(.replaced)
+            }
+        }
     }
 
     func welcome(control: GrantControl) -> LinkMessage.Welcome {
@@ -379,7 +452,7 @@ package final class HostDaemon {
         }
         guard !lower.isEmpty || windows != nil else { return }
         for connection in connections where connection.proven {
-            connection.delta(windows: windows, chats: connection.grant?.control == .full ? any : lower)
+            connection.delta(windows: windows, chats: connection.control == .full ? any : lower)
         }
     }
 

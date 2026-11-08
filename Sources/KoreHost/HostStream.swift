@@ -453,19 +453,20 @@ extension HostDaemon {
         guard let hc = chat(call.chatId) else { return answer(ChatCallResult(id: call.id, ok: false, code: .goneChat, message: "No such chat on this box.")) }
         // 1.10: a chat being moved, or living elsewhere, takes no call.
         if let refusal = Self.held(hc) { return answer(ChatCallResult(id: call.id, ok: false, code: refusal.code, message: refusal.message)) }
-        // Answers are kept per grant: one grant's id never reads another's answer.
-        let key = "\(client.grant?.name ?? "")|\(call.id)"
+        // Answers are kept per device (per grant before its Mac enrolled): one's id never reads
+        // another's answer, and a resend over the other route reads the one already given.
+        let key = "\(client.callKey ?? "")|\(call.id)"
         if let done = hc.answered.first(where: { $0.id == key }) { return client.sendRaw(done.data) }
         if hc.calling[key] != nil {
             hc.calling[key]?.append(client)
             return
         }
-        let full = client.grant?.control == .full
+        let full = client.control == .full
         if case .deny(let code, let message) = LinkPolicy.check(call.command, HostMeta.facts(hc, raise: full), control: full ? .full : .standard) {
             return answer(ChatCallResult(id: call.id, ok: false, code: code, message: message))
         }
         hc.calling[key] = [client]
-        let by = client.grant?.name
+        let by = client.rowMark
         // 1.6: a message says the chat's Arsenal tier on the Mac, and any note the agent is owed.
         var note: String?
         if case .send = call.command {

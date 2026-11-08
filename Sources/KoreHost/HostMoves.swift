@@ -46,7 +46,7 @@ extension HostDaemon {
 
     func release(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
         func refused(_ code: ResultCode, _ message: String) -> MoveResult { .refused(id, code, message) }
-        guard let grant = client.grant?.name, let phase = args.phase.flatMap(MovePhase.init(rawValue:)) else { return refused(.invalid, "Name the phase.") }
+        guard let grant = client.holder, let phase = args.phase.flatMap(MovePhase.init(rawValue:)) else { return refused(.invalid, "Name the phase.") }
         guard let hc = args.chatId.flatMap(chat) else { return refused(.goneChat, "No such chat on this box.") }
         switch phase {
         case .prepare:
@@ -118,7 +118,7 @@ extension HostDaemon {
 
     func adopt(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
         func refused(_ code: ResultCode, _ message: String) -> MoveResult { .refused(id, code, message) }
-        guard let grant = client.grant?.name, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let moveId = args.moveId,
+        guard let grant = client.holder, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let moveId = args.moveId,
             LinkMoves.plainMoveID(moveId)
         else { return refused(.invalid, "Name the move.") }
         let dir = staging.appendingPathComponent(moveId, isDirectory: true)
@@ -218,7 +218,7 @@ extension HostDaemon {
     /// is refused with what the replica holds, so the Mac sends from there.
     func mirror(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
         guard let hc = args.chatId.flatMap(chat) else { return .refused(id, .goneChat, "No such chat on this box.") }
-        guard var owner = hc.record.owner, !owner.onBox, owner.host == client.grant?.name, owner.gen == args.gen else {
+        guard var owner = hc.record.owner, !owner.onBox, owner.host == client.holder, owner.gen == args.gen else {
             return .refused(id, .staleGen, "This Mac doesn't hold that chat.")
         }
         var have = owner.mirrored ?? 0

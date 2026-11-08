@@ -10,24 +10,25 @@ extension LinkClient {
             if let id = StreamWire.id(data) { sendRaw(StreamWire.encode(PtyResult.refused(id, .invalid, "That message isn't one this box reads."))) }
             return
         }
-        guard let grant = current() else { return }
-        if case .deny(let code, let message) = LinkPolicy.checkBox(ask, control: grant.control == .full ? .full : .standard) {
+        guard let control = current(), let holder else { return }
+        if case .deny(let code, let message) = LinkPolicy.checkBox(ask, control: control == .full ? .full : .standard) {
+            if code == .deniedControl { denied(type) }
             if let id = ask.id { sendRaw(StreamWire.encode(PtyResult.refused(id, code, message))) }
             return
         }
         let served = host.config.folders
         switch ask {
         case .ptyOpen(let open):
-            sendRaw(StreamWire.encode(host.terminals.open(open, grant: grant.name, client: self, served: served)))
+            sendRaw(StreamWire.encode(host.terminals.open(open, grant: holder, client: self, served: served)))
         case .ptyAttach(let attach):
-            let result = host.terminals.attach(attach, grant: grant.name, client: self)
+            let result = host.terminals.attach(attach, grant: holder, client: self)
             if !result.ok { sendRaw(StreamWire.encode(result)) }
         case .ptyInput(let input):
-            host.terminals.input(input, grant: grant.name)
+            host.terminals.input(input, grant: holder)
         case .ptyResize(let resize):
-            host.terminals.resize(resize, grant: grant.name)
+            host.terminals.resize(resize, grant: holder)
         case .ptyClose(let close):
-            host.terminals.close(close, grant: grant.name)
+            host.terminals.close(close, grant: holder)
         case .gitStatus(let status):
             Task { [weak self] in
                 guard let self else { return }

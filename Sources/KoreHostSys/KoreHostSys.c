@@ -11,6 +11,8 @@
 #include <sys/uio.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <arpa/inet.h>
+#include <net/if.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -184,3 +186,135 @@ int kore_tcp_notsent_lowat(int fd) {
     if (getsockopt(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, &value, &size) != 0) return -1;
     return value;
 }
+
+int kore_listen_on(const char *ip, unsigned short port, const char *device, int backlog) {
+    struct sockaddr_storage address;
+    memset(&address, 0, sizeof(address));
+    socklen_t length;
+    int family;
+    struct sockaddr_in *v4 = (struct sockaddr_in *)&address;
+    struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&address;
+    if (inet_pton(AF_INET, ip, &v4->sin_addr) == 1) {
+        family = AF_INET;
+        v4->sin_family = AF_INET;
+        v4->sin_port = htons(port);
+        length = sizeof(*v4);
+    } else if (inet_pton(AF_INET6, ip, &v6->sin6_addr) == 1) {
+        family = AF_INET6;
+        v6->sin6_family = AF_INET6;
+        v6->sin6_port = htons(port);
+        length = sizeof(*v6);
+    } else {
+        errno = EINVAL;
+        return -1;
+    }
+#if defined(__APPLE__)
+    v4->sin_len = (unsigned char)length;
+#endif
+    int fd = socket(family, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int on = 1;
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    if (family == AF_INET6) setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on));
+    if (device != NULL) {
+#if defined(__linux__)
+        if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, device, (socklen_t)strlen(device)) != 0) {
+            int saved = errno;
+            close(fd);
+            errno = saved;
+            return -1;
+        }
+#else
+        close(fd);
+        errno = ENOTSUP;
+        return -1;
+#endif
+    }
+    if (bind(fd, (struct sockaddr *)&address, length) != 0 || listen(fd, backlog) != 0) {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    return fd;
+}
+
+int kore_interface_index(const char *name) { return (int)if_nametoindex(name); }
+
+#if defined(__linux__)
+// The static musl SDK has no kernel headers: rtnetlink's few shapes, as the kernel lays them out.
+#define KORE_NETLINK_ROUTE 0
+#define KORE_RTMGRP_LINK 0x1
+#define KORE_RTMGRP_IPV4_IFADDR 0x10
+#define KORE_RTMGRP_IPV6_IFADDR 0x100
+#define KORE_RTM_NEWLINK 16
+#define KORE_RTM_DELLINK 17
+#define KORE_RTM_NEWADDR 20
+#define KORE_RTM_DELADDR 21
+#define KORE_IFLA_IFNAME 3
+#define KORE_ALIGN4(n) (((n) + 3u) & ~3u)
+
+struct kore_sockaddr_nl { unsigned short family; unsigned short pad; unsigned int pid; unsigned int groups; };
+struct kore_nlmsghdr { unsigned int len; unsigned short type; unsigned short flags; unsigned int seq; unsigned int pid; };
+struct kore_ifinfomsg { unsigned char family; unsigned char pad; unsigned short type; int index; unsigned int flags; unsigned int change; };
+struct kore_ifaddrmsg { unsigned char family; unsigned char prefixlen; unsigned char flags; unsigned char scope; unsigned int index; };
+struct kore_rtattr { unsigned short len; unsigned short type; };
+
+int kore_netlink_open(void) {
+    int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC | SOCK_NONBLOCK, KORE_NETLINK_ROUTE);
+    if (fd < 0) return -1;
+    struct kore_sockaddr_nl address;
+    memset(&address, 0, sizeof(address));
+    address.family = AF_NETLINK;
+    address.groups = KORE_RTMGRP_LINK | KORE_RTMGRP_IPV4_IFADDR | KORE_RTMGRP_IPV6_IFADDR;
+    if (bind(fd, (struct sockaddr *)&address, sizeof(address)) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+int kore_netlink_drain(int fd, const char *name, int known) {
+    unsigned char buffer[16384] __attribute__((aligned(4)));
+    int about = 0;
+    for (;;) {
+        ssize_t n = recv(fd, buffer, sizeof(buffer), 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return about;
+            // ENOBUFS: messages were lost; look again to be safe.
+            if (errno == ENOBUFS) { about = 1; continue; }
+            return -1;
+        }
+        if (n == 0) return -1;
+        int index = (int)if_nametoindex(name);
+        size_t at = 0;
+        while (at + sizeof(struct kore_nlmsghdr) <= (size_t)n) {
+            struct kore_nlmsghdr *h = (struct kore_nlmsghdr *)(buffer + at);
+            if (h->len < sizeof(*h) || at + h->len > (size_t)n) break;
+            unsigned char *body = buffer + at + sizeof(*h);
+            size_t size = h->len - sizeof(*h);
+            if ((h->type == KORE_RTM_NEWLINK || h->type == KORE_RTM_DELLINK) && size >= sizeof(struct kore_ifinfomsg)) {
+                struct kore_ifinfomsg *info = (struct kore_ifinfomsg *)body;
+                if ((index > 0 && info->index == index) || (known > 0 && info->index == known)) about = 1;
+                size_t a = KORE_ALIGN4(sizeof(*info));
+                while (a + sizeof(struct kore_rtattr) <= size) {
+                    struct kore_rtattr *attr = (struct kore_rtattr *)(body + a);
+                    if (attr->len < sizeof(*attr) || a + attr->len > size) break;
+                    if (attr->type == KORE_IFLA_IFNAME && strncmp((const char *)(attr + 1), name, attr->len - sizeof(*attr)) == 0) about = 1;
+                    a += KORE_ALIGN4(attr->len);
+                }
+            } else if ((h->type == KORE_RTM_NEWADDR || h->type == KORE_RTM_DELADDR) && size >= sizeof(struct kore_ifaddrmsg)) {
+                struct kore_ifaddrmsg *info = (struct kore_ifaddrmsg *)body;
+                if ((index > 0 && (int)info->index == index) || (known > 0 && (int)info->index == known)) about = 1;
+            }
+            at += KORE_ALIGN4(h->len);
+        }
+    }
+}
+#else
+int kore_netlink_open(void) { return -1; }
+int kore_netlink_drain(int fd, const char *name, int known) { (void)fd; (void)name; (void)known; return -1; }
+#endif

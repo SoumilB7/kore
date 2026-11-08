@@ -22,6 +22,11 @@ final class HostTerminals {
     /// The environment shells start from: the daemon's own unless a test sets another.
     var base: [String: String]?
 
+    /// The upgrade: a grant's shells are its device's from now on.
+    func rehome(_ grant: String, to holder: String) {
+        for pty in ptys.values where pty.grant == grant { pty.grant = holder }
+    }
+
     /// A new shell for `grant`, attached to `client`; or why not.
     func open(_ ask: PtyOpen, grant: String, client: LinkClient, served: [String]) -> PtyResult {
         guard let cwd = ServedPath.inside(ask.cwd, served: served, folder: true) else {
@@ -168,7 +173,8 @@ final class HostTerminals {
 @MainActor
 final class HostPty {
     let id: String
-    let grant: String
+    /// Who holds it: a device's id, or a grant's name before its Mac enrolled.
+    var grant: String
     let cwd: String
     let shellName: String
     private let pid: pid_t

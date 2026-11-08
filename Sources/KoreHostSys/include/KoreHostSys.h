@@ -42,4 +42,22 @@ int kore_tcp_tune(int fd, int lowat);
 /// The connection's `TCP_NOTSENT_LOWAT`, or -1.
 int kore_tcp_notsent_lowat(int fd);
 
+/// kore-host's KoreNet port: a listening TCP socket on `ip` (v4 or v6, never a wildcard: the
+/// caller checks) and `port`, non-blocking and close-on-exec, held to the interface `device` when
+/// given (Linux `SO_BINDTODEVICE`; elsewhere `device` must be NULL). The descriptor, or -1 with
+/// `errno` (`EADDRINUSE` when the port is taken).
+int kore_listen_on(const char *ip, unsigned short port, const char *device, int backlog);
+
+/// A netlink socket for link and address changes (Linux `RTMGRP_LINK | RTMGRP_IPV4_IFADDR |
+/// RTMGRP_IPV6_IFADDR`), non-blocking: it reads ready only when an interface or an address comes
+/// or goes. -1 elsewhere.
+int kore_netlink_open(void);
+
+/// Reads every waiting netlink message: 1 when one was about the interface `name` (or the index
+/// `known`, for one already gone), 0 when none was, -1 when the socket failed.
+int kore_netlink_drain(int fd, const char *name, int known);
+
+/// The interface's index, 0 when there's none by that name.
+int kore_interface_index(const char *name);
+
 #endif
