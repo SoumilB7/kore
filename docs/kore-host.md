@@ -21,8 +21,10 @@ The protocol is in [link-1.4-box.md](link-1.4-box.md).
 
 ## Setting it up from Kore
 
-1. In the left panel, switch to Boxes and choose **Add a box…**. Pick the host from your SSH
-   config.
+1. In a new window (⌘N), click the box button and choose **Add a box…**. Pick the host from your
+   SSH config. A window is either a folder on this Mac or a folder on a box, chosen when it
+   opens: a Mac folder's window has no box button, and a box folder's window opens on its Boxes
+   panel.
 2. Open its row. If the row says "kore-host isn't on <box> · Set up", click **Set up**. Kore then:
    - asks the box for its CPU (`uname -sm`);
    - copies its kore-host to `~/.local/bin/kore-host` (beside it as `kore-host.new`, then moved
@@ -84,27 +86,41 @@ Run it again after replacing the binary.
 
 ## Two-way sync
 
-A folder on the Mac can get a copy on a box, so its chats run there on the same files. From the
-folder's window, the box button's popup offers to open it on a box. Kore then:
-- makes the copy at `~/Code/<name>` on the box: a `git clone` of the folder's origin at its branch
-  and commit, or an empty folder (`git init` for a repository without an origin);
-- asks once before carrying more than 1 GB or 20,000 files, and refuses when the box hasn't the
-  room;
-- adds the copy to the box's folders and opens its window.
+A box folder lives on the box, and its chats work on the box's files. To also have those files on
+the Mac, pair the box folder with a Mac folder: in the box window's Boxes panel, hover the
+folder's row and click its Sync glyph (or right-click the row), choose **Sync with a Mac
+folder…**, and pick or make a folder in the open panel. Kore then:
+- refuses a Mac folder that already syncs, or sits inside or around one that does, and a box
+  folder inside or around a synced one (that row says "inside <folder>, synced"), naming the pair
+  in the way;
+- looks at both folders. When the box folder is empty, the Mac's files go to the box; when the
+  Mac folder is empty, the box's files come to the Mac. When both have files it asks once, "Both
+  have files · Merge (keeps both on conflicts)": a file on one side only goes to the other, and a
+  file on both that differs is kept twice (see below);
+- asks once before carrying more than 1 GB or 20,000 files, and refuses when the other side hasn't
+  the room;
+- keeps the pair (the box, the box folder and the Mac folder) in Kore's settings. The row then
+  says "synced locally to ~/Desktop/app", and the window's folder name shows the same on hover.
 
-While that window is open, Kore keeps both sides the same with rsync over your SSH login. The Mac
-watches its side with FSEvents; kore-host watches the box's with inotify and only says what
-changed. Nothing polls, and nothing syncs while the window is closed: the next open catches up.
+While the box folder's window is open, Kore keeps both sides the same with rsync over your SSH
+login. The Mac watches its side with FSEvents; kore-host watches the box's with inotify and only
+says what changed. Nothing polls, and nothing syncs while the window is closed: the next open
+catches up. A row whose files are moving shows a small pulsing dot.
 - Both ends leave out `.git/`, `.build/`, `node_modules/`, `.DS_Store` and what each folder's
   `.gitignore` names. Only regular files are carried.
 - Edits, new files and deletes go both ways: a file deleted on one side is deleted on the other.
 - A file changed on both sides since the last sync is kept twice: the Mac's in place, and the
   box's beside it as `<name> (<box>).<ext>`. The window's box button marks it.
+- A side that is missing or empty, or a round that would delete more than half of what was agreed
+  (10 files or more), pauses the sync; the box button's popup asks before such a delete.
 - When a sync can't run (the box is offline, or rsync is missing), the window's box button says
   "Sync paused", and the next change tries again.
 
-The Mac keeps the pairs in Kore's settings, and what both sides last agreed on (each file's size
-and mtime) in `~/Library/Application Support/Kore/hosts/<box>/sync/`.
+To stop, right-click the row and choose **Stop syncing**. It ends the sync and forgets the pair;
+no file is deleted on either side.
+
+What both sides last agreed on (each file's size and mtime) is kept in
+`~/Library/Application Support/Kore/hosts/<box>/sync/`, and goes with the pair.
 
 ## Commands
 
