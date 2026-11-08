@@ -120,6 +120,8 @@ final class ArsenalDrive: ChatStoryline {
             // "/" commands are the user's: Kore runs /plan (Codex's Plan switch) and /compact itself.
             KoreAs(["send", "{b}", "/plan"], a, "no /plan", status: 1, says: "Only you send"),
             KoreAs(["send", "{b}", "  /compact now"], a, "no /compact", status: 1, says: "Only you send"),
+            KoreAs(["send", "{b}", "\u{FEFF}/plan"], a, "no /plan behind a BOM", status: 1, says: "Only you send"),
+            KoreAs(["send", "{b}", "\u{200B}/compact"], a, "no /compact behind a zero-width space", status: 1, says: "Only you send"),
             role("b", "b not planning, not compacting") { !$0.storyPlanning && !$0.isBusy },
 
             // A question card in b: answered by its option; the card goes and the turn goes on.

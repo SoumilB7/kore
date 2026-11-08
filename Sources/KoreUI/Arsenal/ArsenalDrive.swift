@@ -20,7 +20,9 @@ extension Chat {
     package func arsenalSend(_ text: String, from caller: String) -> Result<String, ArsenalRefusal> {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .failure(.init("A message needs some text.")) }
-        guard !text.hasPrefix("/") else { return .failure(.init("Only you send a “/” command.")) }
+        // Invisible format characters (U+200B, U+FEFF, U+2060, …) before the "/" don't hide it: a CLI may drop them.
+        let lead = text.unicodeScalars.first { !$0.properties.isWhitespace && $0.properties.generalCategory != .format }
+        guard lead != "/" else { return .failure(.init("Only you send a “/” command.")) }
         let queued = status.isRunning
         note("Arsenal · sent by \(caller)")
         guard sendFromLink(text) else { return .failure(.init("This chat can't take a message right now.")) }
