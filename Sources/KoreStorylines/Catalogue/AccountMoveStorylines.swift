@@ -6,8 +6,8 @@ import src
 
 /// A Claude login moved to a box and back from its row's ⋯ (`account-move-subtle.html`): the
 /// ⋯ offers "Move to mybox"; it goes in the safe order, leaving no copy on this Mac, the row
-/// dimmed "On mybox"; its ⋯ then holds "Move back here", which brings it back. A box that
-/// doesn't read it signed in stops the move with one amber line, the login untouched here.
+/// dimmed "On mybox"; its ⋯ then holds "Move back here", which brings it back. A box that stops
+/// answering stops the move with one amber line, the login untouched here.
 /// The box is held in memory, and this Mac's Keychain is the storylines' own.
 final class AccountMove: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
@@ -18,16 +18,20 @@ final class AccountMove: ChatStoryline {
         var staged: [String: Data] = [:]
         var placed: [String: Data] = [:]
         var paused: Set<String> = []
-        /// Its CLI reads nothing signed in (the move must stop).
-        var signedOut = false
+        /// Its link is down (the move must stop, untouched).
+        var down = false
         var login = "work"
 
         func prepareImport(moveId: String, data: Data, sha: String) throws {
-            guard LoginMove.sha(data) == sha else { throw LoginMove.Failure.sentWrong }
-            guard !signedOut else { throw LoginMove.Failure.notSignedIn }
+            guard !down else { throw LoginMove.Failure.unreachable }
+            guard LoginMove.sha(data) == sha, LoginCredential.complete(data, cli: "claude") else { throw LoginMove.Failure.sentWrong }
             staged[moveId] = data
         }
-        func commitImport(moveId: String) throws { if let data = staged.removeValue(forKey: moveId) { placed[login] = data } }
+        /// Placed, then read by its CLI (one copy left).
+        func commitImport(moveId: String) throws -> Bool? {
+            if let data = staged.removeValue(forKey: moveId) { placed[login] = data }
+            return true
+        }
         func abortImport(moveId: String) throws { staged[moveId] = nil }
         func prepareExport(moveId: String) throws -> (data: Data, sha: String) {
             guard let data = placed[login] else { throw LoginMove.Failure.notThere }
@@ -79,17 +83,17 @@ final class AccountMove: ChatStoryline {
         ] + openMenu + [
             WaitForElement(.id(StoryID.Composer.accountMethod("Move to mybox"))),
             FadesEnd(), Snapshot("account-move-menu"),
-            // The box can't read it signed in: one amber line, nothing moved, nothing left there.
-            Do("mybox's CLI reads it signed out") { _ in box.signedOut = true },
+            // The box stops answering: one amber line, nothing moved, nothing left there.
+            Do("mybox stops answering") { _ in box.down = true },
             Press(.id(StoryID.Composer.accountMethod("Move to mybox"))),
             Expect("not moved: the row says why, the login still here", found: { _ in "\(String(describing: work().flatMap { LoginMoves.shared.line(provider, $0) }))" }) { _ in
                 guard let id = work(), case .failed(let words) = LoginMoves.shared.line(provider, id) else { return false }
-                return words == "mybox doesn't read it signed in" && place().flatMap(vault.held) == credential
+                return words == "mybox isn't reachable" && place().flatMap(vault.held) == credential
                     && box.staged.isEmpty && box.placed.isEmpty
             },
             FadesEnd(), Snapshot("account-move-failed"),
             // Again, with mybox reading it: moved, one copy, the row "On mybox".
-            Do("mybox's CLI reads it signed in") { _ in box.signedOut = false },
+            Do("mybox answers again") { _ in box.down = false },
         ] + reopen + openMenu + [
             Press(.id(StoryID.Composer.accountMethod("Move to mybox"))),
             Expect("moved: on mybox only, none left here") { _ in

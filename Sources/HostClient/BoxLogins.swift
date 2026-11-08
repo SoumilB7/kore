@@ -37,8 +37,8 @@ package struct BoxLogins: LoginMove.Remote {
             moveId: moveId, host: host, sha: sha))
     }
 
-    package func commitImport(moveId: String) async throws {
-        _ = try await send(.accountImport, ControlArgs(force: force ? true : nil, provider: cli, login: login, phase: MovePhase.commit.rawValue, moveId: moveId))
+    package func commitImport(moveId: String) async throws -> Bool? {
+        try await send(.accountImport, ControlArgs(force: force ? true : nil, provider: cli, login: login, phase: MovePhase.commit.rawValue, moveId: moveId)).signedIn
     }
 
     package func abortImport(moveId: String) async throws {
@@ -81,6 +81,7 @@ package struct BoxLogins: LoginMove.Remote {
         switch words {
         case "sentWrong": return .sentWrong
         case "notSignedIn": return .notSignedIn
+        case "notALogin": return .notALogin
         case "busy": return .busy
         case "notThere": return .notThere
         default: break

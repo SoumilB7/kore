@@ -101,12 +101,16 @@ package final class HostAccounts {
         // `auth status` writes nothing: no links are made for a read.
         let folders = ids.map { ($0, $0 == LinkAccount.main ? nil : root.appendingPathComponent($0, isDirectory: true)) }
         let status = status
+        // A login paused for a move isn't read: its CLI could refresh it while the other device
+        // already holds the copy that's going to be the one.
+        let paused = Set(ids.filter { self.paused($0) })
         let task = Task { () -> [LinkAccount] in
             var out: [String: LinkAccount] = [:]
             for chunk in stride(from: 0, to: folders.count, by: 3).map({ Array(folders[$0..<min($0 + 3, folders.count)]) }) {
                 await withTaskGroup(of: LinkAccount.self) { group in
                     for (id, dir) in chunk {
                         group.addTask {
+                            if paused.contains(id) { return LinkAccount(id: id) }
                             var account = Self.account(id, reply: try? await status(dir))
                             // Moved here and not used yet: where it came from.
                             if let dir, let from = HostLoginMoves.from(dir), from.used != true { account.from = from.host }
@@ -177,6 +181,7 @@ package final class HostAccounts {
     /// One account's status, read in its folder.
     package func status(_ id: String) async throws -> JSONValue {
         guard exists(id) else { throw Failure.gone(id) }
+        if paused(id) { throw Failure.moving(id) }
         return try await status(folder(id))
     }
 

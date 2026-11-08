@@ -8,8 +8,10 @@ import src
 //
 // - `account.import` (prepare | commit | abort, by `moveId`): prepare carries the credential
 //   (`data`, base64), its `sha` and what the CLI shows of the account (`text`: Claude's minimal
-//   `.claude.json`). The device writes it 0600 to a staging place nothing runs, checks the bytes
-//   and that its CLI reads it signed in. Commit puts it in place as `login`; abort removes it.
+//   `.claude.json`). The device writes it 0600 to a staging place nothing runs and checks the
+//   file only: a complete login whose sha is the one sent. No CLI runs on it before the commit
+//   (`auth status` online refreshes a login, or wipes it). Commit puts it in place as `login`,
+//   then its CLI reads it (`signedIn`); abort removes it.
 // - `account.export` (prepare | commit | abort): prepare pauses the device's `login` (nothing
 //   starts on it until commit or abort), checks nothing runs on it, and answers its bytes and
 //   sha. Commit deletes it there; abort un-pauses it.
@@ -29,13 +31,16 @@ package struct LoginMoveResult: Codable, Sendable, Equatable {
     package var login: String?
     /// `account.fingerprints`: each login's.
     package var prints: [LoginPrint]?
+    /// `account.import` commit: whether the CLI reads the placed login signed in, read after it
+    /// was put in place (one copy left); absent when it wasn't read.
+    package var signedIn: Bool?
 
     package init(
         id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, data: String? = nil, sha: String? = nil, login: String? = nil,
-        prints: [LoginPrint]? = nil
+        prints: [LoginPrint]? = nil, signedIn: Bool? = nil
     ) {
         (self.id, self.ok, self.code, self.message) = (id, ok, code, message)
-        (self.data, self.sha, self.login, self.prints) = (data, sha, login, prints)
+        (self.data, self.sha, self.login, self.prints, self.signedIn) = (data, sha, login, prints, signedIn)
     }
 
     package static func refused(_ id: String, _ code: ResultCode, _ message: String) -> LoginMoveResult {

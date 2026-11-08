@@ -11,8 +11,35 @@ struct LoginMoveTests {
     typealias Failure = LoginMove.Failure
 
     /// This device: a login (or none), its chats, and what the Keychain or CLI does.
+    /// Claude's side as `claude auth status` meets it online: one refresh token is current. A
+    /// status read on a copy holding it refreshes (a new token, the copy rewritten); on a copy
+    /// whose token is stale it wipes the copy's tokens and still says signed in.
+    final class Server: @unchecked Sendable {
+        var current: String
+        var issued = 1
+        init(_ current: String) { self.current = current }
+
+        /// What one status read does to `copy`; whether the CLI says it's signed in.
+        func status(_ copy: inout Data?) -> Bool {
+            guard let data = copy, let token = LoginCredential.refreshToken(data, cli: "claude") else { return false }
+            if token == current {
+                issued += 1
+                current = "r-\(issued)"
+                copy = Data(#"{"claudeAiOauth":{"accessToken":"a\#(issued)","refreshToken":"\#(current)","expiresAt":\#(issued)}}"#.utf8)
+            } else {
+                copy = Data(#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#.utf8)
+            }
+            return true
+        }
+    }
+
     final class Device: LoginMove.Local, @unchecked Sendable {
         var held: Data?
+        /// A real CLI's status (it refreshes or wipes); nil: it answers `signedInAnswer` and changes nothing.
+        var server: Server?
+        /// Its CLI read the login while the other device held a copy too.
+        var readWhileTwo = false
+        weak var other: Other?
         var chats = 0
         var locked = false
         var denied = false
@@ -52,7 +79,12 @@ struct LoginMoveTests {
             held = data
             steps.append("write")
         }
-        func signedIn() -> Bool { signedInAnswer }
+        func signedIn() -> Bool {
+            steps.append("status")
+            if let other, other.holdsAny { readWhileTwo = true }
+            guard let server else { return signedInAnswer }
+            return server.status(&held)
+        }
         func delete() throws {
             if deleteFails { throw Failure.failed("can't delete") }
             held = nil
@@ -64,6 +96,12 @@ struct LoginMoveTests {
     final class Other: LoginMove.Remote, @unchecked Sendable {
         var staged: [String: Data] = [:]
         var placed: Data?
+        var server: Server?
+        var readWhileTwo = false
+        weak var here: Device?
+        /// Its CLI's answer after placing, without a server.
+        var signedInAnswer: Bool? = true
+        var holdsAny: Bool { placed != nil || !staged.isEmpty }
         var paused = false
         /// What prepareImport answers with, else it checks the sha.
         var importFails: Failure?
@@ -94,9 +132,13 @@ struct LoginMoveTests {
             guard LoginMove.sha(got) == sha else { throw Failure.sentWrong }
             staged[moveId] = got
         }
-        func commitImport(moveId: String) throws {
+        func commitImport(moveId: String) throws -> Bool? {
             try drop("commitImport")
             if let data = staged.removeValue(forKey: moveId) { placed = data }
+            // Its CLI reads what it placed: one copy left, or a fake that says otherwise.
+            if here?.held != nil { readWhileTwo = true }
+            guard let server else { return signedInAnswer }
+            return server.status(&placed)
         }
         func abortImport(moveId: String) throws {
             try drop("abortImport")
@@ -126,8 +168,8 @@ struct LoginMoveTests {
 
     @Test func aMoveEndsWithOneCopyThereInTheSafeOrder() async {
         let here = Device(login), there = Other()
-        let outcome = await LoginMove.out(here, to: there, moveId: "m1")
-        #expect(outcome == .moved())
+        let outcome = await LoginMove.out(here, to: there, cli: "claude", moveId: "m1")
+        #expect(outcome == .moved(signedIn: true))
         #expect(here.held == nil)
         #expect(there.placed == login && there.staged.isEmpty)
         // Locked first, read twice (sent, then checked unchanged), deleted only after the target verified.
@@ -139,7 +181,7 @@ struct LoginMoveTests {
     @Test func chatsUsingItStopItBeforeAnythingIsRead() async {
         let here = Device(login), there = Other()
         here.set(chats: 2)
-        #expect(await LoginMove.out(here, to: there) == .failed(.inUse(2)))
+        #expect(await LoginMove.out(here, to: there, cli: "claude") == .failed(.inUse(2)))
         #expect(here.held == login && here.reads == 0)
         #expect(there.calls.isEmpty)
     }
@@ -147,14 +189,14 @@ struct LoginMoveTests {
     @Test func aLoginAlreadyMovingIsntMovedAgain() async {
         let here = Device(login), there = Other()
         here.lockNow()
-        #expect(await LoginMove.out(here, to: there) == .failed(.busy))
+        #expect(await LoginMove.out(here, to: there, cli: "claude") == .failed(.busy))
         #expect(there.calls.isEmpty)
     }
 
     @Test func aDeniedKeychainLeavesEverythingAsItWas() async {
         let here = Device(login), there = Other()
         here.set(denied: true)
-        #expect(await LoginMove.out(here, to: there) == .failed(.keychainDenied))
+        #expect(await LoginMove.out(here, to: there, cli: "claude") == .failed(.keychainDenied))
         #expect(here.held == login && there.calls.isEmpty)
         #expect(await !here.locked)
     }
@@ -162,24 +204,30 @@ struct LoginMoveTests {
     @Test func aShaMismatchAbortsAndTheSourceKeepsIt() async {
         let here = Device(login), there = Other()
         there.set(corrupt: true)
-        #expect(await LoginMove.out(here, to: there, moveId: "m") == .failed(.sentWrong))
+        #expect(await LoginMove.out(here, to: there, cli: "claude", moveId: "m") == .failed(.sentWrong))
         #expect(here.held == login)
         #expect(there.staged.isEmpty && there.placed == nil)
         #expect(there.calls == ["prepareImport", "abortImport"])
     }
 
-    @Test func aTargetThatDoesntReadItSignedInAbortsIt() async {
+    @Test func aTargetThatFindsNoCompleteLoginAbortsIt() async {
         let here = Device(login), there = Other()
-        there.set(importFails: .notSignedIn)
-        #expect(await LoginMove.out(here, to: there, moveId: "m") == .failed(.notSignedIn))
+        there.set(importFails: .notALogin)
+        #expect(await LoginMove.out(here, to: there, cli: "claude", moveId: "m") == .failed(.notALogin))
         #expect(here.held == login)
         #expect(there.staged.isEmpty)
+    }
+
+    @Test func anIncompleteLoginNeverLeaves() async {
+        let here = Device(Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":""}}"#.utf8)), there = Other()
+        #expect(await LoginMove.out(here, to: there, cli: "claude") == .failed(.notALogin))
+        #expect(there.calls.isEmpty)
     }
 
     @Test func aRefreshMidMoveKeepsTheLiveCopyAndDropsTheStaleOne() async {
         let here = Device(login), there = Other()
         here.set(refreshTo: refreshed)
-        #expect(await LoginMove.out(here, to: there, moveId: "m") == .failed(.changedMeanwhile))
+        #expect(await LoginMove.out(here, to: there, cli: "claude", moveId: "m") == .failed(.changedMeanwhile))
         // The live (refreshed) copy stays here; the stale one sent is gone there.
         #expect(here.held == refreshed)
         #expect(there.staged.isEmpty && there.placed == nil)
@@ -189,7 +237,7 @@ struct LoginMoveTests {
         let here = Device(login), there = Other()
         // The target wrote to staging, but its answer never came; the abort can't go either.
         there.set(importFails: .unreachable, down: ["abortImport"])
-        let outcome = await LoginMove.out(here, to: there, moveId: "m")
+        let outcome = await LoginMove.out(here, to: there, cli: "claude", moveId: "m")
         #expect(outcome == .failed(.unreachable, pending: .abortImport(moveId: "m")))
         #expect(here.held == login)
         #expect(there.staged["m"] == login && there.placed == nil)
@@ -202,7 +250,7 @@ struct LoginMoveTests {
     @Test func aDeleteThatFailsAbortsTheTargetsCopy() async {
         let here = Device(login), there = Other()
         here.set(deleteFails: true)
-        #expect(await LoginMove.out(here, to: there, moveId: "m") == .failed(.failed("can't delete")))
+        #expect(await LoginMove.out(here, to: there, cli: "claude", moveId: "m") == .failed(.failed("can't delete")))
         #expect(here.held == login)
         #expect(there.staged.isEmpty && there.placed == nil)
     }
@@ -210,7 +258,7 @@ struct LoginMoveTests {
     @Test func aCommitThatCantGoIsOwedAndTheStagedCopyIsNeverLost() async {
         let here = Device(login), there = Other()
         there.set(down: ["commitImport"])
-        let outcome = await LoginMove.out(here, to: there, moveId: "m")
+        let outcome = await LoginMove.out(here, to: there, cli: "claude", moveId: "m")
         #expect(outcome == .moved(pending: .commitImport(moveId: "m")))
         // The source is gone; the target's staged copy is the only one and stays until the commit lands.
         #expect(here.held == nil && there.staged["m"] == login)
@@ -221,7 +269,7 @@ struct LoginMoveTests {
 
     @Test func nothingHereIsNothingToMove() async {
         let here = Device(nil), there = Other()
-        #expect(await LoginMove.out(here, to: there) == .failed(.notThere))
+        #expect(await LoginMove.out(here, to: there, cli: "claude") == .failed(.notThere))
         #expect(there.calls.isEmpty)
     }
 
@@ -229,7 +277,7 @@ struct LoginMoveTests {
 
     @Test func aMoveBackWritesVerifiesThenTheOtherDeletes() async {
         let here = Device(nil), there = Other(placed: login)
-        #expect(await LoginMove.back(here, from: there, moveId: "b") == .moved())
+        #expect(await LoginMove.back(here, from: there, cli: "claude", moveId: "b") == .moved(signedIn: true))
         #expect(here.held == login)
         #expect(there.placed == nil && !there.paused)
         #expect(there.calls == ["prepareExport", "commitExport"])
@@ -237,7 +285,7 @@ struct LoginMoveTests {
 
     @Test func aMoveBackNeverWritesOverACopyHere() async {
         let here = Device(refreshed), there = Other(placed: login)
-        #expect(await LoginMove.back(here, from: there) == .failed(.alreadyThere))
+        #expect(await LoginMove.back(here, from: there, cli: "claude") == .failed(.alreadyThere))
         #expect(here.held == refreshed && there.placed == login)
         #expect(there.calls.isEmpty)
     }
@@ -245,30 +293,41 @@ struct LoginMoveTests {
     @Test func aMoveBackThatArrivesWrongIsDroppedAndTheOtherKeepsIt() async {
         let here = Device(nil), there = Other(placed: login)
         there.set(corrupt: true)
-        #expect(await LoginMove.back(here, from: there, moveId: "b") == .failed(.sentWrong))
+        #expect(await LoginMove.back(here, from: there, cli: "claude", moveId: "b") == .failed(.sentWrong))
         #expect(here.held == nil)
         #expect(there.placed == login && !there.paused)
     }
 
-    @Test func aMoveBackThatTheCLIHereDoesntReadSignedInIsUndone() async {
+    /// The CLI here reads it only after the other deleted its copy: a login it doesn't read
+    /// signed in is still moved (one copy, here), and says so.
+    @Test func aMoveBackIsReadHereOnlyOnceTheOtherHasNone() async {
         let here = Device(nil), there = Other(placed: login)
         here.set(signedIn: false)
-        #expect(await LoginMove.back(here, from: there, moveId: "b") == .failed(.notSignedIn))
-        #expect(here.held == nil)
-        #expect(there.placed == login && !there.paused)
+        here.other = there
+        #expect(await LoginMove.back(here, from: there, cli: "claude", moveId: "b") == .moved(signedIn: false))
+        #expect(here.held == login && there.placed == nil && !there.paused)
+        #expect(!here.readWhileTwo)
+        #expect(here.steps.last(where: { $0 == "status" || $0 == "write" }) == "status")
+    }
+
+    @Test func anIncompleteLoginComingBackIsLeftWhereItWas() async {
+        let partial = Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r1"}}"#.utf8)
+        let here = Device(nil), there = Other(placed: partial)
+        #expect(await LoginMove.back(here, from: there, cli: "claude", moveId: "b") == .failed(.notALogin))
+        #expect(here.held == nil && there.placed == partial && !there.paused)
     }
 
     @Test func aDeniedKeychainOnTheWayBackLeavesTheOtherAsItWas() async {
         let here = Device(nil), there = Other(placed: login)
         here.set(denied: true)
-        #expect(await LoginMove.back(here, from: there) == .failed(.keychainDenied))
+        #expect(await LoginMove.back(here, from: there, cli: "claude") == .failed(.keychainDenied))
         #expect(there.placed == login && there.calls.isEmpty)
     }
 
     @Test func aMoveBackWhoseCommitCantGoIsOwedWhileTheOtherStaysPaused() async {
         let here = Device(nil), there = Other(placed: login)
         there.set(down: ["commitExport"])
-        #expect(await LoginMove.back(here, from: there, moveId: "b") == .moved(pending: .commitExport(moveId: "b")))
+        #expect(await LoginMove.back(here, from: there, cli: "claude", moveId: "b") == .moved(pending: .commitExport(moveId: "b")))
         // Here it works; there it's paused (nothing refreshes it) until the delete lands.
         #expect(here.held == login && there.paused && there.placed == login)
         there.set()
@@ -279,7 +338,7 @@ struct LoginMoveTests {
     @Test func anUnreachableDeviceOwesItsUnpause() async {
         let here = Device(nil), there = Other(placed: login)
         there.set(down: ["prepareExport", "abortExport"])
-        #expect(await LoginMove.back(here, from: there, moveId: "b") == .failed(.unreachable, pending: .abortExport(moveId: "b")))
+        #expect(await LoginMove.back(here, from: there, cli: "claude", moveId: "b") == .failed(.unreachable, pending: .abortExport(moveId: "b")))
         #expect(here.held == nil)
     }
 
@@ -344,7 +403,7 @@ struct LoginKeepTests {
 
     @Test func keepHereTakesTheirsWhenTheirsIsLive() async {
         let here = Device(older), there = Other(placed: newer)
-        #expect(await LoginMove.keepHere(here, there, cli: "claude") == .moved())
+        #expect(await LoginMove.keepHere(here, there, cli: "claude") == .moved(signedIn: true))
         #expect(here.held == newer && there.placed == nil && !there.paused)
     }
 
@@ -355,16 +414,18 @@ struct LoginKeepTests {
         #expect(!here.steps.contains("write"))
     }
 
-    @Test func keepHereThatTheCLIDoesntReadPutsMineBack() async {
+    @Test func keepHereReadsWhatItWroteOnlyOnceTheOtherHasNone() async {
         let here = Device(older), there = Other(placed: newer)
         here.set(signedIn: false)
-        #expect(await LoginMove.keepHere(here, there, cli: "claude") == .failed(.notSignedIn))
-        #expect(here.held == older && there.placed == newer && !there.paused)
+        here.other = there
+        #expect(await LoginMove.keepHere(here, there, cli: "claude") == .moved(signedIn: false))
+        #expect(here.held == newer && there.placed == nil && !there.paused)
+        #expect(!here.readWhileTwo)
     }
 
     @Test func keepThereSendsMineFirstWhenMineIsLive() async {
         let here = Device(newer), there = Other(placed: older)
-        #expect(await LoginMove.keepThere(here, there, cli: "claude", moveId: "k") == .moved())
+        #expect(await LoginMove.keepThere(here, there, cli: "claude", moveId: "k") == .moved(signedIn: true))
         #expect(here.held == nil && there.placed == newer && !there.paused)
     }
 
@@ -380,5 +441,86 @@ struct LoginKeepTests {
         here.set(chats: 1)
         #expect(await LoginMove.keepThere(here, there, cli: "claude") == .failed(.inUse(1)))
         #expect(here.held == newer && there.placed == older && there.calls.isEmpty)
+    }
+}
+
+/// Kore-main, 2026-11-17: online, `claude auth status` refreshes a login (or wipes its tokens
+/// when the refresh fails) and still says signed in. A CLI read on a copy while two exist would
+/// leave two diverged logins, or kill the moved one. With a CLI that does exactly that, every
+/// move and Keep ends with one valid login, on one device, and no CLI ever read a copy while the
+/// other device held one too.
+@Suite("Login move with a CLI that refreshes")
+struct LoginMoveRefreshTests {
+    typealias Device = LoginMoveTests.Device
+    typealias Other = LoginMoveTests.Other
+    typealias Server = LoginMoveTests.Server
+
+    static func login(_ token: String, _ at: Int) -> Data { Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"\#(token)","expiresAt":\#(at)}}"#.utf8) }
+
+    /// One copy left across both devices (staging included), complete, holding the server's current token.
+    func oneValid(_ here: Device, _ there: Other, _ server: Server) -> Bool {
+        let copies = [here.held, there.placed].compactMap { $0 } + Array(there.staged.values)
+        guard copies.count == 1, let copy = copies.first else { return false }
+        return LoginCredential.complete(copy, cli: "claude") && LoginCredential.refreshToken(copy, cli: "claude") == server.current
+    }
+
+    func pair(here: Data?, there: Data?, server: Server) -> (Device, Other) {
+        let d = Device(here), o = Other(placed: there)
+        (d.server, o.server, d.other, o.here) = (server, server, o, d)
+        return (d, o)
+    }
+
+    @Test func aMoveOutIsReadThereOnlyAfterItsTheOnlyCopy() async {
+        let server = Server("r1")
+        let (here, there) = pair(here: Self.login("r1", 1), there: nil, server: server)
+        #expect(await LoginMove.out(here, to: there, cli: "claude", moveId: "m") == .moved(signedIn: true))
+        // The target's read refreshed it: the copy there holds the new token, the only one.
+        #expect(oneValid(here, there, server) && there.placed != nil)
+        #expect(!here.readWhileTwo && !there.readWhileTwo)
+    }
+
+    @Test func aMoveBackIsReadHereOnlyAfterItsTheOnlyCopy() async {
+        let server = Server("r1")
+        let (here, there) = pair(here: nil, there: Self.login("r1", 1), server: server)
+        #expect(await LoginMove.back(here, from: there, cli: "claude", moveId: "b") == .moved(signedIn: true))
+        #expect(oneValid(here, there, server) && here.held != nil)
+        #expect(!here.readWhileTwo && !there.readWhileTwo)
+    }
+
+    @Test func aRefreshOnTheSourceMidMoveKeepsTheLiveCopyAndNeverReadsTheStaleOne() async {
+        let server = Server("r1")
+        let (here, there) = pair(here: Self.login("r1", 1), there: nil, server: server)
+        // Something outside Kore refreshes the source while it moves: r2 is current now.
+        here.set(refreshTo: Self.login("r2", 2))
+        server.current = "r2"
+        #expect(await LoginMove.out(here, to: there, cli: "claude", moveId: "m") == .failed(.changedMeanwhile))
+        // The stale copy sent was dropped unread; the source's is the one valid login.
+        #expect(oneValid(here, there, server) && here.held != nil)
+        #expect(!there.readWhileTwo)
+    }
+
+    @Test func eachKeepEndsWithOneValidCopy() async {
+        // Keep here, theirs live.
+        var server = Server("r2")
+        var (here, there) = pair(here: Self.login("r1", 1), there: Self.login("r2", 2), server: server)
+        #expect(await LoginMove.keepHere(here, there, cli: "claude").moved)
+        #expect(oneValid(here, there, server) && here.held != nil && !here.readWhileTwo)
+        // Keep there, mine live.
+        server = Server("r2")
+        (here, there) = pair(here: Self.login("r2", 2), there: Self.login("r1", 1), server: server)
+        #expect(await LoginMove.keepThere(here, there, cli: "claude", moveId: "k").moved)
+        #expect(oneValid(here, there, server) && there.placed != nil && !there.readWhileTwo)
+    }
+
+    /// The order this replaced, played on purpose: a CLI read on the staged copy before the
+    /// source is deleted. It leaves the source's copy stale, and its next read wipes it.
+    @Test func readingTheStagedCopyEarlyIsWhatBreaksIt() {
+        let server = Server("r1")
+        var staged: Data? = Self.login("r1", 1)
+        var source: Data? = Self.login("r1", 1)
+        _ = server.status(&staged)
+        #expect(LoginCredential.refreshToken(staged!, cli: "claude") == server.current)
+        _ = server.status(&source)
+        #expect(LoginCredential.refreshToken(source!, cli: "claude") == "")
     }
 }

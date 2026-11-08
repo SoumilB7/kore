@@ -144,7 +144,7 @@ package final class LoginMoves {
                 if case .some(let other) = fallback { store.switchLogin(cli, to: other, LoginPick.byMove()) }
             }
             let remote = target.remote(cli, LinkLogins.name(forEmail: email), Self.profile(cli, id), false)
-            let outcome = await LoginMove.out(MacLogin(cli: cli, id: id), to: remote)
+            let outcome = await LoginMove.out(MacLogin(cli: cli, id: id), to: remote, cli: cli)
             if let pending = outcome.pending { self.owe(Owed(box: box, cli: cli, login: AccountStore.loginKey(id), pending: pending)) }
             if outcome.moved {
                 CLIProfiles.markMoved(cli, email: email, box: box)
@@ -170,14 +170,14 @@ package final class LoginMoves {
         Task {
             guard let login = await target.login(email) else { return self.finish(key, .failed(.notThere), box: name) }
             let remote = target.remote(cli, login, nil, false)
-            let outcome = await LoginMove.back(MacLogin(cli: cli, id: id), from: remote)
+            let outcome = await LoginMove.back(MacLogin(cli: cli, id: id), from: remote, cli: cli)
             if let pending = outcome.pending { self.owe(Owed(box: box, cli: cli, login: AccountStore.loginKey(id), pending: pending)) }
             if outcome.moved {
                 CLIProfiles.noteBack(cli, email: email)
                 AccountStore.shared.loginsChanged(cli)
                 UILog.event("login-move", ["cli": cli, "login": AccountStore.loginKey(id), "to": "mac", "outcome": "moved"])
             }
-            self.finish(key, outcome, box: name)
+            self.finish(key, outcome, box: name, here: true)
         }
     }
 
@@ -200,16 +200,18 @@ package final class LoginMoves {
                 AccountStore.shared.loginsChanged(cli)
             }
             UILog.event("login-keep", ["cli": cli, "login": AccountStore.loginKey(id), "where": here ? "mac" : "box", "outcome": outcome.failure.map(Self.code) ?? "kept"])
-            self.finish(key, outcome, box: name)
+            self.finish(key, outcome, box: name, here: here)
         }
     }
 
-    private func finish(_ key: String, _ outcome: LoginMove.Outcome, box: String) {
+    /// `here`: the login ended up on this Mac (a move back, a Keep here).
+    private func finish(_ key: String, _ outcome: LoginMove.Outcome, box: String, here: Bool = false) {
         if let failure = outcome.failure {
             lines[key] = .failed(Self.words(failure, box: box))
             UILog.event("login-move", ["login": key, "outcome": Self.code(failure)])
         } else {
-            lines[key] = nil
+            // Moved; then read where it is now (one copy left): one that doesn't work there says so.
+            lines[key] = outcome.signedIn == false ? .failed(here ? "Back here, but Claude doesn't read it signed in" : "On \(box), but it doesn't read signed in there") : nil
             incompatible[key] = nil
         }
     }
@@ -309,6 +311,7 @@ package final class LoginMoves {
         case .tooOld: "\(box) needs a newer kore-host"
         case .sentWrong: "It arrived changed on \(box): not moved"
         case .notSignedIn: "\(box) doesn't read it signed in"
+        case .notALogin: "It isn't a complete login: not moved"
         case .changedMeanwhile: "It refreshed while moving: try again"
         case .failed(let words): words
         case .refused(let words): words == "not on KoreNet" ? "\(box) isn't on KoreNet" : words
@@ -326,6 +329,7 @@ package final class LoginMoves {
         case .tooOld: "tooOld"
         case .sentWrong: "sentWrong"
         case .notSignedIn: "notSignedIn"
+        case .notALogin: "notALogin"
         case .changedMeanwhile: "changedMeanwhile"
         case .failed: "failed"
         case .refused: "refused"

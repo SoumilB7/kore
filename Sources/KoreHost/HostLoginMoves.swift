@@ -80,7 +80,7 @@ package final class HostLoginMoves {
 
     // MARK: Coming in
 
-    package func importPrepare(_ args: ControlArgs, id: String) async -> LoginMoveResult {
+    package func importPrepare(_ args: ControlArgs, id: String) -> LoginMoveResult {
         guard args.provider == "claude" else { return .refused(id, .invalid, "Only Claude logins move to a box for now.") }
         guard let moveId = args.moveId, let data = args.data.flatMap({ Data(base64Encoded: $0) }), let sha = args.sha else {
             return .refused(id, .invalid, "Name the move and send the login.")
@@ -106,18 +106,20 @@ package final class HostLoginMoves {
             HostJournal.note("login import", ["move": moveId, "outcome": "sha"])
             return .refused(id, .invalid, "sentWrong")
         }
-        // The CLI reads it signed in there.
-        let signedIn = await accounts.signedIn(folder: dir)
-        guard signedIn else {
+        // A complete login, read as a file only: no CLI runs on a staged copy (`auth status`
+        // online refreshes a login, or wipes its tokens, while the source still holds it).
+        guard LoginCredential.complete(written, cli: "claude") else {
             try? FileManager.default.removeItem(at: dir)
-            HostJournal.note("login import", ["move": moveId, "outcome": "signedOut"])
-            return .refused(id, .invalid, "notSignedIn")
+            HostJournal.note("login import", ["move": moveId, "outcome": "notALogin"])
+            return .refused(id, .invalid, "notALogin")
         }
         HostJournal.note("login import", ["move": moveId, "outcome": "staged"])
         return LoginMoveResult(id: id, ok: true)
     }
 
-    package func importCommit(_ args: ControlArgs, id: String) -> LoginMoveResult {
+    /// Puts the staged login in place (the source deleted its copy before sending this), then
+    /// reads it with the CLI: one copy is left, so a refresh there is harmless.
+    package func importCommit(_ args: ControlArgs, id: String) async -> LoginMoveResult {
         guard let moveId = args.moveId else { return .refused(id, .invalid, "Name the move.") }
         let dir = staging(moveId)
         // Sent again after it landed: the folder it went to says so.
@@ -134,17 +136,21 @@ package final class HostLoginMoves {
             try? FileManager.default.removeItem(at: dir)
             accounts.forget()
             HostJournal.note("login import", ["move": moveId, "outcome": "replaced", "login": login])
-            return LoginMoveResult(id: id, ok: true, login: login)
+            let signedIn = await accounts.signedIn(folder: url.deletingLastPathComponent())
+            return LoginMoveResult(id: id, ok: true, login: login, signedIn: signedIn)
         }
         let name = freeName(args.login ?? "moved")
+        let placedDir = accounts.root.appendingPathComponent(name, isDirectory: true)
         do {
-            try FileManager.default.moveItem(at: dir, to: accounts.root.appendingPathComponent(name, isDirectory: true))
+            try FileManager.default.moveItem(at: dir, to: placedDir)
         } catch {
             return .refused(id, .invalid, "Couldn't put the login in place.")
         }
         accounts.forget()
         HostJournal.note("login import", ["move": moveId, "outcome": "placed", "login": name])
-        return LoginMoveResult(id: id, ok: true, login: name)
+        let signedIn = await accounts.signedIn(folder: placedDir)
+        HostJournal.note("login import", ["move": moveId, "outcome": signedIn ? "signedIn" : "signedOut"])
+        return LoginMoveResult(id: id, ok: true, login: name, signedIn: signedIn)
     }
 
     package func importAbort(_ args: ControlArgs, id: String) -> LoginMoveResult {

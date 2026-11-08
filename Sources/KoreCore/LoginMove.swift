@@ -15,12 +15,16 @@ import Crypto
 /// 3. it is read in-process (never on a command line);
 /// 4. it goes sealed to the target, in the KoreNet session;
 /// 5. the target writes it (0600, or its Keychain) where nothing runs it yet;
-/// 6. the target checks the bytes (sha256) and that its CLI reads it signed in;
-/// 7. only then is the source's copy deleted;
+/// 6. the target checks the file only: a complete login (its refresh token and expiry there)
+///    whose sha256 is the one sent. No CLI runs on a copy while two exist: `claude auth status`
+///    online refreshes the login (or wipes its tokens when that fails), which would leave two
+///    diverged logins or kill the moved one;
+/// 7. only then is the source's copy deleted, and the target's put in place;
 /// 8. no clear copy is left anywhere.
 ///
-/// A failure before 7 removes the target's copy and leaves the source as it was. Kore never runs
-/// a CLI's logout: it revokes the login on every device. The engine is the order alone; what
+/// Only once one copy is left does the CLI where it is now read it (`auth status`), to say
+/// whether it works there. A failure before 7 removes the target's copy and leaves the source as
+/// it was. Kore never runs a CLI's logout: it revokes the login on every device. The engine is the order alone; what
 /// reads, writes and sends is the caller's (`Local`, `Remote`), so every branch is testable.
 public enum LoginMove {
     /// Why a move didn't happen. The login is where it was, untouched, in every case.
@@ -43,6 +47,8 @@ public enum LoginMove {
         case sentWrong
         /// The target's CLI doesn't read it signed in.
         case notSignedIn
+        /// The file isn't a complete login (no refresh token or expiry): nothing to move.
+        case notALogin
         /// It refreshed on the source while it moved: the copy sent is already stale.
         case changedMeanwhile
         /// Reading, writing or deleting it failed, in the system's words.
@@ -68,9 +74,12 @@ public enum LoginMove {
         public var failure: Failure?
         /// Owed to the other side, kept and sent again by the caller.
         public var pending: Pending?
+        /// Whether the CLI where the login is now reads it signed in, read after the move once one
+        /// copy is left; nil when it wasn't read (a commit still owed, a Keep that wrote nothing).
+        public var signedIn: Bool?
         public var moved: Bool { failure == nil }
 
-        public static func moved(pending: Pending? = nil) -> Outcome { Outcome(failure: nil, pending: pending) }
+        public static func moved(pending: Pending? = nil, signedIn: Bool? = nil) -> Outcome { Outcome(failure: nil, pending: pending, signedIn: signedIn) }
         public static func failed(_ failure: Failure, pending: Pending? = nil) -> Outcome { Outcome(failure: failure, pending: pending) }
     }
 
@@ -86,7 +95,8 @@ public enum LoginMove {
         func read() async throws -> Data?
         /// Writes it where this device keeps it. Throws when it can't.
         func write(_ data: Data) async throws
-        /// Whether the CLI here reads it signed in (`auth status`).
+        /// Whether the CLI here reads it signed in (`auth status`). Only ever asked once this is
+        /// the one copy left: it may refresh the login.
         func signedIn() async -> Bool
         /// Deletes the copy here (never a logout).
         func delete() async throws
@@ -95,10 +105,13 @@ public enum LoginMove {
     /// The same login's place on the other device, over the link. Each call is idempotent by
     /// `moveId`: one sent twice (after a drop) does the same once.
     public protocol Remote: Sendable {
-        /// The target writes `data` to staging (never run), checks `sha` and its CLI's status.
-        /// Throws a `Failure` (unreachable, sentWrong, notSignedIn, alreadyThere, refused…).
+        /// The target writes `data` to staging (never run) and checks the file only: a complete
+        /// login whose sha is `sha`. No CLI runs on it. Throws a `Failure` (unreachable,
+        /// sentWrong, notALogin, alreadyThere, refused…).
         func prepareImport(moveId: String, data: Data, sha: String) async throws
-        func commitImport(moveId: String) async throws
+        /// Puts the staged login in place; then (one copy left) its CLI reads it: whether it's
+        /// signed in there, nil when it couldn't say.
+        func commitImport(moveId: String) async throws -> Bool?
         func abortImport(moveId: String) async throws
         /// The remote device pauses its copy, checks nothing runs on it, and sends it.
         func prepareExport(moveId: String) async throws -> (data: Data, sha: String)
@@ -113,14 +126,14 @@ public enum LoginMove {
     public static func newID() -> String { UUID().uuidString.lowercased() }
 
     /// This device's login goes to the other device (Move to mybox, Keep on mybox).
-    public static func out(_ local: some Local, to remote: some Remote, moveId: String = newID()) async -> Outcome {
+    public static func out(_ local: some Local, to remote: some Remote, cli: String, moveId: String = newID()) async -> Outcome {
         guard await local.lock() else { return .failed(.busy) }
-        let outcome = await outLocked(local, remote, moveId)
+        let outcome = await outLocked(local, remote, cli, moveId)
         await local.unlock()
         return outcome
     }
 
-    private static func outLocked(_ local: some Local, _ remote: some Remote, _ moveId: String) async -> Outcome {
+    private static func outLocked(_ local: some Local, _ remote: some Remote, _ cli: String, _ moveId: String) async -> Outcome {
         let using = await local.chatsUsing()
         guard using == 0 else { return .failed(.inUse(using)) }
         let data: Data
@@ -128,6 +141,7 @@ public enum LoginMove {
             guard let read = try await local.read() else { return .failed(.notThere) }
             data = read
         } catch { return .failed(failure(error)) }
+        guard LoginCredential.complete(data, cli: cli) else { return .failed(.notALogin) }
         let sent = sha(data)
         do {
             try await remote.prepareImport(moveId: moveId, data: data, sha: sent)
@@ -148,24 +162,24 @@ public enum LoginMove {
         } catch {
             return .failed(failure(error), pending: await abortImport(remote, moveId))
         }
-        // From here the target's copy is the only one: it goes in place, now or when the link is back.
+        // From here the target's copy is the only one: it goes in place, now or when the link is
+        // back, and only then does its CLI read it.
         do {
-            try await remote.commitImport(moveId: moveId)
-            return .moved()
+            return .moved(signedIn: try await remote.commitImport(moveId: moveId))
         } catch {
             return .moved(pending: .commitImport(moveId: moveId))
         }
     }
 
     /// The other device's login comes here (Move back here, Keep here).
-    public static func back(_ local: some Local, from remote: some Remote, moveId: String = newID()) async -> Outcome {
+    public static func back(_ local: some Local, from remote: some Remote, cli: String, moveId: String = newID()) async -> Outcome {
         guard await local.lock() else { return .failed(.busy) }
-        let outcome = await backLocked(local, remote, moveId)
+        let outcome = await backLocked(local, remote, cli, moveId)
         await local.unlock()
         return outcome
     }
 
-    private static func backLocked(_ local: some Local, _ remote: some Remote, _ moveId: String) async -> Outcome {
+    private static func backLocked(_ local: some Local, _ remote: some Remote, _ cli: String, _ moveId: String) async -> Outcome {
         do {
             if try await local.read() != nil { return .failed(.alreadyThere) }
         } catch {
@@ -179,29 +193,27 @@ public enum LoginMove {
             return .failed(failure(error), pending: await abortExport(remote, moveId))
         }
         guard sha(got.data) == got.sha else { return .failed(.sentWrong, pending: await abortExport(remote, moveId)) }
+        guard LoginCredential.complete(got.data, cli: cli) else { return .failed(.notALogin, pending: await abortExport(remote, moveId)) }
         do {
             try await local.write(got.data)
         } catch {
             try? await local.delete()
             return .failed(failure(error), pending: await abortExport(remote, moveId))
         }
-        // What was written is what came, and the CLI here reads it signed in.
+        // What was written is what came (the file only: no CLI runs on it while the other holds one too).
         let written = try? await local.read()
         guard written.map(sha) == got.sha else {
             try? await local.delete()
             return .failed(.sentWrong, pending: await abortExport(remote, moveId))
         }
-        guard await local.signedIn() else {
-            try? await local.delete()
-            return .failed(.notSignedIn, pending: await abortExport(remote, moveId))
-        }
-        // From here this device's copy is the one: the other deletes its own, now or later.
+        // From here this device's copy is the one: the other deletes its own, now or later. Only
+        // once it has does the CLI here read it.
         do {
             try await remote.commitExport(moveId: moveId)
-            return .moved()
         } catch {
             return .moved(pending: .commitExport(moveId: moveId))
         }
+        return .moved(signedIn: await local.signedIn())
     }
 
     private static func abortImport(_ remote: some Remote, _ moveId: String) async -> Pending? {
@@ -251,24 +263,28 @@ public enum LoginMove {
             return .failed(failure(error), pending: await abortExport(remote, moveId))
         }
         guard sha(theirs.data) == theirs.sha else { return .failed(.sentWrong, pending: await abortExport(remote, moveId)) }
+        var wrote = false
         if (LoginCredential.freshness(theirs.data, cli: cli) ?? 0) > (LoginCredential.freshness(mine, cli: cli) ?? 0) {
-            // Theirs refreshed last: it's the live one, and replaces this device's.
+            // Theirs refreshed last: it's the live one, and replaces this device's (checked by its file only).
+            guard LoginCredential.complete(theirs.data, cli: cli) else { return .failed(.notALogin, pending: await abortExport(remote, moveId)) }
             do { try await local.write(theirs.data) } catch {
                 try? await local.write(mine)
                 return .failed(failure(error), pending: await abortExport(remote, moveId))
             }
             let written = try? await local.read()
-            guard written.map(sha) == theirs.sha, await local.signedIn() else {
+            guard written.map(sha) == theirs.sha else {
                 try? await local.write(mine)
-                return .failed(.notSignedIn, pending: await abortExport(remote, moveId))
+                return .failed(.sentWrong, pending: await abortExport(remote, moveId))
             }
+            wrote = true
         }
         do {
             try await remote.commitExport(moveId: moveId)
-            return .moved()
         } catch {
             return .moved(pending: .commitExport(moveId: moveId))
         }
+        // One copy left: the CLI here reads the one it now has.
+        return .moved(signedIn: wrote ? await local.signedIn() : nil)
     }
 
     /// The same sign-in is here and on the other device: it stays there. If this device's copy
@@ -295,8 +311,10 @@ public enum LoginMove {
         } catch {
             return .failed(failure(error), pending: await abortExport(remote, moveId))
         }
+        var signedIn: Bool?
         if (LoginCredential.freshness(mine, cli: cli) ?? 0) > (LoginCredential.freshness(theirs.data, cli: cli) ?? 0) {
-            // This device's is the live one: it replaces theirs (staged, checked) before this one goes.
+            // This device's is the live one: it replaces theirs (staged, checked by its file) before this one goes.
+            guard LoginCredential.complete(mine, cli: cli) else { return .failed(.notALogin, pending: await abortExport(remote, moveId)) }
             do {
                 try await remote.prepareImport(moveId: moveId, data: mine, sha: sha(mine))
             } catch {
@@ -308,7 +326,7 @@ public enum LoginMove {
             do { try await local.delete() } catch {
                 return .failed(failure(error), pending: await abortBoth(remote, moveId))
             }
-            do { try await remote.commitImport(moveId: moveId) } catch { return .moved(pending: .commitImport(moveId: moveId)) }
+            do { signedIn = try await remote.commitImport(moveId: moveId) } catch { return .moved(pending: .commitImport(moveId: moveId)) }
         } else {
             do { try await local.delete() } catch {
                 return .failed(failure(error), pending: await abortExport(remote, moveId))
@@ -317,9 +335,9 @@ public enum LoginMove {
         // Theirs runs again.
         do {
             try await remote.abortExport(moveId: moveId)
-            return .moved()
+            return .moved(signedIn: signedIn)
         } catch {
-            return .moved(pending: .abortExport(moveId: moveId))
+            return .moved(pending: .abortExport(moveId: moveId), signedIn: signedIn)
         }
     }
 
@@ -327,7 +345,7 @@ public enum LoginMove {
     public static func resend(_ pending: Pending, to remote: some Remote) async -> Bool {
         do {
             switch pending {
-            case .commitImport(let id): try await remote.commitImport(moveId: id)
+            case .commitImport(let id): _ = try await remote.commitImport(moveId: id)
             case .abortImport(let id): try await remote.abortImport(moveId: id)
             case .commitExport(let id): try await remote.commitExport(moveId: id)
             case .abortExport(let id): try await remote.abortExport(moveId: id)
@@ -366,6 +384,14 @@ public enum LoginCredential {
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         if cli == "codex" { return (object["tokens"] as? [String: Any])?["refresh_token"] as? String }
         return (object["claudeAiOauth"] as? [String: Any])?["refreshToken"] as? String
+    }
+
+    /// Whether the file is a complete login, read as a file only (no CLI): JSON, a non-empty
+    /// refresh token, and (Claude) its expiry. What a move checks while two copies exist.
+    public static func complete(_ data: Data, cli: String) -> Bool {
+        guard let token = refreshToken(data, cli: cli), !token.isEmpty else { return false }
+        if cli == "codex" { return true }
+        return freshness(data, cli: cli) != nil
     }
 
     /// When the access token expires (ms since 1970), Claude's; Codex's last refresh. The copy

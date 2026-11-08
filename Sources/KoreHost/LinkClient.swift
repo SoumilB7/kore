@@ -720,12 +720,12 @@ final class LinkClient {
         let moves = host.loginMoves
         let phase = args.phase.flatMap(MovePhase.init(rawValue:))
         switch (kind, phase) {
-        case (.accountImport, .prepare?):
+        case (.accountImport, .prepare?): sendRaw(StreamWire.encode(moves.importPrepare(args, id: id)))
+        case (.accountImport, .commit?):
             Task { [weak self] in
-                let result = await moves.importPrepare(args, id: id)
+                let result = await moves.importCommit(args, id: id)
                 self?.sendRaw(StreamWire.encode(result))
             }
-        case (.accountImport, .commit?): sendRaw(StreamWire.encode(moves.importCommit(args, id: id)))
         case (.accountImport, .abort?): sendRaw(StreamWire.encode(moves.importAbort(args, id: id)))
         case (.accountExport, .prepare?): sendRaw(StreamWire.encode(moves.exportPrepare(args, id: id)))
         case (.accountExport, .commit?): sendRaw(StreamWire.encode(moves.exportCommit(args, id: id)))
