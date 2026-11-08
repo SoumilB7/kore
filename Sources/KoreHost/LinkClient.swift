@@ -119,7 +119,9 @@ final class LinkClient {
             HostJournal.audit("connect", ["device": device.id.uuidString.lowercased(), "name": device.name, "route": route.rawValue, "control": control?.rawValue])
             if let wire = socket as? NetLinkWire, wire.resumed, wire.awaitingCursors {
                 // A resume: its cursors come first, then the welcome answers them. A client
-                // with none sends something else first; at most a second goes by.
+                // with none sends something else first; at most a second goes by. Until then
+                // nothing goes ahead of the welcome (`held`).
+                held = []
                 wire.cursorsSettled = { [weak self] in self?.welcomed() }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak wire] in
                     MainActor.assumeIsolated {
@@ -147,7 +149,30 @@ final class LinkClient {
         DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: wait)
     }
 
-    func send(_ message: LinkMessage) { socket.send(message) }
+    func send(_ message: LinkMessage) {
+        guard held == nil else { return hold(.message(message)) }
+        socket.send(message)
+    }
+
+    /// What's sent to a resume before its welcome: it can't place anything ahead of it, so it
+    /// waits and goes after it. A state change (`delta`) is dropped: the welcome's snapshot is
+    /// newer. Its leaving goes at once.
+    private var held: [Held]?
+    private enum Held {
+        case message(LinkMessage)
+        case raw(Data)
+    }
+
+    private func hold(_ item: Held) {
+        switch item {
+        case .message(.bye):
+            if case .message(let message) = item { socket.send(message) }
+        case .message(.delta):
+            break
+        default:
+            held?.append(item)
+        }
+    }
 
     // MARK: A phone's own log (1.13)
 
@@ -210,7 +235,10 @@ final class LinkClient {
 
     func streams(_ chatId: String) -> Bool { streaming.contains(chatId) }
 
-    func sendRaw(_ data: Data) { socket.send(data) }
+    func sendRaw(_ data: Data) {
+        guard held == nil else { return hold(.raw(data)) }
+        socket.send(data)
+    }
 
     /// Bytes waiting for this client: a terminal reads on only below `HostSocket.lowWater`.
     var backlog: Int { socket.backlog }
@@ -494,6 +522,16 @@ final class LinkClient {
 
     /// The link's welcome, snapshot and attention, once it's proven.
     private func welcomed() {
+        let waited = held ?? []
+        held = nil
+        defer {
+            for item in waited {
+                switch item {
+                case .message(let message): socket.send(message)
+                case .raw(let data): socket.send(data)
+                }
+            }
+        }
         let control = control ?? .watch
         send(.welcome(host.welcome(control: control)))
         rev += 1

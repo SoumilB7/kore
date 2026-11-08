@@ -95,6 +95,27 @@ struct NetPhoneHostTests {
         #expect(Array(again.types.prefix(3)) == ["welcome", "snapshot", "attn.state"])
     }
 
+    @Test func aResumeHearsNothingBeforeItsWelcome() async throws {
+        let rig = try await NetRig.make()
+        defer { rig.finish() }
+        let host = rig.rig.host
+        let mac = Device("mac")
+        try rig.allow(mac)
+        let first = try dial(rig, mac)
+        try await first.next("attn.state")
+        let ticket = try #require(first.peer?.ticket)
+        let firstClient = try #require(host.provenClients.first)
+        // A resume whose cursors haven't come yet: the box holds its welcome for them.
+        let again = try dial(rig, mac, resume: .init(ticket: ticket, cursors: [:]))
+        while host.provenClients.first.map({ $0 === firstClient }) ?? true { await Task.yield() }
+        // A change meanwhile goes to every client: not ahead of this one's welcome.
+        host.broadcast(windows: true, chats: [])
+        _ = again.ping()
+        try await again.next("attn.state")
+        #expect(again.peer?.resumed == true)
+        #expect(Array(again.types.prefix(3)) == ["welcome", "snapshot", "attn.state"])
+    }
+
     @Test func anOwnerMacMergesItsPhonesAndLeavesTheRest() async throws {
         let rig = try await NetRig.make()
         defer { rig.finish() }
