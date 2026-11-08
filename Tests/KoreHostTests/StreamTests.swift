@@ -389,6 +389,53 @@ struct StreamTests {
         #expect(rig.host.chat(hc.id) == nil && rig.host.closedChats.map(\.id) == [hc.id])
     }
 
+    /// A follow's catch-up ends with a frame marked live, empty when there's nothing to catch up;
+    /// a CLI's commands end in the log with it, at its stop and after a box that stopped without
+    /// saying so, so a client reading the log from 0 never shows one running for ever.
+    @Test func aCatchUpEndsLiveAndNoCommandOutlivesItsCLI() async throws {
+        let backend = StreamStandIn()
+        let (rig, grant, hc) = try rig(backend)
+        defer { rig.finish() }
+        let client = try await StreamClient(rig, grant: grant)
+        client.send(ChatFollow(chatId: hc.id, after: nil, log: nil))
+        try await until { client.flat.contains { if case .controlsLoaded = $0 { true } else { false } } }
+        // Nothing held yet: the catch-up is one empty frame, the reset, marked live.
+        #expect(client.events.first?.reset == true && client.events.first?.live == true && client.events.first?.items.isEmpty == true)
+        #expect(client.events.dropFirst().allSatisfy { $0.live == nil })
+
+        // A command its CLI runs, and the CLI stops (the tab closed): the command ends with it.
+        let watcher = ActiveCommand(id: "bg1", kind: .monitor, title: "watch", startedAt: .now, owner: .main)
+        backend.sink.yield(.commandStarted(watcher))
+        try await until { hc.chat?.commands.summary.total == 1 }
+        #expect(try await client.call(hc.id, .close).ok)
+        func ended(_ id: String, _ items: [StreamItem]) -> Bool {
+            items.contains { if case .commandEnded(id, .ended, _)? = $0.e { true } else { false } }
+        }
+        #expect(ended("bg1", await hc.stream.since(nil, log: nil).items))
+
+        // Following again from what it holds: a frame with nothing new, still marked live.
+        let log = try #require(client.events.last?.log)
+        let last = hc.stream.seq
+        client.close()
+        _ = rig.host.reopen(hc.id)
+        let again = try await StreamClient(rig, grant: grant)
+        again.send(ChatFollow(chatId: hc.id, after: last, log: log))
+        try await until { again.events.contains { $0.live == true } }
+        #expect(again.items.isEmpty && again.events.allSatisfy { $0.reset != true })
+        again.close()
+
+        // A log its box stopped mid-turn with a command running: both end when it's read again.
+        let closing = try #require(rig.host.chat(hc.id))
+        closing.stream.add(.turnStarted("t9", origin: .user, at: .now), by: nil)
+        closing.stream.add(.commandStarted(ActiveCommand(id: "bg2", kind: .shell, title: "loop", startedAt: .now, owner: .main)), by: nil)
+        closing.stream.flush()
+        rig.restart()
+        let back = try #require(rig.host.chat(hc.id))
+        let items = await back.stream.since(nil, log: nil).items
+        #expect(ended("bg2", items) && !ended("bg1", Array(items.suffix(2))))
+        #expect(items.suffix(2).contains { if case .turnFinished(nil, .interrupted, _)? = $0.e { true } else { false } })
+    }
+
     @Test func anAnswerFitsOneFrame() {
         var value = CallValue()
         value.text = String(repeating: "x", count: 2_000_000)

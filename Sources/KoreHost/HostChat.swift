@@ -315,6 +315,9 @@ package final class HostChat {
         projectWaiting(chat)
         // A turn its CLI takes along ends here, so no client keeps it running.
         if chat.isBusy { stream.add(.turnFinished(nil, .interrupted, duration: nil), by: nil) }
+        // Its background commands end with it, as a CLI's exit ends them: none shows running for
+        // ever to a client reading the log later.
+        for command in chat.commands.all where command.isLive { stream.add(.commandEnded(id: command.id, .ended, at: Date()), by: nil) }
         stream.flush()
         chat.close(reason: "idle")
         self.chat = nil

@@ -51,6 +51,12 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     private var assembler = StreamAssembler()
     /// Something was shown: a history from the box from now on rebuilds it.
     private var shown = false
+    /// The turn what was shown left open (nil when none).
+    private var openTurn: TurnID?
+    /// A follow's catch-up comes in until the frame the box marks live (`HostConnection.marksLive`):
+    /// meanwhile its events wait here, and go to the chat at once, as its history.
+    private var catchingUp = true
+    private var backlog: [ChatEvent] = []
     private var starting: Task<Void, Error>?
     private var closed = false
     /// Sync level 2: a mirror on this Mac of a chat that lives on the box. It shows this Mac's
@@ -149,13 +155,13 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             onCreated?(id)
         }
         guard let chatId, !closed else { return }
-        // The copy first: its history and what followed, as they came.
+        // The copy first, as the chat's history: shown at once, never played as live turns.
         let cache = connection.cache
         let copy = await Task.detached { cache.events(chat: chatId) }.value
         if let id = copy.log {
             log = id
             seq = copy.items.last?.s
-            show(assembler.take(copy.items))
+            past(assembler.take(copy.items))
         }
         if let meta = connection.chats[chatId] { self.meta(meta) }
         if mirror { return }
@@ -186,6 +192,8 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// A frame shown; `keep`: written to this Mac's copy too (a mirror's came from it).
     private func take(_ frame: ChatEvents, keep: Bool) {
         guard let chatId, !closed else { return }
+        // The follow's catch-up is in: from here on it's live.
+        defer { if frame.live == true { caughtUp() } }
         if frame.reset == true {
             // The box's log started again, or this copy was behind or ahead of it: what it holds
             // replaces what's kept. Of the same log, only what this copy didn't have is shown (the
@@ -206,7 +214,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             log = frame.log
             seq = frame.seq ?? seq
             if keep { connection.cache.restart(log: frame.log, items: frame.items, chat: chatId) }
-            show(list)
+            arrive(list)
             return
         }
         guard frame.log == log else { return }
@@ -221,7 +229,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             guard let event = assembler.take(item), !ownRow(item, event) else { continue }
             list.append(event)
         }
-        show(list)
+        arrive(list)
     }
 
     /// This chat's own row (its message, its answer), shown here already. The box marks it with
@@ -249,7 +257,91 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         }
         guard !shownList.isEmpty else { return }
         shown = true
+        track(shownList)
         emit(shownList.map(boxed))
+    }
+
+    private func track(_ list: [ChatEvent]) {
+        for event in list {
+            switch event {
+            case .turnStarted(let id, _, _): openTurn = id
+            case .turnFinished, .exited, .replayed, .historyReplaced: openTurn = nil
+            default: break
+            }
+        }
+    }
+
+    /// Frames' events: live, or the catch-up's while it comes in.
+    private func arrive(_ list: [ChatEvent]) {
+        if catchingUp, !mirror, connection.marksLive { backlog += list } else { show(list) }
+    }
+
+    /// The catch-up is in (or the link went mid-way): what it brought is the chat's past.
+    private func caughtUp() {
+        catchingUp = false
+        let list = backlog
+        backlog = []
+        past(list)
+    }
+
+    /// The chat's past (its copy here, a follow's catch-up): one history the chat takes at once
+    /// (one render, no turn played as live, no Stop, nothing counted twice); a CLI's own history
+    /// in it, and a correction, as themselves. Only a turn the box says runs now goes on live,
+    /// from its start; one it no longer runs ends here, as the box's log ends one its CLI took
+    /// along.
+    private func past(_ list: [ChatEvent]) {
+        let running = chatId.flatMap { connection.chats[$0] }?.running == true
+        var history = list[...]
+        var live: ArraySlice<ChatEvent> = []
+        if running, unfinished(from: openTurn, in: list) != nil {
+            // From the running turn's start; all of these when it started before them.
+            let from = list.lastIndex { if case .turnStarted = $0 { true } else { false } } ?? 0
+            (history, live) = (list[..<from], list[from...])
+        }
+        var segment: [ChatEvent] = []
+        func flush() {
+            track(segment)
+            let kept = segment.filter { event in
+                guard case .requestUsage(let request) = event else { return true }
+                count(request)
+                return false
+            }
+            segment = []
+            guard !kept.isEmpty else { return }
+            shown = true
+            emit([.replayed(kept.map(boxed))])
+        }
+        for event in history {
+            switch event {
+            case .replayed(let earlier):
+                // A CLI's own history (a fork's start) stays one: what follows it shows after it.
+                flush()
+                segment = earlier
+                flush()
+            case .historyReplaced:
+                flush()
+                show([event])
+            default: segment.append(event)
+            }
+        }
+        if !running, let turn = unfinished(from: openTurn, in: segment) {
+            segment.append(.turnFinished(turn, .interrupted, duration: nil))
+        }
+        flush()
+        show(Array(live))
+    }
+
+    /// The turn left open after `list`, from `open` before it.
+    private func unfinished(from open: TurnID?, in list: some Sequence<ChatEvent>) -> TurnID? {
+        var open = open
+        for event in list {
+            switch event {
+            case .turnStarted(let id, _, _): open = id
+            case .turnFinished, .exited: open = nil
+            default: break
+            }
+        }
+        return open
     }
 
     /// One request, weighed as the Mac's index weighs its own, under the box's chat. Copies (a
@@ -359,7 +451,16 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// the chat itself shows nothing, and a send meanwhile waits for the box. Back: the box may have
     /// started again, so the tier is said to it again rather than taken from it.
     package func linked(_ up: Bool) {
-        if up { seen.arsenal = nil }
+        if up {
+            seen.arsenal = nil
+            // Its follow is asked again: a catch-up comes first.
+            catchingUp = true
+        } else if catchingUp, !backlog.isEmpty {
+            // Gone mid-way: what came is shown, as history, and the rest comes with the next.
+            let list = backlog
+            backlog = []
+            past(list)
+        }
     }
 
     private func emit(_ list: [ChatEvent]) {

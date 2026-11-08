@@ -87,19 +87,22 @@ package struct ChatCallResult: Codable, Sendable {
 }
 
 /// Box to client: a chat's events, in order. `reset`: what the client holds of the chat is
-/// replaced by these (they start at the log's start).
+/// replaced by these (they start at the log's start). `live`: a follow's catch-up ends with this
+/// frame (it may hold no items): what it brought is the chat's past, and what follows is live.
 package struct ChatEvents: Codable, Sendable {
     package var t = "chat.events"
     package var chatId: String
     package var log: String
     package var reset: Bool?
     package var items: [StreamItem]
+    package var live: Bool?
 
-    package init(chatId: String, log: String, reset: Bool? = nil, items: [StreamItem]) {
+    package init(chatId: String, log: String, reset: Bool? = nil, items: [StreamItem], live: Bool? = nil) {
         self.chatId = chatId
         self.log = log
         self.reset = reset
         self.items = items
+        self.live = live
     }
 
     /// The last seq it brings the client to.
@@ -240,9 +243,9 @@ package enum StreamWire {
     }
 
     /// One `chat.events` frame of items already encoded.
-    package static func frame(chatId: String, log: String, reset: Bool, encoded items: [Data]) -> Data {
+    package static func frame(chatId: String, log: String, reset: Bool, live: Bool = false, encoded items: [Data]) -> Data {
         // `{"chatId":…,"items":[],…}` with the items spliced in.
-        var data = StreamWire.encode(ChatEvents(chatId: chatId, log: log, reset: reset ? true : nil, items: []))
+        var data = StreamWire.encode(ChatEvents(chatId: chatId, log: log, reset: reset ? true : nil, items: [], live: live ? true : nil))
         if let range = data.range(of: Data("\"items\":[]".utf8)) {
             var list = Data("\"items\":[".utf8)
             for (i, item) in items.enumerated() {

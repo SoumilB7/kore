@@ -206,6 +206,8 @@ final class BoxBinding {
     /// A box chat in front here: its tab, made when the window doesn't show it yet (a chat that
     /// came back from this Mac as a new one).
     func show(_ chatId: String) {
+        // Asked for by name (a paired folder's History opened it again): no longer closed here.
+        closedIds.remove(chatId)
         adoptChats()
         guard let workspace, let tab = workspace.tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == chatId }) else { return }
         workspace.select(tab)
@@ -297,7 +299,8 @@ final class BoxBinding {
     private var windowId: String? { connection.windowId(of: folder) }
 
     /// The folder's history on the box, for the History popup: its closed chats (by box chat id)
-    /// and, from 1.9, the past sessions its CLIs keep there, archived ones too.
+    /// and, from 1.9, the past sessions its CLIs keep there, archived ones too, and its open chats
+    /// (a row of one brings its tab forward).
     func closedHistory() async -> [SessionSummary] {
         guard let window = windowId else { return [] }
         let keeps = connection.keepsHistory
@@ -315,13 +318,29 @@ final class BoxBinding {
     var historyLocked: String? { connection.keepsHistory ? nil : "Update kore-host on \(NodeNames.name(alias)) to rename or archive here" }
 
     /// A past chat back as a box chat (a closed one, or a session its CLI keeps), for a tab here.
+    /// One a tab here shows already (an open chat's row, or a session an open chat holds) is that
+    /// tab's chat: never a second chat following the same box chat.
     func openSession(_ session: SessionSummary) async -> Chat? {
+        if let shown = shownChat(session.id) { return shown }
         let provider = Registry.provider(for: session.agent)
         guard connection.keepsHistory else { return await reopen(session.id, provider: provider, title: session.title) }
         let args = ControlArgs(windowId: windowId, title: session.title, provider: provider.id, sessionId: session.id)
         guard case .success(let result) = await connection.history(.historyOpen, args), let chatId = result.chatId else { return nil }
         closedIds.remove(chatId)
+        if let shown = shownChat(chatId) { return shown }
         return chat(provider, id: chatId, title: session.title)
+    }
+
+    /// The chat a tab of this window shows (on its own or on a board) for a box chat id, or for
+    /// the CLI session it holds.
+    func shownChat(_ id: String) -> Chat? {
+        for tab in workspace?.tabs ?? [] where tab.agent == nil {
+            for chat in [tab.chat].compactMap({ $0 }) + (tab.board?.orderedChats ?? []) {
+                guard let services = chat.services as? BoxChatServices, !services.mirror else { continue }
+                if services.chatId == id || chat.sessionId == id { return chat }
+            }
+        }
+        return nil
     }
 
     /// Renames or archives a past chat on the box; false when the box refused.
@@ -342,7 +361,12 @@ final class BoxBinding {
         Task {
             // Through the chat's own call: the box closes it for good, so it doesn't come back.
             let result = await connection.call(id, .close)
-            if result.ok || result.code == .goneChat { connection.cache.forget(chat: id) } else { closedIds.remove(id) }
+            // Its copy stays (a few closed ones are kept): a reopen catches up only what's new.
+            if result.ok || result.code == .goneChat {
+                connection.cache.closed(chat: id, open: Set(connection.chats.keys))
+            } else {
+                closedIds.remove(id)
+            }
         }
     }
 }

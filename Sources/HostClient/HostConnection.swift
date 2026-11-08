@@ -588,6 +588,9 @@ package final class HostConnection {
         return listed
     }
 
+    /// The box marks where a follow's catch-up ends (`ChatEvents.live`): the chat takes it as history.
+    package var marksLive: Bool { caps.contains("live") }
+
     /// The box keeps a folder's history itself (1.9): opened, renamed and archived from here.
     package var keepsHistory: Bool { caps.contains("history") }
 

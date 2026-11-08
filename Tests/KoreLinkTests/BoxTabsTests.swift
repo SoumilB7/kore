@@ -73,10 +73,11 @@ struct BoxTabsTests {
         #expect(ids(window) == [first.id, second.id])
         #expect(window.tabs.last?.chat?.title == "From the phone")
 
-        // History: the folder's closed chat and its CLI's past session, none of the parent's.
+        // History: the folder's open chat, its closed one and its CLI's past session, none of the
+        // parent's.
         host.close(second)
         let history = await box.closedHistory()
-        #expect(Set(history.map(\.id)) == [second.id, "s-past"])
+        #expect(Set(history.map(\.id)) == [first.id, second.id, "s-past"])
     }
 
     @Test func aBoxFolderNamesItsWindowAsTheBoxDoes() {

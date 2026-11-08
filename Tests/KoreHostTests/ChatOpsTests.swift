@@ -139,6 +139,53 @@ struct ChatOpsTests {
         #expect(try await apply(rig, .chatFork, ControlArgs(chatId: hc.id, entryId: "nope"), .act).code == .invalid)
     }
 
+    /// The folder's open chats are in its history too, as the Mac's own History lists them: marked
+    /// open, as recent as their session's last write (else their last use), for both CLIs; their
+    /// sessions never listed again as past ones. Opening one, or the session it holds, is that
+    /// chat: nothing new is made.
+    @Test func historyListsOpenChatsAsOpenWithClosedAndPastOnes() async throws {
+        let rig = try HostRig()
+        try rig.host.start()
+        rig.host.services.backend = { _, _ in StreamStandIn() }
+        defer { rig.finish() }
+        let window = HostDaemon.windowID(rig.folder.path)
+        let at = { (s: Double) in Date(timeIntervalSince1970: 1_700_000_000 + s) }
+        let claude = try #require(rig.host.newChat(folder: rig.folder.path, provider: "claude", modelId: nil, title: "Slack", session: "s1"))
+        let codex = try #require(rig.host.newChat(folder: rig.folder.path, provider: "codex", modelId: nil, title: "Codex open", session: "th1"))
+        let fresh = try #require(rig.host.newChat(folder: rig.folder.path, provider: "codex", modelId: nil, title: "Fresh"))
+        let closed = try #require(rig.host.newChat(folder: rig.folder.path, provider: "claude", modelId: nil, title: "Closed", session: "s2"))
+        rig.host.close(closed)
+        rig.sessions["claude"] = [
+            SessionSummary(id: "s1", agent: .claude, title: "Slack (CLI)", updated: at(100)),
+            SessionSummary(id: "s2", agent: .claude, title: "Closed (CLI)", updated: at(150)),
+            SessionSummary(id: "past1", agent: .claude, title: "Old work", updated: at(0)),
+        ]
+        rig.sessions["codex"] = [
+            SessionSummary(id: "th1", agent: .codex, title: "Codex (CLI)", updated: at(200)),
+            SessionSummary(id: "th0", agent: .codex, title: "Old codex", updated: at(300)),
+        ]
+        let ms = { (d: Date) in Int64(d.timeIntervalSince1970 * 1000) }
+
+        let listed = await rig.host.history(windowId: window, query: nil, archived: false)
+        #expect(listed.map(\.id) == [closed.id, fresh.id, "th0", codex.id, claude.id, "past1"])
+        #expect(listed.filter(\.open).map(\.id) == [fresh.id, codex.id, claude.id])
+        #expect(listed.map(\.title) == ["Closed", "Fresh", "Old codex", "Codex open", "Slack", "Old work"])
+        #expect(listed.map(\.provider) == ["claude", "codex", "codex", "codex", "claude", "claude"])
+        let updated = Dictionary(uniqueKeysWithValues: listed.map { ($0.id, $0.updatedAt) })
+        #expect(updated[claude.id] == ms(at(100)) && updated[codex.id] == ms(at(200)) && updated[fresh.id] == ms(fresh.lastUsed))
+        // An open chat is never archived, and a query finds it by its title.
+        #expect(await rig.host.history(windowId: window, query: nil, archived: true).isEmpty)
+        #expect(await rig.host.history(windowId: window, query: "slack", archived: false).map(\.id) == [claude.id])
+
+        // Opened by its row, or by the session it holds: the open chat itself, nothing made.
+        let count = rig.host.chats.count
+        for (session, chat) in [(claude.id, claude), ("s1", claude), ("th1", codex)] {
+            let opened = try await apply(rig, .historyOpen, ControlArgs(windowId: window, sessionId: session), .act)
+            #expect(opened.ok && opened.chatId == chat.id && opened.windowId == window)
+        }
+        #expect(rig.host.chats.count == count)
+    }
+
     @Test func historyListsClosedChatsAndPastSessionsAndKeepsRenamesAndArchives() async throws {
         let backend = StreamStandIn()
         let (rig, hc) = try rig(backend)
@@ -181,7 +228,8 @@ struct ChatOpsTests {
         let opened = try await apply(rig, .historyOpen, ControlArgs(windowId: window, provider: "claude", sessionId: "past1"), .act)
         let resumed = try #require(opened.chatId.flatMap(rig.host.chat))
         #expect(resumed.record.session == "past1" && resumed.record.title == "Older work" && resumed.record.provider == "claude")
-        #expect(await rig.host.history(windowId: window, query: nil, archived: false).isEmpty)
+        // Listed now as the open chat it is, not as a past session.
+        #expect(await rig.host.history(windowId: window, query: nil, archived: false).map { "\($0.id) \($0.open)" } == ["\(resumed.id) true"])
         let back = try await apply(rig, .historyOpen, ControlArgs(sessionId: hc.id), .act)
         #expect(back.chatId == hc.id && rig.host.chat(hc.id)?.title == "Closed one")
         #expect(try await apply(rig, .historyOpen, ControlArgs(windowId: window, provider: "claude", sessionId: "nope"), .act).code == .goneSession)

@@ -37,6 +37,8 @@ final class LinkClient {
         var items: ArraySlice<StreamItem>
         /// Its start is still being read off the main thread: live items wait behind it.
         var loading = false
+        /// A follow's: its last frame says the client is live from there (`ChatEvents.live`).
+        var follow = false
     }
     /// The explorer's open folders, watched for this client (`fs.watch`).
     private var watches: FolderWatches?
@@ -192,12 +194,14 @@ final class LinkClient {
     /// live items for that chat wait behind it.
     func events(_ hc: HostChat, _ items: [StreamItem], reset: Bool) {
         guard reset || !items.isEmpty else { return }
+        // A follow's catch-up given way to a reset still ends with its mark.
+        let follow = reset && catchUps.contains { $0.chatId == hc.id && !$0.loading && $0.follow }
         if reset { catchUps.removeAll { $0.chatId == hc.id && !$0.loading } }
         if let at = catchUps.firstIndex(where: { $0.chatId == hc.id }) {
             catchUps[at].items += items
             if reset, !catchUps[at].loading { catchUps[at].reset = true }
         } else {
-            catchUps.append(CatchUp(chatId: hc.id, log: hc.stream.id, reset: reset, items: items[...]))
+            catchUps.append(CatchUp(chatId: hc.id, log: hc.stream.id, reset: reset, items: items[...], follow: follow))
         }
         sendCatchUps()
     }
@@ -205,7 +209,7 @@ final class LinkClient {
     /// A follow's catch-up is being read: live items for the chat wait until it's in.
     func catchUpStarts(_ chatId: String, log: String) {
         catchUps.removeAll { $0.chatId == chatId }
-        catchUps.append(CatchUp(chatId: chatId, log: log, reset: false, items: [], loading: true))
+        catchUps.append(CatchUp(chatId: chatId, log: log, reset: false, items: [], loading: true, follow: true))
     }
 
     /// The catch-up read: it goes first, then what came live meanwhile that it doesn't hold.
@@ -233,7 +237,7 @@ final class LinkClient {
                 size += data.count + 1
                 next.items = next.items.dropFirst()
             }
-            socket.send(StreamWire.frame(chatId: next.chatId, log: next.log, reset: next.reset, encoded: part))
+            socket.send(StreamWire.frame(chatId: next.chatId, log: next.log, reset: next.reset, live: next.follow && next.items.isEmpty, encoded: part))
             if !next.items.isEmpty {
                 next.reset = false
                 catchUps.insert(next, at: at)

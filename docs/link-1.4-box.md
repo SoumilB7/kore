@@ -37,7 +37,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
   (kore-host can't run there, or isn't there).
 - `welcome`: `proto {1,11}`, `host {name, koreVersion (kore-host's version), kind: "box"}`,
   `policy {sendMaxLevel: 4, control: "full"|"standard"}` (`full` for a full grant),
-  `caps ["tx","attn","commands","control","box"]`, plus `"stream"` for a full grant (1.5), `"move"`
+  `caps ["tx","attn","commands","control","box"]`, plus `"stream"` and `"live"` (a follow's catch-up marks its end) for a full grant (1.5), `"move"`
   for a full grant (1.10) and
   `"history"` for an act or full grant (1.9). For a
   full grant each of `providers[]` carries `calls`: the `chat.call` types the box takes for that
@@ -178,9 +178,14 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
 - `chat.follow {chatId, after?, log?}`: send this chat's events after seq `after` of log `log`.
   The box answers with `chat.events`. A client that names no log, another log, or a seq outside
   what the box keeps (snapshot required) gets the whole kept log, its first frame marked `reset`:
-  what it held is replaced. `chat.unfollow {chatId}` stops them. An unknown chat: `result
+  what it held is replaced. With the `live` cap, the catch-up's last frame (empty when nothing
+  was new) is marked `live: true`: what came up to it is the chat's past, which Kore takes as one
+  history (with its own copy, shown first), and only what follows is live. A turn the past leaves
+  open goes on live from its start only if the chat's meta says `running`; else it ends there.
+  Kore keeps the copies of the last 10 chats closed on it, so a reopen catches up only what's new.
+  `chat.unfollow {chatId}` stops them. An unknown chat: `result
   {id: "chat.follow:<chatId>", ok: false, code: "gone.chat"}`.
-- `chat.events {chatId, log, reset?, items: [{s, e?, open?, close?, by?}]}`: `s` is the item's
+- `chat.events {chatId, log, reset?, live?, items: [{s, e?, open?, close?, by?}]}`: `s` is the item's
   seq, rising by one per item within a log. `e` is one `ChatEvent`; a history (`replayed`,
   `historyReplaced`) is sent piece by piece, `open: "replayed"|"historyReplaced"`, its events,
   then `close: true`. `by` names the grant whose own `chat.call` made a row (a message's
@@ -200,7 +205,8 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
   its session, and the box doesn't send or keep that again; the log starts again (a new id, a
   `reset` to followers) only when a rollback cuts the history or a resumed history finds the log
   past 16 MiB. A box that stopped mid-turn ends the turn in the log (`turnFinished`,
-  `interrupted`) when it next reads it, and a CLI stopped mid-turn does the same.
+  `interrupted`) when it next reads it, and a CLI stopped mid-turn does the same; the commands
+  still running in either end with it (`commandEnded`, `ended`).
 
 ### Calls
 
@@ -509,11 +515,13 @@ keeps none of it after.
 ### History
 
 `history.list {id, windowId, query?, archived, offset}` answers act and full grants (1.8: full
-only), with `history.page`: the folder's closed chats, and the past sessions each CLI on the box
-keeps for the folder (Claude's from its files, Codex's through its app-server, which starts only
-for the list) that aren't a box chat's own; `archived: true` lists only the archived ones, else
-only the others. Newest first, 50 a page. A past session's `id` is its CLI's session id, a closed
-chat's its box chat id.
+only), with `history.page`: the folder's open chats (`open: true`, as recent as their CLI
+session's last write, else their last use), its closed chats, and the past sessions each CLI on
+the box keeps for the folder (Claude's from its files, Codex's through its app-server, which starts
+only for the list) that aren't a box chat's own; `archived: true` lists only the archived ones
+(never an open chat), else only the others. Newest first, 50 a page. A past session's `id` is its
+CLI's session id, an open or closed chat's its box chat id. Opening an open chat, or a session one
+holds, answers with that chat and makes nothing.
 
 | `type` | fields | |
 |---|---|---|

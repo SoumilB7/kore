@@ -188,6 +188,27 @@ package final class HostCache: Sendable {
         queue.async { [self] in try? FileManager.default.removeItem(at: log(chatId)) }
     }
 
+    /// How many closed chats' copies are kept, so reopening one catches up only what's new.
+    package static let closedKept = 10
+
+    /// A chat's tab closed: its copy stays, for a reopen. Of the chats not in `open`, only the
+    /// `kept` copies written last stay.
+    package func closed(chat chatId: String, open: Set<String>, kept: Int = HostCache.closedKept) {
+        queue.async { [self] in
+            let fm = FileManager.default
+            let keys: [URLResourceKey] = [.contentModificationDateKey]
+            let logs = (try? fm.contentsOfDirectory(at: chats, includingPropertiesForKeys: keys)) ?? []
+            let openNames = Set(open.map { Self.safe($0) + ".log" })
+            let closed = logs.filter { $0.pathExtension == "log" && !openNames.contains($0.lastPathComponent) }
+            let newest = closed.sorted {
+                let a = (try? $0.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
+                let b = (try? $1.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
+                return a > b
+            }
+            for url in newest.dropFirst(max(kept, 0)) { try? fm.removeItem(at: url) }
+        }
+    }
+
     /// Waits for the writes queued so far (tests, and before reading back).
     package func flush() { queue.sync {} }
 

@@ -316,6 +316,117 @@ struct BoxParityTests {
         again.release()
     }
 
+    /// A follow from 0 (a reopened chat, nothing held here) brings the chat's past: a turn its
+    /// log leaves open is history unless the box says it runs, and only what comes live after
+    /// the catch-up starts one. A turn the box does run stays running.
+    @Test func aFollowFromZeroNeverLeavesATurnRunning() async throws {
+        let rig = try BoxRig()
+        defer { rig.finish() }
+        let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: "claude", modelId: nil))
+        // Its log: a turn its CLI took along without an end (no CLI runs for it now).
+        for event: ChatEvent in [
+            .userMessage(text: "hi", attachments: [], id: "m1"), .turnStarted("t1", origin: .user, at: .now), .text("b1", .answer, "half"),
+        ] { hc.stream.add(event, by: nil) }
+        let connection = rig.connection()
+        connection.retain()
+        defer { connection.release() }
+        #expect(await until(5) { connection.isOnline })
+        let (chat, _) = rig.chat(connection, id: hc.id)
+        await chat.startOnce()
+        #expect(await until(5) { rows(chat, .answer) == ["half"] })
+        #expect(await until { !chat.isBusy && !chat.status.isRunning })
+        // Live after the catch-up: a turn starts and ends as the box says.
+        hc.stream.add(.turnStarted("t2", origin: .user, at: .now), by: nil)
+        #expect(await until { chat.isBusy })
+        hc.stream.add(.turnFinished("t2", .completed, duration: nil), by: nil)
+        #expect(await until { !chat.isBusy })
+        chat.close()
+
+        // A turn the box's CLI is running now: a follow from 0 keeps it running.
+        let running = try #require(rig.host.live(hc))
+        await running.startOnce()
+        #expect(await until(5) { !rig.made.isEmpty })
+        rig.cli.sink.yield(.turnStarted("t3", origin: .user, at: .now))
+        #expect(await until { hc.running })
+        let other = rig.connection()
+        other.retain()
+        defer { other.release() }
+        #expect(await until(5) { other.isOnline && other.chats[hc.id]?.running == true })
+        let (watching, _) = rig.chat(other, id: hc.id)
+        await watching.startOnce()
+        rig.cli.sink.yield(.text("b3", .answer, "working"))
+        #expect(await until(5) { rows(watching, .answer).last == "working" })
+        #expect(watching.isBusy)
+        rig.cli.sink.yield(.turnFinished("t3", .completed, duration: nil))
+        #expect(await until { !watching.isBusy })
+        watching.close()
+    }
+
+    /// A long box chat closed and opened again (from History): its past comes as one history,
+    /// rendered once, never played as live turns (no running state, no Stop, nothing for the
+    /// title row to step through), and the composer works at once. A reopen keeps this Mac's
+    /// copy, so only what's new is caught up.
+    @Test func aLongChatClosedAndReopenedIsOneHistory() async throws {
+        let rig = try BoxRig()
+        defer { rig.finish() }
+        let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: "claude", modelId: nil))
+        let turns = 1000
+        for i in 0..<turns {
+            for event: ChatEvent in [
+                .userMessage(text: "q\(i)", attachments: [], id: "m\(i)"), .turnStarted("t\(i)", origin: .user, at: .now),
+                .text("b\(i)", .answer, "a\(i)"), .turnFinished("t\(i)", .completed, duration: nil),
+            ] { hc.stream.add(event, by: nil) }
+        }
+        #expect(hc.stream.seq >= 4 * turns)
+        let connection = rig.connection()
+        connection.retain()
+        defer { connection.release() }
+        #expect(await until(5) { connection.isOnline && connection.marksLive })
+
+        /// A Mac chat on it: what its backend gave it, and whether it was ever busy after an event.
+        func open() async -> (Chat, () -> [ChatEvent], () -> Bool) {
+            let (chat, _) = rig.chat(connection, id: hc.id)
+            var raw: [ChatEvent] = []
+            var everBusy = false
+            chat.backendTap = { raw.append($0) }
+            (chat.services as? HostServices)?.onEvent = { chat, _ in everBusy = everBusy || chat.isBusy || chat.status.isRunning }
+            await chat.startOnce()
+            return (chat, { raw }, { everBusy })
+        }
+        func count(_ events: [ChatEvent], _ match: (ChatEvent) -> Bool) -> Int { events.count(where: match) }
+        let started = { (e: ChatEvent) in if case .turnStarted = e { true } else { false } }
+        let history = { (e: ChatEvent) in if case .replayed = e { true } else { false } }
+
+        // Nothing held here: the whole log, one history.
+        let (first, raw, busy) = await open()
+        #expect(await until(5) { rows(first, .answer).count == turns })
+        #expect(count(raw(), history) == 1 && count(raw(), started) == 0 && !busy() && !first.isBusy)
+        // The composer works at once.
+        #expect(first.sendFromLink("next"))
+        #expect(await until(5) { rows(first, .answer).last == "Hi: next" && !first.isBusy })
+        connection.cache.flush()
+
+        // Closed (the box closes it, this Mac keeps its copy), then opened again from History.
+        first.close()
+        #expect((await connection.call(hc.id, .close)).ok)
+        connection.cache.closed(chat: hc.id, open: [])
+        connection.cache.flush()
+        #expect(connection.cache.events(chat: hc.id).items.count >= 4 * turns)
+        let back = rig.host.apply(.control(.historyOpen, ControlArgs(sessionId: hc.id)), id: "h1", control: .full) { _ in }
+        #expect(back?.ok == true && back?.chatId == hc.id)
+        let (again, rawAgain, busyAgain) = await open()
+        #expect(await until(5) { rows(again, .answer).count == turns + 1 })
+        let shown = rawAgain().filter(history)
+        // The copy at once; then only what came since (the close's own end of things), if anything.
+        #expect((1...2).contains(shown.count) && count(rawAgain(), started) == 0 && !busyAgain() && !again.isBusy)
+        if shown.count == 2, case .replayed(let since) = shown[1] { #expect(since.count < 20) }
+        #expect(again.sendFromLink("more"))
+        // (The stand-in CLI names each answer's block by its own count of calls: this one's joins
+        // the row of the last, from the CLI before it.)
+        #expect(await until(5) { rows(again, .answer).last?.hasSuffix("Hi: more") == true && !again.isBusy })
+        again.close()
+    }
+
     @Test func thePolicyHoldsFromTheMac() async throws {
         let rig = try BoxRig()
         defer { rig.finish() }
@@ -393,11 +504,13 @@ struct BoxParityTests {
         // History: the box's past sessions, opened as a box chat; renamed and archived there.
         rig.sessions["claude"] = [SessionSummary(id: "past1", agent: .claude, title: "Old work", updated: Date(timeIntervalSince1970: 1_700_000_000))]
         let window = HostDaemon.windowID(rig.folder.path)
-        #expect(await connection.closedChats(windowId: window).map(\.id) == ["past1"])
+        // The open chats (this one, its fork) too, as open ones.
+        let listed = await connection.closedChats(windowId: window)
+        #expect(listed.filter { !$0.open }.map(\.id) == ["past1"] && listed.contains { $0.id == hc.id && $0.open })
         guard case .success = await connection.history(.historyRename, ControlArgs(title: "Older work", sessionId: "past1")) else {
             Issue.record("not renamed"); return
         }
-        #expect(await connection.closedChats(windowId: window).map(\.title) == ["Older work"])
+        #expect(await connection.closedChats(windowId: window).filter { !$0.open }.map(\.title) == ["Older work"])
         guard case .success(let opened) = await connection.history(.historyOpen, ControlArgs(windowId: window, provider: "claude", sessionId: "past1"))
         else { Issue.record("not opened"); return }
         #expect(opened.chatId.flatMap(rig.host.chat)?.record.session == "past1")

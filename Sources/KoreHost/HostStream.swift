@@ -111,6 +111,19 @@ package final class StreamLog {
         struct Kind: Decodable {
             var type: String?
             var id: String?
+            /// A started command's id (`commandStarted`'s own object; other events' `command` may
+            /// be text, and never stops the line being read).
+            var command: String?
+
+            private enum Keys: String, CodingKey { case type, id, command }
+            private struct Ref: Decodable { var id: String? }
+
+            init(from decoder: any Decoder) throws {
+                let c = try decoder.container(keyedBy: Keys.self)
+                type = try? c.decodeIfPresent(String.self, forKey: .type)
+                id = try? c.decodeIfPresent(String.self, forKey: .id)
+                command = type == "commandStarted" ? (try? c.decodeIfPresent(Ref.self, forKey: .command))?.id : nil
+            }
         }
     }
 
@@ -125,6 +138,7 @@ package final class StreamLog {
         var firstSeq: Int?
         var inHistory = false
         var turnOpen = false
+        var commands: [String] = []
         let decoder = JSONDecoder()
         var offset = 0
         for line in data.split(separator: 0x0A, omittingEmptySubsequences: false) {
@@ -142,6 +156,8 @@ package final class StreamLog {
             if !inHistory, let type = peek.e?.type {
                 if type == "turnStarted" { turnOpen = true }
                 if type == "turnFinished" { turnOpen = false }
+                if type == "commandStarted", let command = peek.e?.command, !commands.contains(command) { commands.append(command) }
+                if type == "commandEnded", let command = peek.e?.id { commands.removeAll { $0 == command } }
             }
         }
         if id.isEmpty { return restart(with: [], announce: false) }
@@ -149,6 +165,9 @@ package final class StreamLog {
         // The box stopped mid-turn (a crash, a restart): the turn ends, so no client shows it
         // running for ever.
         if turnOpen { write(StreamItem.items(.turnFinished(nil, .interrupted, duration: nil), seq: &seq)) }
+        // Its commands went with the CLI too.
+        let at = Date()
+        for command in commands { write(StreamItem.items(.commandEnded(id: command, .ended, at: at), seq: &seq)) }
     }
 
     package var isEmpty: Bool {

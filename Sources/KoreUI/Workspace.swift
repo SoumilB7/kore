@@ -367,11 +367,10 @@ package final class Workspace {
 
     /// A box's chat back in a tab, at `index` (where it was), selected.
     private func place(_ chat: Chat, at index: Int) {
-        // A box chat its window adopted already (the box listed it before this answer came).
-        if let id = (chat.services as? BoxChatServices)?.chatId,
-            let shown = tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == id && $0.agent == nil })
-        {
-            activeID = shown.id
+        // A chat a tab shows already (History's open row), or a box chat its window adopted
+        // already (the box listed it before this answer came).
+        if let shown = tab(showing: chat) ?? (chat.services as? BoxChatServices)?.chatId.flatMap({ boxTab($0) }) {
+            select(shown)
             return
         }
         let tab = ChatTab()
@@ -389,9 +388,10 @@ package final class Workspace {
             Task { await paired.open(session, isOpen: isOpen) }
             return
         }
-        // On a box: a closed chat it keeps, back on the box and in a tab here.
+        // On a box: an open chat's tab in front; a closed chat it keeps, back on the box and in a
+        // tab here.
         if let box {
-            if let tab = tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == session.id && $0.agent == nil }) {
+            if let tab = boxTab(session.id) {
                 select(tab)
                 return
             }
@@ -410,6 +410,14 @@ package final class Workspace {
         if !activeTab.isEmpty { newTab() }
         activeTab.chat = chat(session)
     }
+
+    /// The tab showing a chat itself, or the board it's on.
+    private func tab(showing chat: Chat) -> ChatTab? {
+        tabs.first { $0.agent == nil && ($0.chat === chat || $0.board?.orderedChats.contains { $0 === chat } == true) }
+    }
+
+    /// The tab showing a box chat (by its id, or the CLI session it holds), or the board it's on.
+    private func boxTab(_ id: String) -> ChatTab? { box?.shownChat(id).flatMap { tab(showing: $0) } }
 
     /// Shows a chat's sub-agent in its own tab: its tab if already open, else a new one right
     /// after the parent's tab (or the parent's last agent tab), so the family sits together.

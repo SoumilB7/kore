@@ -30,6 +30,7 @@ struct BoxTabsUITests {
         }
 
         func send(_ message: LinkMessage) { transport.send((try? message.encoded()) ?? Data()) }
+        func send(json: [String: Any]) { transport.send((try? JSONSerialization.data(withJSONObject: json)) ?? Data()) }
 
         func next(_ type: String) async -> [String: Any]? {
             let end = Date().addingTimeInterval(BoxTabsUITests.patience)
@@ -145,5 +146,55 @@ struct BoxTabsUITests {
         let row = HistorySession(id: "c0", provider: "claude", title: "Session status inquiry", updatedAt: 1_700_000_000_000, archived: false, open: false)
         script.send(.historyPage(id: try #require(ask["id"] as? String), windowId: Self.window, sessions: [row], more: false))
         #expect(await listing.value.map(\.title) == ["Session status inquiry"])
+    }
+
+    /// History in a box window: a row of a chat a tab shows (its box id, or a session the box says
+    /// that chat holds) brings that tab forward. No second chat follows the same box chat, so the
+    /// tab keeps its chat, bound to this window's box: its title, the folder's name and the
+    /// title row's counts stay as they were.
+    @Test func historyOpenOfAHeldChatFocusesItsTabAndMakesNoSecondChat() async throws {
+        let (script, box, workspace) = try await rig()
+        defer { box.windowClosed() }
+        script.send(json: [
+            "t": "welcome", "proto": ["major": 1, "minor": 10], "epoch": "e1", "host": ["name": "box", "koreVersion": "1", "kind": "box"],
+            "providers": [], "policy": ["sendMaxLevel": 4, "control": "full"], "caps": ["tx", "control", "stream", "history"],
+        ])
+        #expect(await until { box.connection.keepsHistory })
+        let original = try #require(workspace.tabs.first?.chat)
+        let folderName = workspace.folder.lastPathComponent
+        func shown() -> [Chat] {
+            workspace.tabs.flatMap { [$0.chat].compactMap { $0 } + ($0.board?.orderedChats ?? []) }.filter {
+                ($0.services as? BoxChatServices)?.chatId == "c1"
+            }
+        }
+
+        // Its open row (the box lists open chats now): the tab, at once, nothing asked of the box.
+        workspace.newTab()
+        workspace.open(SessionSummary(id: "c1", agent: .claude, title: "Main-struc", updated: .now))
+        #expect(workspace.activeTab.chat === original)
+        #expect(!script.got.contains { ($0["cmd"] as? [String: Any])?["type"] as? String == "history.open" })
+
+        // A row of the session it holds: the box answers with the open chat, whose tab comes forward.
+        workspace.newTab()
+        let count = workspace.tabs.count
+        workspace.open(SessionSummary(id: "749491e6", agent: .claude, title: "Main-struc", updated: .now))
+        let ask = try #require(await script.command("history.open"))
+        #expect((ask["cmd"] as? [String: Any])?["sessionId"] as? String == "749491e6")
+        script.send(.result(.init(id: try #require(ask["id"] as? String), ok: true, chatId: "c1", windowId: Self.window)))
+        #expect(await until { workspace.activeTab.chat === original })
+        #expect(workspace.tabs.count == count && shown().count == 1 && shown().first === original)
+        #expect(box.shownChat("c1") === original)
+
+        // The tab is the window's own: bound to this box, its name, the folder's name, its counts.
+        let services = try #require(original.services as? BoxChatServices)
+        #expect(services.connection === box.connection && services.chatId == "c1" && !services.mirror)
+        #expect(original.title == "Main-struc" && original.folder == box.folderURL && workspace.folder.lastPathComponent == folderName)
+        #expect(original.commands.summary.total == 0 && original.transcript.agentSummary.total == 0)
+
+        // Closed here, then asked for by name (a paired folder's History): its tab comes back, once.
+        workspace.close(try #require(workspace.tabs.first { $0.chat === original }))
+        box.show("c1")
+        let back = try #require(shown().first)
+        #expect(shown().count == 1 && workspace.activeTab.chat === back && back !== original)
     }
 }

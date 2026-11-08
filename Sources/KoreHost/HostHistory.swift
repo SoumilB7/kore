@@ -11,7 +11,7 @@ struct HostHistoryKept: Codable, Sendable, Equatable {
 }
 
 /// Link 1.9: a folder's history on the box, as a Mac window's History shows a folder's: the
-/// chats closed there, and the past sessions each CLI on the box keeps for that folder. Opened,
+/// chats open and closed there, and the past sessions each CLI on the box keeps for that folder. Opened,
 /// renamed and archived from any client.
 extension HostDaemon {
     private var historyURL: URL { paths.state.appendingPathComponent("history.json") }
@@ -36,9 +36,11 @@ extension HostDaemon {
         chats.first { $0.id == id || $0.record.session == id } ?? closedChats.first { $0.id == id || $0.record.session == id }
     }
 
-    /// A folder's history, newest first: its closed chats and its CLIs' past sessions that aren't
-    /// a box chat's, archived ones only when `archived`. Codex lists through its app-server, so a
-    /// list may take a moment; nothing runs until a client asks.
+    /// A folder's history, newest first, as a Mac window's History lists its folder's: its open
+    /// chats (`open`), its closed ones, and its CLIs' past sessions that aren't a box chat's;
+    /// archived ones only when `archived` (an open chat never is: archiving closes it). An open
+    /// chat is as recent as its session's last write, else its last use. Codex lists through its
+    /// app-server, so a list may take a moment; nothing runs until a client asks.
     func history(windowId: String, query: String?, archived: Bool) async -> [HistorySession] {
         guard let folder = folder(windowId: windowId) else { return [] }
         let words = query?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
@@ -48,12 +50,18 @@ extension HostDaemon {
                 id: $0.id, provider: $0.record.provider, title: $0.title, updatedAt: Int64($0.closedAt.timeIntervalSince1970 * 1000),
                 archived: $0.record.archived == true, open: false)
         }
+        let open = archived ? [] : chats.filter { $0.record.folder == folder && shown($0.title) }
         let boxSessions = Set((chats + closedChats).compactMap(\.record.session))
         let kept = self.kept
         let list = pastSessions
         let url = URL(fileURLWithPath: folder)
+        var updated: [String: Date] = [:]
         for provider in Registry.all {
-            for session in await list(provider, url) ?? [] where !boxSessions.contains(session.id) {
+            for session in await list(provider, url) ?? [] {
+                guard !boxSessions.contains(session.id) else {
+                    updated[session.id] = session.updated
+                    continue
+                }
                 let title = kept.titles[session.id] ?? session.title
                 let isArchived = session.archived || kept.archived.contains(session.id)
                 guard isArchived == archived, shown(title) else { continue }
@@ -62,6 +70,12 @@ extension HostDaemon {
                         id: session.id, provider: provider.id, title: title, updatedAt: Int64(session.updated.timeIntervalSince1970 * 1000),
                         archived: isArchived, open: false))
             }
+        }
+        // Still open now (none closed while the CLIs listed).
+        for hc in open where chats.contains(where: { $0 === hc }) {
+            let at = hc.record.session.flatMap { updated[$0] } ?? hc.lastUsed
+            out.append(
+                HistorySession(id: hc.id, provider: hc.record.provider, title: hc.title, updatedAt: Int64(at.timeIntervalSince1970 * 1000), archived: false, open: true))
         }
         return out.sorted { $0.updatedAt > $1.updatedAt }
     }
