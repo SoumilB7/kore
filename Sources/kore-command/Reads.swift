@@ -14,6 +14,7 @@ enum Reads {
         if ["show", "log"].contains(name), options.positional.isEmpty {
             return fail(name == "show" ? "kore show <chat>" : "kore log <chat> [-n N] [-f]", code: 2)
         }
+        if let wanted = Own.usage[name], !Own.fits(name, options.positional) { return fail("kore \(name) \(wanted)", code: 2) }
         do {
             let client = try AgentClient()
             switch name {
@@ -24,6 +25,8 @@ enum Reads {
             case "log": try log(client, options.positional[0], &options)
             case "pending": try pending(client, options)
             case "history": try history(client, options)
+            case "options": try Own.options(client, options)
+            case "fast", "compact", "rename", "model", "effort", "mode": try Own.set(name, client, options)
             default: return fail(usage, code: 2)
             }
             return 0
@@ -32,7 +35,7 @@ enum Reads {
         } catch .notKore {
             return fail("What's at Kore's socket isn't the Kore this came with.", code: 5)
         } catch .refused(let code, let message) {
-            return fail(message, code: ["denied", "mismatch", "tier", "stopped", "version", "rate_limited"].contains(code) ? 5 : 1)
+            return fail(message, code: ["denied", "mismatch", "tier", "stopped", "version", "rate_limited", "not_own"].contains(code) ? 5 : 1)
         } catch {
             return fail("Kore closed the connection.", code: 1)
         }

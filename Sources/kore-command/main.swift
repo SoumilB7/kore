@@ -17,17 +17,25 @@ let usage = """
            kore pending [<chat>] cards waiting on you
            kore history [--folder F] [--search Q] [--archived]
                                  a window's past chats
+           kore options          what Own may set on this chat now
+           kore rename <name>    rename this chat
+           kore model <model>    switch this chat's model
+           kore effort <level>   set its effort
+           kore fast on|off      its fast mode
+           kore mode <mode>      lower its mode (only you raise one)
+           kore compact          compact it, once this turn ends
            kore whoami           who Kore sees calling, and its access
            kore caps             what that access allows
            kore mcp              the same reads as an MCP server, on stdio
            kore help             show this
 
+    Own's commands change only the chat they run in, and need its Arsenal at Own.
     A chat is its title (any part only it has), its short id, or . for the chat this runs in.
     Every read takes --json. A folder named like a command opens with a slash: kore ./ls
     """
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-let reads: Set = ["ls", "show", "log", "pending", "history", "whoami", "caps", "mcp"]
+let reads: Set = ["ls", "show", "log", "pending", "history", "whoami", "caps", "mcp", "options", "rename", "model", "effort", "fast", "mode", "compact"]
 
 switch arguments.first {
 case "help", "-h", "--help":

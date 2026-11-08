@@ -85,6 +85,19 @@ final class ArsenalButton: ChatStoryline {
         }
     }
 
+    /// Presses the open popup's row titled `title`, found by its title.
+    private struct PressRow: Step {
+        let title: String
+        var label: String { "press “\(title)”" }
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            guard let index = StoryID.Options.rows.firstIndex(where: { $0.title == title }) else {
+                throw StoryFailure.expectation("a “\(title)” row in \(StoryID.Options.rows.map(\.title))")
+            }
+            try await Press(.id(StoryID.Options.item(index))).run(story)
+        }
+    }
+
     private struct Full: Step {
         let role: String
         var label: String { "\(role) in Codex's Full access" }
@@ -179,8 +192,7 @@ final class ArsenalButton: ChatStoryline {
             key,
             tier("a", .watch, "back on at its last tier"),
             OpenTiers(role: "a"),
-            ExpectElement(.id(StoryID.Options.item(3))),
-            Press(.id(StoryID.Options.item(3))),
+            PressRow(title: "Drive: not built yet"),
             tier("a", .watch, "a tier not built does nothing"),
             Key(.escape),
             OpenTiers(role: "a"),

@@ -487,10 +487,10 @@ final class AgentChannelAll: ChatStoryline {
                     && AgentJSON.path(o, "caller", "short") as? String == cast.short("a") && o["tier"] as? String == "watch" && o["proto"] as? Int == 1
             },
             KoreAs(["caps"], a, "the tier and its nine commands") { status, out, _ in
-                status == 0 && out.contains("Kore access: watch") && AgentCommand.all.allSatisfy { out.contains("  \($0.name)\n") }
+                status == 0 && out.contains("Kore access: watch") && AgentCommand.allowed(.watch).allSatisfy { out.contains("  \($0.name)\n") }
             },
             KoreAs.json(["caps"], a, "caps' data") { o, _ in
-                o["tier"] as? String == "watch" && (o["commands"] as? [String]) == AgentCommand.all.map(\.name)
+                o["tier"] as? String == "watch" && (o["commands"] as? [String]) == AgentCommand.allowed(.watch).map(\.name)
             },
             KoreAs(["ls"], a, "three chats, a marked as this one") { status, out, story in
                 let cast = AgentCast.of(story)
@@ -578,8 +578,12 @@ final class AgentChannelAll: ChatStoryline {
                 replies: Self.forbidden.count + 1, c, "4. every higher-tier or control command refused", helloExtra: "\"tier\":\"full\""
             ) { replies, _ in
                 guard replies.first?["type"] as? String == "welcome", replies.first?["tier"] as? String == "watch", replies.count == Self.forbidden.count + 2 else { return false }
-                let refused = replies.dropFirst().dropLast()
-                return refused.allSatisfy { $0["ok"] as? Bool == false && $0["code"] as? String == "unknown_command" }
+                // Own's commands are there, above Watch; the rest aren't Kore's.
+                let refused = zip(Self.forbidden, replies.dropFirst().dropLast())
+                return refused.allSatisfy { name, reply in
+                    reply["ok"] as? Bool == false
+                        && reply["code"] as? String == (AgentCommand.all.contains { $0.name == name } ? "tier" : "unknown_command")
+                }
                     && AgentJSON.path(replies.last, "data", "tier") as? String == "watch"
             },
             Expect("4. no grant or switch changed") { story in
@@ -814,6 +818,69 @@ final class AgentWhoamiLive: Storyline {
                 let short = String(try story.activeChat().id.uuidString.prefix(8)).lowercased()
                 return (story.app.chat?.rows ?? []).contains { $0.kind != "user" && $0.text.contains("chat \(short)") && $0.text.contains("watch") }
             },
+            Do("off again") { story in
+                unsetenv("KORE_AGENT_SOCKET")
+                AgentCast.of(story).finish()
+            },
+        ]
+    }
+}
+
+/// A live model at Own, through Arsenal as the owner picks it: `kore options` and `kore rename` from
+/// its own shell, the name seen on the tab. Then what that chat is shown, as JSON, into
+/// `agent-notes.txt`: its whoami, caps, options, and `kore mcp`'s tool list.
+final class AgentOwnLive: Storyline {
+    override class var tags: Set<Tag> { [.live] }
+    override class var variants: [Variant] { [.claude, .codex] }
+
+    override func steps() -> [any Step] {
+        let given = ProcessInfo.processInfo.environment["KORE_AGENT_SOCKET"].map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+        let directory = given ?? URL(fileURLWithPath: "/tmp/kol-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        var link: String { directory.appendingPathComponent("kore").path }
+        let codex: [any Step] = variant == .codex ? [SetMode("fullAccess")] : []
+        let a = KoreCaller.chat("a")
+        func shown(_ arguments: [String], input: String? = nil) -> KoreAs {
+            KoreAs(arguments, a, "what the chat is shown", input: input) { status, out, story in
+                AgentCast.of(story).note("$ kore \(arguments.joined(separator: " "))\n\(out)", to: story.outputs)
+                return status == 0
+            }
+        }
+        let mcp = [
+            #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+            #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        ].joined(separator: "\n") + "\n"
+        return [
+            Do("agent control on, at a socket the chat's CLI is told of") { story in
+                let cast = AgentCast.of(story)
+                cast.directory = directory
+                AgentChannel.directory = directory
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                try? FileManager.default.removeItem(atPath: link)
+                try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: KoreRun.binary.path)
+                setenv("KORE_AGENT_SOCKET", AgentWatchReads.socketPath, 1)
+                AgentGrants.stopAll()
+            },
+            OpenFolder(), StartChat(),
+        ] + codex + [
+            Do("Arsenal on, at Own, as the tiers popup picks it") { story in
+                let chat = try story.activeChat()
+                AgentCast.of(story).chats["a"] = chat
+                Arsenal.shared.setAllowed(true)
+                Arsenal.shared.choose(.own, chat)
+            },
+            Expect("Own, and the socket") { story in try story.activeChat().arsenal == .own && AgentChannel.current != nil },
+            // The socket given in the command: a CLI's shell may not have Kore's environment, and
+            // `kore` would otherwise find the owner's own Kore, which it refuses.
+            Send("Run this exact shell command and reply with only its output, nothing else: export KORE_AGENT_SOCKET=\(directory.appendingPathComponent(AgentChannel.socketName).path); \(link) options; \(link) rename own-live"),
+            AllowUntilDone(),
+            Expect("the tab has the name the agent gave it", found: { story in try? story.activeChat().storyTitle }) { story in
+                try story.activeChat().storyTitle == "own-live"
+            },
+            Expect("the answer has kore's reply", found: { story in (story.app.chat?.rows ?? []).last?.text ?? "no answer" }) { story in
+                (story.app.chat?.rows ?? []).contains { $0.kind != "user" && $0.text.contains("Renamed.") }
+            },
+            shown(["whoami", "--json"]), shown(["caps", "--json"]), shown(["options", "--json"]), shown(["options"]),
+            shown(["mcp"], input: mcp),
             Do("off again") { story in
                 unsetenv("KORE_AGENT_SOCKET")
                 AgentCast.of(story).finish()

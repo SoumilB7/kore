@@ -35,7 +35,18 @@ package struct AgentCommand: Sendable, Equatable {
     package static let cards = Self(name: "cards.list", tier: .watch)
     package static let history = Self(name: "history.list", tier: .watch)
 
-    package static let all: [Self] = [whoami, caps, chats, show, read, follow, unfollow, cards, history]
+    // Own: the caller's own chat. Each changes it as its composer would; a mode only downwards.
+    package static let options = Self(name: "chat.options", tier: .own)
+    package static let rename = Self(name: "chat.rename", tier: .own)
+    package static let model = Self(name: "chat.model", tier: .own)
+    package static let effort = Self(name: "chat.effort", tier: .own)
+    package static let fast = Self(name: "chat.fast", tier: .own)
+    package static let mode = Self(name: "chat.mode", tier: .own)
+    package static let compact = Self(name: "chat.compact", tier: .own)
+
+    package static let all: [Self] = [
+        whoami, caps, chats, show, read, follow, unfollow, cards, history, options, rename, model, effort, fast, mode, compact,
+    ]
 
     /// Why `tier` may not run `name`; nil when it may.
     package static func refusal(_ name: String, tier: AgentTier, among commands: [Self] = all) -> AgentCode? {
@@ -66,6 +77,10 @@ package enum AgentCode: String, Codable, Sendable {
     case noWindow = "no_window"
     /// Agent control was stopped, or this chat's access turned off.
     case stopped
+    /// Own reaches only the caller's own chat.
+    case notOwn = "not_own"
+    /// The chat can't take that now, or only the user may do it (raising a mode).
+    case refused
 }
 
 // MARK: Lines in
@@ -92,10 +107,14 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     package var query: String?
     package var archived: Bool?
     package var offset: Int?
+    /// Own's: what to set (`chat.rename`'s name, `chat.model`'s model, `chat.effort`'s level,
+    /// `chat.mode`'s mode), and `chat.fast` on or off.
+    package var to: String?
+    package var on: Bool?
 
     package init(
         chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, query: String? = nil,
-        archived: Bool? = nil, offset: Int? = nil
+        archived: Bool? = nil, offset: Int? = nil, to: String? = nil, on: Bool? = nil
     ) {
         self.chat = chat
         self.last = last
@@ -104,6 +123,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
         self.query = query
         self.archived = archived
         self.offset = offset
+        self.to = to
+        self.on = on
     }
 }
 
@@ -273,4 +294,34 @@ package struct AgentHistory: Encodable, Sendable {
     package var folder: String
     package var sessions: [AgentSession]
     package var more: Bool
+}
+
+/// What Own may set on a chat now.
+package struct AgentOptions: Encodable, Sendable {
+    package struct Model: Encodable, Sendable {
+        package var id: String
+        package var name: String
+        package var efforts: [String]
+    }
+
+    package struct Mode: Encodable, Sendable {
+        package var id: String
+        package var label: String
+        /// At or below the chat's mode now.
+        package var allowed: Bool
+    }
+
+    package var chat: String
+    package var models: [Model]
+    package var model: String?
+    package var effort: String?
+    package var modes: [Mode]
+    package var mode: String
+    package var fast: Bool?
+}
+
+/// What a change did, in a line.
+package struct AgentDone: Encodable, Sendable {
+    package var chat: String
+    package var message: String
 }

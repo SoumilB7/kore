@@ -104,6 +104,8 @@ package final class Chat: Identifiable {
     /// a Stop, a failure or a limit.
     @ObservationIgnored private var continueAfterCompaction = false
     @ObservationIgnored private var lastTurnCompleted = false
+    /// Arsenal's Own asked for a compaction during a turn (its agent asks from inside one).
+    @ObservationIgnored var compactAfterTurn = false
     @ObservationIgnored private var compactedInTurn = false
     /// Stop came while a compaction ran: however it ends short of done is said as stopped, not
     /// failed. Both CLIs report the cancel as a failure (`compactionFailed`).
@@ -1328,8 +1330,10 @@ package final class Chat: Identifiable {
             compactedInTurn = false
         case .compactionStarted:
             autoCompactDue = false
+            compactAfterTurn = false
         case .compactionFailed, .compactionStopped, .exited:
             autoCompactDue = false
+            if case .exited = event { compactAfterTurn = false }
             continueAfterCompaction = false
             compactedInTurn = false
         case .turnFinished(_, let outcome, _):
@@ -1341,6 +1345,10 @@ package final class Chat: Identifiable {
             let stoppedByCompaction = compactedInTurn && outcome == .completed && !inContinueTurn
             compactedInTurn = false
             if inContinueTurn { lastTurnCompleted = false }
+            if compactAfterTurn, waiting.isEmpty {
+                compactAfterTurn = false
+                if canCompact { return compact() }
+            }
             if autoCompactDue, context.pastPoint, canCompact, waiting.isEmpty, let point = context.autoCompactAt {
                 compact(at: point)
             } else if stoppedByCompaction, waiting.isEmpty {

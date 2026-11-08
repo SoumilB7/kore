@@ -25,7 +25,7 @@ package final class AgentChannel {
     static let strikes = 30
     /// Log lines a caller may cause a minute; the rest are one `agent-throttled` line.
     static let logLinesPerMinute = 120
-    /// The commands served. Every one is Watch's for now, so tests add a higher one to reach `.tier`.
+    /// The commands served. Tests add one above Own to reach `.tier` from it.
     static var commands = AgentCommand.all
 
     package let socketPath: String
@@ -402,10 +402,63 @@ package final class AgentChannel {
             guard let workspace = window(args, client, id) else { return nil }
             let data = AgentReads.history(workspace, query: args.query, archived: args.archived ?? false, offset: args.offset ?? 0)
             send(client, AgentResult(id: id, ok: true, data: data))
+        case AgentCommand.options.name:
+            guard let chat = ownChat(args, client, id) else { return nil }
+            let o = chat.arsenalOptions
+            send(client, AgentResult(id: id, ok: true, data: AgentOptions(
+                chat: chat.id.uuidString,
+                models: o.models.map { .init(id: $0.id, name: $0.name, efforts: $0.efforts) }, model: o.model, effort: o.effort,
+                modes: o.modes.map { .init(id: $0.id, label: $0.label, allowed: $0.allowed) }, mode: o.mode, fast: o.fast)))
+            return chat.id.uuidString
+        case AgentCommand.rename.name, AgentCommand.model.name, AgentCommand.effort.name, AgentCommand.mode.name:
+            guard let chat = ownChat(args, client, id) else { return nil }
+            guard let value = args.to, !value.isEmpty, value.utf8.count <= 1024 else {
+                fail(client, id, .invalid, "Say what to set it to.")
+                return chat.id.uuidString
+            }
+            let outcome = switch name {
+            case AgentCommand.rename.name: chat.arsenalRename(value, taken: AgentReads.chatsByID().values.filter { $0 !== chat }.map(\.title))
+            case AgentCommand.model.name: chat.arsenalModel(value)
+            case AgentCommand.effort.name: chat.arsenalEffort(value)
+            default: chat.arsenalMode(value)
+            }
+            done(outcome, chat, client, id)
+            return chat.id.uuidString
+        case AgentCommand.fast.name:
+            guard let chat = ownChat(args, client, id) else { return nil }
+            guard let on = args.on else {
+                fail(client, id, .invalid, "Say on or off.")
+                return chat.id.uuidString
+            }
+            done(chat.arsenalFast(on), chat, client, id)
+            return chat.id.uuidString
+        case AgentCommand.compact.name:
+            guard let chat = ownChat(args, client, id) else { return nil }
+            done(chat.arsenalCompact(), chat, client, id)
+            return chat.id.uuidString
         default:
             fail(client, id, .unknownCommand, Self.message(.unknownCommand))
         }
         return nil
+    }
+
+    /// The chat an Own command names (`.` when none is named), which has to be the caller's own.
+    private func ownChat(_ args: AgentArgs, _ client: Client, _ id: String) -> Chat? {
+        guard let chat = resolve(args.chat ?? ".", client, id) else { return nil }
+        guard chat.id.uuidString == client.chat else {
+            fail(client, id, .notOwn, "Own changes only this chat.")
+            return nil
+        }
+        return chat
+    }
+
+    private func done(_ outcome: Result<String, ArsenalRefusal>, _ chat: Chat, _ client: Client, _ id: String) {
+        switch outcome {
+        case .success(let message):
+            send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chat.id.uuidString, message: message)))
+        case .failure(let refusal):
+            fail(client, id, .refused, refusal.message)
+        }
     }
 
     private func fail(_ client: Client, _ id: String, _ code: AgentCode, _ message: String) {

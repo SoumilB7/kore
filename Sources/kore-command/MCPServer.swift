@@ -43,6 +43,24 @@ enum MCPServer {
                 ("folder", "string", "The window's folder (default: this chat's window)."), ("query", "string", "Words the title holds."),
                 ("archived", "boolean", "Archived chats instead."), ("offset", "integer", "Skip this many (pages of 50)."),
             ], required: []),
+        Tool(
+            name: "kore_options", command: "chat.options",
+            description: "This chat's models, efforts and modes, and which modes it may lower to (Own access).", args: [], required: []),
+        Tool(name: "kore_rename", command: "chat.rename", description: "Rename this chat (Own access).", args: [("to", "string", "The new name.")], required: ["to"]),
+        Tool(
+            name: "kore_set_model", command: "chat.model", description: "Switch this chat's model to one kore_options lists (Own access).",
+            args: [("to", "string", "The model's id or name.")], required: ["to"]),
+        Tool(
+            name: "kore_set_effort", command: "chat.effort", description: "Set this chat's effort to a level its model offers (Own access).",
+            args: [("to", "string", "The level.")], required: ["to"]),
+        Tool(
+            name: "kore_set_fast", command: "chat.fast", description: "Turn this chat's fast mode on or off (Own access).",
+            args: [("on", "boolean", "On or off.")], required: ["on"]),
+        Tool(
+            name: "kore_lower_mode", command: "chat.mode",
+            description: "Lower this chat's mode, to one kore_options marks allowed. Only the user raises a mode (Own access).",
+            args: [("to", "string", "The mode's id or label.")], required: ["to"]),
+        Tool(name: "kore_compact", command: "chat.compact", description: "Compact this chat once the current turn ends (Own access).", args: [], required: []),
     ]
 
     static func run() -> Int32 {
@@ -90,6 +108,8 @@ enum MCPServer {
     static func call(_ name: String, _ arguments: Object) -> Object {
         guard let tool = tools.first(where: { $0.name == name }) else { return failure("No such tool: \(name).") }
         var args = arguments.filter { key, _ in tool.args.contains { $0.0 == key } }
+        // Own's tools act on the chat this runs in.
+        if tool.command.hasPrefix("chat."), tool.command != "chat.show" { args["chat"] = "." }
         do {
             let client = try AgentClient()
             let data = try client.run(tool.command, args)

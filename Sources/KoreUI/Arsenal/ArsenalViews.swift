@@ -2,8 +2,18 @@ import SwiftUI
 
 extension Theme {
     enum Arsenal {
-        /// Tiers follow the mode ladder.
+        /// Tiers follow the mode ladder: deeper blue as a tier does more.
         static let watch = Blue.b200
+        static let own = Blue.b400
+
+        static func color(_ tier: ArsenalTier) -> Color {
+            switch tier {
+            case .watch: watch
+            case .own: own
+            case .drive: Blue.b300
+            case .full: Theme.warning
+            }
+        }
         /// The K's stem behind its arms.
         static let stem = 0.5
     }
@@ -77,15 +87,17 @@ struct ArsenalTabControl: View {
         }
     }
 
+    private var color: Color { Theme.Arsenal.color(chat.arsenal ?? .watch) }
+
     private var button: some View {
         Button {
             Arsenal.shared.turnOff(chat)
         } label: {
             Group {
                 if hovered.value {
-                    Image(systemName: "xmark.circle.fill").font(TextStyle.label).foregroundStyle(Theme.Arsenal.watch)
+                    Image(systemName: "xmark.circle.fill").font(TextStyle.label).foregroundStyle(color)
                 } else {
-                    ArsenalMark(color: Theme.Arsenal.watch)
+                    ArsenalMark(color: color)
                 }
             }
             .frame(width: Size.Arsenal.button, height: Size.Arsenal.button)
@@ -101,10 +113,10 @@ struct ArsenalTabControl: View {
     private func word(_ tier: ArsenalTier) -> some View {
         OptionMenuButton(source: "arsenal", items: { Arsenal.shared.tierItems(chat) }) {
             if showsName {
-                Text(tier.title).font(Chrome.label).foregroundStyle(Theme.Arsenal.watch).lineLimit(1).fixedSize()
+                Text(tier.title).font(Chrome.label).foregroundStyle(Theme.Arsenal.color(tier)).lineLimit(1).fixedSize()
             }
         }
-        .help("\(tier.title) · reads chats, can't change anything")
+        .help("\(tier.title) · \(tier.reach)")
         .accessibilityLabel("Arsenal tiers")
         .storyID(StoryID.Tabs.arsenalTiers(tab))
     }
@@ -115,7 +127,7 @@ struct ArsenalOnBadge: View {
     let chat: Chat
 
     var body: some View {
-        if chat.arsenal != nil { ArsenalMark(color: Theme.Arsenal.watch).allowsHitTesting(false) }
+        if let tier = chat.arsenal { ArsenalMark(color: Theme.Arsenal.color(tier)).allowsHitTesting(false) }
     }
 }
 

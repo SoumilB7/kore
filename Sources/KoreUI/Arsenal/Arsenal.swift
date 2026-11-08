@@ -1,13 +1,22 @@
 import Foundation
 import Observation
 
-/// A chat's Arsenal tier (`z-docs/design/kore-access.html`). Each adds to the one before; only Watch
-/// has commands behind it, so the others are named in its popup but can't be chosen.
+/// A chat's Arsenal tier (`z-docs/design/kore-access.html`). Each adds to the one before; Watch and
+/// Own have commands behind them, so the others are named in its popup but can't be chosen.
 package enum ArsenalTier: String, CaseIterable, Sendable {
     case watch, own, drive, full
 
     var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
-    var built: Bool { self == .watch }
+    var built: Bool { self == .watch || self == .own }
+
+    /// What it lets the chat's agent do, in a line.
+    var reach: String {
+        switch self {
+        case .watch: "reads this folder's chats"
+        case .own: "also sets this chat's name, model, effort, and lowers its mode"
+        case .drive, .full: "not built yet"
+        }
+    }
 }
 
 /// Arsenal: one chat's agent may use Kore itself through `kore` (`z-docs/design/arsenal-button.html`).
@@ -43,7 +52,10 @@ package final class Arsenal {
     }
 
     private func clearChats() {
-        for chat in chats.allObjects { chat.arsenal = nil }
+        for chat in chats.allObjects {
+            chat.arsenal = nil
+            chat.compactAfterTurn = false
+        }
         chats.removeAllObjects()
         anyOn = false
     }
@@ -73,9 +85,24 @@ package final class Arsenal {
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": chat.arsenalLast.rawValue])
     }
 
+    /// A tier from its popup: on at it, or moved to it while on. It's the chat's last tier from then.
+    package func choose(_ tier: ArsenalTier, _ chat: Chat) {
+        guard tier.built, allowed, Self.unavailable(chat) == nil else { return }
+        chat.arsenalLast = tier
+        guard chat.arsenal != nil else { return turnOn(chat) }
+        guard chat.arsenal != tier else { return }
+        // A compaction Own asked for goes with Own.
+        if tier == .watch { chat.compactAfterTurn = false }
+        chat.arsenal = tier
+        AgentTaps.setTier?(chat.id.uuidString, tier)
+        UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": tier.rawValue])
+    }
+
     package func turnOff(_ chat: Chat) {
         guard chat.arsenal != nil else { return }
         chat.arsenal = nil
+        // A compaction it asked for doesn't outlive its access.
+        chat.compactAfterTurn = false
         chats.remove(chat)
         anyOn = chats.anyObject != nil
         AgentTaps.setTier?(chat.id.uuidString, nil)
@@ -97,22 +124,22 @@ package final class Arsenal {
     /// Its row in the tab's right-click popup: the tier while on, dim with why when it can't be.
     func row(_ chat: Chat) -> OptionItem {
         if let tier = chat.arsenal {
-            return OptionItem("Arsenal · \(tier.title)", tint: Theme.Arsenal.watch, key: Self.key) { [self] in flip(chat) }
+            return OptionItem("Arsenal · \(tier.title)", tint: Theme.Arsenal.color(tier), key: Self.key) { [self] in flip(chat) }
         }
         if Self.unavailable(chat) != nil { return OptionItem("Arsenal · Codex needs Full access", enabled: false, key: Self.key) }
         return OptionItem("Arsenal", key: Self.key) { [self] in flip(chat) }
     }
 
-    /// The tiers' popup. The last lines are what it reaches: what's built reads only, so the chat's
-    /// mode caps only what's still to come.
+    /// The tiers' popup. The last lines are what it reaches: Own changes only this chat, and never
+    /// raises its mode; the chat's mode caps only what's still to come.
     func tierItems(_ chat: Chat) -> [OptionItem] {
-        var items = [
-            OptionItem("Off", checked: chat.arsenal == nil) { [self] in turnOff(chat) },
+        var items = [OptionItem("Off", checked: chat.arsenal == nil) { [self] in turnOff(chat) }]
+        items += ArsenalTier.allCases.filter(\.built).map { tier in
             OptionItem(
-                "Watch: reads this folder's chats", checked: chat.arsenal == .watch, tint: chat.arsenal == .watch ? Theme.Arsenal.watch : nil
-            ) { [self] in turnOn(chat) },
-            .rule,
-        ]
+                "\(tier.title): \(tier.reach)", checked: chat.arsenal == tier, tint: chat.arsenal == tier ? Theme.Arsenal.color(tier) : nil
+            ) { [self] in choose(tier, chat) }
+        }
+        items.append(.rule)
         items += ArsenalTier.allCases.filter { !$0.built }.map { OptionItem("\($0.title): not built yet", enabled: false) }
         items += [
             .rule,

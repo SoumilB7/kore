@@ -12,10 +12,18 @@ package enum AgentGrants {
 
     package static var enabled: Bool { defaults.bool(forKey: switchKey) }
 
-    /// Connects Arsenal to this, at launch. Only Watch has commands; external callers stay Off.
+    /// Connects Arsenal to this, at launch. Watch and Own have commands; a tier not built yet is
+    /// Off here, and external callers stay Off.
     package static func install() {
         AgentTaps.setAllowed = { setEnabled($0) }
-        AgentTaps.setTier = { chat, tier in set(tier == .watch ? .watch : .off, chat: chat) }
+        AgentTaps.setTier = { chat, tier in
+            let granted: AgentTier = switch tier {
+            case .watch: .watch
+            case .own: .own
+            case .drive, .full, nil: .off
+            }
+            set(granted, chat: chat)
+        }
         AgentTaps.stopAll = { stopAll() }
         Arsenal.shared.adopt(allowed: enabled)
     }

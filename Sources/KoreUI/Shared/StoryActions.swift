@@ -131,6 +131,9 @@ extension Chat {
     }
 
     /// The mode popup's "Allow commands in Plan" switch: "on" or "off", "*" first when the keys are on it.
+    /// The mode menu's "Allow commands in Plan".
+    package func storySetPlanAllow(_ on: Bool) { setPlanAllow(on) }
+
     package var storyPlanAllow: String {
         let at = controls.availableModes.count + (provider.planToggle == nil ? 0 : 1)
         return (picker.lit == .row(at) ? "*" : "") + (controls.planAllow ? "on" : "off")
