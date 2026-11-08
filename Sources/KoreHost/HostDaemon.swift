@@ -119,8 +119,17 @@ package final class HostDaemon {
         HostJournal.note("start", ["version": Self.version, "link": HostVersion.link, "pid": "\(getpid())", "chats": "\(chats.count)"])
     }
 
-    package func stop() {
-        for connection in connections { connection.end(.quit) }
+    /// Stops: links are told `quit`, or `restart` when it's coming straight back (an update, or
+    /// systemd's SIGTERM under `Restart=always`), so phones and Macs dial again within seconds.
+    /// Whether this stop is a restart: something left the marker (consumed here), or systemd
+    /// runs it (`INVOCATION_ID`; the unit is `Restart=always`, so a SIGTERM there comes back).
+    package static func restarting(_ paths: HostPaths, environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        let marked = (try? FileManager.default.removeItem(at: paths.restarting)) != nil
+        return marked || environment["INVOCATION_ID"] != nil
+    }
+
+    package func stop(restarting: Bool = false) {
+        for connection in connections { connection.end(restarting ? .restart : .quit) }
         net?.stop()
         net = nil
         terminals.stopAll()

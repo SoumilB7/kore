@@ -29,6 +29,28 @@ class NodeMachineTest {
         assertEquals(listOf(1_000L, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000), delays)
     }
 
+    @Test fun aRestartingNodeIsTriedAtOneTwoAndFiveSecondsThenTheUsualBackoff() {
+        val m = machine()
+        m.on(Event.Start, 0)
+        m.on(Event.Connected, 0)
+        var s = m.on(Event.Ended("restart"), 0) as State.Away
+        assertEquals(AwayWhy.UNREACHABLE, s.why)
+        val delays = mutableListOf(s.at!!)
+        repeat(4) {
+            m.on(Event.Tick, s.at!!)
+            s = m.on(Event.Failed, s.at!!) as State.Away
+            delays += s.at!! - delays.sum()
+        }
+        assertEquals(listOf(1_000L, 2_000, 5_000, 1_000, 2_000), delays)
+        // Up again: a later restart starts from one second again; a stop still waits long.
+        m.on(Event.Tick, s.at!!)
+        m.on(Event.Connected, 20_000)
+        assertEquals(21_000L, (m.on(Event.Ended("restart"), 20_000) as State.Away).at)
+        m.on(Event.Tick, 21_000)
+        m.on(Event.Connected, 21_000)
+        assertEquals(AwayWhy.ASLEEP, (m.on(Event.Ended("quit"), 21_000) as State.Away).why)
+    }
+
     @Test fun offScreenAWaitingBoxWaitsForATriggerOnly() {
         val m = machine(box = true)
         m.on(Event.Start, 0)

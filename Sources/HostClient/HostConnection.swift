@@ -812,6 +812,11 @@ package final class HostConnection {
             case .slow:
                 lateHello = true
                 drop("\(NodeNames.name(alias)) waited too long for this Mac")
+            // kore-host restarting (an update, a service restart): back within seconds, so the
+            // backoff starts again from its shortest wait.
+            case .restart:
+                attempts = 0
+                drop("\(NodeNames.name(alias)) is restarting")
             default: drop("\(NodeNames.name(alias)) said \(reason.rawValue)")
             }
         case .snapshot(_, let windows, let chats, let extras):

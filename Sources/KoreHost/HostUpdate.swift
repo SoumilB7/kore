@@ -117,6 +117,8 @@ package struct HostUpdate {
     package static func restart(
         paths: HostPaths, home: URL, executable: String = HostService.executable(), user: String = HostService.user(), run: HostRunner = HostService.system
     ) -> String {
+        // The running daemon tells its links it's coming straight back.
+        if HostLock.held(paths.lock) { try? HostPaths.privateFile(Data(), to: paths.restarting) }
         switch HostService.installed(paths) {
         case nil, .systemd?:
             if FileManager.default.fileExists(atPath: HostService.unitFile(home: home).path) {

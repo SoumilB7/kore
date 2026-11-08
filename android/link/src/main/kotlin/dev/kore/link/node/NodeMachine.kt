@@ -60,6 +60,8 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
     var state: State = State.Idle
         private set
     private var attempt = 0
+    /** After a `restart`: the next of [RESTART_MS] waits, until it's up again or they're spent. */
+    private var quick: Int? = null
     private var lastSeen: Long? = null
     private var onScreen = true
 
@@ -72,6 +74,7 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
             Event.Enrolling -> if (s is State.Connecting) State.AwaitingAllow else s
             Event.Connected -> {
                 attempt = 0
+                quick = null
                 lastSeen = now
                 State.Up
             }
@@ -115,6 +118,13 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
         // A Mac brought this phone online again (its parked link ends so): dial straight back.
         "online" -> connecting(reset = true)
         "quit", "sleep" -> State.Away(AwayWhy.ASLEEP, now + jitter(CAP_MS), lastSeen)
+        // kore-host restarting (an update, a service restart): back within seconds, tried at
+        // 1 s, 2 s, 5 s, then the usual backoff. A peer that predates it says something else.
+        "restart" -> {
+            attempt = 0
+            quick = 0
+            backoff(now, AwayWhy.UNREACHABLE)
+        }
         // This side gave up on a dead socket (a probe got nothing): dial again at once.
         "abandoned" -> connecting(reset = true)
         else -> if (state is State.AwaitingAllow && reason == null) State.Denied("closed") else backoff(now, AwayWhy.UNREACHABLE)
@@ -126,6 +136,13 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
     }
 
     private fun backoff(now: Long, why: AwayWhy, cap: Long = CAP_MS): State {
+        quick?.let { i ->
+            if (i < RESTART_MS.size) {
+                quick = i + 1
+                return State.Away(why, now + RESTART_MS[i], lastSeen, attempt)
+            }
+            quick = null
+        }
         val base = minOf(cap.toDouble(), 1000.0 * (1L shl minOf(attempt, 16)))
         attempt += 1
         return State.Away(why, now + jitter(base.toLong()), lastSeen, attempt)
@@ -141,5 +158,7 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
         const val CAP_MS = 300_000L
         /** A box waiting for its Mac's push is tried at least this often while on screen. */
         const val WAITING_CAP_MS = 60_000L
+        /** The waits after a node said `restart`, before the usual backoff. */
+        val RESTART_MS = longArrayOf(1_000L, 2_000L, 5_000L)
     }
 }

@@ -85,7 +85,8 @@ case "run":
         let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
         source.setEventHandler {
             MainActor.assumeIsolated {
-                host.stop()
+                // SIGINT is a person stopping it; SIGTERM may be a restart (systemd, an update).
+                host.stop(restarting: number == SIGTERM && HostDaemon.restarting(paths))
                 exit(0)
             }
         }

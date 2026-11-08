@@ -53,6 +53,8 @@ package struct HostPaths: Sendable {
     /// What the running daemon's KoreNet port is doing (`listening …` or why it isn't), for
     /// `status`: removed when KoreNet is off.
     package var netState: URL { runtime.appendingPathComponent("net.state") }
+    /// Left by whatever restarts the daemon (an update): its next stop says `restart`.
+    package var restarting: URL { runtime.appendingPathComponent("restarting") }
 
     /// How kore-host was installed here when it isn't a systemd unit: `launchd` or `on-demand`
     /// (`HostService.Kind`), in `state/service`. Nothing there for systemd.
