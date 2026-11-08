@@ -21,6 +21,9 @@ enum NetLiveness {
             defaults: .standard, directory: .shared, rekeyer: NodeRekeyer(migration: NodeMigration()),
             environment: { NetEnvironment.standard() })
         KoreNetSwitch.shared = net
+        // SSH boxes move to KoreNet by themselves (phase 18 §2g); a box's sign-in page opens here.
+        BoxUpgrades.shared.openURL = { NSWorkspace.shared.open($0) }
+        net.upgrades = BoxUpgrades.shared
         // An enrolled box's SSH route carries this Mac's identity, KoreNet on or off.
         HostConnection.sshNet = net
         net.start()

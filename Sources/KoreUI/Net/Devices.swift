@@ -83,11 +83,10 @@ package final class Devices {
     /// Opens a page in the browser, or an app (storylines: recorded, nothing opens).
     @ObservationIgnored package var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
     @ObservationIgnored package var openTailscaleApp: @MainActor () -> Void = { Devices.launchTailscale() }
-    /// The join sheets' runner for a box (Kore: over its SSH link).
-    @ObservationIgnored package var joinRunner: @MainActor (String) -> (any BoxNetJoinRunner)? = { key in
-        guard let net = KoreNetSwitch.shared, let connection = HostConnection.live(key) else { return nil }
-        return BoxNetJoinRun(connection: connection, net: net)
-    }
+    /// The join sheets' runner for a box (Kore: its upgrade over SSH, with or without a window).
+    @ObservationIgnored package var joinRunner: @MainActor (String) -> (any BoxNetJoinRunner)? = { BoxUpgrades.shared.runner(for: $0) }
+    /// The boxes' upgrades, so Join KoreNet shows the one under way (storylines: none).
+    @ObservationIgnored package var upgrades: BoxUpgrades? = .shared
     @ObservationIgnored private let defaults: UserDefaults
 
     /// Bumped when the phones' side changes (a phone linked or went, the window closed): what
@@ -178,6 +177,7 @@ package final class Devices {
         facts.entry = directory.entry(forKey: key)
         facts.paused = NetPauses.shared.contains(key)
         facts.pending = connection?.pendingDevices ?? facts.entry?.pending ?? []
+        facts.upgrade = upgrades?.facts(key)
         return facts
     }
 
@@ -286,13 +286,24 @@ package final class Devices {
 
     // MARK: Join KoreNet (an SSH box)
 
-    /// Opens a box's join sheet and starts it.
+    /// Opens a box's join sheet: the upgrade under way when there is one, else a new one. It
+    /// needs no window on the box; one that can't start says why.
     package func join(_ key: String) {
         if let joining, joining.key == key, !joining.ending.over { return }
-        guard let runner = joinRunner(key) else { return }
+        if let running = upgrades?.running(key) {
+            joining = running.join
+            joinRun = running.runner
+            return changed()
+        }
+        guard let runner = joinRunner(key) else {
+            joining = BoxNetJoin.failed(key: key, name: NodeNames.name(key), "KoreNet isn't ready on this Mac yet.", fix: .tryAgain)
+            joinRun = nil
+            return changed()
+        }
         let join = BoxNetJoin(key: key, name: NodeNames.name(key))
         joining = join
         joinRun = runner
+        upgrades?.adopt(join, runner)
         runner.start(join)
     }
 

@@ -160,7 +160,7 @@ struct NetSweepMacTests {
         // Join KoreNet: the box's node key comes once its port listens, and the link moves to
         // the tailnet (however `net.node` and `net.set`'s answer interleave with Join's relink).
         let join = BoxNetJoin(key: alias, name: "box-1")
-        let run = BoxNetJoinRun(connection: connection, net: switcher, directory: directory)
+        let run = BoxNetJoinRun(connection: connection, net: switcher, directory: directory, shell: inProcessUpgrade(host, paths: paths), sleep: VirtualClock().sleep)
         run.start(join)
         #expect(await holds { join.ending.over }, "\(join.rows) · \(String(describing: connection.route))")
         #expect(join.ending == .done, "\(join.ending) · \(join.rows)")
@@ -244,7 +244,7 @@ struct NetSweepMacTests {
         #expect(!connection.inUse)
 
         let join = BoxNetJoin(key: alias, name: "box-1")
-        let run = BoxNetJoinRun(connection: connection, net: switcher, directory: NodeDirectory(defaults: defaults))
+        let run = BoxNetJoinRun(connection: connection, net: switcher, directory: NodeDirectory(defaults: defaults), shell: FakeUpgradeShell(BoxRan(status: 1)).shell)
         run.start(join)
         #expect(await holds { join.ending.over })
         #expect(join.ending == .failed("Tailscale is off on this Mac."))

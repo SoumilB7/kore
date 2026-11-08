@@ -124,12 +124,43 @@ struct NetJoinSheet: View {
                 button("Done", go: true) { NetJoinSheet.close() }
             case .done:
                 EmptyView()
-            case .unreachable, .failed:
+            case .unreachable:
                 button("Close", go: true) { NetJoinSheet.close() }
+            case .failed:
+                // The failure's one action beside Close (G3: never a silent end).
+                switch join.fix {
+                case .copy(let line)?:
+                    button("Close") { NetJoinSheet.close() }
+                    copyButton(line, title: "Copy line", id: "copy-line")
+                case .tryAgain?, .update?, .setUp?:
+                    button("Close") { NetJoinSheet.close() }
+                    button(join.fix == .tryAgain ? "Try again" : join.fix?.title ?? "Try again", go: true) { NetJoinSheet.retry(join) }
+                default:
+                    button("Close", go: true) { NetJoinSheet.close() }
+                }
             }
         }
         .padding(.horizontal, Space.xxl)
         .padding(.top, join.ending == .done ? 0 : Space.xl)
+    }
+
+    private func copyButton(_ line: String, title: String, id: String) -> some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(line, forType: .string)
+            copied.value = true
+            Task { @MainActor in
+                try? await Task.sleep(for: Size.Net.copiedFor)
+                copied.value = false
+            }
+        } label: {
+            HStack(spacing: Space.sm) {
+                NetGlyph(kind: .copy, size: Size.Net.smallGlyph)
+                Text(copied.value ? "Copied" : title)
+            }
+        }
+        .buttonStyle(NetButtonStyle(look: .go))
+        .storyID(StoryID.Net.sheetButton(id))
     }
 
     private func button(_ title: String, go: Bool = false, action: @escaping @MainActor () -> Void) -> some View {
@@ -140,11 +171,23 @@ struct NetJoinSheet: View {
 
     // MARK: Showing
 
-    /// Starts `key`'s join and shows its sheet under `anchor` (the Welcome's line, or the icon).
+    /// Starts `key`'s join and shows its sheet under `anchor` (the Welcome's line, or the icon),
+    /// in any visible window when neither names one: no box window is needed.
     static func show(_ key: String, under anchor: NSView?, in window: NSWindow? = nil) {
         Devices.shared.join(key)
-        guard let join = Devices.shared.joining, let window = anchor?.window ?? window ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        let shown = anchor?.window ?? window ?? NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first { $0.isVisible && $0.canBecomeKey }
+        guard let join = Devices.shared.joining, let window = shown else { return }
         NetPopupHost.shared.show("join", NetJoinSheet(join: join), in: window, under: anchor, edge: .center, modal: true) { Devices.shared.endJoin() }
+    }
+
+    /// Try again / Update: the same box's join afresh, in the same sheet.
+    static func retry(_ join: BoxNetJoin) {
+        guard let runner = Devices.shared.joinRunnerNow else {
+            Devices.shared.endJoin()
+            return Devices.shared.join(join.key)
+        }
+        Devices.shared.upgrades?.adopt(join, runner)
+        runner.start(join)
     }
 
     static func close() {

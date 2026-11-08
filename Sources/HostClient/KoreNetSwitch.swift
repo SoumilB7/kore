@@ -156,7 +156,8 @@ package final class KoreNetSwitch: NetRouter {
     /// phones' listener (`MacNet`, KoreLink) reads it too.
     @ObservationIgnored package private(set) var identities = NetIdentityBox()
     @ObservationIgnored private var upgrading: Set<String> = []
-    @ObservationIgnored private var generation = 0
+    /// Bumped each time it turns on or off (a box's upgrade tries once per run of KoreNet).
+    @ObservationIgnored package private(set) var generation = 0
     @ObservationIgnored private var reading = false
     /// A join sheet's ears: what each box says on KoreNet, and how its enroll ended.
     @ObservationIgnored private var nodeWatchers: [String: @MainActor (NetNodeWire.Node) -> Void] = [:]
@@ -170,6 +171,9 @@ package final class KoreNetSwitch: NetRouter {
     @ObservationIgnored package var directoryChanged: (@MainActor () -> Void)?
     /// The Mac woke or its network changed: the phones' listener looks again.
     @ObservationIgnored package var phonesLook: (@MainActor () -> Void)?
+    /// The boxes' SSH → KoreNet upgrades (Kore: `BoxUpgrades.shared`; tests: their own or none):
+    /// told when KoreNet can reach boxes, and when a box's link says who it is.
+    @ObservationIgnored package var upgrades: BoxUpgrades?
 
     /// The links it routes (Kore: every held one; a test: its own).
     @ObservationIgnored private let connections: @MainActor () -> [HostConnection]
@@ -262,6 +266,8 @@ package final class KoreNetSwitch: NetRouter {
         readStatus()
         if !holders.isEmpty { holdBus() }
         if state.reaches { for connection in connections() { connection.peerOnline() } }
+        // U-b: every SSH box not on KoreNet yet upgrades now, with no window.
+        if state.reaches { upgrades?.switchedOn() }
         settled?("chose")
     }
 
@@ -494,6 +500,9 @@ package final class KoreNetSwitch: NetRouter {
             // Its stores were kept under the old device's id: they move to the new one's.
             if connection.alias == old.id.raw { Task { _ = await rekeyer.rekey(connection, to: entry.id, directory: directory) } }
         }
+        // U0: a box reached over SSH that isn't on KoreNet yet upgrades (once per state).
+        let viaSSH = connection.route.map { !$0.isNet } ?? false
+        defer { if viaSSH { upgrades?.reached(connection.alias, fresh: false) } }
         if entry.enrolled {
             if entry.listening { connection.preferNet() }
             return

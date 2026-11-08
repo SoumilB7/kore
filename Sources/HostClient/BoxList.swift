@@ -264,6 +264,8 @@ package final class BoxList {
                 $0.older = found.older
             }
         }
+        // U0: reached over SSH, it moves to KoreNet when it isn't there yet (KoreNet on).
+        if found != nil || box(alias)?.status == .stale { KoreNetSwitch.shared?.upgrades?.reached(alias, fresh: true) }
         _ = await finding?.value
     }
 

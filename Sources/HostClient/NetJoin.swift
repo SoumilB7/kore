@@ -77,12 +77,29 @@ package final class BoxNetJoin {
         }
     }
 
+    /// Where the upgrade is while it works: the row's detail ("Upgrading mybox… · joining the
+    /// tailnet").
+    package enum Step: String, Equatable, Sendable {
+        case checking = "checking"
+        case updating = "updating kore-host"
+        case joining = "joining the tailnet"
+        case allowing = "allowing this Mac"
+        case moving = "moving the link"
+    }
+
     package let key: String
     package let name: String
     package private(set) var rows: [Row] = []
     package private(set) var ending = Ending.working
+    package private(set) var step = Step.checking
     /// The sheet's one sentence, under the rows.
     package private(set) var note: String?
+    /// A failure's one action (Try again, Update, Copy, Set up).
+    package private(set) var fix: BoxFix?
+    /// The box's Tailscale sign-in page, opened on this Mac.
+    package private(set) var loginURL: String?
+    /// A catch to say once it's on (linger off), and its line to copy.
+    package private(set) var warning: String?
     /// The box runs Kore's own tailnet (no root).
     package private(set) var sidecar = false
     private var enrolled = false
@@ -97,22 +114,58 @@ package final class BoxNetJoin {
         self.name = name
     }
 
+    /// A join that couldn't start, with why.
+    package static func failed(key: String, name: String, _ why: String, fix: BoxFix? = nil) -> BoxNetJoin {
+        let join = BoxNetJoin(key: key, name: name)
+        join.failed(why, fix: fix)
+        return join
+    }
+
     /// The command that starts the box's own Tailscale, for "Copy sudo line".
     package static let sudoLine = "sudo tailscale up"
+    /// The command that installs Tailscale on a box, for "Copy line".
+    package static let installLine = "curl -fsSL https://tailscale.com/install.sh | sh"
+    /// The command that keeps kore-host running after the last logout.
+    package static let lingerLine = "sudo loginctl enable-linger $USER"
 
     // What happened, in order.
+
+    /// `kore-host upgrade` runs over SSH (U1–U3).
+    package func checking() {
+        rows = [Row("kore-host on \(name)", detail: "over SSH", mark: .working)]
+        ending = .working
+        step = .checking
+        note = nil
+        fix = nil
+        loginURL = nil
+        enrolled = false
+        onTailnet = nil
+        sshAfterNet = 0
+    }
+
+    /// This Mac's kore-host goes to the box first (it's older, or not there).
+    package func updating() {
+        rows = [Row("Updating kore-host on \(name)…", detail: "over SSH", mark: .working)]
+        step = .updating
+    }
 
     package func started(version: String?) {
         rows = [Row("kore-host" + (version.map { " " + $0 } ?? ""), detail: "over SSH", mark: .done), Row("Tailscale on \(name)…", mark: .working)]
         ending = .working
+        step = .joining
         note = nil
+        fix = nil
     }
 
-    package func failed(_ why: String) {
+    package func failed(_ why: String, fix: BoxFix? = nil) {
         ending = .failed(why)
         note = why
+        self.fix = fix
         if let i = rows.firstIndex(where: { $0.mark == .working }) { rows[i].mark = .attention }
     }
+
+    /// The box is on, with a catch to say (linger off).
+    package func warn(_ line: String) { warning = line }
 
     /// The box said how it's on KoreNet now: its node key while its Tailscale runs.
     package func node(on: Bool, nodeKey: String?, sidecar: Bool = false) {
@@ -123,18 +176,24 @@ package final class BoxNetJoin {
             rows = Array(rows.prefix(1)) + [Row("Tailscale on \(name) is stopped", mark: .attention)]
             note = "Starting it needs sudo. Kore's tailnet can run instead, without root."
             ending = .needsSudo
+            fix = .copy(Self.sudoLine)
             return
         }
         rows = Array(rows.prefix(1)) + [tailscale, Row("Reaching \(name) on the tailnet…", mark: .working), Row("Allowed by SSH", mark: enrolled ? .done : .skipped)]
         note = nil
+        fix = nil
         ending = .working
+        step = enrolled ? .moving : .allowing
         settle()
     }
 
-    /// Kore's tailnet on the box waits for a sign-in.
-    package func needsSignIn() {
-        sidecar = true
-        rows = Array(rows.prefix(1)) + [Row("Kore's tailnet on \(name)", detail: "no root", mark: .done), Row("Sign in for \(name)", mark: .attention)]
+    /// Kore's tailnet on the box waits for a sign-in; or the box's own Tailscale does, its page
+    /// (`url`) opened on this Mac.
+    package func needsSignIn(url: String? = nil) {
+        loginURL = url
+        sidecar = url == nil
+        let tailnet = url == nil ? Row("Kore's tailnet on \(name)", detail: "no root", mark: .done) : Row("Tailscale on \(name)", detail: "signed out", mark: .done)
+        rows = Array(rows.prefix(1)) + [tailnet, Row("Sign in for \(name)", mark: .attention)]
         note = "The sign-in page opens here, on this Mac."
         ending = .signIn
     }
@@ -150,6 +209,7 @@ package final class BoxNetJoin {
     /// The box's SSH link vouched for this Mac (`attach --proto 2`).
     package func allowedBySSH() {
         enrolled = true
+        if step == .allowing { step = .moving }
         if let i = rows.firstIndex(where: { $0.title == "Allowed by SSH" }) { rows[i].mark = .done }
         settle()
     }
@@ -177,6 +237,36 @@ package final class BoxNetJoin {
         note = "\(name) stays on SSH."
         ending = .unreachable
         Self.unreachable.insert(key)
+    }
+
+    // What the box's row says.
+
+    /// Under way: "Upgrading mybox… · joining the tailnet".
+    package var working: String? {
+        guard ending == .working else { return nil }
+        return "Upgrading \(name)… · \(step.rawValue)"
+    }
+
+    /// Stopped, or on with a catch: the one line.
+    package var line: String? {
+        switch ending {
+        case .working: return nil
+        case .done, .relayed: return warning
+        case .needsSudo: return "Tailscale is off on \(name)"
+        case .signIn, .authKey: return "Sign in for \(name) in your browser"
+        case .signInCancelled: return "Sign-in for \(name) was cancelled"
+        case .unreachable: return "Can't reach Tailscale · stays on SSH"
+        case .failed(let why): return why.hasSuffix(".") ? String(why.dropLast()) : why
+        }
+    }
+
+    /// The Mac's own tailnet can't reach boxes now: why, in its words (G24).
+    package static func macLine(_ state: NetState) -> String {
+        switch state {
+        case .unavailable: "Kore's tailnet couldn't start."
+        case .signedOut: "Tailscale is signed out on this Mac."
+        default: "Tailscale is off on this Mac."
+        }
     }
 
     private func settle() {
@@ -208,48 +298,162 @@ package protocol BoxNetJoinRunner: AnyObject {
     func offersKoreTailnet(_ join: BoxNetJoin) -> Bool
 }
 
-/// The join over a box's live SSH link (phase 18 step 4's upgrade): this Mac's KoreNet on,
-/// `net.set{on}` to the box, its link dialled again so its `net.node` says how it's on the
-/// tailnet; KoreNet's switch then enrolls this Mac there over SSH (`attach --proto 2`, so no Allow
-/// card) and moves the link to the tailnet once the box's node key is known. Nothing polls: every
-/// step waits on what the link or the tailnet says.
+/// The SSH → KoreNet upgrade of one box (phase 18 §2g), from "Join KoreNet" or by itself
+/// (`BoxUpgrades`, U0): this Mac's KoreNet on, then `kore-host upgrade` over the box's SSH
+/// (U1–U3: kore-host current, its service, `net on`, this Mac's grant), this Mac's own kore-host
+/// pushed first when the box's is older; then the box's link, held (dialled when no window holds
+/// it), says `net.node`, KoreNet's switch enrolls this Mac there over SSH (`attach --proto 2`, U4)
+/// and moves the link to the tailnet once the box's node key is known (U5). Nothing polls: every
+/// step waits on what the shell, the link or the tailnet says; the link's part is bounded.
 @MainActor
 package final class BoxNetJoinRun: BoxNetJoinRunner {
     private let connection: HostConnection
     private let net: KoreNetSwitch
     private let directory: NodeDirectory
+    private let shell: BoxUpgradeShell
+    /// Started by itself (no sheet): it never turns KoreNet on, and lets go at a stop that needs
+    /// a person (the next reach looks again).
+    private let auto: Bool
+    private let openURL: @MainActor (URL) -> Void
+    private let sleep: @Sendable (Duration) async -> Void
+    private let want: String?
+    /// Told once when a start ends, however it ends (`BoxUpgrades`).
+    package var ended: (@MainActor (BoxNetJoin) -> Void)?
     private var watching = false
-    /// The link retained and the bus held (from `start` until it ends, however it ends).
-    private var holding = false
+    /// The bus held (from `start` until it ends), and the link retained (from U4).
+    private var holdingBus = false
+    private var holdingLink = false
     private var cancelled = false
+    /// Each start's number: a step of an earlier one is dropped.
+    private var run = 0
+    private var told = 0
+    /// Sign-in pages opened, once each.
+    private var opened: Set<String> = []
 
-    package init(connection: HostConnection, net: KoreNetSwitch, directory: NodeDirectory = .shared) {
+    /// How long the link may take to reach the tailnet once the box is on (U4–U5).
+    package static let linkLimit: Duration = .seconds(90)
+    /// How long a sign-in on the box is waited for.
+    package static let signInLimit: Duration = .seconds(600)
+
+    package init(
+        connection: HostConnection, net: KoreNetSwitch, directory: NodeDirectory = .shared, shell: BoxUpgradeShell = .standard, auto: Bool = false,
+        openURL: @escaping @MainActor (URL) -> Void = { _ in }, sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+        want: String? = HostWire.appVersion
+    ) {
         self.connection = connection
         self.net = net
         self.directory = directory
+        self.shell = shell
+        self.auto = auto
+        self.openURL = openURL
+        self.sleep = sleep
+        self.want = want
     }
+
+    private func live(_ mine: Int) -> Bool { !cancelled && mine == run }
 
     package func start(_ join: BoxNetJoin) {
         cancelled = false
-        join.started(version: connection.hostVersion)
-        guard connection.boxMinor >= 12, connection.control == .full else {
-            return join.failed("kore-host on \(join.name) needs an update first.")
-        }
-        if !holding {
-            holding = true
-            connection.retain()
+        run += 1
+        let mine = run
+        join.checking()
+        if !holdingBus {
+            holdingBus = true
             net.hold("join." + join.key, true)
         }
         Task {
-            if !net.on { net.set(true) }
-            await Observed.until { self.net.state != .choosing }
-            guard !cancelled else { return }
-            guard net.state.reaches else { return failed(join, "Tailscale is off on this Mac.") }
-            guard let answer = await connection.setBoxNet(true), answer.ok else {
-                return failed(join, "\(join.name) didn't turn KoreNet on.")
+            if !net.on {
+                guard !auto else { return failed(join, "KoreNet is off on this Mac.") }
+                net.set(true)
             }
-            watch(join)
-            connection.relink("korenet on")
+            await Observed.until { self.net.state != .choosing }
+            guard live(mine) else { return }
+            guard net.state.reaches else { return failed(join, BoxNetJoin.macLine(net.state)) }
+            guard let report = await upgrade(join, mine), live(mine) else { return }
+            join.started(version: report.version)
+            if report["linger"] == "off" { join.warn("\(join.name) stops kore-host when you log out") }
+            switch report.state {
+            case "done":
+                link(join, mine, limit: Self.linkLimit)
+            case "needs you":
+                let error = report.error ?? ""
+                if error == "tailscale absent" { return failed(join, "Install Tailscale on \(join.name)", fix: .copy(BoxNetJoin.installLine)) }
+                if error.hasPrefix("port held") {
+                    return failed(join, "Port \(NetListener.port) on \(join.name) is held by another program", fix: .tryAgain)
+                }
+                if error == "tailscale signed out", let page = report.login {
+                    // The box's own sign-in, opened here: the link waits for its node key.
+                    join.needsSignIn(url: page)
+                    if opened.insert(page).inserted, let url = URL(string: page) { openURL(url) }
+                    return link(join, mine, limit: Self.signInLimit)
+                }
+                if error.hasPrefix("tailscale") || error == "no sudo" {
+                    join.node(on: true, nodeKey: nil)
+                    // From Join, the sheet waits for the box's Tailscale (`followTailnet`); by
+                    // itself, the next reach looks again.
+                    return auto ? finish(join) : link(join, mine, limit: nil)
+                }
+                failed(join, "\(join.name) isn't listening on the tailnet" + (report["listen"].map { ": " + $0 } ?? ""), fix: .tryAgain)
+            default:
+                failed(join, "\(join.name) couldn't join KoreNet" + (report.error.map { ": " + $0 } ?? ""), fix: .tryAgain)
+            }
+        }
+    }
+
+    /// U1–U3 over SSH, this Mac's kore-host pushed first when the box's is older or missing: the
+    /// box's report, or nil with the join failed.
+    private func upgrade(_ join: BoxNetJoin, _ mine: Int) async -> BoxUpgradeReport? {
+        let (alias, grant, command) = (connection.sshAlias, connection.grant, connection.sshCommand)
+        var ran = await shell.upgrade(alias, command, grant, want)
+        guard live(mine) else { return nil }
+        if ran.status == AttachExit.sshFailed {
+            let why = BoxSetup.sshFailure(join.name, ran.output)
+            failed(join, why.message, fix: why.fix ?? .tryAgain)
+            return nil
+        }
+        if let report = BoxUpgradeReport.parse(ran.output), !report.old(want: want) { return report }
+        // Updating restarts kore-host there, ending the turns running: asked first (Update).
+        if connection.chats.values.contains(where: \.running) {
+            failed(join, "\(join.name) needs an update", fix: .update)
+            return nil
+        }
+        join.updating()
+        if let why = await shell.push(alias, grant) {
+            HostLog.note(join.key, "korenet upgrade push failed", why.message)
+            if live(mine) { failed(join, "\(join.name) needs an update", fix: .update) }
+            return nil
+        }
+        guard live(mine) else { return nil }
+        ran = await shell.upgrade(alias, command, grant, want)
+        guard live(mine) else { return nil }
+        guard let report = BoxUpgradeReport.parse(ran.output), !report.old(want: want) else {
+            HostLog.note(join.key, "korenet upgrade", "still old after the push: " + (ran.output.split(whereSeparator: \.isNewline).last.map(String.init) ?? ""))
+            failed(join, "\(join.name) needs an update", fix: .update)
+            return nil
+        }
+        return report
+    }
+
+    /// U4–U5: the link held, `net.node` heard anew, enrolled, moved; given up after `limit`.
+    private func link(_ join: BoxNetJoin, _ mine: Int, limit: Duration?) {
+        if !holdingLink {
+            holdingLink = true
+            connection.retain()
+        }
+        watch(join)
+        // Up already (a window holds it): dialled again, so the box's `net.node` is heard anew.
+        if connection.isOnline, connection.route != .net { connection.relink("korenet on") }
+        guard let limit else { return }
+        let sleep = sleep
+        Task { [weak self, weak join] in
+            await sleep(limit)
+            guard let self, let join, self.live(mine), !join.ending.over else { return }
+            if join.ending == .signIn || join.ending == .authKey {
+                self.failed(join, "Sign-in for \(join.name) didn't finish", fix: .tryAgain)
+            } else {
+                join.unreachableNow()
+                self.finish(join)
+            }
         }
     }
 
@@ -264,19 +468,24 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
         }
         connection.onLink("netjoin") { [weak self, weak join] up in
             guard let self, let join, up, !self.cancelled else { return }
+            if self.connection.control != nil, self.connection.control != .full, self.directory.entry(forKey: self.connection.alias)?.enrolled != true {
+                return self.failed(join, "\(join.name) gives this Mac less than full control", fix: .setUp)
+            }
             if self.directory.entry(forKey: self.connection.alias)?.enrolled == true { join.allowedBySSH() }
             let relayed = self.relayed()
             join.linked(net: self.connection.route == .net, relayed: relayed)
             if join.ending.over { self.finish(join) }
         }
         net.watchEnroll(key) { [weak self, weak join] ok in
-            guard let self, let join, !self.cancelled, ok else { return }
+            guard let self, let join, !self.cancelled else { return }
+            guard ok else { return self.failed(join, "\(join.name) hasn't allowed this Mac", fix: .setUp) }
             join.allowedBySSH()
             if join.ending.over { self.finish(join) }
         }
-        // The box's node key may have come before this watch (just ahead of `net.set`'s answer):
-        // what it said counts now, not only at the next `net.node`.
+        // The box's node key may have come before this watch (just ahead of the relink): what it
+        // said counts now, not only at the next `net.node`.
         if let key = directory.entry(forKey: connection.alias)?.nodeKey { join.node(on: true, nodeKey: key) }
+        if directory.entry(forKey: connection.alias)?.enrolled == true { join.allowedBySSH() }
         // And a link already up on the tailnet by now (its `onLink` came before this watch).
         if connection.isOnline, connection.route == .net {
             join.linked(net: true, relayed: relayed())
@@ -289,7 +498,7 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
     private func followTailnet(_ join: BoxNetJoin) {
         withObservationTracking { _ = net.status } onChange: { [weak self, weak join] in
             Task { @MainActor in
-                guard let self, let join, !self.cancelled, !join.ending.over else { return }
+                guard let self, let join, !self.cancelled, self.watching, !join.ending.over else { return }
                 if join.ending == .needsSudo, self.peerOnline(named: join.name) { self.connection.relink("tailscale on the box") }
                 self.followTailnet(join)
             }
@@ -306,8 +515,8 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
     }
 
     /// Ended without joining: what `start` held goes, so "Try again" starts clean.
-    private func failed(_ join: BoxNetJoin, _ why: String) {
-        join.failed(why)
+    private func failed(_ join: BoxNetJoin, _ why: String, fix: BoxFix? = nil) {
+        join.failed(why, fix: fix)
         finish(join)
     }
 
@@ -318,10 +527,17 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
             net.watchEnroll(connection.alias, nil)
             connection.onLink("netjoin", nil)
         }
-        guard holding else { return }
-        holding = false
-        net.hold("join." + join.key, false)
-        connection.release()
+        if holdingBus {
+            holdingBus = false
+            net.hold("join." + join.key, false)
+        }
+        if holdingLink {
+            holdingLink = false
+            connection.release()
+        }
+        guard told != run else { return }
+        told = run
+        ended?(join)
     }
 
     package func cancel(_ join: BoxNetJoin) {
@@ -333,7 +549,10 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
     // doesn't carry yet: the sheet offers it only once the box says it can.
     package func offersKoreTailnet(_ join: BoxNetJoin) -> Bool { connection.caps.contains("net.sidecar") }
     package func useKoreTailnet(_ join: BoxNetJoin) {}
-    package func signIn(_ join: BoxNetJoin) {}
+    /// "Sign in ↗": the box's sign-in page again.
+    package func signIn(_ join: BoxNetJoin) {
+        if let page = join.loginURL.flatMap(URL.init(string:)) { openURL(page) }
+    }
     package func authKey(_ join: BoxNetJoin, _ key: String) {}
     package func stayOnSSH(_ join: BoxNetJoin) { cancel(join) }
 }

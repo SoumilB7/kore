@@ -202,7 +202,20 @@ struct DevicesPopup: View {
         let point = view.convert(CGPoint(x: x, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
         var items = [OptionItem("Rename") { startRename(row) }]
         items.append(row.paused ? OptionItem("Bring online") { devices.setPaused(row, false) } : OptionItem("Take offline") { devices.setPaused(row, true) })
-        if row.canJoin { items.append(OptionItem("Join KoreNet") { join(row) }) }
+        if row.canJoin { items.append(OptionItem(row.upgradeNote == nil ? "Join KoreNet" : "Try again") { join(row) }) }
+        // A stopped upgrade's one action (its line is the row's detail).
+        switch row.upgradeFix {
+        case .copy(let line)?:
+            items.append(OptionItem(line == BoxNetJoin.sudoLine ? "Copy sudo line" : "Copy line") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(line, forType: .string)
+            })
+        case .update?, .setUp?:
+            let fix = row.upgradeFix!
+            items.append(OptionItem(fix.title) { Task { await BoxList.shared.act(fix, on: row.id) } })
+        default:
+            break
+        }
         items.append(.rule)
         let forget = row.kind == .box && !row.canJoin && row.route == .ssh ? "Forget \(row.name) on this Mac" : "Remove \(row.name) from KoreNet"
         items.append(OptionItem("Remove", destructive: true, children: [OptionItem(forget, destructive: true) { devices.remove(row) }]))

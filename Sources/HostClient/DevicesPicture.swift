@@ -106,6 +106,13 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
     package var tailscaleOff = false
     /// A box that said another identity key under its id: refused until it's forgotten.
     package var identityChanged = false
+    /// A box's SSH → KoreNet upgrade under way: "Upgrading mybox… · joining the tailnet".
+    package var upgrading: String?
+    /// Its upgrade stopped (or is on with a catch): the one line, and its action.
+    package var upgradeNote: String?
+    package var upgradeFix: BoxFix?
+    /// On KoreNet a moment ago ("on KoreNet" for `BoxUpgrades.shownFor`).
+    package var joinedAt: Date?
 
     package init(id: String, kind: Kind, name: String, status: Status, route: Route? = nil) {
         self.id = id
@@ -195,6 +202,8 @@ package struct BoxFacts: Equatable, Sendable {
     package var entry: NodeDirectory.Entry?
     package var paused = false
     package var pending: [PendingDevice] = []
+    /// Its SSH → KoreNet upgrade, as `BoxUpgrades` says it.
+    package var upgrade: BoxUpgradeFacts?
 
     package init(key: String, name: String) {
         self.key = key
@@ -253,6 +262,12 @@ extension DevicesPicture {
             row.canJoin = net.on && picture.net == .running && box.entry?.on != true && box.listed != nil
             row.tailscaleOff = box.entry.map { $0.on && !$0.listening } ?? false
             row.identityChanged = box.entry?.identityChanged ?? false
+            if net.on, let upgrade = box.upgrade {
+                row.upgrading = upgrade.working
+                row.upgradeNote = upgrade.note
+                row.upgradeFix = upgrade.fix
+                row.joinedAt = upgrade.joinedAt
+            }
             if box.online {
                 switch box.route {
                 case .net?: row.route = tailnetPeer?.relayed == true ? .relayed : .tailnet
@@ -391,6 +406,9 @@ package enum DevicesWords {
         if row.paused { return "taken offline" }
         if row.identityChanged { return "identity changed · Forget and set up again" }
         if row.needsTailscale { return "needs Tailscale on" }
+        if let upgrading = row.upgrading { return upgrading }
+        if let at = row.joinedAt, now.timeIntervalSince(at) < Double(BoxUpgrades.shownFor.components.seconds) { return "on KoreNet" }
+        if let note = row.upgradeNote { return note }
         switch row.status {
         case .needsAllow: return "hasn't allowed this Mac"
         case .needsUpdate: return "needs an update"

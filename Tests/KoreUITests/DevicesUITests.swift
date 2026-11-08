@@ -32,6 +32,7 @@ struct DevicesUITests {
         devices.macNameOverride = "MacBook"
         devices.openURL = { sides.opened.append($0) }
         devices.openTailscaleApp = { sides.apps += 1 }
+        devices.upgrades = BoxUpgrades()
         return devices
     }
 
@@ -128,10 +129,32 @@ struct DevicesUITests {
         #expect(devices.joining === join && runner.log == ["start"])
         devices.endJoin()
         #expect(devices.joining == nil && runner.log == ["start", "cancel"])
-        // No link to the box: nothing opens.
+        // No runner for the box: the sheet still opens, saying why (never a silent no-op).
         devices.joinRunner = { _ in nil }
         devices.join("gone")
-        #expect(devices.joining == nil)
+        #expect(devices.joining?.ending == .failed("KoreNet isn't ready on this Mac yet.") && devices.joining?.fix == .tryAgain)
+        devices.endJoin()
+    }
+
+    /// Join KoreNet with no box window: an upgrade under way (started by itself) is the one the
+    /// sheet shows; nothing starts beside it; once it ends, Join starts a new one.
+    @Test func joinShowsTheUpgradeUnderWay() {
+        let sides = Sides(ScriptedNet(on: true, state: .installed, status: ScriptedNet.running))
+        let devices = devices(sides)
+        let running = ScriptedJoin()
+        let under = BoxNetJoin(key: "mybox", name: "mybox")
+        devices.upgrades?.adopt(under, running)
+        running.start(under)
+        var asked = 0
+        devices.joinRunner = { _ in asked += 1; return ScriptedJoin() }
+        devices.join("mybox")
+        #expect(devices.joining === under && asked == 0)
+        devices.endJoin()
+        #expect(running.log == ["start", "cancel"])
+        under.failed("mybox needs an update", fix: .update)
+        devices.join("mybox")
+        #expect(devices.joining !== under && asked == 1)
+        devices.endJoin()
     }
 
     @Test func theCardsWords() {

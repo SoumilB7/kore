@@ -19,6 +19,7 @@ HostMemory.smallPages()
 let usage = """
     usage: kore-host run
            kore-host join
+           kore-host upgrade [--want <version>] [--grant <name>]
            kore-host net on|off
            kore-host devices [allow <id|code> | remove <id|code|name>]
            kore-host status
@@ -142,6 +143,26 @@ case "join":
         print("code    \(me.code)")
         print("Within 10 minutes, open Devices in Kore on your Mac and check the code matches before you Allow this box.")
     } catch { fail("kore-host: \(error)") }
+case "upgrade":
+    // U1–U3 of the SSH → KoreNet upgrade, each only when not done yet (HostUpgrade).
+    func option(_ name: String) -> String? {
+        guard let at = arguments.firstIndex(of: name) else { return nil }
+        guard at + 1 < arguments.count else { fail(usage) }
+        return arguments[at + 1]
+    }
+    let want = option("--want"), grant = option("--grant")
+    if let grant, !Grant.valid(grant) { fail("kore-host: \(GrantError.badName)") }
+    let report = HostUpgrade.standard(paths: paths, home: home).run(want: want, grant: grant)
+    for line in report.text { print(line) }
+    if report.updated {
+        // The new binary runs the rest: it is the version wanted now.
+        fflush(stdout)
+        let next = ["kore-host", "upgrade"] + (grant.map { ["--grant", $0] } ?? [])
+        let argv = next.map { strdup($0) } + [nil]
+        execv(HostService.executable(), argv)
+        fail("kore-host: the new kore-host didn't start (\(String(cString: strerror(errno))))", code: 1)
+    }
+    exit(report.exit)
 case "net":
     switch arguments.dropFirst().first {
     case "on":
