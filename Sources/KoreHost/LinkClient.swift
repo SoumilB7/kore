@@ -189,6 +189,12 @@ final class LinkClient {
                 guard let blob = host.keep(file) else { return uploadFailed(uploadId, .init(.busy, "The box couldn't keep the file.")) }
                 send(.result(.init(id: "blob.put:" + uploadId, ok: true, blobId: blob)))
             }
+        case .historyList(let id, let windowId, let query, _, let offset):
+            // A folder's closed chats, to reopen (full grants).
+            guard current()?.control == .full else { return }
+            let all = host.closedHistory(windowId: windowId, query: query)
+            let page = Array(all.dropFirst(max(offset, 0)).prefix(50))
+            send(.historyPage(id: id, windowId: windowId, sessions: page, more: all.count > max(offset, 0) + page.count))
         case .cmd(let id, .control(let kind, let args)) where kind == .syncWatch || kind == .syncUnwatch:
             guard current() != nil else { return }
             send(.result(sync(kind, folder: args.folder, id: id)))

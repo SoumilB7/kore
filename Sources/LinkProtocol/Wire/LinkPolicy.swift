@@ -272,6 +272,9 @@ package enum LinkPolicy {
             // The box also checks it serves the folder.
             guard let folder = args.folder, folder.hasPrefix("/"), !folder.contains("\0") else { return .deny(.invalid, "Name the folder.") }
             return .allow
+        case .tabReopen:
+            // A closed chat back: named by `sourceId` (it isn't one of the box's chats until then).
+            return args.sourceId != nil ? .allow : .deny(.invalid, "Name the chat.")
         case .authGh:
             return full()
         case .accountSignIn:

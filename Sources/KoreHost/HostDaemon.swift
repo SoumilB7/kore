@@ -12,6 +12,8 @@ package final class HostDaemon {
     package let services = HostServices()
     package private(set) var config: HostConfig
     package private(set) var chats: [HostChat] = []
+    /// Chats whose tabs were closed, oldest first: hidden from every client's state, kept to reopen.
+    package private(set) var closedChats: [HostChat] = []
     private var listener: HostListener?
     /// Held from `start` to `stop`: one daemon per runtime folder.
     private var lock: HostLock?
@@ -48,7 +50,9 @@ package final class HostDaemon {
         try? HostPaths.privateFile(Data(HostServices.instructions(host: ProcessInfo.processInfo.hostName).utf8), to: note)
         services.instructions = note
         let dirs = (try? FileManager.default.contentsOfDirectory(at: paths.chats, includingPropertiesForKeys: nil)) ?? []
-        chats = dirs.compactMap(HostChat.load).filter { $0.record.closed != true }.sorted { $0.record.created < $1.record.created }
+        let all = dirs.compactMap(HostChat.load).sorted { $0.record.created < $1.record.created }
+        chats = all.filter { $0.record.closed != true }
+        closedChats = all.filter { $0.record.closed == true }
         for chat in chats { watch(chat) }
     }
 
@@ -141,11 +145,43 @@ package final class HostDaemon {
     /// and logs stay on disk, marked closed.
     func close(_ hc: HostChat) {
         sleep(hc)
-        hc.markClosed()
+        hc.markClosed(at: Date())
         hc.stream.close()
         chats.removeAll { $0 === hc }
+        // Kept, hidden, so it can be reopened: the last `keptClosed`, and none past a month.
+        closedChats.append(hc)
+        let month = Date().addingTimeInterval(-30 * 86400)
+        while let oldest = closedChats.first, closedChats.count > Self.keptClosed || oldest.closedAt < month {
+            closedChats.removeFirst()
+            oldest.remove()
+        }
         for connection in connections where connection.proven {
             connection.send(.delta(rev: connection.nextRev(), windows: windows, chats: nil, removed: [hc.id]))
+        }
+    }
+
+    /// Closed chats kept for reopening.
+    static let keptClosed = 50
+
+    /// A closed chat back among the box's chats (a client's ⇧⌘T, or its History).
+    func reopen(_ id: String) -> HostChat? {
+        guard let at = closedChats.firstIndex(where: { $0.id == id }) else { return nil }
+        let hc = closedChats.remove(at: at)
+        hc.markOpen()
+        chats.append(hc)
+        watch(hc)
+        broadcast(windows: true, chats: [hc])
+        return hc
+    }
+
+    /// A folder's closed chats, newest closed first, whose titles have `query`.
+    func closedHistory(windowId: String, query: String?) -> [HistorySession] {
+        guard let folder = folder(windowId: windowId) else { return [] }
+        let words = query?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+        return closedChats.reversed().filter { $0.record.folder == folder && (words.isEmpty || $0.title.lowercased().contains(words)) }.map {
+            HistorySession(
+                id: $0.id, provider: $0.record.provider, title: $0.title, updatedAt: Int64($0.closedAt.timeIntervalSince1970 * 1000),
+                archived: false, open: false)
         }
     }
 
@@ -410,6 +446,9 @@ package final class HostDaemon {
             guard let hc = args.chatId.flatMap(chat) else { return fail(.goneChat, "No such chat on this box.") }
             close(hc)
             return .init(id: id, ok: true)
+        case .tabReopen:
+            guard let hc = args.sourceId.flatMap(reopen) else { return fail(.goneChat, "That chat isn't kept any more.") }
+            return .init(id: id, ok: true, chatId: hc.id, windowId: Self.windowID(hc.record.folder))
         case .chatSetModel:
             guard let hc = args.chatId.flatMap(chat), let model = args.modelId, offers(model: model, hc.record.provider) else {
                 return fail(.invalid, "The chat's CLI doesn't offer that model.")

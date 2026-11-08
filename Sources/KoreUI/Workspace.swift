@@ -277,8 +277,31 @@ package final class Workspace {
         return chat
     }
 
+    /// A box's chat back in a tab, at `index` (where it was), selected.
+    private func place(_ chat: Chat, at index: Int) {
+        let tab = ChatTab()
+        tab.chat = chat
+        if tabs.count == 1, tabs[0].isEmpty { tabs.removeAll() }
+        tabs.insert(tab, at: min(max(index, 0), tabs.count))
+        activeID = tab.id
+    }
+
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.
     package func open(_ session: SessionSummary) {
+        // On a box: a closed chat it keeps, back on the box and in a tab here.
+        if let box {
+            if let tab = tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == session.id && $0.agent == nil }) {
+                select(tab)
+                return
+            }
+            let provider = Registry.provider(for: session.agent)
+            Task {
+                guard let chat = await box.reopen(session.id, provider: provider, title: session.title) else { return }
+                place(chat, at: tabs.count)
+                chats.removeAll { $0.id == session.id }
+            }
+            return
+        }
         if let tab = tab(for: session.id, provider: Registry.provider(for: session.agent).id) {
             select(tab)
             return
@@ -438,6 +461,9 @@ package final class Workspace {
             returnToStrip(chats, after: tab, select: false)
         } else if remember, box == nil {
             rememberClosed(tab, at: index)
+        } else if remember, let box, tab.agent == nil, let chat = tab.chat {
+            // On a box: the box keeps the chat, and ⇧⌘T asks for it back.
+            box.rememberClosed(chat, at: index)
         }
         if tab.agent == nil, let chat = tab.chat {
             for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
@@ -906,8 +932,9 @@ package final class Workspace {
     }
 
     private func load() async {
-        // A box's history isn't read from here yet.
-        guard box == nil else {
+        // A box's history: the closed chats it keeps for this folder.
+        if let box {
+            chats = await box.closedHistory()
             loaded = true
             return
         }
@@ -973,6 +1000,8 @@ package final class Workspace {
     /// Archives a chat in its CLI (Codex: `thread/archive`; Claude has no archive of its own, so
     /// Kore keeps a hidden list, as the Claude Code extension does) and closes its tab.
     func archive(_ session: SessionSummary) async {
+        // A box's closed chats are reopened, not renamed or archived from here.
+        guard box == nil else { return }
         let provider = Registry.provider(for: session.agent).id
         discardRecovery(provider: provider, session: session.id)
         if let tab = tab(for: session.id, provider: provider) { close(tab, remember: false) }
@@ -989,6 +1018,8 @@ package final class Workspace {
     /// Renames a chat through its CLI. An open tab's chat does it directly; a chat that isn't
     /// open is resumed just long enough to rename it.
     func rename(_ session: SessionSummary, to name: String) async {
+        // A box's closed chats are reopened, not renamed or archived from here.
+        guard box == nil else { return }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         if let index = chats.firstIndex(where: { $0.id == session.id }) {
@@ -1010,6 +1041,8 @@ package final class Workspace {
 
     /// Brings an archived chat back and opens it.
     func unarchive(_ session: SessionSummary) async {
+        // A box's closed chats are reopened, not renamed or archived from here.
+        guard box == nil else { return }
         await Registry.provider(for: session.agent).setArchived(session.id, false, folder)
         setArchived(session.id, false)
         open(session)
@@ -1200,13 +1233,21 @@ package final class Workspace {
     }
 
     var canReopenClosedTab: Bool {
-        closedTabs.contains { entry in
+        if let box { return box.canReopen }
+        return closedTabs.contains { entry in
             entry.agent == nil || tabs.contains { $0.agent == nil && $0.id == entry.parent }
         }
     }
 
     /// Reopens the last closed tab at its old position without retaining its previous CLI or views.
     func reopenClosedTab() {
+        if let box {
+            Task {
+                guard let (chat, index) = await box.reopenLast() else { return }
+                place(chat, at: index)
+            }
+            return
+        }
         while let entry = closedTabs.popLast() {
             let attachments = retainedAttachments.removeValue(forKey: entry.id) ?? []
             let tab: ChatTab

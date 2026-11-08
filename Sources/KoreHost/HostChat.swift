@@ -23,8 +23,10 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     /// and the message it forks at. Kept until the fork has a session of its own.
     package var forkFrom: String?
     package var forkAt: String?
-    /// Its tab was closed on a client: it's no longer one of the box's chats.
+    /// Its tab was closed on a client: it's no longer one of the box's chats, and when (seconds
+    /// since 1970).
     package var closed: Bool?
+    package var closedAt: Double?
 }
 
 /// One line of a chat's log (`log.jsonl`): an entry as it went on the wire, a turn, or the start
@@ -253,9 +255,24 @@ package final class HostChat {
         }
     }
 
-    func markClosed() {
+    func markClosed(at date: Date) {
         record.closed = true
+        record.closedAt = date.timeIntervalSince1970
         try? saveRecord()
+    }
+
+    func markOpen() {
+        record.closed = nil
+        record.closedAt = nil
+        try? saveRecord()
+    }
+
+    var closedAt: Date { Date(timeIntervalSince1970: record.closedAt ?? Double(record.created)) }
+
+    /// A closed chat past what the box keeps: its record and logs go.
+    func remove() {
+        stream.close()
+        try? FileManager.default.removeItem(at: dir)
     }
 
     func setModel(_ id: String) {

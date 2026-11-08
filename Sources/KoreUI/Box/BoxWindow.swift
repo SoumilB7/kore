@@ -173,6 +173,44 @@ final class BoxBinding {
     }
 
     /// Its tab closed here: it closes on the box too.
+    /// Box tabs closed in this window, last closed last: ⇧⌘T reopens them on the box.
+    private var closedTabs: [(id: String, provider: Provider, title: String, index: Int)] = []
+
+    var canReopen: Bool { !closedTabs.isEmpty }
+
+    func rememberClosed(_ chat: Chat, at index: Int) {
+        guard let id = (chat.services as? BoxChatServices)?.chatId else { return }
+        closedTabs.append((id, chat.provider, chat.title, index))
+        if closedTabs.count > 20 { closedTabs.removeFirst(closedTabs.count - 20) }
+    }
+
+    /// The last closed tab's chat, back on the box, and where its tab was.
+    func reopenLast() async -> (chat: Chat, index: Int)? {
+        while let entry = closedTabs.popLast() {
+            if let chat = await reopen(entry.id, provider: entry.provider, title: entry.title) { return (chat, entry.index) }
+        }
+        return nil
+    }
+
+    /// A closed chat back on the box, as a chat for a tab here; nil when the box no longer keeps it.
+    func reopen(_ id: String, provider: Provider, title: String) async -> Chat? {
+        guard case .success(let chatId) = await connection.reopen(id) else { return nil }
+        closedIds.remove(chatId)
+        return chat(provider, id: chatId, title: title)
+    }
+
+    /// The folder's closed chats on the box, for the History popup: its sessions, by box chat id.
+    func closedHistory() async -> [SessionSummary] {
+        let window = connection.folders.first { $0.path == folder }?.windowId ?? connection.windows.first { $0.path == folder }?.id
+        guard let window else { return [] }
+        return await connection.closedChats(windowId: window).compactMap { session in
+            guard let provider = Registry.provider(session.provider) else { return nil }
+            return SessionSummary(
+                id: session.id, agent: provider.historyAgent, title: session.title,
+                updated: Date(timeIntervalSince1970: Double(session.updatedAt) / 1000))
+        }
+    }
+
     func tabClosed(_ chat: Chat) {
         guard let id = (chat.services as? BoxChatServices)?.chatId else { return }
         let connection = connection

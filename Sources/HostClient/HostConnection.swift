@@ -106,6 +106,7 @@ package final class HostConnection {
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var waiting: [String: CheckedContinuation<LinkMessage.Result, Never>] = [:]
     @ObservationIgnored private var folderAsks: [String: CheckedContinuation<[BoxFolder], Never>] = [:]
+    @ObservationIgnored private var historyAsks: [String: CheckedContinuation<[HistorySession], Never>] = [:]
     @ObservationIgnored private var followers: [String: Weak] = [:]
     @ObservationIgnored private var wantRaw: Set<String> = []
     /// Forwarded calls waiting, and their answers as the box gave them (`ChatCallResult`).
@@ -355,6 +356,29 @@ package final class HostConnection {
         return listed
     }
 
+    /// A folder's closed chats on the box, newest closed first, to reopen; empty while it can't be
+    /// reached.
+    package func closedChats(windowId: String) async -> [HistorySession] {
+        guard ready, let transport else { return [] }
+        serial += 1
+        let id = "h\(serial).\(tag)"
+        transport.send(HostWire.encode(.historyList(id: id, windowId: windowId, query: nil, archived: false, offset: 0)))
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            self?.historyAsks.removeValue(forKey: id)?.resume(returning: [])
+        }
+        let listed = await withCheckedContinuation { historyAsks[id] = $0 }
+        timeout.cancel()
+        return listed
+    }
+
+    /// A closed chat back among the box's chats: its id, or why not.
+    package func reopen(_ chatId: String) async -> Result<String, HostRefusal> {
+        let result = await command { HostWire.command(id: $0, .control(.tabReopen, ControlArgs(sourceId: chatId))) }
+        guard result.ok, let id = result.chatId else { return .failure(HostRefusal(result, alias: alias)) }
+        return .success(id)
+    }
+
     private func answerFolders(_ id: String, _ list: [BoxFolder]?) {
         guard let ask = folderAsks.removeValue(forKey: id) else { return }
         if let list {
@@ -433,6 +457,8 @@ package final class HostConnection {
         ready = false
         if was { for follower in liveFollowers { follower.linked(false) } }
         for id in Array(folderAsks.keys) { answerFolders(id, nil) }
+        for (_, ask) in historyAsks { ask.resume(returning: []) }
+        historyAsks = [:]
     }
 
     private func dropped(_ reason: String?) {
@@ -532,6 +558,8 @@ package final class HostConnection {
                 followers[id]?.follower?.meta(nil)
             }
             saveSoon()
+        case .historyPage(let id, _, let sessions, _):
+            historyAsks.removeValue(forKey: id)?.resume(returning: sessions)
         case .result(let result):
             if result.id.hasPrefix("chat.follow:") {
                 followers[String(result.id.dropFirst("chat.follow:".count))]?.follower?.refused(result.message ?? "This chat isn't on \(alias) any more")
