@@ -126,15 +126,16 @@ struct MoveSheetLayer: View {
 /// edits wait there; nothing here can change it.
 struct ReplicaLine: View {
     let replica: ChatPlaces.Replica
-    let sendBack: (() -> Void)?
+    /// Its one action: Send back (this Mac holds it), or Continue here (a mirror).
+    let action: (title: String, run: () -> Void)?
 
     var body: some View {
         HStack(spacing: Space.sm) {
             Circle().fill(Theme.tertiary).frame(width: Size.statusPoint, height: Size.statusPoint)
             Text(line).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1)
-            if let sendBack {
+            if let action {
                 Text("·").font(Chrome.label).foregroundStyle(Theme.tertiary)
-                Button("Send back", action: sendBack).buttonStyle(.plain).font(Chrome.label).foregroundStyle(Theme.accent)
+                Button(action.title, action: action.run).buttonStyle(.plain).font(Chrome.label).foregroundStyle(Theme.accent)
             }
         }
         .padding(.horizontal, Space.lg)
@@ -144,8 +145,12 @@ struct ReplicaLine: View {
         .help(replica.here ? "It runs on this Mac now · read-only here" : "It runs on \(replica.name) · read-only here")
     }
 
+    /// When a mirror last caught up.
+    var asOf: Date? = nil
+
     private var line: String {
         if replica.moving { return "Moving…" }
+        if replica.mirror { return "on \(replica.name)" + (asOf.map { " · as of " + BoxBinding.when($0) } ?? "") }
         return replica.here ? "on this Mac" : "on \(replica.name) · read-only here"
     }
 }

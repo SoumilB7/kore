@@ -161,6 +161,8 @@ package final class Workspace {
     private(set) var chats: [SessionSummary] = []
     /// A Mac folder synced with a box folder: the box's chats there (the cue, History's rows).
     private(set) var paired: PairedBox?
+    /// Sync level 2: the paired box folder's chats, as mirrors here (`ChatMirrorTabs`).
+    @ObservationIgnored var mirrorBinding: BoxBinding?
     /// The paired box's chats in History, while it's open, and which of them are open there.
     private(set) var boxRows: [SessionSummary] = []
     @ObservationIgnored private var boxOpen: Set<String> = []
@@ -248,6 +250,7 @@ package final class Workspace {
         // Coming back to Kore checks the folder is still where it was (one lookup, no polling).
         guard box == nil else { return }
         paired = PairedBox.of(folder)
+        adoptMirrors()
         activation = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -268,6 +271,7 @@ package final class Workspace {
         paired?.letGo()
         paired = pair.map { PairedBox(alias: $0.alias, folder: $0.box) }
         boxRows = []
+        adoptMirrors()
     }
 
     /// A box's link came or went (its window opened or closed): the paired windows' cues read it again.
@@ -556,7 +560,7 @@ package final class Workspace {
             let chats = board.orderedChats
             board.close()
             returnToStrip(chats, after: tab, select: false)
-        } else if remember, box == nil {
+        } else if remember, box == nil, !tab.isMirror {
             rememberClosed(tab, at: index)
         } else if remember, let box, tab.agent == nil, let chat = tab.chat {
             // On a box: the box keeps the chat, and ⇧⌘T asks for it back.
@@ -1265,7 +1269,7 @@ package final class Workspace {
 
     /// Agent tabs and preview tabs aren't saved: they come back by opening them again.
     var saved: Saved {
-        let kept = tabs.filter { $0.agent == nil && !$0.isPreview }
+        let kept = tabs.filter { $0.agent == nil && !$0.isPreview && !$0.isMirror }
         let groups = tabGroups
         let savedGroups = groups.groups.filter { group in kept.contains { groups.member[$0.id] == group.id } }
         return Saved(
@@ -1291,7 +1295,7 @@ package final class Workspace {
     /// Builds the persistence value outside SwiftUI observation: typing never changes `saved`.
     func persistenceSnapshot() -> Saved {
         var snapshot = saved
-        let kept = tabs.filter { $0.agent == nil && !$0.isPreview }
+        let kept = tabs.filter { $0.agent == nil && !$0.isPreview && !$0.isMirror }
         for (index, tab) in kept.enumerated() {
             guard let chat = tab.chat else { continue }
             rememberDraft(chat)

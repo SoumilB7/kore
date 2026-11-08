@@ -3,10 +3,11 @@ import HostClient
 import SwiftUI
 
 /// A box window's title-row button, beside the panel button: the folder's two-way sync with a Mac
-/// folder (the window is the box folder already). Not synced, a click picks a Mac folder and
-/// pairs them; synced, one quiet point says how it stands (accent in sync, pulsing while files
-/// move, grey while paused) and a click opens a small popup: its one line, Stop syncing and Open
-/// the Mac folder.
+/// folder (the window is the box folder already). Not synced, a click picks a Mac folder, then one
+/// card asks the level (Files, or Files + chats) and pairs them; synced, one quiet point says how
+/// it stands (accent in sync, pulsing while files move, grey while paused) and a click opens the
+/// option list: its one line, the level, Keep syncing when closed, Open on this Mac, Show in
+/// Finder and Stop syncing.
 struct BoxSyncButton: View {
     let workspace: Workspace
     let box: BoxBinding
@@ -40,7 +41,16 @@ struct BoxSyncButton: View {
 
     private func click() {
         if !open.value { OptionsMenu.shared.close() }
-        if pair == nil, BoxSyncState.of(box) == .off { startPairing() } else { open.value.toggle() }
+        if pair == nil, BoxSyncState.of(box) == .off { return startPairing() }
+        if let pair, pairing.value == nil { return showOptions(pair) }
+        open.value.toggle()
+    }
+
+    /// The synced folder's option list, under the button.
+    private func showOptions(_ pair: SyncPair) {
+        guard let window = workspace.window, let content = window.contentView else { return }
+        let below = CGPoint(x: frame.value.minX, y: content.bounds.height - frame.value.maxY - Space.xs)
+        OptionsMenu.shared.show(BoxSyncOptions.items(pair, box: box), at: below, in: window, source: "sync")
     }
 
     private func glyph(lit: Bool, state: BoxSyncState) -> some View {
@@ -75,29 +85,11 @@ struct BoxSyncButton: View {
         BoxSyncPopup(anchor: { frame.value }, close: close) {
             if let pairing = pairing.value {
                 pairingCard(pairing)
-            } else if let pair {
-                syncedCard(pair)
             } else if let around = SyncPairList.shared.around(alias: box.alias, box: box.folder) {
                 Text("Inside \(BoxFolder.lastPart(around.box)), synced locally to \(SyncPairs.shown(mac: around.mac))")
                     .font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(2)
             }
         }
-    }
-
-    private func syncedCard(_ pair: SyncPair) -> some View {
-        let sync = box.sync
-        return BoxSyncedCard(
-            line: sync?.notice ?? "Synced locally to \(SyncPairs.shown(mac: pair.mac))", mac: pair.mac, deletes: sync?.askDeletes,
-            allowDeletes: { sync?.allowDeletes() },
-            stop: {
-                SyncPairList.shared.unpair(alias: box.alias, box: box.folder)
-                BoxBinding.pairsChanged()
-                close()
-            },
-            open: {
-                NSWorkspace.shared.open(URL(fileURLWithPath: pair.mac))
-                close()
-            })
     }
 
     private func pairingCard(_ pairing: BoxPairing) -> some View {
@@ -112,9 +104,11 @@ struct BoxSyncButton: View {
                 switch pairing.state {
                 case .checking:
                     Button("Cancel") { close() }.smallButton()
-                case .ask(_, let start, let mac):
+                case .ask(_, _, let mac):
+                    // The level is the button: Files, or Files + chats.
                     Button("Cancel") { close() }.smallButton()
-                    Button(start == .merge ? "Merge" : "Copy") { finishPairing(mac) }.smallButton(prominent: true)
+                    Button("Files") { finishPairing(mac) }.smallButton()
+                    Button("Files + chats") { finishPairing(mac, chats: true) }.smallButton(prominent: true)
                 case .failed:
                     Button("Close") { close() }.smallButton()
                     Button("Pick another…") { startPairing() }.smallButton(prominent: true)
@@ -170,41 +164,51 @@ struct BoxSyncButton: View {
             let check = await pairs.check(mac: mac, alias: alias, box: folder, via: ssh, link: link)
             guard !Task.isCancelled, pairing.value?.place == place else { return }
             switch check {
-            case .go: finishPairing(mac)
+            case .go(let start):
+                let line = "Sync \(BoxFolder.lastPart(folder)) with \(SyncPairs.shown(mac: mac.path))"
+                pairing.value = BoxPairing(place: place, state: .ask(line, start, mac))
             case .ask(let question, let start): pairing.value = BoxPairing(place: place, state: .ask(question, start, mac))
             case .refuse(let why): pairing.value = BoxPairing(place: place, state: .failed(why))
             }
         }
     }
 
-    private func finishPairing(_ mac: URL) {
+    private func finishPairing(_ mac: URL, chats: Bool = false) {
         SyncPairList.shared.pair(mac: mac, alias: box.alias, box: box.folder)
+        if chats { SyncPairList.shared.setSyncsChats(true, mac: mac.standardizedFileURL.path) }
         BoxBinding.pairsChanged()
         close()
     }
 }
 
-/// The Sync popup while synced: its one line (or why it's paused), the bulk delete it waits on,
-/// Stop syncing and Open the Mac folder.
-struct BoxSyncedCard: View {
-    let line: String
-    let mac: String
-    let deletes: Int?
-    let allowDeletes: () -> Void
-    let stop: () -> Void
-    let open: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.sm) {
-            Text(line).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(2).help(mac)
-            HStack(spacing: Space.sm) {
-                // A round that stopped before a bulk delete goes on only with this.
-                if let deletes { Button("Delete \(deletes.formatted()) files", action: allowDeletes).smallButton(danger: true) }
-                Spacer(minLength: 0)
-                Button("Stop syncing", action: stop).smallButton()
-                Button("Open \(URL(fileURLWithPath: mac).lastPathComponent)", action: open).smallButton(prominent: true)
-            }
+/// The synced folder's option list (the same frame as a tab's menu): its one line (or why it's
+/// paused), the bulk delete it waits on, the level, Keep syncing when closed, then its actions.
+@MainActor
+enum BoxSyncOptions {
+    static func items(_ pair: SyncPair, box: BoxBinding) -> [OptionItem] {
+        let pairs = SyncPairList.shared, sync = box.sync
+        var items = [OptionItem(sync?.notice ?? "Synced locally to \(SyncPairs.shown(mac: pair.mac))", enabled: false)]
+        if let deletes = sync?.askDeletes {
+            items.append(OptionItem("Delete \(deletes.formatted()) files", destructive: true) { sync?.allowDeletes() })
         }
+        items += [
+            .rule,
+            OptionItem("Files", checked: !pair.syncsChats) { pairs.setSyncsChats(false, mac: pair.mac) },
+            OptionItem("Files + chats", checked: pair.syncsChats) { pairs.setSyncsChats(true, mac: pair.mac) },
+            .rule,
+            OptionItem("Keep syncing when closed", checked: pair.keepsSyncing) {
+                pairs.setKeepsSyncing(!pair.keepsSyncing, mac: pair.mac)
+                BoxBinding.pairsChanged()
+            },
+            .rule,
+            OptionItem("Open on this Mac") { ChatMoving.openLocal(URL(fileURLWithPath: pair.mac)) },
+            OptionItem("Show in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: pair.mac)) },
+            OptionItem("Stop syncing") {
+                pairs.unpair(alias: box.alias, box: box.folder)
+                BoxBinding.pairsChanged()
+            },
+        ]
+        return items
     }
 }
 

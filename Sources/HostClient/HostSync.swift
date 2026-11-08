@@ -1499,6 +1499,8 @@ package final class SyncPairList {
     static let chatsKey = "syncChats"
     /// The mirrors of each running level-2 pair, by Mac folder.
     @ObservationIgnored private var mirrors: [String: ChatMirrorBatches] = [:]
+    /// A mirror took a batch: its Mac folder and the chat (the windows show it).
+    @ObservationIgnored package var onMirrorBatch: (@MainActor (String, String) -> Void)?
     /// Bumped as levels and chats' toggles change (the menus read it).
     package private(set) var chatToggles = 0
 
@@ -1551,6 +1553,11 @@ package final class SyncPairList {
             guard let sync = HostSync.live[pair.mac], sync.isRunning, sync.pair.sameFolders(pair) else { continue }
             let mirror = ChatMirrorBatches(link: sync.link, folder: pair.box) { [weak self] id in self?.syncs(pair, chatId: id) ?? false }
             mirrors[pair.mac] = mirror
+            let mac = pair.mac
+            mirror.onBatch = { [weak self] id in
+                self?.chatToggles &+= 1
+                self?.onMirrorBatch?(mac, id)
+            }
             mirror.start()
         }
     }

@@ -174,6 +174,7 @@ final class BoxBinding {
         for workspace in Workspace.all.allObjects where !workspace.isClosed {
             workspace.box?.followPair()
             workspace.followPairedBox()
+            workspace.adoptMirrors()
         }
     }
 
@@ -251,6 +252,17 @@ final class BoxBinding {
         let chat = Chat(
             provider: provider, folder: folderURL, forkedFrom: forkedFrom, modeMemory: ModeMemory(defaults: nil),
             compactMemory: AutoCompactMemory(defaults: nil), services: services)
+        if let title, !title.isEmpty { chat.adoptName(title) }
+        return chat
+    }
+
+    /// A read-only mirror of a box chat, for the paired Mac folder's window (sync level 2).
+    func mirrorChat(_ provider: Provider, id: String, title: String?) -> Chat {
+        let services = BoxChatServices(binding: self, chatId: id)
+        services.mirror = true
+        let chat = Chat(
+            provider: provider, folder: folderURL, modeMemory: ModeMemory(defaults: nil), compactMemory: AutoCompactMemory(defaults: nil),
+            services: services)
         if let title, !title.isEmpty { chat.adoptName(title) }
         return chat
     }
@@ -344,6 +356,9 @@ final class BoxChatServices: ChatServices {
     let connection: HostConnection
     private let folder: String
     private(set) var chatId: String?
+    /// Sync level 2: a mirror in the paired Mac folder's window (shows this Mac's copy, follows
+    /// nothing; `ChatMirrorBatches` brings the copy up to date).
+    var mirror = false
     /// Its chat, for the box's renames.
     private weak var chat: Chat?
     /// What a chat new from here is made with on the box (a fork's start).
@@ -370,6 +385,7 @@ final class BoxChatServices: ChatServices {
         var making = making ?? LinkChatBackend.Making(mode: options.mode, effort: options.effort)
         making.model = making.model ?? options.model
         let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId, making: making)
+        backend.mirror = mirror
         // A rename on the box (from another Mac, or its CLI's own title) shows in this tab.
         backend.onTitle = { [weak self] title in
             guard let chat = self?.chat, chat.title != title else { return }
@@ -410,6 +426,12 @@ final class BoxChatServices: ChatServices {
         }
         backend.arsenal = { [weak self] in self?.chat?.arsenal?.rawValue }
         return backend
+    }
+
+    /// A mirror's copy took a batch: shown.
+    func reread() {
+        guard mirror, let backend else { return }
+        Task { await backend.reread() }
     }
 
     /// The composer as one line of text: its command, then the draft (files stay on this Mac).

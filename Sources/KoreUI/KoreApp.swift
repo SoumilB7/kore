@@ -184,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Transfers a quit, a crash or a restart stopped go on from their checkpoints.
         FileCarries.shared.restore()
         // Synced folders that keep syncing run from now on, windows or not.
+        ChatMirrorTabs.install()
         SyncPairList.shared.startKeeping()
     }
 

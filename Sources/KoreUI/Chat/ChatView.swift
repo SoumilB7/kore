@@ -56,6 +56,13 @@ struct ChatView: View {
         }
     }
 
+    /// A replica's one action: Send back (this Mac holds it), or Continue here (a mirror).
+    static func replicaAction(_ chat: Chat, in workspace: Workspace) -> (title: String, run: () -> Void)? {
+        if let back = sendBack(chat, in: workspace) { return ("Send back", back) }
+        guard (chat.services as? BoxChatServices)?.mirror == true else { return nil }
+        return ("Continue here", { ChatMirrorTabs.continueHere(chat, in: workspace) })
+    }
+
     /// A replica this Mac holds: Send back, from its line.
     static func sendBack(_ chat: Chat, in workspace: Workspace) -> (() -> Void)? {
         guard let services = chat.services as? BoxChatServices, let id = services.chatId,
@@ -106,7 +113,7 @@ struct ChatView: View {
                 }
                 if let replica = ChatPlaces.shared.replica(chat) {
                     // A box chat that lives elsewhere: one line where the composer was.
-                    ReplicaLine(replica: replica, sendBack: Self.sendBack(chat, in: workspace))
+                    ReplicaLine(replica: replica, action: Self.replicaAction(chat, in: workspace), asOf: ChatMirrorTabs.asOf(chat))
                         .transition(.opacity)
                 } else {
                     ComposerView(chat: chat, workspace: workspace, focused: $composerFocused) { view($0, of: chat, pending: true) }

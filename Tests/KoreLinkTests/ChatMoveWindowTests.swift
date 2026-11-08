@@ -1,7 +1,7 @@
 import Foundation
 import HostClient
 import KoreCore
-import KoreHost
+@testable import KoreHost
 import LinkProtocol
 import Testing
 
@@ -149,6 +149,95 @@ struct ChatMoveWindowTests {
         #expect(openedBox.count == 1 && openedBox.first?.1 == hc.id && openedBox.first?.0 == BoxPlace(alias: "local", folder: folder.path))
         #expect(ChatPlaces.shared.replica(boxTab.chat!) == nil && boxWindow.activeTab === boxTab)
         #expect(ChatPlaces.shared.gen("local", hc.id) == 2)
+    }
+
+    /// Sync level 2: a box chat shows in the paired Mac folder's window as a mirror tab (dimmed,
+    /// read-only, never saved with the window), its copy brought up to date by a batch that
+    /// follows the chat only for that batch; Continue here moves it here and the mirror gives way.
+    @Test func aSyncedBoxChatMirrorsHereAndContinuesHere() async throws {
+        let root = URL(fileURLWithPath: "/tmp/kml-\(UUID().uuidString.prefix(6))")
+        let folder = root.appendingPathComponent("work")
+        let mac = root.appendingPathComponent("mac")
+        for made in [folder, mac] { try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true) }
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HostPaths(environment: [
+            "HOME": root.path, "XDG_STATE_HOME": root.appendingPathComponent("state").path,
+            "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
+        ])
+        try HostConfig(folders: [folder.path]).save(paths.config)
+        let host = HostDaemon(paths: paths)
+        try host.start()
+        defer { host.stop() }
+        host.sessionEnv = ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("boxclaude").path, "HOME": root.path]
+        let grant = try GrantStore(paths.grants).allow("laptop", control: .full, socket: paths.socket)
+        let hc = try #require(host.newChat(folder: folder.path, provider: "claude", modelId: "haiku", title: "Main-struc", session: Self.session))
+        hc.stream.add(.userMessage(text: "restructure the ledger", attachments: [], id: "u1"), by: nil)
+        hc.noteRecent(at: Date(), line: "You: restructure the ledger")
+        let boxFile = root.appendingPathComponent("boxclaude/projects").appendingPathComponent(ClaudeHistory.projectKey(for: folder))
+            .appendingPathComponent("\(Self.session).jsonl")
+        try FileManager.default.createDirectory(at: boxFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(rows(SessionFiles.real(folder.path), count: 3).utf8).write(to: boxFile)
+
+        let socket = paths.socket.path
+        let connection = HostConnection(alias: "local", cache: HostCache(alias: "local", root: root.appendingPathComponent("cache"))) {
+            MoveDaemonTransport(path: socket, grant: grant)
+        }
+        HostConnection.adopt(connection)
+        connection.retain()
+        defer { connection.release() }
+        #expect(await until { connection.isOnline && !connection.chats(in: folder.path).isEmpty })
+        let store = MovedChats(root: root.appendingPathComponent("hosts"))
+        ChatPlaces.shared.use(store)
+        let ssh = try moveSSH(root)
+        let pair = SyncPair(mac: mac.path, alias: "local", box: folder.path, chats: true)
+        var openedLocal: [URL] = []
+        ChatMoving.engine = { connection in
+            var moves = ChatMoves(connection: connection, box: ssh, staging: root.appendingPathComponent("staging"), name: "MacBook", store: store)
+            moves.env = ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("macclaude").path, "HOME": root.path]
+            return moves
+        }
+        ChatMoving.pairs = { _, _ in pair }
+        ChatMoving.makeSync = { _, _ in nil }
+        ChatMoving.openLocal = { openedLocal.append($0) }
+        let pairFor = PairedBox.pairFor
+        PairedBox.pairFor = { _ in pair }
+        defer {
+            ChatMoving.engine = { connection in SyncBox.ssh(connection.alias).map { ChatMoves(connection: connection, box: $0) } }
+            ChatMoving.pairs = { alias, box in SyncPairList.shared.pair(alias: alias, box: box) ?? SyncPairList.shared.around(alias: alias, box: box) }
+            ChatMoving.makeSync = { HostSync(pair: $0, connection: $1) }
+            ChatMoving.openLocal = { AppModel.shared?.openFolder($0) }
+            PairedBox.pairFor = pairFor
+            ChatPlaces.shared.use(.shared)
+        }
+
+        // The Mac folder's window: the box chat as a mirror tab, read-only, with Continue here.
+        let local = Workspace(folder: mac, restore: false)
+        let mirrorTab = try #require(local.tabs.first { $0.isMirror })
+        let chat = try #require(mirrorTab.chat)
+        #expect(chat.title == "Main-struc")
+        #expect(ChatPlaces.shared.replica(chat) == ChatPlaces.Replica(here: false, name: "local", mirror: true))
+        #expect(ChatView.replicaAction(chat, in: local)?.title == "Continue here")
+        #expect(!local.saved.tabs.contains { $0.title == "Main-struc" })
+        #expect(!connection.isFollowed(hc.id))
+
+        // A batch: the chat followed only for it, its events in this Mac's copy.
+        let mirrors = ChatMirrorBatches(link: connection, folder: folder.path) { _ in true }
+        #expect(await mirrors.catchUp(hc.id))
+        #expect(!connection.isFollowed(hc.id))
+        #expect(await until { !connection.cache.events(chat: hc.id).items.isEmpty })
+
+        // Continue here: the move, then the mirror gives way to the chat itself.
+        ChatMirrorTabs.continueHere(chat, in: local)
+        let sheet = try #require(local.moveSheet)
+        sheet.checks?.cancel()
+        sheet.sync = .settled
+        #expect(sheet.ready)
+        sheet.onGo()
+        #expect(await until { local.moveSheet == nil })
+        #expect(sheet.line == nil)
+        #expect(hc.isReplica)
+        #expect(!local.tabs.contains { $0.isMirror })
+        #expect(openedLocal == [AppModel.canonical(mac)])
     }
 }
 

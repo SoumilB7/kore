@@ -40,6 +40,8 @@ final class ChatPlaces {
         /// "this Mac", or the holding Mac's own name.
         var name: String
         var moving = false
+        /// Sync level 2: a mirror of a box chat, read-only until Continue here.
+        var mirror = false
     }
 
     init(store: MovedChats = .shared) {
@@ -88,6 +90,7 @@ final class ChatPlaces {
     func replica(_ chat: Chat) -> Replica? {
         _ = revision
         guard let services = chat.services as? BoxChatServices, let id = services.chatId else { return nil }
+        if services.mirror { return Replica(here: false, name: NodeNames.name(services.connection.alias), mirror: true) }
         return replica(alias: services.connection.alias, chatId: id, meta: services.connection.chats[id])
     }
 

@@ -92,15 +92,8 @@ struct BoxSnapshotTests {
         try await shoot("browser-refused", BoxFolderBrowser(model: model, close: {}, open: { _ in }), size: CGSize(width: 480, height: 440))
     }
 
-    @Test func syncPopupAndOfflineCard() async throws {
-        let card = BoxSyncPopup(anchor: { .zero }, close: {}) {
-            BoxSyncedCard(line: "Synced locally to ~/Desktop/app", mac: "/Users/me/Desktop/app", deletes: nil, allowDeletes: {}, stop: {}, open: {})
-        }
-        try await shoot("sync-popup", card.padding(), size: CGSize(width: 360, height: 140))
-        let paused = BoxSyncPopup(anchor: { .zero }, close: {}) {
-            BoxSyncedCard(line: "Sync paused: 40 files would be deleted on fakebox", mac: "/Users/me/Desktop/app", deletes: 40, allowDeletes: {}, stop: {}, open: {})
-        }
-        try await shoot("sync-paused", paused.padding(), size: CGSize(width: 360, height: 140))
+    /// The synced folder's popup is the option list now (`BoxSyncOptions`), drawn by the menus' own view.
+    @Test func offlineCard() async throws {
         let binding = BoxBinding(alias: "fakebox-offline", folder: "/home/me/app")
         try await shoot("offline-card", BoxOfflineDialog(box: binding), size: CGSize(width: 520, height: 300), settle: .milliseconds(2300))
     }

@@ -55,7 +55,7 @@ struct ChatMirrorBatchTests {
         var meta = ChatMeta(
             id: id, provider: "claude", title: id, state: running ? .working : .idle, mode: .init(id: "default", level: .manual), modeIds: ["default"],
             allowedModeIds: ["default"], model: nil, queued: 0, running: running, cards: [], can: .init(send: true, stop: running))
-        meta.lastAt = said ? 1_700_000_000_000 : nil
+        meta.last = said ? "You: hi" : nil
         meta.owner = owner
         return meta
     }
@@ -99,7 +99,7 @@ struct ChatMirrorBatchTests {
         // Idle: the loop is gone, its wait ended with it.
         clock.tick()
         #expect(link.fetches["Main-struc"] == 3)
-        #expect(mirrors.batches["Main-struc"] == 3 && mirrors.caughtUp["Main-struc"] != nil)
+        #expect(await until { mirrors.batches["Main-struc"] == 3 && mirrors.caughtUp["Main-struc"] != nil })
         mirrors.stop()
     }
 

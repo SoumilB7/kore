@@ -53,6 +53,10 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     private var shown = false
     private var starting: Task<Void, Error>?
     private var closed = false
+    /// Sync level 2: a mirror on this Mac of a chat that lives on the box. It shows this Mac's
+    /// copy and never follows the chat; the copy is brought up to date in batches
+    /// (`ChatMirrorBatches`) and read again (`reread`).
+    package var mirror = false
     private var titleSaid: String?
     /// Messages and answers this chat sent in this run: the box's copies of them are shown already.
     private var sentHere: Set<String> = []
@@ -154,6 +158,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             show(assembler.take(copy.items))
         }
         if let meta = connection.chats[chatId] { self.meta(meta) }
+        if mirror { return }
         connection.follow(self)
         if !connection.isOnline { linked(false) }
     }
@@ -162,7 +167,24 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     package var following: ChatFollow? { chatId.map { ChatFollow(chatId: $0, after: seq, log: log, arsenal: arsenal()) } }
 
-    package func streamed(_ frame: ChatEvents) {
+    /// A mirror's copy took a batch: what it holds past what's shown, shown.
+    package func reread() async {
+        guard mirror, let chatId, !closed else { return }
+        let cache = connection.cache
+        let copy = await Task.detached(priority: .utility) { cache.events(chat: chatId) }.value
+        guard let id = copy.log, !closed else { return }
+        if id == log {
+            let items = seq.map { last in copy.items.filter { $0.s > last } } ?? copy.items
+            if !items.isEmpty { take(ChatEvents(chatId: chatId, log: id, items: items), keep: false) }
+        } else {
+            take(ChatEvents(chatId: chatId, log: id, reset: true, items: copy.items), keep: false)
+        }
+    }
+
+    package func streamed(_ frame: ChatEvents) { take(frame, keep: true) }
+
+    /// A frame shown; `keep`: written to this Mac's copy too (a mirror's came from it).
+    private func take(_ frame: ChatEvents, keep: Bool) {
         guard let chatId, !closed else { return }
         if frame.reset == true {
             // The box's log started again, or this copy was behind or ahead of it: what it holds
@@ -183,7 +205,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             }
             log = frame.log
             seq = frame.seq ?? seq
-            connection.cache.restart(log: frame.log, items: frame.items, chat: chatId)
+            if keep { connection.cache.restart(log: frame.log, items: frame.items, chat: chatId) }
             show(list)
             return
         }
@@ -193,7 +215,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         let items = seq.map { last in frame.items.filter { $0.s > last } } ?? frame.items
         guard let last = items.last?.s else { return }
         seq = last
-        connection.cache.append(items, chat: chatId)
+        if keep { connection.cache.append(items, chat: chatId) }
         var list: [ChatEvent] = []
         for item in items {
             guard let event = assembler.take(item), !ownRow(item, event) else { continue }

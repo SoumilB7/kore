@@ -1769,6 +1769,7 @@ enum TabMenu {
         items += [OptionItem("Rename…", enabled: tab.chat != nil && tab.agent == nil) { startRename() }]
         if let chat = tab.chat, tab.agent == nil { items.append(Arsenal.shared.row(chat)) }
         // 1.10: a box chat comes here, a chat brought here goes back.
+        items += ChatMirrorTabs.menuItems(tab, in: workspace)
         items += ChatMoving.menuItems(tab, in: workspace)
         // A chat moves onto a board: into one of its sections, or a new one.
         if tab.chat != nil, tab.agent == nil {

@@ -53,6 +53,15 @@ final class PairedBox {
         return live.map { $0.chats(in: folder) } ?? saved
     }
 
+    /// The folder syncs at Files + chats.
+    var syncsChats: Bool { SyncPairList.shared.pair(alias: alias, box: folder)?.syncsChats == true }
+
+    /// Its sync paused (a background one, with no box window to say so).
+    var syncPaused: Bool {
+        guard let pair = SyncPairList.shared.pair(alias: alias, box: folder), let sync = SyncPairList.shared.live[pair.mac], sync.isRunning else { return false }
+        return sync.notice?.hasPrefix("Sync paused") == true || sync.askDeletes != nil
+    }
+
     /// The cue's words, nil when the box has no chat open there.
     var line: String? {
         let count = chats.count
@@ -146,12 +155,18 @@ struct PairedBoxCue: View {
     @StateObject private var hovered = Local(false)
 
     var body: some View {
-        if let line = paired.line {
+        // Files + chats: the chats are tabs here already, so the cue is only the way across. A
+        // sync paused with no window open says so here, once.
+        let name = NodeNames.name(paired.alias)
+        let lead = paired.syncPaused ? "\(name) · sync paused" : paired.syncsChats ? nil : paired.line
+        if lead != nil || paired.syncsChats {
             Button(action: paired.openWindow) {
                 HStack(spacing: Space.xs) {
-                    Text(line).foregroundStyle(Theme.tertiary)
-                    Text("·").foregroundStyle(Theme.tertiary)
-                    Text("Open").foregroundStyle(hovered.value ? Theme.text : Theme.accent)
+                    if let lead {
+                        Text(lead).foregroundStyle(Theme.tertiary)
+                        Text("·").foregroundStyle(Theme.tertiary)
+                    }
+                    Text(paired.syncsChats ? "Open on \(name)" : "Open").foregroundStyle(hovered.value ? Theme.text : Theme.accent)
                 }
                 .font(Chrome.label)
                 .lineLimit(1)

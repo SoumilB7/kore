@@ -103,7 +103,7 @@ package final class ChatMirrorBatches {
     /// Mirrored: synced, said something (following a fresh chat would start its CLI on the box),
     /// and living on the box (a chat a Mac holds mirrors from there).
     private func mirrored(_ meta: ChatMeta) -> Bool {
-        guard synced(meta.id), meta.lastAt != nil || meta.running else { return false }
+        guard synced(meta.id), meta.last != nil || meta.running else { return false }
         return meta.owner.map { $0.host == ChatOwner.box } ?? true
     }
 

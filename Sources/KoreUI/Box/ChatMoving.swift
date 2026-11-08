@@ -77,7 +77,9 @@ final class MoveSheet: Identifiable {
 
     var heading: String { way == .bring ? "Bring “\(title)” to this Mac" : "Send “\(title)” back to \(NodeNames.name(alias))" }
 
-    var working: Bool { chat?.isWorking == true }
+    var working: Bool { running?() ?? (chat?.isWorking == true) }
+    /// Whether a turn runs, when the chat's own view can't say (a mirror shows its last batch).
+    @ObservationIgnored var running: (() -> Bool)?
 
     var idleLine: String {
         guard working else { return "Chat is idle" }
