@@ -74,6 +74,11 @@ struct BoxesPanel: View {
             selected.value = at
             return .handled
         }
+        .onKeyPress(.escape) {
+            guard pairing.value != nil else { return .ignored }
+            cancelPairing()
+            return .handled
+        }
         .onKeyPress(.return) {
             guard let at = cursor.value ?? selected.value else { return .ignored }
             open(at, newWindow: false)
@@ -132,6 +137,8 @@ struct BoxesPanel: View {
             selected.value = place
             cursor.value = place
             keyed = true
+            // Another row: a card left under another one goes.
+            if pairing.value.map({ $0.place != place && $0.failed }) == true { cancelPairing() }
         } label: { hovered in
             Image(systemName: "folder").font(Chrome.caption).foregroundStyle(missing ? Theme.tertiary : Theme.secondary)
             VStack(alignment: .leading, spacing: 0) {
@@ -164,22 +171,24 @@ struct BoxesPanel: View {
         return [OptionItem("Stop syncing", children: [OptionItem("Stop · files stay on both sides") { stopSyncing(place.alias, folder) }])]
     }
 
-    /// Under a folder row while it's paired: the one line, and its one action.
+    /// Under a folder row while it's paired: its one line, and its action under it. Esc closes it.
     private func pairingCard(_ pairing: BoxPairing) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
+        VStack(alignment: .trailing, spacing: Space.xs) {
             Text(pairing.line)
                 .font(Chrome.caption)
                 .foregroundStyle(pairing.failed ? Theme.danger : Theme.secondary)
-                .lineLimit(3)
+                .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            switch pairing.state {
-            case .checking:
-                Button("Cancel") { cancelPairing() }.smallButton()
-            case .ask(_, let start, let mac):
-                Button("Cancel") { cancelPairing() }.smallButton()
-                Button(start == .merge ? "Merge" : "Copy") { finishPairing(pairing.place, mac: mac) }.smallButton(prominent: true)
-            case .failed:
-                Button("OK") { cancelPairing() }.smallButton()
+            HStack(spacing: Space.sm) {
+                switch pairing.state {
+                case .checking:
+                    Button("Cancel") { cancelPairing() }.smallButton()
+                case .ask(_, let start, let mac):
+                    Button("Cancel") { cancelPairing() }.smallButton()
+                    Button(start == .merge ? "Merge" : "Copy") { finishPairing(pairing.place, mac: mac) }.smallButton(prominent: true)
+                case .failed:
+                    Button("Pick another…") { startPairing(pairing.place) }.smallButton(prominent: true)
+                }
             }
         }
         .padding(Space.sm)
@@ -279,7 +288,10 @@ struct BoxesPanel: View {
         guard let folder = place.folder else { return }
         checking.value?.cancel()
         guard let mac = AppModel.shared?.chooseFolder(prompt: "Sync", message: "Sync \(BoxFolder.lastPart(folder)) on \(place.alias) with a folder on this Mac")
-        else { return }
+        else {
+            cancelPairing()
+            return
+        }
         selected.value = place
         let pairs = SyncPairList.shared
         if let why = pairs.refusal(mac: mac, alias: place.alias, box: folder) {
