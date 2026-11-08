@@ -2,6 +2,28 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.1] - 2026-11-17
+
+### Fixed
+- Phone: no more crash right after connecting, when the new chat sheet opened.
+- Phone: a permission card shows the command it asks to run.
+- Chats open at their end, and nothing is clipped on the left.
+- The install line runs on the Mac's built-in bash again. 0.3.0's stopped at "unbound variable".
+- Phone: the bar's buttons sit on the bar row, not under the title.
+
+### Added
+- Phone: type by voice, and paste files into a message.
+- Phone: send while a chat is working; the message waits in line, and the Mac holds it while the
+  chat compacts.
+- Phone: Revert to here, and tables that fit the screen without cutting a word.
+- Phone: close a box window.
+- Phone logs, kept for a day: Kore on the Mac gets them with Get logs, and `kore-host devices logs`
+  does the same on a box.
+- Arsenal: `kore_close` closes a chat by its id, and refuses while closing it would lose work.
+
+### Changed
+- Phone: lighter on battery and data. The tailnet carries less, and drafts reach the Mac every 2 s.
+
 ## [0.3.0] - 2026-11-15
 
 ### Added
